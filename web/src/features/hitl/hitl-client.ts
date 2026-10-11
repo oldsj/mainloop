@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { ApiError, fetchClient, keys } from '@/api';
 import type {
   HITLMergeDetailSection,
@@ -7,7 +7,7 @@ import type {
   HITLResponse,
   HITLView
 } from '@/lib/contract';
-import { createHITLChannel, type HITLState } from '@/lib/hitl';
+import { createHITLChannel, type HITLDraft, type HITLState } from '@/lib/hitl';
 import { visiblePolling } from '@/lib/visiblePolling';
 
 /** The owner write has no read deadline of its own; 90 s is how long we wait before locking. */
@@ -65,6 +65,66 @@ export function createHITLSend(timeoutMs = RESPOND_TIMEOUT_MS) {
 
 /** One state machine per request id in this browser, shared by every mounted card. */
 export const hitlClient = createHITLChannel(readHITL, createHITLSend());
+
+/** A request this browser recorded a response for. Kept until the page reloads; see `respondHITL`. */
+export interface AnsweredRequest {
+  /** The session the request belongs to, so that session's page keeps the receipt. */
+  sessionId: string | null;
+  /** When the owner sent the response, from this browser's clock (ISO time). */
+  answeredAt: string;
+}
+
+const answered = new Map<string, AnsweredRequest>();
+let answeredSnapshot: ReadonlyMap<string, AnsweredRequest> = answered;
+const answeredListeners = new Set<() => void>();
+
+function subscribeAnswered(listener: () => void) {
+  answeredListeners.add(listener);
+  return () => {
+    answeredListeners.delete(listener);
+  };
+}
+
+/**
+ * The requests this browser answered, oldest first. The server drops an answered request from the
+ * pending lists, so a list keeps these rows mounted to show their receipts in place.
+ */
+export function useAnswered(): ReadonlyMap<string, AnsweredRequest> {
+  return useSyncExternalStore(subscribeAnswered, () => answeredSnapshot);
+}
+
+/** The channel's current state for one request, read through a subscription that is closed at once. */
+function stateOf(requestId: string): HITLState {
+  let state: HITLState | undefined;
+  hitlClient.subscribe(requestId, (next) => {
+    state = next;
+  })();
+  return state as HITLState;
+}
+
+/**
+ * Sends one owner response through the shared channel. The answer is kept in `useAnswered` as soon
+ * as the server records it, not when the send finishes, so a list refetch in between cannot drop it.
+ * A request that is already answered is not recorded again, since the channel refuses a second
+ * response before anything is sent.
+ */
+export function respondHITL(
+  requestId: string,
+  draft: HITLDraft,
+  sessionId: string | null
+): Promise<void> {
+  const answeredAt = new Date().toISOString();
+  let stop = () => {};
+  if (!stateOf(requestId).view?.response) {
+    stop = hitlClient.subscribe(requestId, (state) => {
+      if (!state.view?.response || answered.has(requestId)) return;
+      answered.set(requestId, { sessionId, answeredAt });
+      answeredSnapshot = new Map(answered);
+      for (const listener of answeredListeners) listener();
+    });
+  }
+  return hitlClient.respond(requestId, draft).finally(stop);
+}
 
 export async function loadMergeDetails(
   requestId: string,

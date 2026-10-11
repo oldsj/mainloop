@@ -16,7 +16,7 @@ The evidence an owner reads before approving a pull request merge, shown inside 
 
 - PR title, a description excerpt with a truncation note, `repo #number`, file count and `+added / −deleted` with a preview of changed paths.
 - "Approval required because:" with one line per reason: "Project policy requires approval." or "Protected path matched {glob}: {path}."
-- Head and base with their full commit SHAs, the proposal id, policy and glob versions, and the reviewed summary SHA-256.
+- Head and base as their first 7 characters, with a Copy control that copies the full SHA. The full SHA is also the element's title. The proposal id, policy and glob versions, and the reviewed summary SHA-256 in full, wrapping as needed so the card never overflows at 390 px.
 - CI as history: "N results recorded at {time} · passed, failed, pending at preparation". Say "Recorded CI evidence is unavailable or incomplete" when there is none.
 - Links: Open PR and Compare diff (https on github.com, and only under the summary's repository), and the conversation link. Both are rebuilt from the repository and number, so no query, fragment or userinfo from the server is shown.
 - Three lazy sections, loaded when first opened: PR description, Changed paths, Full CI list. Paths and CI page 50 at a time with "Load more paths" and "Load more CI results".

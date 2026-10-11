@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router';
-import { useMemo, useState, type ReactNode } from 'react';
+import { Check } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Button } from '@/components/ui/button';
@@ -24,6 +25,7 @@ import {
   unavailableNotes,
   viewProblem
 } from './evidence';
+import { receiptLine } from './receipt';
 import { UnavailableMerge, VerifiedMerge, type LoadMergeDetails } from './merge-review';
 
 export interface HITLRequestProps {
@@ -31,6 +33,8 @@ export interface HITLRequestProps {
   onRespond: (draft: HITLDraft) => void;
   onRefresh: () => void;
   onLoadMergeDetails: LoadMergeDetails;
+  /** When this browser sent the recorded response (ISO time), for the receipt line. */
+  answeredAt?: string | null;
 }
 
 const link = 'text-primary inline-flex min-h-11 items-center underline underline-offset-4';
@@ -40,12 +44,13 @@ const approveChoice = cn(
   choiceBase,
   'aria-pressed:bg-primary aria-pressed:text-primary-foreground'
 );
+// A selected Reject fills as strongly as a selected Approve, so the two read the same at a glance.
+const rejectChoice = cn(
+  choiceBase,
+  'aria-pressed:bg-destructive aria-pressed:text-destructive-foreground'
+);
 // A choice is a sentence the agent wrote, up to 4096 characters: it must wrap, not scroll the card.
 const wrapChoice = 'h-auto min-w-0 max-w-full py-sm text-left whitespace-normal break-words';
-const neutralChoice = cn(
-  choiceBase,
-  'aria-pressed:bg-secondary aria-pressed:text-secondary-foreground'
-);
 
 function ConversationLink({
   context,
@@ -100,7 +105,8 @@ export function HITLRequest({
   snapshot,
   onRespond,
   onRefresh,
-  onLoadMergeDetails
+  onLoadMergeDetails,
+  answeredAt = null
 }: HITLRequestProps) {
   const [chosen, setDecisions] = useState<HITLDraft['decisions']>({});
   // The evidence each Approve was chosen against. An Approve counts only while it still matches.
@@ -109,7 +115,17 @@ export function HITLRequest({
   const [answers, setAnswers] = useState<string[][]>([]);
   // The Approvals whose evidence moved on since the owner chose them, so the owner can review again.
   const [evidenceChanged, setEvidenceChanged] = useState<string[]>([]);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const receiptRef = useRef<HTMLParagraphElement>(null);
+  // Set by Send. Focus then moves to the receipt once it is recorded, never to <body>.
+  const sending = useRef(false);
   const { view } = snapshot;
+  const recorded = !!view?.response;
+  useEffect(() => {
+    if (!recorded || !sending.current) return;
+    sending.current = false;
+    receiptRef.current?.focus();
+  }, [recorded]);
   const problem = view ? viewProblem(view) : null;
   const rawPayload = view && !problem ? view.request.payload : undefined;
   const payload = useMemo(() => parseHITL(rawPayload), [rawPayload]);
@@ -185,6 +201,9 @@ export function HITLRequest({
           : []
       )
     );
+    // Send is disabled, then replaced by the receipt. Focus moves to the heading first so it is not lost.
+    sending.current = true;
+    headingRef.current?.focus();
     onRespond({ decisions, reasons, answers, reviewedContext });
   }
 
@@ -286,11 +305,14 @@ export function HITLRequest({
                       setEvidenceChanged((ids) => ids.filter((id) => id !== tool.id));
                     }}
                   >
-                    Approve
+                    {decision === 'approve' ? (
+                      <Check className="size-4" aria-hidden="true" />
+                    ) : null}
+                    {decision === 'approve' ? 'Approved' : 'Approve'}
                   </Button>
                   <Button
                     variant="outline"
-                    className={neutralChoice}
+                    className={rejectChoice}
                     aria-label={decisionLabel('Reject', tool)}
                     aria-pressed={decision === 'reject'}
                     onClick={() => {
@@ -298,7 +320,8 @@ export function HITLRequest({
                       setEvidenceChanged((ids) => ids.filter((id) => id !== tool.id));
                     }}
                   >
-                    Reject
+                    {decision === 'reject' ? <Check className="size-4" aria-hidden="true" /> : null}
+                    {decision === 'reject' ? 'Rejected' : 'Reject'}
                   </Button>
                 </div>
                 {decision === 'reject' ? (
@@ -384,7 +407,7 @@ export function HITLRequest({
       className="gap-sm p-md text-foreground grid text-sm break-words"
     >
       <header className="gap-xs grid">
-        <h3 className="font-medium">
+        <h3 ref={headingRef} tabIndex={-1} className="font-medium focus:outline-none">
           {payload?.type === 'ask_user_request' ? 'Questions for you' : 'Session needs input'}
         </h3>
         <p role="status">
@@ -432,6 +455,14 @@ export function HITLRequest({
       {body}
       {receipt ? (
         <section aria-label="Recorded response" className="gap-sm grid">
+          <p
+            ref={receiptRef}
+            tabIndex={-1}
+            data-testid="hitl-receipt"
+            className="font-medium focus:outline-none"
+          >
+            {receiptLine(view, answeredAt)}
+          </p>
           <h4 className="font-medium">Your recorded response</h4>
           {receipt.response.type === 'tool_approval_response'
             ? receipt.response.approvals.map((approval) => (

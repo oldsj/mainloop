@@ -41,8 +41,9 @@ in-flight state across mobile/inbox/chat mounts. Other-device conflicts refresh 
 server receipt. Network/5xx submission failures do not offer automatic or contradictory retries.
 Read/unread remains presentation state; generic queue responses cannot settle HITL.
 
-An accepted response is marked responded and leaves the pending inbox on refresh. Chat retains
-current read-only receipts until superseded by newer input. Decision delivery never implies task
+An accepted response is marked responded and leaves the pending inbox on refresh. The page that sent
+it keeps a one-line receipt in place until reload, even after the server stops listing the request.
+Chat retains current read-only receipts until superseded by newer input. Decision delivery never implies task
 completion. Supported provider reason behavior is documented in [chat](chat.md#native-structured-input).
 
 Raw queue list and legacy count reads retire pending HITL cards whose verified leaves all belong
@@ -104,15 +105,18 @@ they provide no live-provider proof.
 Labels: **implemented** means built in `web/src/features/inbox` and covered by component, model or
 poll tests against MSW fakes. Nothing here is live-proven.
 
-- **Implemented:** the **Needs you** list from `GET /attention`. A HITL row shows the shared request card from `features/hitl`. Other queue rows show option buttons, a free-text reply for open questions and plan reviews, a folded plan, and a **View PR** link only for `https` URLs. A row without a queue item links to its task. The empty state says **Nothing needs you**.
+- **Implemented:** the **Needs you** list from `GET /attention`. A HITL row shows the shared request card from `features/hitl`. A request this browser answered stays as a card with its receipt until reload, even after the server stops listing it. Other queue rows show option buttons, a free-text reply for open questions and plan reviews, a folded plan, and a **View PR** link only for `https` URLs. A row without a queue item links to its task. The empty state says **Nothing needs you**.
 - **Implemented:** the **Activity** view from `GET /activity`, read only while it is open. Provider reports keep the server's `unverified` label and link to their task.
 - **Implemented:** **Dismiss notice** on an Activity row the server marks `dismissible` (an input notice with no structured request reference), through `POST /queue/{id}/dismiss` with the row's `queue_item_id`. The client does not copy the rule. The row leaves Activity at once. A refusal, including a `409`, restores the row and shows the server's reason above the list. That reason clears once the re-read removes the row. Both Needs you and Activity re-read once the request settles, so the owner sees the current state.
 - **Implemented:** the count covers unresolved attention only and reads `99+` above 99. Attention polls only while the page is visible, one read at a time, on the shared cadence and deadline. `inbox:updated` refreshes attention and activity.
 - **Implemented:** the badge (`InboxBadge`) is mounted on the compact **Inbox** tab in `CompactShell.tsx`, beside the owner-task badge. Attention is read by the shell, so it keeps polling while another compact tab is open. On desktop the count is on the **Needs you** tab, in the always-mounted panel.
+- **Implemented:** after **Send response**, the card keeps a receipt line built from the response this browser sent, such as "Approved Bash, rejected Edit · 6:20 PM". The time is when this browser sent it, since the server receipt has none. Focus moves to the receipt once it is recorded. While the send is in flight, and when it is uncertain, focus stays on the card heading, never on the page body.
+- **Implemented:** the session page (`features/sessions/SessionChatSlot`) shows the session's pending requests as cards above the conversation. Its state reads **needs you** while a request is pending, in place of working, ready or idle. Failed and unconfirmed delivery still show as such.
+- **Not built:** answered requests in **Activity**. The server's `/activity` query reads queue items only (`source_kind = 'queue'`), so an answered HITL request is not returned. The receipt lasts only for this page visit; the server must return answered HITL items before Activity can show them.
 - **Not built:** the notification toast. The plan drops it (production never creates notification rows, and the inbox covers attention), but F4's result assigned it to F5. The supervisor needs to settle this.
 - **Not built:** the `?inbox` URL parameter from the frozen app. Opening the inbox is local state, with no deep link.
 - **Not built:** skeleton loading, and the **Last checked** and offline timestamps. Loading shows a status line. A failed refresh keeps the rows already shown.
-- **Not proven:** the Playwright journeys for inbox (tabs, badge, Needs you, Activity, dismiss at phone width), deferred to F9 (`web/e2e/**`). Also not proven: live SSE delivery, poll timing in a real browser, and any run against the Go server.
+- **Not proven:** the 390 px layout of the request card and merge SHAs, which the vitest tests do not measure. The Playwright journeys for inbox (tabs, badge, Needs you, Activity, dismiss at phone width), deferred to F9 (`web/e2e/**`). Also not proven: live SSE delivery, poll timing in a real browser, and any run against the Go server.
 
 ## Go HITL observer and response dispatch
 

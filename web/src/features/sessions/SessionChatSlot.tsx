@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
+import { SessionRequests } from '@/features/chat/SessionRequests';
 import { statusWords } from '@/features/chat/MainThreadHeader';
 import { ThreadBody } from '@/features/chat/ThreadBody';
 import { useThread, type ThreadSource } from '@/features/chat/useThread';
+import { useSessionRequests } from '@/features/hitl/session-requests';
 import { threadStatus } from '@/lib/delivery';
 import { useConnection } from '@/shell/ConnectionBanner';
 
@@ -35,8 +37,9 @@ function useVisibleHeight(): number | null {
 
 /**
  * The session's conversation: the same timeline and composer as the main thread, reading and
- * sending to this session. The header shows the turn's state and the stop control. A closed
- * session (`closedReason` set) locks the composer, says why, and hides stop.
+ * sending to this session. The header shows the turn's state and the stop control. Requests the
+ * session is waiting on show as cards above the conversation, and the state reads "needs you" while
+ * one is pending. A closed session (`closedReason` set) locks the composer, says why, and hides stop.
  */
 export function SessionChatSlot({
   sessionId,
@@ -55,6 +58,10 @@ export function SessionChatSlot({
     deliveries: native?.deliveries ?? [],
     sessionState: native?.session_state
   });
+  const { pending } = useSessionRequests(sessionId);
+  // A pending request holds the turn until the owner answers, so "working" would mislead.
+  const needsYou =
+    pending.length > 0 && (status === 'working' || status === 'ready' || status === 'idle');
 
   return (
     <section
@@ -65,7 +72,7 @@ export function SessionChatSlot({
     >
       <div className="gap-sm px-md border-border text-muted-foreground flex min-h-11 flex-wrap items-center border-b py-1 text-xs">
         <span className="text-foreground" data-testid="session-chat-state" role="status">
-          {statusWords(status)}
+          {needsYou ? 'needs you' : statusWords(status)}
         </span>
         {thread.busy && closedReason === null ? (
           <button
@@ -79,6 +86,7 @@ export function SessionChatSlot({
           </button>
         ) : null}
       </div>
+      <SessionRequests sessionId={sessionId} />
       {/*
         A fixed height lets the message list scroll inside the page instead of growing it. It follows
         the visible viewport, so the composer stays above a soft keyboard that `dvh` ignores.

@@ -95,7 +95,7 @@ describe('HITLCard', () => {
     expect(container).toHaveTextContent('<script>run()</script>');
     expect(container).toHaveTextContent('owner/repo #7');
     expect(container).toHaveTextContent('Head: feature/retry');
-    expect(container).toHaveTextContent('b'.repeat(40));
+    expect(screen.getByTitle('b'.repeat(40))).toHaveTextContent('bbbbbbb');
     expect(container).toHaveTextContent('Base: main');
     expect(container).toHaveTextContent('Proposal proposal-1');
     expect(container).toHaveTextContent('Merge state: prepared');
@@ -196,5 +196,33 @@ describe('HITLCard', () => {
     renderRouted(<HITLCard requestId={id} />);
     expect(await screen.findByText('Responding disabled by the server.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send response' })).toBeDisabled();
+  });
+
+  it('keeps a receipt in place after Send, naming each decision, and focuses it', async () => {
+    server.use(http.get(`${API_URL}/tasks`, () => HttpResponse.json([])));
+    const user = userEvent.setup();
+    renderRouted(<HITLCard requestId={id} />);
+    await screen.findByRole('heading', { name: 'Session needs input' });
+    await user.click(await screen.findByRole('button', { name: /^Approve tool\.a/ }));
+    await user.click(screen.getByRole('button', { name: /^Reject tool\.b/ }));
+    await user.click(screen.getByRole('button', { name: 'Send response' }));
+    const receipt = await screen.findByTestId('hitl-receipt');
+    expect(receipt).toHaveTextContent(/^Approved tool\.a, rejected tool\.b · \S/);
+    await waitFor(() => expect(receipt).toHaveFocus());
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it('keeps focus on the request heading when the send is uncertain, never on the body', async () => {
+    server.use(http.get(`${API_URL}/tasks`, () => HttpResponse.json([])));
+    fake.setRespondMode({ status: 500, detail: 'Server error' });
+    const user = userEvent.setup();
+    renderRouted(<HITLCard requestId={id} />);
+    await screen.findByRole('heading', { name: 'Session needs input' });
+    await user.click(await screen.findByRole('button', { name: /^Approve tool\.a/ }));
+    await user.click(screen.getByRole('button', { name: /^Reject tool\.b/ }));
+    await user.click(screen.getByRole('button', { name: 'Send response' }));
+    expect(await screen.findByText('Decision delivery uncertain')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Session needs input' })).toHaveFocus();
+    expect(document.activeElement).not.toBe(document.body);
   });
 });

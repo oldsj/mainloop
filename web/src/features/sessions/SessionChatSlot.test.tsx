@@ -7,6 +7,8 @@ import { connection } from '@/api';
 import { loadDraft } from '@/features/chat/drafts';
 import { deliveryFixture, messageFixture } from '@/features/chat/fixtures';
 import { LOST_REPLY_RECORDED } from '@/features/chat/useThread';
+import { createFakeHITL } from '@/features/hitl/handlers';
+import { hitlView } from '@/test/fixtures/hitl';
 import { server } from '@/test/msw/server';
 import { testChat } from '@/test/msw/handlers';
 import { native, session } from './test/fixtures';
@@ -284,5 +286,31 @@ describe('session chat', () => {
     } finally {
       Reflect.deleteProperty(window, 'visualViewport');
     }
+  });
+});
+
+describe('session requests (UI-C)', () => {
+  it('shows a pending request as a card and reads "needs you" instead of working', async () => {
+    server.use(
+      http.get(`${API_URL}/sessions/s1/hitl`, () => HttpResponse.json(['req-s1'])),
+      ...createFakeHITL({ 'req-s1': hitlView('req-s1', { context: { session_id: 's1' } }) })
+        .handlers
+    );
+    const slot = await openSession();
+    expect(
+      await within(slot).findByRole('heading', { name: 'Session needs input' })
+    ).toBeInTheDocument();
+    expect(within(slot).getByTestId('session-chat-state')).toHaveTextContent(/^needs you$/);
+  });
+
+  it('does not say needs you when no request is pending', async () => {
+    server.use(http.get(`${API_URL}/sessions/s1/hitl`, () => HttpResponse.json([])));
+    const slot = await openSession();
+    await waitFor(() =>
+      expect(within(slot).getByTestId('session-chat-state')).not.toHaveTextContent('needs you')
+    );
+    expect(
+      within(slot).queryByRole('heading', { name: 'Session needs input' })
+    ).not.toBeInTheDocument();
   });
 });

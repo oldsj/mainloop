@@ -170,6 +170,40 @@ function DetailSection({
   );
 }
 
+/**
+ * A commit SHA as its first 7 characters, which is enough to match it in git. The full value is in
+ * the title and the copy button's label, so a reviewer can check the whole SHA without it wrapping.
+ */
+function ShortSha({ sha }: { sha: string | null }) {
+  const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle');
+  // A summary without this SHA shows nothing here, as it did before the SHA was shortened.
+  if (!sha) return null;
+  async function copyFull(full: string) {
+    try {
+      await navigator.clipboard.writeText(full);
+      setCopy('copied');
+    } catch {
+      setCopy('failed');
+    }
+  }
+  return (
+    <span className="gap-xs inline-flex max-w-full flex-wrap items-center">
+      <code title={sha} className="break-all">
+        {sha.slice(0, 7)}
+      </code>
+      <Button
+        variant="outline"
+        size="sm"
+        className="min-h-11"
+        aria-label={`Copy full SHA ${sha}`}
+        onClick={() => void copyFull(sha)}
+      >
+        {copy === 'copied' ? 'Copied' : copy === 'failed' ? 'Copy failed' : 'Copy'}
+      </Button>
+    </span>
+  );
+}
+
 function FileItem({ file }: { file: MergeDetailItem }) {
   return (
     <li className="gap-xs grid">
@@ -271,10 +305,10 @@ export function VerifiedMerge({
         <p className="text-muted-foreground">Evaluation deadline: {when(facts.deadline)}</p>
       ) : null}
       <p>
-        Head: {summary.head} · <code>{summary.head_sha}</code>
+        Head: {summary.head} · <ShortSha sha={summary.head_sha} />
       </p>
       <p>
-        Base: {summary.base} · <code>{summary.base_sha}</code>
+        Base: {summary.base} · <ShortSha sha={summary.base_sha} />
       </p>
       <p className="text-muted-foreground">
         Proposal <code>{facts.proposal_id}</code> · project policy v{summary.policy_version} ·
@@ -282,7 +316,7 @@ export function VerifiedMerge({
       </p>
       {facts.state ? <p className="text-muted-foreground">Merge state: {facts.state}</p> : null}
       <p className="text-muted-foreground">
-        Reviewed summary SHA-256: <code>{facts.summary_digest}</code>
+        Reviewed summary SHA-256: <code className="break-all">{facts.summary_digest}</code>
       </p>
       {summary.ci?.complete ? (
         <p>

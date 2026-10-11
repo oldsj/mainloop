@@ -1,7 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { $api } from '@/api';
 import { statusLabel, taskForApproval } from '@/lib/taskState';
-import { hitlClient, loadMergeDetails, useHITL } from './hitl-client';
+import { loadMergeDetails, respondHITL, useAnswered, useHITL, hitlClient } from './hitl-client';
 import { HITLRequest } from './hitl-request';
 
 export interface HITLCardProps {
@@ -15,6 +15,7 @@ export interface HITLCardProps {
  */
 export function HITLCard({ requestId }: HITLCardProps) {
   const snapshot = useHITL(requestId);
+  const answered = useAnswered().get(requestId);
   const projectId = snapshot.view?.context?.project_id ?? null;
   const tasks = $api.useQuery(
     'get',
@@ -41,7 +42,10 @@ export function HITLCard({ requestId }: HITLCardProps) {
       <HITLRequest
         key={requestId}
         snapshot={snapshot}
-        onRespond={(draft) => void hitlClient.respond(requestId, draft)}
+        answeredAt={answered?.answeredAt ?? null}
+        onRespond={(draft) =>
+          void respondHITL(requestId, draft, snapshot.view?.context?.session_id ?? null)
+        }
         onRefresh={() => void hitlClient.refresh(requestId)}
         onLoadMergeDetails={(proposalId, section, cursor) =>
           loadMergeDetails(requestId, proposalId, section, cursor)

@@ -8,7 +8,7 @@ The structured input card for a native agent's request: tool-call approvals and 
 
 ## Tokens
 
-- Card `bg-card` with `border-border`. Decision buttons: approve on `bg-primary`, reject as a secondary button (`bg-secondary`).
+- Card `bg-card` with `border-border`. Decision buttons are outline until chosen. A chosen Approve fills `bg-primary` and a chosen Reject fills `bg-destructive`, each with a check mark and its label ("Approved" or "Rejected"), so both read at the same strength.
 - Recorded answer uses `text-muted-foreground`. Errors use `text-destructive`.
 - Radius `rounded-none`.
 
@@ -22,7 +22,7 @@ The structured input card for a native agent's request: tool-call approvals and 
 
 - **Pending:** controls enabled.
 - **Submitting:** controls disabled; the submitted choice stays visible. Only one submit per request is in flight, across every card showing that request.
-- **Recorded:** a recorded answer disables further decisions and shows what was chosen.
+- **Recorded:** a recorded answer disables further decisions and shows what was chosen. A one-line receipt leads the answer, such as "Approved Bash, rejected Edit · 6:20 PM". After Send, focus moves to that receipt.
 - **Unconfirmed:** the submission timed out (after 90 seconds) or the network failed, so it may or may not have been recorded. The card locks, says "do not submit again", and re-reads the request. It unlocks only when the re-read shows a recorded decision.
 - **Stale:** the request was replaced. Show the new request in its own card with fresh controls. The old card is read-only.
 - **Unavailable:** the continuation cannot run, or writes are off on the server. Say so on the card ("Responding disabled by the server."); do not show enabled controls. A refused send (503) with writes off, proven by a re-read, shows the same state and says nothing was recorded.

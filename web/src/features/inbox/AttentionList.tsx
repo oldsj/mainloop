@@ -3,6 +3,7 @@ import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import { HITLCard } from '@/features/hitl';
+import { useAnswered } from '@/features/hitl/hitl-client';
 import { type AttentionItem, attentionAnchor, attentionItems, messageOf, taskIdOf } from './model';
 import { QueueCard } from './QueueCard';
 import { useAttention } from './queries';
@@ -11,6 +12,10 @@ import { useAttention } from './queries';
 export function AttentionList() {
   const attention = useAttention();
   const items = attentionItems(attention.data);
+  const answered = useAnswered();
+  // The server drops a request once it is answered. This browser keeps its receipt in place until reload.
+  const listed = new Set(items.map((item) => item.queue_item?.hitl_request_id));
+  const receipts = [...answered.keys()].reverse().filter((id) => !listed.has(id));
 
   // A failed refresh keeps the rows already shown, with the error above them.
   const failure = attention.isError ? (
@@ -37,14 +42,26 @@ export function AttentionList() {
   return (
     <div className="flex flex-col">
       {failure}
-      {items.length === 0 && attention.isError ? null : <AttentionRows items={items} />}
+      {items.length === 0 && receipts.length === 0 && attention.isError ? null : (
+        <AttentionRows items={items} answered={receipts} />
+      )}
     </div>
   );
 }
 
-/** The Needs-you rows, or the empty state. It reads no data, so it can be rendered on its own. */
-export function AttentionRows({ items }: { items: AttentionItem[] }) {
-  if (items.length === 0) {
+/**
+ * The Needs-you rows, or the empty state. `answered` are requests this browser just answered: they
+ * stay as cards with their receipts, above the rows the server still lists. It reads no data, so it
+ * can be rendered on its own.
+ */
+export function AttentionRows({
+  items,
+  answered = []
+}: {
+  items: AttentionItem[];
+  answered?: string[];
+}) {
+  if (items.length === 0 && answered.length === 0) {
     return (
       <div className="p-md text-sm">
         <p className="font-medium">Nothing needs you</p>
@@ -57,6 +74,11 @@ export function AttentionRows({ items }: { items: AttentionItem[] }) {
 
   return (
     <ul aria-label="Needs you" className="flex flex-col">
+      {answered.map((id) => (
+        <li key={`answered:${id}`} className="border-border border-b">
+          <HITLCard requestId={id} />
+        </li>
+      ))}
       {items.map((item) => (
         <li key={item.id} id={attentionAnchor(item)} className="border-border border-b">
           <AttentionEntry item={item} />

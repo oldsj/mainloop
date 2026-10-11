@@ -442,3 +442,32 @@ describe('Activity', () => {
     expect(queryClient.getQueryData(keys.activity())).toBeDefined();
   });
 });
+
+describe('answered requests stay in Needs you (UI-C)', () => {
+  it('keeps the receipt after the server stops listing the request', async () => {
+    const user = userEvent.setup();
+    const requestId = 'req-kept';
+    const fake = createFakeHITL({ [requestId]: hitlView(requestId) });
+    server.use(
+      ...fake.handlers,
+      attentionRead(() => HttpResponse.json(attentionSnapshot([hitlAttentionItem(requestId)])))
+    );
+    const { queryClient } = renderInbox();
+    await user.click(await screen.findByRole('button', { name: /^Approve tool\.a/ }));
+    await user.click(screen.getByRole('button', { name: /^Reject tool\.b/ }));
+    await user.click(screen.getByRole('button', { name: 'Send response' }));
+    expect(await screen.findByTestId('hitl-receipt')).toHaveTextContent(
+      /^Approved tool\.a, rejected tool\.b · \S/
+    );
+
+    server.use(attentionRead(() => HttpResponse.json(attentionSnapshot([]))));
+    await queryClient.invalidateQueries({ queryKey: keys.attention() });
+    await waitFor(() =>
+      expect(queryClient.getQueryData(keys.attention())).toEqual(attentionSnapshot([]))
+    );
+    expect(await screen.findByTestId('hitl-receipt')).toHaveTextContent(
+      'Approved tool.a, rejected tool.b'
+    );
+    expect(screen.queryByText('Nothing needs you')).not.toBeInTheDocument();
+  });
+});

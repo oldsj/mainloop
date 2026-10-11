@@ -222,8 +222,8 @@ describe('verified merge evidence (frozen: integrated observer and owner API tes
     });
     show(withPayload(mergeTools(['a']), { merge: [facts] as HITLView['merge'] }));
     const region = screen.getByRole('region', { name: 'Verified merge context' });
-    expect(region).toHaveTextContent('a'.repeat(40));
-    expect(region).toHaveTextContent('b'.repeat(40));
+    expect(screen.getByTitle('a'.repeat(40))).toHaveTextContent('aaaaaaa');
+    expect(screen.getByTitle('b'.repeat(40))).toHaveTextContent('bbbbbbb');
     expect(region).toHaveTextContent('Protected path matched k8s/**: k8s/protected.yaml.');
     expect(screen.getByRole('button', { name: /^Approve/ })).toBeEnabled();
   });
@@ -711,5 +711,48 @@ describe('follow-up 1: copy, links and guards', () => {
     expect(button).toHaveClass('whitespace-normal', 'h-auto', 'max-w-full', 'text-left');
     expect(button.className).not.toMatch(/(^|\s)whitespace-nowrap(\s|$)/);
     await waitFor(() => expect(button).toBeEnabled());
+  });
+});
+
+describe('decision state and merge SHAs (UI-C)', () => {
+  it('a selected Reject fills as strongly as a selected Approve, with a check and its label', async () => {
+    const user = userEvent.setup();
+    show(hitlView());
+    const approve = screen.getByRole('button', { name: /^Approve tool\.a/ });
+    const reject = screen.getByRole('button', { name: /^Reject tool\.b/ });
+    await user.click(reject);
+    expect(reject).toHaveTextContent(/^Rejected$/);
+    expect(reject.querySelector('svg')).not.toBeNull();
+    expect(reject).toHaveClass(
+      'aria-pressed:bg-destructive',
+      'aria-pressed:text-destructive-foreground'
+    );
+    expect(approve).toHaveTextContent(/^Approve$/);
+    expect(approve.querySelector('svg')).toBeNull();
+    await user.click(approve);
+    expect(approve).toHaveTextContent(/^Approved$/);
+    expect(approve.querySelector('svg')).not.toBeNull();
+    // Each tool has its own decision: choosing Approve for one does not clear a Reject on another.
+    expect(reject).toHaveTextContent(/^Rejected$/);
+    expect(reject.querySelector('svg')).not.toBeNull();
+  });
+
+  it('shows a merge SHA as 7 characters, with the full value in the title and a copy button', async () => {
+    const user = userEvent.setup();
+    const head = 'a'.repeat(40);
+    const base = 'b'.repeat(40);
+    const facts = mergeContext({
+      summary: mergeSummary({ head_sha: head, base_sha: base }),
+      head_sha: head,
+      base_sha: base
+    });
+    show(withPayload(mergeTools(['a']), { merge: [facts] as HITLView['merge'] }));
+    const code = screen.getByTitle(head);
+    expect(code).toHaveTextContent(/^aaaaaaa$/);
+    expect(code).toHaveClass('break-all');
+    const copy = screen.getByRole('button', { name: `Copy full SHA ${head}` });
+    await user.click(copy);
+    expect(await navigator.clipboard.readText()).toBe(head);
+    expect(copy).toHaveTextContent('Copied');
   });
 });
