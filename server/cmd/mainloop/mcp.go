@@ -32,8 +32,15 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	gh, err := newGitHubApp(cfg)
+	if err != nil {
+		return err
+	}
+	prSvc, mergeSvc := newPullRequestServices(cfg, pool, gh, log)
 	q := dbq.New(pool)
 	srv := &mcpserver.Server{
+		PRs:          prSvc,
+		Merge:        mergeSvc,
 		Auth:         &agentauth.Authenticator{Q: q, Depth: taskSvc.AuthDepth},
 		Tasks:        taskSvc,
 		Policy:       agentauth.Policy{MergeTools: bool(cfg.MergeToolsEnabled)},

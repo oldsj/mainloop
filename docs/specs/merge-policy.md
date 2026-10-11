@@ -12,6 +12,10 @@ server-resolved project/repository/branch scope used by PR creation. Workspace e
 not change merge policy, mint HITL consent, enable production flags or grant owner REST access.
 The normal production manifests keep merge tools disabled.
 
+> **Go server.** The merge states, consent rule, nested-agent rule and GitHub 403 handling of the
+> Go server are in [Pull requests](pull-requests.md#go-server-migration-slice-g10). The 403 rule
+> below (an _exact_ plan-unavailable message) is the Python rule; Go decides by status code.
+
 ## Owner policy
 
 New projects and existing projects migrated from the schema without policy columns default

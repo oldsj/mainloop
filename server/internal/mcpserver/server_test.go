@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/agentauth/authtest"
 	"github.com/oldsj/mainloop/server/internal/config"
@@ -34,13 +36,17 @@ type harness struct {
 	handler http.Handler
 }
 
-func newHarness(t *testing.T, mergeTools bool) *harness { return buildHarness(t, mergeTools, false) }
+func newHarness(t *testing.T, mergeTools bool) *harness {
+	return buildHarness(t, mergeTools, false, nil)
+}
 
 // newTaskHarness authenticates supervisors and children through their task attempts, as serveMCP
 // does. The plain harness gives the task roles a fixed depth instead.
-func newTaskHarness(t *testing.T, mergeTools bool) *harness { return buildHarness(t, mergeTools, true) }
+func newTaskHarness(t *testing.T, mergeTools bool) *harness {
+	return buildHarness(t, mergeTools, true, nil)
+}
 
-func buildHarness(t *testing.T, mergeTools, realDepth bool) *harness {
+func buildHarness(t *testing.T, mergeTools, realDepth bool, mod func(*mcpserver.Server, *pgxpool.Pool)) *harness {
 	t.Helper()
 	d := testdb.New(t)
 	env := authtest.NewEnv(d.Pool)
@@ -75,6 +81,9 @@ func buildHarness(t *testing.T, mergeTools, realDepth bool) *harness {
 		Tasks:        taskSvc,
 		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		AllowedHosts: map[string]bool{host: true},
+	}
+	if mod != nil {
+		mod(srv, d.Pool)
 	}
 	return &harness{env: env, handler: srv.Handler()}
 }
@@ -234,16 +243,15 @@ func TestDiscoveryFollowsThePerActorTable(t *testing.T) {
 	ws := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
 	sup := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleSupervisor, Grant: dbstate.GrantCoordination, Parent: main.SessionID})
 
-	// Only the implemented tools are listed; the pull request tools arrive with their slice, so
-	// the table's other entries are absent, not stubbed.
+	// With the merge tools off, only open_pull_request is listed of the pull request tools.
 	want := []string{
-		"decide", "delegate", "note", "pending_add", "pending_done", "task_cancel", "task_get", "task_history",
-		"task_list", "topic_open", "topics", "whoami",
+		"decide", "delegate", "note", "open_pull_request", "pending_add", "pending_done", "task_cancel", "task_get",
+		"task_history", "task_list", "topic_open", "topics", "whoami",
 	}
 	if got := h.list(t, mcpserver.PathOrdinary, main.Token); !slices.Equal(got, want) {
 		t.Errorf("main lists %v, want %v", got, want)
 	}
-	if got := h.list(t, mcpserver.PathOrdinary, ws.Token); !slices.Equal(got, []string{"whoami"}) {
+	if got := h.list(t, mcpserver.PathOrdinary, ws.Token); !slices.Equal(got, []string{"open_pull_request", "whoami"}) {
 		t.Errorf("workspace agent lists %v", got)
 	}
 	if got := h.list(t, mcpserver.PathOrdinary, sup.Token); !slices.Equal(got, []string{"delegate", "report", "task_cancel", "task_get", "task_history", "task_list", "whoami"}) {

@@ -70,7 +70,8 @@ const (
 )
 
 // rule is one allowed endpoint: a method and a path pattern. A pattern segment is literal,
-// "{owner}" or "{repo}" (bound to the scoped repository), or "*" (any one segment).
+// "{owner}" or "{repo}" (bound to the scoped repository), or "*" (any one segment). A final "**"
+// takes one or more segments, for branch names that contain a slash.
 type rule struct {
 	method  string
 	pattern []string
@@ -91,6 +92,19 @@ var rules = []rule{
 	newRule(http.MethodGet, "/repos/{owner}/{repo}", kindRepo, Permissions{"metadata": Read}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/pulls", kindRepo, Permissions{"pull_requests": Read}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/commits", kindRepo, Permissions{"contents": Read}),
+	// Pull requests and merges (pulls.go). The merge call is the only write that changes a branch.
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/pulls/*", kindRepo, Permissions{"pull_requests": Read}),
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/pulls/*/files", kindRepo, Permissions{"pull_requests": Read}),
+	newRule(http.MethodPost, "/repos/{owner}/{repo}/pulls", kindRepo, Permissions{"pull_requests": Write}),
+	newRule(http.MethodPut, "/repos/{owner}/{repo}/pulls/*/merge", kindRepo,
+		Permissions{"contents": Write, "pull_requests": Write}),
+	// Protection must precede the general branch rule so it asks for administration.
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/branches/*/protection", kindRepo, Permissions{"administration": Read}),
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/branches/**", kindRepo, Permissions{"contents": Read}),
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/rules/branches/*", kindRepo, Permissions{"metadata": Read}),
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/commits/*/check-suites", kindRepo, Permissions{"checks": Read}),
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/commits/*/check-runs", kindRepo, Permissions{"checks": Read}),
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/commits/*/statuses", kindRepo, Permissions{"statuses": Read}),
 }
 
 // Scope is what one client may touch: a single repository and the permissions of its token.
@@ -212,7 +226,12 @@ func (a *Allowlist) match(req *http.Request) (rule, error) {
 // bind matches segs against pattern. It returns the bound owner and repo, empty when the
 // pattern has none.
 func bind(pattern, segs []string) (owner, name string, ok bool) {
-	if len(pattern) != len(segs) {
+	if n := len(pattern); pattern[n-1] == "**" {
+		if len(segs) < n {
+			return "", "", false
+		}
+		pattern, segs = pattern[:n-1], segs[:n-1]
+	} else if n != len(segs) {
 		return "", "", false
 	}
 	for i, p := range pattern {

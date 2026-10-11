@@ -68,6 +68,24 @@ sql:
                 import: github.com/oldsj/mainloop/server/internal/db/dbstate,
                 type: HITLResponseState
               }
+          - column: pr_creations.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: PRCreationState
+              }
+          - column: merge_candidates.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: MergeState }
+          - column: merge_candidates.route
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: MergeRoute }
+          - column: merge_request_keys.tool
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: MergeTool }
+          - column: merge_results.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: MergeState }
           - column: attention_items.kind
             go_type:
               { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: AttentionKind }

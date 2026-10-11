@@ -324,6 +324,86 @@ type KagentAgent struct {
 	Name      string
 }
 
+type MergeCandidate struct {
+	ID                  string
+	IdempotencyKey      string
+	OwnerID             string
+	ProjectID           string
+	RepositoryID        int64
+	Repository          string
+	PrNumber            int64
+	HeadSha             string
+	Route               dbstate.MergeRoute
+	State               dbstate.MergeState
+	Deadline            *time.Time
+	ReceiptActionID     *string
+	InvocationRequestID *string
+	Detail              *string
+	MergeSha            *string
+	Attempts            int32
+	Rechecks            int32
+	NextAttemptAt       time.Time
+	LeaseOwner          *string
+	LeaseUntil          *time.Time
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type MergeProposal struct {
+	ID            string
+	CandidateID   string
+	OwnerID       string
+	SessionID     string
+	Facts         json.RawMessage
+	Presentation  json.RawMessage
+	SummaryDigest string
+	CreatedAt     time.Time
+}
+
+type MergeRequestKey struct {
+	OwnerID     string
+	Tool        dbstate.MergeTool
+	RequestID   string
+	PayloadHash string
+	ProposalID  string
+	CreatedAt   time.Time
+}
+
+type MergeResult struct {
+	ProposalID string
+	State      dbstate.MergeState
+	Result     json.RawMessage
+	CreatedAt  time.Time
+}
+
+type PrCreation struct {
+	ID             string
+	IdempotencyKey string
+	OwnerID        string
+	ProjectID      string
+	SessionID      *string
+	RequestID      string
+	PayloadHash    string
+	RepoID         int64
+	RepoFullName   string
+	Head           string
+	Base           string
+	ExpectedSha    string
+	Title          string
+	Body           string
+	State          dbstate.PRCreationState
+	PrNumber       *int64
+	Url            *string
+	Detail         *string
+	Attempts       int32
+	Rechecks       int32
+	NextAttemptAt  time.Time
+	LeaseOwner     *string
+	LeaseUntil     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 type PreviewLease struct {
 	ID          string
 	WorkspaceID string

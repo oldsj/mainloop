@@ -17,6 +17,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/health"
 	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/merge"
 	"github.com/oldsj/mainloop/server/internal/preview"
 	"github.com/oldsj/mainloop/server/internal/projects"
 	"github.com/oldsj/mainloop/server/internal/providers"
@@ -51,6 +52,7 @@ type Server struct {
 	*attention.AttentionAPI
 	*health.DataAPI
 	*schedules.SchedulesAPI
+	*merge.MergeAPI
 
 	fallback
 
@@ -97,6 +99,8 @@ type Deps struct {
 	// Schedules serves scheduled runs. Nil builds one over Pool with no kagent client: the routes
 	// answer 503 and nothing is adopted.
 	Schedules *schedules.Service
+	// Merge serves the owner's read of a merge proposal's details. Nil answers that route with 503.
+	Merge *merge.Service
 }
 
 // maxBodyBytes caps request bodies. The validator buffers the whole body before any handler runs,
@@ -154,6 +158,7 @@ func New(d Deps) *Server {
 		AttentionAPI:    attention.NewAPI(att),
 		DataAPI:         health.NewAPI(healthService(d)),
 		SchedulesAPI:    schedules.NewAPI(schedulesService(d)),
+		MergeAPI:        &merge.MergeAPI{Svc: d.Merge, OwnerID: d.Config.Identity.OwnerID},
 		deps:            d,
 		initErr:         err,
 	}

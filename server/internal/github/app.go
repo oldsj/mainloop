@@ -138,6 +138,8 @@ func permissionFields(p Permissions) (*gh.InstallationPermissions, error) {
 			out.Checks = &l
 		case "statuses":
 			out.Statuses = &l
+		case "administration":
+			out.Administration = &l
 		default:
 			return nil, fmt.Errorf("github: unknown permission %q", name)
 		}

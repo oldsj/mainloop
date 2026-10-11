@@ -9,6 +9,7 @@
 package githubtest
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -16,6 +17,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -66,6 +68,32 @@ type PullRequest struct {
 	HeadRef   string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	// The fields below serve the pull-request and merge calls (pulls.go). The zero values make an
+	// open, mergeable, non-draft pull request into the default branch.
+
+	Body string
+	// Closed marks a closed pull request; Merged also sets it.
+	Closed bool
+	Merged bool
+	Draft  bool
+	// HeadSHA is the head commit; BaseRef is the base branch, the default branch when empty.
+	HeadSHA string
+	BaseRef string
+	// MergeCommitSHA is set when the pull request is merged.
+	MergeCommitSHA string
+	// Unmergeable answers mergeable false; MergeableUnknown answers null; MergeableState defaults
+	// to "clean".
+	Unmergeable      bool
+	MergeableUnknown bool
+	MergeableState   string
+	Files            []File
+	// Additions, Deletions and ChangedFiles override the totals computed from Files when nonzero.
+	Additions    int
+	Deletions    int
+	ChangedFiles int
+	// HeadRepoGone answers a null head repository (a deleted fork).
+	HeadRepoGone bool
 }
 
 // Commit is a commit in the fake. Commits are served newest first, in the order given.
@@ -89,6 +117,30 @@ type Repository struct {
 	Commits       []Commit
 	// NotInstalled makes the App unknown to this repository (404 on the installation lookup).
 	NotInstalled bool
+
+	// The fields below serve the pull-request and merge calls (pulls.go).
+
+	// ID is the repository id; zero means 1.
+	ID int64
+	// NoSquash turns squash merging off; Archived marks the repository archived.
+	NoSquash bool
+	Archived bool
+	// Branches maps a branch name to the commit it points at. The default branch is added with a
+	// fixed tip when absent.
+	Branches map[string]string
+	// Suites, Runs and Statuses are the CI facts, by commit.
+	Suites   map[string][]CheckSuite
+	Runs     map[string][]CheckRun
+	Statuses map[string][]Status
+	// Protection is classic branch protection of the default branch; nil means none.
+	// ProtectionStatus, when set, is the status the protection read answers instead.
+	Protection       *Protection
+	ProtectionStatus int
+	// Rules are the active ruleset rules; RulesStatus, when set, is the status that read answers.
+	Rules       []Rule
+	RulesStatus int
+	// MergeStatus, when set, is the status a merge request answers instead of merging.
+	MergeStatus int
 }
 
 // Request is one request the fake received.
@@ -96,6 +148,8 @@ type Request struct {
 	Method string
 	Path   string
 	Query  string
+	// Body is the request body, for the calls that send one (a pull request, a merge).
+	Body string
 }
 
 // Mint is one installation-token request the fake served.
@@ -133,13 +187,20 @@ type Server struct {
 	tokens    map[string]token
 	failures  map[string]int
 	redirects map[string]string
+	// rateLimited and lost are keyed like failures; lost counts replies still to be dropped.
+	rateLimited map[string]bool
+	lost        map[string]int
+	nextPR      map[string]int
 }
 
 // New starts a fake and closes it when t finishes.
 func New(t testing.TB) *Server {
 	t.Helper()
 	loadKey()
-	s := &Server{repos: map[string]*Repository{}, tokens: map[string]token{}, failures: map[string]int{}, redirects: map[string]string{}}
+	s := &Server{
+		repos: map[string]*Repository{}, tokens: map[string]token{}, failures: map[string]int{}, redirects: map[string]string{},
+		rateLimited: map[string]bool{}, lost: map[string]int{}, nextPR: map[string]int{},
+	}
 	s.srv = httptest.NewServer(http.HandlerFunc(s.serve))
 	s.URL = s.srv.URL + "/"
 	t.Cleanup(s.srv.Close)
@@ -196,27 +257,58 @@ func (s *Server) Mints() []Mint {
 const SecretMarker = "upstream-secret-marker"
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	var body []byte
+	if r.Body != nil {
+		body, _ = io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		r.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	key := r.Method + " " + r.URL.Path
 	s.mu.Lock()
-	s.requests = append(s.requests, Request{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery})
-	status := s.failures[r.Method+" "+r.URL.Path]
+	s.requests = append(s.requests, Request{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Body: string(body)})
+	status := s.failures[key]
+	limited := s.rateLimited[key]
 	target := s.redirects[r.URL.Path]
+	lose := s.lost[key] > 0
+	if lose {
+		s.lost[key]--
+	}
 	s.mu.Unlock()
 	if target != "" {
 		http.Redirect(w, r, target, http.StatusFound)
+		return
+	}
+	if limited {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(2*time.Second).Unix(), 10))
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "API rate limit exceeded"})
 		return
 	}
 	if status != 0 {
 		writeJSON(w, status, map[string]string{"message": SecretMarker})
 		return
 	}
+	if lose {
+		// The request is carried out, and the connection is dropped before the answer.
+		s.dispatch(httptest.NewRecorder(), r)
+		if hj, ok := w.(http.Hijacker); ok {
+			if conn, _, err := hj.Hijack(); err == nil {
+				_ = conn.Close()
+			}
+		}
+		return
+	}
+	s.dispatch(w, r)
+}
+
+func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	segs := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	switch {
 	case r.Method == http.MethodGet && len(segs) == 4 && segs[0] == "repos" && segs[3] == "installation":
 		s.installation(w, r, segs[1], segs[2])
 	case r.Method == http.MethodPost && len(segs) == 4 && segs[0] == "app" && segs[1] == "installations" && segs[3] == "access_tokens":
 		s.mint(w, r, segs[2])
-	case r.Method == http.MethodGet && len(segs) >= 3 && segs[0] == "repos":
-		s.repoRead(w, r, segs)
+	case len(segs) >= 3 && segs[0] == "repos":
+		s.repoCall(w, r, segs)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
 	}
@@ -311,25 +403,40 @@ func (s *Server) mint(w http.ResponseWriter, r *http.Request, id string) {
 	writeJSON(w, http.StatusCreated, answer)
 }
 
-// need is the permission an endpoint requires.
-func need(segs []string) string {
+// need is the permissions an endpoint requires, by name and level. Nil means no such endpoint.
+func need(method string, segs []string) map[string]string {
+	rest := segs[3:]
+	read := func(name string) map[string]string { return map[string]string{name: "read"} }
 	switch {
-	case len(segs) == 3:
-		return "metadata"
-	case len(segs) == 4 && segs[3] == "pulls":
-		return "pull_requests"
-	case len(segs) == 4 && segs[3] == "commits":
-		return "contents"
+	case method == http.MethodGet && len(rest) == 0:
+		return read("metadata")
+	case method == http.MethodGet && len(rest) == 1 && rest[0] == "pulls",
+		method == http.MethodGet && len(rest) == 2 && rest[0] == "pulls",
+		method == http.MethodGet && len(rest) == 3 && rest[0] == "pulls" && rest[2] == "files":
+		return read("pull_requests")
+	case method == http.MethodPost && len(rest) == 1 && rest[0] == "pulls":
+		return map[string]string{"pull_requests": "write"}
+	case method == http.MethodPut && len(rest) == 3 && rest[0] == "pulls" && rest[2] == "merge":
+		return map[string]string{"pull_requests": "write", "contents": "write"}
+	case method == http.MethodGet && len(rest) == 1 && rest[0] == "commits":
+		return read("contents")
+	case method == http.MethodGet && len(rest) == 3 && rest[0] == "commits" && rest[2] == "statuses":
+		return read("statuses")
+	case method == http.MethodGet && len(rest) == 3 && rest[0] == "commits" && (rest[2] == "check-suites" || rest[2] == "check-runs"):
+		return read("checks")
+	case method == http.MethodGet && len(rest) == 3 && rest[0] == "branches" && rest[2] == "protection":
+		return read("administration")
+	case method == http.MethodGet && len(rest) >= 2 && rest[0] == "branches":
+		return read("contents")
+	case method == http.MethodGet && len(rest) == 3 && rest[0] == "rules" && rest[1] == "branches":
+		return read("metadata")
 	}
-	return ""
+	return nil
 }
 
-func (s *Server) repoRead(w http.ResponseWriter, r *http.Request, segs []string) {
-	perm := need(segs)
-	if perm == "" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
-		return
-	}
+// authorize checks the installation token the way GitHub does and returns the repository, or
+// answers the request itself and returns nil.
+func (s *Server) authorize(w http.ResponseWriter, r *http.Request, segs []string, needs map[string]string) *Repository {
 	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "token ")
 	s.mu.Lock()
 	tok, known := s.tokens[raw]
@@ -337,32 +444,60 @@ func (s *Server) repoRead(w http.ResponseWriter, r *http.Request, segs []string)
 	s.mu.Unlock()
 	if !ok || !known || time.Now().After(tok.expires) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
-		return
+		return nil
 	}
 	if tok.repo != lower(segs[1], segs[2]) || repo == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+		return nil
+	}
+	for name, want := range needs {
+		have := tok.perms[name]
+		if have != "write" && have != want {
+			writeJSON(w, http.StatusForbidden, map[string]string{"message": "Resource not accessible by integration"})
+			return nil
+		}
+	}
+	return repo
+}
+
+func (s *Server) repoCall(w http.ResponseWriter, r *http.Request, segs []string) {
+	needs := need(r.Method, segs)
+	if needs == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
 		return
 	}
-	if lvl := tok.perms[perm]; lvl != "read" && lvl != "write" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"message": "Resource not accessible by integration"})
+	repo := s.authorize(w, r, segs, needs)
+	if repo == nil {
 		return
 	}
-	switch perm {
-	case "metadata":
+	rest := segs[3:]
+	switch {
+	case len(rest) == 0:
 		s.mu.Lock()
+		id := repo.ID
+		if id == 0 {
+			id = 1
+		}
 		out := map[string]any{
-			"id": 1, "name": repo.Name, "full_name": repo.Owner + "/" + repo.Name,
+			"id": id, "name": repo.Name, "full_name": repo.Owner + "/" + repo.Name,
 			"owner":       map[string]any{"login": repo.Owner, "avatar_url": repo.AvatarURL},
 			"description": repo.Description, "default_branch": repo.DefaultBranch,
-			"html_url":          "https://github.com/" + repo.Owner + "/" + repo.Name,
-			"open_issues_count": repo.Issues + len(repo.PullRequests),
+			"html_url":           "https://github.com/" + repo.Owner + "/" + repo.Name,
+			"open_issues_count":  repo.Issues + openCount(repo),
+			"allow_squash_merge": !repo.NoSquash, "archived": repo.Archived,
 		}
 		s.mu.Unlock()
 		writeJSON(w, http.StatusOK, out)
-	case "pull_requests":
-		s.pulls(w, r, repo)
-	case "contents":
+	case rest[0] == "pulls":
+		s.pullCall(w, r, repo, rest)
+	case rest[0] == "commits" && len(rest) == 1:
 		s.commits(w, r, repo)
+	case rest[0] == "commits":
+		s.commitFacts(w, r, repo, rest[1], rest[2])
+	case rest[0] == "branches":
+		s.branchCall(w, r, repo, rest[1:])
+	case rest[0] == "rules":
+		s.ruleCall(w, r, repo)
 	}
 }
 
@@ -398,25 +533,6 @@ func (s *Server) link(w http.ResponseWriter, r *http.Request, pageNo, last int) 
 		parts = append(parts, u(1)+`; rel="first"`, u(pageNo-1)+`; rel="prev"`)
 	}
 	w.Header().Set("Link", strings.Join(parts, ", "))
-}
-
-func (s *Server) pulls(w http.ResponseWriter, r *http.Request, repo *Repository) {
-	s.mu.Lock()
-	all := append([]PullRequest(nil), repo.PullRequests...)
-	s.mu.Unlock()
-	from, to, pageNo, last := page(r, len(all))
-	out := []map[string]any{}
-	for _, p := range all[from:to] {
-		out = append(out, map[string]any{
-			"number": p.Number, "title": p.Title, "state": "open",
-			"user":       map[string]any{"login": p.Author},
-			"created_at": p.CreatedAt.UTC().Format(time.RFC3339), "updated_at": p.UpdatedAt.UTC().Format(time.RFC3339),
-			"html_url": fmt.Sprintf("https://github.com/%s/%s/pull/%d", repo.Owner, repo.Name, p.Number),
-			"head":     map[string]any{"ref": p.HeadRef},
-		})
-	}
-	s.link(w, r, pageNo, last)
-	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) commits(w http.ResponseWriter, r *http.Request, repo *Repository) {

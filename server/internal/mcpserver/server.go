@@ -21,6 +21,8 @@ import (
 	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/merge"
+	"github.com/oldsj/mainloop/server/internal/prs"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/topics"
 )
@@ -39,6 +41,10 @@ type Server struct {
 	Topics  *topics.Service
 	// Tasks serves the task tools. With none, those tools answer that tasks are unavailable.
 	Tasks *tasks.Service
+	// PRs and Merge serve the pull-request and merge tools. With none, those tools answer that
+	// they are unavailable.
+	PRs   *prs.Service
+	Merge *merge.Service
 	Log   *slog.Logger
 	// AllowedHosts are the Host names the listener answers to; Dev also allows loopback.
 	AllowedHosts map[string]bool

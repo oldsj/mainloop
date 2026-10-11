@@ -19,7 +19,6 @@ import (
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/events"
-	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/gittransport"
 	"github.com/oldsj/mainloop/server/internal/health"
 	"github.com/oldsj/mainloop/server/internal/hitl"
@@ -119,13 +118,15 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 
 	hub := events.NewHub(log, cfg.Events.SubscriberBuffer)
 	deps := app.Deps{Config: cfg, Log: log, DB: pool, Pool: pool, Hub: hub}
-	if cfg.GitHub.AppID != "" {
-		gh, err := github.NewApp(github.Options{AppID: cfg.GitHub.AppID, PrivateKey: cfg.GitHub.AppPrivateKey.Reveal()})
-		if err != nil {
-			return err
-		}
+	gh, err := newGitHubApp(cfg)
+	if err != nil {
+		return err
+	}
+	if gh != nil {
 		deps.GitHub = gh
 	}
+	prSvc, mergeSvc := newPullRequestServices(cfg, pool, gh, log)
+	deps.Merge = mergeSvc
 	// The one credential service of this process is built first: the workspace and session services
 	// publish an agent's MCP credential before creating its kagent Session and revoke it when the
 	// agent ends.
@@ -207,6 +208,14 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	previews.Register(runner)
 	if ts := apiServer.TasksAPI.Svc; ts != nil {
 		ts.Register(runner)
+	}
+	if prSvc != nil {
+		runner.Add(prSvc.Loop())
+		// Merges run only where the merge tools are on: nothing else creates a candidate.
+		if cfg.MergeToolsEnabled {
+			runner.Add(mergeSvc.Loop())
+			runner.AddSweep(mergeSvc.CompletionSweep())
+		}
 	}
 
 	g.Go(func() error { return notifier.Run(gctx) })

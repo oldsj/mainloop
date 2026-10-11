@@ -5,6 +5,123 @@ bindings and to new owner workspaces enrolled through `POST /workspaces`. Unknow
 standalone sessions and retained legacy workspaces cannot discover or invoke it. A checkout or
 tool discovery does not enroll a binding.
 
+## Go server (migration slice G10)
+
+This section describes the Go server in `server/internal/{prs,merge}`. The sections after it
+describe the frozen Python backend and stay as the reference for behaviour not repeated here
+(evidence inventory, summary text, web rendering). Where they differ, this section is current.
+
+### Both tools are durable intents
+
+Every call writes a row first and a reconcile loop carries it out; no database transaction or
+lock is held across a GitHub request. A tool call writes the row, wakes the loop, and polls the row
+for up to `Settle` (20 s by default) before it returns the state it has. The MCP process runs no
+loops, so a call that is cut off or repeated never sends a second PR or merge: the row is the
+authority and the loop is the only sender.
+
+### `open_pull_request`
+
+States of a `pr_creations` row: `pending` (written; nothing sent) → `dispatching` (the claimer
+checked the branch and found no PR, and is about to POST) → `created` or `refused`, with
+`uncertain` for a POST whose outcome is unknown. `created` and `refused` are final.
+
+- The row is keyed `pr:<owner>:<request id>`; the same id with other arguments is a conflict. One
+  intent may be in flight per owner, repository and head/base at a time; a second request for
+  the same head finds the first.
+- Before the one POST the loop re-reads the repository, checks that the branch exists at
+  `expected_sha`, and lists the PRs for the head (open and closed). One match is adopted
+  (`created`) and no PR is created in that case. A head or base that does not match is refused.
+- A POST whose outcome is not known (transport failure, 5xx, a body that is not the PR asked for)
+  leaves the row `uncertain`. An uncertain row is only ever re-checked by listing the head; it is
+  never POSTed again, even when the list is empty, because absence does not prove the earlier
+  request failed. If no PR appears within `Window` (10 min), the row is `refused` as
+  `not_created` and the caller needs a new request id.
+- A 4xx on the POST (other than 429) is a definite refusal recorded as `github_<status>`; GitHub's
+  free text is never stored. A 429 returns the row to `pending` and is retried later.
+
+### Merge
+
+A merge is prepared, then evaluated and merged by the `merge_candidates` loop.
+
+| State        | Meaning                                                                                                                                |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `prepared`   | A proposal exists with its frozen facts; nobody has asked to merge it                                                                  |
+| `evaluating` | A merge was requested (auto policy, or the owner's consent); the loop reads the evidence until it holds, fails, or the deadline passes |
+| `merging`    | The merge intent is committed; the one `PUT /pulls/{n}/merge` (squash, pinned head SHA) is being sent or was                           |
+| `uncertain`  | The PUT's outcome is unknown; resolved by reading the PR, never by resending                                                           |
+| `blocked`    | Final: the evidence or GitHub refused it; the detail says why                                                                          |
+| `expired`    | Final: the deadline (30 min by default) passed before the evidence held                                                                |
+| `superseded` | Final: a newer head or a newer preparation replaced it                                                                                 |
+| `merged`     | Final: the PR is merged                                                                                                                |
+
+Allowed edges: `prepared` → `evaluating`, `superseded`, `blocked`; `evaluating` → `merging`,
+`blocked`, `expired`, `superseded`; `merging` → `merged`, `uncertain`, `blocked`, and back to
+`evaluating` on a 429; `uncertain` → `uncertain`, `merged`, `blocked`. The proposal, its request
+keys and its result are an append-only ledger (a trigger refuses updates and deletes).
+
+- `prepare_pull_request_merge` reads the PR and repository, freezes the facts and the route
+  (`auto` or `approval`, from the project's merge policy and the protected paths), supersedes
+  older proposals for the same PR, and creates no approval card. A replay of the request id returns
+  the same proposal without reading GitHub.
+- `merge_pull_request` prepares and, on the `auto` route, starts the evaluation. On the
+  `approval` route it returns `approval_required` and the proposal; the owner's consent and the
+  approved-merge tool finish it. When the evidence is unavailable (draft, closed, wrong base,
+  too many files, squash not allowed, archived) it refuses with `evidence_unavailable`.
+- `merge_pull_request_with_approval` (only on `/mcp/merge-approval`) evaluates the exact merge the
+  owner approved, once, and Mainloop then keeps evaluating under that consent until CI settles or
+  the deadline passes. Re-calling it while it evaluates is a replay; read
+  `get_pull_request_merge_status` instead. A sweep (every 30 s) starts any approved merge whose
+  tool call never arrived or was lost: the approval is recorded, so completing it does not need
+  the agent.
+- `get_pull_request_merge_status` reads the stored state for a proposal id and one of its request
+  ids. It never approves or executes.
+- The intent is committed (`merging`, fenced by the lease) before the PUT. A unique index allows one
+  candidate per PR to hold the merge intent (`merging`, `uncertain`, `merged`); a second candidate
+  that reaches the PUT is blocked `merge_in_progress`.
+- A PUT that returns the merge is `merged`. A 429 returns the row to `evaluating`. A 403 on the PUT
+  is `blocked` as `merge_refused_403`; another 4xx is `blocked` as `merge_refused_<status>`.
+  Anything else (a transport error, a 5xx, a lost reply) makes the row `uncertain`.
+- An `uncertain` row, and a `merging` row found again after a crash, is only ever read. Merged with
+  the same head → `merged`; merged with another head → `blocked` (`merged_other_head`); closed →
+  `blocked` (`closed_without_merge`); open at a different head → `blocked` (`head_moved`). Open at
+  the same head stays `uncertain`, and after `Window` (10 min) the row is `blocked` as
+  `merge_not_applied`. The PUT is never resent, so a merge that never ran is reported as not
+  applied and the agent prepares again.
+- Merge detail paging (`GET /hitl/{request_id}/merge/{proposal_id}/details`) reads the frozen
+  facts for the owner: a section (`description`, `files` or `checks`), an offset cursor and a limit
+  of at most 50. A description page is at most 16 KiB of text; a page over 64 KiB is refused with 409. The request must be an approval request of the owner that names the proposal; otherwise 404.
+
+### Consent
+
+The approved-merge tool counts only the invoking session's own live approval of the exact call:
+a tool-approval response for that session, approved, whose `tool_name` is the public name of an
+operator-configured merge tool for the session's provider, with `args` exactly
+`{proposal_id, request_id}` and an `arguments_hash` equal to the SHA-256 of those canonical
+arguments. A response that was rejected in transport withdraws the consent (`consent_withdrawn`).
+The configured merge-tool mapping (`MAINLOOP_MERGE_CONFIGURATIONS`) is the allowlist; the
+template name in a mapping is not checked in Go.
+
+**Nested agents.** A merge approval raised by a delegated agent reaches the owner only through its
+parent. Nested approvals are not answerable (HITL refuses to answer a nested request), and the
+consent search skips them, so a nested agent's approved-merge call has no consent and is refused.
+A delegated agent that needs a merge asks its parent, whose own call is answerable.
+
+### Authority and GitHub reads
+
+- Every tool needs the actor's session project to equal the `project_id` argument, and fails closed
+  when the session has no project. Merge tools are listed only for actors that hold
+  `open_pull_request`; a completed task may only read status.
+- A 403 on the branch-protection or rules read means "rules are unavailable on this plan": the
+  evidence records `github_rules_unavailable_on_plan` and continues with CI. Only the status code
+  is used, never the message text. A 403 on any other read is an ordinary failure
+  (`github_unavailable`, retried). A 403 on the PUT is `merge_refused_403`. A permission-denied 403
+  on the two rule reads cannot be told from a plan 403.
+- Required checks and statuses must have a result; with no CI at all nothing merges. A
+  `merge_queue` rule always routes to approval.
+- The Observer for the task projection (PR state and CI at the exact head, five minutes fresh) is
+  not implemented: G8b is not merged. When it lands, an observer over `github.App.PullRequest` and
+  the check reads belongs in `internal/github`.
+
 ## Inputs and authority
 
 Inputs are `project_id`, `branch`, `expected_sha` (40 lowercase hexadecimal characters),

@@ -123,6 +123,19 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.PublicationPending), string(dbstate.PublicationDispatching), string(dbstate.PublicationConfirmed),
 			string(dbstate.PublicationRejected), string(dbstate.PublicationUnknown))},
 		{"scheduled_run_schedules", "state", strs(string(dbstate.ScheduleIntent), string(dbstate.ScheduleCreated))},
+		{"pr_creations", "state", strs(
+			string(dbstate.PRPending), string(dbstate.PRDispatching), string(dbstate.PRUncertain),
+			string(dbstate.PRCreated), string(dbstate.PRRefused))},
+		{"merge_candidates", "route", strs(string(dbstate.RouteAuto), string(dbstate.RouteApproval))},
+		{"merge_candidates", "state", strs(
+			string(dbstate.MergePrepared), string(dbstate.MergeEvaluating), string(dbstate.MergeMerging),
+			string(dbstate.MergeUncertain), string(dbstate.MergeBlocked), string(dbstate.MergeExpired),
+			string(dbstate.MergeSuperseded), string(dbstate.MergeMerged))},
+		{"merge_request_keys", "tool", strs(
+			string(dbstate.ToolPrepare), string(dbstate.ToolMerge), string(dbstate.ToolApprovedMerge))},
+		{"merge_results", "state", strs(
+			string(dbstate.MergeBlocked), string(dbstate.MergeExpired), string(dbstate.MergeSuperseded),
+			string(dbstate.MergeMerged))},
 		// No state machine, so no dbstate type: the contract enum is the constant the CHECK must match.
 		{"environment_versions", "architecture", strs(
 			string(api.EnvironmentVersionArchitectureAmd64), string(api.EnvironmentVersionArchitectureArm64))},
