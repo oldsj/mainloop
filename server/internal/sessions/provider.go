@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -118,7 +117,7 @@ func checkMainReady(ctx context.Context, q *dbq.Queries, sessionID string) error
 		return fmt.Errorf("get binding: %w", err)
 	}
 	if b.MainPending {
-		return conflict("The main thread is switching to %s; messages wait until it is ready.", b.Kind)
+		return conflictCode(codePending, "The main thread is switching to %s; messages wait until it is ready.", b.Kind)
 	}
 	return nil
 }
@@ -230,6 +229,9 @@ func (s *Service) switchTo(ctx context.Context, b dbq.GetMainBindingRow, provide
 	if err != nil {
 		return err
 	}
+	if err := s.requireAgentReady(ctx, agent); err != nil {
+		return err
+	}
 	if err := s.retireIdle(ctx, b); err != nil {
 		return err
 	}
@@ -243,6 +245,24 @@ func (s *Service) switchTo(ctx context.Context, b dbq.GetMainBindingRow, provide
 	return s.prepare(ctx, next)
 }
 
+// requireAgentReady is the first thing a switch does: it reads the target Agent and refuses with 409
+// when kagent has no such Agent or it has no prepared revision, before anything is suspended,
+// revoked or written. A create on such an Agent would be refused anyway, but only after the old
+// identity was retired.
+func (s *Service) requireAgentReady(ctx context.Context, agent kagent.AgentRef) error {
+	a, err := s.Kagent.GetAgent(ctx, agent)
+	var se *kagent.SessionError
+	switch {
+	case errors.As(err, &se) && se.Code == connect.CodeNotFound:
+		return conflictCode(codeAgentUnavailable, "The target Agent %s/%s does not exist.", agent.Namespace, agent.Name)
+	case err != nil:
+		return conflictCode(codeAgentUnavailable, "The target Agent %s/%s could not be read.", agent.Namespace, agent.Name)
+	case !kagent.AgentReady(a):
+		return conflictCode(codeAgentUnavailable, "The target Agent %s/%s is not ready (no prepared revision yet).", agent.Namespace, agent.Name)
+	}
+	return nil
+}
+
 // retireIdle establishes that the main is idle and suspends its native Session. It reads and
 // suspends; it commits nothing. Anything it cannot confirm refuses the switch with 409 and
 // changes nothing but possibly the Session's suspended state, which the next send reverses.
@@ -253,7 +273,7 @@ func (s *Service) retireIdle(ctx context.Context, b dbq.GetMainBindingRow) error
 	}
 	if b.KagentSessionID == nil {
 		if b.KagentCreateRequestID != nil {
-			return conflict("A native Session create for the main thread is unresolved; try again once it settles.")
+			return conflictCode(codeUnresolved, "A native Session create for the main thread is unresolved; try again once it settles.")
 		}
 		return nil // never started: nothing to suspend
 	}
@@ -265,32 +285,35 @@ func (s *Service) retireIdle(ctx context.Context, b dbq.GetMainBindingRow) error
 	case errors.As(err, &se) && se.Code == connect.CodeNotFound:
 		return nil // gone: kept in history
 	case err != nil:
-		return conflict("The main thread's native state could not be confirmed idle.")
+		return conflictCode(codeUnconfirmed, "The main thread's native state could not be confirmed idle.")
 	case sessionEnded(sess):
 		return nil
 	}
 	if st := sess.GetState(); changing(sess) ||
 		(st != kagentapi.RuntimeState_RUNTIME_STATE_READY && st != kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED) {
-		return conflict("The main thread's native Session is not settled (%s); try again shortly.", st)
+		return conflictCode(codeUnconfirmed, "The main thread's native Session is not settled (%s); try again shortly.", st)
 	}
 	tasks, err := s.Kagent.ListTasks(ctx, agent, ksid)
 	if err != nil {
-		return conflict("The main thread's native turns could not be confirmed finished.")
+		return conflictCode(codeUnconfirmed, "The main thread's native turns could not be confirmed finished.")
 	}
 	for _, t := range tasks {
 		if !isTerminal(t.Status.State) {
-			return conflict("The main thread has a native turn in progress.")
+			return conflictCode(codeBusy, "The main thread has a native turn in progress.")
 		}
 	}
 	if sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED {
 		return nil
 	}
 	if _, err := s.Kagent.SuspendSession(ctx, ksid); err != nil {
-		return conflict("The main thread's native Session could not be suspended.")
+		return conflictCode(codeUnconfirmed, "The main thread's native Session could not be suspended.")
 	}
 	after, err := s.Kagent.GetSession(ctx, ksid)
 	if err != nil || after.GetState() != kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED {
-		return conflict("The suspend of the main thread's native Session is unconfirmed.")
+		return conflictCode(codeUnconfirmed, "The suspend of the main thread's native Session is unconfirmed.")
+	}
+	if s.AfterSuspend != nil {
+		return s.AfterSuspend(ctx)
 	}
 	return nil
 }
@@ -304,9 +327,9 @@ func (s *Service) requireNoOpenWork(ctx context.Context, q *dbq.Queries, session
 	}
 	switch {
 	case c.Deliveries > 0:
-		return conflict("The main thread has open work: a message is recorded, being sent, delivered or unconfirmed.")
+		return conflictCode(codeBusy, "The main thread has open work: a message is recorded, being sent, delivered or unconfirmed.")
 	case c.Cancels > 0:
-		return conflict("A stop of the main thread is unconfirmed.")
+		return conflictCode(codeUnconfirmed, "A stop of the main thread is unconfirmed.")
 	}
 	return nil
 }
@@ -326,7 +349,7 @@ func (s *Service) commitSwitch(
 		q := dbq.New(tx)
 		cur, err := q.LockMainBinding(ctx, read.SessionID)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return conflict("The main thread changed; try again.")
+			return conflictCode(codeBusy, "The main thread changed; try again.")
 		}
 		if err != nil {
 			return fmt.Errorf("lock main binding: %w", err)
@@ -334,25 +357,27 @@ func (s *Service) commitSwitch(
 		if cur.MainPending != read.MainPending || cur.Kind != read.Kind ||
 			derefStr(cur.KagentRequestID) != derefStr(read.KagentRequestID) ||
 			derefStr(cur.KagentSessionID) != derefStr(read.KagentSessionID) {
-			return conflict("The main thread changed; try again.")
+			return conflictCode(codeBusy, "The main thread changed; try again.")
 		}
 		if !abandoned && cur.KagentSessionID == nil && cur.KagentCreateRequestID != nil {
-			return conflict("A native Session create for the main thread is unresolved; try again once it settles.")
+			return conflictCode(codeUnresolved, "A native Session create for the main thread is unresolved; try again once it settles.")
 		}
 		if err := s.requireNoOpenWork(ctx, q, cur.SessionID); err != nil {
 			return err
 		}
-		retired := cur.KagentSessionID
-		if retired == nil {
-			retired = ksid
-		}
-		if err := q.InsertMainProviderHistory(ctx, dbq.InsertMainProviderHistoryParams{
-			SessionID: cur.SessionID, Provider: cur.Kind, KagentSessionID: retired,
-			AgentNamespace: cur.KagentAgentNamespace, AgentName: cur.KagentAgentName,
-			RequestID: cur.KagentRequestID, CreateRequestID: cur.KagentCreateRequestID,
-			Model: cur.Model, Turns: cur.Turns, Abandoned: abandoned, Error: cur.MainError,
-		}); err != nil {
-			return fmt.Errorf("record provider history: %w", err)
+		// A main that never started has no native identity to keep.
+		if retired := cur.KagentSessionID; retired != nil || abandoned {
+			if retired == nil {
+				retired = ksid
+			}
+			if err := q.InsertMainProviderHistory(ctx, dbq.InsertMainProviderHistoryParams{
+				SessionID: cur.SessionID, Provider: cur.Kind, KagentSessionID: retired,
+				AgentNamespace: cur.KagentAgentNamespace, AgentName: cur.KagentAgentName,
+				RequestID: cur.KagentRequestID, CreateRequestID: cur.KagentCreateRequestID,
+				Model: cur.Model, Turns: cur.Turns, Abandoned: abandoned, Error: cur.MainError,
+			}); err != nil {
+				return fmt.Errorf("record provider history: %w", err)
+			}
 		}
 		if _, err := agentauth.RevokeInTx(ctx, q, cur.SessionID); err != nil {
 			return err
@@ -375,12 +400,15 @@ func (s *Service) resumeSwitch(ctx context.Context, b dbq.GetMainBindingRow, pro
 	other := provider != b.Kind
 	switch {
 	case other && !b.MainRecoverable:
-		return conflict("A switch to %s is pending; repeat it to recover, and choose another provider only once it is recoverable.", b.Kind)
+		return conflictCode(codePending, "A switch to %s is pending; repeat it to recover, and choose another provider only once it is recoverable.", b.Kind)
 	case !other && (!restart || !b.MainRecoverable):
 		return s.prepare(ctx, b) // the same create contract
 	}
 	agent, err := s.newMainAgent(provider)
 	if err != nil {
+		return err
+	}
+	if err := s.requireAgentReady(ctx, agent); err != nil {
 		return err
 	}
 	ksid, err := s.confirmAbandonable(ctx, b)
@@ -406,14 +434,16 @@ func (s *Service) confirmAbandonable(ctx context.Context, b dbq.GetMainBindingRo
 	if err := s.requireNoOpenWork(ctx, q, b.SessionID); err != nil {
 		return nil, err
 	}
-	unconfirmed := conflict("The pending target could not be confirmed absent or failed; repeat the same selection.")
+	unconfirmed := conflictCode(codeUnconfirmed, "The pending target could not be confirmed absent or failed; repeat the same selection.")
 	var se *kagent.SessionError
 	if b.KagentSessionID == nil {
 		sess, err := s.Kagent.CreateSession(ctx, s.createRequest(b))
 		switch {
-		case errors.As(err, &se) && createHitDeleted(se):
+		case errors.As(err, &se) && createProvenAbsent(se):
 			return nil, nil
 		case err != nil:
+			return nil, unconfirmed
+		case changing(sess):
 			return nil, unconfirmed
 		case sessionEnded(sess) || sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_FAILED:
 			id := sess.GetId()
@@ -433,7 +463,7 @@ func (s *Service) confirmAbandonable(ctx context.Context, b dbq.GetMainBindingRo
 		return nil, unconfirmed
 	case sessionEnded(sess):
 		return b.KagentSessionID, nil
-	case sess.GetState() != kagentapi.RuntimeState_RUNTIME_STATE_FAILED:
+	case changing(sess) || sess.GetState() != kagentapi.RuntimeState_RUNTIME_STATE_FAILED:
 		return nil, unconfirmed
 	}
 	tasks, err := s.Kagent.ListTasks(ctx, s.agentOf(b), *b.KagentSessionID)
@@ -442,7 +472,7 @@ func (s *Service) confirmAbandonable(ctx context.Context, b dbq.GetMainBindingRo
 	}
 	for _, t := range tasks {
 		if !isTerminal(t.Status.State) {
-			return nil, conflict("The pending target has a native turn in progress.")
+			return nil, conflictCode(codeBusy, "The pending target has a native turn in progress.")
 		}
 	}
 	return b.KagentSessionID, nil
@@ -456,7 +486,7 @@ func (s *Service) createRequest(b dbq.GetMainBindingRow) *kagentapi.CreateSessio
 		Agent:       &kagentapi.ResourceReference{Namespace: agent.Namespace, Name: agent.Name},
 		RequestId:   derefStr(b.KagentRequestID),
 		Name:        "Mainloop main thread",
-		Credentials: s.Credentials.ReplayCredentials(b.SessionID, s.MCPOrigin, b.Role, b.MCPGrantKind),
+		Credentials: s.Credentials.ReplayCredentialsFor(b.SessionID, derefStr(b.CredentialIdentity), s.MCPOrigin, b.Role, b.MCPGrantKind),
 	}
 }
 
@@ -481,7 +511,7 @@ func (s *Service) prepare(ctx context.Context, b dbq.GetMainBindingRow) error {
 	var se *kagent.SessionError
 	if ksid == "" {
 		req := s.createRequest(b)
-		creds, err := s.targetCredentials(ctx, b.SessionID)
+		creds, err := s.Credentials.SessionCredentialsFor(ctx, b.SessionID, derefStr(b.CredentialIdentity), s.MCPOrigin)
 		if err != nil {
 			return fail("the MCP credential could not be published: "+err.Error(), false)
 		}
@@ -490,6 +520,10 @@ func (s *Service) prepare(ctx context.Context, b dbq.GetMainBindingRow) error {
 		switch {
 		case errors.As(err, &se) && createHitDeleted(se):
 			return fail("kagent reports that the Session of this create request was deleted", true)
+		case errors.As(err, &se) && createRejectedBeforeReservation(se):
+			// kagent checks the Agent's prepared revision and the create's inputs before it reserves
+			// the request id, so nothing holds it: the target is proven absent.
+			return fail("kagent refused the create: "+se.Error(), true)
 		case err != nil:
 			return fail("the native Session could not be created: "+err.Error(), false)
 		}
@@ -531,24 +565,6 @@ func (s *Service) prepare(ctx context.Context, b dbq.GetMainBindingRow) error {
 		return fmt.Errorf("finish the switch: %w", err)
 	}
 	return nil
-}
-
-// targetCredentials publishes the target's MCP credential. The previous identity's Secret holds the
-// name until the cleanup loop deletes it, so it waits for that, bounded by the ready wait.
-func (s *Service) targetCredentials(ctx context.Context, sessionID string) ([]*kagentapi.SessionCredential, error) {
-	deadline := time.Now().Add(s.opts().ReadyWait)
-	poll := min(max(s.opts().ReadyWait/20, 10*time.Millisecond), time.Second)
-	for {
-		creds, err := s.Credentials.SessionCredentials(ctx, sessionID, s.MCPOrigin)
-		if !errors.Is(err, agentauth.ErrCleanupPending) || !time.Now().Before(deadline) {
-			return creds, err
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(poll):
-		}
-	}
 }
 
 // afterIntent is a test seam: it runs after a switch intent commits and before the create, and an

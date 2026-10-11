@@ -240,6 +240,7 @@ func TestGetAgentMustBeTheAgentAskedFor(t *testing.T) {
 
 func TestCreateEchoIgnoresFieldsTheClientDoesNotKnow(t *testing.T) {
 	c, srv, _ := setup(t)
+	srv.AddAgent("kagent", "a")
 	req := &api.CreateSessionRequest{
 		RequestId: "r", Agent: &api.ResourceReference{Namespace: "kagent", Name: "a"},
 		Workspace:              &api.Workspace{Repo: "https://example.test/o/r", Ref: "main", Branch: "b", Depth: 1},

@@ -34,6 +34,11 @@ type httpError struct {
 	Detail string `json:"detail"`
 }
 
+type codedError struct {
+	Detail string `json:"detail"`
+	Code   string `json:"code"`
+}
+
 type validationError struct {
 	Loc  []string `json:"loc"`
 	Msg  string   `json:"msg"`
@@ -53,6 +58,13 @@ type reasonBody struct {
 // New builds an error with the contract's HTTPError body.
 func New(status int, detail string) *Error {
 	return &Error{Status: status, Message: detail, body: httpError{Detail: detail}}
+}
+
+// ConflictCode is a 409 with the contract's CodedHTTPError body: the human message and a stable
+// machine code the client switches on. (The TaskError shape of [Reason] has no message, and the
+// routes that use this one already show `detail` as text.)
+func ConflictCode(detail, code string) *Error {
+	return &Error{Status: http.StatusConflict, Message: detail, body: codedError{Detail: detail, Code: code}}
 }
 
 // Forbidden is a 403.

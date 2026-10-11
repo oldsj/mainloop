@@ -85,6 +85,7 @@ SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.u
        d.kagent_session_id AS sent_kagent_session_id,
        b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id,
        b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
+       b.credential_identity,
        coalesce(b.mcp_grant_kind::text, '')::text AS binding_grant, s.user_id, s.title AS session_title,
        w.id AS workspace_id,
        coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
@@ -129,6 +130,10 @@ WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attemp
 UPDATE agent_bindings b
 SET kagent_create_request_id = sqlc.arg(create_request_id),
     kagent_create_agent_namespace = sqlc.arg(agent_namespace), kagent_create_agent_name = sqlc.arg(agent_name),
+    -- A main pins the Agent its first create names, so a later configuration change moves no existing
+    -- main (a switch pins its target in BeginMainSwitch).
+    kagent_agent_namespace = CASE WHEN b.role = 'main' THEN coalesce(b.kagent_agent_namespace, sqlc.arg(agent_namespace)) ELSE b.kagent_agent_namespace END,
+    kagent_agent_name = CASE WHEN b.role = 'main' THEN coalesce(b.kagent_agent_name, sqlc.arg(agent_name)) ELSE b.kagent_agent_name END,
     updated_at = now()
 FROM deliveries d
 WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attempts = sqlc.arg(attempts)
@@ -140,7 +145,7 @@ WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attemp
 -- open any more, so nothing is about to retry the create. The workspace service owns the creates
 -- of workspace bindings.
 -- name: ListUnresolvedCreates :many
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.kagent_create_request_id::text AS create_request_id,
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.credential_identity, b.kagent_create_request_id::text AS create_request_id,
        b.kagent_create_agent_namespace AS agent_namespace, b.kagent_create_agent_name AS agent_name
 FROM agent_bindings b
 WHERE b.kagent_create_request_id IS NOT NULL AND b.kagent_session_id IS NULL
@@ -401,6 +406,7 @@ UPDATE agent_bindings
 SET kind = sqlc.arg(kind),
     kagent_agent_namespace = sqlc.arg(agent_namespace), kagent_agent_name = sqlc.arg(agent_name),
     kagent_session_id = NULL, kagent_request_id = sqlc.arg(request_id),
+    credential_identity = sqlc.arg(request_id),
     kagent_create_request_id = sqlc.arg(request_id),
     kagent_create_agent_namespace = sqlc.arg(agent_namespace), kagent_create_agent_name = sqlc.arg(agent_name),
     standing_hash = NULL, model = NULL, turns = 0, queue_held = false,

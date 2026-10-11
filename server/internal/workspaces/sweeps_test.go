@@ -3,6 +3,7 @@ package workspaces
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -285,5 +286,20 @@ func TestOrphanDeleteCommandSharesTheSweepLease(t *testing.T) {
 	rep, ran, err = h.svc.deleteOrphansLeased(bg)
 	if err != nil || !ran || len(rep.Deleted) != 1 || rep.Deleted[0] != orphan {
 		t.Fatalf("ran=%v err=%v %+v", ran, err, rep)
+	}
+}
+
+func TestOrphanSweepNamesAPendingMainCreateAsTheBlock(t *testing.T) {
+	h := newHarness(t, nil)
+	h.strayOn(h.cfg.Kagent.Namespace, h.cfg.Kagent.WorkspaceClaudeAgent, "stray-1")
+	h.exec(`INSERT INTO sessions (id, user_id, title, description, prompt, status) VALUES ('main-1', 'owner', 'Main', 'd', 'p', 'idle')`)
+	h.exec(`INSERT INTO agent_bindings (session_id, kind, role, main_pending, kagent_create_request_id) VALUES ('main-1', 'codex', 'main', true, 'req-1')`)
+	h.svc.Now = func() time.Time { return time.Now().Add(time.Hour) }
+	rep, err := h.svc.SweepOrphans(bg, OrphanOptions{Delete: true})
+	if err != nil || len(rep.Deleted) != 0 || len(h.sessions()) != 1 {
+		t.Fatalf("%v %+v", err, rep)
+	}
+	if !strings.Contains(rep.Blocked, "1 is a pending main-provider switch") {
+		t.Fatalf("blocked reason %q does not name the pending main create", rep.Blocked)
 	}
 }

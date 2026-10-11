@@ -18,6 +18,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/oldsj/mainloop/server/internal/kagent"
@@ -183,12 +184,38 @@ func (s *Server) Script(steps ...Step) {
 	s.scripts = append(s.scripts, steps)
 }
 
-// AddAgent makes GetAgent find this agent.
+// AddAgent makes GetAgent find this agent, with a prepared revision so Sessions can be created on it.
 func (s *Server) AddAgent(namespace, name string) {
+	s.setAgent(namespace, name, true)
+}
+
+// AddAgentNotReady adds an Agent whose first revision has not been prepared: GetAgent finds it and
+// CreateSession refuses it, as kagent does.
+func (s *Server) AddAgentNotReady(namespace, name string) {
+	s.setAgent(namespace, name, false)
+}
+
+// RemoveAgent deletes the Agent: GetAgent no longer finds it and creates on it are refused.
+func (s *Server) RemoveAgent(namespace, name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	delete(s.agents, namespace+"/"+name)
+}
+
+func (s *Server) setAgent(namespace, name string, ready bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	status := map[string]any{}
+	if ready {
+		status["latestSuccessfulRevision"] = "revision-1"
+	}
+	v, err := structpb.NewStruct(map[string]any{"status": status})
+	if err != nil {
+		panic(err)
+	}
 	s.agents[namespace+"/"+name] = &api.Agent{
-		Ref: &api.ResourceReference{Namespace: namespace, Name: name},
+		Ref:      &api.ResourceReference{Namespace: namespace, Name: name},
+		Resource: &api.StructuredObject{Value: v},
 	}
 }
 
@@ -325,6 +352,13 @@ func (s *Server) createSession(
 				fmt.Errorf("request_id %q belongs to a deleted Session", m.GetRequestId()))
 		}
 		return connect.NewResponse(&api.CreateSessionResponse{Session: s.out(kagent.ProcCreateSession, prev)}), nil
+	}
+	// kagent looks the Agent up after the replay check and before it reserves the request id, so a
+	// create it refuses here leaves nothing behind. A request that names no Agent
+	// is let through, which kagent would refuse: the client tests create bare Sessions.
+	if ref := m.GetAgent(); ref != nil && !kagent.AgentReady(s.agents[ref.GetNamespace()+"/"+ref.GetName()]) {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("Agent does not have a ready prepared revision")) //nolint:staticcheck // kagent's own wording
 	}
 	s.sessSeq++
 	id := fmt.Sprintf("session-%d", s.sessSeq)

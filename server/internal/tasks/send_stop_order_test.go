@@ -116,6 +116,7 @@ func sendOrderProbe(t *testing.T) (*rig, *kagenttest.Server, string, string, str
 	t.Helper()
 	r, _, _, _, attempt, session := stopProbeProvision(t)
 	f := kagenttest.New()
+	f.AddAgent("kagent", "agent")
 	t.Cleanup(f.Close)
 	c, err := kagent.New(kagent.Config{GatewayURL: f.URL, UserID: "test-owner", RequestTimeout: time.Second})
 	if err != nil {

@@ -141,8 +141,9 @@ func TestMainProviderOverHTTP(t *testing.T) {
 		t.Fatalf("%d %s", r.status, r.body)
 	}
 	strict(t, r.body, &p)
+	// A main that never started has no old Session to keep, so the switch records no history.
 	if p.DesiredProvider != api.MainProviderCodex || p.Status != api.MainProviderInfoStatusReady || p.EffectiveProvider == nil ||
-		*p.EffectiveProvider != api.MainProviderCodex || p.KagentSessionId == nil || len(p.History) != 1 || p.Recoverable {
+		*p.EffectiveProvider != api.MainProviderCodex || p.KagentSessionId == nil || len(p.History) != 0 || p.Recoverable {
 		t.Fatalf("after the switch: %s", r.body)
 	}
 	// The same request again changes nothing.
@@ -167,10 +168,14 @@ func TestMainProviderOverHTTP(t *testing.T) {
 	if r.status != 409 {
 		t.Fatalf("%d %s", r.status, r.body)
 	}
-	strict(t, r.body, &api.HTTPError{})
+	var coded api.CodedHTTPError
+	strict(t, r.body, &coded)
+	if coded.Code == nil || *coded.Code != api.CodedHTTPErrorCodeBusy {
+		t.Fatalf("code = %v, want busy: %s", coded.Code, r.body)
+	}
 	r = send(h, "GET", "/main-thread/provider", "", nil)
 	strict(t, r.body, &p)
-	if p.DesiredProvider != api.MainProviderCodex || len(p.History) != 1 {
+	if p.DesiredProvider != api.MainProviderCodex || len(p.History) != 0 {
 		t.Fatalf("a refused switch changed the state: %s", r.body)
 	}
 }

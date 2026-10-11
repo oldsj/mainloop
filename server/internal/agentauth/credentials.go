@@ -64,13 +64,25 @@ type Issued struct {
 
 // SecretName is the name of the Secret for a binding's credential of a kind.
 func (c *Credentials) SecretName(kind dbstate.CredentialKind, bindingID string) string {
+	return c.SecretNameFor(kind, bindingID, "")
+}
+
+// SecretNameFor is SecretName for one native identity of a binding. A main thread gets a new
+// identity at every provider switch, so each identity has its own Secret and the previous one's
+// cleanup never holds the new one's name. The identity is a lowercase uuid (or empty, for a binding
+// that has only one).
+func (c *Credentials) SecretNameFor(kind dbstate.CredentialKind, bindingID, identity string) string {
+	name := c.Prefix + "-mcp-" + bindingID
 	switch kind {
 	case dbstate.CredentialGitRead:
-		return c.Prefix + "-git-read-" + bindingID
+		name = c.Prefix + "-git-read-" + bindingID
 	case dbstate.CredentialGitPush:
-		return c.Prefix + "-git-push-" + bindingID
+		name = c.Prefix + "-git-push-" + bindingID
 	}
-	return c.Prefix + "-mcp-" + bindingID
+	if identity != "" {
+		name += "-" + identity
+	}
+	return name
 }
 
 func purpose(kind dbstate.CredentialKind) string {
@@ -87,10 +99,17 @@ func purpose(kind dbstate.CredentialKind) string {
 // is returned as it is, and one left planned by an interrupted publish is resumed. The database
 // holds the intent first; the Kubernetes call runs with no transaction open.
 func (c *Credentials) Issue(ctx context.Context, bindingID string, kind dbstate.CredentialKind) (Issued, error) {
+	return c.IssueFor(ctx, bindingID, kind, "")
+}
+
+// IssueFor is Issue for one native identity of the binding (see SecretNameFor). It refuses with
+// ErrRevoked when the binding has moved on to another identity, so a stale caller cannot revive a
+// retired identity's credential.
+func (c *Credentials) IssueFor(ctx context.Context, bindingID string, kind dbstate.CredentialKind, identity string) (Issued, error) {
 	if _, off := c.Secrets.(Unconfigured); off {
 		return Issued{}, ErrNotConfigured // before any intent row is written
 	}
-	row, err := c.plan(ctx, bindingID, kind)
+	row, err := c.plan(ctx, bindingID, kind, identity)
 	if err != nil {
 		return Issued{}, err
 	}
@@ -145,7 +164,7 @@ func (c *Credentials) Issue(ctx context.Context, bindingID string, kind dbstate.
 	return Issued{CredentialID: row.ID, SecretName: row.SecretName, SecretUID: uid}, nil
 }
 
-func (c *Credentials) plan(ctx context.Context, bindingID string, kind dbstate.CredentialKind) (dbq.Credential, error) {
+func (c *Credentials) plan(ctx context.Context, bindingID string, kind dbstate.CredentialKind, identity string) (dbq.Credential, error) {
 	var row dbq.Credential
 	err := db.InTx(ctx, c.Pool, func(tx pgx.Tx) error {
 		q := dbq.New(tx)
@@ -155,6 +174,9 @@ func (c *Credentials) plan(ctx context.Context, bindingID string, kind dbstate.C
 		}
 		if kind == dbstate.CredentialMCP && !ValidPair(b.Role, b.MCPGrantKind) {
 			return ErrInvalidGrant
+		}
+		if deref(b.CredentialIdentity) != identity {
+			return ErrRevoked // the binding has a newer native identity
 		}
 		// The session row is locked FOR SHARE until this transaction commits: whatever ends the
 		// session updates that row, so it either waits for this plan (and then revokes it in its own
@@ -175,7 +197,7 @@ func (c *Credentials) plan(ctx context.Context, bindingID string, kind dbstate.C
 		id := uuid.NewString()
 		row, err = q.CreateCredential(ctx, dbq.CreateCredentialParams{
 			ID: id, Kind: kind, BindingID: bindingID,
-			TokenHash: HashToken(Token(c.Key, id)), SecretName: c.SecretName(kind, bindingID),
+			TokenHash: HashToken(Token(c.Key, id)), SecretName: c.SecretNameFor(kind, bindingID, identity),
 		})
 		var pg *pgconn.PgError
 		if errors.As(err, &pg) && pg.ConstraintName == "credentials_secret_name" {

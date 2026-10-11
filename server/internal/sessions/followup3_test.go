@@ -9,7 +9,6 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/workspaces"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
 )
 
 // renameAgent points the service at a new Agent, as a configuration change would.
@@ -38,12 +37,11 @@ func (e *env) orphans(c *kagent.Client) workspaces.OrphanReport {
 	return rep
 }
 
-// A main create lands and its reply is lost, then the main Agent's configuration changes before the
-// next send. The send replays the create with the new Agent and kagent refuses it (AlreadyExists),
-// so the turn replaces the request id and the message completes on a new Session on the renamed
-// Agent. Nothing leaks: the orphan sweep reclaims the Session that landed on the old Agent. Messages
-// sent before the next resolve pass complete too.
-func TestAConfigChangeBetweenALostReplyAndTheNextSendCompletesOnTheRenamedAgent(t *testing.T) {
+// A first-use main pins its Agent when its first create is requested. A create lands and its reply is
+// lost, then the main Agent's configuration changes before the next send: the send replays the create
+// on the pinned Agent and binds the Session that landed. Nothing is created on the renamed Agent and
+// nothing leaks.
+func TestAConfigChangeBetweenALostReplyAndTheNextSendBindsTheSessionThatLanded(t *testing.T) {
 	e, k := newFlakyEnv(t)
 	// The old Agent is not one of the provider Agents, so only the record of the create knows it.
 	e.renameAgent("main-old")
@@ -68,43 +66,30 @@ func TestAConfigChangeBetweenALostReplyAndTheNextSendCompletesOnTheRenamedAgent(
 
 	e.renameAgent("main-renamed")
 	e.run()
-	// Three messages before any resolve pass: none fails, all land on the renamed Agent.
+	// Three messages before any resolve pass: none fails, all bind the Session that landed.
 	for _, text := range []string{"after the config change", "again, before the sweep", "and again"} {
 		if d := e.waitState(e.send(text), dbstate.DeliveryCompleted); d.CreateFailures != 0 {
 			t.Fatalf("%q: create failures = %d, want 0", text, d.CreateFailures)
 		}
 	}
-	ksid := e.bindingKsid(m.SessionID)
-	if ksid == "" || ksid == landed.GetId() {
-		t.Fatalf("bound %q, want a new Session", ksid)
+	if ksid := e.bindingKsid(m.SessionID); ksid != landed.GetId() {
+		t.Fatalf("bound %q, want the Session that landed, %q", ksid, landed.GetId())
 	}
-	now, ok := e.srv.Session(ksid)
-	if !ok || now.GetAgent().GetName() != "main-renamed" {
-		t.Fatalf("new Session %v, want one on main-renamed", now.GetAgent())
+	if n := e.createsOn("main-renamed"); n != 0 {
+		t.Fatalf("%d creates on the renamed Agent, want 0: the first-use main is pinned", n)
 	}
-	if _, ok := e.srv.Session(landed.GetId()); !ok {
-		t.Fatal("the Session on the old Agent was deleted by a send")
-	}
-
 	if err := e.svc.ResolveCreates(ctx); err != nil || e.unresolved() != 0 {
 		t.Fatalf("ResolveCreates: %v, unresolved %d", err, e.unresolved())
 	}
-	rep := e.orphans(k.Kagent.(*kagent.Client))
-	if len(rep.Deleted) != 1 || rep.Deleted[0] != landed.GetId() {
-		t.Fatalf("orphan sweep deleted %v, want the old-Agent Session %s", rep.Deleted, landed.GetId())
-	}
-	if s, ok := e.srv.Session(landed.GetId()); ok && s.GetState() != kagentapi.RuntimeState_RUNTIME_STATE_DELETED {
-		t.Fatalf("the old-Agent Session is still %s", s.GetState())
-	}
-	e.waitState(e.send("after the sweeps"), dbstate.DeliveryCompleted)
-	if got := e.bindingKsid(m.SessionID); got != ksid {
-		t.Fatalf("rebound to %q after the sweeps, want %q", got, ksid)
+	if rep := e.orphans(k.Kagent.(*kagent.Client)); len(rep.Deleted) != 0 {
+		t.Fatalf("orphan sweep deleted %v, want nothing: the landed Session is bound", rep.Deleted)
 	}
 }
 
-// The main Session is bound on the old Agent, the configuration is renamed, then kagent drops the
-// Session out of band. The replacement made inside the next delivery's turn is on the renamed Agent.
-func TestAReplacementSessionInTheTurnIsOnTheRenamedAgent(t *testing.T) {
+// The main Session is bound on the first-use pinned Agent, the configuration is renamed, then kagent
+// drops the Session out of band. The replacement made inside the next delivery's turn stays on the
+// pinned Agent.
+func TestAReplacementSessionInTheTurnStaysOnThePinnedAgent(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	stop := e.run()
@@ -126,7 +111,7 @@ func TestAReplacementSessionInTheTurnIsOnTheRenamedAgent(t *testing.T) {
 	if !ok {
 		t.Fatal("replacement missing")
 	}
-	if sess.GetAgent().GetNamespace() != e.svc.Agent.Namespace || sess.GetAgent().GetName() != "main-renamed" {
-		t.Fatalf("replacement created on %s/%s, want main-renamed", sess.GetAgent().GetNamespace(), sess.GetAgent().GetName())
+	if sess.GetAgent().GetNamespace() != e.svc.Agent.Namespace || sess.GetAgent().GetName() != "mainloop-main" {
+		t.Fatalf("replacement created on %s/%s, want the pinned mainloop-main", sess.GetAgent().GetNamespace(), sess.GetAgent().GetName())
 	}
 }

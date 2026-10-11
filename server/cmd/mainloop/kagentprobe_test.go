@@ -13,7 +13,7 @@ import (
 
 func probeSettings(url string) config.Kagent {
 	return config.Kagent{
-		GatewayURL: url, UserID: "mainloop", Namespace: "kagent", MainAgent: "mainloop-main",
+		GatewayURL: url, UserID: "mainloop", Namespace: "kagent", MainAgent: "mainloop-main", MainCodexAgent: "mainloop-main-codex",
 		RequestTimeout: config.Seconds(5 * time.Second), TurnTimeout: config.Seconds(5 * time.Second),
 		SendRetryBudget: config.Seconds(time.Second),
 	}
@@ -23,18 +23,19 @@ func TestKagentProbeReportsTheAgentAndSessions(t *testing.T) {
 	srv := kagenttest.New()
 	defer srv.Close()
 	srv.AddAgent("kagent", "mainloop-main")
+	srv.AddAgent("kagent", "mainloop-main-codex")
 
 	var out bytes.Buffer
 	if err := kagentProbe(context.Background(), probeSettings(srv.URL), &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"agent kagent/mainloop-main: found", "sessions visible: 0", "x-user-id mainloop"} {
+	for _, want := range []string{"agent kagent/mainloop-main: found", "agent kagent/mainloop-main-codex: found", "sessions visible: 0", "x-user-id mainloop"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output %q lacks %q", out.String(), want)
 		}
 	}
-	if n := len(srv.Requests()); n != 2 {
-		t.Errorf("probe sent %d requests, want a GetAgent and a ListSessions", n)
+	if n := len(srv.Requests()); n != 3 {
+		t.Errorf("probe sent %d requests, want two GetAgents and a ListSessions", n)
 	}
 }
 
@@ -44,6 +45,20 @@ func TestKagentProbeFailsWhenTheAgentIsMissing(t *testing.T) {
 	var out bytes.Buffer
 	err := kagentProbe(context.Background(), probeSettings(srv.URL), &out)
 	if err == nil || !strings.Contains(err.Error(), "get agent kagent/mainloop-main") {
+		t.Fatalf("got %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("printed %q on failure", out.String())
+	}
+}
+
+func TestKagentProbeFailsWhenTheCodexMainIsMissing(t *testing.T) {
+	srv := kagenttest.New()
+	defer srv.Close()
+	srv.AddAgent("kagent", "mainloop-main")
+	var out bytes.Buffer
+	err := kagentProbe(context.Background(), probeSettings(srv.URL), &out)
+	if err == nil || !strings.Contains(err.Error(), "get agent kagent/mainloop-main-codex") {
 		t.Fatalf("got %v", err)
 	}
 	if out.Len() != 0 {
@@ -64,6 +79,7 @@ func TestKagentProbeCommandReadsOnlyKagentSettings(t *testing.T) {
 	srv := kagenttest.New()
 	defer srv.Close()
 	srv.AddAgent("kagent", "mainloop-main")
+	srv.AddAgent("kagent", "mainloop-main-codex")
 	t.Setenv("AGENT_TOKEN_KEY", "")
 	t.Setenv("MAINLOOP_OWNER_ID", "")
 	t.Setenv("KAGENT_GATEWAY_URL", srv.URL)

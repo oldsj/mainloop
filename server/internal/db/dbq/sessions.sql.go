@@ -31,6 +31,7 @@ UPDATE agent_bindings
 SET kind = $1,
     kagent_agent_namespace = $2, kagent_agent_name = $3,
     kagent_session_id = NULL, kagent_request_id = $4,
+    credential_identity = $4,
     kagent_create_request_id = $4,
     kagent_create_agent_namespace = $2, kagent_create_agent_name = $3,
     standing_hash = NULL, model = NULL, turns = 0, queue_held = false,
@@ -143,7 +144,7 @@ const createMainBinding = `-- name: CreateMainBinding :one
 
 INSERT INTO agent_bindings (session_id, kind, role, mcp_grant_kind)
 VALUES ($1, $2, 'main', 'coordination')
-RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, main_released_at
+RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at
 `
 
 type CreateMainBindingParams struct {
@@ -187,6 +188,7 @@ func (q *Queries) CreateMainBinding(ctx context.Context, arg CreateMainBindingPa
 		&i.MainPending,
 		&i.MainError,
 		&i.MainRecoverable,
+		&i.CredentialIdentity,
 		&i.MainReleasedAt,
 	)
 	return i, err
@@ -429,6 +431,7 @@ SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.u
        d.kagent_session_id AS sent_kagent_session_id,
        b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id,
        b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
+       b.credential_identity,
        coalesce(b.mcp_grant_kind::text, '')::text AS binding_grant, s.user_id, s.title AS session_title,
        w.id AS workspace_id,
        coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
@@ -455,6 +458,7 @@ type GetDeliveryContextRow struct {
 	KagentRequestID        *string
 	BindingKind            *string
 	BindingRole            string
+	CredentialIdentity     *string
 	BindingGrant           string
 	UserID                 string
 	SessionTitle           string
@@ -483,6 +487,7 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 		&i.KagentRequestID,
 		&i.BindingKind,
 		&i.BindingRole,
+		&i.CredentialIdentity,
 		&i.BindingGrant,
 		&i.UserID,
 		&i.SessionTitle,
@@ -496,7 +501,7 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 
 const getMainBinding = `-- name: GetMainBinding :one
 
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.main_released_at, s.user_id, s.title, s.status AS session_status
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, s.user_id, s.title, s.status AS session_status
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
 WHERE b.role = 'main' AND b.main_released_at IS NULL AND s.user_id = $1 AND s.archived_at IS NULL
@@ -530,6 +535,7 @@ type GetMainBindingRow struct {
 	MainPending                bool
 	MainError                  *string
 	MainRecoverable            bool
+	CredentialIdentity         *string
 	MainReleasedAt             *time.Time
 	UserID                     string
 	Title                      string
@@ -570,6 +576,7 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 		&i.MainPending,
 		&i.MainError,
 		&i.MainRecoverable,
+		&i.CredentialIdentity,
 		&i.MainReleasedAt,
 		&i.UserID,
 		&i.Title,
@@ -579,7 +586,7 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 }
 
 const getOwnedSessionBinding = `-- name: GetOwnedSessionBinding :one
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.main_released_at, s.user_id, s.title, s.status AS session_status, s.archived_at,
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, s.user_id, s.title, s.status AS session_status, s.archived_at,
        w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name,
        coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
        coalesce(b.kagent_agent_name, w.agent_name, '') AS resolved_agent_name
@@ -620,6 +627,7 @@ type GetOwnedSessionBindingRow struct {
 	MainPending                bool
 	MainError                  *string
 	MainRecoverable            bool
+	CredentialIdentity         *string
 	MainReleasedAt             *time.Time
 	UserID                     string
 	Title                      string
@@ -661,6 +669,7 @@ func (q *Queries) GetOwnedSessionBinding(ctx context.Context, arg GetOwnedSessio
 		&i.MainPending,
 		&i.MainError,
 		&i.MainRecoverable,
+		&i.CredentialIdentity,
 		&i.MainReleasedAt,
 		&i.UserID,
 		&i.Title,
@@ -1288,7 +1297,7 @@ func (q *Queries) ListTopicLines(ctx context.Context, userID string) ([]ListTopi
 }
 
 const listUnresolvedCreates = `-- name: ListUnresolvedCreates :many
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.kagent_create_request_id::text AS create_request_id,
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.credential_identity, b.kagent_create_request_id::text AS create_request_id,
        b.kagent_create_agent_namespace AS agent_namespace, b.kagent_create_agent_name AS agent_name
 FROM agent_bindings b
 WHERE b.kagent_create_request_id IS NOT NULL AND b.kagent_session_id IS NULL
@@ -1302,13 +1311,14 @@ LIMIT $1
 `
 
 type ListUnresolvedCreatesRow struct {
-	SessionID       string
-	Kind            string
-	Role            dbstate.BindingRole
-	MCPGrantKind    dbstate.MCPGrantKind
-	CreateRequestID string
-	AgentNamespace  *string
-	AgentName       *string
+	SessionID          string
+	Kind               string
+	Role               dbstate.BindingRole
+	MCPGrantKind       dbstate.MCPGrantKind
+	CredentialIdentity *string
+	CreateRequestID    string
+	AgentNamespace     *string
+	AgentName          *string
 }
 
 // The bindings that sent a create whose Session id never came back and whose session has nothing
@@ -1328,6 +1338,7 @@ func (q *Queries) ListUnresolvedCreates(ctx context.Context, limit int32) ([]Lis
 			&i.Kind,
 			&i.Role,
 			&i.MCPGrantKind,
+			&i.CredentialIdentity,
 			&i.CreateRequestID,
 			&i.AgentNamespace,
 			&i.AgentName,
@@ -1343,7 +1354,7 @@ func (q *Queries) ListUnresolvedCreates(ctx context.Context, limit int32) ([]Lis
 }
 
 const lockMainBinding = `-- name: LockMainBinding :one
-SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, main_released_at FROM agent_bindings
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at FROM agent_bindings
 WHERE session_id = $1 AND role = 'main' AND main_released_at IS NULL
 FOR UPDATE
 `
@@ -1378,6 +1389,7 @@ func (q *Queries) LockMainBinding(ctx context.Context, sessionID string) (AgentB
 		&i.MainPending,
 		&i.MainError,
 		&i.MainRecoverable,
+		&i.CredentialIdentity,
 		&i.MainReleasedAt,
 	)
 	return i, err
@@ -1403,6 +1415,10 @@ const markCreateRequested = `-- name: MarkCreateRequested :execrows
 UPDATE agent_bindings b
 SET kagent_create_request_id = $1,
     kagent_create_agent_namespace = $2, kagent_create_agent_name = $3,
+    -- A main pins the Agent its first create names, so a later configuration change moves no existing
+    -- main (a switch pins its target in BeginMainSwitch).
+    kagent_agent_namespace = CASE WHEN b.role = 'main' THEN coalesce(b.kagent_agent_namespace, $2) ELSE b.kagent_agent_namespace END,
+    kagent_agent_name = CASE WHEN b.role = 'main' THEN coalesce(b.kagent_agent_name, $3) ELSE b.kagent_agent_name END,
     updated_at = now()
 FROM deliveries d
 WHERE d.id = $4 AND d.lease_owner = $5 AND d.attempts = $6

@@ -63,6 +63,28 @@ var (
 	ErrConflict = errors.New("sessions: conflict")
 )
 
+// Stable codes of a refused main-thread provider switch (see CodedHTTPError in the contract).
+const (
+	codeBusy             = "busy"
+	codePending          = "pending"
+	codeUnconfirmed      = "unconfirmed"
+	codeUnresolved       = "unresolved"
+	codeAgentUnavailable = "agent_unavailable"
+)
+
+// codedConflict is an ErrConflict that also carries a stable machine code.
+type codedConflict struct {
+	code, msg string
+}
+
+func (e *codedConflict) Error() string { return ErrConflict.Error() + ": " + e.msg }
+func (e *codedConflict) Unwrap() error { return ErrConflict }
+
+// conflictCode is conflict with a stable code.
+func conflictCode(code, format string, args ...any) error {
+	return &codedConflict{code: code, msg: fmt.Sprintf(format, args...)}
+}
+
 // conflict is an ErrConflict with the reason shown to the caller.
 func conflict(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrConflict, fmt.Sprintf(format, args...))
@@ -100,6 +122,7 @@ type Kagent interface {
 	DeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	ResumeSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	SuspendSession(ctx context.Context, id string) (*kagentapi.Session, error)
+	GetAgent(ctx context.Context, ref kagent.AgentRef) (*kagentapi.Agent, error)
 	SendMessage(ctx context.Context, agent kagent.AgentRef, p kagent.SendParams) iter.Seq2[a2a.Event, error]
 	GetTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)
 	ListTasks(ctx context.Context, agent kagent.AgentRef, contextID string) ([]*a2a.Task, error)
@@ -196,6 +219,9 @@ type Service struct {
 	// AfterIntent is a test seam: it runs after a main switch intent commits and before the create;
 	// an error it returns ends the request there, as a crash would.
 	AfterIntent func(ctx context.Context) error
+	// AfterSuspend is a test seam: it runs after a switch suspended the old native Session and before
+	// the intent commits; an error it returns ends the request there, as a crash would.
+	AfterSuspend func(ctx context.Context) error
 	// Providers resolves a session's Agent from its binding, and a new session's provider.
 	Providers *providers.Registry
 	// Waker, when set, readies a workspace session's runtime before each send.

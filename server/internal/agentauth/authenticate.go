@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
@@ -84,4 +85,23 @@ func stale(s dbstate.SessionStatus) bool {
 		return true
 	}
 	return false
+}
+
+// LockPublished re-reads the credential behind actor FOR SHARE inside tx and requires it to be
+// published, so a revoke (which updates the row) serializes against the write that follows. A
+// credential that is no longer published is [ErrUnauthorized].
+func LockPublished(ctx context.Context, tx pgx.Tx, actor Actor) error {
+	if _, err := dbq.New(tx).LockPublishedCredential(ctx, actor.CredentialID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrUnauthorized
+		}
+		return fmt.Errorf("agentauth: lock credential: %w", err)
+	}
+	return nil
+}
+
+// Guarded returns ctx so that every [db.InTx] transaction started with it first takes
+// [LockPublished] on actor's credential.
+func Guarded(ctx context.Context, actor Actor) context.Context {
+	return db.WithTxGuard(ctx, func(ctx context.Context, tx pgx.Tx) error { return LockPublished(ctx, tx, actor) })
 }

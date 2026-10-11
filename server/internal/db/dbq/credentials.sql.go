@@ -98,6 +98,20 @@ func (q *Queries) GetMCPActor(ctx context.Context, tokenHash string) (GetMCPActo
 	return i, err
 }
 
+const lockPublishedCredential = `-- name: LockPublishedCredential :one
+SELECT id FROM credentials WHERE id = $1 AND state = 'published' FOR SHARE
+`
+
+// The caller's MCP credential, locked FOR SHARE and required to be published. A revoke updates the
+// row, so it waits for the write transaction that holds this lock, and a write that starts after
+// the revoke finds no published row.
+func (q *Queries) LockPublishedCredential(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, lockPublishedCredential, id)
+	var id_2 string
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const lockSessionForCredential = `-- name: LockSessionForCredential :one
 SELECT status, archived_at FROM sessions WHERE id = $1 FOR SHARE
 `
@@ -319,7 +333,7 @@ func (q *Queries) RevokeStalePlannedCredentials(ctx context.Context, olderThanSe
 }
 
 const setBindingGrant = `-- name: SetBindingGrant :one
-UPDATE agent_bindings SET mcp_grant_kind = $2, updated_at = now() WHERE session_id = $1 RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, main_released_at
+UPDATE agent_bindings SET mcp_grant_kind = $2, updated_at = now() WHERE session_id = $1 RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at
 `
 
 type SetBindingGrantParams struct {
@@ -356,6 +370,7 @@ func (q *Queries) SetBindingGrant(ctx context.Context, arg SetBindingGrantParams
 		&i.MainPending,
 		&i.MainError,
 		&i.MainRecoverable,
+		&i.CredentialIdentity,
 		&i.MainReleasedAt,
 	)
 	return i, err

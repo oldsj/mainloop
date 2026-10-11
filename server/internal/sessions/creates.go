@@ -75,7 +75,7 @@ func (s *Service) resolveCreate(ctx context.Context, q *dbq.Queries, r dbq.ListU
 		RequestId: r.CreateRequestID,
 		Name:      "Mainloop session",
 		// The credentials the original create carried: kagent refuses a replay that differs.
-		Credentials: s.Credentials.ReplayCredentials(r.SessionID, s.MCPOrigin, dbstate.BindingRole(r.Role), r.MCPGrantKind),
+		Credentials: s.Credentials.ReplayCredentialsFor(r.SessionID, derefStr(r.CredentialIdentity), s.MCPOrigin, dbstate.BindingRole(r.Role), r.MCPGrantKind),
 	})
 	var se *kagent.SessionError
 	switch {

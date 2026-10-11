@@ -23,10 +23,15 @@ const authorizationHeader = "Authorization"
 // caller should treat as "try again later" are [ErrCleanupPending] and [ErrRevoked]; the session
 // having ended is [ErrBindingEnded].
 func (c *Credentials) SessionCredentials(ctx context.Context, bindingID, origin string) ([]*kagentapi.SessionCredential, error) {
+	return c.SessionCredentialsFor(ctx, bindingID, "", origin)
+}
+
+// SessionCredentialsFor is SessionCredentials for one native identity of the binding.
+func (c *Credentials) SessionCredentialsFor(ctx context.Context, bindingID, identity, origin string) ([]*kagentapi.SessionCredential, error) {
 	if c == nil {
 		return nil, nil
 	}
-	issued, err := c.Issue(ctx, bindingID, dbstate.CredentialMCP)
+	issued, err := c.IssueFor(ctx, bindingID, dbstate.CredentialMCP, identity)
 	if errors.Is(err, ErrNotConfigured) {
 		c.log().WarnContext(ctx, "session is created without an MCP credential: Kubernetes is not configured",
 			"binding", bindingID)
@@ -42,17 +47,22 @@ func (c *Credentials) SessionCredentials(ctx context.Context, bindingID, origin 
 // that create. kagent refuses a replayed request id whose credentials differ from the original's,
 // so a replay must send the same reference whatever became of the credential since (it may be
 // revoked by now). The reference is a function of the binding alone: the Secret name is
-// deterministic. It is sent when the store is configured and the role and grant are a valid pair,
+// deterministic (a function of the binding and its identity). It is sent when the store is configured and the role and grant are a valid pair,
 // the two conditions under which [Credentials.SessionCredentials] sent one. It reads nothing and
 // publishes nothing.
 func (c *Credentials) ReplayCredentials(bindingID, origin string, role dbstate.BindingRole, grant dbstate.MCPGrantKind) []*kagentapi.SessionCredential {
+	return c.ReplayCredentialsFor(bindingID, "", origin, role, grant)
+}
+
+// ReplayCredentialsFor is ReplayCredentials for one native identity of the binding.
+func (c *Credentials) ReplayCredentialsFor(bindingID, identity, origin string, role dbstate.BindingRole, grant dbstate.MCPGrantKind) []*kagentapi.SessionCredential {
 	if c == nil || !ValidPair(role, grant) {
 		return nil
 	}
 	if _, off := c.Secrets.(Unconfigured); off {
 		return nil
 	}
-	return []*kagentapi.SessionCredential{reference(origin, c.SecretName(dbstate.CredentialMCP, bindingID))}
+	return []*kagentapi.SessionCredential{reference(origin, c.SecretNameFor(dbstate.CredentialMCP, bindingID, identity))}
 }
 
 func reference(origin, secretName string) *kagentapi.SessionCredential {

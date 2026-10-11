@@ -76,3 +76,9 @@ UPDATE credentials
 SET create_started_at = now()
 WHERE id = $1 AND state = 'planned'
 RETURNING id;
+
+-- name: LockPublishedCredential :one
+-- The caller's MCP credential, locked FOR SHARE and required to be published. A revoke updates the
+-- row, so it waits for the write transaction that holds this lock, and a write that starts after
+-- the revoke finds no published row.
+SELECT id FROM credentials WHERE id = $1 AND state = 'published' FOR SHARE;

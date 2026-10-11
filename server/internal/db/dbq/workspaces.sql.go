@@ -105,6 +105,21 @@ func (q *Queries) CancelOpenWorkspaceOps(ctx context.Context, workspaceID string
 	return result.RowsAffected(), nil
 }
 
+const countPendingMainCreates = `-- name: CountPendingMainCreates :one
+SELECT count(*) FROM agent_bindings b
+WHERE b.role = 'main' AND b.main_pending AND b.kagent_session_id IS NULL
+  AND b.kagent_create_request_id IS NOT NULL
+`
+
+// The unresolved bindings that are a main thread's switch target: its create was requested and no
+// Session id came back. A repeated PUT of the selection settles them.
+func (q *Queries) CountPendingMainCreates(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countPendingMainCreates)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countUnresolvedBindings = `-- name: CountUnresolvedBindings :one
 SELECT count(*) FROM agent_bindings b
 WHERE b.kagent_session_id IS NULL

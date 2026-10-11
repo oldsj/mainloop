@@ -200,6 +200,11 @@ func (s *Service) SweepOrphans(ctx context.Context, opt OrphanOptions) (OrphanRe
 			return rep, err
 		} else if n > 0 {
 			rep.Blocked = fmt.Sprintf("%d binding(s) have a create with no recorded Session id; deleting could remove a Session that is about to be bound", n)
+			if m, err := q.CountPendingMainCreates(ctx); err != nil {
+				return rep, err
+			} else if m > 0 {
+				rep.Blocked += fmt.Sprintf(" (%d is a pending main-provider switch: repeat PUT /main-thread/provider with the same selection to settle it)", m)
+			}
 			return rep, nil
 		}
 		if _, err := q.GetAgentBindingByKagentSession(ctx, &id); err == nil {

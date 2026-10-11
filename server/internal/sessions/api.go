@@ -58,7 +58,7 @@ func (a *SessionsAPI) SendMessage(ctx context.Context, r api.SendMessageRequestO
 	case errors.Is(err, ErrBusy):
 		return nil, apierr.Conflict("A turn is already in progress for this conversation")
 	case errors.Is(err, ErrConflict):
-		return nil, apierr.Conflict(reason(err, ErrConflict))
+		return nil, conflictResponse(err)
 	case errors.Is(err, ErrInvalid):
 		return nil, apierr.Invalid(strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))
 	case err != nil:
@@ -178,7 +178,7 @@ func (a *SessionsAPI) PutMainProvider(ctx context.Context, r api.PutMainProvider
 	case errors.Is(err, ErrUnavailable):
 		return nil, apierr.Unavailable("The agent runtime is not configured")
 	case errors.Is(err, ErrConflict):
-		return nil, apierr.Conflict(reason(err, ErrConflict))
+		return nil, conflictResponse(err)
 	case errors.Is(err, ErrInvalid):
 		return nil, apierr.Invalid(reason(err, ErrInvalid))
 	case err != nil:
@@ -513,4 +513,13 @@ func (a *SessionsAPI) ArchiveSession(ctx context.Context, r api.ArchiveSessionRe
 		return nil, err
 	}
 	return api.ArchiveSession200JSONResponse(api.SessionArchiveResponse{Status: api.Archived}), nil
+}
+
+// conflictResponse is the 409 for an ErrConflict: with its stable code when it has one.
+func conflictResponse(err error) *apierr.Error {
+	var c *codedConflict
+	if errors.As(err, &c) {
+		return apierr.ConflictCode(c.msg, c.code)
+	}
+	return apierr.Conflict(reason(err, ErrConflict))
 }

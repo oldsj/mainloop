@@ -304,3 +304,10 @@ SELECT (EXISTS (SELECT 1 FROM workspaces WHERE agent_namespace = $1 AND agent_na
         SELECT 1 FROM agent_bindings
         WHERE kagent_create_agent_namespace = $1 AND kagent_create_agent_name = $2
           AND kagent_session_id IS NULL))::bool AS in_use;
+
+-- name: CountPendingMainCreates :one
+-- The unresolved bindings that are a main thread's switch target: its create was requested and no
+-- Session id came back. A repeated PUT of the selection settles them.
+SELECT count(*) FROM agent_bindings b
+WHERE b.role = 'main' AND b.main_pending AND b.kagent_session_id IS NULL
+  AND b.kagent_create_request_id IS NOT NULL;

@@ -10,6 +10,10 @@
 ALTER TABLE agent_bindings ADD COLUMN main_pending boolean NOT NULL DEFAULT false;
 ALTER TABLE agent_bindings ADD COLUMN main_error text;
 ALTER TABLE agent_bindings ADD COLUMN main_recoverable boolean NOT NULL DEFAULT false;
+-- The native identity the binding's MCP credential belongs to; it names the Secret. A switch gives the
+-- target a new one, so the retired identity's Secret cleanup never holds the target's name. NULL for a
+-- binding that has only ever had one identity.
+ALTER TABLE agent_bindings ADD COLUMN credential_identity text;
 ALTER TABLE agent_bindings ADD CONSTRAINT agent_bindings_main_pending_is_main CHECK (
     role = 'main' OR (NOT main_pending AND main_error IS NULL AND NOT main_recoverable)
 );
@@ -47,6 +51,7 @@ DROP TABLE IF EXISTS main_provider_history;
 DROP INDEX IF EXISTS agent_bindings_one_main;
 CREATE UNIQUE INDEX agent_bindings_one_main ON agent_bindings ((true)) WHERE role = 'main';
 ALTER TABLE agent_bindings DROP COLUMN IF EXISTS main_released_at;
+ALTER TABLE agent_bindings DROP COLUMN IF EXISTS credential_identity;
 ALTER TABLE agent_bindings DROP CONSTRAINT IF EXISTS agent_bindings_main_pending_is_main;
 ALTER TABLE agent_bindings DROP COLUMN IF EXISTS main_recoverable;
 ALTER TABLE agent_bindings DROP COLUMN IF EXISTS main_error;

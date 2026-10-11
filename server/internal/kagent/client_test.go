@@ -126,6 +126,7 @@ func TestProcedureNamesMatchTheForkDefinitions(t *testing.T) {
 
 func TestSessionLifecycle(t *testing.T) {
 	c, srv, _ := setup(t)
+	srv.AddAgent("kagent", "claude-workspace")
 	ref := &api.ResourceReference{Namespace: "kagent", Name: "claude-workspace"}
 
 	created, err := c.CreateSession(ctx, &api.CreateSessionRequest{Agent: ref, RequestId: "req-1", Name: "work"})

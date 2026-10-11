@@ -2651,6 +2651,16 @@ export interface components {
       /** @description Human-readable error message. */
       detail: string;
     };
+    /** @description `{detail: string}` with an optional stable `code`. */
+    CodedHTTPError: {
+      /** @description Human-readable error message. */
+      detail: string;
+      /**
+       * @description Stable machine code for a refused main-thread provider switch or a message refused because one is pending; absent on other conflicts. `busy`: the main has open work or changed while the request ran. `pending`: a switch is pending and the request needs it settled or recoverable first. `unconfirmed`: kagent could not confirm the main idle, the old Session suspended, or the pending target absent. `unresolved`: a native create for the main is unresolved. `agent_unavailable`: the target Agent is missing or not ready.
+       * @enum {string}
+       */
+      code?: 'busy' | 'pending' | 'unconfirmed' | 'unresolved' | 'agent_unavailable';
+    };
     /** @description Task error payload. `reason` is always present; some reasons add detail fields. */
     TaskErrorDetail: {
       /** @description Stable machine code, for example stale_task_attempt. */
@@ -4641,7 +4651,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPError'];
+          'application/json': components['schemas']['CodedHTTPError'];
         };
       };
       /** @description Request Entity Too Large */
@@ -5530,7 +5540,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPError'];
+          'application/json': components['schemas']['CodedHTTPError'];
         };
       };
       /** @description Request Entity Too Large */

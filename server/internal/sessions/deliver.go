@@ -1016,5 +1016,22 @@ func (t *turn) mcpCredentials(ctx context.Context) ([]*kagentapi.SessionCredenti
 	if !agentauth.ValidPair(dbstate.BindingRole(t.d.BindingRole), dbstate.MCPGrantKind(t.d.BindingGrant)) {
 		return nil, nil
 	}
-	return t.s.Credentials.SessionCredentials(ctx, t.d.SessionID, t.s.MCPOrigin)
+	return t.s.Credentials.SessionCredentialsFor(ctx, t.d.SessionID, derefStr(t.d.CredentialIdentity), t.s.MCPOrigin)
+}
+
+// createRejectedBeforeReservation reports a create that kagent refused before it reserved the
+// request id: the Agent has no prepared revision (FAILED_PRECONDITION) or the request failed
+// validation (INVALID_ARGUMENT). In the fork, CreateSession replays a known request id first, then
+// resolves the Agent, its runtime and the workspace and credential checks inside the transaction
+// that inserts the Session, and reserves the id only in that same insert, so these rejections roll
+// back with nothing stored. A refusal that its request id belongs to a deleted Session is the other
+// FAILED_PRECONDITION; see createHitDeleted.
+func createRejectedBeforeReservation(e *kagent.SessionError) bool {
+	return e.Code == connect.CodeInvalidArgument || (e.Code == connect.CodeFailedPrecondition && !createHitDeleted(e))
+}
+
+// createProvenAbsent reports a create answer that proves no live Session holds the request id: it
+// was deleted, or it was never reserved.
+func createProvenAbsent(e *kagent.SessionError) bool {
+	return createHitDeleted(e) || createRejectedBeforeReservation(e)
 }

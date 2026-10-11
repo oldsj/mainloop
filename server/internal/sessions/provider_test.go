@@ -319,9 +319,9 @@ func TestASwitchBeforeTheFirstMessageNeedsNoOldSession(t *testing.T) {
 	if st.Status != "ready" || st.Desired != "codex" {
 		t.Fatalf("state = %+v", st)
 	}
-	h := e.historyRows()
-	if len(h) != 1 || h[0].Provider != "claude" || h[0].KagentSessionID != nil {
-		t.Fatalf("history = %+v", h)
+	// A main that never started has no native identity to keep.
+	if h := e.historyRows(); len(h) != 0 {
+		t.Fatalf("history = %+v, want none", h)
 	}
 	if e.createsOn(codexAgentName) != 1 || e.createsOn("mainloop-main") != 0 {
 		t.Fatalf("creates = %v", e.srv.CreateRequests())
@@ -451,12 +451,12 @@ func TestADifferentProviderCannotReplaceAnUnresolvedSelection(t *testing.T) {
 		t.Fatalf("err = %v, want ErrConflict", err)
 	}
 	now := e.bindingRow()
-	if now.Kind != "codex" || !now.MainPending || deref(now.KagentRequestID) != deref(before.KagentRequestID) || len(e.historyRows()) != 1 {
+	if now.Kind != "codex" || !now.MainPending || deref(now.KagentRequestID) != deref(before.KagentRequestID) || len(e.historyRows()) != 0 {
 		t.Fatalf("binding = %+v", now)
 	}
 	// restart_failed on the same provider only recovers the same contract while it is not recoverable.
 	st := e.mustSelect("codex", true)
-	if st.Status != "ready" || e.createsOn(codexAgentName) != 1 || len(e.historyRows()) != 1 {
+	if st.Status != "ready" || e.createsOn(codexAgentName) != 1 || len(e.historyRows()) != 0 {
 		t.Fatalf("state = %+v, history %d", st, len(e.historyRows()))
 	}
 }
@@ -759,8 +759,8 @@ func (e *env) liveMains() (n int) {
 
 // ---- helpers ------------------------------------------------------------------------------------
 
-// runCredentialCleanup runs the loop that deletes revoked credentials' Secrets, which a target
-// create waits for: both identities of the main share one Secret name.
+// runCredentialCleanup runs the loop that deletes revoked credentials' Secrets. A switch does not
+// wait for it: each native identity has its own Secret name.
 func runCredentialCleanup(t *testing.T, e *env, a *authtest.Env) (stop func()) {
 	t.Helper()
 	r := reconcile.NewRunner(e.pool, quiet(), nil)

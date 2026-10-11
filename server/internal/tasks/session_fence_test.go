@@ -23,6 +23,7 @@ import (
 func TestReview4CompletedSessionCannotRestartAfterFencing(t *testing.T) {
 	r, _, sup, child, attempt, session := stopProbeProvision(t)
 	f := kagenttest.New()
+	f.AddAgent("kagent", "agent")
 	t.Cleanup(f.Close)
 	c, err := kagent.New(kagent.Config{GatewayURL: f.URL, UserID: "test-owner", RequestTimeout: time.Second})
 	if err != nil {
@@ -73,6 +74,7 @@ func TestStoppedTaskSessionDoesNotDispatchRecordedMessage(t *testing.T) {
 		t.Run(stage, func(t *testing.T) {
 			r, _, _, _, attempt, session := stopProbeProvision(t)
 			f := kagenttest.New()
+			f.AddAgent("kagent", "agent")
 			t.Cleanup(f.Close)
 			c, err := kagent.New(kagent.Config{GatewayURL: f.URL, UserID: "test-owner"})
 			if err != nil {
@@ -135,6 +137,7 @@ func (c *stopDuringPreparationClient) GetSession(ctx context.Context, id string)
 func TestTaskStopDuringPreparationPreventsDispatch(t *testing.T) {
 	r, _, _, _, attempt, session := stopProbeProvision(t)
 	f := kagenttest.New()
+	f.AddAgent("kagent", "agent")
 	t.Cleanup(f.Close)
 	c, err := kagent.New(kagent.Config{GatewayURL: f.URL, UserID: "test-owner"})
 	if err != nil {

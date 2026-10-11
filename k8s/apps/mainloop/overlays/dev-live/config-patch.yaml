@@ -30,6 +30,8 @@ data:
   KAGENT_NAMESPACE: kagent
   KAGENT_ACTOR_ATESPACE: kagent
   KAGENT_MAIN_AGENT: claude-workspace-dev
+  # KAGENT_MAIN_CODEX_AGENT is left at its default (mainloop-main-codex), which this cluster does not
+  # define: selecting Codex for the main is refused with 409 agent_unavailable until the Agent exists.
   KAGENT_CLAUDE_AGENT: claude-workspace-dev
   KAGENT_CODEX_AGENT: codex-workspace-dev
   KAGENT_WORKSPACE_CLAUDE_AGENT: claude-workspace-dev

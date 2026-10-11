@@ -37,6 +37,7 @@ type AgentBinding struct {
 	MainPending                bool
 	MainError                  *string
 	MainRecoverable            bool
+	CredentialIdentity         *string
 	MainReleasedAt             *time.Time
 }
 

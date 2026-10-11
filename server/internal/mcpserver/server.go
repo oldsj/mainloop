@@ -169,8 +169,13 @@ func (s *Server) buildServer(st *requestState, tools map[string]Tool) *mcp.Serve
 // way the Python server did; anything else is logged and reported without detail.
 func (s *Server) call(actor agentauth.Actor, t Tool) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		res, err := t.Handle(ctx, actor, req.Params.Arguments)
+		// Every transaction a tool opens re-checks the credential under a lock, so a revoke cannot
+		// slip in between the authentication and the write.
+		res, err := t.Handle(agentauth.Guarded(ctx, actor), actor, req.Params.Arguments)
 		if err != nil {
+			if errors.Is(err, agentauth.ErrUnauthorized) {
+				err = failure("unauthorized", "the credential is no longer valid")
+			}
 			msg, ok := asToolError(err)
 			if !ok {
 				s.Log.ErrorContext(ctx, "mcp tool failed", "tool", t.Name, "session", actor.BindingID, "error", err)

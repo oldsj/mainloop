@@ -123,7 +123,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPError'
+                $ref: '#/components/schemas/CodedHTTPError'
         '422':
           description: Validation Error
           content:
@@ -891,7 +891,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPError'
+                $ref: '#/components/schemas/CodedHTTPError'
         '413':
           description: Request Entity Too Large
           content:
@@ -5879,6 +5879,31 @@ components:
         - detail
       additionalProperties: false
       description: 'FastAPI HTTPException body: `{detail: string}`.'
+    CodedHTTPError:
+      type: object
+      properties:
+        detail:
+          type: string
+          description: Human-readable error message.
+        code:
+          type: string
+          enum:
+            - busy
+            - pending
+            - unconfirmed
+            - unresolved
+            - agent_unavailable
+          description: >-
+            Stable machine code for a refused main-thread provider switch or a message refused
+            because one is pending; absent on other conflicts. `busy`: the main has open work or
+            changed while the request ran. `pending`: a switch is pending and the request needs it
+            settled or recoverable first. `unconfirmed`: kagent could not confirm the main idle, the
+            old Session suspended, or the pending target absent. `unresolved`: a native create for
+            the main is unresolved. `agent_unavailable`: the target Agent is missing or not ready.
+      required:
+        - detail
+      additionalProperties: false
+      description: '`{detail: string}` with an optional stable `code`.'
     TaskErrorDetail:
       type: object
       properties:
