@@ -81,3 +81,20 @@ Verified aliases link to the selected continuation card. Bound requests link to 
 conversation; observed standalone requests explicitly state when no Mainloop conversation
 exists. Agent-supplied request data is escaped text, and unknown fields remain inspectable.
 See [inbox](inbox.md) and [project policy](projects.md).
+
+## Go/React status
+
+Implemented in `web/src/features/chat` against the contract (`GET /main-thread`,
+`GET /conversations/{id}`, `POST /chat`). It has not run against the Go server yet; tests use
+MSW fixtures typed from `api/openapi.yaml`.
+
+- The main thread is the only chat surface. There is no session picker, no thread replies, no
+  zoom, and no fallback to an older conversation list.
+- A send shows the message at once. If the backend refuses it, the bubble goes away and the
+  text returns to the box; once it is recorded, a later failure to refresh does not undo it.
+- Drafts are kept per conversation in `sessionStorage` and cleared when a send is recorded.
+- While a turn is in flight the thread is re-read every two seconds, for about six minutes, as
+  a fallback to the `session:message` event. Reads pause while the tab is hidden.
+- Pending requests of the main session and `?hitl=<id>` render through `features/hitl`; the
+  card itself arrives with the HITL slice.
+- The native identity strip in the header details is supplied by the sessions slice.

@@ -17,7 +17,8 @@ The text box and send button at the bottom of a conversation. It submits one use
 - **Empty:** send button disabled; placeholder explains what the box is for.
 - **Ready:** text present; send enabled.
 - **Sending:** one delivery is in flight. Send is disabled with the reason visible ("Waiting for the current reply"). A second send is refused with `409`, so the UI must not offer one.
-- **Failed:** the message appears in the conversation with its own Failed notice. Do not refill the box with the failed text. Retry lives on the message.
+- **Refused:** the backend did not record the message (for example a `409` because a turn is running, or no reply at all). The bubble is removed, the text returns to the box, and the error says so ("Your message is back in the box.").
+- **Failed:** the backend recorded the message but could not deliver it. It stays in the conversation with its own Failed notice. Do not refill the box with the failed text. Retry lives on the message.
 - **Stale:** if the session changed while the user typed, keep the draft and show the refreshed status. Never discard typed text.
 - **Offline (proposed):** keep the draft, disable send and say so. Do not mark a message failed because the browser lost its connection; the server records delivery.
 

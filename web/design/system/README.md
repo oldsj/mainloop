@@ -23,6 +23,8 @@ Each file in `guidelines/` covers one product component: purpose, states, keyboa
 - `guidelines/error-recovery.md`
 - `guidelines/evidence-link.md`
 - `guidelines/hitl-card.md`
+- `guidelines/main-thread-header.md`
+- `guidelines/markdown.md`
 - `guidelines/message.md`
 - `guidelines/session-summary.md`
 - `guidelines/status-badge.md`
