@@ -12,41 +12,44 @@ import (
 )
 
 type AgentBinding struct {
-	SessionID             string
-	Kind                  string
-	Role                  dbstate.BindingRole
-	MCPGrantKind          dbstate.MCPGrantKind
-	ParentSessionID       *string
-	TopicID               *string
-	KagentSessionID       *string
-	KagentRequestID       *string
-	Model                 *string
-	StandingHash          *string
-	Turns                 int32
-	QueueHeld             bool
-	ChildStartFailure     *string
-	ReportedAt            *time.Time
-	KagentDeletedAt       *time.Time
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	KagentCreateRequestID *string
+	SessionID                  string
+	Kind                       string
+	Role                       dbstate.BindingRole
+	MCPGrantKind               dbstate.MCPGrantKind
+	ParentSessionID            *string
+	TopicID                    *string
+	KagentSessionID            *string
+	KagentRequestID            *string
+	Model                      *string
+	StandingHash               *string
+	Turns                      int32
+	QueueHeld                  bool
+	ChildStartFailure          *string
+	ReportedAt                 *time.Time
+	KagentDeletedAt            *time.Time
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
+	KagentCreateRequestID      *string
+	KagentCreateAgentNamespace *string
+	KagentCreateAgentName      *string
 }
 
 type Credential struct {
-	ID            string
-	Kind          dbstate.CredentialKind
-	BindingID     string
-	TokenHash     string
-	SecretName    string
-	SecretUID     *string
-	State         dbstate.CredentialState
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	RevokedAt     *time.Time
-	Attempts      int32
-	NextAttemptAt time.Time
-	LeaseOwner    *string
-	LeaseUntil    *time.Time
+	ID              string
+	Kind            dbstate.CredentialKind
+	BindingID       string
+	TokenHash       string
+	SecretName      string
+	SecretUID       *string
+	State           dbstate.CredentialState
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	RevokedAt       *time.Time
+	Attempts        int32
+	NextAttemptAt   time.Time
+	LeaseOwner      *string
+	LeaseUntil      *time.Time
+	CreateStartedAt *time.Time
 }
 
 type Delivery struct {
@@ -60,6 +63,7 @@ type Delivery struct {
 	Detail          *string
 	KagentSessionID *string
 	Attempts        int32
+	CreateFailures  int32
 	NextAttemptAt   time.Time
 	LeaseOwner      *string
 	LeaseUntil      *time.Time

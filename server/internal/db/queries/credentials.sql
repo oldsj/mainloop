@@ -68,3 +68,11 @@ WHERE s.id = c.binding_id
     AND c.state IN ('planned', 'published')
     AND (s.archived_at IS NOT NULL OR s.status IN ('completed', 'failed', 'cancelled'))
 RETURNING c.*;
+
+-- name: MarkCredentialCreateStarted :one
+-- Records, before the Secret create, that it is about to start. Only while the row is planned, so a
+-- row revoked first never gets a create: cleanup that sees no start time can call the name free.
+UPDATE credentials
+SET create_started_at = now()
+WHERE id = $1 AND state = 'planned'
+RETURNING id;

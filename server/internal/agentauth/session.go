@@ -3,12 +3,8 @@ package agentauth
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 
-	"github.com/jackc/pgx/v5"
-
-	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/k8ssecrets"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
@@ -42,25 +38,21 @@ func (c *Credentials) SessionCredentials(ctx context.Context, bindingID, origin 
 	return []*kagentapi.SessionCredential{reference(origin, issued.SecretName)}, nil
 }
 
-// SessionReference returns the credential reference of the binding's live published MCP
-// credential, or nil when it has none. It publishes nothing: a replayed create that only looks for
-// a Session an earlier attempt made sends the same request as the original, without making a
-// credential for a binding that has ended.
-func (c *Credentials) SessionReference(ctx context.Context, bindingID, origin string) ([]*kagentapi.SessionCredential, error) {
-	if c == nil {
-		return nil, nil
+// ReplayCredentials returns the credential reference the binding's create carried, for a replay of
+// that create. kagent refuses a replayed request id whose credentials differ from the original's,
+// so a replay must send the same reference whatever became of the credential since (it may be
+// revoked by now). The reference is a function of the binding alone: the Secret name is
+// deterministic. It is sent when the store is configured and the role and grant are a valid pair,
+// the two conditions under which [Credentials.SessionCredentials] sent one. It reads nothing and
+// publishes nothing.
+func (c *Credentials) ReplayCredentials(bindingID, origin string, role dbstate.BindingRole, grant dbstate.MCPGrantKind) []*kagentapi.SessionCredential {
+	if c == nil || !ValidPair(role, grant) {
+		return nil
 	}
-	row, err := dbq.New(c.Pool).GetLiveCredential(ctx, dbq.GetLiveCredentialParams{BindingID: bindingID, Kind: dbstate.CredentialMCP})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+	if _, off := c.Secrets.(Unconfigured); off {
+		return nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("agentauth: read credential: %w", err)
-	}
-	if row.State != dbstate.CredentialPublished {
-		return nil, nil
-	}
-	return []*kagentapi.SessionCredential{reference(origin, row.SecretName)}, nil
+	return []*kagentapi.SessionCredential{reference(origin, c.SecretName(dbstate.CredentialMCP, bindingID))}
 }
 
 func reference(origin, secretName string) *kagentapi.SessionCredential {

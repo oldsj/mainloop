@@ -187,10 +187,12 @@ func (s *Service) finalize(ctx context.Context, c reconcile.Claim, op dbq.Worksp
 			}
 		}
 		if res.purge {
-			if _, err := agentauth.RevokeInTx(ctx, q, w.ID); err != nil {
+			// The session row goes first: an Issue that planned a credential holds it FOR SHARE, so the
+			// delete waits for that plan to commit and the revoke after it sees the row.
+			if _, err := q.DeleteSession(ctx, w.ID); err != nil {
 				return false, err
 			}
-			if _, err := q.DeleteSession(ctx, w.ID); err != nil {
+			if _, err := agentauth.RevokeInTx(ctx, q, w.ID); err != nil {
 				return false, err
 			}
 		}
@@ -496,13 +498,14 @@ func (s *Service) doDelete(ctx context.Context, w wsRow) result {
 		}
 		// A create may have reached kagent without the reply being recorded. The idempotent
 		// create returns that Session, so the delete removes it rather than leaking it.
-		// The replay carries the credential the original create did, if it is still live; it makes none.
+		// The replay carries the credential reference the original create did (kagent refuses a
+		// replay that differs), whether or not the credential is still live; it makes none.
 		req := w.createRequest()
-		creds, cerr := s.Credentials.SessionReference(ctx, w.ID, s.Config.MCPOrigin())
-		if cerr != nil {
-			return result{err: &transient{cerr}}
+		b, err := q.GetAgentBinding(ctx, w.ID)
+		if err != nil {
+			return result{err: &transient{err}}
 		}
-		req.Credentials = creds
+		req.Credentials = s.Credentials.ReplayCredentials(w.ID, s.Config.MCPOrigin(), b.Role, b.MCPGrantKind)
 		sess, err := s.Kagent.CreateSession(ctx, req)
 		if replayFoundNoSession(err) {
 			// No Session holds the request id, or the orphan sweep reclaims it if a kagent-side

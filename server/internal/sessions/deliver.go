@@ -272,6 +272,7 @@ func (t *turn) createKagentSession(ctx context.Context) (*kagentapi.Session, err
 	id, owner, attempts := t.fence()
 	if err := lost(dbq.New(t.s.Pool).MarkCreateRequested(ctx, dbq.MarkCreateRequestedParams{
 		ID: id, LeaseOwner: owner, Attempts: attempts, CreateRequestID: &reqID, RequestID: t.d.KagentRequestID,
+		AgentNamespace: &t.agent.Namespace, AgentName: &t.agent.Name,
 	})); err != nil {
 		return nil, fmt.Errorf("record the create request: %w", err)
 	}
@@ -423,12 +424,26 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 			return t.settle(ctx, dbstate.DeliveryFailed, "not sent: "+err.Error(), nil, false)
 		}
 		var cfg *kagent.ConfigError
-		if errors.As(err, &cfg) || errors.Is(err, errWorkspaceSessionGone) || t.c.Attempts >= createAttempts {
+		if errors.As(err, &cfg) || errors.Is(err, errWorkspaceSessionGone) {
+			return t.settle(ctx, dbstate.DeliveryFailed,
+				"not sent: could not prepare the kagent session: "+err.Error(), nil, false)
+		}
+		// Failures are counted apart from claims: waiting for a credential cleanup or recovering a
+		// lease claims the row again without being a failure.
+		failures, ferr := dbq.New(t.s.Pool).NoteCreateFailure(ctx, dbq.NoteCreateFailureParams{
+			ID: t.c.ID, LeaseOwner: &t.c.Owner, Attempts: int32(t.c.Attempts)}) //nolint:gosec // a small counter
+		if errors.Is(ferr, pgx.ErrNoRows) {
+			return reconcile.Retry(), reconcile.ErrLeaseLost
+		}
+		if ferr != nil {
+			return reconcile.Retry(), fmt.Errorf("count the create failure: %w", ferr)
+		}
+		if int(failures) >= createAttempts {
 			return t.settle(ctx, dbstate.DeliveryFailed,
 				"not sent: could not prepare the kagent session: "+err.Error(), nil, false)
 		}
 		t.s.log().WarnContext(ctx, "prepare kagent session failed", "message_id", t.c.ID, "error", err)
-		return reconcile.RetryAfter(min(createBackoff<<(t.c.Attempts-1), createBackoffM)), nil
+		return reconcile.RetryAfter(min(createBackoff<<(failures-1), createBackoffM)), nil
 	}
 
 	// Commit "sending" before the call: if this process dies mid-call, the next claimer sees

@@ -56,7 +56,8 @@ func (s *Service) SuspendIdle(ctx context.Context) error {
 
 // DeleteArchived deletes the kagent Session of every archived session and marks the binding.
 // The binding columns are the durable intent: a failed or unconfirmed delete leaves it pending
-// and the next pass retries, so a Session is never forgotten.
+// and the next pass retries, so a Session is never forgotten. An archived workspace with no
+// recorded Session id gets a delete operation, which finds the Session its create may have made.
 func (s *Service) DeleteArchived(ctx context.Context) error {
 	q := dbq.New(s.Pool)
 	rows, err := q.ListArchivedUndeletedBindings(ctx, sweepBatch)
@@ -66,9 +67,7 @@ func (s *Service) DeleteArchived(ctx context.Context) error {
 	var errs []error
 	for _, r := range rows {
 		if r.KagentSessionID == nil {
-			// Nothing is known to exist. A create may still be in flight; leave the binding for
-			// the lifecycle loop to resolve rather than guess.
-			continue
+			continue // no Session id: ListArchivedWorkspacesWithoutSession handles these below
 		}
 		if open, err := s.turnOpen(ctx, wsRow{ID: r.SessionID}); err != nil {
 			errs = append(errs, err)
@@ -82,6 +81,32 @@ func (s *Service) DeleteArchived(ctx context.Context) error {
 			continue
 		}
 		if err := q.MarkBindingKagentDeleted(ctx, r.SessionID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(append(errs, s.deleteArchivedWithoutSession(ctx, q))...)
+}
+
+// deleteArchivedWithoutSession queues the delete of every archived workspace whose create was sent
+// but whose Session id was never recorded, once its create operation is closed. The delete replays
+// the create to find the Session a lost reply may have made, deletes it and purges the rows; until
+// then the binding counts as an unresolved create and the orphan sweep refuses to delete anything.
+// A workspace whose create is still being retried is left to that operation.
+func (s *Service) deleteArchivedWithoutSession(ctx context.Context, q *dbq.Queries) error {
+	ids, err := q.ListArchivedWorkspacesWithoutSession(ctx, sweepBatch)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, id := range ids {
+		if open, err := s.turnOpen(ctx, wsRow{ID: id}); err != nil {
+			errs = append(errs, err)
+			continue
+		} else if open {
+			continue
+		}
+		if _, err := s.enqueue(ctx, id, dbstate.OpDelete, nil); err != nil && !errors.Is(err, ErrBusy) && !errors.Is(err, ErrNotFound) {
+			s.Log.WarnContext(ctx, "could not queue the delete of an archived workspace", "workspace", id, "error", err)
 			errs = append(errs, err)
 		}
 	}

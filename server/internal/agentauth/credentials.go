@@ -97,6 +97,20 @@ func (c *Credentials) Issue(ctx context.Context, bindingID string, kind dbstate.
 	if row.State == dbstate.CredentialPublished {
 		return Issued{CredentialID: row.ID, SecretName: row.SecretName, SecretUID: deref(row.SecretUID)}, nil
 	}
+	// Cleanup waits out a create that may be in flight, counting from here. A row revoked before
+	// this write never gets a create.
+	if _, err := dbq.New(c.Pool).MarkCredentialCreateStarted(ctx, row.ID); errors.Is(err, pgx.ErrNoRows) {
+		cur, gerr := dbq.New(c.Pool).GetCredential(ctx, row.ID)
+		if gerr != nil {
+			return Issued{}, fmt.Errorf("agentauth: read credential %s: %w", row.ID, gerr)
+		}
+		if cur.State == dbstate.CredentialPublished {
+			return Issued{CredentialID: row.ID, SecretName: row.SecretName, SecretUID: deref(cur.SecretUID)}, nil
+		}
+		return Issued{}, ErrRevoked
+	} else if err != nil {
+		return Issued{}, fmt.Errorf("agentauth: record the publish start: %w", err)
+	}
 	token := Token(c.Key, row.ID)
 	cctx, cancel := context.WithTimeout(ctx, createTimeout)
 	defer cancel()
@@ -219,10 +233,10 @@ func CleanupTable() reconcile.Table {
 }
 
 // createTimeout bounds the Secret create inside Issue. Cleanup relies on it: a revoked credential
-// with no recorded UID may still have a create in flight until this long after its row was made.
+// with no recorded UID may still have a create in flight until this long after the create started.
 const createTimeout = 30 * time.Second
 
-// lookupGrace is how long past a credential row's creation a missing Secret may still appear.
+// lookupGrace is how long past the start of a Secret create a missing Secret may still appear.
 const lookupGrace = createTimeout + 15*time.Second
 
 // stalePlanned is how long a planned credential may wait for its publish before it is revoked
@@ -279,10 +293,13 @@ func (c *Credentials) cleanup(ctx context.Context, claim reconcile.Claim) (recon
 			return reconcile.Retry(), err
 		}
 		if !found {
-			// An Issue whose create is still in flight may yet land the Secret; wait out its deadline
-			// before calling the name free.
-			if wait := time.Until(row.CreatedAt.Add(lookupGrace)); wait > 0 {
-				return reconcile.RetryAfter(min(wait, time.Minute)), nil
+			// An Issue whose create is still in flight may yet land the Secret; wait out its deadline,
+			// counted from when the create started, before calling the name free. A row whose create
+			// never started has no Secret to wait for.
+			if row.CreateStartedAt != nil {
+				if wait := time.Until(row.CreateStartedAt.Add(lookupGrace)); wait > 0 {
+					return reconcile.RetryAfter(min(wait, time.Minute)), nil
+				}
 			}
 			return reconcile.Done(string(dbstate.CredentialDeleted)), nil
 		}

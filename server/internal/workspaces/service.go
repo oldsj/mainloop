@@ -515,10 +515,11 @@ func (s *Service) dropRejected(ctx context.Context, id string, create dbq.Worksp
 		if _, err := q.GetOpenWorkspaceOp(ctx, id); !errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
-		if _, err := agentauth.RevokeInTx(ctx, q, id); err != nil {
+		// The session row first, so an Issue holding it FOR SHARE finishes before the revoke runs.
+		if _, err := q.DeleteSession(ctx, id); err != nil {
 			return nil, err
 		}
-		if _, err := q.DeleteSession(ctx, id); err != nil {
+		if _, err := agentauth.RevokeInTx(ctx, q, id); err != nil {
 			return nil, err
 		}
 		lc := project(wsRow(row), nil, &create, time.Time{})

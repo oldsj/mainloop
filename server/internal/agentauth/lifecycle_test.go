@@ -192,7 +192,8 @@ func TestCleanupKeepsLookingForASecretWithinTheCreateDeadline(t *testing.T) {
 	q := dbq.New(d.Pool)
 	s := env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
 	name := "mainloop-mcp-" + s.SessionID
-	if _, err := d.Pool.Exec(ctx, `UPDATE credentials SET state='planned', secret_uid=NULL WHERE id=$1`, s.CredentialID); err != nil {
+	// The row is old but its create has only just started: the grace counts from the start.
+	if _, err := d.Pool.Exec(ctx, `UPDATE credentials SET state='planned', secret_uid=NULL, created_at = now() - interval '1 hour', create_started_at = now() WHERE id=$1`, s.CredentialID); err != nil {
 		t.Fatal(err)
 	}
 	if err := env.Cluster.CoreV1().Secrets(authtest.Namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
@@ -214,7 +215,7 @@ func TestCleanupKeepsLookingForASecretWithinTheCreateDeadline(t *testing.T) {
 		t.Fatalf("state = %s: cleanup gave up on a Secret that may still be created", got.State)
 	}
 	// Past the create deadline nothing can land any more.
-	if _, err := d.Pool.Exec(ctx, `UPDATE credentials SET created_at = now() - interval '1 hour', next_attempt_at = now() WHERE id=$1`, s.CredentialID); err != nil {
+	if _, err := d.Pool.Exec(ctx, `UPDATE credentials SET create_started_at = now() - interval '1 hour', next_attempt_at = now() WHERE id=$1`, s.CredentialID); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(20 * time.Second)
@@ -226,6 +227,67 @@ func TestCleanupKeepsLookingForASecretWithinTheCreateDeadline(t *testing.T) {
 			t.Fatal("cleanup did not finish after the grace")
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// A revoked credential whose Secret create never started has nothing to wait for: cleanup frees the
+// name at once instead of waiting out a deadline.
+func TestCleanupDoesNotWaitForACreateThatNeverStarted(t *testing.T) {
+	d := testdb.New(t)
+	env := authtest.NewEnv(d.Pool)
+	ctx := context.Background()
+	q := dbq.New(d.Pool)
+	s := env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
+	if _, err := d.Pool.Exec(ctx, `UPDATE credentials SET state='planned', secret_uid=NULL, create_started_at=NULL WHERE id=$1`, s.CredentialID); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Cluster.CoreV1().Secrets(authtest.Namespace).Delete(ctx, "mainloop-mcp-"+s.SessionID, metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.Creds.Revoke(ctx, s.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	rctx, cancel := context.WithCancel(ctx)
+	r := reconcile.NewRunner(d.Pool, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	env.Creds.Register(r)
+	done := make(chan error, 1)
+	go func() { done <- r.Run(rctx) }()
+	defer func() { cancel(); <-done }()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if got, _ := q.GetCredential(ctx, s.CredentialID); got.State == dbstate.CredentialDeleted {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cleanup waited for a create that never started")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// Issue records that the create is starting before it calls the store.
+func TestIssueRecordsTheCreateStart(t *testing.T) {
+	d := testdb.New(t)
+	env := authtest.NewEnv(d.Pool)
+	ctx := context.Background()
+	q := dbq.New(d.Pool)
+	s := env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
+	freeName(t, env, s)
+	if _, err := env.Creds.Issue(ctx, s.SessionID, dbstate.CredentialMCP); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := q.ListCredentialsByBinding(ctx, s.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started bool
+	for _, r := range rows {
+		if r.State == dbstate.CredentialPublished && r.CreateStartedAt != nil {
+			started = true
+		}
+	}
+	if !started {
+		t.Fatalf("no published credential records its create start: %+v", rows)
 	}
 }
 

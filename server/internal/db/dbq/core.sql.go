@@ -29,7 +29,7 @@ const createAgentBinding = `-- name: CreateAgentBinding :one
 INSERT INTO agent_bindings (
     session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_request_id, model
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id
+RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name
 `
 
 type CreateAgentBindingParams struct {
@@ -75,6 +75,8 @@ func (q *Queries) CreateAgentBinding(ctx context.Context, arg CreateAgentBinding
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.KagentCreateRequestID,
+		&i.KagentCreateAgentNamespace,
+		&i.KagentCreateAgentName,
 	)
 	return i, err
 }
@@ -83,7 +85,7 @@ const createCredential = `-- name: CreateCredential :one
 
 INSERT INTO credentials (id, kind, binding_id, token_hash, secret_name)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until
+RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until, create_started_at
 `
 
 type CreateCredentialParams struct {
@@ -119,6 +121,7 @@ func (q *Queries) CreateCredential(ctx context.Context, arg CreateCredentialPara
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
+		&i.CreateStartedAt,
 	)
 	return i, err
 }
@@ -356,7 +359,7 @@ func (q *Queries) DeleteTopic(ctx context.Context, id string) (int64, error) {
 }
 
 const getAgentBinding = `-- name: GetAgentBinding :one
-SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id FROM agent_bindings WHERE session_id = $1
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name FROM agent_bindings WHERE session_id = $1
 `
 
 func (q *Queries) GetAgentBinding(ctx context.Context, sessionID string) (AgentBinding, error) {
@@ -381,12 +384,14 @@ func (q *Queries) GetAgentBinding(ctx context.Context, sessionID string) (AgentB
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.KagentCreateRequestID,
+		&i.KagentCreateAgentNamespace,
+		&i.KagentCreateAgentName,
 	)
 	return i, err
 }
 
 const getAgentBindingByKagentSession = `-- name: GetAgentBindingByKagentSession :one
-SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id FROM agent_bindings WHERE kagent_session_id = $1
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name FROM agent_bindings WHERE kagent_session_id = $1
 `
 
 func (q *Queries) GetAgentBindingByKagentSession(ctx context.Context, kagentSessionID *string) (AgentBinding, error) {
@@ -411,12 +416,14 @@ func (q *Queries) GetAgentBindingByKagentSession(ctx context.Context, kagentSess
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.KagentCreateRequestID,
+		&i.KagentCreateAgentNamespace,
+		&i.KagentCreateAgentName,
 	)
 	return i, err
 }
 
 const getCredential = `-- name: GetCredential :one
-SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until FROM credentials WHERE id = $1
+SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until, create_started_at FROM credentials WHERE id = $1
 `
 
 func (q *Queries) GetCredential(ctx context.Context, id string) (Credential, error) {
@@ -437,6 +444,7 @@ func (q *Queries) GetCredential(ctx context.Context, id string) (Credential, err
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
+		&i.CreateStartedAt,
 	)
 	return i, err
 }
@@ -578,7 +586,7 @@ func (q *Queries) GetTopicByName(ctx context.Context, arg GetTopicByNameParams) 
 }
 
 const listAgentBindingsByParent = `-- name: ListAgentBindingsByParent :many
-SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id FROM agent_bindings WHERE parent_session_id = $1 ORDER BY created_at, session_id
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name FROM agent_bindings WHERE parent_session_id = $1 ORDER BY created_at, session_id
 `
 
 func (q *Queries) ListAgentBindingsByParent(ctx context.Context, parentSessionID *string) ([]AgentBinding, error) {
@@ -609,6 +617,8 @@ func (q *Queries) ListAgentBindingsByParent(ctx context.Context, parentSessionID
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.KagentCreateRequestID,
+			&i.KagentCreateAgentNamespace,
+			&i.KagentCreateAgentName,
 		); err != nil {
 			return nil, err
 		}
@@ -621,7 +631,7 @@ func (q *Queries) ListAgentBindingsByParent(ctx context.Context, parentSessionID
 }
 
 const listCredentialsByBinding = `-- name: ListCredentialsByBinding :many
-SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until FROM credentials WHERE binding_id = $1 ORDER BY created_at, id
+SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until, create_started_at FROM credentials WHERE binding_id = $1 ORDER BY created_at, id
 `
 
 func (q *Queries) ListCredentialsByBinding(ctx context.Context, bindingID string) ([]Credential, error) {
@@ -648,6 +658,7 @@ func (q *Queries) ListCredentialsByBinding(ctx context.Context, bindingID string
 			&i.NextAttemptAt,
 			&i.LeaseOwner,
 			&i.LeaseUntil,
+			&i.CreateStartedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -832,7 +843,7 @@ const markCredentialPublished = `-- name: MarkCredentialPublished :one
 UPDATE credentials
 SET state = 'published', secret_uid = $2, updated_at = now()
 WHERE id = $1 AND state = 'planned'
-RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until
+RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until, create_started_at
 `
 
 type MarkCredentialPublishedParams struct {
@@ -858,6 +869,7 @@ func (q *Queries) MarkCredentialPublished(ctx context.Context, arg MarkCredentia
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
+		&i.CreateStartedAt,
 	)
 	return i, err
 }
@@ -866,7 +878,7 @@ const markCredentialRevoked = `-- name: MarkCredentialRevoked :one
 UPDATE credentials
 SET state = 'revoked', secret_uid = coalesce(secret_uid, $2), revoked_at = now(), updated_at = now()
 WHERE id = $1 AND state IN ('planned', 'published')
-RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until
+RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until, create_started_at
 `
 
 type MarkCredentialRevokedParams struct {
@@ -892,6 +904,7 @@ func (q *Queries) MarkCredentialRevoked(ctx context.Context, arg MarkCredentialR
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
+		&i.CreateStartedAt,
 	)
 	return i, err
 }
@@ -900,7 +913,7 @@ const setBindingKagentSession = `-- name: SetBindingKagentSession :one
 UPDATE agent_bindings
 SET kagent_session_id = $2, updated_at = now()
 WHERE session_id = $1
-RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id
+RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name
 `
 
 type SetBindingKagentSessionParams struct {
@@ -930,6 +943,8 @@ func (q *Queries) SetBindingKagentSession(ctx context.Context, arg SetBindingKag
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.KagentCreateRequestID,
+		&i.KagentCreateAgentNamespace,
+		&i.KagentCreateAgentName,
 	)
 	return i, err
 }

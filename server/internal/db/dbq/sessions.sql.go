@@ -187,7 +187,7 @@ func (q *Queries) GetConversationSummary(ctx context.Context, arg GetConversatio
 }
 
 const getDelivery = `-- name: GetDelivery :one
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE id = $1
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE id = $1
 `
 
 func (q *Queries) GetDelivery(ctx context.Context, id string) (Delivery, error) {
@@ -204,6 +204,7 @@ func (q *Queries) GetDelivery(ctx context.Context, id string) (Delivery, error) 
 		&i.Detail,
 		&i.KagentSessionID,
 		&i.Attempts,
+		&i.CreateFailures,
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
@@ -297,7 +298,7 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 
 const getMainBinding = `-- name: GetMainBinding :one
 
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_create_request_id, s.user_id, s.title, s.status AS session_status
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, s.user_id, s.title, s.status AS session_status
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
 WHERE b.role = 'main' AND s.user_id = $1 AND s.archived_at IS NULL
@@ -306,27 +307,29 @@ LIMIT 1
 `
 
 type GetMainBindingRow struct {
-	SessionID             string
-	Kind                  string
-	Role                  dbstate.BindingRole
-	MCPGrantKind          dbstate.MCPGrantKind
-	ParentSessionID       *string
-	TopicID               *string
-	KagentSessionID       *string
-	KagentRequestID       *string
-	Model                 *string
-	StandingHash          *string
-	Turns                 int32
-	QueueHeld             bool
-	ChildStartFailure     *string
-	ReportedAt            *time.Time
-	KagentDeletedAt       *time.Time
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	KagentCreateRequestID *string
-	UserID                string
-	Title                 string
-	SessionStatus         dbstate.SessionStatus
+	SessionID                  string
+	Kind                       string
+	Role                       dbstate.BindingRole
+	MCPGrantKind               dbstate.MCPGrantKind
+	ParentSessionID            *string
+	TopicID                    *string
+	KagentSessionID            *string
+	KagentRequestID            *string
+	Model                      *string
+	StandingHash               *string
+	Turns                      int32
+	QueueHeld                  bool
+	ChildStartFailure          *string
+	ReportedAt                 *time.Time
+	KagentDeletedAt            *time.Time
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
+	KagentCreateRequestID      *string
+	KagentCreateAgentNamespace *string
+	KagentCreateAgentName      *string
+	UserID                     string
+	Title                      string
+	SessionStatus              dbstate.SessionStatus
 }
 
 // Main thread, message mirror and delivery ledger (internal/sessions).
@@ -356,6 +359,8 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.KagentCreateRequestID,
+		&i.KagentCreateAgentNamespace,
+		&i.KagentCreateAgentName,
 		&i.UserID,
 		&i.Title,
 		&i.SessionStatus,
@@ -364,7 +369,7 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 }
 
 const getOwnedSessionBinding = `-- name: GetOwnedSessionBinding :one
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_create_request_id, s.user_id, s.title, s.status AS session_status, s.archived_at,
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, s.user_id, s.title, s.status AS session_status, s.archived_at,
        w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
@@ -378,30 +383,32 @@ type GetOwnedSessionBindingParams struct {
 }
 
 type GetOwnedSessionBindingRow struct {
-	SessionID               string
-	Kind                    string
-	Role                    dbstate.BindingRole
-	MCPGrantKind            dbstate.MCPGrantKind
-	ParentSessionID         *string
-	TopicID                 *string
-	KagentSessionID         *string
-	KagentRequestID         *string
-	Model                   *string
-	StandingHash            *string
-	Turns                   int32
-	QueueHeld               bool
-	ChildStartFailure       *string
-	ReportedAt              *time.Time
-	KagentDeletedAt         *time.Time
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
-	KagentCreateRequestID   *string
-	UserID                  string
-	Title                   string
-	SessionStatus           dbstate.SessionStatus
-	ArchivedAt              *time.Time
-	WorkspaceAgentNamespace *string
-	WorkspaceAgentName      *string
+	SessionID                  string
+	Kind                       string
+	Role                       dbstate.BindingRole
+	MCPGrantKind               dbstate.MCPGrantKind
+	ParentSessionID            *string
+	TopicID                    *string
+	KagentSessionID            *string
+	KagentRequestID            *string
+	Model                      *string
+	StandingHash               *string
+	Turns                      int32
+	QueueHeld                  bool
+	ChildStartFailure          *string
+	ReportedAt                 *time.Time
+	KagentDeletedAt            *time.Time
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
+	KagentCreateRequestID      *string
+	KagentCreateAgentNamespace *string
+	KagentCreateAgentName      *string
+	UserID                     string
+	Title                      string
+	SessionStatus              dbstate.SessionStatus
+	ArchivedAt                 *time.Time
+	WorkspaceAgentNamespace    *string
+	WorkspaceAgentName         *string
 }
 
 // A session's binding, with the Agent its workspace was created on (NULL for a session that has no
@@ -428,6 +435,8 @@ func (q *Queries) GetOwnedSessionBinding(ctx context.Context, arg GetOwnedSessio
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.KagentCreateRequestID,
+		&i.KagentCreateAgentNamespace,
+		&i.KagentCreateAgentName,
 		&i.UserID,
 		&i.Title,
 		&i.SessionStatus,
@@ -524,7 +533,7 @@ const insertDelivery = `-- name: InsertDelivery :one
 INSERT INTO deliveries (id, idempotency_key, session_id, source)
 VALUES ($1, $1, $2, $3)
 ON CONFLICT (id) DO NOTHING
-RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at
+RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at
 `
 
 type InsertDeliveryParams struct {
@@ -547,6 +556,7 @@ func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) 
 		&i.Detail,
 		&i.KagentSessionID,
 		&i.Attempts,
+		&i.CreateFailures,
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
@@ -583,7 +593,7 @@ func (q *Queries) InsertSessionMessage(ctx context.Context, arg InsertSessionMes
 }
 
 const listOpenDeliveries = `-- name: ListOpenDeliveries :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries
 WHERE session_id = $1 AND state IN ('recorded', 'sending', 'delivered', 'uncertain')
 ORDER BY created_at, id
 `
@@ -609,6 +619,7 @@ func (q *Queries) ListOpenDeliveries(ctx context.Context, sessionID string) ([]D
 			&i.Detail,
 			&i.KagentSessionID,
 			&i.Attempts,
+			&i.CreateFailures,
 			&i.NextAttemptAt,
 			&i.LeaseOwner,
 			&i.LeaseUntil,
@@ -626,7 +637,7 @@ func (q *Queries) ListOpenDeliveries(ctx context.Context, sessionID string) ([]D
 }
 
 const listSessionDeliveries = `-- name: ListSessionDeliveries :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2
 `
 
 type ListSessionDeliveriesParams struct {
@@ -654,6 +665,7 @@ func (q *Queries) ListSessionDeliveries(ctx context.Context, arg ListSessionDeli
 			&i.Detail,
 			&i.KagentSessionID,
 			&i.Attempts,
+			&i.CreateFailures,
 			&i.NextAttemptAt,
 			&i.LeaseOwner,
 			&i.LeaseUntil,
@@ -831,7 +843,8 @@ func (q *Queries) ListTopicLines(ctx context.Context, userID string) ([]ListTopi
 }
 
 const listUnresolvedCreates = `-- name: ListUnresolvedCreates :many
-SELECT b.session_id, b.kind, b.role, b.kagent_create_request_id::text AS create_request_id
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.kagent_create_request_id::text AS create_request_id,
+       b.kagent_create_agent_namespace AS agent_namespace, b.kagent_create_agent_name AS agent_name
 FROM agent_bindings b
 WHERE b.kagent_create_request_id IS NOT NULL AND b.kagent_session_id IS NULL
   AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = b.session_id)
@@ -846,7 +859,10 @@ type ListUnresolvedCreatesRow struct {
 	SessionID       string
 	Kind            string
 	Role            dbstate.BindingRole
+	MCPGrantKind    dbstate.MCPGrantKind
 	CreateRequestID string
+	AgentNamespace  *string
+	AgentName       *string
 }
 
 // The bindings that sent a create whose Session id never came back and whose session has nothing
@@ -865,7 +881,10 @@ func (q *Queries) ListUnresolvedCreates(ctx context.Context, limit int32) ([]Lis
 			&i.SessionID,
 			&i.Kind,
 			&i.Role,
+			&i.MCPGrantKind,
 			&i.CreateRequestID,
+			&i.AgentNamespace,
+			&i.AgentName,
 		); err != nil {
 			return nil, err
 		}
@@ -879,16 +898,20 @@ func (q *Queries) ListUnresolvedCreates(ctx context.Context, limit int32) ([]Lis
 
 const markCreateRequested = `-- name: MarkCreateRequested :execrows
 UPDATE agent_bindings b
-SET kagent_create_request_id = $1, updated_at = now()
+SET kagent_create_request_id = $1,
+    kagent_create_agent_namespace = $2, kagent_create_agent_name = $3,
+    updated_at = now()
 FROM deliveries d
-WHERE d.id = $2 AND d.lease_owner = $3 AND d.attempts = $4
+WHERE d.id = $4 AND d.lease_owner = $5 AND d.attempts = $6
   AND b.session_id = d.session_id
   AND b.kagent_session_id IS NULL
-  AND b.kagent_request_id IS NOT DISTINCT FROM $5::text
+  AND b.kagent_request_id IS NOT DISTINCT FROM $7::text
 `
 
 type MarkCreateRequestedParams struct {
 	CreateRequestID *string
+	AgentNamespace  *string
+	AgentName       *string
 	ID              string
 	LeaseOwner      *string
 	Attempts        int32
@@ -896,11 +919,14 @@ type MarkCreateRequestedParams struct {
 }
 
 // Records, before the CreateSession call, that a create under this request id is about to be
-// sent. From then on the binding may own a kagent Session whose id Mainloop has not stored, which
-// the orphan sweep must not mistake for an orphan. Fenced like SetDeliveryKagentSession.
+// sent, with the Agent it names. From then on the binding may own a kagent Session whose id
+// Mainloop has not stored, which the orphan sweep must not mistake for an orphan. Fenced like
+// SetDeliveryKagentSession.
 func (q *Queries) MarkCreateRequested(ctx context.Context, arg MarkCreateRequestedParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markCreateRequested,
 		arg.CreateRequestID,
+		arg.AgentNamespace,
+		arg.AgentName,
 		arg.ID,
 		arg.LeaseOwner,
 		arg.Attempts,
@@ -995,6 +1021,28 @@ func (q *Queries) MarkDeliveryUncertain(ctx context.Context, arg MarkDeliveryUnc
 	return result.RowsAffected(), nil
 }
 
+const noteCreateFailure = `-- name: NoteCreateFailure :one
+UPDATE deliveries
+SET create_failures = create_failures + 1
+WHERE id = $1 AND lease_owner = $2 AND attempts = $3
+RETURNING create_failures
+`
+
+type NoteCreateFailureParams struct {
+	ID         string
+	LeaseOwner *string
+	Attempts   int32
+}
+
+// Counts a failed attempt to create the delivery's kagent Session and returns the count. Fenced on
+// the claim; no rows when the claim is lost. updated_at stays: a failure is not activity.
+func (q *Queries) NoteCreateFailure(ctx context.Context, arg NoteCreateFailureParams) (int32, error) {
+	row := q.db.QueryRow(ctx, noteCreateFailure, arg.ID, arg.LeaseOwner, arg.Attempts)
+	var create_failures int32
+	err := row.Scan(&create_failures)
+	return create_failures, err
+}
+
 const noteHoldPassed = `-- name: NoteHoldPassed :execrows
 UPDATE deliveries
 SET detail = $4
@@ -1042,7 +1090,8 @@ func (q *Queries) RefreshSessionStatus(ctx context.Context, id string) error {
 const replaceDeliveryKagentSession = `-- name: ReplaceDeliveryKagentSession :execrows
 UPDATE agent_bindings b
 SET kagent_session_id = NULL, kagent_request_id = $1, standing_hash = NULL,
-    kagent_create_request_id = NULL, updated_at = now()
+    kagent_create_request_id = NULL, kagent_create_agent_namespace = NULL, kagent_create_agent_name = NULL,
+    updated_at = now()
 FROM deliveries d
 WHERE d.id = $2 AND d.lease_owner = $3 AND d.attempts = $4
   AND b.session_id = d.session_id
@@ -1078,7 +1127,8 @@ func (q *Queries) ReplaceDeliveryKagentSession(ctx context.Context, arg ReplaceD
 
 const resolveCreate = `-- name: ResolveCreate :execrows
 UPDATE agent_bindings b
-SET kagent_create_request_id = NULL, updated_at = now()
+SET kagent_create_request_id = NULL, kagent_create_agent_namespace = NULL, kagent_create_agent_name = NULL,
+    updated_at = now()
 WHERE b.session_id = $1 AND b.kagent_create_request_id = $2
   AND b.kagent_session_id IS NULL
   AND NOT EXISTS (
@@ -1095,6 +1145,39 @@ type ResolveCreateParams struct {
 // was deleted. Only while the create is still unresolved and nothing of the session is open.
 func (q *Queries) ResolveCreate(ctx context.Context, arg ResolveCreateParams) (int64, error) {
 	result, err := q.db.Exec(ctx, resolveCreate, arg.SessionID, arg.CreateRequestID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const rotateCreateRequest = `-- name: RotateCreateRequest :execrows
+UPDATE agent_bindings b
+SET kagent_request_id = CASE
+        WHEN coalesce(nullif(b.kagent_request_id, ''), 'mainloop-session-' || b.session_id) = b.kagent_create_request_id
+        THEN $1::text ELSE b.kagent_request_id END,
+    updated_at = now()
+WHERE b.session_id = $2 AND b.kagent_create_request_id = $3
+  AND b.kagent_session_id IS NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM deliveries d
+      WHERE d.session_id = b.session_id AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain'))
+`
+
+type RotateCreateRequestParams struct {
+	NewRequestID    string
+	SessionID       string
+	CreateRequestID *string
+}
+
+// Moves the binding off the request id of an unresolved create, so that a message that arrives while
+// the sweep replays and deletes that create's Session makes its own Session under a new id and
+// cannot bind the one being deleted. Matches only while the create is unresolved, nothing of the
+// session is open, and the create still names the binding's request id (a binding already moved
+// keeps its id and still matches, so a repeated pass replays the same create). Zero rows: the
+// create was settled, or a message is open; the sweep leaves it.
+func (q *Queries) RotateCreateRequest(ctx context.Context, arg RotateCreateRequestParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rotateCreateRequest, arg.NewRequestID, arg.SessionID, arg.CreateRequestID)
 	if err != nil {
 		return 0, err
 	}

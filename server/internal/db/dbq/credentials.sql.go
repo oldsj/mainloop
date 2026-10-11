@@ -13,7 +13,7 @@ import (
 )
 
 const getLiveCredential = `-- name: GetLiveCredential :one
-SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until FROM credentials
+SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until, create_started_at FROM credentials
 WHERE binding_id = $1 AND kind = $2 AND state IN ('planned', 'published')
 `
 
@@ -40,6 +40,7 @@ func (q *Queries) GetLiveCredential(ctx context.Context, arg GetLiveCredentialPa
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
+		&i.CreateStartedAt,
 	)
 	return i, err
 }
@@ -115,11 +116,27 @@ func (q *Queries) LockSessionForCredential(ctx context.Context, id string) (Lock
 	return i, err
 }
 
+const markCredentialCreateStarted = `-- name: MarkCredentialCreateStarted :one
+UPDATE credentials
+SET create_started_at = now()
+WHERE id = $1 AND state = 'planned'
+RETURNING id
+`
+
+// Records, before the Secret create, that it is about to start. Only while the row is planned, so a
+// row revoked first never gets a create: cleanup that sees no start time can call the name free.
+func (q *Queries) MarkCredentialCreateStarted(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, markCredentialCreateStarted, id)
+	var id_2 string
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const revokeBindingCredentials = `-- name: RevokeBindingCredentials :many
 UPDATE credentials
 SET state = 'revoked', revoked_at = now(), updated_at = now(), next_attempt_at = now()
 WHERE binding_id = $1 AND state IN ('planned', 'published')
-RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until
+RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until, create_started_at
 `
 
 // Revokes the live credentials of one binding and makes the Secret deletes due now. Only this
@@ -148,6 +165,7 @@ func (q *Queries) RevokeBindingCredentials(ctx context.Context, bindingID string
 			&i.NextAttemptAt,
 			&i.LeaseOwner,
 			&i.LeaseUntil,
+			&i.CreateStartedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -166,7 +184,7 @@ FROM sessions AS s
 WHERE s.id = c.binding_id
     AND c.state IN ('planned', 'published')
     AND (s.archived_at IS NOT NULL OR s.status IN ('completed', 'failed', 'cancelled'))
-RETURNING c.id, c.kind, c.binding_id, c.token_hash, c.secret_name, c.secret_uid, c.state, c.created_at, c.updated_at, c.revoked_at, c.attempts, c.next_attempt_at, c.lease_owner, c.lease_until
+RETURNING c.id, c.kind, c.binding_id, c.token_hash, c.secret_name, c.secret_uid, c.state, c.created_at, c.updated_at, c.revoked_at, c.attempts, c.next_attempt_at, c.lease_owner, c.lease_until, c.create_started_at
 `
 
 // Live credentials of sessions that can no longer act (archived, or completed, failed or
@@ -197,6 +215,7 @@ func (q *Queries) RevokeEndedSessionCredentials(ctx context.Context) ([]Credenti
 			&i.NextAttemptAt,
 			&i.LeaseOwner,
 			&i.LeaseUntil,
+			&i.CreateStartedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -214,7 +233,7 @@ SET state = 'revoked', revoked_at = now(), updated_at = now(), next_attempt_at =
 WHERE c.state IN ('planned', 'published')
     AND NOT EXISTS (SELECT 1 FROM agent_bindings AS b WHERE b.session_id = c.binding_id)
     AND c.updated_at < now() - make_interval(secs => $1::float8)
-RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until
+RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until, create_started_at
 `
 
 // Live credentials whose binding no longer exists (it has no foreign key on purpose).
@@ -242,6 +261,7 @@ func (q *Queries) RevokeOrphanedCredentials(ctx context.Context, olderThanSecond
 			&i.NextAttemptAt,
 			&i.LeaseOwner,
 			&i.LeaseUntil,
+			&i.CreateStartedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -257,7 +277,7 @@ const revokeStalePlannedCredentials = `-- name: RevokeStalePlannedCredentials :m
 UPDATE credentials
 SET state = 'revoked', revoked_at = now(), updated_at = now(), next_attempt_at = now()
 WHERE state = 'planned' AND updated_at < now() - make_interval(secs => $1::float8)
-RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until
+RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until, create_started_at
 `
 
 // A planned row whose publish never finished: the Secret create may or may not have landed, so
@@ -286,6 +306,7 @@ func (q *Queries) RevokeStalePlannedCredentials(ctx context.Context, olderThanSe
 			&i.NextAttemptAt,
 			&i.LeaseOwner,
 			&i.LeaseUntil,
+			&i.CreateStartedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -298,7 +319,7 @@ func (q *Queries) RevokeStalePlannedCredentials(ctx context.Context, olderThanSe
 }
 
 const setBindingGrant = `-- name: SetBindingGrant :one
-UPDATE agent_bindings SET mcp_grant_kind = $2, updated_at = now() WHERE session_id = $1 RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id
+UPDATE agent_bindings SET mcp_grant_kind = $2, updated_at = now() WHERE session_id = $1 RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name
 `
 
 type SetBindingGrantParams struct {
@@ -328,6 +349,8 @@ func (q *Queries) SetBindingGrant(ctx context.Context, arg SetBindingGrantParams
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.KagentCreateRequestID,
+		&i.KagentCreateAgentNamespace,
+		&i.KagentCreateAgentName,
 	)
 	return i, err
 }

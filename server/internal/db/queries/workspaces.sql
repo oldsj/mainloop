@@ -173,3 +173,20 @@ SELECT DISTINCT agent_namespace, agent_name FROM workspaces;
 -- Locks the workspace row. An operation insert needs a share lock on it for its foreign key, so
 -- it waits for the transaction that holds this.
 SELECT id FROM workspaces WHERE id = $1 FOR UPDATE;
+
+-- name: ListArchivedWorkspacesWithoutSession :many
+-- Archived workspaces whose kagent Session id was never recorded although a create was sent, and
+-- that have no operation open: the create reply may have been lost, so a Session may exist that
+-- only a replay of the create can find. The delete operation does that and then purges the rows.
+SELECT b.session_id
+FROM agent_bindings b
+JOIN sessions s ON s.id = b.session_id
+JOIN workspaces w ON w.id = b.session_id
+WHERE s.archived_at IS NOT NULL AND b.kagent_session_id IS NULL
+  AND EXISTS (
+      SELECT 1 FROM workspace_ops o
+      WHERE o.workspace_id = w.id AND o.kind = 'create' AND o.attempts > 0)
+  AND NOT EXISTS (
+      SELECT 1 FROM workspace_ops o WHERE o.workspace_id = w.id AND o.state IN ('pending', 'retrying'))
+ORDER BY s.archived_at, b.session_id
+LIMIT $1;

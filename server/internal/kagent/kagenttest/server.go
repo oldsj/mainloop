@@ -106,7 +106,8 @@ type Server struct {
 	agents   map[string]*api.Agent
 	sessions map[string]*api.Session
 	order    []string
-	byReq    map[string]string // create request id -> session id
+	byReq    map[string]string                    // create request id -> session id
+	first    map[string]*api.CreateSessionRequest // create request id -> the request that made its Session
 	tasks    map[a2a.TaskID]*a2a.Task
 	taskSeq  int
 	sessSeq  int
@@ -128,6 +129,7 @@ func New() *Server {
 		agents:   map[string]*api.Agent{},
 		sessions: map[string]*api.Session{},
 		byReq:    map[string]string{},
+		first:    map[string]*api.CreateSessionRequest{},
 		tasks:    map[a2a.TaskID]*a2a.Task{},
 	}
 	mux := http.NewServeMux()
@@ -291,15 +293,16 @@ func (s *Server) createSession(
 	defer s.mu.Unlock()
 	s.creates = append(s.creates, proto.CloneOf(m))
 	if id, ok := s.byReq[m.GetRequestId()]; ok && m.GetRequestId() != "" {
+		// kagent compares the replay with the request that made the Session first, deleted or not.
+		if !sameContract(s.first[m.GetRequestId()], m) {
+			return nil, connect.NewError(connect.CodeAlreadyExists,
+				fmt.Errorf("request id %q was used for a different session", m.GetRequestId()))
+		}
 		prev, live := s.sessions[id]
 		if !live {
 			// kagent keeps the request id of a deleted Session and refuses to reuse it.
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("request_id %q belongs to a deleted Session", m.GetRequestId()))
-		}
-		if !sameContract(prev, m) {
-			return nil, connect.NewError(connect.CodeAlreadyExists,
-				fmt.Errorf("request id %q was used for a different session", m.GetRequestId()))
 		}
 		return connect.NewResponse(&api.CreateSessionResponse{Session: s.out(kagent.ProcCreateSession, prev)}), nil
 	}
@@ -315,6 +318,7 @@ func (s *Server) createSession(
 	s.sessions[id] = sess
 	s.order = append(s.order, id)
 	s.byReq[m.GetRequestId()] = id
+	s.first[m.GetRequestId()] = proto.CloneOf(m)
 	return connect.NewResponse(&api.CreateSessionResponse{Session: s.out(kagent.ProcCreateSession, sess)}), nil
 }
 
@@ -711,11 +715,14 @@ func (s *Server) out(proc string, sess *api.Session) *api.Session {
 	return cp
 }
 
-// sameContract reports whether a create request matches the Session made for the same request id.
-func sameContract(prev *api.Session, m *api.CreateSessionRequest) bool {
+// sameContract reports whether a replayed create matches the request that made the Session for the
+// same request id: the Agent, the workspace, the environment and the credentials all have to match,
+// as in kagent.
+func sameContract(prev, m *api.CreateSessionRequest) bool {
 	return proto.Equal(prev.GetAgent(), m.GetAgent()) &&
 		proto.Equal(prev.GetWorkspace(), m.GetWorkspace()) &&
-		proto.Equal(prev.GetDevelopmentEnvironment(), m.GetDevelopmentEnvironment())
+		proto.Equal(prev.GetDevelopmentEnvironment(), m.GetDevelopmentEnvironment()) &&
+		slices.EqualFunc(prev.GetCredentials(), m.GetCredentials(), func(a, b *api.SessionCredential) bool { return proto.Equal(a, b) })
 }
 
 // ctxDone is r's done channel, or a channel that never closes when there is no request.

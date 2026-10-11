@@ -268,6 +268,13 @@ func (c *Config) validate() error {
 			fail("MAINLOOP_MCP_HOSTS entry %q is not a host name", h)
 		}
 	}
+	// Agents are handed MCPOrigin() in a cluster; the MCP listener refuses every other Host, so an
+	// allowlist without the Service's host would make every agent's MCP call fail.
+	if c.InCluster() {
+		if u, err := url.Parse(c.MCPOrigin()); err != nil || !c.AllowedMCPHosts()[u.Hostname()] {
+			fail("MAINLOOP_MCP_HOSTS must include %s, the host agents are given as the MCP origin", c.MCPOrigin())
+		}
+	}
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		fail("PORT must be between 1 and 65535")
 	}

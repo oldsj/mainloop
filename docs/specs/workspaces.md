@@ -61,12 +61,18 @@ built; nothing here has been measured against a live kagent.
   as deleted, or answer not found. Anything else keeps the rows and returns `502`; the operation
   keeps retrying. A workspace whose create was never sent is removed without calling kagent. One
   whose create may have been sent replays the idempotent create first and deletes whatever comes
-  back. If the replay is refused for good (or kagent says the request id belongs to a deleted
+  back. The replay carries the same credential reference the create sent (the deterministic
+  `mainloop-mcp-<id>` Secret, even if the credential is revoked by now), because kagent answers a
+  replay whose credentials differ with `AlreadyExists`. If the replay is refused for good (or kagent says the request id belongs to a deleted
   Session) the rows are removed: no Session exists, or the orphan sweep reclaims it. A reply
   without a Session id is not trusted and the delete retries. Delete is refused (`409`) while a delivery is open.
 - Archiving a session deletes its kagent Session: a sweep (`WORKSPACE_ARCHIVED_DELETE_SECONDS`,
   default 60) deletes the Session of every archived binding that has no open delivery, and marks
   `kagent_deleted_at` only after kagent confirms. A failed delete is tried again on the next pass.
+  An archived workspace whose create outcome was never known has no Session id to delete by: once
+  its create op is closed (given up or succeeded without a bound id) and no op is open, the same
+  sweep starts a delete op for it, which replays the create, deletes what comes back and removes the
+  rows. A workspace with a create op still open is left to that op.
 - Idle suspend: a sweep (`WORKSPACE_IDLE_CHECK_SECONDS`, default 60) suspends a running workspace that has been quiet for its idle timeout (1
   to 1440 minutes, default 30). Quiet means no preview traffic (`Touch`), no resume and no
   delivery activity, and no open delivery. A Session kagent no longer has, or that is failed or
@@ -84,8 +90,8 @@ built; nothing here has been measured against a live kagent.
   binding exists that has no Session id yet and whose create was requested (the binding records the
   create request id before the call; a create that was never sent does not count), because that
   create may own a listed Session. A create of a session that has since finished is settled by the
-  session service's `resolve-session-creates` sweep, which replays it with its request id and deletes
-  what comes back, so a cancelled session never blocks the sweep for ever. Each Session is checked against the database again just before it is
+  session service's `resolve-session-creates` sweep, which replays it with its request id, Agent and
+  credential reference and deletes what comes back, so a cancelled session never blocks the sweep for ever. Each Session is checked against the database again just before it is
   deleted. The exit status is non-zero if a delete failed or deletion was blocked, and the
   scheduled pass logs a warning when it is blocked. kagent records every Session made with the
   control token as created by the same user, so the creator does not tell Mainloop instances
@@ -249,9 +255,12 @@ workspace operations.
 - Resume calls `ResumeSession` only when the Session is suspended and counts as activity. A
   suspend or resume keeps the workspace grant and its token hash.
 - Delete is refused (`409`) while a delivery is open. If the create's outcome was never known,
-  delete first resolves it with the same idempotent `CreateSession` (the stored request id) that
-  **refresh** uses, including after cancellation has revoked the bearer: a Session found there is
-  deleted without republishing the credential or restoring its hash. A rejected retry or an outcome that is still
+  delete first resolves it with the same idempotent `CreateSession` (the stored request id and the
+  same credential reference) that **refresh** uses, including after cancellation has revoked the
+  bearer: a Session found there is deleted without republishing the credential or restoring its hash.
+  Removing the rows deletes the session row before revoking the binding's credentials, so a concurrent
+  `Issue` (which locks the session row `FOR SHARE`) either finishes first and is revoked, or finds the
+  binding gone. A rejected retry or an outcome that is still
   unknown returns `502` and keeps the rows: a rejected retry cannot prove that the earlier
   unknown request created nothing. kagent's `DeleteSession`
   must confirm (a Session it does not know counts as confirmed) before the rows are removed;

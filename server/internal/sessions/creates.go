@@ -6,8 +6,10 @@ import (
 	"fmt"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
@@ -21,7 +23,9 @@ const createsBatch = 50
 // is settled the orphan sweep refuses to delete anything. The create is idempotent by request id,
 // so replaying it shows what kagent holds: no Session (the request id is reserved by a deleted one)
 // settles it at once, and a Session that comes back is deleted first, then the create is settled.
-// A later send to the same session then finds the request id deleted and replaces it.
+// The binding is moved to a new request id before the replay, so a message that arrives meanwhile
+// makes its own Session instead of binding the one being deleted. The replay carries the Agent and
+// the credentials of the original create, which kagent compares.
 func (s *Service) ResolveCreatesSweep() reconcile.Sweep {
 	return reconcile.Sweep{
 		Name: "resolve-session-creates", Every: s.opts().ResolveEvery,
@@ -51,20 +55,38 @@ func (s *Service) ResolveCreates(ctx context.Context) error {
 }
 
 func (s *Service) resolveCreate(ctx context.Context, q *dbq.Queries, r dbq.ListUnresolvedCreatesRow) error {
-	agent, err := s.bindingAgent(&r.Kind, r.Role)
-	if err != nil {
-		return fmt.Errorf("resolve agent: %w", err)
+	// The replay names the Agent the create named, stored with it, so a config change since cannot
+	// turn it into a different request.
+	if r.AgentNamespace == nil || r.AgentName == nil {
+		return errors.New("the create recorded no Agent")
+	}
+	// Move the binding to a new request id first. A message that arrives while the Session below is
+	// replayed and deleted then makes its own Session, and cannot bind the one being deleted.
+	if n, err := q.RotateCreateRequest(ctx, dbq.RotateCreateRequestParams{
+		SessionID: r.SessionID, CreateRequestID: &r.CreateRequestID, NewRequestID: uuid.NewString(),
+	}); err != nil {
+		return fmt.Errorf("rotate the request id: %w", err)
+	} else if n == 0 {
+		return nil // settled, or a message is open now; the next pass looks again
 	}
 	sess, err := s.Kagent.CreateSession(ctx, &kagentapi.CreateSessionRequest{
-		Agent:     &kagentapi.ResourceReference{Namespace: agent.Namespace, Name: agent.Name},
+		Agent:     &kagentapi.ResourceReference{Namespace: *r.AgentNamespace, Name: *r.AgentName},
 		RequestId: r.CreateRequestID,
 		Name:      "Mainloop session",
+		// The credentials the original create carried: kagent refuses a replay that differs.
+		Credentials: s.Credentials.ReplayCredentials(r.SessionID, s.MCPOrigin, dbstate.BindingRole(r.Role), r.MCPGrantKind),
 	})
 	var se *kagent.SessionError
 	switch {
 	case errors.As(err, &se) && se.Code == connect.CodeFailedPrecondition:
 		// The request id belongs to a Session that is gone, or the Agent is not ready: kagent looked
 		// the id up first and found no Session holding it, so nothing is left to find.
+	case errors.As(err, &se) && se.Code == connect.CodeAlreadyExists:
+		// kagent holds a Session for the request id but will not show it to this request. The orphan
+		// sweep can reclaim it once nothing counts as unresolved, so this create is settled rather
+		// than retried for ever.
+		s.log().WarnContext(ctx, "kagent refused to replay a create; its Session is left to the orphan sweep",
+			"session_id", r.SessionID, "request_id", r.CreateRequestID, "error", err)
 	case err != nil:
 		return fmt.Errorf("replay the create: %w", err)
 	case sess.GetState() != kagentapi.RuntimeState_RUNTIME_STATE_DELETED:

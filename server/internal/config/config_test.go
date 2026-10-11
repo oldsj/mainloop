@@ -537,3 +537,27 @@ func TestMCPOrigin(t *testing.T) {
 		t.Error("the origin's host is not served")
 	}
 }
+
+func TestMCPHostsMustServeTheMCPOriginInACluster(t *testing.T) {
+	base := map[string]string{"AGENT_TOKEN_KEY": "k", "MAINLOOP_NAMESPACE": "team", "KUBERNETES_SERVICE_HOST": "10.0.0.1"}
+	with := func(hosts string) map[string]string {
+		m := map[string]string{"MAINLOOP_MCP_HOSTS": hosts}
+		for k, v := range base {
+			m[k] = v
+		}
+		return m
+	}
+	if _, err := Parse(with("mcp.example")); err == nil || !strings.Contains(err.Error(), "MAINLOOP_MCP_HOSTS must include") {
+		t.Errorf("a list without the origin's host: err = %v", err)
+	}
+	if _, err := Parse(with("mcp.example, mainloop-mcp.team.svc.cluster.local")); err != nil {
+		t.Errorf("a list with the origin's host: %v", err)
+	}
+	if _, err := Parse(base); err != nil {
+		t.Errorf("the default list: %v", err)
+	}
+	// Outside a cluster no credential is issued, so the origin is never handed out.
+	if _, err := Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "MAINLOOP_NAMESPACE": "team", "MAINLOOP_MCP_HOSTS": "mcp.example"}); err != nil {
+		t.Errorf("outside a cluster: %v", err)
+	}
+}

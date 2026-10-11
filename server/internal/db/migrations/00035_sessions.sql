@@ -6,7 +6,12 @@
 -- before the call. A create whose Session id never came back is found by it: the orphan sweep
 -- counts the binding until the create is resolved, and the sessions sweep replays the create by
 -- this id once the session has no open delivery.
+--
+-- The Agent the create named is stored with it, so a replay names the same Agent after the
+-- provider or main-agent configuration has changed.
 ALTER TABLE agent_bindings ADD COLUMN kagent_create_request_id text;
+ALTER TABLE agent_bindings ADD COLUMN kagent_create_agent_namespace text;
+ALTER TABLE agent_bindings ADD COLUMN kagent_create_agent_name text;
 CREATE INDEX agent_bindings_create_unresolved ON agent_bindings (session_id)
 WHERE kagent_create_request_id IS NOT NULL AND kagent_session_id IS NULL;
 
@@ -52,6 +57,9 @@ CREATE TABLE deliveries (
     -- names by then.
     kagent_session_id text,
     attempts integer NOT NULL DEFAULT 0,
+    -- How many times creating the kagent Session failed for this delivery. Claims (attempts) also
+    -- count waits for a credential cleanup and lease recoveries, which are not failures.
+    create_failures integer NOT NULL DEFAULT 0,
     next_attempt_at timestamptz NOT NULL DEFAULT now(),
     lease_owner text,
     lease_until timestamptz,
@@ -90,6 +98,8 @@ FOR EACH ROW EXECUTE FUNCTION refuse_archiving_main_session();
 
 -- +goose Down
 DROP INDEX IF EXISTS agent_bindings_create_unresolved;
+ALTER TABLE agent_bindings DROP COLUMN IF EXISTS kagent_create_agent_name;
+ALTER TABLE agent_bindings DROP COLUMN IF EXISTS kagent_create_agent_namespace;
 ALTER TABLE agent_bindings DROP COLUMN IF EXISTS kagent_create_request_id;
 DROP TRIGGER IF EXISTS sessions_keep_main ON sessions;
 DROP FUNCTION IF EXISTS refuse_archiving_main_session();
