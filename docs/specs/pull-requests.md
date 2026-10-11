@@ -299,6 +299,11 @@ not merged yet.
 - The description, changed paths and CI list load when their section is first opened, 50 at a
   time. A page is refused unless its proposal, section, cursor and summary digest match what is on
   screen, and a cursor must move forward. Pages already loaded stay when a later page fails.
+- The card shows the repository and PR number from the digested summary. If the request context
+  names a different pull request, the evidence is treated as unavailable. The PR link is shown
+  only when its path is `/{repository}/pull/{number}` for those values.
+- When a poll brings a new proposal or digest for a call, the loaded detail pages are dropped and
+  an Approve chosen against the old digest is cleared. Reject is kept.
 - PR and diff links are shown only for https on github.com; CI result links only for https.
   CI is labelled as historical evidence.
 

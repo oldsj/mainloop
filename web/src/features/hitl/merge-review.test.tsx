@@ -3,7 +3,13 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { HITLMergeDetails } from '@/lib/contract';
 import { mergeContext } from '@/test/fixtures/hitl';
-import { isReviewable, safeExternalHref, safeGithubHref, unavailableNotes } from './evidence';
+import {
+  isReviewable,
+  prLinkFor,
+  safeExternalHref,
+  safeGithubHref,
+  unavailableNotes
+} from './evidence';
 import { VerifiedMerge, type LoadMergeDetails } from './merge-review';
 import { hitlView } from '@/test/fixtures/hitl';
 
@@ -144,6 +150,25 @@ describe('detail paging', () => {
     expect(links[0]).toHaveAttribute('rel', 'noopener noreferrer');
   });
 
+  it('drops loaded pages when the same call carries a new digest', async () => {
+    const user = userEvent.setup();
+    const load = vi
+      .fn<LoadMergeDetails>()
+      .mockResolvedValue(page({ items: [{ filename: 'old.ts' }] }));
+    const { rerender } = draw(load);
+    await user.click(screen.getByText('Changed paths'));
+    await screen.findByText('old.ts');
+    rerender(
+      <VerifiedMerge
+        facts={{ ...ready, summary_digest: 'f'.repeat(64) }}
+        conversation={null}
+        load={load}
+      />
+    );
+    expect(screen.queryByText('old.ts')).not.toBeInTheDocument();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
   it('does not start a second read for a section that is already loading', async () => {
     const user = userEvent.setup();
     let release!: (p: HITLMergeDetails) => void;
@@ -185,6 +210,17 @@ describe('links and evidence helpers', () => {
     expect(isReviewable(mergeContext({ availability: 'unavailable' }))).toBe(false);
     expect(isReviewable(mergeContext({ summary: null }))).toBe(false);
     expect(isReviewable(mergeContext({ summary_digest: null }))).toBe(false);
+    expect(isReviewable(mergeContext({ pr_number: 8 }))).toBe(false);
+    expect(isReviewable(mergeContext({ repository: 'other/repo' }))).toBe(false);
+  });
+
+  it('a PR link must name the repository and number it is shown with', () => {
+    const url = 'https://github.com/owner/repo/pull/7';
+    expect(prLinkFor(url, 'owner/repo', 7)).toBe(url);
+    expect(prLinkFor(url, 'owner/repo', 8)).toBeNull();
+    expect(prLinkFor(url, 'other/repo', 7)).toBeNull();
+    expect(prLinkFor(url, null, 7)).toBeNull();
+    expect(prLinkFor('https://github.com/owner/repo/pull/7/files', 'owner/repo', 7)).toBeNull();
   });
 
   it('server notes are read only from a single matching entry, and clipped', () => {

@@ -7,7 +7,14 @@ import type {
   VerifiedMergeContext
 } from '@/lib/contract';
 import { messageTime } from '@/lib/time';
-import { isReviewable, safeExternalHref, safeGithubHref, type SummarizedFacts } from './evidence';
+import {
+  evidenceKey,
+  isReviewable,
+  prLinkFor,
+  safeExternalHref,
+  safeGithubHref,
+  type SummarizedFacts
+} from './evidence';
 
 export type LoadMergeDetails = (
   proposalId: string,
@@ -209,9 +216,13 @@ export function VerifiedMerge({
   load: LoadMergeDetails;
 }) {
   const { summary } = facts;
-  const prUrl = safeGithubHref(facts.pr_url);
+  const prUrl = prLinkFor(facts.pr_url, summary.repository, summary.pr_number);
   const compareUrl = safeGithubHref(facts.compare_url);
   const withheld = !isReviewable(facts);
+  // The notice leads with one reason; the list below must not say it twice.
+  const lead = facts.freshness_reason ?? summary.unavailable_reasons[0];
+  const otherReasons = summary.unavailable_reasons.filter((reason) => reason !== lead);
+  const key = evidenceKey(facts);
   return (
     <section
       aria-label="Verified merge context"
@@ -226,7 +237,7 @@ export function VerifiedMerge({
       ) : null}
       <p>
         <strong>
-          {facts.repository ?? 'Unknown repository'} #{facts.pr_number ?? '?'}
+          {summary.repository ?? 'Unknown repository'} #{summary.pr_number ?? '?'}
         </strong>{' '}
         · {summary.file_count ?? 'unknown'} files · +{summary.additions ?? '?'} / −
         {summary.deletions ?? '?'}
@@ -246,13 +257,11 @@ export function VerifiedMerge({
       ))}
       {withheld ? (
         <p role="status" className="text-term-yellow">
-          {facts.freshness_reason ??
-            summary.unavailable_reasons[0] ??
-            'Approval context is unavailable. Refresh this request.'}{' '}
-          Approve is disabled; Reject stays available.
+          {lead ?? 'Approval context is unavailable. Refresh this request.'} Approve is disabled;
+          Reject stays available.
         </p>
       ) : null}
-      {summary.unavailable_reasons.map((reason, i) => (
+      {otherReasons.map((reason, i) => (
         <p key={i} className="text-muted-foreground">
           {reason}
         </p>
@@ -296,6 +305,7 @@ export function VerifiedMerge({
         {conversation}
       </nav>
       <DetailSection
+        key={`${key}:description`}
         title="PR description from GitHub"
         section="description"
         facts={facts}
@@ -315,6 +325,7 @@ export function VerifiedMerge({
         )}
       </DetailSection>
       <DetailSection
+        key={`${key}:files`}
         title="Changed paths"
         section="files"
         facts={facts}
@@ -336,6 +347,7 @@ export function VerifiedMerge({
         )}
       </DetailSection>
       <DetailSection
+        key={`${key}:checks`}
         title="Full CI list"
         section="checks"
         facts={facts}

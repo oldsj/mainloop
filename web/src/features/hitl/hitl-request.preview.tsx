@@ -20,7 +20,11 @@ const question = hitlView('question', {
       questions: [
         {
           question: 'Which systems should the tests cover?',
-          choices: ['Linux', 'macOS'],
+          choices: [
+            'Linux',
+            'macOS',
+            'Cover every platform the release supports, including the older distributions we still package for, and report any gaps before the run starts.'
+          ],
           multiple: true
         },
         { question: 'Anything else the agent should know?', choices: null, multiple: false }

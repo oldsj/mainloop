@@ -15,7 +15,15 @@ import {
   type HITLDraft,
   type HITLState
 } from '@/lib/hitl';
-import { clipText, hasSummary, isReviewable, statusTone, unavailableNotes } from './evidence';
+import {
+  clipText,
+  evidenceKey,
+  hasSummary,
+  isReviewable,
+  statusTone,
+  unavailableNotes,
+  viewProblem
+} from './evidence';
 import { UnavailableMerge, VerifiedMerge, type LoadMergeDetails } from './merge-review';
 
 export interface HITLRequestProps {
@@ -32,25 +40,43 @@ const approveChoice = cn(
   choiceBase,
   'aria-pressed:bg-primary aria-pressed:text-primary-foreground'
 );
+// A choice is a sentence the agent wrote, up to 4096 characters: it must wrap, not scroll the card.
+const wrapChoice = 'h-auto min-w-0 max-w-full py-sm text-left whitespace-normal break-words';
 const neutralChoice = cn(
   choiceBase,
   'aria-pressed:bg-secondary aria-pressed:text-secondary-foreground'
 );
 
-function ConversationLink({ context }: { context: HITLContext | undefined }) {
+function ConversationLink({
+  context,
+  label = 'Open original conversation'
+}: {
+  context: HITLContext | undefined;
+  label?: string;
+}) {
   if (!context?.session_id) return null;
   return context.role === 'main' ? (
     <Link to="/" className={link}>
-      Open original conversation
+      {label}
     </Link>
   ) : (
     <Link to="/sessions/$id" params={{ id: context.session_id }} className={link}>
-      Open original conversation
+      {label}
     </Link>
   );
 }
 
+/** After a clean re-read that shows no decision, the lock stays but the copy says what to do. */
+const notRecorded = (snapshot: HITLState): boolean =>
+  snapshot.uncertain && !snapshot.stale && !!snapshot.view && !snapshot.view.response;
+
+function errorMessage(snapshot: HITLState): string {
+  if (notRecorded(snapshot)) return 'No decision was recorded. Reload to answer again.';
+  return snapshot.error ?? '';
+}
+
 function errorTitle(snapshot: HITLState): string {
+  if (notRecorded(snapshot)) return 'No decision was recorded';
   if (snapshot.uncertain) return 'Decision delivery uncertain';
   if (snapshot.error?.startsWith('Could not refresh')) return 'Request not up to date';
   return 'Response not accepted';
@@ -71,13 +97,30 @@ export function HITLRequest({
   onRefresh,
   onLoadMergeDetails
 }: HITLRequestProps) {
-  const [decisions, setDecisions] = useState<HITLDraft['decisions']>({});
+  const [chosen, setDecisions] = useState<HITLDraft['decisions']>({});
+  // The evidence each Approve was chosen against. An Approve counts only while it still matches.
+  const [approvedKeys, setApprovedKeys] = useState<Record<string, string>>({});
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [answers, setAnswers] = useState<string[][]>([]);
   const { view } = snapshot;
-  const rawPayload = view?.request.payload;
+  const problem = view ? viewProblem(view) : null;
+  const rawPayload = view && !problem ? view.request.payload : undefined;
   const payload = useMemo(() => parseHITL(rawPayload), [rawPayload]);
-  const mergeReviews = useMemo(() => (view ? mergeContexts(view) : []), [view]);
+  const mergeReviews = useMemo(
+    () => (view && !problem ? mergeContexts(view) : []),
+    [view, problem]
+  );
+  const decisions = useMemo(() => {
+    const keyOf = (id: string) =>
+      evidenceKey(mergeReviews.find((item) => item.toolId === id)?.facts ?? null);
+    return Object.fromEntries(
+      Object.entries(chosen).filter(
+        ([id, decision]) =>
+          decision !== 'approve' ||
+          (Object.hasOwn(approvedKeys, id) && approvedKeys[id] === keyOf(id))
+      )
+    ) as HITLDraft['decisions'];
+  }, [chosen, approvedKeys, mergeReviews]);
   const decisionOf = (id: string) => (Object.hasOwn(decisions, id) ? decisions[id] : undefined);
 
   const disabled =
@@ -127,13 +170,21 @@ export function HITLRequest({
     onRespond({ decisions, reasons, answers, reviewedContext });
   }
 
-  if (!view) {
+  if (!view || problem) {
     return (
       <section aria-label="Session input" className="gap-sm p-md grid">
-        {snapshot.error ? (
+        {problem ? (
+          <ErrorRecovery
+            title="Request cannot be shown"
+            message={`The server sent a request this page cannot display: ${problem}. Controls are unavailable.`}
+            onRetry={onRefresh}
+            retryLabel="Refresh status"
+            pending={snapshot.busy}
+          />
+        ) : snapshot.error ? (
           <ErrorRecovery
             title={errorTitle(snapshot)}
-            message={snapshot.error}
+            message={errorMessage(snapshot)}
             onRetry={onRefresh}
             retryLabel="Refresh status"
             pending={snapshot.busy}
@@ -165,12 +216,23 @@ export function HITLRequest({
               {ctx ? (
                 ctx.facts && hasSummary(ctx.facts) ? (
                   <VerifiedMerge
+                    key={evidenceKey(ctx.facts)}
                     facts={ctx.facts}
-                    conversation={<ConversationLink context={context} />}
+                    conversation={
+                      <ConversationLink context={context} label="Open agent conversation" />
+                    }
                     load={onLoadMergeDetails}
                   />
                 ) : (
-                  <UnavailableMerge toolId={tool.id} notes={unavailableNotes(view, tool.id)} />
+                  <UnavailableMerge
+                    toolId={tool.id}
+                    notes={[
+                      ...(ctx.facts?.summary && !hasSummary(ctx.facts)
+                        ? ['The summary and the request context name different pull requests.']
+                        : []),
+                      ...unavailableNotes(view, tool.id)
+                    ]}
+                  />
                 )
               ) : null}
               <fieldset
@@ -193,6 +255,10 @@ export function HITLRequest({
                     disabled={!!ctx && !isReviewable(ctx.facts)}
                     onClick={() => {
                       setDecisions((d) => ({ ...d, [tool.id]: 'approve' }));
+                      setApprovedKeys((k) => ({
+                        ...k,
+                        [tool.id]: evidenceKey(ctx?.facts ?? null)
+                      }));
                       setReasons((r) =>
                         Object.fromEntries(Object.entries(r).filter(([id]) => id !== tool.id))
                       );
@@ -252,7 +318,7 @@ export function HITLRequest({
                     <Button
                       key={choice}
                       variant="outline"
-                      className={approveChoice}
+                      className={cn(approveChoice, wrapChoice)}
                       aria-pressed={answers[i]?.includes(choice) ?? false}
                       onClick={() => choose(i, choice, question.multiple)}
                     >
@@ -379,7 +445,7 @@ export function HITLRequest({
         </pre>
       </details>
       {snapshot.error ? (
-        <ErrorRecovery title={errorTitle(snapshot)} message={snapshot.error} />
+        <ErrorRecovery title={errorTitle(snapshot)} message={errorMessage(snapshot)} />
       ) : null}
       <div>
         <Button variant="outline" disabled={snapshot.busy} onClick={onRefresh}>

@@ -7,18 +7,21 @@ import type { HITLState } from '@/lib/hitl';
 import { hitlView } from '@/test/fixtures/hitl';
 import type { HITLRequestProps } from './hitl-request';
 
-/** Renders under the real router so `Link` resolves, without navigating anywhere. */
+/**
+ * Renders under the real router so `Link` resolves, without navigating anywhere. The providers
+ * are a wrapper, so `rerender(ui)` keeps them.
+ */
 export function renderRouted(ui: ReactNode) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = createAppRouter(queryClient, createMemoryHistory({ initialEntries: ['/'] }));
-  return {
-    queryClient,
-    ...render(
+  function Providers({ children }: { children: ReactNode }) {
+    return (
       <QueryClientProvider client={queryClient}>
-        <RouterContextProvider router={router}>{ui}</RouterContextProvider>
+        <RouterContextProvider router={router}>{children}</RouterContextProvider>
       </QueryClientProvider>
-    )
-  };
+    );
+  }
+  return { queryClient, ...render(ui, { wrapper: Providers }) };
 }
 
 export function snapshotOf(overrides: Partial<HITLState> = {}): HITLState {
