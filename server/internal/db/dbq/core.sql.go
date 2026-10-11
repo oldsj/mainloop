@@ -29,7 +29,7 @@ const createAgentBinding = `-- name: CreateAgentBinding :one
 INSERT INTO agent_bindings (
     session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_request_id, model
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at
+RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id
 `
 
 type CreateAgentBindingParams struct {
@@ -74,6 +74,7 @@ func (q *Queries) CreateAgentBinding(ctx context.Context, arg CreateAgentBinding
 		&i.KagentDeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.KagentCreateRequestID,
 	)
 	return i, err
 }
@@ -355,7 +356,7 @@ func (q *Queries) DeleteTopic(ctx context.Context, id string) (int64, error) {
 }
 
 const getAgentBinding = `-- name: GetAgentBinding :one
-SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at FROM agent_bindings WHERE session_id = $1
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id FROM agent_bindings WHERE session_id = $1
 `
 
 func (q *Queries) GetAgentBinding(ctx context.Context, sessionID string) (AgentBinding, error) {
@@ -379,12 +380,13 @@ func (q *Queries) GetAgentBinding(ctx context.Context, sessionID string) (AgentB
 		&i.KagentDeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.KagentCreateRequestID,
 	)
 	return i, err
 }
 
 const getAgentBindingByKagentSession = `-- name: GetAgentBindingByKagentSession :one
-SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at FROM agent_bindings WHERE kagent_session_id = $1
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id FROM agent_bindings WHERE kagent_session_id = $1
 `
 
 func (q *Queries) GetAgentBindingByKagentSession(ctx context.Context, kagentSessionID *string) (AgentBinding, error) {
@@ -408,6 +410,7 @@ func (q *Queries) GetAgentBindingByKagentSession(ctx context.Context, kagentSess
 		&i.KagentDeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.KagentCreateRequestID,
 	)
 	return i, err
 }
@@ -575,7 +578,7 @@ func (q *Queries) GetTopicByName(ctx context.Context, arg GetTopicByNameParams) 
 }
 
 const listAgentBindingsByParent = `-- name: ListAgentBindingsByParent :many
-SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at FROM agent_bindings WHERE parent_session_id = $1 ORDER BY created_at, session_id
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id FROM agent_bindings WHERE parent_session_id = $1 ORDER BY created_at, session_id
 `
 
 func (q *Queries) ListAgentBindingsByParent(ctx context.Context, parentSessionID *string) ([]AgentBinding, error) {
@@ -605,6 +608,7 @@ func (q *Queries) ListAgentBindingsByParent(ctx context.Context, parentSessionID
 			&i.KagentDeletedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.KagentCreateRequestID,
 		); err != nil {
 			return nil, err
 		}
@@ -896,7 +900,7 @@ const setBindingKagentSession = `-- name: SetBindingKagentSession :one
 UPDATE agent_bindings
 SET kagent_session_id = $2, updated_at = now()
 WHERE session_id = $1
-RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at
+RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id
 `
 
 type SetBindingKagentSessionParams struct {
@@ -925,6 +929,7 @@ func (q *Queries) SetBindingKagentSession(ctx context.Context, arg SetBindingKag
 		&i.KagentDeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.KagentCreateRequestID,
 	)
 	return i, err
 }

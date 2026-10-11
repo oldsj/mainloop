@@ -12,23 +12,24 @@ import (
 )
 
 type AgentBinding struct {
-	SessionID         string
-	Kind              string
-	Role              dbstate.BindingRole
-	MCPGrantKind      dbstate.MCPGrantKind
-	ParentSessionID   *string
-	TopicID           *string
-	KagentSessionID   *string
-	KagentRequestID   *string
-	Model             *string
-	StandingHash      *string
-	Turns             int32
-	QueueHeld         bool
-	ChildStartFailure *string
-	ReportedAt        *time.Time
-	KagentDeletedAt   *time.Time
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	SessionID             string
+	Kind                  string
+	Role                  dbstate.BindingRole
+	MCPGrantKind          dbstate.MCPGrantKind
+	ParentSessionID       *string
+	TopicID               *string
+	KagentSessionID       *string
+	KagentRequestID       *string
+	Model                 *string
+	StandingHash          *string
+	Turns                 int32
+	QueueHeld             bool
+	ChildStartFailure     *string
+	ReportedAt            *time.Time
+	KagentDeletedAt       *time.Time
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	KagentCreateRequestID *string
 }
 
 type Credential struct {

@@ -294,7 +294,7 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 
 const getMainBinding = `-- name: GetMainBinding :one
 
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, s.user_id, s.title, s.status AS session_status
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_create_request_id, s.user_id, s.title, s.status AS session_status
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
 WHERE b.role = 'main' AND s.user_id = $1 AND s.archived_at IS NULL
@@ -303,26 +303,27 @@ LIMIT 1
 `
 
 type GetMainBindingRow struct {
-	SessionID         string
-	Kind              string
-	Role              dbstate.BindingRole
-	MCPGrantKind      dbstate.MCPGrantKind
-	ParentSessionID   *string
-	TopicID           *string
-	KagentSessionID   *string
-	KagentRequestID   *string
-	Model             *string
-	StandingHash      *string
-	Turns             int32
-	QueueHeld         bool
-	ChildStartFailure *string
-	ReportedAt        *time.Time
-	KagentDeletedAt   *time.Time
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	UserID            string
-	Title             string
-	SessionStatus     dbstate.SessionStatus
+	SessionID             string
+	Kind                  string
+	Role                  dbstate.BindingRole
+	MCPGrantKind          dbstate.MCPGrantKind
+	ParentSessionID       *string
+	TopicID               *string
+	KagentSessionID       *string
+	KagentRequestID       *string
+	Model                 *string
+	StandingHash          *string
+	Turns                 int32
+	QueueHeld             bool
+	ChildStartFailure     *string
+	ReportedAt            *time.Time
+	KagentDeletedAt       *time.Time
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	KagentCreateRequestID *string
+	UserID                string
+	Title                 string
+	SessionStatus         dbstate.SessionStatus
 }
 
 // Main thread, message mirror and delivery ledger (internal/sessions).
@@ -351,6 +352,7 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 		&i.KagentDeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.KagentCreateRequestID,
 		&i.UserID,
 		&i.Title,
 		&i.SessionStatus,
@@ -359,7 +361,7 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 }
 
 const getOwnedSessionBinding = `-- name: GetOwnedSessionBinding :one
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, s.user_id, s.title, s.status AS session_status, s.archived_at,
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_create_request_id, s.user_id, s.title, s.status AS session_status, s.archived_at,
        w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
@@ -390,6 +392,7 @@ type GetOwnedSessionBindingRow struct {
 	KagentDeletedAt         *time.Time
 	CreatedAt               time.Time
 	UpdatedAt               time.Time
+	KagentCreateRequestID   *string
 	UserID                  string
 	Title                   string
 	SessionStatus           dbstate.SessionStatus
@@ -421,6 +424,7 @@ func (q *Queries) GetOwnedSessionBinding(ctx context.Context, arg GetOwnedSessio
 		&i.KagentDeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.KagentCreateRequestID,
 		&i.UserID,
 		&i.Title,
 		&i.SessionStatus,
@@ -823,6 +827,88 @@ func (q *Queries) ListTopicLines(ctx context.Context, userID string) ([]ListTopi
 	return items, nil
 }
 
+const listUnresolvedCreates = `-- name: ListUnresolvedCreates :many
+SELECT b.session_id, b.kind, b.role, b.kagent_create_request_id::text AS create_request_id
+FROM agent_bindings b
+WHERE b.kagent_create_request_id IS NOT NULL AND b.kagent_session_id IS NULL
+  AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = b.session_id)
+  AND NOT EXISTS (
+      SELECT 1 FROM deliveries d
+      WHERE d.session_id = b.session_id AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain'))
+ORDER BY b.created_at
+LIMIT $1
+`
+
+type ListUnresolvedCreatesRow struct {
+	SessionID       string
+	Kind            string
+	Role            dbstate.BindingRole
+	CreateRequestID string
+}
+
+// The bindings that sent a create whose Session id never came back and whose session has nothing
+// open any more, so nothing is about to retry the create. The workspace service owns the creates
+// of workspace bindings.
+func (q *Queries) ListUnresolvedCreates(ctx context.Context, limit int32) ([]ListUnresolvedCreatesRow, error) {
+	rows, err := q.db.Query(ctx, listUnresolvedCreates, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUnresolvedCreatesRow{}
+	for rows.Next() {
+		var i ListUnresolvedCreatesRow
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.Kind,
+			&i.Role,
+			&i.CreateRequestID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markCreateRequested = `-- name: MarkCreateRequested :execrows
+UPDATE agent_bindings b
+SET kagent_create_request_id = $1, updated_at = now()
+FROM deliveries d
+WHERE d.id = $2 AND d.lease_owner = $3 AND d.attempts = $4
+  AND b.session_id = d.session_id
+  AND b.kagent_session_id IS NULL
+  AND b.kagent_request_id IS NOT DISTINCT FROM $5::text
+`
+
+type MarkCreateRequestedParams struct {
+	CreateRequestID *string
+	ID              string
+	LeaseOwner      *string
+	Attempts        int32
+	RequestID       *string
+}
+
+// Records, before the CreateSession call, that a create under this request id is about to be
+// sent. From then on the binding may own a kagent Session whose id Mainloop has not stored, which
+// the orphan sweep must not mistake for an orphan. Fenced like SetDeliveryKagentSession.
+func (q *Queries) MarkCreateRequested(ctx context.Context, arg MarkCreateRequestedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markCreateRequested,
+		arg.CreateRequestID,
+		arg.ID,
+		arg.LeaseOwner,
+		arg.Attempts,
+		arg.RequestID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const markDeliveryDelivered = `-- name: MarkDeliveryDelivered :execrows
 UPDATE deliveries
 SET state = 'delivered', task_id = $4, evidence_ref = $5, detail = NULL, updated_at = now()
@@ -953,7 +1039,7 @@ func (q *Queries) RefreshSessionStatus(ctx context.Context, id string) error {
 const replaceDeliveryKagentSession = `-- name: ReplaceDeliveryKagentSession :execrows
 UPDATE agent_bindings b
 SET kagent_session_id = NULL, kagent_request_id = $1, standing_hash = NULL,
-    updated_at = now()
+    kagent_create_request_id = NULL, updated_at = now()
 FROM deliveries d
 WHERE d.id = $2 AND d.lease_owner = $3 AND d.attempts = $4
   AND b.session_id = d.session_id
@@ -981,6 +1067,31 @@ func (q *Queries) ReplaceDeliveryKagentSession(ctx context.Context, arg ReplaceD
 		arg.OldSessionID,
 		arg.OldRequestID,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const resolveCreate = `-- name: ResolveCreate :execrows
+UPDATE agent_bindings b
+SET kagent_create_request_id = NULL, updated_at = now()
+WHERE b.session_id = $1 AND b.kagent_create_request_id = $2
+  AND b.kagent_session_id IS NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM deliveries d
+      WHERE d.session_id = b.session_id AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain'))
+`
+
+type ResolveCreateParams struct {
+	SessionID       string
+	CreateRequestID *string
+}
+
+// Marks a create resolved: kagent has no Session for the request id, or the Session it returned
+// was deleted. Only while the create is still unresolved and nothing of the session is open.
+func (q *Queries) ResolveCreate(ctx context.Context, arg ResolveCreateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, resolveCreate, arg.SessionID, arg.CreateRequestID)
 	if err != nil {
 		return 0, err
 	}

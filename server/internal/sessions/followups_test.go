@@ -225,8 +225,9 @@ func TestAFailingTaskReadIsRetriedLessAndLess(t *testing.T) {
 	}
 }
 
-// G5 review P2-2: a binding whose Session was never asked for cannot own an unrecorded one, so the
-// orphan sweep's safety count ignores it until a delivery has been claimed.
+// G5 review P2-2, narrowed by G6b follow-up 1: a binding whose Session was never asked for cannot
+// own an unrecorded one, so the orphan sweep's safety count ignores it until the create has been
+// requested (the request id is recorded before the call). A claim alone does not count.
 func TestUnresolvedBindingsIgnoreTheMainBindingBeforeItsFirstSession(t *testing.T) {
 	e := newEnv(t)
 	e.send("hello") // records the main binding and a delivery; no loop runs
@@ -244,8 +245,14 @@ func TestUnresolvedBindingsIgnoreTheMainBindingBeforeItsFirstSession(t *testing.
 	if _, err := e.pool.Exec(context.Background(), `UPDATE deliveries SET attempts = 1`); err != nil {
 		t.Fatal(err)
 	}
+	if n := count(); n != 0 {
+		t.Fatalf("%d unresolved after a claim that sent no create", n)
+	}
+	if _, err := e.pool.Exec(context.Background(), `UPDATE agent_bindings SET kagent_create_request_id = 'req-1'`); err != nil {
+		t.Fatal(err)
+	}
 	if n := count(); n != 1 {
-		t.Fatalf("%d unresolved after a claim with no Session id", n)
+		t.Fatalf("%d unresolved after a create with no Session id", n)
 	}
 	if _, err := e.pool.Exec(context.Background(), `UPDATE agent_bindings SET kagent_session_id = 'ks-1'`); err != nil {
 		t.Fatal(err)

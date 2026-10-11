@@ -179,6 +179,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	registerCredentials(cfg, creds, runner)
 	runner.Add(svc.DeliveryLoop())
 	runner.AddSweep(svc.EnsureSweep())
+	runner.AddSweep(svc.ResolveCreatesSweep())
 	previews.Register(runner)
 
 	g.Go(func() error { return notifier.Run(gctx) })

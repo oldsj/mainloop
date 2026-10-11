@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -112,7 +113,14 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 			if c.State == string(dbstate.DeliveryRecorded) {
 				return t.settle(ctx, dbstate.DeliveryFailed, "not sent: "+aerr.Error(), nil, false)
 			}
-			s.log().WarnContext(ctx, "resolve agent failed", "message_id", c.ID, "error", aerr)
+			// A row past recorded may hold a running task, so it is not failed here; the log says it is
+			// stuck, at error level once it has been for longer than the uncertain hold.
+			lvl := slog.LevelWarn
+			if time.Since(d.CreatedAt) > s.opts().UncertainHold {
+				lvl = slog.LevelError
+			}
+			s.log().Log(ctx, lvl, "delivery is stuck: its agent cannot be resolved",
+				"message_id", c.ID, "state", c.State, "age", time.Since(d.CreatedAt).Round(time.Second), "error", aerr)
 			return reconcile.RetryAfter(s.opts().UncertainRecheck), nil
 		}
 	}
@@ -251,6 +259,14 @@ func (t *turn) createKagentSession(ctx context.Context) (*kagentapi.Session, err
 	if dbstate.BindingRole(t.d.BindingRole) != dbstate.RoleMain {
 		name = sessionName(t.d.SessionTitle)
 	}
+	// Record the request before the call: from now on the binding may own a Session whose id is not
+	// stored, which the orphan sweep must not delete.
+	id, owner, attempts := t.fence()
+	if err := lost(dbq.New(t.s.Pool).MarkCreateRequested(ctx, dbq.MarkCreateRequestedParams{
+		ID: id, LeaseOwner: owner, Attempts: attempts, CreateRequestID: &reqID, RequestID: t.d.KagentRequestID,
+	})); err != nil {
+		return nil, fmt.Errorf("record the create request: %w", err)
+	}
 	sess, err := t.s.Kagent.CreateSession(ctx, &kagentapi.CreateSessionRequest{
 		Agent:     &kagentapi.ResourceReference{Namespace: t.agent.Namespace, Name: t.agent.Name},
 		RequestId: reqID,
@@ -259,7 +275,6 @@ func (t *turn) createKagentSession(ctx context.Context) (*kagentapi.Session, err
 	if err != nil {
 		return nil, err
 	}
-	id, owner, attempts := t.fence()
 	if err := lost(dbq.New(t.s.Pool).SetDeliveryKagentSession(ctx, dbq.SetDeliveryKagentSessionParams{
 		ID: id, LeaseOwner: owner, Attempts: attempts,
 		KagentSessionID: &sess.Id, RequestID: t.d.KagentRequestID,
@@ -309,7 +324,20 @@ func (t *turn) readyKagentSession(ctx context.Context, sess *kagentapi.Session) 
 		case st == kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED && !resumed:
 			resumed = true
 			var err error
-			if sess, err = t.s.Kagent.ResumeSession(ctx, t.ksid); err != nil {
+			if t.d.WorkspaceID != nil {
+				// A workspace is resumed through its operation ledger, never directly: wake it again
+				// (something suspended it after the first wake) and read the Session once more.
+				if t.s.Waker == nil {
+					return "", errors.New("the workspace's kagent session is suspended")
+				}
+				if err = t.s.Waker.Wake(ctx, *t.d.WorkspaceID); err != nil {
+					return "", fmt.Errorf("wake the workspace: %w", err)
+				}
+				sess, err = t.s.Kagent.GetSession(ctx, t.ksid)
+			} else {
+				sess, err = t.s.Kagent.ResumeSession(ctx, t.ksid)
+			}
+			if err != nil {
 				return "", err
 			}
 			continue
@@ -365,7 +393,15 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 			return reconcile.Retry(), err
 		}
 		if errors.Is(err, errWorkspaceNotReady) {
-			// The workspace is still being made. Nothing is wrong with the delivery; it waits.
+			// The workspace is still being made, so the delivery waits. A workspace that never gets its
+			// Session would hold the turn open for ever, so the wait has an end.
+			age := time.Since(t.d.CreatedAt)
+			if hold := t.s.opts().UncertainHold; age > hold {
+				return t.settle(ctx, dbstate.DeliveryFailed,
+					"not sent: the workspace had no kagent session after "+hold.String(), nil, false)
+			}
+			t.s.log().WarnContext(ctx, "delivery is waiting for its workspace's kagent session",
+				"message_id", t.c.ID, "workspace", *t.d.WorkspaceID, "age", age.Round(time.Second))
 			return reconcile.RetryAfter(t.s.opts().UncertainRecheck), nil
 		}
 		var cfg *kagent.ConfigError

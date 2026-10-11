@@ -184,3 +184,74 @@ func TestHasOpenAndLastActivity(t *testing.T) {
 		t.Fatal("an uncertain turn past its hold is open")
 	}
 }
+
+// skipFirstWake is a Waker whose first call does nothing, as when something suspends the workspace
+// between the wake and the check that follows it.
+type skipFirstWake struct {
+	inner sessions.Waker
+	calls int
+}
+
+func (w *skipFirstWake) Wake(ctx context.Context, id string) error {
+	w.calls++
+	if w.calls == 1 {
+		return nil
+	}
+	return w.inner.Wake(ctx, id)
+}
+
+// A workspace's Session is never resumed outside its operation ledger, even when the delivery finds
+// it suspended right after a wake: it wakes the workspace again.
+func TestADeliveryThatFindsTheWorkspaceSuspendedAfterWakeWakesAgain(t *testing.T) {
+	h := newHarness(t, nil)
+	ss := h.ledger()
+	w := h.running()
+	h.runBoth(ss)
+	if _, err := h.svc.Suspend(bg, w.WorkspaceId); err != nil {
+		t.Fatal(err)
+	}
+	waker := &skipFirstWake{inner: h.svc}
+	ss.Waker = waker
+
+	id := uuid.NewString()
+	if _, err := ss.SendTo(bg, w.WorkspaceId, id, "continue please"); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "delivered and finished", func() bool { return h.deliveryState(id) == dbstate.DeliveryCompleted })
+	if waker.calls < 2 {
+		t.Fatalf("%d wakes: the delivery resumed the Session itself", waker.calls)
+	}
+	if n := h.fake.Count(kagent.ProcResumeSession); n != 1 {
+		t.Fatalf("%d resumes", n)
+	}
+	var resumes int
+	if err := h.svc.Pool.QueryRow(bg, `SELECT count(*) FROM workspace_ops WHERE workspace_id = $1 AND kind = 'resume'`, w.WorkspaceId).Scan(&resumes); err != nil {
+		t.Fatal(err)
+	}
+	if resumes != 1 {
+		t.Fatalf("%d resume ops: the resume did not go through the ledger", resumes)
+	}
+}
+
+// A delivery waiting for a workspace that never gets its Session gives up after the hold instead of
+// holding the turn open for ever.
+func TestADeliveryForAWorkspaceWithoutASessionGivesUp(t *testing.T) {
+	h := newHarness(t, nil)
+	ss := h.ledger()
+	w := h.running()
+	id := uuid.NewString()
+	if _, err := ss.SendTo(bg, w.WorkspaceId, id, "hello"); err != nil { // recorded; no loop runs it yet
+		t.Fatal(err)
+	}
+	h.exec(`UPDATE agent_bindings SET kagent_session_id = NULL WHERE session_id = $1`, w.WorkspaceId)
+	h.runBoth(ss)
+	time.Sleep(200 * time.Millisecond)
+	if st := h.deliveryState(id); st != dbstate.DeliveryRecorded {
+		t.Fatalf("within the hold the delivery was %s, want it waiting", st)
+	}
+	h.exec(`UPDATE deliveries SET created_at = now() - interval '2 hours' WHERE id = $1`, id)
+	eventually(t, "given up", func() bool { return h.deliveryState(id) == dbstate.DeliveryFailed })
+	if n := h.fake.Count("SendStreamingMessage"); n != 0 {
+		t.Fatalf("sent %d times", n)
+	}
+}

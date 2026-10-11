@@ -137,16 +137,17 @@ SELECT kagent_session_id AS kagent_session_id FROM agent_bindings WHERE kagent_s
 
 -- name: CountUnresolvedBindings :one
 -- Bindings that may own a kagent Session Mainloop has not recorded: a create was sent (or may have
--- been) and no Session id came back. A workspace whose create was never sent cannot own one, and
--- nor can any other binding (the main thread's included) before a delivery of its session was
--- claimed, because that claim is what creates its Session.
+-- been) and no Session id came back. A workspace whose create was never sent cannot own one. Any
+-- other binding is counted from the moment its create was requested (the request id is written
+-- before the call), until it is resolved; a session whose create was never requested (it was
+-- cancelled before any send, say) is not counted.
 SELECT count(*) FROM agent_bindings b
 WHERE b.kagent_session_id IS NULL
   AND CASE WHEN EXISTS (SELECT 1 FROM workspaces w WHERE w.id = b.session_id)
       THEN EXISTS (
           SELECT 1 FROM workspace_ops o
           WHERE o.workspace_id = b.session_id AND o.kind = 'create' AND o.attempts > 0)
-      ELSE EXISTS (SELECT 1 FROM deliveries d WHERE d.session_id = b.session_id AND d.attempts > 0)
+      ELSE b.kagent_create_request_id IS NOT NULL
       END;
 
 -- name: GetWorkspaceEnvironmentVersion :one

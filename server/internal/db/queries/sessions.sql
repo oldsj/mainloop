@@ -102,12 +102,49 @@ WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attemp
 -- name: ReplaceDeliveryKagentSession :execrows
 UPDATE agent_bindings b
 SET kagent_session_id = NULL, kagent_request_id = sqlc.arg(new_request_id), standing_hash = NULL,
-    updated_at = now()
+    kagent_create_request_id = NULL, updated_at = now()
 FROM deliveries d
 WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attempts = sqlc.arg(attempts)
   AND b.session_id = d.session_id
   AND b.kagent_session_id IS NOT DISTINCT FROM sqlc.narg(old_session_id)::text
   AND b.kagent_request_id IS NOT DISTINCT FROM sqlc.narg(old_request_id)::text;
+
+-- Records, before the CreateSession call, that a create under this request id is about to be
+-- sent. From then on the binding may own a kagent Session whose id Mainloop has not stored, which
+-- the orphan sweep must not mistake for an orphan. Fenced like SetDeliveryKagentSession.
+-- name: MarkCreateRequested :execrows
+UPDATE agent_bindings b
+SET kagent_create_request_id = sqlc.arg(create_request_id), updated_at = now()
+FROM deliveries d
+WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attempts = sqlc.arg(attempts)
+  AND b.session_id = d.session_id
+  AND b.kagent_session_id IS NULL
+  AND b.kagent_request_id IS NOT DISTINCT FROM sqlc.narg(request_id)::text;
+
+-- The bindings that sent a create whose Session id never came back and whose session has nothing
+-- open any more, so nothing is about to retry the create. The workspace service owns the creates
+-- of workspace bindings.
+-- name: ListUnresolvedCreates :many
+SELECT b.session_id, b.kind, b.role, b.kagent_create_request_id::text AS create_request_id
+FROM agent_bindings b
+WHERE b.kagent_create_request_id IS NOT NULL AND b.kagent_session_id IS NULL
+  AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = b.session_id)
+  AND NOT EXISTS (
+      SELECT 1 FROM deliveries d
+      WHERE d.session_id = b.session_id AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain'))
+ORDER BY b.created_at
+LIMIT $1;
+
+-- Marks a create resolved: kagent has no Session for the request id, or the Session it returned
+-- was deleted. Only while the create is still unresolved and nothing of the session is open.
+-- name: ResolveCreate :execrows
+UPDATE agent_bindings b
+SET kagent_create_request_id = NULL, updated_at = now()
+WHERE b.session_id = sqlc.arg(session_id) AND b.kagent_create_request_id = sqlc.arg(create_request_id)
+  AND b.kagent_session_id IS NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM deliveries d
+      WHERE d.session_id = b.session_id AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain'));
 
 -- name: MarkDeliverySending :execrows
 -- Also stores the kagent Session the message is about to be sent to.

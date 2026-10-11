@@ -382,9 +382,37 @@ func (s *Service) Wake(ctx context.Context, workspaceID string) error {
 	return ErrBusy
 }
 
-// WakeForPreview is Wake for the preview proxy (a later slice).
+// WakeForPreview makes sure the workspace is running before preview traffic reaches it, without
+// waiting out other work. A running workspace is only touched. If a suspend (or a create) is open
+// it answers ErrBusy at once, and the proxy shows its waking page with Retry-After instead of
+// holding the request; a delete is a *RejectedError. Otherwise a suspended workspace has its resume
+// queued once (concurrent calls share the open one) and the call returns once kagent confirms, for
+// a bounded wait. A caller whose context ends does not cancel the resume; the lifecycle loop
+// finishes it. It returns an *UnconfirmedError when kagent has not confirmed in time, so the caller
+// can retry. [Service.Wake] is the variant that waits out an open suspend, for the delivery path.
 func (s *Service) WakeForPreview(ctx context.Context, workspaceID string) error {
-	return s.Wake(ctx, workspaceID)
+	w, err := s.lookup(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	open, err := dbq.New(s.Pool).GetOpenWorkspaceOp(ctx, workspaceID)
+	switch {
+	case err == nil && open.Kind == dbstate.OpDelete:
+		return &RejectedError{Detail: "The workspace is being deleted"}
+	case err == nil && open.Kind != dbstate.OpResume:
+		return ErrBusy
+	case err != nil && !errors.Is(err, pgx.ErrNoRows):
+		return err
+	}
+	if w.KagentSessionID != nil {
+		if sess := s.observe(ctx, w.sessionID()); sess != nil {
+			if state, _ := stateOf(sess); state == api.WorkspaceObservedStateRunning {
+				return s.Touch(ctx, workspaceID)
+			}
+		}
+	}
+	_, err = s.change(ctx, workspaceID, dbstate.OpResume)
+	return err
 }
 
 // Touch records owner activity (preview traffic), which defers the idle suspend.

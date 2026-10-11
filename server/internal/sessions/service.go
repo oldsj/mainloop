@@ -76,6 +76,7 @@ func reason(err, sentinel error) string {
 type Kagent interface {
 	CreateSession(ctx context.Context, req *kagentapi.CreateSessionRequest) (*kagentapi.Session, error)
 	GetSession(ctx context.Context, id string) (*kagentapi.Session, error)
+	DeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	ResumeSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	SendMessage(ctx context.Context, agent kagent.AgentRef, p kagent.SendParams) iter.Seq2[a2a.Event, error]
 	GetTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)
@@ -108,6 +109,8 @@ type Options struct {
 	Concurrency int
 	// EnsureEvery is the period of the main-session sweep.
 	EnsureEvery time.Duration
+	// ResolveEvery is the period of the sweep that settles unresolved Session creates.
+	ResolveEvery time.Duration
 	// Lease is the delivery claim lease.
 	Lease time.Duration
 }
@@ -137,6 +140,7 @@ func (o Options) withDefaults() Options {
 	def(&o.ParkedMax, 5*time.Minute)
 	def(&o.ReadyWait, time.Minute)
 	def(&o.EnsureEvery, time.Minute)
+	def(&o.ResolveEvery, 5*time.Minute)
 	def(&o.Lease, 30*time.Second)
 	if o.Concurrency <= 0 {
 		o.Concurrency = 16
@@ -358,8 +362,9 @@ func (s *Service) SendTo(ctx context.Context, sessionID, messageID, text string)
 		return Sent{}, err
 	}
 	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
-		// The lock cancel and archive also take, before the status is read: no message is recorded
-		// after a cancel commits.
+		// The lock cancel also takes, before the status is read: no message is recorded after a
+		// cancel commits. Stop and archive take no lock; the open-turn index and the status check
+		// already keep them consistent with a send.
 		if err := db.XactLock(ctx, tx, "mainloop:send:"+sessionID); err != nil {
 			return err
 		}

@@ -169,7 +169,14 @@ func (s *Service) Stop(ctx context.Context, sessionID string) (StopOutcome, erro
 		return "", fmt.Errorf("list open turns: %w", err)
 	}
 	out := NoOpenTurn
+	hold := s.opts().UncertainHold
 	for _, d := range open {
+		if d.State == dbstate.DeliveryUncertain && time.Since(d.UpdatedAt) > hold {
+			// Past its hold the row no longer blocks sends, so a newer turn may be running behind it.
+			// The delivery loop fails it on its next recheck; stopping it here would only mask the
+			// turn that is running.
+			continue
+		}
 		res, err := s.stopDelivery(ctx, b, d, false)
 		if err != nil {
 			return "", err
@@ -284,6 +291,9 @@ func stopResult(st dbstate.DeliveryState) StopOutcome {
 	return Finished
 }
 
+// errFinishedMeanwhile aborts a cancel's transaction for a session that finished while it ran.
+var errFinishedMeanwhile = errors.New("sessions: finished meanwhile")
+
 // CancelResult is what cancelling a session did.
 type CancelResult struct {
 	// Status is the session's status after the call.
@@ -323,30 +333,24 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 	}
 	var closedNow []closed
 	status := dbstate.SessionCancelled
-	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+	err = events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+		closedNow = nil
 		// Sends take this lock before they look at the status, so none is recorded after this commits.
 		if err := db.XactLock(ctx, tx, "mainloop:send:"+sessionID); err != nil {
-			return err
+			return nil, err
 		}
 		q := dbq.New(tx)
-		if _, err := q.SetSessionCancelled(ctx, sessionID); errors.Is(err, pgx.ErrNoRows) {
-			cur, err := q.GetSessionRow(ctx, dbq.GetSessionRowParams{ID: sessionID, UserID: s.OwnerID})
-			if err != nil {
-				return err
-			}
-			status = cur.Status // finished meanwhile
-			return nil
-		} else if err != nil {
-			return fmt.Errorf("cancel session: %w", err)
-		}
+		// Deliveries first, then the session: a settle locks them in that order too (FinishDelivery,
+		// then RefreshSessionStatus), so the two cannot deadlock.
 		open, err := q.ListOpenDeliveries(ctx, sessionID)
 		if err != nil {
-			return fmt.Errorf("list open turns: %w", err)
+			return nil, fmt.Errorf("list open turns: %w", err)
 		}
 		states := make([]string, 0, len(openStates))
 		for _, st := range openStates {
 			states = append(states, string(st))
 		}
+		var drafts []events.Draft
 		for _, d := range open {
 			det := "cancelled by user"
 			prev, err := q.EndDelivery(ctx, dbq.EndDeliveryParams{
@@ -356,13 +360,25 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 				continue
 			}
 			if err != nil {
-				return fmt.Errorf("close delivery: %w", err)
+				return nil, fmt.Errorf("close delivery: %w", err)
 			}
 			closedNow = append(closedNow, closed{d: d, prev: dbstate.DeliveryState(prev)})
+			// Every ending publishes one event, so open clients see the turn end.
+			drafts = append(drafts, endedEvent(s.OwnerID, sessionID, d.ID))
 		}
-		return nil
+		if _, err := q.SetSessionCancelled(ctx, sessionID); errors.Is(err, pgx.ErrNoRows) {
+			cur, err := q.GetSessionRow(ctx, dbq.GetSessionRowParams{ID: sessionID, UserID: s.OwnerID})
+			if err != nil {
+				return nil, err
+			}
+			status = cur.Status
+			return nil, errFinishedMeanwhile // rolls back: a finished session keeps its deliveries as they are
+		} else if err != nil {
+			return nil, fmt.Errorf("cancel session: %w", err)
+		}
+		return drafts, nil
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, errFinishedMeanwhile) {
 		return CancelResult{}, err
 	}
 	if status != dbstate.SessionCancelled {
@@ -431,8 +447,12 @@ func (s *Service) Archive(ctx context.Context, sessionID string) error {
 	if !finishedStatus(row.Status) {
 		return conflict("This session is still running or waiting; cancel it first.")
 	}
-	if _, err := q.ArchiveFinishedSession(ctx, sessionID); err != nil {
+	n, err := q.ArchiveFinishedSession(ctx, sessionID)
+	if err != nil {
 		return fmt.Errorf("archive session: %w", err)
+	}
+	if n == 0 {
+		return conflict("This session is still running or waiting; cancel it first.")
 	}
 	return nil
 }

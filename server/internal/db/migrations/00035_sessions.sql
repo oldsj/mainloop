@@ -2,6 +2,14 @@
 -- The main thread's message mirror and the delivery ledger (G6a). Sessions and their agent
 -- bindings are in 00010_core.
 
+-- The request id of a kagent CreateSession that was sent (or may have been) for the binding, written
+-- before the call. A create whose Session id never came back is found by it: the orphan sweep
+-- counts the binding until the create is resolved, and the sessions sweep replays the create by
+-- this id once the session has no open delivery.
+ALTER TABLE agent_bindings ADD COLUMN kagent_create_request_id text;
+CREATE INDEX agent_bindings_create_unresolved ON agent_bindings (session_id)
+WHERE kagent_create_request_id IS NOT NULL AND kagent_session_id IS NULL;
+
 -- Messages of a session's conversation, mirrored from what the user sent and what the agent
 -- answered. The conversation id of the contract is the session id. The user message and its
 -- delivery share one id, which is also the A2A messageId; the reply's id is derived from the
@@ -81,6 +89,8 @@ CREATE TRIGGER sessions_keep_main BEFORE UPDATE OF archived_at ON sessions
 FOR EACH ROW EXECUTE FUNCTION refuse_archiving_main_session();
 
 -- +goose Down
+DROP INDEX IF EXISTS agent_bindings_create_unresolved;
+ALTER TABLE agent_bindings DROP COLUMN IF EXISTS kagent_create_request_id;
 DROP TRIGGER IF EXISTS sessions_keep_main ON sessions;
 DROP FUNCTION IF EXISTS refuse_archiving_main_session();
 DROP INDEX IF EXISTS agent_bindings_one_main;

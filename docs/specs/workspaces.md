@@ -79,8 +79,11 @@ built; nothing here has been measured against a live kagent.
   old (default 600) and that no binding names, is an orphan. It runs on a schedule
   (`WORKSPACE_ORPHAN_SWEEP_SECONDS`, default 3600) and deletes; the command
   `mainloop sweep-orphans` lists them and `--delete` removes them. Both refuse to delete while a
-  binding exists that has no Session id yet and whose create was sent, because that create may own
-  a listed Session. Each Session is checked against the database again just before it is
+  binding exists that has no Session id yet and whose create was requested (the binding records the
+  create request id before the call; a create that was never sent does not count), because that
+  create may own a listed Session. A create of a session that has since finished is settled by the
+  session service's `resolve-session-creates` sweep, which replays it with its request id and deletes
+  what comes back, so a cancelled session never blocks the sweep for ever. Each Session is checked against the database again just before it is
   deleted. The exit status is non-zero if a delete failed or deletion was blocked, and the
   scheduled pass logs a warning when it is blocked. kagent records every Session made with the
   control token as created by the same user, so the creator does not tell Mainloop instances
@@ -95,10 +98,12 @@ built; nothing here has been measured against a live kagent.
   one kagent has not confirmed in time or that stays busy is an error the delivery loop retries
   without sending. The sender commits its delivery first: an open delivery makes a suspend that
   has not yet reached kagent stand down, and one already in flight is waited for.
-- `WakeForPreview(workspaceID)` delegates to `Wake`. It and `Touch(workspaceID)` are the entry
-  points the preview proxy calls: a running workspace is only touched; otherwise a resume operation is queued once for
-  any number of concurrent callers, and the call returns when the Session is ready or fails with
-  `502`/`409`.
+- `WakeForPreview(workspaceID)` does not wait out other work, unlike `Wake`. It and
+  `Touch(workspaceID)` are the entry points the preview proxy calls. A running workspace is only
+  touched. If a suspend or a create is open it returns `ErrBusy` at once, and the proxy answers its
+  waking page (`503`, `Retry-After: 2`) instead of holding the request; an open delete is refused
+  (`409`). Otherwise a resume operation is queued once for any number of concurrent callers, and the
+  call returns when the Session is ready (a bounded wait) or fails with `502`/`409`.
 - Preview URLs are `<port>--<workspace>--preview.<host>` built from `SUBSTRATE_PREVIEW_BASE_URL`, ports sorted
   by number.
 - The preview proxy (G12, `server/internal/preview`), described under "Go preview proxy" in the
