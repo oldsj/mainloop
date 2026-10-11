@@ -1,0 +1,3536 @@
+# trunk-ignore-begin(checkov/CKV_OPENAPI_4,checkov/CKV_OPENAPI_5): no global security scheme; auth is
+# network reachability plus the Host/Origin guards, so the empty security list is intended.
+# Mainloop API contract, v1 (OpenAPI 3.1). Source of truth for the Go server and the React client.
+# Baseline exported from the Python app; response typing and error schemas follow in C1b.
+# Auth is not an HTTP security scheme: owner identity comes from network reachability plus the
+# Host and Origin guards, so the root security requirement is empty on purpose.
+openapi: 3.1.0
+info:
+  title: Mainloop API
+  description: Mainloop control-plane API
+  version: 0.2.0
+servers:
+  - url: /
+security: []
+# trunk-ignore-end(checkov/CKV_OPENAPI_4,checkov/CKV_OPENAPI_5)
+tags:
+  - name: health
+    description: Liveness and orchestration-health rollups.
+  - name: events
+    description: Owner-scoped live update stream (server-sent events).
+  - name: chat
+    description: Main thread and chat delivery.
+  - name: attention
+    description: Needs-you items, activity and queue responses.
+  - name: hitl
+    description: Native approvals and questions, and observer status.
+  - name: projects
+    description: Projects, merge policy, provider preference and smoke data.
+  - name: sessions
+    description: Native-bound sessions and provider profiles.
+  - name: workspaces
+    description: Workspace lifecycle and preview ports.
+  - name: environments
+    description: Development environments, versions, grants and selection.
+  - name: tasks
+    description: Task reads, task operations and task actions.
+# trunk-ignore-begin(checkov/CKV_OPENAPI_21): the other arrays have no code-level cap yet;
+# C1b types the responses and copies the Pydantic limits, then this block is removed.
+paths:
+  /activity:
+    get:
+      tags:
+        - attention
+      summary: Owner Activity
+      operationId: listActivity
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ActivityItem'
+                type: array
+                title: Response Owner Activity Activity Get
+  /attention:
+    get:
+      tags:
+        - attention
+      summary: Owner Attention
+      operationId: getAttention
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttentionSnapshot'
+  /chat:
+    post:
+      tags:
+        - chat
+      summary: Chat
+      description: Record and deliver a message to the user's native main session.
+      operationId: sendMessage
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /conversations/{conversation_id}:
+    get:
+      tags:
+        - chat
+      summary: Get Conversation
+      description: Get a conversation with its messages.
+      operationId: getConversation
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Conversation Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /environments:
+    get:
+      tags:
+        - environments
+      summary: List Environments
+      operationId: listEnvironments
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+    post:
+      tags:
+        - environments
+      summary: Register
+      operationId: registerEnvironment
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterEnvironment'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /environments/{environment_id}:
+    get:
+      tags:
+        - environments
+      summary: Get Environment
+      operationId: getEnvironment
+      parameters:
+        - name: environment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Environment Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /environments/{environment_id}/default:
+    put:
+      tags:
+        - environments
+      summary: Set Default
+      operationId: acceptEnvironmentDefault
+      parameters:
+        - name: environment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Environment Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /environments/{environment_id}/grants/{project_id}:
+    put:
+      tags:
+        - environments
+      summary: Grant
+      operationId: grantEnvironment
+      parameters:
+        - name: environment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Environment Id
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+        - environments
+      summary: Revoke
+      operationId: revokeEnvironment
+      parameters:
+        - name: environment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Environment Id
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /environments/{environment_id}/refresh:
+    post:
+      tags:
+        - environments
+      summary: Refresh Tag
+      operationId: refreshEnvironment
+      parameters:
+        - name: environment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Environment Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /environments/{environment_id}/versions:
+    get:
+      tags:
+        - environments
+      summary: Versions
+      operationId: listEnvironmentVersions
+      parameters:
+        - name: environment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Environment Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /environments/{environment_id}/versions/{version_id}:
+    get:
+      tags:
+        - environments
+      summary: Version
+      operationId: getEnvironmentVersion
+      parameters:
+        - name: environment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Environment Id
+        - name: version_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Version Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /events:
+    get:
+      tags:
+        - events
+      summary: Sse Events
+      description: 'SSE endpoint for real-time updates.
+
+
+        Streams events for:
+
+        - inbox:updated - when inbox items change
+
+        - heartbeat - periodic keepalive (every 30s)
+
+
+        The client should reconnect automatically on disconnect.
+
+        EventSource handles this natively.'
+      operationId: getEvents
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /health:
+    get:
+      tags:
+        - health
+      summary: Health
+      description: Health check endpoint.
+      operationId: getHealth
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /hitl-observer/status:
+    get:
+      tags:
+        - hitl
+      summary: Get Hitl Observer Status
+      operationId: getHITLObserverStatus
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /hitl/{request_id}:
+    get:
+      tags:
+        - hitl
+      summary: Get Hitl Request
+      operationId: getHITL
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Request Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /hitl/{request_id}/merge/{proposal_id}/details:
+    get:
+      tags:
+        - hitl
+      summary: Get Hitl Merge Details
+      description: Read bounded, immutable proposal details for this owner's exact HITL card.
+      operationId: getHITLMergeDetails
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Request Id
+        - name: proposal_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Proposal Id
+        - name: section
+          in: query
+          required: true
+          schema:
+            enum:
+              - description
+              - files
+              - checks
+            type: string
+            title: Section
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+            title: Cursor
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            maximum: 50
+            minimum: 1
+            default: 50
+            title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /hitl/{request_id}/respond:
+    post:
+      tags:
+        - hitl
+      summary: Respond To Hitl
+      operationId: respondHITL
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Request Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HITLDecisionInput'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /main-thread:
+    get:
+      tags:
+        - chat
+      summary: Get Main Thread Info
+      description: Main-thread mode, native identity strip, and the topic index.
+      operationId: getMainThread
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MainThreadInfo'
+  /orchestration-health:
+    get:
+      tags:
+        - health
+      summary: Read Health
+      operationId: orchestrationHealth
+      parameters:
+        - name: project_id
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Project Id
+        - name: task_id
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Task Id
+        - name: session_id
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Session Id
+        - name: attempt_id
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Attempt Id
+        - name: provider
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - type: string
+                pattern: ^(claude|codex)$
+              - type: 'null'
+            title: Provider
+        - name: hours
+          in: query
+          required: false
+          schema:
+            type: integer
+            maximum: 8760
+            minimum: 1
+            default: 24
+            title: Hours
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /orchestration-health/events:
+    get:
+      tags:
+        - health
+      summary: Read Events
+      operationId: healthEvents
+      parameters:
+        - name: session_id
+          in: query
+          required: true
+          schema:
+            type: string
+            title: Session Id
+        - name: hours
+          in: query
+          required: false
+          schema:
+            type: integer
+            maximum: 8760
+            minimum: 1
+            default: 24
+            title: Hours
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /projects:
+    get:
+      tags:
+        - projects
+      summary: List Projects
+      description: List user's projects ordered by last used.
+      operationId: listProjects
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+                title: Response List Projects Projects Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+        - projects
+      summary: Import Project
+      description: Import the owner's repository without admitting a workspace or session.
+      operationId: importProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectImportRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /projects/{project_id}:
+    get:
+      tags:
+        - projects
+      summary: Get Project
+      description: Get a project by ID.
+      operationId: getProject
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /projects/{project_id}/default-provider:
+    get:
+      tags:
+        - projects
+      summary: Get Preference
+      operationId: getProjectDefaultProvider
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+        - projects
+      summary: Set Preference
+      operationId: updateProjectDefaultProvider
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectProviderUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /projects/{project_id}/detail:
+    get:
+      tags:
+        - projects
+      summary: Get Project Detail
+      description: Get project with GitHub data (PRs, commits, sessions).
+      operationId: getProjectDetail
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectDetail'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /projects/{project_id}/environment:
+    get:
+      tags:
+        - environments
+      summary: Selection
+      operationId: getProjectEnvironment
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+        - environments
+      summary: Select
+      operationId: selectProjectEnvironment
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectEnvironment'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /projects/{project_id}/merge-policy:
+    get:
+      tags:
+        - projects
+      summary: Get Project Merge Policy
+      operationId: getMergePolicy
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MergePolicyView'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+        - projects
+      summary: Update Project Merge Policy
+      operationId: updateMergePolicy
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MergePolicyUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MergePolicyView'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /projects/{project_id}/smoke-observations:
+    get:
+      tags:
+        - projects
+      summary: Smoke Observations
+      description: Sanitized ledger facts for an operator smoke run; grants stay private.
+      operationId: getProjectSmokeObservations
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+        - name: branch
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Branch
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /providers:
+    get:
+      tags:
+        - sessions
+      summary: List Providers
+      description: Owner-only configured profiles, including disabled profiles and scoped evidence.
+      operationId: listProviders
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ProviderProfile'
+                type: array
+                title: Response List Providers Providers Get
+  /queue/{item_id}/dismiss:
+    post:
+      tags:
+        - attention
+      summary: Dismiss Queue Diagnostic
+      description: Dismiss an uncorrelated input diagnostic; this records no native decision.
+      operationId: dismissQueueDiagnostic
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Item Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /queue/{item_id}/respond:
+    post:
+      tags:
+        - attention
+      summary: Respond To Queue Item
+      description: Respond to a queue item.
+      operationId: respondToQueueItem
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Item Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueueItemResponse'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /sessions:
+    get:
+      tags:
+        - sessions
+      summary: List Sessions
+      description: List user's sessions.
+      operationId: listSessions
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Status
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Session'
+                title: Response List Sessions Sessions Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+        - sessions
+      summary: Create Session
+      description: Create a new session with its own conversation.
+      operationId: createSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionCreate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /sessions/{session_id}:
+    get:
+      tags:
+        - sessions
+      summary: Get Session
+      description: Get a session by ID.
+      operationId: getSession
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /sessions/{session_id}/archive:
+    post:
+      tags:
+        - sessions
+      summary: Archive Session
+      description: Clear one finished session from the list. A live one must be cancelled first.
+      operationId: archiveSession
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /sessions/{session_id}/cancel:
+    post:
+      tags:
+        - sessions
+      summary: Cancel Session
+      description: Cancel a running session.
+      operationId: cancelSession
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /sessions/{session_id}/conversation:
+    get:
+      tags:
+        - sessions
+      summary: Get Session Conversation
+      description: Get a session's conversation messages.
+      operationId: getSessionConversation
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionConversationResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /sessions/{session_id}/hitl:
+    get:
+      tags:
+        - hitl
+      summary: List Session Hitl
+      operationId: listSessionHITL
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /sessions/{session_id}/message:
+    post:
+      tags:
+        - sessions
+      summary: Send Session Message
+      description: Send a message to a session's conversation.
+      operationId: sendSessionMessage
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionMessageRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /sessions/{session_id}/native:
+    get:
+      tags:
+        - sessions
+      summary: Get Session Native
+      description: Identity strip for a session bound to a native agent in kagent.
+      operationId: getSessionNative
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeSessionInfo'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /sessions/{session_id}/stop-turn:
+    post:
+      tags:
+        - sessions
+      summary: Stop Session Turn
+      description:
+        'Stop the open turn of a session (the main thread included) without ending the session.
+
+
+        ``status`` is ``stopped``, ``finished`` (the turn ended on its own first) or ``no_open_turn``.
+
+        A kagent error is returned as 502 and leaves the delivery as it was.'
+      operationId: stopTurn
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /task-operations/{operation_id}:
+    get:
+      tags:
+        - tasks
+      summary: Get Operation
+      operationId: getTaskOperation
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Operation Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /tasks:
+    get:
+      tags:
+        - tasks
+      summary: List Tasks
+      operationId: listTasks
+      parameters:
+        - name: project_id
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Project Id
+        - name: parent_task_id
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Parent Task Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+        - tasks
+      summary: Create Task
+      operationId: createTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCreate'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /tasks/{task_id}:
+    get:
+      tags:
+        - tasks
+      summary: Get Task
+      operationId: getTask
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Task Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /tasks/{task_id}/cancel:
+    post:
+      tags:
+        - tasks
+      summary: Cancel Task
+      operationId: cancelTask
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Task Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskAction'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /tasks/{task_id}/reassign:
+    post:
+      tags:
+        - tasks
+      summary: Reassign Task
+      operationId: reassignTask
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Task Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskReassign'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /tasks/{task_id}/retry:
+    post:
+      tags:
+        - tasks
+      summary: Retry Task
+      operationId: retryTask
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Task Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskAction'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workspaces:
+    get:
+      tags:
+        - workspaces
+      summary: List Workspaces
+      operationId: listWorkspaces
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/WorkspaceLifecycle'
+                type: array
+                title: Response List Workspaces Workspaces Get
+    post:
+      tags:
+        - workspaces
+      summary: Create Workspace
+      description:
+        'Create a branch workspace: a session whose kagent Session has the repository cloned
+        in.'
+      operationId: createWorkspace
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkspaceRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceLifecycle'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workspaces/{workspace_id}:
+    get:
+      tags:
+        - workspaces
+      summary: Get Workspace
+      operationId: getWorkspace
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Workspace Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceLifecycle'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+        - workspaces
+      summary: Delete Workspace
+      operationId: deleteWorkspace
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Workspace Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workspaces/{workspace_id}/ports:
+    get:
+      tags:
+        - workspaces
+      summary: List Workspace Preview Ports
+      operationId: listWorkspacePreviewPorts
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Workspace Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workspaces/{workspace_id}/refresh:
+    post:
+      tags:
+        - workspaces
+      summary: Refresh Workspace
+      operationId: refreshWorkspace
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Workspace Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceLifecycle'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workspaces/{workspace_id}/resume:
+    post:
+      tags:
+        - workspaces
+      summary: Resume Workspace
+      operationId: resumeWorkspace
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Workspace Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceLifecycle'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workspaces/{workspace_id}/suspend:
+    post:
+      tags:
+        - workspaces
+      summary: Suspend Workspace
+      operationId: suspendWorkspace
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Workspace Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceLifecycle'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    ActivityItem:
+      properties:
+        id:
+          type: string
+          title: Id
+        title:
+          type: string
+          title: Title
+        content:
+          type: string
+          title: Content
+        href:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Href
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+        - id
+        - title
+        - content
+        - created_at
+      title: ActivityItem
+    AskUserAnswer:
+      properties:
+        answer:
+          items:
+            type: string
+            maxLength: 8192
+          type: array
+          maxItems: 100
+          title: Answer
+      additionalProperties: false
+      type: object
+      required:
+        - answer
+      title: AskUserAnswer
+    AskUserResponse:
+      properties:
+        type:
+          type: string
+          const: ask_user_response
+          title: Type
+        id:
+          type: string
+          maxLength: 2048
+          minLength: 1
+          title: Id
+        answers:
+          items:
+            $ref: '#/components/schemas/AskUserAnswer'
+          type: array
+          maxItems: 100
+          minItems: 1
+          title: Answers
+      additionalProperties: false
+      type: object
+      required:
+        - type
+        - id
+        - answers
+      title: AskUserResponse
+    AttentionItem:
+      properties:
+        id:
+          type: string
+          title: Id
+        kind:
+          type: string
+          enum:
+            - approval
+            - question
+            - owner_decision
+          title: Kind
+        title:
+          type: string
+          title: Title
+        needed:
+          type: string
+          title: Needed
+        href:
+          type: string
+          title: Href
+        session_ids:
+          items:
+            type: string
+          type: array
+          title: Session Ids
+        task_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Task Id
+        queue_item:
+          anyOf:
+            - $ref: '#/components/schemas/QueueItem'
+            - type: 'null'
+      type: object
+      required:
+        - id
+        - kind
+        - title
+        - needed
+        - href
+      title: AttentionItem
+    AttentionSnapshot:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/AttentionItem'
+          type: array
+          title: Items
+        count:
+          type: integer
+          title: Count
+          default: 0
+        sessions:
+          items:
+            $ref: '#/components/schemas/Session'
+          type: array
+          title: Sessions
+      type: object
+      title: AttentionSnapshot
+    CapabilityResult:
+      properties:
+        capability:
+          type: string
+          minLength: 1
+          title: Capability
+        state:
+          $ref: '#/components/schemas/CapabilityState'
+          default: unknown
+        scope:
+          type: string
+          enum:
+            - fixture
+            - live
+            - unverified
+          title: Scope
+          default: unverified
+        evidence_ref:
+          anyOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+          title: Evidence Ref
+        detail:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Detail
+      additionalProperties: false
+      type: object
+      required:
+        - capability
+      title: CapabilityResult
+    CapabilityState:
+      type: string
+      enum:
+        - proved
+        - partial
+        - unsupported
+        - unknown
+      title: CapabilityState
+    ChatRequest:
+      properties:
+        message:
+          type: string
+          title: Message
+          description: User message
+        conversation_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Conversation Id
+          description: Existing conversation ID
+      type: object
+      required:
+        - message
+      title: ChatRequest
+      description: Request model for sending a message.
+    ChatResponse:
+      properties:
+        conversation_id:
+          type: string
+          title: Conversation Id
+        message:
+          anyOf:
+            - $ref: '#/components/schemas/Message'
+            - type: 'null'
+        spawned_session_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Spawned Session Id
+        pending:
+          type: boolean
+          title: Pending
+          default: false
+        delivery_message_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Delivery Message Id
+      type: object
+      required:
+        - conversation_id
+      title: ChatResponse
+      description: Response model for chat interaction.
+    CommitSummary:
+      properties:
+        sha:
+          type: string
+          title: Sha
+        message:
+          type: string
+          title: Message
+        author:
+          type: string
+          title: Author
+        date:
+          type: string
+          format: date-time
+          title: Date
+        url:
+          type: string
+          title: Url
+      type: object
+      required:
+        - sha
+        - message
+        - author
+        - date
+        - url
+      title: CommitSummary
+      description: Summary of a commit.
+    Conversation:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: Unique conversation ID
+        user_id:
+          type: string
+          title: User Id
+          description: Owner ID (the single configured owner)
+        title:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Title
+          description: Conversation title
+        summary:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Summary
+          description: Compacted summary of older messages
+        summarized_through_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Summarized Through Id
+          description: ID of last message included in summary
+        message_count:
+          type: integer
+          title: Message Count
+          description: Total message count for compaction threshold
+          default: 0
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+          description: Creation timestamp
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+          description: Last update timestamp
+      type: object
+      required:
+        - id
+        - user_id
+      title: Conversation
+      description: A conversation thread.
+    ConversationResponse:
+      properties:
+        conversation:
+          $ref: '#/components/schemas/Conversation'
+        messages:
+          items:
+            $ref: '#/components/schemas/Message'
+          type: array
+          title: Messages
+      type: object
+      required:
+        - conversation
+      title: ConversationResponse
+      description: Response model for conversation with messages.
+    CreateWorkspaceRequest:
+      properties:
+        project_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Project Id
+        repo:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Repo
+        branch:
+          type: string
+          title: Branch
+          default: ''
+        ref:
+          type: string
+          title: Ref
+          default: ''
+        depth:
+          type: integer
+          maximum: 1000.0
+          minimum: 0.0
+          title: Depth
+          default: 0
+        dev:
+          $ref: '#/components/schemas/WorkspaceDev'
+          default:
+            ports: []
+            idle_timeout_minutes: 30
+        agent_kind:
+          type: string
+          maxLength: 80
+          minLength: 1
+          pattern: ^[a-z][a-z0-9_-]*$
+          title: Agent Kind
+          default: claude
+      additionalProperties: false
+      type: object
+      title: CreateWorkspaceRequest
+    DefinitionReference:
+      properties:
+        repository:
+          type: string
+          maxLength: 2048
+          minLength: 1
+          title: Repository
+        commit_sha:
+          type: string
+          pattern: ^[0-9a-f]{40}$
+          title: Commit Sha
+        path:
+          type: string
+          maxLength: 1024
+          minLength: 1
+          title: Path
+      additionalProperties: false
+      type: object
+      required:
+        - repository
+        - commit_sha
+        - path
+      title: DefinitionReference
+    GrantRequest:
+      properties:
+        permission:
+          type: string
+          enum:
+            - use
+            - derive
+          title: Permission
+      additionalProperties: false
+      type: object
+      required:
+        - permission
+      title: GrantRequest
+    HITLDecisionInput:
+      properties:
+        action_id:
+          type: string
+          maxLength: 2048
+          minLength: 1
+          title: Action Id
+        response:
+          oneOf:
+            - $ref: '#/components/schemas/ToolApprovalResponse'
+            - $ref: '#/components/schemas/AskUserResponse'
+          title: Response
+          discriminator:
+            propertyName: type
+            mapping:
+              ask_user_response: '#/components/schemas/AskUserResponse'
+              tool_approval_response: '#/components/schemas/ToolApprovalResponse'
+      additionalProperties: false
+      type: object
+      required:
+        - action_id
+        - response
+      title: HITLDecisionInput
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    MainThreadInfo:
+      properties:
+        mode:
+          type: string
+          title: Mode
+        session_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Session Id
+        conversation_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Conversation Id
+        native:
+          anyOf:
+            - $ref: '#/components/schemas/NativeSessionInfo'
+            - type: 'null'
+        topics:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Topics
+          default: []
+      type: object
+      required:
+        - mode
+      title: MainThreadInfo
+    MergePolicy:
+      type: string
+      enum:
+        - auto
+        - approval
+      title: MergePolicy
+    MergePolicyUpdate:
+      properties:
+        merge_policy:
+          $ref: '#/components/schemas/MergePolicy'
+        expected_version:
+          type: integer
+          minimum: 1.0
+          title: Expected Version
+      additionalProperties: false
+      type: object
+      required:
+        - merge_policy
+        - expected_version
+      title: MergePolicyUpdate
+    MergePolicyView:
+      properties:
+        writes_enabled:
+          type: boolean
+          title: Writes Enabled
+          default: false
+        merge_policy:
+          $ref: '#/components/schemas/MergePolicy'
+        merge_policy_version:
+          type: integer
+          minimum: 1.0
+          title: Merge Policy Version
+        protected_globs:
+          items:
+            type: string
+          type: array
+          title: Protected Globs
+          default:
+            - k8s/**
+            - .github/**
+            - '**/migrations/**'
+        protected_globs_version:
+          type: integer
+          const: 1
+          title: Protected Globs Version
+          default: 1
+      type: object
+      required:
+        - merge_policy
+        - merge_policy_version
+      title: MergePolicyView
+    Message:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: Unique message ID
+        conversation_id:
+          type: string
+          title: Conversation Id
+          description: Parent conversation ID
+        role:
+          type: string
+          enum:
+            - user
+            - assistant
+          title: Role
+          description: Message role
+        content:
+          type: string
+          title: Content
+          description: Message content
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+          description: Creation timestamp
+      type: object
+      required:
+        - id
+        - conversation_id
+        - role
+        - content
+      title: Message
+      description: A single message in a conversation.
+    NativeDeliveryInfo:
+      properties:
+        message_id:
+          type: string
+          title: Message Id
+        state:
+          type: string
+          title: State
+          description: queued|recorded|sending|delivered|completed|uncertain|failed|cancelled
+        task_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Task Id
+        evidence_ref:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Evidence Ref
+        detail:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Detail
+        source:
+          type: string
+          title: Source
+          default: user
+      type: object
+      required:
+        - message_id
+        - state
+      title: NativeDeliveryInfo
+      description: Delivery ledger row for one message sent to a native agent.
+    NativeSessionInfo:
+      properties:
+        session_id:
+          type: string
+          title: Session Id
+        kind:
+          type: string
+          maxLength: 80
+          minLength: 1
+          pattern: ^[a-z][a-z0-9_-]*$
+          title: Kind
+        role:
+          type: string
+          title: Role
+          default: agent
+        parent_session_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Parent Session Id
+        topic:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Topic
+        agent_name:
+          type: string
+          title: Agent Name
+        kagent_session_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Kagent Session Id
+        session_state:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Session State
+        model:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Model
+        turns:
+          type: integer
+          title: Turns
+          default: 0
+        turn_in_flight:
+          type: boolean
+          title: Turn In Flight
+          default: false
+        deliveries:
+          items:
+            $ref: '#/components/schemas/NativeDeliveryInfo'
+          type: array
+          title: Deliveries
+        note:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Note
+      type: object
+      required:
+        - session_id
+        - kind
+        - agent_name
+      title: NativeSessionInfo
+      description: Identity strip for a session bound to a native agent session in kagent.
+    Project:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: Unique project ID
+        user_id:
+          type: string
+          title: User Id
+          description: User who owns this project
+        merge_policy:
+          $ref: '#/components/schemas/MergePolicy'
+          default: auto
+        merge_policy_version:
+          type: integer
+          minimum: 1.0
+          title: Merge Policy Version
+          default: 1
+        owner:
+          type: string
+          title: Owner
+          description: GitHub owner/org
+        name:
+          type: string
+          title: Name
+          description: Repository name
+        full_name:
+          type: string
+          title: Full Name
+          description: owner/name
+        description:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Description
+          description: Repo description
+        default_branch:
+          type: string
+          title: Default Branch
+          description: Default branch
+          default: main
+        avatar_url:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Avatar Url
+          description: Owner avatar URL
+        html_url:
+          type: string
+          title: Html Url
+          description: GitHub repo URL
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+          description: Creation timestamp
+        last_used_at:
+          type: string
+          format: date-time
+          title: Last Used At
+          description: Last used timestamp
+        metadata_updated_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Metadata Updated At
+          description: When GitHub data was refreshed
+        open_pr_count:
+          type: integer
+          title: Open Pr Count
+          description: Cached open PR count
+          default: 0
+        open_issue_count:
+          type: integer
+          title: Open Issue Count
+          description: Cached open issue count
+          default: 0
+      type: object
+      required:
+        - user_id
+        - owner
+        - name
+        - full_name
+        - html_url
+      title: Project
+      description: A GitHub repository project tracked by the user.
+    ProjectDetail:
+      properties:
+        project:
+          $ref: '#/components/schemas/Project'
+        open_prs:
+          items:
+            $ref: '#/components/schemas/ProjectPRSummary'
+          type: array
+          title: Open Prs
+          maxItems: 10
+        recent_commits:
+          items:
+            $ref: '#/components/schemas/CommitSummary'
+          type: array
+          title: Recent Commits
+          maxItems: 10
+        sessions:
+          items:
+            $ref: '#/components/schemas/Session'
+          type: array
+          title: Sessions
+      type: object
+      required:
+        - project
+        - open_prs
+        - recent_commits
+        - sessions
+      title: ProjectDetail
+      description: Detailed project info including GitHub data.
+    ProjectImportRequest:
+      properties:
+        repo:
+          type: string
+          title: Repo
+      additionalProperties: false
+      type: object
+      required:
+        - repo
+      title: ProjectImportRequest
+    ProjectPRSummary:
+      properties:
+        number:
+          type: integer
+          title: Number
+        title:
+          type: string
+          title: Title
+        state:
+          type: string
+          title: State
+        author:
+          type: string
+          title: Author
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+        url:
+          type: string
+          title: Url
+        is_mainloop:
+          type: boolean
+          title: Is Mainloop
+      type: object
+      required:
+        - number
+        - title
+        - state
+        - author
+        - created_at
+        - updated_at
+        - url
+        - is_mainloop
+      title: ProjectPRSummary
+      description: Summary of a PR for a project.
+    ProjectProviderUpdate:
+      properties:
+        profile_id:
+          anyOf:
+            - type: string
+              maxLength: 80
+              minLength: 1
+              pattern: ^[a-z][a-z0-9_-]*$
+            - type: 'null'
+          title: Profile Id
+        expected_version:
+          type: integer
+          minimum: 0.0
+          title: Expected Version
+      additionalProperties: false
+      type: object
+      required:
+        - profile_id
+        - expected_version
+      title: ProjectProviderUpdate
+    ProviderAgentRef:
+      properties:
+        namespace:
+          type: string
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$
+          title: Namespace
+        name:
+          type: string
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$
+          title: Name
+      additionalProperties: false
+      type: object
+      required:
+        - namespace
+        - name
+      title: ProviderAgentRef
+    ProviderProfile:
+      properties:
+        id:
+          type: string
+          maxLength: 80
+          minLength: 1
+          pattern: ^[a-z][a-z0-9_-]*$
+          title: Id
+        display_name:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Display Name
+        runtime_adapter:
+          type: string
+          const: kagent
+          title: Runtime Adapter
+          default: kagent
+        native_provider:
+          type: string
+          enum:
+            - claude
+            - codex
+          title: Native Provider
+        configuration_revision:
+          type: string
+          minLength: 1
+          title: Configuration Revision
+        agents:
+          additionalProperties:
+            $ref: '#/components/schemas/ProviderAgentRef'
+          propertyNames:
+            enum:
+              - main
+              - supervisor
+              - child
+              - agent
+          type: object
+          title: Agents
+        aliases:
+          items:
+            type: string
+            maxLength: 80
+            minLength: 1
+            pattern: ^[a-z][a-z0-9_-]*$
+          type: array
+          title: Aliases
+          default: []
+        enabled:
+          type: boolean
+          title: Enabled
+          default: true
+        capabilities:
+          items:
+            $ref: '#/components/schemas/CapabilityResult'
+          type: array
+          title: Capabilities
+          default: []
+      additionalProperties: false
+      type: object
+      required:
+        - id
+        - display_name
+        - native_provider
+        - configuration_revision
+        - agents
+      title: ProviderProfile
+    QueueItem:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: Unique item ID
+        main_thread_id:
+          type: string
+          title: Main Thread Id
+          description: Parent main thread ID
+        task_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Task Id
+          description: Related worker task ID
+        user_id:
+          type: string
+          title: User Id
+          description: User ID
+        hitl_request_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Hitl Request Id
+        item_type:
+          $ref: '#/components/schemas/QueueItemType'
+          description: Type of queue item
+        priority:
+          $ref: '#/components/schemas/QueueItemPriority'
+          description: Priority level
+          default: normal
+        title:
+          type: string
+          title: Title
+          description: Short title/summary
+        content:
+          type: string
+          title: Content
+          description: Full content/question
+        context:
+          additionalProperties: true
+          type: object
+          title: Context
+          description: Extra context
+        options:
+          anyOf:
+            - items:
+                type: string
+              type: array
+            - type: 'null'
+          title: Options
+          description: Predefined response options if any
+        status:
+          type: string
+          enum:
+            - pending
+            - responded
+            - expired
+            - cancelled
+          title: Status
+          description: Item status
+          default: pending
+        response:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Response
+          description: Human response
+        responded_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Responded At
+          description: Response timestamp
+        read_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Read At
+          description: When item was read/acknowledged
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+          description: Creation timestamp
+        expires_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Expires At
+          description: When this item expires
+      type: object
+      required:
+        - main_thread_id
+        - user_id
+        - item_type
+        - title
+        - content
+      title: QueueItem
+      description: An item in the human review queue.
+    QueueItemPriority:
+      type: string
+      enum:
+        - urgent
+        - high
+        - normal
+        - low
+      title: QueueItemPriority
+      description: Priority levels for queue items.
+    QueueItemResponse:
+      properties:
+        response:
+          type: string
+          title: Response
+          description: Response text
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+          description: Optional metadata
+      type: object
+      required:
+        - response
+      title: QueueItemResponse
+      description: Human response to a queue item.
+    QueueItemType:
+      type: string
+      enum:
+        - hitl_request
+        - question
+        - approval
+        - review
+        - error
+        - notification
+        - plan_ready
+        - plan_review
+        - code_ready
+        - feedback_addressed
+        - routing_suggestion
+      title: QueueItemType
+      description: Types of items in the human queue.
+    RefreshRequest:
+      properties:
+        version_id:
+          type: string
+          title: Version Id
+      additionalProperties: false
+      type: object
+      required:
+        - version_id
+      title: RefreshRequest
+    RegisterEnvironment:
+      properties:
+        name:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Name
+        source_kind:
+          type: string
+          enum:
+            - prebuilt_image
+            - definition_repo
+          title: Source Kind
+          default: prebuilt_image
+        image:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Image
+        architecture:
+          type: string
+          enum:
+            - amd64
+            - arm64
+          title: Architecture
+          default: amd64
+        watched_tag:
+          anyOf:
+            - type: string
+              pattern: ^[\w][\w.-]{0,127}$
+            - type: 'null'
+          title: Watched Tag
+        definition:
+          anyOf:
+            - $ref: '#/components/schemas/DefinitionReference'
+            - type: 'null'
+      additionalProperties: false
+      type: object
+      required:
+        - name
+      title: RegisterEnvironment
+    SelectEnvironment:
+      properties:
+        environment_id:
+          type: string
+          title: Environment Id
+        version_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Version Id
+        follow_default:
+          type: boolean
+          title: Follow Default
+          default: false
+        expected_version:
+          type: integer
+          minimum: 0.0
+          title: Expected Version
+      additionalProperties: false
+      type: object
+      required:
+        - environment_id
+        - expected_version
+      title: SelectEnvironment
+    Session:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: Unique session ID
+        user_id:
+          type: string
+          title: User Id
+          description: Owner ID (the single configured owner)
+        main_thread_id:
+          type: string
+          title: Main Thread Id
+          description: Parent main thread ID
+        title:
+          type: string
+          title: Title
+          description: Short title for the session
+        description:
+          type: string
+          title: Description
+          description: What the session is for
+        prompt:
+          type: string
+          title: Prompt
+          description: Initial prompt that started the session
+        conversation_id:
+          type: string
+          title: Conversation Id
+          description: Session's conversation ID
+        parent_session_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Parent Session Id
+          description: Parent session (delegation)
+        topic:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Topic
+          description: Topic this session works for
+        agent_kind:
+          anyOf:
+            - type: string
+              maxLength: 80
+              minLength: 1
+              pattern: ^[a-z][a-z0-9_-]*$
+            - type: 'null'
+          title: Agent Kind
+          description: Native runtime kind from the session binding
+        status:
+          $ref: '#/components/schemas/SessionStatus'
+          description: Session status
+          default: pending
+        needs_owner:
+          type: boolean
+          title: Needs Owner
+          description: Current owner attention projection
+          default: false
+        worker_pod_name:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Worker Pod Name
+          description: K8s pod running this session
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+          description: Creation timestamp
+        started_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Started At
+          description: Start timestamp
+        completed_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Completed At
+          description: Completion timestamp
+        archived_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Archived At
+          description: When the session was cleared from the list; kept for audit, never deleted
+        summary:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Summary
+          description: Summary posted to main thread on completion
+        error:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Error
+          description: Error message if failed
+        repo_url:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Repo Url
+          description: GitHub repository URL
+        project_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Project Id
+          description: Associated project ID
+        branch_name:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Branch Name
+          description: Branch to create/work on
+        base_branch:
+          type: string
+          title: Base Branch
+          description: Base ref; empty means the remote's default branch
+          default: main
+        model:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Model
+          description: Claude model to use (haiku, sonnet, opus)
+        issue_url:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Issue Url
+          description: Plan issue URL
+        issue_number:
+          anyOf:
+            - type: integer
+            - type: 'null'
+          title: Issue Number
+          description: Plan issue number
+        issue_etag:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Issue Etag
+          description: ETag for conditional polling
+        issue_last_modified:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Issue Last Modified
+          description: Last-Modified for polling
+        pr_url:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Pr Url
+          description: Implementation PR URL
+        pr_number:
+          anyOf:
+            - type: integer
+            - type: 'null'
+          title: Pr Number
+          description: PR number
+        pr_etag:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Pr Etag
+          description: ETag for conditional PR polling
+        pr_last_modified:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Pr Last Modified
+          description: Last-Modified for PR polling
+        commit_sha:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Commit Sha
+          description: Final commit SHA
+        anchor_message_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Anchor Message Id
+          description: Main thread message ID that triggered this session
+        color:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Color
+          description: Assigned color for inline display (hex or name)
+        result:
+          anyOf:
+            - additionalProperties: true
+              type: object
+            - type: 'null'
+          title: Result
+          description: Session result data
+      type: object
+      required:
+        - user_id
+        - main_thread_id
+        - title
+        - description
+        - prompt
+        - conversation_id
+      title: Session
+      description: 'A background task that runs independently from the main thread.
+
+
+        Sessions can be:
+
+        - Simple Claude conversations (no repo_url)
+
+        - Code work with GitHub integration (with repo_url)
+
+
+        Both types have their own conversation and can notify the user when input is needed.'
+    SessionConversationResponse:
+      properties:
+        session:
+          $ref: '#/components/schemas/Session'
+        messages:
+          items: {}
+          type: array
+          title: Messages
+      type: object
+      required:
+        - session
+        - messages
+      title: SessionConversationResponse
+      description: Response for session conversation.
+    SessionCreate:
+      properties:
+        title:
+          type: string
+          title: Title
+          description: Short title for the session
+        description:
+          type: string
+          title: Description
+          description: What the session is for
+        prompt:
+          type: string
+          title: Prompt
+          description: Initial prompt for the session
+        repo_url:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Repo Url
+          description: GitHub repository URL for code work
+        anchor_message_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Anchor Message Id
+          description: Main thread message ID to anchor this session to
+        agent_kind:
+          anyOf:
+            - type: string
+              maxLength: 80
+              minLength: 1
+              pattern: ^[a-z][a-z0-9_-]*$
+            - type: 'null'
+          title: Agent Kind
+          description: Native agent kind; defaults to Claude Code
+      type: object
+      required:
+        - title
+        - description
+        - prompt
+      title: SessionCreate
+      description: Request to create a new session.
+    SessionMessageRequest:
+      properties:
+        message:
+          type: string
+          title: Message
+      type: object
+      required:
+        - message
+      title: SessionMessageRequest
+      description: Request to send a message to a session.
+    SessionStatus:
+      type: string
+      enum:
+        - pending
+        - active
+        - idle
+        - superseded
+        - completed
+        - failed
+        - cancelled
+        - waiting_on_user
+        - implementing
+        - under_review
+      title: SessionStatus
+      description: Status of a session.
+    TaskAction:
+      properties:
+        request_id:
+          type: string
+          maxLength: 100
+          minLength: 1
+          title: Request Id
+        expected_version:
+          type: integer
+          minimum: 1.0
+          title: Expected Version
+        expected_attempt_id:
+          anyOf:
+            - type: string
+              maxLength: 100
+              minLength: 1
+            - type: 'null'
+          title: Expected Attempt Id
+      additionalProperties: false
+      type: object
+      required:
+        - request_id
+        - expected_version
+        - expected_attempt_id
+      title: TaskAction
+    TaskCheckout:
+      properties:
+        branch:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Branch
+        ref:
+          type: string
+          maxLength: 255
+          title: Ref
+          default: ''
+        depth:
+          type: integer
+          maximum: 1000.0
+          minimum: 0.0
+          title: Depth
+          default: 0
+      additionalProperties: false
+      type: object
+      required:
+        - branch
+      title: TaskCheckout
+    TaskCreate:
+      properties:
+        request_id:
+          type: string
+          maxLength: 100
+          minLength: 1
+          title: Request Id
+        title:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Title
+        brief:
+          type: string
+          maxLength: 16384
+          minLength: 1
+          title: Brief
+        mode:
+          type: string
+          enum:
+            - code
+            - coordination
+          title: Mode
+        project_id:
+          anyOf:
+            - type: string
+              maxLength: 100
+              minLength: 1
+            - type: 'null'
+          title: Project Id
+        topic_id:
+          anyOf:
+            - type: string
+              maxLength: 100
+              minLength: 1
+            - type: 'null'
+          title: Topic Id
+        provider_profile_id:
+          anyOf:
+            - type: string
+              maxLength: 80
+              minLength: 1
+              pattern: ^[a-z][a-z0-9_-]*$
+            - type: 'null'
+          title: Provider Profile Id
+        checkout:
+          anyOf:
+            - $ref: '#/components/schemas/TaskCheckout'
+            - type: 'null'
+      additionalProperties: false
+      type: object
+      required:
+        - request_id
+        - title
+        - brief
+        - mode
+      title: TaskCreate
+    TaskReassign:
+      properties:
+        request_id:
+          type: string
+          maxLength: 100
+          minLength: 1
+          title: Request Id
+        expected_version:
+          type: integer
+          minimum: 1.0
+          title: Expected Version
+        expected_attempt_id:
+          anyOf:
+            - type: string
+              maxLength: 100
+              minLength: 1
+            - type: 'null'
+          title: Expected Attempt Id
+        target_profile_id:
+          type: string
+          maxLength: 80
+          minLength: 1
+          pattern: ^[a-z][a-z0-9_-]*$
+          title: Target Profile Id
+      additionalProperties: false
+      type: object
+      required:
+        - request_id
+        - expected_version
+        - expected_attempt_id
+        - target_profile_id
+      title: TaskReassign
+    ToolApproval:
+      properties:
+        id:
+          type: string
+          maxLength: 2048
+          minLength: 1
+          title: Id
+        approved:
+          type: boolean
+          title: Approved
+        rejection_reason:
+          anyOf:
+            - type: string
+              maxLength: 8192
+            - type: 'null'
+          title: Rejection Reason
+      additionalProperties: false
+      type: object
+      required:
+        - id
+        - approved
+      title: ToolApproval
+    ToolApprovalResponse:
+      properties:
+        type:
+          type: string
+          const: tool_approval_response
+          title: Type
+        approvals:
+          items:
+            $ref: '#/components/schemas/ToolApproval'
+          type: array
+          maxItems: 100
+          minItems: 1
+          title: Approvals
+        reviewed_context:
+          additionalProperties:
+            type: string
+            pattern: ^[0-9a-f]{64}$
+          propertyNames:
+            maxLength: 2048
+            minLength: 1
+          type: object
+          maxProperties: 100
+          title: Reviewed Context
+      additionalProperties: false
+      type: object
+      required:
+        - type
+        - approvals
+      title: ToolApprovalResponse
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+              - type: string
+              - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+        - loc
+        - msg
+        - type
+      title: ValidationError
+    WorkspaceDev:
+      properties:
+        ports:
+          items:
+            $ref: '#/components/schemas/WorkspacePort'
+          type: array
+          title: Ports
+          default: []
+        idle_timeout_minutes:
+          type: integer
+          maximum: 1440.0
+          minimum: 1.0
+          title: Idle Timeout Minutes
+          default: 30
+      additionalProperties: false
+      type: object
+      title: WorkspaceDev
+      description: 'Dev server settings: which ports the preview URL may reach, and when to idle out.'
+    WorkspaceEnvironment:
+      properties:
+        environment_id:
+          type: string
+          title: Environment Id
+        version_id:
+          type: string
+          title: Version Id
+        image:
+          type: string
+          maxLength: 512
+          pattern: ^[A-Za-z0-9][A-Za-z0-9./_:-]*@sha256:[a-f0-9]{64}$
+          title: Image
+        platform:
+          type: string
+          pattern: ^linux/(amd64|arm64)$
+          title: Platform
+        policy_identity:
+          type: string
+          maxLength: 256
+          minLength: 1
+          title: Policy Identity
+      additionalProperties: false
+      type: object
+      required:
+        - environment_id
+        - version_id
+        - image
+        - platform
+        - policy_identity
+      title: WorkspaceEnvironment
+    WorkspaceLifecycle:
+      properties:
+        workspace_id:
+          type: string
+          minLength: 1
+          title: Workspace Id
+        session_id:
+          type: string
+          minLength: 1
+          title: Session Id
+        publication_mode:
+          type: string
+          enum:
+            - read_only
+            - branch
+          title: Publication Mode
+          default: read_only
+        publication_reason:
+          anyOf:
+            - type: string
+              enum:
+                - default_branch
+                - protected_branch
+                - missing_metadata
+                - no_grant
+                - disabled
+            - type: 'null'
+          title: Publication Reason
+          default: disabled
+        observed_state:
+          $ref: '#/components/schemas/WorkspaceObservedState'
+        detail:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Detail
+        manifest:
+          $ref: '#/components/schemas/WorkspaceManifest'
+        last_activity_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Last Activity At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      additionalProperties: false
+      type: object
+      required:
+        - workspace_id
+        - session_id
+        - observed_state
+        - manifest
+        - updated_at
+      title: WorkspaceLifecycle
+      description: A workspace as last observed from kagent. Nothing here is stored except the manifest.
+    WorkspaceManifest:
+      properties:
+        repo_url:
+          type: string
+          maxLength: 2048
+          minLength: 1
+          title: Repo Url
+        ref:
+          type: string
+          maxLength: 255
+          title: Ref
+          default: ''
+        branch:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Branch
+        depth:
+          type: integer
+          maximum: 1000.0
+          minimum: 0.0
+          title: Depth
+          default: 0
+        agent_kind:
+          type: string
+          maxLength: 80
+          minLength: 1
+          pattern: ^[a-z][a-z0-9_-]*$
+          title: Agent Kind
+          default: claude
+        dev:
+          $ref: '#/components/schemas/WorkspaceDev'
+          default:
+            ports: []
+            idle_timeout_minutes: 30
+        development_environment:
+          anyOf:
+            - $ref: '#/components/schemas/WorkspaceEnvironment'
+            - type: 'null'
+      additionalProperties: false
+      type: object
+      required:
+        - repo_url
+        - branch
+      title: WorkspaceManifest
+      description:
+        "What kagent clones into the harness (``repo_url``/``ref``/``branch``/``depth``), which
+
+        agent runs there, and the dev server settings.
+
+
+        The repository fields are the Session's ``workspace``. They are stored once and resent
+
+        unchanged if the Session is replaced."
+    WorkspaceObservedState:
+      type: string
+      enum:
+        - running
+        - suspending
+        - suspended
+        - resuming
+        - failed
+        - unknown
+      title: WorkspaceObservedState
+    WorkspacePort:
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: ^[a-z][a-z0-9-]{0,31}$
+          title: Name
+        number:
+          type: integer
+          maximum: 65535.0
+          minimum: 1.0
+          title: Number
+      additionalProperties: false
+      type: object
+      required:
+        - name
+        - number
+      title: WorkspacePort
+# trunk-ignore-end(checkov/CKV_OPENAPI_21)
