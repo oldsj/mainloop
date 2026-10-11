@@ -1,9 +1,10 @@
 """Durable task contracts. Caller inputs never include runtime authority."""
 
+import hashlib
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import AwareDatetime, Field, model_validator
 
 from models.native_agent import ContractModel
 from models.provider import ProviderAgentRef, ProviderProfileId
@@ -260,6 +261,43 @@ class TaskEligibility(ContractModel):
         return self
 
 
+class TaskPRDescription(ContractModel):
+    """Bounded, untrusted GitHub text, tied to one validated PR observation."""
+
+    repository: Annotated[
+        str,
+        Field(
+            strict=True, max_length=200, pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        ),
+    ]
+    branch: Annotated[str, Field(strict=True, min_length=1, max_length=255)]
+    pr_number: Annotated[int, Field(strict=True, gt=0)]
+    attempt_id: Identifier
+    head_sha: Annotated[str, Field(strict=True, pattern=r"^[0-9a-f]{40}$")]
+    excerpt: Annotated[str, Field(strict=True, max_length=16384)]
+    byte_length: Annotated[int, Field(strict=True, ge=0)]
+    digest: Annotated[str, Field(strict=True, pattern=r"^[0-9a-f]{64}$")]
+    truncated: Annotated[bool, Field(strict=True)]
+    fetched_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def valid_description(self):
+        TaskCheckout(branch=self.branch)
+        if "\x00" in self.excerpt:
+            raise ValueError("PR description excerpt contains NUL")
+        encoded = self.excerpt.encode("utf-8")
+        if len(encoded) > 16384 or self.truncated != (self.byte_length > 16384):
+            raise ValueError("invalid PR description bound")
+        if not self.truncated and (
+            self.byte_length != len(encoded)
+            or self.digest != hashlib.sha256(encoded).hexdigest()
+        ):
+            raise ValueError("invalid PR description length/digest")
+        if self.truncated and not 16381 <= len(encoded) <= 16384:
+            raise ValueError("invalid UTF-8 PR description prefix")
+        return self
+
+
 class TaskProjection(ContractModel):
     # These facts are observations, never execution authority or approval receipts.
     agent_activity: str | None = None
@@ -271,6 +309,7 @@ class TaskProjection(ContractModel):
     pr_url: str | None = None
     pr_number: int | None = None
     pr_head_sha: str | None = None
+    pr_description: TaskPRDescription | None = None
     pr_state: Literal["open", "closed", "merged", "unknown"] = "unknown"
     ci_state: Literal["pending", "success", "failure", "unknown"] = "unknown"
     ci_head_sha: str | None = None
