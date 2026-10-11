@@ -2,9 +2,9 @@
 
 Sessions are native Claude Code or Codex work started from the home thread or the `/agents` page. Mainloop keeps the product session, workspace lifecycle, native binding, and message delivery as separate records.
 
-## Go server status (G6a)
+## Go server status (G6a, G6b)
 
-Status: **implemented** for the main session in `server/internal/sessions`; tests use a scratch PostgreSQL and the fake kagent. **Not measured** against a live kagent. The rest of this page describes the frozen Python backend until each slice lands.
+Status: **implemented** for the main session (G6a) and the session routes (G6b) in `server/internal/sessions`; tests use a scratch PostgreSQL and the fake kagent. **Not measured** against a live kagent. The rest of this page describes the frozen Python backend until each slice lands.
 
 - The main session is created by the reconciler (a periodic sweep) and by the first `POST /chat`, never by a GET. Concurrent first calls share one session.
 - Delivery states in the Go ledger: `recorded`, `sending`, `delivered`, `completed`, `failed`, `cancelled`, `uncertain`. `queued` arrives with the report queue. Only `recorded` is ever sent: the claimer commits `sending` before the kagent call, holds no database lock or transaction across it, and fences every outcome write on its lease and attempt count, so a claimer that lost its lease changes nothing.
@@ -13,7 +13,12 @@ Status: **implemented** for the main session in `server/internal/sessions`; test
 - The main session cannot be archived (a database trigger refuses it). At most one main binding exists in the whole database; the owner is a single user for now, so the index is global.
 - A task that finished while no process was watching is finalized from `GetTask` on restart. A task parked for input keeps the turn open.
 - Failure reasons are stored with best-effort redaction and a 300 character cut (see [chat](chat.md)).
-- Cancelling a turn (`CancelTask`) is not implemented yet: the kagent client has no cancel call.
+- Routes (G6b), all owner-only and all on the same ledger: `POST /sessions` (create), `GET /sessions` (the owner's sessions except the main thread, newest first), `GET /sessions/{id}`, `GET /sessions/{id}/conversation`, `GET /sessions/{id}/native`, `POST /sessions/{id}/message`, `POST /sessions/{id}/stop-turn`, `POST /sessions/{id}/cancel`, `POST /sessions/{id}/archive`. Another owner's session and an unknown id are both `404`. `needs_owner` is always false until the attention projection is ported; the task-backed (delegated) cancel path of the Python backend is not ported.
+- `POST /sessions/{id}/message` records the message and its delivery exactly like `POST /chat`, with one open turn per session: `409` while a delivery is `recorded`, `sending` or `delivered` or an `uncertain` one is inside its hold. It is also `409` for a cancelled or failed session, an archived one, one without a native binding, and a workspace whose Session does not exist yet.
+- Stop turn cancels the A2A task with `CancelTask` (the kagent client and `kagenttest` both have it). It serializes with sends on a per-session advisory lock. A delivery still `recorded` is cancelled without any kagent call. The task is cancelled outside any transaction; the delivery ends `cancelled`, the queue is held, and the partial reply and the stop note go into one message in one transaction (the note's id is derived from the delivery, so the delivery loop and the stop call settle the same turn once). Results: `stopped`, `finished` (the task had already ended, and its real outcome is recorded), `no_open_turn`. A task that is not visible yet or still running after the cancel is `409` and nothing changes; a kagent error is `502`. An `uncertain` delivery counts as open (the Python backend looked only at recorded, sending and delivered). The stop is not repeated blindly.
+- Cancel sets the sticky `cancelled` status first (a session that already finished is left as it is), closes the session's open deliveries and then cancels their tasks. The response carries the new `status` and `agent`: `stopped`, `not_running` (nothing had been sent), or `unknown` (kagent did not confirm; the agent may still be running and the cancel is not retried). The main thread cannot be cancelled (`409`). A cancelled or failed session takes no more messages.
+- Archive clears one finished session from the list. A live session must be cancelled first (`409`), and the main thread is never archived (`409`). For a workspace the archived Session is deleted by the workspace service.
+- `POST /sessions` creates a native session with its first prompt as a recorded delivery and answers with the session row; the first delivery creates the kagent Session.
 
 ## Session list
 

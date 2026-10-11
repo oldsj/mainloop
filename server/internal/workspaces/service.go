@@ -179,6 +179,9 @@ func (s *Service) insertOp(ctx context.Context, q *dbq.Queries, workspaceID stri
 	if errors.As(err, &pg) && pg.ConstraintName == "workspace_ops_open" {
 		return dbq.WorkspaceOp{}, errRaced
 	}
+	if errors.As(err, &pg) && pg.Code == "23503" && pg.ConstraintName == "workspace_ops_workspace_id_fkey" {
+		return dbq.WorkspaceOp{}, ErrNotFound // the workspace was deleted after it was looked up
+	}
 	if err != nil {
 		return dbq.WorkspaceOp{}, err
 	}
@@ -334,27 +337,54 @@ func (s *Service) Refresh(ctx context.Context, id string) (api.WorkspaceLifecycl
 	return s.lifecycle(ctx, w), nil
 }
 
-// WakeForPreview makes sure the workspace is running before preview traffic reaches it: a running
-// workspace is only touched, a suspended or suspending one is resumed through kagent and
-// the call returns once kagent confirms. Concurrent calls share one resume operation. A request
-// context that ends does not cancel the resume; the lifecycle loop finishes it. The preview
-// proxy (a later slice) calls this; it returns a *RejectedError for a workspace that cannot be
-// resumed and an *UnconfirmedError when kagent has not confirmed in time, so the caller can
-// retry.
-func (s *Service) WakeForPreview(ctx context.Context, workspaceID string) error {
-	w, err := s.lookup(ctx, workspaceID)
-	if err != nil {
-		return err
-	}
-	if w.KagentSessionID != nil {
-		if sess := s.observe(ctx, w.sessionID()); sess != nil {
-			if state, _ := stateOf(sess); state == api.WorkspaceObservedStateRunning {
-				return s.Touch(ctx, workspaceID)
+// wakeRounds bounds how often Wake starts over because another operation took the workspace
+// between its checks.
+const wakeRounds = 4
+
+// Wake makes sure the workspace is running before something talks to it (preview traffic, a
+// message for its session). A running workspace is only touched. One that is being suspended is
+// waited for, and then resumed; a suspended one is resumed through kagent and the call returns
+// once kagent confirms. Concurrent calls share one resume operation. A caller whose context ends
+// does not cancel the resume; the lifecycle loop finishes it. It returns a *RejectedError for a
+// workspace that cannot be resumed and an *UnconfirmedError when kagent has not confirmed in time,
+// so the caller can retry.
+func (s *Service) Wake(ctx context.Context, workspaceID string) error {
+	for range wakeRounds {
+		w, err := s.lookup(ctx, workspaceID)
+		if err != nil {
+			return err
+		}
+		open, err := dbq.New(s.Pool).GetOpenWorkspaceOp(ctx, workspaceID)
+		switch {
+		case err == nil && open.Kind == dbstate.OpDelete:
+			return &RejectedError{Detail: "The workspace is being deleted"}
+		case err == nil && open.Kind == dbstate.OpSuspend:
+			// A suspend that started before the message is let finish; then the workspace is resumed.
+			// One that starts after the message was recorded finds the open turn and stands down.
+			if _, err := s.await(ctx, open); err != nil {
+				return err
+			}
+			continue
+		case err != nil && !errors.Is(err, pgx.ErrNoRows):
+			return err
+		}
+		if w.KagentSessionID != nil {
+			if sess := s.observe(ctx, w.sessionID()); sess != nil {
+				if state, _ := stateOf(sess); state == api.WorkspaceObservedStateRunning {
+					return s.Touch(ctx, workspaceID)
+				}
 			}
 		}
+		if _, err := s.change(ctx, workspaceID, dbstate.OpResume); !errors.Is(err, ErrBusy) {
+			return err
+		}
 	}
-	_, err = s.change(ctx, workspaceID, dbstate.OpResume)
-	return err
+	return ErrBusy
+}
+
+// WakeForPreview is Wake for the preview proxy (a later slice).
+func (s *Service) WakeForPreview(ctx context.Context, workspaceID string) error {
+	return s.Wake(ctx, workspaceID)
 }
 
 // Touch records owner activity (preview traffic), which defers the idle suspend.
@@ -431,15 +461,18 @@ func (s *Service) Create(ctx context.Context, body api.CreateWorkspaceRequest) (
 func (s *Service) dropRejected(ctx context.Context, id string, create dbq.WorkspaceOp) error {
 	return events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
 		q := dbq.New(tx)
+		// An operation insert needs a share lock on this row for its foreign key, so it waits here.
+		// Lock first, then read, so what is read is what is decided on.
+		if _, err := q.LockWorkspace(ctx, id); errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		} else if err != nil {
+			return nil, err
+		}
 		row, err := q.GetWorkspaceForOp(ctx, id)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		if err != nil {
-			return nil, err
-		}
-		// An operation insert needs a share lock on this row for its foreign key, so it waits here.
-		if _, err := tx.Exec(ctx, `SELECT 1 FROM workspaces WHERE id = $1 FOR UPDATE`, id); err != nil {
 			return nil, err
 		}
 		latest, err := q.GetLatestCreateOp(ctx, id)

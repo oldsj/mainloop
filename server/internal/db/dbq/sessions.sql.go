@@ -7,10 +7,24 @@ package dbq
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
+
+const archiveFinishedSession = `-- name: ArchiveFinishedSession :execrows
+UPDATE sessions SET archived_at = coalesce(archived_at, now())
+WHERE id = $1 AND status IN ('completed', 'failed', 'cancelled')
+`
+
+func (q *Queries) ArchiveFinishedSession(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, archiveFinishedSession, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
 
 const bumpBindingTurns = `-- name: BumpBindingTurns :exec
 UPDATE agent_bindings SET turns = turns + 1, updated_at = now() WHERE session_id = $1
@@ -19,6 +33,60 @@ UPDATE agent_bindings SET turns = turns + 1, updated_at = now() WHERE session_id
 func (q *Queries) BumpBindingTurns(ctx context.Context, sessionID string) error {
 	_, err := q.db.Exec(ctx, bumpBindingTurns, sessionID)
 	return err
+}
+
+const countSessions = `-- name: CountSessions :one
+SELECT count(*) FROM sessions WHERE user_id = $1
+`
+
+func (q *Queries) CountSessions(ctx context.Context, userID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countSessions, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const endDelivery = `-- name: EndDelivery :one
+WITH old AS (
+    SELECT id, state FROM deliveries
+    WHERE deliveries.id = $5 AND deliveries.state = ANY($6::text[])
+    FOR UPDATE
+)
+UPDATE deliveries d
+SET state = $1, detail = $2,
+    task_id = coalesce($3, d.task_id),
+    evidence_ref = coalesce($4, d.evidence_ref),
+    lease_owner = NULL, lease_until = NULL, updated_at = now()
+FROM old
+WHERE d.id = old.id
+RETURNING old.state::text AS previous_state
+`
+
+type EndDeliveryParams struct {
+	State       dbstate.DeliveryState
+	Detail      *string
+	TaskID      *string
+	EvidenceRef *string
+	ID          string
+	FromStates  []string
+}
+
+// Ends a delivery from outside its claim (a stop, a cancel) and releases the claim, so a loop that
+// still holds it finds its next write matching nothing. Only from the given states (the ones the
+// caller observed), so the loser of a race with the loop changes nothing (no rows). Returns the
+// state the delivery was in, which says whether a send could have reached kagent.
+func (q *Queries) EndDelivery(ctx context.Context, arg EndDeliveryParams) (string, error) {
+	row := q.db.QueryRow(ctx, endDelivery,
+		arg.State,
+		arg.Detail,
+		arg.TaskID,
+		arg.EvidenceRef,
+		arg.ID,
+		arg.FromStates,
+	)
+	var previous_state string
+	err := row.Scan(&previous_state)
+	return previous_state, err
 }
 
 const finishDelivery = `-- name: FinishDelivery :execrows
@@ -119,7 +187,7 @@ func (q *Queries) GetConversationSummary(ctx context.Context, arg GetConversatio
 }
 
 const getDelivery = `-- name: GetDelivery :one
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE id = $1
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE id = $1
 `
 
 func (q *Queries) GetDelivery(ctx context.Context, id string) (Delivery, error) {
@@ -134,6 +202,7 @@ func (q *Queries) GetDelivery(ctx context.Context, id string) (Delivery, error) 
 		&i.TaskID,
 		&i.EvidenceRef,
 		&i.Detail,
+		&i.KagentSessionID,
 		&i.Attempts,
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
@@ -144,29 +213,54 @@ func (q *Queries) GetDelivery(ctx context.Context, id string) (Delivery, error) 
 	return i, err
 }
 
+const getDeliveryActivity = `-- name: GetDeliveryActivity :one
+SELECT coalesce(max(updated_at), 'epoch'::timestamptz)::timestamptz AS activity
+FROM deliveries WHERE session_id = $1
+`
+
+// The newest update of any delivery of the session, or the epoch when it has none.
+func (q *Queries) GetDeliveryActivity(ctx context.Context, sessionID string) (time.Time, error) {
+	row := q.db.QueryRow(ctx, getDeliveryActivity, sessionID)
+	var activity time.Time
+	err := row.Scan(&activity)
+	return activity, err
+}
+
 const getDeliveryContext = `-- name: GetDeliveryContext :one
 SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.updated_at,
-       b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id, s.user_id,
+       d.kagent_session_id AS sent_kagent_session_id,
+       b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id,
+       b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role, s.user_id, s.title AS session_title,
+       w.id AS workspace_id, w.agent_namespace AS workspace_agent_namespace,
+       w.agent_name AS workspace_agent_name,
        (SELECT m.content FROM session_messages m WHERE m.id = d.id) AS content
 FROM deliveries d
 JOIN sessions s ON s.id = d.session_id
 LEFT JOIN agent_bindings b ON b.session_id = d.session_id
+LEFT JOIN workspaces w ON w.id = d.session_id
 WHERE d.id = $1
 `
 
 type GetDeliveryContextRow struct {
-	ID               string
-	SessionID        string
-	State            dbstate.DeliveryState
-	TaskID           *string
-	EvidenceRef      *string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	BindingSessionID *string
-	KagentSessionID  *string
-	KagentRequestID  *string
-	UserID           string
-	Content          string
+	ID                      string
+	SessionID               string
+	State                   dbstate.DeliveryState
+	TaskID                  *string
+	EvidenceRef             *string
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
+	SentKagentSessionID     *string
+	BindingSessionID        *string
+	KagentSessionID         *string
+	KagentRequestID         *string
+	BindingKind             *string
+	BindingRole             string
+	UserID                  string
+	SessionTitle            string
+	WorkspaceID             *string
+	WorkspaceAgentNamespace *string
+	WorkspaceAgentName      *string
+	Content                 string
 }
 
 // What a handler needs about the delivery's session. The binding is a LEFT JOIN so a delivery
@@ -182,10 +276,17 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 		&i.EvidenceRef,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SentKagentSessionID,
 		&i.BindingSessionID,
 		&i.KagentSessionID,
 		&i.KagentRequestID,
+		&i.BindingKind,
+		&i.BindingRole,
 		&i.UserID,
+		&i.SessionTitle,
+		&i.WorkspaceID,
+		&i.WorkspaceAgentNamespace,
+		&i.WorkspaceAgentName,
 		&i.Content,
 	)
 	return i, err
@@ -258,9 +359,11 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 }
 
 const getOwnedSessionBinding = `-- name: GetOwnedSessionBinding :one
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, s.user_id, s.title, s.status AS session_status
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, s.user_id, s.title, s.status AS session_status, s.archived_at,
+       w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
+LEFT JOIN workspaces w ON w.id = b.session_id
 WHERE s.id = $1 AND s.user_id = $2
 `
 
@@ -270,28 +373,33 @@ type GetOwnedSessionBindingParams struct {
 }
 
 type GetOwnedSessionBindingRow struct {
-	SessionID         string
-	Kind              string
-	Role              dbstate.BindingRole
-	MCPGrantKind      dbstate.MCPGrantKind
-	ParentSessionID   *string
-	TopicID           *string
-	KagentSessionID   *string
-	KagentRequestID   *string
-	Model             *string
-	StandingHash      *string
-	Turns             int32
-	QueueHeld         bool
-	ChildStartFailure *string
-	ReportedAt        *time.Time
-	KagentDeletedAt   *time.Time
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	UserID            string
-	Title             string
-	SessionStatus     dbstate.SessionStatus
+	SessionID               string
+	Kind                    string
+	Role                    dbstate.BindingRole
+	MCPGrantKind            dbstate.MCPGrantKind
+	ParentSessionID         *string
+	TopicID                 *string
+	KagentSessionID         *string
+	KagentRequestID         *string
+	Model                   *string
+	StandingHash            *string
+	Turns                   int32
+	QueueHeld               bool
+	ChildStartFailure       *string
+	ReportedAt              *time.Time
+	KagentDeletedAt         *time.Time
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
+	UserID                  string
+	Title                   string
+	SessionStatus           dbstate.SessionStatus
+	ArchivedAt              *time.Time
+	WorkspaceAgentNamespace *string
+	WorkspaceAgentName      *string
 }
 
+// A session's binding, with the Agent its workspace was created on (NULL for a session that has no
+// workspace).
 func (q *Queries) GetOwnedSessionBinding(ctx context.Context, arg GetOwnedSessionBindingParams) (GetOwnedSessionBindingRow, error) {
 	row := q.db.QueryRow(ctx, getOwnedSessionBinding, arg.ID, arg.UserID)
 	var i GetOwnedSessionBindingRow
@@ -316,6 +424,80 @@ func (q *Queries) GetOwnedSessionBinding(ctx context.Context, arg GetOwnedSessio
 		&i.UserID,
 		&i.Title,
 		&i.SessionStatus,
+		&i.ArchivedAt,
+		&i.WorkspaceAgentNamespace,
+		&i.WorkspaceAgentName,
+	)
+	return i, err
+}
+
+const getSessionRow = `-- name: GetSessionRow :one
+SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
+FROM sessions s
+LEFT JOIN agent_bindings b ON b.session_id = s.id
+LEFT JOIN topics t ON t.id = b.topic_id
+WHERE s.id = $1 AND s.user_id = $2
+`
+
+type GetSessionRowParams struct {
+	ID     string
+	UserID string
+}
+
+type GetSessionRowRow struct {
+	ID              string
+	UserID          string
+	ProjectID       *string
+	Title           string
+	Description     string
+	Prompt          string
+	Status          dbstate.SessionStatus
+	RepoURL         *string
+	BranchName      *string
+	BaseBranch      string
+	Model           *string
+	CommitSha       *string
+	Summary         *string
+	Error           *string
+	Color           *string
+	Result          json.RawMessage
+	CreatedAt       time.Time
+	StartedAt       *time.Time
+	CompletedAt     *time.Time
+	ArchivedAt      *time.Time
+	AgentKind       *string
+	ParentSessionID *string
+	Topic           *string
+}
+
+// A session with what its binding says about it. The owner filter is part of the key.
+func (q *Queries) GetSessionRow(ctx context.Context, arg GetSessionRowParams) (GetSessionRowRow, error) {
+	row := q.db.QueryRow(ctx, getSessionRow, arg.ID, arg.UserID)
+	var i GetSessionRowRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ProjectID,
+		&i.Title,
+		&i.Description,
+		&i.Prompt,
+		&i.Status,
+		&i.RepoURL,
+		&i.BranchName,
+		&i.BaseBranch,
+		&i.Model,
+		&i.CommitSha,
+		&i.Summary,
+		&i.Error,
+		&i.Color,
+		&i.Result,
+		&i.CreatedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.ArchivedAt,
+		&i.AgentKind,
+		&i.ParentSessionID,
+		&i.Topic,
 	)
 	return i, err
 }
@@ -335,7 +517,7 @@ const insertDelivery = `-- name: InsertDelivery :one
 INSERT INTO deliveries (id, idempotency_key, session_id, source)
 VALUES ($1, $1, $2, $3)
 ON CONFLICT (id) DO NOTHING
-RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at
+RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at
 `
 
 type InsertDeliveryParams struct {
@@ -356,6 +538,7 @@ func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) 
 		&i.TaskID,
 		&i.EvidenceRef,
 		&i.Detail,
+		&i.KagentSessionID,
 		&i.Attempts,
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
@@ -392,8 +575,51 @@ func (q *Queries) InsertSessionMessage(ctx context.Context, arg InsertSessionMes
 	return result.RowsAffected(), nil
 }
 
+const listOpenDeliveries = `-- name: ListOpenDeliveries :many
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries
+WHERE session_id = $1 AND state IN ('recorded', 'sending', 'delivered', 'uncertain')
+ORDER BY created_at, id
+`
+
+// The deliveries a stop or a cancel works on: open, or uncertain (a task may be running).
+func (q *Queries) ListOpenDeliveries(ctx context.Context, sessionID string) ([]Delivery, error) {
+	rows, err := q.db.Query(ctx, listOpenDeliveries, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Delivery{}
+	for rows.Next() {
+		var i Delivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.IdempotencyKey,
+			&i.SessionID,
+			&i.State,
+			&i.Source,
+			&i.TaskID,
+			&i.EvidenceRef,
+			&i.Detail,
+			&i.KagentSessionID,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.LeaseOwner,
+			&i.LeaseUntil,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSessionDeliveries = `-- name: ListSessionDeliveries :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2
 `
 
 type ListSessionDeliveriesParams struct {
@@ -419,6 +645,7 @@ func (q *Queries) ListSessionDeliveries(ctx context.Context, arg ListSessionDeli
 			&i.TaskID,
 			&i.EvidenceRef,
 			&i.Detail,
+			&i.KagentSessionID,
 			&i.Attempts,
 			&i.NextAttemptAt,
 			&i.LeaseOwner,
@@ -455,6 +682,101 @@ func (q *Queries) ListSessionMessages(ctx context.Context, sessionID string) ([]
 			&i.Role,
 			&i.Content,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSessionRows = `-- name: ListSessionRows :many
+SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
+FROM sessions s
+LEFT JOIN agent_bindings b ON b.session_id = s.id
+LEFT JOIN topics t ON t.id = b.topic_id
+WHERE s.user_id = $1 AND s.archived_at IS NULL AND b.role IS DISTINCT FROM 'main'
+  AND ($2::text IS NULL OR s.status = $2::text)
+  AND (s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+       OR s.id IN (
+           SELECT h.id FROM sessions h
+           LEFT JOIN agent_bindings hb ON hb.session_id = h.id
+           WHERE h.user_id = $1 AND h.archived_at IS NULL AND hb.role IS DISTINCT FROM 'main'
+             AND h.status IN ('completed', 'failed', 'cancelled', 'superseded')
+           ORDER BY h.created_at DESC, h.id LIMIT 100))
+ORDER BY s.created_at DESC, s.id
+`
+
+type ListSessionRowsParams struct {
+	UserID string
+	Status *string
+}
+
+type ListSessionRowsRow struct {
+	ID              string
+	UserID          string
+	ProjectID       *string
+	Title           string
+	Description     string
+	Prompt          string
+	Status          dbstate.SessionStatus
+	RepoURL         *string
+	BranchName      *string
+	BaseBranch      string
+	Model           *string
+	CommitSha       *string
+	Summary         *string
+	Error           *string
+	Color           *string
+	Result          json.RawMessage
+	CreatedAt       time.Time
+	StartedAt       *time.Time
+	CompletedAt     *time.Time
+	ArchivedAt      *time.Time
+	AgentKind       *string
+	ParentSessionID *string
+	Topic           *string
+}
+
+// The owner's unarchived sessions other than the main thread, newest first: every session that is
+// not history, plus the newest 100 history records (completed, failed, cancelled, superseded).
+// Optionally of one status.
+func (q *Queries) ListSessionRows(ctx context.Context, arg ListSessionRowsParams) ([]ListSessionRowsRow, error) {
+	rows, err := q.db.Query(ctx, listSessionRows, arg.UserID, arg.Status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSessionRowsRow{}
+	for rows.Next() {
+		var i ListSessionRowsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.ProjectID,
+			&i.Title,
+			&i.Description,
+			&i.Prompt,
+			&i.Status,
+			&i.RepoURL,
+			&i.BranchName,
+			&i.BaseBranch,
+			&i.Model,
+			&i.CommitSha,
+			&i.Summary,
+			&i.Error,
+			&i.Color,
+			&i.Result,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.ArchivedAt,
+			&i.AgentKind,
+			&i.ParentSessionID,
+			&i.Topic,
 		); err != nil {
 			return nil, err
 		}
@@ -531,18 +853,27 @@ func (q *Queries) MarkDeliveryDelivered(ctx context.Context, arg MarkDeliveryDel
 
 const markDeliverySending = `-- name: MarkDeliverySending :execrows
 UPDATE deliveries
-SET state = 'sending', detail = NULL, updated_at = now()
-WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state = 'recorded'
+SET state = 'sending', detail = NULL, kagent_session_id = $1,
+    updated_at = now()
+WHERE id = $2 AND lease_owner = $3 AND attempts = $4
+  AND state = 'recorded'
 `
 
 type MarkDeliverySendingParams struct {
-	ID         string
-	LeaseOwner *string
-	Attempts   int32
+	KagentSessionID *string
+	ID              string
+	LeaseOwner      *string
+	Attempts        int32
 }
 
+// Also stores the kagent Session the message is about to be sent to.
 func (q *Queries) MarkDeliverySending(ctx context.Context, arg MarkDeliverySendingParams) (int64, error) {
-	result, err := q.db.Exec(ctx, markDeliverySending, arg.ID, arg.LeaseOwner, arg.Attempts)
+	result, err := q.db.Exec(ctx, markDeliverySending,
+		arg.KagentSessionID,
+		arg.ID,
+		arg.LeaseOwner,
+		arg.Attempts,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -564,6 +895,35 @@ type MarkDeliveryUncertainParams struct {
 
 func (q *Queries) MarkDeliveryUncertain(ctx context.Context, arg MarkDeliveryUncertainParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markDeliveryUncertain,
+		arg.ID,
+		arg.LeaseOwner,
+		arg.Attempts,
+		arg.Detail,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const noteHoldPassed = `-- name: NoteHoldPassed :execrows
+UPDATE deliveries
+SET detail = $4
+WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state = 'uncertain'
+  AND detail IS DISTINCT FROM $4
+`
+
+type NoteHoldPassedParams struct {
+	ID         string
+	LeaseOwner *string
+	Attempts   int32
+	Detail     *string
+}
+
+// Records, once, that an uncertain delivery's hold is over. updated_at stays: the hold is counted
+// from it. Zero rows when the note is already there, so the caller announces it once.
+func (q *Queries) NoteHoldPassed(ctx context.Context, arg NoteHoldPassedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, noteHoldPassed,
 		arg.ID,
 		arg.LeaseOwner,
 		arg.Attempts,
@@ -660,4 +1020,20 @@ func (q *Queries) SetDeliveryKagentSession(ctx context.Context, arg SetDeliveryK
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setSessionCancelled = `-- name: SetSessionCancelled :one
+UPDATE sessions
+SET status = 'cancelled', completed_at = coalesce(completed_at, now())
+WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')
+RETURNING id
+`
+
+// The cancelled status is final (RefreshSessionStatus leaves it alone). Nothing changes once the
+// session is finished.
+func (q *Queries) SetSessionCancelled(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, setSessionCancelled, id)
+	var id_2 string
+	err := row.Scan(&id_2)
+	return id_2, err
 }

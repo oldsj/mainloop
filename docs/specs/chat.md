@@ -2,7 +2,7 @@
 
 The home chat is the user's native Claude Code main session, run by a kagent Agent. The provider owns native session history and tools; Mainloop records logical messages and delivery state.
 
-## Go server status (G6a)
+## Go server status (G6a, G6b)
 
 Status: **implemented** in `server/internal/sessions`, proven by tests against a scratch PostgreSQL and the fake kagent (`kagenttest`). **Not measured** against a live kagent. The sections below describe the frozen Python backend until the cutover; where they differ, this section is the Go behavior.
 
@@ -12,7 +12,8 @@ Status: **implemented** in `server/internal/sessions`, proven by tests against a
 - Every transaction that settles a delivery (`completed`, `failed`, `cancelled`, including "not sent again" after the uncertain hold) publishes `session:message` last in that transaction, so the page re-reads the session whichever way the turn ended. `message_id` is the mirrored reply, or the user message when nothing was mirrored.
 - `GET /main-thread` lists the newest 20 deliveries, oldest first. `turn_in_flight` is true only while a delivery blocks a send, by the rule `POST /chat` applies: an open one, or an uncertain one inside the hold. Inside the hold the note says new messages wait; once the hold has passed and the loop has not yet settled the row, it says the message was not sent again.
 - `GET /main-thread` and `GET /conversations/{id}` only read. Before the reconciler has created the main session (it runs a sweep every `SESSION_ENSURE_SECONDS`), `GET /main-thread` answers with `session_id`, `conversation_id` and `native` null. The conversation has no summary (`summary` and `summarized_through_id` are null). `session_state` is read from kagent best effort; if kagent is down the note says so.
-- `queued` deliveries and stop turn are not part of this slice (see [sessions](sessions.md)).
+- Stop turn (G6b) is implemented for the main thread and every other session: see [sessions](sessions.md). `queued` deliveries (the report queue) are not part of the Go server yet.
+- A delivery that stays `uncertain` while its hold passes and kagent lookups keep failing publishes `session:message` once when the hold passes, so the page shows the "not sent again" note without waiting for a lookup to succeed.
 
 ## Sending messages
 

@@ -49,20 +49,21 @@ type Credential struct {
 }
 
 type Delivery struct {
-	ID             string
-	IdempotencyKey string
-	SessionID      string
-	State          dbstate.DeliveryState
-	Source         string
-	TaskID         *string
-	EvidenceRef    *string
-	Detail         *string
-	Attempts       int32
-	NextAttemptAt  time.Time
-	LeaseOwner     *string
-	LeaseUntil     *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID              string
+	IdempotencyKey  string
+	SessionID       string
+	State           dbstate.DeliveryState
+	Source          string
+	TaskID          *string
+	EvidenceRef     *string
+	Detail          *string
+	KagentSessionID *string
+	Attempts        int32
+	NextAttemptAt   time.Time
+	LeaseOwner      *string
+	LeaseUntil      *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type DevEnvironment struct {

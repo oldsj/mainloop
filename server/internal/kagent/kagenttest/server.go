@@ -116,6 +116,8 @@ type Server struct {
 	TamperSession func(proc string, s *api.Session)
 	TamperReceipt func(*api.WorkspacePreparationReceipt)
 	TamperAgent   func(*api.Agent)
+	// TamperTask edits the task a CancelTask reply carries, without changing the stored task.
+	TamperTask func(proc string, t *a2a.Task)
 }
 
 // New starts a fake kagent. Close it with Close.
@@ -287,7 +289,12 @@ func (s *Server) createSession(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if id, ok := s.byReq[m.GetRequestId()]; ok && m.GetRequestId() != "" {
-		prev := s.sessions[id]
+		prev, live := s.sessions[id]
+		if !live {
+			// kagent keeps the request id of a deleted Session and refuses to reuse it.
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("request_id %q belongs to a deleted Session", m.GetRequestId()))
+		}
 		if !sameContract(prev, m) {
 			return nil, connect.NewError(connect.CodeAlreadyExists,
 				fmt.Errorf("request id %q was used for a different session", m.GetRequestId()))
@@ -487,6 +494,18 @@ func (s *Server) a2a(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeEnvelope(w, call.ID, task, nil)
+	case "CancelTask":
+		var p a2a.CancelTaskRequest
+		_ = json.Unmarshal(call.Params, &p)
+		task, ok := s.cancelTask(p.ID)
+		if !ok {
+			writeEnvelope(w, call.ID, nil, taskNotFound())
+			return
+		}
+		if s.TamperTask != nil {
+			s.TamperTask("CancelTask", task)
+		}
+		writeEnvelope(w, call.ID, task, nil)
 	case "ListTasks":
 		var p a2a.ListTasksRequest
 		_ = json.Unmarshal(call.Params, &p)
@@ -510,6 +529,27 @@ func (s *Server) task(id a2a.TaskID) (*a2a.Task, bool) {
 	cp := *t
 	return &cp, true
 }
+
+// cancelTask ends a task that has not ended, as kagent does; an ended task is returned unchanged.
+func (s *Server) cancelTask(id a2a.TaskID) (*a2a.Task, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[id]
+	if !ok {
+		return nil, false
+	}
+	if !t.Status.State.Terminal() {
+		cp := *t
+		cp.Status = a2a.TaskStatus{State: a2a.TaskStateCanceled}
+		s.tasks[id] = &cp
+		t = &cp
+	}
+	cp := *t
+	return &cp, true
+}
+
+// Task returns the stored task, for assertions.
+func (s *Server) Task(id a2a.TaskID) (*a2a.Task, bool) { return s.task(id) }
 
 func (s *Server) listTasks(p a2a.ListTasksRequest) *a2a.ListTasksResponse {
 	s.mu.Lock()

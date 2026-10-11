@@ -39,6 +39,10 @@ CREATE TABLE deliveries (
     task_id text,
     evidence_ref text,
     detail text,
+    -- The kagent Session (A2A contextId) the message was sent to, stored when the row moves to
+    -- sending so a later lookup asks the Session the message went to, not whatever the binding
+    -- names by then.
+    kagent_session_id text,
     attempts integer NOT NULL DEFAULT 0,
     next_attempt_at timestamptz NOT NULL DEFAULT now(),
     lease_owner text,

@@ -70,7 +70,9 @@ built; nothing here has been measured against a live kagent.
   delivery activity, and no open delivery. A Session kagent no longer has, or that is failed or
   being deleted, rejects the idle suspend and marks the workspace as handled until it is used
   again, so it is not queued every pass; a Session that is mid-change is looked at again shortly.
-  The sweep is not registered while the delivery ledger is missing (see below), and the server
+  With the delivery ledger wired (G6b) a workspace with a `recorded`, `sending` or `delivered`
+  delivery, or an `uncertain` one inside its hold, is never picked, and a delivery that finished
+  recently counts as activity. The sweep is not registered when no ledger is set, and the server
   logs once that idle suspend is off.
 - Orphan sweep: a Session in kagent that was created for `KAGENT_USER_ID`, belongs to one of the
   configured provider profiles' Agents or to an Agent recorded on a workspace row, is not deleted, is at least `WORKSPACE_ORPHAN_MIN_AGE_SECONDS`
@@ -86,8 +88,15 @@ built; nothing here has been measured against a live kagent.
   one instance's sweep deletes the other's Sessions.
 - Every state change publishes `workspace:updated` in the same transaction as the change. The
   event carries the workspace lifecycle; it is not a removal notice.
-- `WakeForPreview(workspaceID)` and `Touch(workspaceID)` are the entry points the preview proxy
-  calls: a running workspace is only touched; otherwise a resume operation is queued once for
+- `Wake(workspaceID)` is what a message to a workspace session calls before it is sent. It waits
+  for an open suspend to finish (up to `WORKSPACE_OPERATION_WAIT_SECONDS`, over at most four
+  rounds), then resumes the workspace if it is not running, so the message finds a running Session
+  and is sent once. A workspace with an open delete is refused, one that is gone is not found, and
+  one kagent has not confirmed in time or that stays busy is an error the delivery loop retries
+  without sending. The sender commits its delivery first: an open delivery makes a suspend that
+  has not yet reached kagent stand down, and one already in flight is waited for.
+- `WakeForPreview(workspaceID)` delegates to `Wake`. It and `Touch(workspaceID)` are the entry
+  points the preview proxy calls: a running workspace is only touched; otherwise a resume operation is queued once for
   any number of concurrent callers, and the call returns when the Session is ready or fails with
   `502`/`409`.
 - Preview URLs are `<port>--<workspace>--preview.<host>` built from `SUBSTRATE_PREVIEW_BASE_URL`, ports sorted
@@ -100,10 +109,6 @@ built; nothing here has been measured against a live kagent.
 
 - The git gate (SHA resolution, credentials, publication) and the
   per-workspace MCP grant. `publication_mode` is `read_only` with reason `disabled` until they land.
-- The delivery ledger (G6a). Open-turn and delivery-activity checks go through an optional
-  `Deliveries` interface that is unset until then. Interim: with it unset the idle-suspend sweep is
-  not registered, so nothing is suspended for being idle (explicit suspends and archived deletes
-  still work, but their open-delivery guards see nothing). This ends when the ledger is wired.
 
 ## Lifecycle
 

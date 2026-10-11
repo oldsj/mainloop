@@ -153,6 +153,10 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 	deps.Preview = previews
+	// Sends wake a suspended workspace through the workspace service, and idle suspend reads the
+	// delivery ledger: no turn is interrupted, and a delivery counts as activity.
+	svc.Providers, svc.Waker = wsSvc.Providers, wsSvc
+	wsSvc.Deliveries = svc
 	handler, err := app.New(deps).Handler()
 	if err != nil {
 		return err

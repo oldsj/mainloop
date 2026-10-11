@@ -164,8 +164,12 @@ func TestAStoppedTurnPublishes(t *testing.T) {
 	e.run()
 	id := e.send("hi")
 	e.waitState(id, dbstate.DeliveryCancelled)
-	if evs := e.sessionEvents(); len(evs) != 1 || evs[0].MessageId != id {
-		t.Fatalf("events %+v", evs)
+	// The event names the stop note, the assistant message the turn ended with.
+	evs := e.sessionEvents()
+	msgs := e.messages()
+	last := msgs[len(msgs)-1]
+	if len(evs) != 1 || evs[0].MessageId != last.ID || !strings.Contains(last.Content, sessions.TurnStoppedNote) {
+		t.Fatalf("events %+v, last message %+v", evs, last)
 	}
 }
 

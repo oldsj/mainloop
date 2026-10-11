@@ -13,9 +13,13 @@ ORDER BY b.created_at
 LIMIT 1;
 
 -- name: GetOwnedSessionBinding :one
-SELECT b.*, s.user_id, s.title, s.status AS session_status
+-- A session's binding, with the Agent its workspace was created on (NULL for a session that has no
+-- workspace).
+SELECT b.*, s.user_id, s.title, s.status AS session_status, s.archived_at,
+       w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
+LEFT JOIN workspaces w ON w.id = b.session_id
 WHERE s.id = $1 AND s.user_id = $2;
 
 -- name: GetTopicName :one
@@ -69,11 +73,16 @@ LIMIT 1;
 -- whose binding is gone still loads, and the handler can fail it instead of retrying for ever.
 -- name: GetDeliveryContext :one
 SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.updated_at,
-       b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id, s.user_id,
+       d.kagent_session_id AS sent_kagent_session_id,
+       b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id,
+       b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role, s.user_id, s.title AS session_title,
+       w.id AS workspace_id, w.agent_namespace AS workspace_agent_namespace,
+       w.agent_name AS workspace_agent_name,
        (SELECT m.content FROM session_messages m WHERE m.id = d.id) AS content
 FROM deliveries d
 JOIN sessions s ON s.id = d.session_id
 LEFT JOIN agent_bindings b ON b.session_id = d.session_id
+LEFT JOIN workspaces w ON w.id = d.session_id
 WHERE d.id = $1;
 
 -- Stores the kagent Session the create returned. Fenced on the delivery's claim and on the
@@ -101,9 +110,12 @@ WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attemp
   AND b.kagent_request_id IS NOT DISTINCT FROM sqlc.narg(old_request_id)::text;
 
 -- name: MarkDeliverySending :execrows
+-- Also stores the kagent Session the message is about to be sent to.
 UPDATE deliveries
-SET state = 'sending', detail = NULL, updated_at = now()
-WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state = 'recorded';
+SET state = 'sending', detail = NULL, kagent_session_id = sqlc.arg(kagent_session_id),
+    updated_at = now()
+WHERE id = sqlc.arg(id) AND lease_owner = sqlc.arg(lease_owner) AND attempts = sqlc.arg(attempts)
+  AND state = 'recorded';
 
 -- name: MarkDeliveryDelivered :execrows
 UPDATE deliveries
@@ -114,6 +126,14 @@ WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state IN ('sending', 'u
 UPDATE deliveries
 SET state = 'uncertain', detail = $4, updated_at = now()
 WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state IN ('recorded', 'sending', 'delivered', 'uncertain');
+
+-- name: NoteHoldPassed :execrows
+-- Records, once, that an uncertain delivery's hold is over. updated_at stays: the hold is counted
+-- from it. Zero rows when the note is already there, so the caller announces it once.
+UPDATE deliveries
+SET detail = $4
+WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state = 'uncertain'
+  AND detail IS DISTINCT FROM $4;
 
 -- name: FinishDelivery :execrows
 UPDATE deliveries
@@ -133,3 +153,75 @@ WHERE sessions.id = $1 AND sessions.status IN ('pending', 'active', 'idle');
 
 -- name: BumpBindingTurns :exec
 UPDATE agent_bindings SET turns = turns + 1, updated_at = now() WHERE session_id = $1;
+
+-- name: GetDeliveryActivity :one
+-- The newest update of any delivery of the session, or the epoch when it has none.
+SELECT coalesce(max(updated_at), 'epoch'::timestamptz)::timestamptz AS activity
+FROM deliveries WHERE session_id = $1;
+
+-- name: EndDelivery :one
+-- Ends a delivery from outside its claim (a stop, a cancel) and releases the claim, so a loop that
+-- still holds it finds its next write matching nothing. Only from the given states (the ones the
+-- caller observed), so the loser of a race with the loop changes nothing (no rows). Returns the
+-- state the delivery was in, which says whether a send could have reached kagent.
+WITH old AS (
+    SELECT id, state FROM deliveries
+    WHERE deliveries.id = sqlc.arg(id) AND deliveries.state = ANY(sqlc.arg(from_states)::text[])
+    FOR UPDATE
+)
+UPDATE deliveries d
+SET state = sqlc.arg(state), detail = sqlc.arg(detail),
+    task_id = coalesce(sqlc.narg(task_id), d.task_id),
+    evidence_ref = coalesce(sqlc.narg(evidence_ref), d.evidence_ref),
+    lease_owner = NULL, lease_until = NULL, updated_at = now()
+FROM old
+WHERE d.id = old.id
+RETURNING old.state::text AS previous_state;
+
+-- name: ListOpenDeliveries :many
+-- The deliveries a stop or a cancel works on: open, or uncertain (a task may be running).
+SELECT * FROM deliveries
+WHERE session_id = $1 AND state IN ('recorded', 'sending', 'delivered', 'uncertain')
+ORDER BY created_at, id;
+
+-- name: GetSessionRow :one
+-- A session with what its binding says about it. The owner filter is part of the key.
+SELECT s.*, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
+FROM sessions s
+LEFT JOIN agent_bindings b ON b.session_id = s.id
+LEFT JOIN topics t ON t.id = b.topic_id
+WHERE s.id = $1 AND s.user_id = $2;
+
+-- name: ListSessionRows :many
+-- The owner's unarchived sessions other than the main thread, newest first: every session that is
+-- not history, plus the newest 100 history records (completed, failed, cancelled, superseded).
+-- Optionally of one status.
+SELECT s.*, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
+FROM sessions s
+LEFT JOIN agent_bindings b ON b.session_id = s.id
+LEFT JOIN topics t ON t.id = b.topic_id
+WHERE s.user_id = $1 AND s.archived_at IS NULL AND b.role IS DISTINCT FROM 'main'
+  AND (sqlc.narg(status)::text IS NULL OR s.status = sqlc.narg(status)::text)
+  AND (s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+       OR s.id IN (
+           SELECT h.id FROM sessions h
+           LEFT JOIN agent_bindings hb ON hb.session_id = h.id
+           WHERE h.user_id = $1 AND h.archived_at IS NULL AND hb.role IS DISTINCT FROM 'main'
+             AND h.status IN ('completed', 'failed', 'cancelled', 'superseded')
+           ORDER BY h.created_at DESC, h.id LIMIT 100))
+ORDER BY s.created_at DESC, s.id;
+
+-- name: CountSessions :one
+SELECT count(*) FROM sessions WHERE user_id = $1;
+
+-- name: SetSessionCancelled :one
+-- The cancelled status is final (RefreshSessionStatus leaves it alone). Nothing changes once the
+-- session is finished.
+UPDATE sessions
+SET status = 'cancelled', completed_at = coalesce(completed_at, now())
+WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')
+RETURNING id;
+
+-- name: ArchiveFinishedSession :execrows
+UPDATE sessions SET archived_at = coalesce(archived_at, now())
+WHERE id = $1 AND status IN ('completed', 'failed', 'cancelled');

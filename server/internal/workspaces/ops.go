@@ -280,7 +280,7 @@ func classify(err error) (permanent bool, reason string) {
 			if strings.Contains(strings.ToLower(se.Detail), "deleted") {
 				return true, "the runtime session for this request was deleted"
 			}
-			return false, "kagent is not ready to create the workspace"
+			return false, "kagent is not ready for this change"
 		}
 		return false, "kagent reported an error"
 	case errors.As(err, &un):
@@ -310,6 +310,19 @@ func refused(err error) bool {
 	}
 	perm, _ := classify(err)
 	return perm
+}
+
+// replayFoundNoSession is the delete's rule for a replayed create: it answered with a definite
+// refusal, so kagent looked up the workspace's request id, found no Session holding it and would
+// not make one. There is nothing to delete. A refusal about the request (see refused) and a
+// FAILED_PRECONDITION of any kind both mean that; kagent also uses FAILED_PRECONDITION while an
+// Agent is not ready, which is still an answer given after the lookup found nothing.
+func replayFoundNoSession(err error) bool {
+	var se *kagent.SessionError
+	if !errors.As(err, &se) {
+		return false
+	}
+	return se.Code == connect.CodeFailedPrecondition || refused(err)
 }
 
 func notFoundErr(err error) bool {
@@ -468,10 +481,9 @@ func (s *Service) doDelete(ctx context.Context, w wsRow) result {
 		// A create may have reached kagent without the reply being recorded. The idempotent
 		// create returns that Session, so the delete removes it rather than leaking it.
 		sess, err := s.Kagent.CreateSession(ctx, w.createRequest())
-		if refused(err) {
-			// kagent refuses the request for good (or its id belongs to a deleted Session). No
-			// Session exists, or the orphan sweep reclaims it if a kagent-side change made this
-			// replay refuse a request an earlier attempt had accepted.
+		if replayFoundNoSession(err) {
+			// No Session holds the request id, or the orphan sweep reclaims it if a kagent-side
+			// change made this replay refuse a request an earlier attempt had accepted.
 			return result{state: dbstate.OpSucceeded, purge: true}
 		}
 		if err != nil {

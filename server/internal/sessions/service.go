@@ -39,6 +39,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
+	"github.com/oldsj/mainloop/server/internal/providers"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
 )
 
@@ -56,7 +57,20 @@ var (
 	ErrBusy = errors.New("sessions: a turn is already in progress")
 	// ErrInvalid is a message that cannot be sent.
 	ErrInvalid = errors.New("sessions: invalid message")
+	// ErrConflict is a request the session's state does not allow: no agent binding, ended or
+	// archived, or not stoppable. The wrapping text is shown to the caller.
+	ErrConflict = errors.New("sessions: conflict")
 )
+
+// conflict is an ErrConflict with the reason shown to the caller.
+func conflict(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrConflict, fmt.Sprintf(format, args...))
+}
+
+// reason is the text of an error that wraps sentinel, without the sentinel.
+func reason(err, sentinel error) string {
+	return strings.TrimPrefix(err.Error(), sentinel.Error()+": ")
+}
 
 // Kagent is the part of the kagent client the sessions use.
 type Kagent interface {
@@ -67,6 +81,14 @@ type Kagent interface {
 	GetTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)
 	FindTaskForMessage(ctx context.Context, agent kagent.AgentRef, contextID, messageID string) (*a2a.Task, bool, error)
 	SubscribeToTask(ctx context.Context, agent kagent.AgentRef, taskID string) iter.Seq2[a2a.Event, error]
+	CancelTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)
+}
+
+// Waker makes a workspace's runtime ready for a message: it waits for an open suspend to finish and
+// resumes the workspace if it is suspended. *workspaces.Service satisfies it. A nil Waker leaves a
+// suspended Session to the delivery loop's own resume.
+type Waker interface {
+	Wake(ctx context.Context, workspaceID string) error
 }
 
 // Options tunes the ledger. Zero values take the defaults.
@@ -130,6 +152,10 @@ type Service struct {
 	OwnerID string
 	// Agent is the kagent Agent that runs the main session.
 	Agent kagent.AgentRef
+	// Providers resolves a session's Agent from its binding, and a new session's provider.
+	Providers *providers.Registry
+	// Waker, when set, readies a workspace session's runtime before each send.
+	Waker Waker
 	Log   *slog.Logger
 	Opts  Options
 }
@@ -219,6 +245,76 @@ type Sent struct {
 	MessageID      string
 }
 
+// checkText trims and validates a message and its id.
+func checkText(messageID, text string) (string, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", fmt.Errorf("%w: the message is empty", ErrInvalid)
+	}
+	if utf8.RuneCountInString(text) > MaxMessageRunes {
+		return "", fmt.Errorf("%w: the message is too long", ErrInvalid)
+	}
+	if _, err := uuid.Parse(messageID); err != nil {
+		return "", fmt.Errorf("%w: the message id is not a UUID", ErrInvalid)
+	}
+	return text, nil
+}
+
+// record writes a user message and its delivery for a session, in tx. It is idempotent per message
+// id: an id that is already recorded for the session changes nothing. The caller has checked that
+// the session exists and may take a message.
+func (s *Service) record(ctx context.Context, tx pgx.Tx, sessionID, messageID, text string) error {
+	q := dbq.New(tx)
+	// One send at a time per session, so the open-turn check below cannot race another send.
+	if err := db.XactLock(ctx, tx, "mainloop:send:"+sessionID); err != nil {
+		return err
+	}
+	if d, err := q.GetDelivery(ctx, messageID); err == nil {
+		if d.SessionID != sessionID {
+			return fmt.Errorf("%w: the message id belongs to another conversation", ErrInvalid)
+		}
+		return nil // already recorded
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("get delivery: %w", err)
+	}
+	if _, err := q.GetBlockingDelivery(ctx, dbq.GetBlockingDeliveryParams{
+		SessionID: sessionID, HoldSeconds: s.opts().UncertainHold.Seconds(),
+	}); err == nil {
+		return ErrBusy
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("check open turn: %w", err)
+	}
+	if n, err := q.InsertSessionMessage(ctx, dbq.InsertSessionMessageParams{
+		ID: messageID, SessionID: sessionID, Role: string(userRole), Content: text,
+	}); err != nil {
+		return fmt.Errorf("record message: %w", err)
+	} else if n == 0 {
+		// No delivery has this id, so the row is some other message: ids are global.
+		return fmt.Errorf("%w: the message id is already used", ErrInvalid)
+	}
+	if _, err := q.InsertDelivery(ctx, dbq.InsertDeliveryParams{ID: messageID, SessionID: sessionID, Source: "user"}); err != nil {
+		return fmt.Errorf("record delivery: %w", err)
+	}
+	// The owner's next message releases the hold a stop left on the queue.
+	if err := q.SetBindingQueueHeld(ctx, dbq.SetBindingQueueHeldParams{SessionID: sessionID, QueueHeld: false}); err != nil {
+		return fmt.Errorf("release queue hold: %w", err)
+	}
+	if err := q.RefreshSessionStatus(ctx, sessionID); err != nil {
+		return fmt.Errorf("refresh session status: %w", err)
+	}
+	// Delivered to listeners when the transaction commits.
+	return q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: DeliveryChannel, Payload: messageID})
+}
+
+// busyOrErr maps the database's one-open-turn index to ErrBusy.
+func busyOrErr(err error) error {
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && pg.Code == "23505" && pg.ConstraintName == "deliveries_one_open" {
+		return ErrBusy
+	}
+	return err
+}
+
 // Send records one user message for the main session and queues its delivery. It is idempotent
 // per message id: sending the same id again returns the first result and changes nothing, so a
 // client or caller that is unsure whether a request landed may repeat it. conversationID, when
@@ -226,19 +322,12 @@ type Sent struct {
 //
 // It touches only the database. The delivery loop makes the kagent calls.
 func (s *Service) Send(ctx context.Context, messageID, conversationID, text string) (Sent, error) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return Sent{}, fmt.Errorf("%w: the message is empty", ErrInvalid)
-	}
-	if utf8.RuneCountInString(text) > MaxMessageRunes {
-		return Sent{}, fmt.Errorf("%w: the message is too long", ErrInvalid)
-	}
-	if _, err := uuid.Parse(messageID); err != nil {
-		return Sent{}, fmt.Errorf("%w: the message id is not a UUID", ErrInvalid)
+	text, err := checkText(messageID, text)
+	if err != nil {
+		return Sent{}, err
 	}
 	var out Sent
-	err := db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
-		q := dbq.New(tx)
+	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
 		main, err := s.ensureMain(ctx, tx)
 		if err != nil {
 			return err
@@ -247,52 +336,60 @@ func (s *Service) Send(ctx context.Context, messageID, conversationID, text stri
 			return ErrNotFound
 		}
 		out = Sent{ConversationID: main.SessionID, MessageID: messageID}
-		// One send at a time per session, so the open-turn check below cannot race another send.
-		if err := db.XactLock(ctx, tx, "mainloop:send:"+main.SessionID); err != nil {
-			return err
-		}
-		if d, err := q.GetDelivery(ctx, messageID); err == nil {
-			if d.SessionID != main.SessionID {
-				return fmt.Errorf("%w: the message id belongs to another conversation", ErrInvalid)
-			}
-			return nil // already recorded
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("get delivery: %w", err)
-		}
-		if _, err := q.GetBlockingDelivery(ctx, dbq.GetBlockingDeliveryParams{
-			SessionID: main.SessionID, HoldSeconds: s.opts().UncertainHold.Seconds(),
-		}); err == nil {
-			return ErrBusy
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("check open turn: %w", err)
-		}
-		if n, err := q.InsertSessionMessage(ctx, dbq.InsertSessionMessageParams{
-			ID: messageID, SessionID: main.SessionID, Role: string(userRole), Content: text,
-		}); err != nil {
-			return fmt.Errorf("record message: %w", err)
-		} else if n == 0 {
-			// No delivery has this id, so the row is some other message: ids are global.
-			return fmt.Errorf("%w: the message id is already used", ErrInvalid)
-		}
-		if _, err := q.InsertDelivery(ctx, dbq.InsertDeliveryParams{
-			ID: messageID, SessionID: main.SessionID, Source: "user",
-		}); err != nil {
-			return fmt.Errorf("record delivery: %w", err)
-		}
-		if err := q.RefreshSessionStatus(ctx, main.SessionID); err != nil {
-			return fmt.Errorf("refresh session status: %w", err)
-		}
-		// Delivered to listeners when the transaction commits.
-		return q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: DeliveryChannel, Payload: messageID})
+		return s.record(ctx, tx, main.SessionID, messageID, text)
 	})
-	var pg *pgconn.PgError
-	if errors.As(err, &pg) && pg.Code == "23505" && pg.ConstraintName == "deliveries_one_open" {
-		return Sent{}, ErrBusy
-	}
-	if err != nil {
+	if err = busyOrErr(err); err != nil {
 		return Sent{}, err
 	}
 	return out, nil
+}
+
+// endedStatus is a status after which a session takes no more messages.
+func endedStatus(st dbstate.SessionStatus) bool {
+	return st == dbstate.SessionCancelled || st == dbstate.SessionFailed
+}
+
+// SendTo records one user message for a session of the owner and queues its delivery, like Send.
+// The session must have a native binding, must not have ended or been archived, and must have no
+// open turn.
+func (s *Service) SendTo(ctx context.Context, sessionID, messageID, text string) (Sent, error) {
+	text, err := checkText(messageID, text)
+	if err != nil {
+		return Sent{}, err
+	}
+	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+		// The lock cancel and archive also take, before the status is read: no message is recorded
+		// after a cancel commits.
+		if err := db.XactLock(ctx, tx, "mainloop:send:"+sessionID); err != nil {
+			return err
+		}
+		q := dbq.New(tx)
+		b, err := q.GetOwnedSessionBinding(ctx, dbq.GetOwnedSessionBindingParams{ID: sessionID, UserID: s.OwnerID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Either not the owner's, or a session without a native binding.
+			if sess, serr := q.GetSession(ctx, sessionID); serr == nil && sess.UserID == s.OwnerID {
+				return conflict("Session has no native agent binding")
+			}
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("get binding: %w", err)
+		}
+		if endedStatus(b.SessionStatus) {
+			return conflict("This session is %s; start a new one.", b.SessionStatus)
+		}
+		if b.ArchivedAt != nil {
+			return conflict("This session is archived; start a new one.")
+		}
+		if b.WorkspaceAgentName != nil && b.KagentSessionID == nil {
+			return conflict("The workspace is not ready yet; try again when it is.")
+		}
+		return s.record(ctx, tx, sessionID, messageID, text)
+	})
+	if err = busyOrErr(err); err != nil {
+		return Sent{}, err
+	}
+	return Sent{ConversationID: sessionID, MessageID: messageID}, nil
 }
 
 // NewService builds the service from settings. k may be nil in a process that does not talk to

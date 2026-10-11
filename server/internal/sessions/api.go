@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"slices"
@@ -119,7 +120,10 @@ func (a *SessionsAPI) GetMainThread(ctx context.Context, _ api.GetMainThreadRequ
 	if err != nil {
 		return nil, err
 	}
-	native, err := a.native(ctx, q, row)
+	native, err := a.native(ctx, q, nativeBinding{
+		SessionID: row.SessionID, Kind: row.Kind, Role: row.Role, ParentSessionID: row.ParentSessionID,
+		TopicID: row.TopicID, KagentSessionID: row.KagentSessionID, Model: row.Model, Turns: row.Turns,
+	}, a.Svc.Agent.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +143,19 @@ func (a *SessionsAPI) topics(ctx context.Context, q *dbq.Queries) ([]api.TopicLi
 	return out, nil
 }
 
-func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row dbq.GetMainBindingRow) (*api.NativeSessionInfo, error) {
+// nativeBinding is the part of a binding the identity strip shows.
+type nativeBinding struct {
+	SessionID       string
+	Kind            string
+	Role            dbstate.BindingRole
+	ParentSessionID *string
+	TopicID         *string
+	KagentSessionID *string
+	Model           *string
+	Turns           int32
+}
+
+func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row nativeBinding, agentName string) (*api.NativeSessionInfo, error) {
 	ds, err := q.ListSessionDeliveries(ctx, dbq.ListSessionDeliveriesParams{SessionID: row.SessionID, Limit: deliveriesShown})
 	if err != nil {
 		return nil, err
@@ -173,7 +189,7 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row dbq.GetMai
 		return nil, err
 	}
 	n := &api.NativeSessionInfo{
-		AgentName: a.Svc.Agent.Name, Deliveries: deliveries, KagentSessionId: row.KagentSessionID,
+		AgentName: agentName, Deliveries: deliveries, KagentSessionId: row.KagentSessionID,
 		Kind: row.Kind, Model: row.Model, ParentSessionId: row.ParentSessionID,
 		Role: string(row.Role), SessionId: row.SessionID, TurnInFlight: inFlight, Turns: int(row.Turns),
 	}
@@ -198,7 +214,7 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row dbq.GetMai
 
 // sessionState reads the kagent session's state, best effort: kagent being down must not take
 // the main thread view down with it.
-func (a *SessionsAPI) sessionState(ctx context.Context, row dbq.GetMainBindingRow) (state *string, note string) {
+func (a *SessionsAPI) sessionState(ctx context.Context, row nativeBinding) (state *string, note string) {
 	if a.Svc.Kagent == nil || row.KagentSessionID == nil || *row.KagentSessionID == "" {
 		return nil, ""
 	}
@@ -210,4 +226,214 @@ func (a *SessionsAPI) sessionState(ctx context.Context, row dbq.GetMainBindingRo
 	}
 	s := strings.ToLower(strings.TrimPrefix(sess.GetState().String(), "RUNTIME_STATE_"))
 	return &s, ""
+}
+
+// toSession is the wire shape of a session row. needs_owner is false: the attention projection is
+// not ported yet.
+func toSession(r dbq.GetSessionRowRow) api.Session {
+	return api.Session{
+		AgentKind: r.AgentKind, ArchivedAt: r.ArchivedAt, BaseBranch: r.BaseBranch, BranchName: r.BranchName,
+		Color: r.Color, CommitSha: r.CommitSha, CompletedAt: r.CompletedAt, CreatedAt: r.CreatedAt,
+		Description: r.Description, Error: r.Error, Id: r.ID, Model: r.Model,
+		ParentSessionId: r.ParentSessionID, ProjectId: r.ProjectID, Prompt: r.Prompt, RepoUrl: r.RepoURL,
+		Result: resultOf(r.Result), StartedAt: r.StartedAt, Status: api.SessionStatus(r.Status),
+		Summary: r.Summary, Title: r.Title, Topic: r.Topic, UserId: r.UserID,
+	}
+}
+
+func resultOf(raw json.RawMessage) *map[string]interface{} {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]interface{}
+	if json.Unmarshal(raw, &m) != nil || m == nil {
+		return nil
+	}
+	return &m
+}
+
+func listRow(r dbq.ListSessionRowsRow) api.Session {
+	return toSession(dbq.GetSessionRowRow(r))
+}
+
+// ListSessions implements api.StrictServerInterface: the owner's sessions other than the main
+// thread, newest first.
+func (a *SessionsAPI) ListSessions(ctx context.Context, r api.ListSessionsRequestObject) (api.ListSessionsResponseObject, error) {
+	rows, err := dbq.New(a.Svc.Pool).ListSessionRows(ctx, dbq.ListSessionRowsParams{UserID: a.Svc.OwnerID, Status: r.Params.Status})
+	if err != nil {
+		return nil, err
+	}
+	out := make(api.ListSessions200JSONResponse, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, listRow(row))
+	}
+	return out, nil
+}
+
+// CreateSession implements api.StrictServerInterface.
+func (a *SessionsAPI) CreateSession(ctx context.Context, r api.CreateSessionRequestObject) (api.CreateSessionResponseObject, error) {
+	if r.Body == nil {
+		return create422(invalid("the body is required"))
+	}
+	n := NewSession{Title: r.Body.Title, Description: r.Body.Description, Prompt: r.Body.Prompt, RepoURL: r.Body.RepoUrl}
+	if r.Body.AgentKind != nil {
+		n.AgentKind = *r.Body.AgentKind
+	}
+	id, err := a.Svc.Create(ctx, n)
+	switch {
+	case errors.Is(err, ErrInvalid):
+		return create422(invalid(reason(err, ErrInvalid)))
+	case err != nil:
+		return nil, err
+	}
+	row, err := dbq.New(a.Svc.Pool).GetSessionRow(ctx, dbq.GetSessionRowParams{ID: id, UserID: a.Svc.OwnerID})
+	if err != nil {
+		return nil, err
+	}
+	return api.CreateSession200JSONResponse(toSession(row)), nil
+}
+
+func create422(v api.HTTPValidationError) (api.CreateSessionResponseObject, error) {
+	var b api.CreateSession422JSONResponseBody
+	if err := b.FromHTTPValidationError(v); err != nil {
+		return nil, err
+	}
+	return api.CreateSession422JSONResponse(b), nil
+}
+
+// GetSession implements api.StrictServerInterface.
+func (a *SessionsAPI) GetSession(ctx context.Context, r api.GetSessionRequestObject) (api.GetSessionResponseObject, error) {
+	row, err := dbq.New(a.Svc.Pool).GetSessionRow(ctx, dbq.GetSessionRowParams{ID: r.SessionId, UserID: a.Svc.OwnerID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return api.GetSession404JSONResponse(api.HTTPError{Detail: "Session not found"}), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return api.GetSession200JSONResponse(toSession(row)), nil
+}
+
+// GetSessionConversation implements api.StrictServerInterface.
+func (a *SessionsAPI) GetSessionConversation(ctx context.Context, r api.GetSessionConversationRequestObject) (api.GetSessionConversationResponseObject, error) {
+	q := dbq.New(a.Svc.Pool)
+	row, err := q.GetSessionRow(ctx, dbq.GetSessionRowParams{ID: r.SessionId, UserID: a.Svc.OwnerID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return api.GetSessionConversation404JSONResponse(api.HTTPError{Detail: "Session not found"}), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.ListSessionMessages(ctx, row.ID)
+	if err != nil {
+		return nil, err
+	}
+	msgs := make([]api.Message, 0, len(rows))
+	for _, m := range rows {
+		msgs = append(msgs, api.Message{
+			Id: m.ID, ConversationId: m.SessionID, Role: api.MessageRole(m.Role),
+			Content: m.Content, CreatedAt: m.CreatedAt,
+		})
+	}
+	return api.GetSessionConversation200JSONResponse(api.SessionConversationResponse{Messages: msgs, Session: toSession(row)}), nil
+}
+
+// GetSessionNative implements api.StrictServerInterface. A session without a native binding is 404.
+func (a *SessionsAPI) GetSessionNative(ctx context.Context, r api.GetSessionNativeRequestObject) (api.GetSessionNativeResponseObject, error) {
+	q := dbq.New(a.Svc.Pool)
+	b, err := q.GetOwnedSessionBinding(ctx, dbq.GetOwnedSessionBindingParams{ID: r.SessionId, UserID: a.Svc.OwnerID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return api.GetSessionNative404JSONResponse(api.HTTPError{Detail: "Session has no native agent binding"}), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	name := a.Svc.Agent.Name
+	if b.Role != dbstate.RoleMain {
+		name = ""
+		if ref, err := a.Svc.bindingAgentOf(b); err == nil {
+			name = ref.Name
+		}
+	}
+	info, err := a.native(ctx, q, nativeBinding{
+		SessionID: b.SessionID, Kind: b.Kind, Role: b.Role, ParentSessionID: b.ParentSessionID,
+		TopicID: b.TopicID, KagentSessionID: b.KagentSessionID, Model: b.Model, Turns: b.Turns,
+	}, name)
+	if err != nil {
+		return nil, err
+	}
+	return api.GetSessionNative200JSONResponse(*info), nil
+}
+
+// SendSessionMessage implements api.StrictServerInterface. Like POST /chat, each call is a new
+// message; at most one turn is open per session.
+func (a *SessionsAPI) SendSessionMessage(ctx context.Context, r api.SendSessionMessageRequestObject) (api.SendSessionMessageResponseObject, error) {
+	if r.Body == nil {
+		return api.SendSessionMessage422JSONResponse(invalid("the body is required")), nil
+	}
+	id := uuid.NewString()
+	_, err := a.Svc.SendTo(ctx, r.SessionId, id, r.Body.Message)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return api.SendSessionMessage404JSONResponse(api.HTTPError{Detail: "Session not found"}), nil
+	case errors.Is(err, ErrBusy):
+		return api.SendSessionMessage409JSONResponse(api.HTTPError{Detail: "A turn is already in progress for this session"}), nil
+	case errors.Is(err, ErrConflict):
+		return api.SendSessionMessage409JSONResponse(api.HTTPError{Detail: reason(err, ErrConflict)}), nil
+	case errors.Is(err, ErrInvalid):
+		return api.SendSessionMessage422JSONResponse(invalid(reason(err, ErrInvalid))), nil
+	case err != nil:
+		return nil, err
+	}
+	return api.SendSessionMessage200JSONResponse(api.SessionMessageResponse{MessageId: id, Status: api.SessionMessageResponseStatusOk}), nil
+}
+
+// StopTurn implements api.StrictServerInterface.
+func (a *SessionsAPI) StopTurn(ctx context.Context, r api.StopTurnRequestObject) (api.StopTurnResponseObject, error) {
+	out, err := a.Svc.Stop(ctx, r.SessionId)
+	var unconfirmed *UnconfirmedError
+	var kerr *KagentError
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return api.StopTurn404JSONResponse(api.HTTPError{Detail: "Session not found"}), nil
+	case errors.Is(err, ErrConflict):
+		return api.StopTurn409JSONResponse(api.HTTPError{Detail: reason(err, ErrConflict)}), nil
+	case errors.As(err, &unconfirmed):
+		return api.StopTurn409JSONResponse(api.HTTPError{Detail: unconfirmed.Detail}), nil
+	case errors.As(err, &kerr):
+		a.Svc.log().WarnContext(ctx, "stop turn failed in kagent", "session_id", r.SessionId, "error", kerr.Err)
+		return api.StopTurn502JSONResponse(api.HTTPError{Detail: "Could not stop the turn: " + safeDetail(kerr.Err.Error())}), nil
+	case err != nil:
+		return nil, err
+	}
+	return api.StopTurn200JSONResponse(api.SessionStopTurnResponse{Status: api.SessionStopTurnResponseStatus(out)}), nil
+}
+
+// CancelSession implements api.StrictServerInterface.
+func (a *SessionsAPI) CancelSession(ctx context.Context, r api.CancelSessionRequestObject) (api.CancelSessionResponseObject, error) {
+	res, err := a.Svc.Cancel(ctx, r.SessionId)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return api.CancelSession404JSONResponse(api.HTTPError{Detail: "Session not found"}), nil
+	case errors.Is(err, ErrConflict):
+		return api.CancelSession409JSONResponse(api.HTTPError{Detail: reason(err, ErrConflict)}), nil
+	case err != nil:
+		return nil, err
+	}
+	return api.CancelSession200JSONResponse(api.SessionCancelResponse{
+		Agent: api.SessionCancelResponseAgent(res.Agent), Status: api.SessionCancelResponseStatus(res.Status),
+	}), nil
+}
+
+// ArchiveSession implements api.StrictServerInterface.
+func (a *SessionsAPI) ArchiveSession(ctx context.Context, r api.ArchiveSessionRequestObject) (api.ArchiveSessionResponseObject, error) {
+	err := a.Svc.Archive(ctx, r.SessionId)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return api.ArchiveSession404JSONResponse(api.HTTPError{Detail: "Session not found"}), nil
+	case errors.Is(err, ErrConflict):
+		return api.ArchiveSession409JSONResponse(api.HTTPError{Detail: reason(err, ErrConflict)}), nil
+	case err != nil:
+		return nil, err
+	}
+	return api.ArchiveSession200JSONResponse(api.SessionArchiveResponse{Status: api.Archived}), nil
 }

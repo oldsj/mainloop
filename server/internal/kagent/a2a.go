@@ -24,6 +24,7 @@ const (
 	methodSend      = "SendStreamingMessage"
 	methodSubscribe = "SubscribeToTask"
 	methodGetTask   = "GetTask"
+	methodCancel    = "CancelTask"
 	methodListTasks = "ListTasks"
 
 	maxReplyBytes = 32 << 20
@@ -134,6 +135,22 @@ func (c *Client) GetTask(ctx context.Context, agent AgentRef, taskID string) (*a
 	var task a2a.Task
 	if err := json.Unmarshal(raw, &task); err != nil {
 		return nil, &OutcomeUnknown{Op: "A2A " + methodGetTask, Detail: "bad task", Err: err}
+	}
+	return &task, nil
+}
+
+// CancelTask asks kagent to stop a task and returns the task as kagent reports it afterwards. A
+// task that already ended is returned unchanged, so the caller reads the state, not the absence
+// of an error, to learn whether the cancel took. Cancelling is idempotent, so a lost reply is
+// settled by calling again or by GetTask.
+func (c *Client) CancelTask(ctx context.Context, agent AgentRef, taskID string) (*a2a.Task, error) {
+	raw, err := c.call(ctx, agent, methodCancel, a2a.CancelTaskRequest{ID: a2a.TaskID(taskID)})
+	if err != nil {
+		return nil, err
+	}
+	var task a2a.Task
+	if err := json.Unmarshal(raw, &task); err != nil {
+		return nil, &OutcomeUnknown{Op: "A2A " + methodCancel, Detail: "bad task", Err: err}
 	}
 	return &task, nil
 }

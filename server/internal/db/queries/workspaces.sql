@@ -97,15 +97,16 @@ SELECT greatest(coalesce(last_active_at, created_at), created_at)::timestamptz A
 FROM workspaces WHERE id = $1;
 
 -- name: ListIdleWorkspaceCandidates :many
--- Workspaces whose own activity is older than their idle timeout and that are not already parked
--- since that activity. Delivery activity is checked by the caller against the delivery ledger.
+-- Workspaces whose activity (their own, and their session's deliveries') is older than their idle
+-- timeout and that are not already parked since that activity.
 SELECT w.id, w.user_id, w.idle_timeout_minutes, b.kagent_session_id AS kagent_session_id,
        a.activity::timestamptz AS activity
 FROM workspaces w
 JOIN sessions s ON s.id = w.id
 JOIN agent_bindings b ON b.session_id = w.id
 CROSS JOIN LATERAL (
-    SELECT greatest(coalesce(w.last_active_at, w.created_at), w.created_at) AS activity
+    SELECT greatest(coalesce(w.last_active_at, w.created_at), w.created_at,
+                    (SELECT max(d.updated_at) FROM deliveries d WHERE d.session_id = w.id)) AS activity
 ) a
 WHERE s.archived_at IS NULL
   AND b.kagent_session_id IS NOT NULL AND b.kagent_deleted_at IS NULL AND b.role <> 'main'
@@ -136,15 +137,17 @@ SELECT kagent_session_id AS kagent_session_id FROM agent_bindings WHERE kagent_s
 
 -- name: CountUnresolvedBindings :one
 -- Bindings that may own a kagent Session Mainloop has not recorded: a create was sent (or may have
--- been) and no Session id came back. A workspace whose create was never sent cannot own one.
+-- been) and no Session id came back. A workspace whose create was never sent cannot own one, and
+-- nor can any other binding (the main thread's included) before a delivery of its session was
+-- claimed, because that claim is what creates its Session.
 SELECT count(*) FROM agent_bindings b
 WHERE b.kagent_session_id IS NULL
-  AND NOT EXISTS (
-      SELECT 1 FROM workspaces w
-      WHERE w.id = b.session_id
-        AND NOT EXISTS (
-            SELECT 1 FROM workspace_ops o
-            WHERE o.workspace_id = w.id AND o.kind = 'create' AND o.attempts > 0));
+  AND CASE WHEN EXISTS (SELECT 1 FROM workspaces w WHERE w.id = b.session_id)
+      THEN EXISTS (
+          SELECT 1 FROM workspace_ops o
+          WHERE o.workspace_id = b.session_id AND o.kind = 'create' AND o.attempts > 0)
+      ELSE EXISTS (SELECT 1 FROM deliveries d WHERE d.session_id = b.session_id AND d.attempts > 0)
+      END;
 
 -- name: GetWorkspaceEnvironmentVersion :one
 -- The environment version a project's selection resolves to, when it is validated.
@@ -164,3 +167,8 @@ SELECT EXISTS (
 -- name: ListWorkspaceAgents :many
 -- Every Agent a workspace was created on, which may no longer be the configured one.
 SELECT DISTINCT agent_namespace, agent_name FROM workspaces;
+
+-- name: LockWorkspace :one
+-- Locks the workspace row. An operation insert needs a share lock on it for its foreign key, so
+-- it waits for the transaction that holds this.
+SELECT id FROM workspaces WHERE id = $1 FOR UPDATE;

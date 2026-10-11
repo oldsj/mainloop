@@ -75,6 +75,8 @@ type turn struct {
 	c   reconcile.Claim
 	d   dbq.GetDeliveryContextRow
 	cur dbstate.DeliveryState
+	// agent is the kagent Agent that runs the session.
+	agent kagent.AgentRef
 	// ksid is the kagent session, once known.
 	ksid string
 	// taskID is the task of this message, once known.
@@ -98,7 +100,22 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 	if d.KagentSessionID != nil {
 		t.ksid = *d.KagentSessionID
 	}
+	if d.SentKagentSessionID != nil && c.State != string(dbstate.DeliveryRecorded) {
+		// Once sent, the message is looked up in the Session it was sent to, not in whatever the
+		// binding names by now.
+		t.ksid = *d.SentKagentSessionID
+	}
 	var out reconcile.Outcome
+	if d.BindingSessionID != nil {
+		var aerr error
+		if t.agent, aerr = s.agentFor(d); aerr != nil {
+			if c.State == string(dbstate.DeliveryRecorded) {
+				return t.settle(ctx, dbstate.DeliveryFailed, "not sent: "+aerr.Error(), nil, false)
+			}
+			s.log().WarnContext(ctx, "resolve agent failed", "message_id", c.ID, "error", aerr)
+			return reconcile.RetryAfter(s.opts().UncertainRecheck), nil
+		}
+	}
 	switch {
 	case d.BindingSessionID == nil:
 		// The binding is gone, so nothing can be sent or followed. Fail the row; leaving it would
@@ -114,6 +131,31 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 		return reconcile.Recorded(), nil
 	}
 	return out, err
+}
+
+// agentFor is the kagent Agent that runs the delivery's session: the Agent a workspace was created
+// on, the configured main Agent, or the provider profile's Agent for the binding's kind and role.
+func (s *Service) agentFor(d dbq.GetDeliveryContextRow) (kagent.AgentRef, error) {
+	if d.WorkspaceAgentNamespace != nil && d.WorkspaceAgentName != nil {
+		return kagent.AgentRef{Namespace: *d.WorkspaceAgentNamespace, Name: *d.WorkspaceAgentName}, nil
+	}
+	return s.bindingAgent(d.BindingKind, dbstate.BindingRole(d.BindingRole))
+}
+
+// bindingAgent is the Agent for a binding that has no workspace.
+func (s *Service) bindingAgent(kind *string, role dbstate.BindingRole) (kagent.AgentRef, error) {
+	if role == dbstate.RoleMain {
+		return s.Agent, nil
+	}
+	if s.Providers == nil || kind == nil {
+		return kagent.AgentRef{}, errors.New("no provider is configured for this session")
+	}
+	p, err := s.Providers.Resolve(*kind, string(role), false)
+	if err != nil {
+		return kagent.AgentRef{}, err
+	}
+	ref := p.Agents[string(role)]
+	return kagent.AgentRef{Namespace: ref.Namespace, Name: ref.Name}, nil
 }
 
 func (t *turn) fence() (id string, owner *string, attempts int32) {
@@ -136,6 +178,18 @@ func lost(n int64, err error) error {
 // new create request id. Every step is idempotent, so repeating it after a crash is safe, and none
 // holds a database lock across a kagent call.
 func (t *turn) ensureKagentSession(ctx context.Context) (string, error) {
+	if t.d.WorkspaceID != nil {
+		// A workspace's Session belongs to the workspace service: it makes it, and wakes it. Wait for
+		// an open suspend and resume the workspace first, so the send finds a ready Session.
+		if t.ksid == "" {
+			return "", errWorkspaceNotReady
+		}
+		if t.s.Waker != nil {
+			if err := t.s.Waker.Wake(ctx, *t.d.WorkspaceID); err != nil {
+				return "", fmt.Errorf("wake the workspace: %w", err)
+			}
+		}
+	}
 	for replaced := false; ; replaced = true {
 		var sess *kagentapi.Session
 		var err error
@@ -156,6 +210,9 @@ func (t *turn) ensureKagentSession(ctx context.Context) (string, error) {
 		if !gone {
 			return t.readyKagentSession(ctx, sess)
 		}
+		if t.d.WorkspaceID != nil {
+			return "", errWorkspaceSessionGone
+		}
 		if replaced {
 			return "", errors.New("the replacement kagent session is already gone")
 		}
@@ -165,10 +222,17 @@ func (t *turn) ensureKagentSession(ctx context.Context) (string, error) {
 	}
 }
 
+// Failures of a workspace session's send that wait for the workspace or that no retry fixes.
+var (
+	errWorkspaceNotReady    = errors.New("the workspace has no kagent session yet")
+	errWorkspaceSessionGone = errors.New("the workspace's kagent session no longer exists")
+)
+
 // createHitDeleted reports a create that kagent refused because its request id belongs to a
-// Session that has since been deleted.
+// Session that has since been deleted. kagent answers FAILED_PRECONDITION for it; ALREADY_EXISTS is
+// its idempotency conflict, which never mentions a deletion.
 func createHitDeleted(e *kagent.SessionError) bool {
-	return e.Code == connect.CodeAlreadyExists && strings.Contains(strings.ToLower(e.Detail), "deleted")
+	return e.Code == connect.CodeFailedPrecondition && strings.Contains(strings.ToLower(e.Detail), "deleted")
 }
 
 func sessionEnded(s *kagentapi.Session) bool {
@@ -183,10 +247,14 @@ func (t *turn) createKagentSession(ctx context.Context) (*kagentapi.Session, err
 	if t.d.KagentRequestID != nil && *t.d.KagentRequestID != "" {
 		reqID = *t.d.KagentRequestID
 	}
+	name := "Mainloop main thread"
+	if dbstate.BindingRole(t.d.BindingRole) != dbstate.RoleMain {
+		name = sessionName(t.d.SessionTitle)
+	}
 	sess, err := t.s.Kagent.CreateSession(ctx, &kagentapi.CreateSessionRequest{
-		Agent:     &kagentapi.ResourceReference{Namespace: t.s.Agent.Namespace, Name: t.s.Agent.Name},
+		Agent:     &kagentapi.ResourceReference{Namespace: t.agent.Namespace, Name: t.agent.Name},
 		RequestId: reqID,
-		Name:      "Mainloop main thread",
+		Name:      name,
 	})
 	if err != nil {
 		return nil, err
@@ -261,10 +329,26 @@ func (t *turn) readyKagentSession(ctx context.Context, sess *kagentapi.Session) 
 	}
 }
 
-// changing reports a ready Session that is being suspended or deleted.
+// sessionName is the display name of a kagent Session made for a session: its title, cut short.
+func sessionName(title string) string {
+	title = strings.TrimSpace(title)
+	if r := []rune(title); len(r) > 80 {
+		title = string(r[:80])
+	}
+	if title == "" {
+		return "Mainloop session"
+	}
+	return title
+}
+
+// changing reports a Session with an operation in progress (creating, suspending, resuming or
+// deleting): a READY Session is not settled until the operation is over, as in the Python path.
 func changing(s *kagentapi.Session) bool {
-	op := s.GetOperation()
-	return op == kagentapi.RuntimeOperation_RUNTIME_OPERATION_SUSPEND || op == kagentapi.RuntimeOperation_RUNTIME_OPERATION_DELETE
+	switch s.GetOperation() {
+	case kagentapi.RuntimeOperation_RUNTIME_OPERATION_UNSPECIFIED, kagentapi.RuntimeOperation_RUNTIME_OPERATION_NONE:
+		return false
+	}
+	return true
 }
 
 // send delivers a recorded message for the first time.
@@ -280,8 +364,12 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 		if errors.Is(err, reconcile.ErrLeaseLost) {
 			return reconcile.Retry(), err
 		}
+		if errors.Is(err, errWorkspaceNotReady) {
+			// The workspace is still being made. Nothing is wrong with the delivery; it waits.
+			return reconcile.RetryAfter(t.s.opts().UncertainRecheck), nil
+		}
 		var cfg *kagent.ConfigError
-		if errors.As(err, &cfg) || t.c.Attempts >= createAttempts {
+		if errors.As(err, &cfg) || errors.Is(err, errWorkspaceSessionGone) || t.c.Attempts >= createAttempts {
 			return t.settle(ctx, dbstate.DeliveryFailed,
 				"not sent: could not prepare the kagent session: "+err.Error(), nil, false)
 		}
@@ -293,13 +381,13 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 	// sending and looks the message up instead of sending it again.
 	id, owner, attempts := t.fence()
 	if err := lost(dbq.New(t.s.Pool).MarkDeliverySending(ctx,
-		dbq.MarkDeliverySendingParams{ID: id, LeaseOwner: owner, Attempts: attempts})); err != nil {
+		dbq.MarkDeliverySendingParams{ID: id, LeaseOwner: owner, Attempts: attempts, KagentSessionID: &ksid})); err != nil {
 		return reconcile.Retry(), err
 	}
-	t.cur = dbstate.DeliverySending
+	t.cur, t.ksid = dbstate.DeliverySending, ksid
 
 	var sendErr error
-	for ev, err := range t.s.Kagent.SendMessage(ctx, t.s.Agent, kagent.SendParams{
+	for ev, err := range t.s.Kagent.SendMessage(ctx, t.agent, kagent.SendParams{
 		Text: t.d.Content, MessageID: t.c.ID, ContextID: ksid,
 	}) {
 		if err != nil {
@@ -402,17 +490,17 @@ func (t *turn) observe(ctx context.Context) (reconcile.Outcome, error) {
 		// Nothing can have been sent to a session that was never created.
 		return t.settle(ctx, dbstate.DeliveryFailed, "not sent: the kagent session was never created", nil, false)
 	}
-	task, found, err := t.s.Kagent.FindTaskForMessage(ctx, t.s.Agent, ksid, t.c.ID)
+	task, found, err := t.s.Kagent.FindTaskForMessage(ctx, t.agent, ksid, t.c.ID)
 	switch {
 	case ctx.Err() != nil:
 		return reconcile.Retry(), ctx.Err()
 	case err != nil && !found:
 		t.s.log().WarnContext(ctx, "look up message failed", "message_id", t.c.ID, "error", err)
-		return reconcile.RetryAfter(t.s.opts().UncertainRecheck), nil
+		return t.lookAgainLater(ctx, t.s.opts().UncertainRecheck)
 	case found && task == nil:
 		// The message is in a task, but reading the task failed. It was sent: do not decide yet.
 		t.s.log().WarnContext(ctx, "read task failed", "message_id", t.c.ID, "error", err)
-		return reconcile.RetryAfter(t.s.opts().UncertainRecheck), nil
+		return t.lookAgainLater(ctx, t.s.opts().UncertainRecheck)
 	case !found:
 		return t.undecided(ctx, "no task shows this message; it is looked up, not sent again")
 	}
@@ -421,7 +509,7 @@ func (t *turn) observe(ctx context.Context) (reconcile.Outcome, error) {
 
 // refresh reads the delivery's task and carries on from there.
 func (t *turn) refresh(ctx context.Context) (reconcile.Outcome, error) {
-	task, err := t.s.Kagent.GetTask(ctx, t.s.Agent, t.taskID)
+	task, err := t.s.Kagent.GetTask(ctx, t.agent, t.taskID)
 	var gone *kagent.TaskNotFound
 	switch {
 	case ctx.Err() != nil:
@@ -435,9 +523,47 @@ func (t *turn) refresh(ctx context.Context) (reconcile.Outcome, error) {
 		return t.undecided(ctx, "")
 	case err != nil:
 		t.s.log().WarnContext(ctx, "read task failed", "message_id", t.c.ID, "task_id", t.taskID, "error", err)
-		return reconcile.RetryAfter(t.errorDelay()), nil
+		return t.lookAgainLater(ctx, t.errorDelay())
 	}
 	return t.adopt(ctx, task)
+}
+
+// holdNote is the detail an uncertain delivery gets once its hold is over.
+const holdNote = "delivery unknown: no task showed this message within the hold and it was not sent again; " +
+	"check the reply and send again if needed"
+
+// lookAgainLater schedules the next lookup of an unresolved delivery after a failed one. An
+// uncertain delivery stops blocking sends when its hold is over, whether or not the lookups work,
+// so the lookup is also scheduled for the moment the hold ends and the change is announced once.
+func (t *turn) lookAgainLater(ctx context.Context, delay time.Duration) (reconcile.Outcome, error) {
+	if t.cur != dbstate.DeliveryUncertain {
+		return reconcile.RetryAfter(delay), nil
+	}
+	hold := t.s.opts().UncertainHold
+	remaining := hold - time.Since(t.uncertainSince)
+	if remaining > 0 {
+		return reconcile.RetryAfter(min(delay, remaining+10*time.Millisecond)), nil
+	}
+	err := events.InTxPublish(ctx, t.s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+		id, owner, attempts := t.fence()
+		note := holdNote
+		n, err := dbq.New(tx).NoteHoldPassed(ctx, dbq.NoteHoldPassedParams{
+			ID: id, LeaseOwner: owner, Attempts: attempts, Detail: &note,
+		})
+		if err != nil || n == 0 {
+			return nil, err // already announced, or the claim moved on
+		}
+		return []events.Draft{{
+			UserID: t.d.UserID, Type: events.TypeSessionMessage,
+			Payload: api.EventSessionMessage{
+				SessionId: t.d.SessionID, MessageId: t.c.ID, Role: api.EventSessionMessageRoleAssistant,
+			},
+		}}, nil
+	})
+	if err != nil && !errors.Is(err, reconcile.ErrLeaseLost) {
+		t.s.log().WarnContext(ctx, "announce the end of the hold failed", "message_id", t.c.ID, "error", err)
+	}
+	return reconcile.RetryAfter(delay), nil
 }
 
 // backoff is base doubled per attempt after the first, up to ceil. Attempts count claims of the
@@ -497,7 +623,7 @@ func (t *turn) advance(ctx context.Context, task *a2a.Task, follow bool) (reconc
 		// Still running after we followed it to the end of its stream: look again soon.
 		return reconcile.RetryAfter(t.s.opts().FollowPoll), nil
 	}
-	for ev, err := range t.s.Kagent.SubscribeToTask(ctx, t.s.Agent, string(task.ID)) {
+	for ev, err := range t.s.Kagent.SubscribeToTask(ctx, t.agent, string(task.ID)) {
 		if err != nil || endsTask(ev) {
 			break
 		}
@@ -505,7 +631,7 @@ func (t *turn) advance(ctx context.Context, task *a2a.Task, follow bool) (reconc
 	if ctx.Err() != nil {
 		return reconcile.Retry(), ctx.Err()
 	}
-	fresh, err := t.s.Kagent.GetTask(ctx, t.s.Agent, string(task.ID))
+	fresh, err := t.s.Kagent.GetTask(ctx, t.agent, string(task.ID))
 	if err != nil {
 		t.s.log().WarnContext(ctx, "read task failed", "message_id", t.c.ID, "task_id", t.taskID, "error", err)
 		return reconcile.RetryAfter(t.errorDelay()), nil
@@ -513,15 +639,98 @@ func (t *turn) advance(ctx context.Context, task *a2a.Task, follow bool) (reconc
 	return t.advance(ctx, fresh, false)
 }
 
-// settle ends the delivery in a final state, in one transaction. A task's reply is mirrored: the
-// whole reply for a completed task, and whatever the agent had produced for a failed or stopped one
-// (the failure reason is the delivery's detail). Every settle publishes session:message last, so a
-// client that is watching sees the turn end whichever way it ended; when no text was mirrored the
-// event names the user message the turn answered.
-func (t *turn) settle(
-	ctx context.Context, final dbstate.DeliveryState, detail string, task *a2a.Task, nativeFailure bool,
-) (reconcile.Outcome, error) {
-	var det, ref, tid *string
+// TurnStoppedNote closes the conversation message of a stopped turn.
+const TurnStoppedNote = "This turn was stopped before it finished."
+
+// stopNoteID derives the id of a stopped turn's message, so settling a cancellation twice (a stop
+// and a stream that saw it) writes it once.
+func stopNoteID(messageID string) string {
+	return uuid.NewSHA1(assistantNS, []byte("turn-cancelled:"+messageID)).String()
+}
+
+// stoppedMessage is the conversation message of a stopped turn: the partial reply, then the note.
+// The note is always the last paragraph, so a client can show the text above it as stopped.
+func stoppedMessage(partial string) string {
+	partial = strings.TrimSpace(partial)
+	if partial == "" {
+		return TurnStoppedNote
+	}
+	return partial + "\n\n" + TurnStoppedNote
+}
+
+// ended is how a delivery ended, as far as the rest of the conversation is concerned.
+type ended struct {
+	sessionID, userID, messageID string
+	final                        dbstate.DeliveryState
+	// task is the delivery's task, when it had one; its text is mirrored.
+	task *a2a.Task
+	// partial is the reply streamed before a stop, kept above the stop note.
+	partial string
+}
+
+// writeEnded writes everything that goes with a delivery ending, in the transaction that ends it:
+// the mirrored reply (the whole reply for a completed task, and whatever the agent had produced for
+// a failed one), or for a cancelled turn the partial reply and the stop note in one message and the
+// queue hold; the turn count; the session status. It returns the id of the message the
+// session:message event names: when nothing was mirrored, the user message the turn answered.
+func writeEnded(ctx context.Context, q *dbq.Queries, e ended) (string, error) {
+	eventMessage := e.messageID
+	switch {
+	case e.final == dbstate.DeliveryCancelled:
+		partial := e.partial
+		if partial == "" && e.task != nil {
+			partial = artifactText(e.task)
+		}
+		mid := stopNoteID(e.messageID)
+		if _, err := q.InsertSessionMessage(ctx, dbq.InsertSessionMessageParams{
+			ID: mid, SessionID: e.sessionID, Role: string(assistantRole), Content: stoppedMessage(partial),
+		}); err != nil {
+			return "", fmt.Errorf("record stopped turn: %w", err)
+		}
+		eventMessage = mid
+		// The owner's next message releases the hold; reports queued behind the turn wait for it.
+		if err := q.SetBindingQueueHeld(ctx, dbq.SetBindingQueueHeldParams{SessionID: e.sessionID, QueueHeld: true}); err != nil {
+			return "", fmt.Errorf("hold queue: %w", err)
+		}
+	case e.task != nil:
+		reply := artifactText(e.task)
+		if e.final == dbstate.DeliveryCompleted {
+			reply = replyText(e.task)
+		}
+		if reply != "" {
+			mid := assistantID(e.sessionID, e.task.ID)
+			if _, err := q.InsertSessionMessage(ctx, dbq.InsertSessionMessageParams{
+				ID: mid, SessionID: e.sessionID, Role: string(assistantRole), Content: reply,
+			}); err != nil {
+				return "", fmt.Errorf("mirror reply: %w", err)
+			}
+			eventMessage = mid
+		}
+	}
+	if e.final == dbstate.DeliveryCompleted {
+		if err := q.BumpBindingTurns(ctx, e.sessionID); err != nil {
+			return "", fmt.Errorf("count turn: %w", err)
+		}
+	}
+	if err := q.RefreshSessionStatus(ctx, e.sessionID); err != nil {
+		return "", fmt.Errorf("refresh session status: %w", err)
+	}
+	return eventMessage, nil
+}
+
+// endedEvent is the event every ending publishes last, so a client that is watching sees the turn
+// end whichever way it ended.
+func endedEvent(userID, sessionID, messageID string) events.Draft {
+	return events.Draft{
+		UserID: userID, Type: events.TypeSessionMessage,
+		Payload: api.EventSessionMessage{
+			SessionId: sessionID, MessageId: messageID, Role: api.EventSessionMessageRoleAssistant,
+		},
+	}
+}
+
+// finishFields are the detail, evidence reference and task id a delivery is finished with.
+func finishFields(detail string, task *a2a.Task, nativeFailure bool) (det, ref, tid *string) {
 	if d := safeDetail(detail); d != "" {
 		det = &d
 	}
@@ -534,6 +743,14 @@ func (t *turn) settle(
 		}
 		ref = &r
 	}
+	return det, ref, tid
+}
+
+// settle ends the delivery in a final state, in one transaction fenced on the claim.
+func (t *turn) settle(
+	ctx context.Context, final dbstate.DeliveryState, detail string, task *a2a.Task, nativeFailure bool,
+) (reconcile.Outcome, error) {
+	det, ref, tid := finishFields(detail, task, nativeFailure)
 	err := events.InTxPublish(ctx, t.s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
 		q := dbq.New(tx)
 		id, owner, attempts := t.fence()
@@ -542,36 +759,13 @@ func (t *turn) settle(
 		})); err != nil {
 			return nil, err
 		}
-		eventMessage := t.c.ID
-		if task != nil {
-			reply := artifactText(task)
-			if final == dbstate.DeliveryCompleted {
-				reply = replyText(task)
-			}
-			if reply != "" {
-				mid := assistantID(t.d.SessionID, task.ID)
-				if _, err := q.InsertSessionMessage(ctx, dbq.InsertSessionMessageParams{
-					ID: mid, SessionID: t.d.SessionID, Role: string(assistantRole), Content: reply,
-				}); err != nil {
-					return nil, fmt.Errorf("mirror reply: %w", err)
-				}
-				eventMessage = mid
-			}
+		msg, err := writeEnded(ctx, q, ended{
+			sessionID: t.d.SessionID, userID: t.d.UserID, messageID: t.c.ID, final: final, task: task,
+		})
+		if err != nil {
+			return nil, err
 		}
-		if final == dbstate.DeliveryCompleted {
-			if err := q.BumpBindingTurns(ctx, t.d.SessionID); err != nil {
-				return nil, fmt.Errorf("count turn: %w", err)
-			}
-		}
-		if err := q.RefreshSessionStatus(ctx, t.d.SessionID); err != nil {
-			return nil, fmt.Errorf("refresh session status: %w", err)
-		}
-		return []events.Draft{{
-			UserID: t.d.UserID, Type: events.TypeSessionMessage,
-			Payload: api.EventSessionMessage{
-				SessionId: t.d.SessionID, MessageId: eventMessage, Role: api.EventSessionMessageRoleAssistant,
-			},
-		}}, nil
+		return []events.Draft{endedEvent(t.d.UserID, t.d.SessionID, msg)}, nil
 	})
 	if err != nil {
 		return reconcile.Retry(), err

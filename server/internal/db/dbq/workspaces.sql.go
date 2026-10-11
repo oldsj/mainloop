@@ -81,16 +81,18 @@ func (q *Queries) CancelOpenWorkspaceOps(ctx context.Context, workspaceID string
 const countUnresolvedBindings = `-- name: CountUnresolvedBindings :one
 SELECT count(*) FROM agent_bindings b
 WHERE b.kagent_session_id IS NULL
-  AND NOT EXISTS (
-      SELECT 1 FROM workspaces w
-      WHERE w.id = b.session_id
-        AND NOT EXISTS (
-            SELECT 1 FROM workspace_ops o
-            WHERE o.workspace_id = w.id AND o.kind = 'create' AND o.attempts > 0))
+  AND CASE WHEN EXISTS (SELECT 1 FROM workspaces w WHERE w.id = b.session_id)
+      THEN EXISTS (
+          SELECT 1 FROM workspace_ops o
+          WHERE o.workspace_id = b.session_id AND o.kind = 'create' AND o.attempts > 0)
+      ELSE EXISTS (SELECT 1 FROM deliveries d WHERE d.session_id = b.session_id AND d.attempts > 0)
+      END
 `
 
 // Bindings that may own a kagent Session Mainloop has not recorded: a create was sent (or may have
-// been) and no Session id came back. A workspace whose create was never sent cannot own one.
+// been) and no Session id came back. A workspace whose create was never sent cannot own one, and
+// nor can any other binding (the main thread's included) before a delivery of its session was
+// claimed, because that claim is what creates its Session.
 func (q *Queries) CountUnresolvedBindings(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countUnresolvedBindings)
 	var count int64
@@ -558,7 +560,8 @@ FROM workspaces w
 JOIN sessions s ON s.id = w.id
 JOIN agent_bindings b ON b.session_id = w.id
 CROSS JOIN LATERAL (
-    SELECT greatest(coalesce(w.last_active_at, w.created_at), w.created_at) AS activity
+    SELECT greatest(coalesce(w.last_active_at, w.created_at), w.created_at,
+                    (SELECT max(d.updated_at) FROM deliveries d WHERE d.session_id = w.id)) AS activity
 ) a
 WHERE s.archived_at IS NULL
   AND b.kagent_session_id IS NOT NULL AND b.kagent_deleted_at IS NULL AND b.role <> 'main'
@@ -578,8 +581,8 @@ type ListIdleWorkspaceCandidatesRow struct {
 	Activity           time.Time
 }
 
-// Workspaces whose own activity is older than their idle timeout and that are not already parked
-// since that activity. Delivery activity is checked by the caller against the delivery ledger.
+// Workspaces whose activity (their own, and their session's deliveries') is older than their idle
+// timeout and that are not already parked since that activity.
 func (q *Queries) ListIdleWorkspaceCandidates(ctx context.Context, limit int32) ([]ListIdleWorkspaceCandidatesRow, error) {
 	rows, err := q.db.Query(ctx, listIdleWorkspaceCandidates, limit)
 	if err != nil {
@@ -750,6 +753,19 @@ func (q *Queries) ListWorkspaceRows(ctx context.Context, userID string) ([]ListW
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockWorkspace = `-- name: LockWorkspace :one
+SELECT id FROM workspaces WHERE id = $1 FOR UPDATE
+`
+
+// Locks the workspace row. An operation insert needs a share lock on it for its foreign key, so
+// it waits for the transaction that holds this.
+func (q *Queries) LockWorkspace(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, lockWorkspace, id)
+	var id_2 string
+	err := row.Scan(&id_2)
+	return id_2, err
 }
 
 const markWorkspaceIdleSuspended = `-- name: MarkWorkspaceIdleSuspended :exec
