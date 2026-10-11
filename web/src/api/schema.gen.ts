@@ -211,8 +211,13 @@ export interface paths {
      * @description SSE endpoint for real-time updates.
      *
      *     Streams events for:
-     *     - inbox:updated - when inbox items change
+     *     - connected - first frame of every stream
      *     - heartbeat - periodic keepalive (every 30s)
+     *     - inbox:updated - when inbox items change
+     *     - schedule:updated - when a schedule changes or starts an execution
+     *     - session:message - when a mirrored reply lands in a session conversation
+     *     - task:updated - when a task changes; read it with getTask
+     *     - workspace:updated - when the workspace lifecycle projection changes
      *
      *     The client should reconnect automatically on disconnect.
      *     EventSource handles this natively.
@@ -563,6 +568,98 @@ export interface paths {
      * @description Respond to a queue item.
      */
     post: operations['respondToQueueItem'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/schedules': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Schedules
+     * @description The owner's schedules, one page at a time. Ordered by schedule id, not by creation time.
+     */
+    get: operations['listSchedules'];
+    put?: never;
+    /**
+     * Create Schedule
+     * @description Create a scheduled agent run. A retry with the same request_id and body returns the existing schedule; the same request_id with a different body returns 409.
+     */
+    post: operations['createSchedule'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/schedules/{schedule_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Schedule
+     * @description A deleted schedule returns 404.
+     */
+    get: operations['getSchedule'];
+    /**
+     * Update Schedule
+     * @description Replace the schedule configuration. Requires If-Match with the etag from the last read; a stale etag returns 412 and no If-Match returns 428. A deleted schedule returns 409.
+     */
+    put: operations['updateSchedule'];
+    post?: never;
+    /**
+     * Delete Schedule
+     * @description Deleting an already-deleted schedule also returns 204.
+     */
+    delete: operations['deleteSchedule'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/schedules/{schedule_id}/executions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Schedule Executions
+     * @description One page of a schedule's executions, newest first. Each execution links to its session once one is reserved.
+     */
+    get: operations['listScheduleExecutions'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/schedules/{schedule_id}/trigger': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Trigger Schedule
+     * @description Start one execution now. Returns 202 with the new execution, usually in pending state. A repeated request_id returns the execution it created.
+     */
+    post: operations['triggerSchedule'];
     delete?: never;
     options?: never;
     head?: never;
@@ -1732,6 +1829,197 @@ export interface components {
       watched_tag?: string | null;
       definition?: components['schemas']['DefinitionReference'] | null;
     };
+    /** ScheduledRunAgentRef */
+    ScheduledRunAgentRef: {
+      /** Namespace */
+      namespace: string;
+      /** Name */
+      name: string;
+    };
+    /** ScheduledRunConfigInput */
+    ScheduledRunConfigInput: {
+      /**
+       * Name
+       * @default
+       */
+      name: string;
+      /**
+       * Schedule
+       * @description Five-field cron expression (minute hour day-of-month month day-of-week). Macros such as @daily are rejected.
+       */
+      schedule: string;
+      /**
+       * Time Zone
+       * @description IANA time zone name, for example Europe/London. Blank means UTC; Local is rejected.
+       * @default UTC
+       */
+      time_zone: string;
+      /**
+       * Prompt
+       * @description Sent to the agent on each firing. At most 32768 bytes; maxLength counts characters, so the server also checks the byte count.
+       */
+      prompt: string;
+      /**
+       * Paused
+       * @description Pauses the schedule. Config changes apply only to executions reserved after the update.
+       * @default false
+       */
+      paused: boolean;
+      /**
+       * Execution Timeout Seconds
+       * Format: double
+       * @description Includes queueing and provisioning. Default 900 (15 minutes); the minimum is one microsecond.
+       * @default 900
+       */
+      execution_timeout_seconds: number;
+    };
+    /** ScheduledRunConfigOutput */
+    ScheduledRunConfigOutput: {
+      /** Name */
+      name: string;
+      /**
+       * Schedule
+       * @description Five-field cron expression (minute hour day-of-month month day-of-week).
+       */
+      schedule: string;
+      /** Time Zone */
+      time_zone: string;
+      /** Prompt */
+      prompt: string;
+      /** Paused */
+      paused: boolean;
+      /**
+       * Execution Timeout Seconds
+       * Format: double
+       */
+      execution_timeout_seconds: number;
+    };
+    /** ScheduledRunCreate */
+    ScheduledRunCreate: {
+      /**
+       * Request Id
+       * @description Idempotency key for this create. Use a new value per create; a retry must reuse it.
+       */
+      request_id: string;
+      agent: components['schemas']['ScheduledRunAgentRef'];
+      config: components['schemas']['ScheduledRunConfigInput'];
+    };
+    /** ScheduledRunOutput */
+    ScheduledRunOutput: {
+      /**
+       * Id
+       * @description Schedule UUID.
+       */
+      id: string;
+      agent: components['schemas']['ScheduledRunAgentRef'];
+      config: components['schemas']['ScheduledRunConfigOutput'];
+      /**
+       * Etag
+       * @description UUID that changes on every update. Send it back quoted as If-Match.
+       */
+      etag: string;
+      /**
+       * Next Execution Time
+       * @description Null when kagent has no next firing time.
+       */
+      next_execution_time: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /** ScheduledRunTriggerRequest */
+    ScheduledRunTriggerRequest: {
+      /**
+       * Request Id
+       * @description Idempotency key. A repeated request_id returns the execution it already created.
+       */
+      request_id: string;
+    };
+    /** ScheduledRunExecutionOutput */
+    ScheduledRunExecutionOutput: {
+      /**
+       * Id
+       * @description Execution UUIDv7, so ids are time-ordered.
+       */
+      id: string;
+      /** Scheduled Run Id */
+      scheduled_run_id: string;
+      /**
+       * Scheduled Time
+       * @description Set for a cron firing; null for a manual trigger.
+       */
+      scheduled_time: string | null;
+      /**
+       * Manual Request Id
+       * @description Set for a manual trigger; null for a cron firing.
+       */
+      manual_request_id: string | null;
+      /**
+       * Prompt
+       * @description The prompt this execution was reserved with.
+       */
+      prompt: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Deadline
+       * Format: date-time
+       * @description When the execution times out if it has not finished.
+       */
+      deadline: string;
+      /**
+       * Session Id
+       * @description Null until a session is reserved. Kept after that session is deleted, so it is history, not proof the session still exists.
+       */
+      session_id: string | null;
+      /**
+       * State
+       * @enum {string}
+       */
+      state: 'pending' | 'running' | 'succeeded' | 'failed' | 'timed_out';
+      /**
+       * Task Id
+       * @description Original A2A task. Null until set; does not change when the conversation continues.
+       */
+      task_id: string | null;
+      /** Completed At */
+      completed_at: string | null;
+      /**
+       * Failure Reason
+       * @description Stable explanation of a failure; null when there is none.
+       */
+      failure_reason: string | null;
+    };
+    /** ScheduledRunPage */
+    ScheduledRunPage: {
+      /** Items */
+      items: components['schemas']['ScheduledRunOutput'][];
+      /**
+       * Next Page Token
+       * @description Send as page_token for the next page; null on the last page.
+       */
+      next_page_token: string | null;
+    };
+    /** ScheduledRunExecutionPage */
+    ScheduledRunExecutionPage: {
+      /** Items */
+      items: components['schemas']['ScheduledRunExecutionOutput'][];
+      /**
+       * Next Page Token
+       * @description Send as page_token for the next page; null on the last page.
+       */
+      next_page_token: string | null;
+    };
     /** SelectEnvironment */
     SelectEnvironment: {
       /** Environment Id */
@@ -1768,11 +2056,6 @@ export interface components {
        */
       user_id: string;
       /**
-       * Main Thread Id
-       * @description Parent main thread ID
-       */
-      main_thread_id: string;
-      /**
        * Title
        * @description Short title for the session
        */
@@ -1787,11 +2070,6 @@ export interface components {
        * @description Initial prompt that started the session
        */
       prompt: string;
-      /**
-       * Conversation Id
-       * @description Session's conversation ID
-       */
-      conversation_id: string;
       /**
        * Parent Session Id
        * @description Parent session (delegation)
@@ -1818,11 +2096,6 @@ export interface components {
        * @default false
        */
       needs_owner: boolean;
-      /**
-       * Worker Pod Name
-       * @description K8s pod running this session
-       */
-      worker_pod_name: string | null;
       /**
        * Created At
        * Format: date-time
@@ -1881,55 +2154,10 @@ export interface components {
        */
       model: string | null;
       /**
-       * Issue Url
-       * @description Plan issue URL
-       */
-      issue_url: string | null;
-      /**
-       * Issue Number
-       * @description Plan issue number
-       */
-      issue_number: number | null;
-      /**
-       * Issue Etag
-       * @description ETag for conditional polling
-       */
-      issue_etag: string | null;
-      /**
-       * Issue Last Modified
-       * @description Last-Modified for polling
-       */
-      issue_last_modified: string | null;
-      /**
-       * Pr Url
-       * @description Implementation PR URL
-       */
-      pr_url: string | null;
-      /**
-       * Pr Number
-       * @description PR number
-       */
-      pr_number: number | null;
-      /**
-       * Pr Etag
-       * @description ETag for conditional PR polling
-       */
-      pr_etag: string | null;
-      /**
-       * Pr Last Modified
-       * @description Last-Modified for PR polling
-       */
-      pr_last_modified: string | null;
-      /**
        * Commit Sha
        * @description Final commit SHA
        */
       commit_sha: string | null;
-      /**
-       * Anchor Message Id
-       * @description Main thread message ID that triggered this session
-       */
-      anchor_message_id: string | null;
       /**
        * Color
        * @description Assigned color for inline display (hex or name)
@@ -1978,11 +2206,6 @@ export interface components {
        */
       repo_url?: string | null;
       /**
-       * Anchor Message Id
-       * @description Main thread message ID to anchor this session to
-       */
-      anchor_message_id?: string | null;
-      /**
        * Agent Kind
        * @description Native agent kind; defaults to Claude Code
        */
@@ -2009,9 +2232,7 @@ export interface components {
       | 'completed'
       | 'failed'
       | 'cancelled'
-      | 'waiting_on_user'
-      | 'implementing'
-      | 'under_review';
+      | 'waiting_on_user';
     /** TaskAction */
     TaskAction: {
       /** Request Id */
@@ -4010,6 +4231,10 @@ export interface components {
       item_id?: string;
       unread_count?: number;
     };
+    /** @description `schedule:updated`: names a change; read the schedule with getSchedule or its executions with listScheduleExecutions. */
+    EventScheduleUpdated: {
+      schedule_id: string;
+    };
     /** @description `session:message`: a mirrored reply landed in a session conversation. */
     EventSessionMessage: {
       session_id: string;
@@ -4678,6 +4903,7 @@ export interface operations {
             | components['schemas']['EventConnected']
             | components['schemas']['EventHeartbeat']
             | components['schemas']['EventInboxUpdated']
+            | components['schemas']['EventScheduleUpdated']
             | components['schemas']['EventSessionMessage']
             | components['schemas']['EventTaskUpdated']
             | components['schemas']['EventWorkspaceUpdated'];
@@ -5740,6 +5966,438 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  listSchedules: {
+    parameters: {
+      query?: {
+        limit?: number;
+        page_token?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScheduledRunPage'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  createSchedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ScheduledRunCreate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          /** @description Quoted etag of the schedule (a UUID). Send it back as If-Match on update. */
+          ETag?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScheduledRunOutput'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  getSchedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        schedule_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          /** @description Quoted etag of the schedule (a UUID). Send it back as If-Match on update. */
+          ETag?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScheduledRunOutput'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  updateSchedule: {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Quoted etag from the last read, for example "3f1c...". Required in practice; a missing header returns 428. */
+        'If-Match'?: string;
+      };
+      path: {
+        schedule_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ScheduledRunConfigInput'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          /** @description Quoted etag of the schedule after the update. Send it back as If-Match on the next update. */
+          ETag?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScheduledRunOutput'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Precondition Failed */
+      412: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Precondition Required */
+      428: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  deleteSchedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        schedule_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  listScheduleExecutions: {
+    parameters: {
+      query?: {
+        limit?: number;
+        page_token?: string;
+      };
+      header?: never;
+      path: {
+        schedule_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScheduledRunExecutionPage'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  triggerSchedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        schedule_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ScheduledRunTriggerRequest'];
+      };
+    };
+    responses: {
+      /** @description Accepted */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScheduledRunExecutionOutput'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
