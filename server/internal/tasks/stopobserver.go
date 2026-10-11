@@ -96,7 +96,7 @@ func (k *KagentStops) Stopped(ctx context.Context, sessionID string) (bool, erro
 	if k.Kagent == nil {
 		return false, errors.New("tasks: the kagent client cannot list tasks, so a stop cannot be observed")
 	}
-	agent, err := k.Sessions.ResolveAgent(b.WorkspaceAgentNamespace, b.WorkspaceAgentName, &b.Kind, b.Role)
+	agent, err := k.Sessions.ResolveAgent(&b.ResolvedAgentNamespace, &b.ResolvedAgentName, &b.Kind, b.Role)
 	if err != nil {
 		return false, err
 	}

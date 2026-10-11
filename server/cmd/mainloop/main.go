@@ -199,6 +199,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner.Add(svc.DeliveryLoop())
 	runner.AddSweep(svc.EnsureSweep())
 	runner.AddSweep(svc.ResolveCreatesSweep())
+	runner.AddSweep(svc.CancelSweep())
 	runner.Add(hitlSvc.ResponseLoop())
 	runner.AddSweep(hitlSvc.ObserverSweep())
 	runner.AddSweep(attn.Sweep())

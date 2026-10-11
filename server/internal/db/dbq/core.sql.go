@@ -189,7 +189,7 @@ INSERT INTO sessions (
     id, user_id, project_id, title, description, prompt, repo_url, branch_name, base_branch, model,
     color
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, user_id, project_id, title, description, prompt, status, repo_url, branch_name, base_branch, model, commit_sha, summary, error, color, result, created_at, started_at, completed_at, archived_at, agent_cancel_outcome
+RETURNING id, user_id, project_id, title, description, prompt, status, repo_url, branch_name, base_branch, model, commit_sha, summary, error, color, result, created_at, started_at, completed_at, archived_at, agent_cancel_outcome, agent_cancel_attempts, agent_cancel_next_attempt_at
 `
 
 type CreateSessionParams struct {
@@ -244,6 +244,8 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.CompletedAt,
 		&i.ArchivedAt,
 		&i.AgentCancelOutcome,
+		&i.AgentCancelAttempts,
+		&i.AgentCancelNextAttemptAt,
 	)
 	return i, err
 }
@@ -518,7 +520,7 @@ func (q *Queries) GetProjectByFullName(ctx context.Context, arg GetProjectByFull
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, user_id, project_id, title, description, prompt, status, repo_url, branch_name, base_branch, model, commit_sha, summary, error, color, result, created_at, started_at, completed_at, archived_at, agent_cancel_outcome FROM sessions WHERE id = $1
+SELECT id, user_id, project_id, title, description, prompt, status, repo_url, branch_name, base_branch, model, commit_sha, summary, error, color, result, created_at, started_at, completed_at, archived_at, agent_cancel_outcome, agent_cancel_attempts, agent_cancel_next_attempt_at FROM sessions WHERE id = $1
 `
 
 func (q *Queries) GetSession(ctx context.Context, id string) (Session, error) {
@@ -546,6 +548,8 @@ func (q *Queries) GetSession(ctx context.Context, id string) (Session, error) {
 		&i.CompletedAt,
 		&i.ArchivedAt,
 		&i.AgentCancelOutcome,
+		&i.AgentCancelAttempts,
+		&i.AgentCancelNextAttemptAt,
 	)
 	return i, err
 }
@@ -722,7 +726,7 @@ func (q *Queries) ListProjects(ctx context.Context, userID string) ([]Project, e
 }
 
 const listSessions = `-- name: ListSessions :many
-SELECT id, user_id, project_id, title, description, prompt, status, repo_url, branch_name, base_branch, model, commit_sha, summary, error, color, result, created_at, started_at, completed_at, archived_at, agent_cancel_outcome FROM sessions
+SELECT id, user_id, project_id, title, description, prompt, status, repo_url, branch_name, base_branch, model, commit_sha, summary, error, color, result, created_at, started_at, completed_at, archived_at, agent_cancel_outcome, agent_cancel_attempts, agent_cancel_next_attempt_at FROM sessions
 WHERE user_id = $1 AND (archived_at IS NULL OR $2::boolean)
 ORDER BY created_at DESC, id
 `
@@ -763,6 +767,8 @@ func (q *Queries) ListSessions(ctx context.Context, arg ListSessionsParams) ([]S
 			&i.CompletedAt,
 			&i.ArchivedAt,
 			&i.AgentCancelOutcome,
+			&i.AgentCancelAttempts,
+			&i.AgentCancelNextAttemptAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1016,7 +1022,7 @@ const setSessionOutcome = `-- name: SetSessionOutcome :one
 UPDATE sessions
 SET summary = $2, error = $3, commit_sha = $4, result = $5
 WHERE id = $1
-RETURNING id, user_id, project_id, title, description, prompt, status, repo_url, branch_name, base_branch, model, commit_sha, summary, error, color, result, created_at, started_at, completed_at, archived_at, agent_cancel_outcome
+RETURNING id, user_id, project_id, title, description, prompt, status, repo_url, branch_name, base_branch, model, commit_sha, summary, error, color, result, created_at, started_at, completed_at, archived_at, agent_cancel_outcome, agent_cancel_attempts, agent_cancel_next_attempt_at
 `
 
 type SetSessionOutcomeParams struct {
@@ -1058,6 +1064,8 @@ func (q *Queries) SetSessionOutcome(ctx context.Context, arg SetSessionOutcomePa
 		&i.CompletedAt,
 		&i.ArchivedAt,
 		&i.AgentCancelOutcome,
+		&i.AgentCancelAttempts,
+		&i.AgentCancelNextAttemptAt,
 	)
 	return i, err
 }
@@ -1071,7 +1079,7 @@ SET status = $2,
         ELSE completed_at
     END
 WHERE id = $1
-RETURNING id, user_id, project_id, title, description, prompt, status, repo_url, branch_name, base_branch, model, commit_sha, summary, error, color, result, created_at, started_at, completed_at, archived_at, agent_cancel_outcome
+RETURNING id, user_id, project_id, title, description, prompt, status, repo_url, branch_name, base_branch, model, commit_sha, summary, error, color, result, created_at, started_at, completed_at, archived_at, agent_cancel_outcome, agent_cancel_attempts, agent_cancel_next_attempt_at
 `
 
 type SetSessionStatusParams struct {
@@ -1104,6 +1112,8 @@ func (q *Queries) SetSessionStatus(ctx context.Context, arg SetSessionStatusPara
 		&i.CompletedAt,
 		&i.ArchivedAt,
 		&i.AgentCancelOutcome,
+		&i.AgentCancelAttempts,
+		&i.AgentCancelNextAttemptAt,
 	)
 	return i, err
 }

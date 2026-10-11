@@ -26,6 +26,24 @@ func (q *Queries) ArchiveFinishedSession(ctx context.Context, id string) (int64,
 	return result.RowsAffected(), nil
 }
 
+const beginScheduledSessionCancelReconcile = `-- name: BeginScheduledSessionCancelReconcile :execrows
+UPDATE sessions
+SET agent_cancel_next_attempt_at = now() + make_interval(secs => least(30 * power(2, agent_cancel_attempts), 300)::float8),
+    agent_cancel_attempts = least(agent_cancel_attempts + 1, 5)
+WHERE id = $1 AND status = 'cancelled' AND agent_cancel_outcome = 'unknown'
+  AND agent_cancel_next_attempt_at <= now()
+`
+
+// Commit the next retry before remote I/O, including when this pass crashes. A bounded call ends
+// before the earliest next retry. No transaction stays open across the native observation.
+func (q *Queries) BeginScheduledSessionCancelReconcile(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, beginScheduledSessionCancelReconcile, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const bumpBindingTurns = `-- name: BumpBindingTurns :exec
 UPDATE agent_bindings SET turns = turns + 1, updated_at = now() WHERE session_id = $1
 `
@@ -463,7 +481,7 @@ func (q *Queries) GetOwnedSessionBinding(ctx context.Context, arg GetOwnedSessio
 }
 
 const getSessionRow = `-- name: GetSessionRow :one
-SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
+SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, s.agent_cancel_attempts, s.agent_cancel_next_attempt_at, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
 FROM sessions s
 LEFT JOIN agent_bindings b ON b.session_id = s.id
 LEFT JOIN topics t ON t.id = b.topic_id
@@ -476,30 +494,32 @@ type GetSessionRowParams struct {
 }
 
 type GetSessionRowRow struct {
-	ID                 string
-	UserID             string
-	ProjectID          *string
-	Title              string
-	Description        string
-	Prompt             string
-	Status             dbstate.SessionStatus
-	RepoURL            *string
-	BranchName         *string
-	BaseBranch         string
-	Model              *string
-	CommitSha          *string
-	Summary            *string
-	Error              *string
-	Color              *string
-	Result             json.RawMessage
-	CreatedAt          time.Time
-	StartedAt          *time.Time
-	CompletedAt        *time.Time
-	ArchivedAt         *time.Time
-	AgentCancelOutcome *string
-	AgentKind          *string
-	ParentSessionID    *string
-	Topic              *string
+	ID                       string
+	UserID                   string
+	ProjectID                *string
+	Title                    string
+	Description              string
+	Prompt                   string
+	Status                   dbstate.SessionStatus
+	RepoURL                  *string
+	BranchName               *string
+	BaseBranch               string
+	Model                    *string
+	CommitSha                *string
+	Summary                  *string
+	Error                    *string
+	Color                    *string
+	Result                   json.RawMessage
+	CreatedAt                time.Time
+	StartedAt                *time.Time
+	CompletedAt              *time.Time
+	ArchivedAt               *time.Time
+	AgentCancelOutcome       *string
+	AgentCancelAttempts      int32
+	AgentCancelNextAttemptAt time.Time
+	AgentKind                *string
+	ParentSessionID          *string
+	Topic                    *string
 }
 
 // A session with what its binding says about it. The owner filter is part of the key.
@@ -528,10 +548,29 @@ func (q *Queries) GetSessionRow(ctx context.Context, arg GetSessionRowParams) (G
 		&i.CompletedAt,
 		&i.ArchivedAt,
 		&i.AgentCancelOutcome,
+		&i.AgentCancelAttempts,
+		&i.AgentCancelNextAttemptAt,
 		&i.AgentKind,
 		&i.ParentSessionID,
 		&i.Topic,
 	)
+	return i, err
+}
+
+const getSessionScheduledExecution = `-- name: GetSessionScheduledExecution :one
+SELECT execution_id, schedule_id, kagent_session_id FROM scheduled_run_links WHERE session_id = $1
+`
+
+type GetSessionScheduledExecutionRow struct {
+	ExecutionID     string
+	ScheduleID      string
+	KagentSessionID *string
+}
+
+func (q *Queries) GetSessionScheduledExecution(ctx context.Context, sessionID *string) (GetSessionScheduledExecutionRow, error) {
+	row := q.db.QueryRow(ctx, getSessionScheduledExecution, sessionID)
+	var i GetSessionScheduledExecutionRow
+	err := row.Scan(&i.ExecutionID, &i.ScheduleID, &i.KagentSessionID)
 	return i, err
 }
 
@@ -610,6 +649,50 @@ func (q *Queries) InsertSessionMessage(ctx context.Context, arg InsertSessionMes
 	return result.RowsAffected(), nil
 }
 
+const listCancelledSessionSends = `-- name: ListCancelledSessionSends :many
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE session_id = $1 AND state = 'cancelled' AND detail = 'cancelled by user'
+  AND (kagent_session_id IS NOT NULL OR task_id IS NOT NULL)
+`
+
+// Preserve unresolved Mainloop sends as uncertainty when reconciling a scheduled cancellation.
+func (q *Queries) ListCancelledSessionSends(ctx context.Context, sessionID string) ([]Delivery, error) {
+	rows, err := q.db.Query(ctx, listCancelledSessionSends, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Delivery{}
+	for rows.Next() {
+		var i Delivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.IdempotencyKey,
+			&i.SessionID,
+			&i.State,
+			&i.Source,
+			&i.TaskID,
+			&i.EvidenceRef,
+			&i.Detail,
+			&i.KagentSessionID,
+			&i.HealthTracked,
+			&i.Attempts,
+			&i.CreateFailures,
+			&i.NextAttemptAt,
+			&i.LeaseOwner,
+			&i.LeaseUntil,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOpenDeliveries = `-- name: ListOpenDeliveries :many
 SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries
 WHERE session_id = $1 AND state IN ('recorded', 'sending', 'delivered', 'uncertain')
@@ -648,6 +731,39 @@ func (q *Queries) ListOpenDeliveries(ctx context.Context, sessionID string) ([]D
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listScheduledSessionCancelsDue = `-- name: ListScheduledSessionCancelsDue :many
+SELECT s.id FROM sessions s
+WHERE s.user_id = $1 AND s.status = 'cancelled' AND s.agent_cancel_outcome = 'unknown'
+  AND s.agent_cancel_next_attempt_at <= now()
+  AND EXISTS (SELECT 1 FROM scheduled_run_links l WHERE l.session_id = s.id)
+ORDER BY s.agent_cancel_next_attempt_at, s.id LIMIT $2
+`
+
+type ListScheduledSessionCancelsDueParams struct {
+	UserID string
+	Limit  int32
+}
+
+func (q *Queries) ListScheduledSessionCancelsDue(ctx context.Context, arg ListScheduledSessionCancelsDueParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listScheduledSessionCancelsDue, arg.UserID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -762,7 +878,7 @@ func (q *Queries) ListSessionMessages(ctx context.Context, sessionID string) ([]
 }
 
 const listSessionRows = `-- name: ListSessionRows :many
-SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
+SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, s.agent_cancel_attempts, s.agent_cancel_next_attempt_at, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
 FROM sessions s
 LEFT JOIN agent_bindings b ON b.session_id = s.id
 LEFT JOIN topics t ON t.id = b.topic_id
@@ -784,30 +900,32 @@ type ListSessionRowsParams struct {
 }
 
 type ListSessionRowsRow struct {
-	ID                 string
-	UserID             string
-	ProjectID          *string
-	Title              string
-	Description        string
-	Prompt             string
-	Status             dbstate.SessionStatus
-	RepoURL            *string
-	BranchName         *string
-	BaseBranch         string
-	Model              *string
-	CommitSha          *string
-	Summary            *string
-	Error              *string
-	Color              *string
-	Result             json.RawMessage
-	CreatedAt          time.Time
-	StartedAt          *time.Time
-	CompletedAt        *time.Time
-	ArchivedAt         *time.Time
-	AgentCancelOutcome *string
-	AgentKind          *string
-	ParentSessionID    *string
-	Topic              *string
+	ID                       string
+	UserID                   string
+	ProjectID                *string
+	Title                    string
+	Description              string
+	Prompt                   string
+	Status                   dbstate.SessionStatus
+	RepoURL                  *string
+	BranchName               *string
+	BaseBranch               string
+	Model                    *string
+	CommitSha                *string
+	Summary                  *string
+	Error                    *string
+	Color                    *string
+	Result                   json.RawMessage
+	CreatedAt                time.Time
+	StartedAt                *time.Time
+	CompletedAt              *time.Time
+	ArchivedAt               *time.Time
+	AgentCancelOutcome       *string
+	AgentCancelAttempts      int32
+	AgentCancelNextAttemptAt time.Time
+	AgentKind                *string
+	ParentSessionID          *string
+	Topic                    *string
 }
 
 // The owner's unarchived sessions other than the main thread, newest first: every session that is
@@ -844,6 +962,8 @@ func (q *Queries) ListSessionRows(ctx context.Context, arg ListSessionRowsParams
 			&i.CompletedAt,
 			&i.ArchivedAt,
 			&i.AgentCancelOutcome,
+			&i.AgentCancelAttempts,
+			&i.AgentCancelNextAttemptAt,
 			&i.AgentKind,
 			&i.ParentSessionID,
 			&i.Topic,
@@ -1304,7 +1424,8 @@ func (q *Queries) SetDeliveryKagentSession(ctx context.Context, arg SetDeliveryK
 
 const setSessionCancelled = `-- name: SetSessionCancelled :one
 UPDATE sessions
-SET status = 'cancelled', completed_at = coalesce(completed_at, now()), agent_cancel_outcome = 'unknown'
+SET status = 'cancelled', completed_at = coalesce(completed_at, now()), agent_cancel_outcome = 'unknown',
+    agent_cancel_attempts = 0, agent_cancel_next_attempt_at = now() + interval '30 seconds'
 WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')
 RETURNING id
 `

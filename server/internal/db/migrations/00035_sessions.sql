@@ -13,9 +13,17 @@ ALTER TABLE agent_bindings ADD CONSTRAINT agent_bindings_agent_ref CHECK (
 );
 
 -- Cancel commits unknown before touching kagent. A crash or unconfirmed reply retains that
--- outcome, and another cancel reads it without repeating the remote action.
+-- outcome, and another cancel reads it. The scheduled-cancel sweep observes a late dispatch and
+-- may repeat idempotent task cancellation until the execution is positively final.
 ALTER TABLE sessions ADD COLUMN agent_cancel_outcome text
 CHECK (agent_cancel_outcome IN ('unknown', 'stopped', 'not_running'));
+-- Scheduled cancellation is revisited after a late dispatch. Pace even crash recovery with the
+-- database clock; attempts saturate once the backoff reaches its five-minute cap.
+ALTER TABLE sessions ADD COLUMN agent_cancel_attempts integer NOT NULL DEFAULT 0
+CHECK (agent_cancel_attempts BETWEEN 0 AND 5);
+ALTER TABLE sessions ADD COLUMN agent_cancel_next_attempt_at timestamptz NOT NULL DEFAULT now();
+CREATE INDEX sessions_cancel_due ON sessions (agent_cancel_next_attempt_at, id)
+WHERE status = 'cancelled' AND agent_cancel_outcome = 'unknown';
 
 -- The request id of a kagent CreateSession that was sent (or may have been) for the binding, written
 -- before the call. A create whose Session id never came back is found by it: the orphan sweep
@@ -144,6 +152,9 @@ CREATE TRIGGER sessions_keep_main BEFORE UPDATE OF archived_at ON sessions
 FOR EACH ROW EXECUTE FUNCTION refuse_archiving_main_session();
 
 -- +goose Down
+DROP INDEX IF EXISTS sessions_cancel_due;
+ALTER TABLE sessions DROP COLUMN IF EXISTS agent_cancel_next_attempt_at;
+ALTER TABLE sessions DROP COLUMN IF EXISTS agent_cancel_attempts;
 ALTER TABLE sessions DROP COLUMN IF EXISTS agent_cancel_outcome;
 ALTER TABLE agent_bindings DROP CONSTRAINT IF EXISTS agent_bindings_agent_ref;
 ALTER TABLE agent_bindings DROP COLUMN IF EXISTS kagent_agent_name;

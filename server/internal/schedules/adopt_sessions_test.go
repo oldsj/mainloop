@@ -51,6 +51,7 @@ func adoptedSession(t *testing.T) (*env, *sessions.Service, *kagent.Client, stri
 func TestCancelAdoptedScheduledSessionStopsNativeTasks(t *testing.T) {
 	e, svc, _, sid, ksid := adoptedSession(t)
 	e.srv.AddTask(&a2a.Task{ID: "scheduled-turn", ContextID: ksid, Status: a2a.TaskStatus{State: a2a.TaskStateWorking}})
+	e.srv.EditExecution(scheduledExecutionID(t, e, sid), func(x *kagentapi.ScheduledRunExecution) { x.TaskId = "scheduled-turn" })
 	e.srv.AddTask(&a2a.Task{ID: "finished-turn", ContextID: ksid, Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}})
 	e.srv.AddTask(&a2a.Task{ID: "foreign-turn", ContextID: "another-context", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}})
 	if n := e.count(t, `SELECT count(*) FROM deliveries WHERE session_id = $1`, sid); n != 0 {

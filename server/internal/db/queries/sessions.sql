@@ -290,7 +290,8 @@ SELECT count(*) FROM sessions WHERE user_id = $1;
 -- The cancelled status is final (RefreshSessionStatus leaves it alone). Nothing changes once the
 -- session is finished.
 UPDATE sessions
-SET status = 'cancelled', completed_at = coalesce(completed_at, now()), agent_cancel_outcome = 'unknown'
+SET status = 'cancelled', completed_at = coalesce(completed_at, now()), agent_cancel_outcome = 'unknown',
+    agent_cancel_attempts = 0, agent_cancel_next_attempt_at = now() + interval '30 seconds'
 WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')
 RETURNING id;
 
@@ -305,6 +306,30 @@ WHERE agent_bindings.session_id = $1 AND kagent_session_id IS NOT NULL AND kagen
 UNION
 SELECT kagent_session_id::text FROM deliveries
 WHERE deliveries.session_id = $1 AND kagent_session_id IS NOT NULL AND kagent_session_id <> '';
+
+-- name: GetSessionScheduledExecution :one
+SELECT execution_id, schedule_id, kagent_session_id FROM scheduled_run_links WHERE session_id = $1;
+
+-- name: ListScheduledSessionCancelsDue :many
+SELECT s.id FROM sessions s
+WHERE s.user_id = $1 AND s.status = 'cancelled' AND s.agent_cancel_outcome = 'unknown'
+  AND s.agent_cancel_next_attempt_at <= now()
+  AND EXISTS (SELECT 1 FROM scheduled_run_links l WHERE l.session_id = s.id)
+ORDER BY s.agent_cancel_next_attempt_at, s.id LIMIT $2;
+
+-- name: BeginScheduledSessionCancelReconcile :execrows
+-- Commit the next retry before remote I/O, including when this pass crashes. A bounded call ends
+-- before the earliest next retry. No transaction stays open across the native observation.
+UPDATE sessions
+SET agent_cancel_next_attempt_at = now() + make_interval(secs => least(30 * power(2, agent_cancel_attempts), 300)::float8),
+    agent_cancel_attempts = least(agent_cancel_attempts + 1, 5)
+WHERE id = $1 AND status = 'cancelled' AND agent_cancel_outcome = 'unknown'
+  AND agent_cancel_next_attempt_at <= now();
+
+-- name: ListCancelledSessionSends :many
+-- Preserve unresolved Mainloop sends as uncertainty when reconciling a scheduled cancellation.
+SELECT * FROM deliveries WHERE session_id = $1 AND state = 'cancelled' AND detail = 'cancelled by user'
+  AND (kagent_session_id IS NOT NULL OR task_id IS NOT NULL);
 
 -- name: SetBindingAgentRef :exec
 UPDATE agent_bindings

@@ -8,9 +8,57 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 )
+
+type storedReferenceStops struct {
+	*fakeKagent
+	agents []kagent.AgentRef
+}
+
+func (k *storedReferenceStops) ListTasks(ctx context.Context, agent kagent.AgentRef, id string) ([]*a2a.Task, error) {
+	k.agents = append(k.agents, agent)
+	return k.fakeKagent.ListTasks(ctx, agent, id)
+}
+
+func TestReviewS2G8bResolverNeedsStoredReference(t *testing.T) {
+	for _, kind := range []string{"scheduled", "claude"} {
+		t.Run(kind, func(t *testing.T) {
+			r := newRig(t)
+			if kind == "scheduled" {
+				r.ses.Providers = nil // no workspace or profile names the adopted Agent
+			}
+			ctx := context.Background()
+			q := dbq.New(r.pool)
+			const sid = "adopted-scheduled-session"
+			if _, err := q.CreateSession(ctx, dbq.CreateSessionParams{ID: sid, UserID: owner, Title: "scheduled"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := q.CreateAgentBinding(ctx, dbq.CreateAgentBindingParams{
+				SessionID: sid, Kind: kind, Role: dbstate.RoleAgent, MCPGrantKind: dbstate.GrantNone,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.exec(`UPDATE agent_bindings SET kagent_session_id = 'scheduled-context',
+				kagent_agent_namespace = 'kagent', kagent_agent_name = 'pinned-agent' WHERE session_id = $1`, sid)
+			k := &storedReferenceStops{fakeKagent: &fakeKagent{landed: true, state: a2a.TaskStateWorking}}
+			obs := &tasks.KagentStops{Pool: r.pool, OwnerID: owner, Sessions: r.ses.Service, Kagent: k}
+			mustStopped(t, obs, sid, false, "running scheduled task")
+			mustStopped(t, obs, sid, true, "cancelled scheduled task")
+			for _, agent := range k.agents {
+				if agent != (kagent.AgentRef{Namespace: "kagent", Name: "pinned-agent"}) {
+					t.Fatalf("observer used Agent %+v", agent)
+				}
+			}
+			if len(k.agents) != 2 {
+				t.Fatal("observer did not list the adopted context")
+			}
+		})
+	}
+}
 
 // fakeKagent is kagent for the real KagentStops observer. Until it has landed, kagent has not seen
 // the in-flight message: no task carries it. Once landed, the message has a task in state.

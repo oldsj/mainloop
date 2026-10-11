@@ -16,6 +16,8 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/kagent"
+	"github.com/oldsj/mainloop/server/internal/reconcile"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
 )
 
 // UnconfirmedError is a stop that kagent did not confirm. Nothing was written, so it is safe to
@@ -304,7 +306,8 @@ type CancelResult struct {
 // cancels non-final native tasks, including those started outside the delivery ledger. The status
 // and an unknown agent outcome are written first and are sticky, so no later delivery
 // brings the session back and no message is taken. A cancel kagent does not confirm is reported as
-// unknown and is not repeated. A session that had already finished is left as it is.
+// unknown. The scheduled-cancel sweep revisits it without replaying the scheduled send. A session
+// that had already finished is left as it is.
 func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, error) {
 	q := dbq.New(s.Pool)
 	row, err := q.GetSessionRow(ctx, dbq.GetSessionRowParams{ID: sessionID, UserID: s.OwnerID})
@@ -416,16 +419,34 @@ func cancelledResult(row dbq.GetSessionRowRow) CancelResult {
 // cancelNativeTasks observes every bound or previously used context before cancelling. Network
 // calls happen after the cancelled intent commits; none run under a database lock or transaction.
 func (s *Service) cancelNativeTasks(ctx context.Context, sessionID string, b dbq.GetOwnedSessionBindingRow, closedNow []cancelledDelivery) string {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 	outcome := AgentNotRunning
-	contexts, err := dbq.New(s.Pool).ListSessionKagentContexts(ctx, sessionID)
+	q := dbq.New(s.Pool)
+	contexts, err := q.ListSessionKagentContexts(ctx, sessionID)
 	if err != nil {
 		return AgentUnknown
+	}
+	link, err := q.GetSessionScheduledExecution(ctx, &sessionID)
+	scheduled := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return AgentUnknown
+	}
+	if scheduled && link.KagentSessionID != nil && *link.KagentSessionID != "" {
+		// The original execution's context still matters if the binding was replaced later.
+		found := false
+		for _, id := range contexts {
+			found = found || id == *link.KagentSessionID
+		}
+		if !found {
+			contexts = append(contexts, *link.KagentSessionID)
+		}
 	}
 	mayHaveSent := false
 	for _, c := range closedNow {
 		mayHaveSent = mayHaveSent || c.prev != dbstate.DeliveryRecorded
 	}
-	if len(contexts) == 0 && !mayHaveSent {
+	if len(contexts) == 0 && !mayHaveSent && !scheduled {
 		return outcome
 	}
 	if s.Kagent == nil {
@@ -434,6 +455,20 @@ func (s *Service) cancelNativeTasks(ctx context.Context, sessionID string, b dbq
 	agent, err := s.bindingAgentOf(b)
 	if err != nil {
 		return AgentUnknown
+	}
+	var execution *kagentapi.ScheduledRunExecution
+	if scheduled {
+		// A reserved Session or RUNNING execution can precede its A2A send. Only a fresh
+		// execution read, never an empty task list or the adoption snapshot, can close that gap.
+		reader, ok := s.Kagent.(scheduledExecutionReader)
+		if ok {
+			execution, err = reader.GetScheduledRunExecution(ctx, link.ExecutionID)
+		}
+		if !ok || err != nil || execution.GetId() != link.ExecutionID || execution.GetScheduledRunId() != link.ScheduleID ||
+			link.KagentSessionID == nil || execution.GetSessionId() != *link.KagentSessionID {
+			execution = nil
+			outcome = AgentUnknown
+		}
 	}
 	tasks := make(map[string]*a2a.Task)
 	for _, ksid := range contexts {
@@ -486,8 +521,48 @@ func (s *Service) cancelNativeTasks(ctx context.Context, sessionID string, b dbq
 		}
 		tasks[taskID] = task
 	}
+	if taskID := execution.GetTaskId(); taskID != "" && tasks[taskID] == nil {
+		task, err := s.Kagent.GetTask(ctx, agent, taskID)
+		if err != nil || task == nil || string(task.ID) != taskID || task.ContextID != execution.GetSessionId() {
+			outcome = AgentUnknown
+		} else {
+			tasks[taskID] = task
+		}
+	}
+	outcome = s.cancelTaskSet(ctx, sessionID, agent, tasks, outcome)
+	if scheduled && !scheduledExecutionFinal(execution) {
+		task := tasks[execution.GetTaskId()]
+		if execution == nil || task == nil || task.ContextID != execution.GetSessionId() || !task.Status.State.Terminal() {
+			return AgentUnknown
+		}
+		// The execution's task is now positively final. Re-list after that evidence so a task
+		// that appeared during the first listing cannot be missed when we settle the outcome.
+		remaining := make(map[string]*a2a.Task)
+		for _, ksid := range contexts {
+			listed, err := s.Kagent.ListTasks(ctx, agent, ksid)
+			if err != nil {
+				outcome = AgentUnknown
+				continue
+			}
+			for _, task := range listed {
+				if task == nil || task.ID == "" || task.ContextID != ksid {
+					outcome = AgentUnknown
+					continue
+				}
+				remaining[string(task.ID)] = task
+			}
+		}
+		outcome = s.cancelTaskSet(ctx, sessionID, agent, remaining, outcome)
+	}
+	return outcome
+}
+
+func (s *Service) cancelTaskSet(ctx context.Context, sessionID string, agent kagent.AgentRef, tasks map[string]*a2a.Task, outcome string) string {
 	for taskID, task := range tasks {
 		if task.Status.State.Terminal() {
+			if task.Status.State == a2a.TaskStateCanceled && outcome != AgentUnknown {
+				outcome = AgentStopped
+			}
 			continue
 		}
 		cancelled, err := s.Kagent.CancelTask(ctx, agent, taskID)
@@ -500,11 +575,81 @@ func (s *Service) cancelNativeTasks(ctx context.Context, sessionID string, b dbq
 			outcome = AgentUnknown
 			continue
 		}
+		tasks[taskID] = cancelled
 		if cancelled.Status.State == a2a.TaskStateCanceled && outcome != AgentUnknown {
 			outcome = AgentStopped
 		}
 	}
 	return outcome
+}
+
+type scheduledExecutionReader interface {
+	GetScheduledRunExecution(context.Context, string) (*kagentapi.ScheduledRunExecution, error)
+}
+
+func scheduledExecutionFinal(e *kagentapi.ScheduledRunExecution) bool {
+	switch e.GetState() {
+	case kagentapi.ScheduledRunExecutionState_SCHEDULED_RUN_EXECUTION_STATE_SUCCEEDED,
+		kagentapi.ScheduledRunExecutionState_SCHEDULED_RUN_EXECUTION_STATE_FAILED,
+		kagentapi.ScheduledRunExecutionState_SCHEDULED_RUN_EXECUTION_STATE_TIMED_OUT:
+		return true
+	default:
+		return false
+	}
+}
+
+// CancelSweep revisits unknown outcomes on adopted scheduled sessions. There is no cancel-
+// execution RPC: it observes before repeating idempotent task cancellation, never the send.
+func (s *Service) CancelSweep() reconcile.Sweep {
+	return reconcile.Sweep{Name: "cancel-scheduled-sessions", Every: 30 * time.Second, Run: s.ReconcileScheduledCancels}
+}
+
+// ReconcileScheduledCancels runs a bounded batch with durable exponential backoff. A timeout or
+// exhausted pass leaves unknown intact; later passes continue until there is positive evidence.
+func (s *Service) ReconcileScheduledCancels(ctx context.Context) error {
+	if s.Kagent == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	q := dbq.New(s.Pool)
+	rows, err := q.ListScheduledSessionCancelsDue(ctx, dbq.ListScheduledSessionCancelsDueParams{UserID: s.OwnerID, Limit: 50})
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, sessionID := range rows {
+		if ctx.Err() != nil {
+			return errors.Join(append(errs, ctx.Err())...)
+		}
+		if err := s.reconcileScheduledCancel(ctx, q, sessionID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (s *Service) reconcileScheduledCancel(ctx context.Context, q *dbq.Queries, sessionID string) error {
+	if n, err := q.BeginScheduledSessionCancelReconcile(ctx, sessionID); err != nil || n == 0 {
+		return err
+	}
+	b, err := s.ownedBinding(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	rows, err := q.ListCancelledSessionSends(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	closed := make([]cancelledDelivery, 0, len(rows))
+	for _, d := range rows {
+		closed = append(closed, cancelledDelivery{d: d, prev: dbstate.DeliveryUncertain})
+	}
+	outcome := s.cancelNativeTasks(ctx, sessionID, b, closed)
+	if outcome == AgentUnknown {
+		return nil
+	}
+	return q.RecordSessionCancelOutcome(ctx, dbq.RecordSessionCancelOutcomeParams{ID: sessionID, AgentCancelOutcome: &outcome})
 }
 
 // Archive clears one finished session from the list. A live one must be cancelled first, and the

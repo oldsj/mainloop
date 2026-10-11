@@ -491,27 +491,29 @@ type ScheduledRunSchedule struct {
 }
 
 type Session struct {
-	ID                 string
-	UserID             string
-	ProjectID          *string
-	Title              string
-	Description        string
-	Prompt             string
-	Status             dbstate.SessionStatus
-	RepoURL            *string
-	BranchName         *string
-	BaseBranch         string
-	Model              *string
-	CommitSha          *string
-	Summary            *string
-	Error              *string
-	Color              *string
-	Result             json.RawMessage
-	CreatedAt          time.Time
-	StartedAt          *time.Time
-	CompletedAt        *time.Time
-	ArchivedAt         *time.Time
-	AgentCancelOutcome *string
+	ID                       string
+	UserID                   string
+	ProjectID                *string
+	Title                    string
+	Description              string
+	Prompt                   string
+	Status                   dbstate.SessionStatus
+	RepoURL                  *string
+	BranchName               *string
+	BaseBranch               string
+	Model                    *string
+	CommitSha                *string
+	Summary                  *string
+	Error                    *string
+	Color                    *string
+	Result                   json.RawMessage
+	CreatedAt                time.Time
+	StartedAt                *time.Time
+	CompletedAt              *time.Time
+	ArchivedAt               *time.Time
+	AgentCancelOutcome       *string
+	AgentCancelAttempts      int32
+	AgentCancelNextAttemptAt time.Time
 }
 
 type SessionMessage struct {

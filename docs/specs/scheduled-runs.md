@@ -81,7 +81,7 @@ the binding, the item and `schedule:updated` are written in one transaction.
 ## Native session control (implemented)
 
 - The binding stores the schedule's Agent namespace and name independently of provider profiles.
-  Session control, HITL observation and follow-up delivery prefer that reference, including for an
+  Session control, task stop observation, HITL observation and follow-up delivery prefer that reference, including for an
   Agent no profile names. Adoption writes no Session-create marker and does not add an Agent to
   `kagent_agents` or an unresolved create to `CountUnresolvedBindings`.
 - Cancelling an adopted session commits its cancelled status and an `unknown` agent outcome before
@@ -89,9 +89,18 @@ the binding, the item and `schedule:updated` are written in one transaction.
   cancels non-final ones, including a scheduled turn with no Mainloop delivery. No database lock or
   transaction spans those calls.
 - `agent` is `stopped` after a confirmed native cancel, `not_running` when no native task remains
-  running, or `unknown` when a listing, cancel or in-flight send cannot be confirmed. Cancel replies
+  running, or `unknown` when a listing, cancel or in-flight send cannot be confirmed. An empty task
+  list does not settle a reserved or in-flight scheduled dispatch. A fresh `GetScheduledRunExecution`
+  must show a final execution, or identify its task and that task must be observed final; then the
+  native contexts are listed again and any remaining task is cancelled. Cancel replies
   must identify the requested task and context and report a terminal state. The outcome is stored;
   repeated cancellation returns it without repeating the remote action.
+- A scheduled-cancel sweep revisits adopted sessions whose outcome is `unknown`. Each pass handles
+  at most 50 sessions within one minute, with each session's native calls bounded to 20 seconds.
+  Retry times are committed before native I/O and back off from 30 seconds to five minutes, surviving
+  restart. No age or retry count turns uncertainty into a confirmed stop. Only positive evidence
+  moves the stored outcome from `unknown` to `stopped` or `not_running`. The sweep also preserves
+  uncertainty about any Mainloop sends cancellation closed; it never replays a scheduled send.
 
 These paths have fake-kagent and scratch PostgreSQL regression evidence, including HITL adoption
 and a follow-up through the delivery loop. Live kagent behavior has not been measured.
