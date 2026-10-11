@@ -15,7 +15,7 @@ CREATE TABLE dev_environments (
     owner_id text NOT NULL,
     name text NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
     source_kind text NOT NULL CHECK (source_kind IN ('prebuilt_image', 'definition_repo', 'operator_default')),
-    watched_tag text,
+    watched_tag text CHECK (watched_tag ~ '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'),
     definition jsonb,
     -- The accepted default. Set only through the composite foreign key below.
     default_version_id text,

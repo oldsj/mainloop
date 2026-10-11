@@ -90,3 +90,51 @@ const (
 	RecordOpen TopicRecordStatus = "open"
 	RecordDone TopicRecordStatus = "done"
 )
+
+// ValidationStatus is environment_versions.validation_status.
+type ValidationStatus string
+
+// Environment version validation statuses.
+const (
+	ValidationPendingBuild    ValidationStatus = "pending_build"
+	ValidationStaticValidated ValidationStatus = "static_validated"
+)
+
+// ProvenanceKind is environment_versions.provenance_kind.
+type ProvenanceKind string
+
+// Environment version provenance kinds.
+const (
+	ProvenanceUserPushed    ProvenanceKind = "user_pushed"
+	ProvenanceMainloopBuilt ProvenanceKind = "mainloop_built"
+	ProvenanceOperator      ProvenanceKind = "operator"
+)
+
+// BaseProvenance is environment_versions.base_provenance.
+type BaseProvenance string
+
+// Base image provenance values.
+const (
+	BaseSupplied BaseProvenance = "supplied"
+	BaseVerified BaseProvenance = "verified"
+	BaseUnknown  BaseProvenance = "unknown"
+)
+
+// EnvironmentSourceKind is dev_environments.source_kind.
+type EnvironmentSourceKind string
+
+// Environment source kinds.
+const (
+	SourcePrebuiltImage   EnvironmentSourceKind = "prebuilt_image"
+	SourceDefinitionRepo  EnvironmentSourceKind = "definition_repo"
+	SourceOperatorDefault EnvironmentSourceKind = "operator_default"
+)
+
+// GrantPermission is environment_grants.permission.
+type GrantPermission string
+
+// Environment grant permissions.
+const (
+	PermissionUse    GrantPermission = "use"
+	PermissionDerive GrantPermission = "derive"
+)

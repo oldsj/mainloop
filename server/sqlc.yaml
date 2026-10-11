@@ -44,6 +44,30 @@ sql:
                 import: github.com/oldsj/mainloop/server/internal/db/dbstate,
                 type: TopicRecordStatus
               }
+          - column: environment_versions.validation_status
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: ValidationStatus
+              }
+          - column: environment_versions.provenance_kind
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: ProvenanceKind }
+          - column: environment_versions.base_provenance
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: BaseProvenance }
+          - column: dev_environments.source_kind
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: EnvironmentSourceKind
+              }
+          - column: environment_grants.permission
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: GrantPermission
+              }
           - db_type: jsonb
             go_type: { import: encoding/json, type: RawMessage }
           - db_type: jsonb

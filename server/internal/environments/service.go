@@ -15,6 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 )
 
@@ -81,9 +82,9 @@ func environmentVersion(ctx context.Context, q *dbq.Queries, environmentID, vers
 // Register validates the request, then stores the environment and its first version. An invalid
 // registration persists nothing.
 func (s *Service) Register(ctx context.Context, owner string, req api.RegisterEnvironment) (api.RegisteredEnvironment, error) {
-	sourceKind := SourcePrebuiltImage
+	sourceKind := dbstate.SourcePrebuiltImage
 	if req.SourceKind != nil {
-		sourceKind = string(*req.SourceKind)
+		sourceKind = dbstate.EnvironmentSourceKind(*req.SourceKind)
 	}
 	architecture := "amd64"
 	if req.Architecture != nil {
@@ -94,7 +95,7 @@ func (s *Service) Register(ctx context.Context, owner string, req api.RegisterEn
 
 	var version dbq.InsertEnvironmentVersionParams
 	switch sourceKind {
-	case SourcePrebuiltImage:
+	case dbstate.SourcePrebuiltImage:
 		if req.Image == nil || *req.Image == "" || req.Definition != nil {
 			return api.RegisteredEnvironment{}, unprocessable("prebuilt registration requires image only")
 		}
@@ -102,7 +103,7 @@ func (s *Service) Register(ctx context.Context, owner string, req api.RegisterEn
 		if version, err = s.Validator.Validate(ctx, *req.Image, architecture, envID, s.id()); err != nil {
 			return api.RegisteredEnvironment{}, registryFailure(err)
 		}
-	case SourceDefinitionRepo:
+	case dbstate.SourceDefinitionRepo:
 		if req.Definition == nil || req.Image != nil || req.WatchedTag != nil {
 			return api.RegisteredEnvironment{}, unprocessable("definition registration requires definition only")
 		}
@@ -116,9 +117,9 @@ func (s *Service) Register(ctx context.Context, owner string, req api.RegisterEn
 		env.Definition = definition
 		version = dbq.InsertEnvironmentVersionParams{
 			ID: s.id(), EnvironmentID: envID, Definition: definition,
-			CapabilityProfile: json.RawMessage(`{}`), ValidationStatus: StatusPendingBuild,
+			CapabilityProfile: json.RawMessage(`{}`), ValidationStatus: dbstate.ValidationPendingBuild,
 			ValidationResult: json.RawMessage(`{"build":"not_run"}`), ValidatorVersion: ValidatorVersion,
-			ProvenanceKind: ProvenanceMainloopBuilt, BaseProvenance: "unknown",
+			ProvenanceKind: dbstate.ProvenanceMainloopBuilt, BaseProvenance: dbstate.BaseUnknown,
 		}
 	default:
 		return api.RegisteredEnvironment{}, unprocessable("unsupported source kind")
@@ -255,7 +256,7 @@ func (s *Service) SetDefault(ctx context.Context, owner, id, versionID string) (
 		if err != nil {
 			return err
 		}
-		if v.ValidationStatus != StatusStaticValidated {
+		if v.ValidationStatus != dbstate.ValidationStaticValidated {
 			return unprocessable("Version is not statically validated")
 		}
 		row, err := q.SetDevEnvironmentDefault(ctx, dbq.SetDevEnvironmentDefaultParams{ID: id, DefaultVersionID: &versionID})
@@ -269,7 +270,7 @@ func (s *Service) SetDefault(ctx context.Context, owner, id, versionID string) (
 }
 
 // Grant lets a project use an owned environment. A repeated grant replaces the permission.
-func (s *Service) Grant(ctx context.Context, owner, id, projectID, permission string) (api.ProjectEnvironmentGrant, error) {
+func (s *Service) Grant(ctx context.Context, owner, id, projectID string, permission dbstate.GrantPermission) (api.ProjectEnvironmentGrant, error) {
 	err := db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
 		q := dbq.New(tx)
 		if err := lockForGrant(ctx, q, owner, id, projectID); err != nil {
@@ -381,7 +382,7 @@ func (s *Service) Select(ctx context.Context, owner, projectID string, req api.S
 		if err != nil {
 			return err
 		}
-		if candidate.ValidationStatus != StatusStaticValidated {
+		if candidate.ValidationStatus != dbstate.ValidationStaticValidated {
 			return unprocessable("Version is not statically validated")
 		}
 		if _, err := q.UpsertEnvironmentSelection(ctx, dbq.UpsertEnvironmentSelectionParams{

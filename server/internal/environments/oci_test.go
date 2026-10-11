@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/environments"
 	"github.com/oldsj/mainloop/server/internal/environments/fakeregistry"
 )
@@ -44,8 +46,8 @@ func TestValidateSingleManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.ValidationStatus != environments.StatusStaticValidated || v.ValidatorVersion != "oci-static-v2" ||
-		v.ProvenanceKind != environments.ProvenanceUserPushed || v.BaseProvenance != "unknown" {
+	if v.ValidationStatus != dbstate.ValidationStaticValidated || v.ValidatorVersion != "oci-static-v2" ||
+		v.ProvenanceKind != dbstate.ProvenanceUserPushed || v.BaseProvenance != dbstate.BaseUnknown {
 		t.Errorf("status fields = %+v", v)
 	}
 	if v.IndexDigest != nil || str(v.PlatformManifestDigest) != img.Manifest || str(v.ConfigDigest) != img.Config ||
@@ -233,6 +235,18 @@ func (f failing) Read(context.Context, string, string, string, string) ([]byte, 
 	return nil, f.err
 }
 
+// TestCancelledReadReturnsContextError covers a client whose error text carries a signed URL
+// while the caller's context is done.
+func TestCancelledReadReturnsContextError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client := failing{fmt.Errorf("Get %q: %w", "https://cdn.example/blob?X-Amz-Signature=SIGNEDSECRET", context.Canceled)}
+	cancel()
+	_, err := validator(client).Validate(ctx, reg+"/oldsj/dev@sha256:"+strings.Repeat("a", 64), "amd64", "e", "v")
+	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "SIGNEDSECRET") {
+		t.Fatalf("error = %v, want a bare context.Canceled", err)
+	}
+}
+
 func TestValidateIndexPlatformChecks(t *testing.T) {
 	ctx := context.Background()
 	rewriteIndex := func(r *fakeregistry.Registry, img fakeregistry.Image, edit func(string) string) string {
@@ -244,14 +258,18 @@ func TestValidateIndexPlatformChecks(t *testing.T) {
 	t.Run("no matching platform", func(t *testing.T) {
 		r := fakeregistry.New()
 		img := r.AddImage(reg, "oldsj/dev", fakeregistry.Options{Index: true})
-		ref := rewriteIndex(r, img, func(s string) string { return strings.ReplaceAll(s, `"architecture":"amd64"`, `"architecture":"s390x"`) })
+		ref := rewriteIndex(r, img, func(s string) string {
+			return strings.ReplaceAll(s, `"architecture":"amd64"`, `"architecture":"s390x"`)
+		})
 		_, err := validator(r).Validate(ctx, ref, "amd64", "e", "v")
 		wantRegistryError(t, err, "Expected one linux/amd64 platform manifest")
 	})
 	t.Run("two matching platforms", func(t *testing.T) {
 		r := fakeregistry.New()
 		img := r.AddImage(reg, "oldsj/dev", fakeregistry.Options{Index: true})
-		ref := rewriteIndex(r, img, func(s string) string { return strings.ReplaceAll(s, `"architecture":"arm64"`, `"architecture":"amd64"`) })
+		ref := rewriteIndex(r, img, func(s string) string {
+			return strings.ReplaceAll(s, `"architecture":"arm64"`, `"architecture":"amd64"`)
+		})
 		_, err := validator(r).Validate(ctx, ref, "amd64", "e", "v")
 		wantRegistryError(t, err, "Expected one linux/amd64 platform manifest")
 	})
@@ -346,6 +364,16 @@ func TestRefresh(t *testing.T) {
 		wantRegistryError(t, err, "not allowlisted")
 		if len(fresh.Calls()) != 0 {
 			t.Error("resolved the tag on a registry that is no longer allowlisted")
+		}
+	})
+	t.Run("a watched tag outside the tag grammar", func(t *testing.T) {
+		for _, bad := range []string{"a/b", "a?x=1", "..", "-lead", "has space", "a\n", strings.Repeat("a", 129)} {
+			fresh := fakeregistry.New()
+			_, err := validator(fresh).Refresh(ctx, dbq.DevEnvironment{ID: "env", WatchedTag: &bad}, previous, "x")
+			wantRegistryError(t, err, "Invalid watched image tag")
+			if len(fresh.Calls()) != 0 {
+				t.Errorf("tag %q reached the registry", bad)
+			}
 		}
 	})
 	t.Run("tag missing", func(t *testing.T) {

@@ -38,6 +38,15 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"topic_records", "kind", strs(
 			string(dbstate.RecordNote), string(dbstate.RecordDecision), string(dbstate.RecordPending), string(dbstate.RecordReport))},
 		{"topic_records", "status", strs(string(dbstate.RecordOpen), string(dbstate.RecordDone))},
+		{"environment_versions", "validation_status", strs(
+			string(dbstate.ValidationPendingBuild), string(dbstate.ValidationStaticValidated))},
+		{"environment_versions", "provenance_kind", strs(
+			string(dbstate.ProvenanceUserPushed), string(dbstate.ProvenanceMainloopBuilt), string(dbstate.ProvenanceOperator))},
+		{"environment_versions", "base_provenance", strs(
+			string(dbstate.BaseSupplied), string(dbstate.BaseVerified), string(dbstate.BaseUnknown))},
+		{"dev_environments", "source_kind", strs(
+			string(dbstate.SourcePrebuiltImage), string(dbstate.SourceDefinitionRepo), string(dbstate.SourceOperatorDefault))},
+		{"environment_grants", "permission", strs(string(dbstate.PermissionUse), string(dbstate.PermissionDerive))},
 	}
 	for _, c := range cases {
 		t.Run(c.table+"."+c.column, func(t *testing.T) {
@@ -60,5 +69,20 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 				t.Errorf("CHECK %q has %v, constants have %v", def, got, want)
 			}
 		})
+	}
+}
+
+// watched_tag is interpolated into a registry URL path, so the database enforces the tag grammar
+// for every writer.
+func TestWatchedTagCheck(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.New(t)
+	for tag, ok := range map[string]bool{"stable": true, "v1.2-rc_3": true, "_x": true, "a/b": false, "a?x": false, "..": false, "-x": false, "a\n": false, "": false} {
+		_, err := d.Pool.Exec(ctx,
+			`INSERT INTO mainloop.dev_environments (id, owner_id, name, source_kind, watched_tag) VALUES ($1, 'o', 'n', 'prebuilt_image', $2)`,
+			"env-"+tag, tag)
+		if (err == nil) != ok {
+			t.Errorf("watched_tag %q: err = %v, want accepted = %v", tag, err, ok)
+		}
 	}
 }

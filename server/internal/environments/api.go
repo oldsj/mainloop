@@ -9,6 +9,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/config"
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
 // EnvironmentsAPI serves the environment and project-selection routes.
@@ -80,7 +81,7 @@ func (a *EnvironmentsAPI) AcceptEnvironmentDefault(ctx context.Context, req api.
 
 // GrantEnvironmentToProject implements the contract operation.
 func (a *EnvironmentsAPI) GrantEnvironmentToProject(ctx context.Context, req api.GrantEnvironmentToProjectRequestObject) (api.GrantEnvironmentToProjectResponseObject, error) {
-	out, err := a.Service.Grant(ctx, a.OwnerID, req.EnvironmentId, req.ProjectId, string(req.Body.Permission))
+	out, err := a.Service.Grant(ctx, a.OwnerID, req.EnvironmentId, req.ProjectId, dbstate.GrantPermission(req.Body.Permission))
 	if err != nil {
 		return nil, err
 	}

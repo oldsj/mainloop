@@ -8,6 +8,8 @@ package dbq
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
 const deleteEnvironmentGrant = `-- name: DeleteEnvironmentGrant :exec
@@ -136,7 +138,7 @@ type InsertDevEnvironmentParams struct {
 	ID         string
 	OwnerID    string
 	Name       string
-	SourceKind string
+	SourceKind dbstate.EnvironmentSourceKind
 	WatchedTag *string
 	Definition json.RawMessage
 }
@@ -187,11 +189,11 @@ type InsertEnvironmentVersionParams struct {
 	DeclaredUser           *string
 	Architecture           *string
 	CapabilityProfile      json.RawMessage
-	ValidationStatus       string
+	ValidationStatus       dbstate.ValidationStatus
 	ValidationResult       json.RawMessage
 	ValidatorVersion       string
-	ProvenanceKind         string
-	BaseProvenance         string
+	ProvenanceKind         dbstate.ProvenanceKind
+	BaseProvenance         dbstate.BaseProvenance
 	ParentVersionID        *string
 	PackageDeclaration     json.RawMessage
 	ApprovalReference      *string
@@ -394,7 +396,7 @@ RETURNING environment_id, project_id, permission
 type UpsertEnvironmentGrantParams struct {
 	EnvironmentID string
 	ProjectID     string
-	Permission    string
+	Permission    dbstate.GrantPermission
 }
 
 func (q *Queries) UpsertEnvironmentGrant(ctx context.Context, arg UpsertEnvironmentGrantParams) (EnvironmentGrant, error) {

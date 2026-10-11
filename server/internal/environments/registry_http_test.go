@@ -269,6 +269,21 @@ func TestCDNNeverRedirectsOrExchangesAuth(t *testing.T) {
 }
 
 func TestSignedLocationStaysOutOfErrors(t *testing.T) {
+	t.Run("caller cancels during the CDN request", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		c := newConfig()
+		c.cdn = func(r *http.Request) (*http.Response, error) {
+			cancel()
+			return nil, &url.Error{Op: "Get", URL: r.URL.String(), Err: context.Canceled}
+		}
+		_, err := (&environments.AnonymousRegistry{Transport: c.transport()}).Read(ctx, "ghcr.io", "oldsj/dev", "blobs", blobDigest)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context.Canceled", err)
+		}
+		if strings.Contains(err.Error(), "SIGNEDSECRET") {
+			t.Errorf("error leaks the signed URL: %v", err)
+		}
+	})
 	t.Run("CDN status", func(t *testing.T) {
 		c := newConfig()
 		c.cdn = func(*http.Request) (*http.Response, error) { return respond(500, ""), nil }

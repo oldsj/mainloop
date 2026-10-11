@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
 // Static OCI validation reads image metadata only (manifests and the config blob), never layers.
@@ -23,18 +24,6 @@ const (
 	MaxMetadataBytes = 4 << 20
 	// RequiredUser is the only USER an environment image may declare.
 	RequiredUser = "65532:65532"
-)
-
-// Version statuses, provenance kinds and sources, as stored.
-const (
-	StatusPendingBuild    = "pending_build"
-	StatusStaticValidated = "static_validated"
-
-	ProvenanceUserPushed    = "user_pushed"
-	ProvenanceMainloopBuilt = "mainloop_built"
-
-	SourcePrebuiltImage  = "prebuilt_image"
-	SourceDefinitionRepo = "definition_repo"
 )
 
 // Budgets are the elapsed-time limits on registry work. Read applies to one registry read (token
@@ -70,6 +59,8 @@ func regErr(format string, args ...any) *RegistryError {
 var (
 	referencePattern = regexp.MustCompile(`^([a-z0-9.-]+)/([a-z0-9._/-]+)@(sha256:[0-9a-f]{64})$`)
 	digestPattern    = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	// watchedTagPattern is the tag grammar the contract and the watched_tag CHECK also enforce.
+	watchedTagPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
 )
 
 // Reference is a parsed, allowlisted image reference.
@@ -124,8 +115,11 @@ func (v *Validator) Validate(ctx context.Context, reference, architecture, envir
 func (v *Validator) read(ctx context.Context, ref Reference, kind, reference string) ([]byte, error) {
 	data, err := v.Client.Read(ctx, ref.Registry, ref.Repository, kind, reference)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, context.Cause(ctx)
+		}
 		var re *RegistryError
-		if errors.As(err, &re) || ctx.Err() != nil {
+		if errors.As(err, &re) {
 			return nil, err
 		}
 		// A client's own error text may carry a request URL; the owner sees only this.
@@ -217,11 +211,11 @@ func (v *Validator) validate(ctx context.Context, reference, architecture, envir
 		DeclaredUser:           &user,
 		Architecture:           &architecture,
 		CapabilityProfile:      json.RawMessage(`{}`),
-		ValidationStatus:       StatusStaticValidated,
+		ValidationStatus:       dbstate.ValidationStaticValidated,
 		ValidationResult:       result,
 		ValidatorVersion:       ValidatorVersion,
-		ProvenanceKind:         ProvenanceUserPushed,
-		BaseProvenance:         "unknown",
+		ProvenanceKind:         dbstate.ProvenanceUserPushed,
+		BaseProvenance:         dbstate.BaseUnknown,
 	}, nil
 }
 
@@ -245,6 +239,9 @@ func (v *Validator) Refresh(ctx context.Context, env dbq.DevEnvironment, previou
 		var zero dbq.InsertEnvironmentVersionParams
 		if env.WatchedTag == nil || *env.WatchedTag == "" || previous.Registry == nil || previous.Repository == nil || previous.PlatformManifestDigest == nil || previous.Architecture == nil {
 			return zero, regErr("Environment has no watched image tag")
+		}
+		if !watchedTagPattern.MatchString(*env.WatchedTag) {
+			return zero, regErr("Invalid watched image tag")
 		}
 		// Check the registry is still allowlisted before resolving any mutable metadata.
 		ref, err := ParseReference(*previous.Registry+"/"+*previous.Repository+"@"+*previous.PlatformManifestDigest, v.Allowlist)

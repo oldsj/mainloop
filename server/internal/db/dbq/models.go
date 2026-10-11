@@ -48,7 +48,7 @@ type DevEnvironment struct {
 	ID               string
 	OwnerID          string
 	Name             string
-	SourceKind       string
+	SourceKind       dbstate.EnvironmentSourceKind
 	WatchedTag       *string
 	Definition       json.RawMessage
 	DefaultVersionID *string
@@ -58,7 +58,7 @@ type DevEnvironment struct {
 type EnvironmentGrant struct {
 	EnvironmentID string
 	ProjectID     string
-	Permission    string
+	Permission    dbstate.GrantPermission
 }
 
 type EnvironmentVersion struct {
@@ -73,11 +73,11 @@ type EnvironmentVersion struct {
 	DeclaredUser           *string
 	Architecture           *string
 	CapabilityProfile      json.RawMessage
-	ValidationStatus       string
+	ValidationStatus       dbstate.ValidationStatus
 	ValidationResult       json.RawMessage
 	ValidatorVersion       string
-	ProvenanceKind         string
-	BaseProvenance         string
+	ProvenanceKind         dbstate.ProvenanceKind
+	BaseProvenance         dbstate.BaseProvenance
 	ParentVersionID        *string
 	PackageDeclaration     json.RawMessage
 	ApprovalReference      *string

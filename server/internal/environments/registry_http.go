@@ -38,18 +38,20 @@ type AnonymousRegistry struct {
 	ReadBudget time.Duration
 }
 
-func (r *AnonymousRegistry) client() *http.Client {
-	rt := r.Transport
+// client returns a client and a function that releases the connections of a transport the reader
+// created. An injected Transport belongs to the caller and is left alone.
+func (r *AnonymousRegistry) client() (*http.Client, func()) {
+	rt, release := r.Transport, func() {}
 	if rt == nil {
 		t := http.DefaultTransport.(*http.Transport).Clone()
 		t.Proxy = nil
 		t.DisableCompression = true
-		rt = t
+		rt, release = t, t.CloseIdleConnections
 	}
 	return &http.Client{
 		Transport:     rt,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
+	}, release
 }
 
 type fetched struct {
@@ -72,8 +74,12 @@ func (r *AnonymousRegistry) Read(ctx context.Context, registry, repository, kind
 func (r *AnonymousRegistry) read(ctx context.Context, registry, repository, kind, reference string) ([]byte, error) {
 	data, err := r.exchange(ctx, registry, repository, kind, reference)
 	if err != nil {
+		if ctx.Err() != nil {
+			// A transport error would carry the request URL, signed on the CDN hop.
+			return nil, context.Cause(ctx)
+		}
 		var re *RegistryError
-		if errors.As(err, &re) || ctx.Err() != nil {
+		if errors.As(err, &re) {
 			return nil, err
 		}
 		// Transport errors embed the request URL; the owner sees only this.
@@ -83,7 +89,8 @@ func (r *AnonymousRegistry) read(ctx context.Context, registry, repository, kind
 }
 
 func (r *AnonymousRegistry) exchange(ctx context.Context, registry, repository, kind, reference string) ([]byte, error) {
-	client := r.client()
+	client, release := r.client()
+	defer release()
 	target := "https://" + registry + "/v2/" + repository + "/" + kind + "/" + reference
 	headers := http.Header{"Accept": {acceptManifests}}
 
@@ -110,7 +117,9 @@ func (r *AnonymousRegistry) exchange(ctx context.Context, registry, repository, 
 		}
 		// A fresh client with a fresh transport: nothing from the registry exchange (connection
 		// state, cookies, headers) reaches the CDN.
-		if res, err = fetch(ctx, r.client(), location, nil); err != nil {
+		cdn, releaseCDN := r.client()
+		defer releaseCDN()
+		if res, err = fetch(ctx, cdn, location, nil); err != nil {
 			return nil, err
 		}
 	}
