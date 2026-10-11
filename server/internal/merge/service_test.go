@@ -61,7 +61,8 @@ func newEnv(t *testing.T) *env {
 			Number: 1, Title: "Add a thing", Body: "Because.", HeadRef: "feature", HeadSHA: tip,
 			Files: []githubtest.File{{Filename: "server/a.go", Additions: 3, Deletions: 1}},
 		}},
-		Runs: map[string][]githubtest.CheckRun{tip: {{ID: 1, AppID: 9, Name: "ci", Conclusion: "success"}}},
+		Suites: map[string][]githubtest.CheckSuite{tip: {{ID: 1, AppID: 9, Conclusion: "success"}}},
+		Runs:   map[string][]githubtest.CheckRun{tip: {{ID: 1, AppID: 9, Name: "ci", Conclusion: "success"}}},
 	})
 	app, err := github.NewApp(github.Options{AppID: fmt.Sprint(githubtest.AppID), PrivateKey: githubtest.PrivateKey(), BaseURL: fake.URL})
 	if err != nil {
@@ -373,7 +374,7 @@ func TestNewHeadSupersedes(t *testing.T) {
 		r.Branches["feature"] = moved
 	})
 	if got := e.settled(v.ProposalID); got != dbstate.MergeSuperseded || e.puts() != 0 {
-		t.Fatalf("state = %s, puts %d", got, e.puts())
+		t.Fatalf("state = %s, puts %d, detail %q", got, e.puts(), e.detail(v.ProposalID))
 	}
 }
 
@@ -766,11 +767,17 @@ func TestStatusReadsStoredStateOnly(t *testing.T) {
 	}
 }
 
+// planMessage is the one 403 body that means the plan has no protection or rules feature.
+const planMessage = "Upgrade to GitHub Pro or make this repository public to enable this feature."
+
 func TestRulesUnavailableOnPlanKeepsCIEvidence(t *testing.T) {
 	// A 403 on the protection and rules reads means the plan has neither: the checks decide.
 	e := newEnv(t)
 	e.run()
-	e.fake.Update("o", "n", func(r *githubtest.Repository) { r.ProtectionStatus, r.RulesStatus = 403, 403 })
+	e.fake.Update("o", "n", func(r *githubtest.Repository) {
+		r.ProtectionStatus, r.RulesStatus = 403, 403
+		r.ProtectionMessage, r.RulesMessage = planMessage, planMessage
+	})
 	v, err := e.svc.Merge(context.Background(), e.input("r1"))
 	if err != nil || v.State != dbstate.MergeMerged {
 		t.Fatalf("view = %+v, %v", v, err)

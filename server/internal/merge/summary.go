@@ -69,7 +69,7 @@ func summaryOf(proposalID string, f Facts) api.MergeSummary {
 	}
 	fileCount, globs, polVer, prNumber := len(f.Files), f.GlobsVersion, f.PolicyVer, f.PRNumber
 
-	return api.MergeSummary{
+	out := api.MergeSummary{
 		Additions: &f.Additions, ApprovalReasons: reasons, Availability: availability,
 		Base: &f.Base, BaseSha: &f.BaseSHA, Ci: ci, Deletions: &f.Deletions,
 		DescriptionDigest: &bodyDigest, DescriptionExcerpt: excerpt, DescriptionLength: &bodyLen,
@@ -80,6 +80,22 @@ func summaryOf(proposalID string, f Facts) api.MergeSummary {
 		ProtectedMatches: matches, Repository: &f.Repository, Title: &f.Title,
 		UnavailableReasons: unavailable, Version: 1,
 	}
+	// The merge-result fields exist only on a proposal that read the squash's inventory.
+	if f.MergeBaseSHA != "" {
+		inPR := map[string]bool{}
+		for _, x := range f.Files {
+			inPR[x.Filename] = true
+		}
+		mergeOnly := 0
+		for _, x := range f.MergeFiles {
+			if !inPR[x.Filename] {
+				mergeOnly++
+			}
+		}
+		mergeCount := len(f.MergeFiles)
+		out.MergeFileCount, out.MergeOnlyFileCount, out.MergePathsDigest = &mergeCount, &mergeOnly, &f.MergeFilesDigest
+	}
+	return out
 }
 
 func excerptOf(body string) (string, bool) {

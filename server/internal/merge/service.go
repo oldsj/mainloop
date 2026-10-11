@@ -196,10 +196,18 @@ func (s *Service) prepare(ctx context.Context, tool dbstate.MergeTool, in Prepar
 	case err == nil:
 	case hasStatus && st == 404:
 		return View{}, refuse("pull_request_not_found", "the pull request does not exist")
+	case errors.Is(err, errStale):
+		return View{}, refuse("evidence_changed", "the pull request, repository or default branch changed while it was read; prepare again")
 	default:
 		return View{}, refuse("github_unavailable", "GitHub could not be read: "+errStatus(err))
 	}
 	f := ev.Facts
+	switch {
+	case ev.PR.Mergeable != nil && (!*ev.PR.Mergeable || ev.PR.MergeableState == "dirty"):
+		return View{}, refuse("merge_conflict", "the pull request conflicts with "+f.Base+"; merge or rebase it into "+f.Head+", push, then prepare again")
+	case ev.PR.Mergeable == nil && len(f.Unavailable) == 0:
+		return View{}, refuse("mergeability_pending", "GitHub has not worked out whether the pull request conflicts yet; try again shortly")
+	}
 	if !strings.EqualFold(f.Repository, project.FullName) {
 		return View{}, refuse("repository_mismatch", "the repository is not the project's")
 	}

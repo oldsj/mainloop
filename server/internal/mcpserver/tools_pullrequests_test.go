@@ -48,7 +48,8 @@ func newPRHarness(t *testing.T) *prHarness {
 			Number: 1, Title: "Add a thing", HeadRef: "feature", HeadSHA: prTip,
 			Files: []githubtest.File{{Filename: "server/a.go", Additions: 1}},
 		}},
-		Runs: map[string][]githubtest.CheckRun{prTip: {{ID: 1, AppID: 9, Name: "ci", Conclusion: "success"}}},
+		Suites: map[string][]githubtest.CheckSuite{prTip: {{ID: 1, AppID: 9, Conclusion: "success"}}},
+		Runs:   map[string][]githubtest.CheckRun{prTip: {{ID: 1, AppID: 9, Name: "ci", Conclusion: "success"}}},
 	})
 	app, err := github.NewApp(github.Options{AppID: fmt.Sprint(githubtest.AppID), PrivateKey: githubtest.PrivateKey(), BaseURL: fake.URL})
 	if err != nil {

@@ -102,6 +102,8 @@ var rules = []rule{
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/branches/*/protection", kindRepo, Permissions{"administration": Read}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/branches/**", kindRepo, Permissions{"contents": Read}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/rules/branches/*", kindRepo, Permissions{"metadata": Read}),
+	// Commit comparison, for the merge inventory: base and head are 40-hex SHAs joined by "...".
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/compare/*", kindRepo, Permissions{"contents": Read}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/commits/*/check-suites", kindRepo, Permissions{"checks": Read}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/commits/*/check-runs", kindRepo, Permissions{"checks": Read}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/commits/*/statuses", kindRepo, Permissions{"statuses": Read}),

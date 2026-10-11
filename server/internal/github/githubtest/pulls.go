@@ -18,39 +18,80 @@ type File struct {
 	Deletions        int
 }
 
-// CheckSuite is a check suite on a commit. Status defaults to "completed".
+// CheckSuite is a check suite on a commit. Status defaults to "completed". HeadSHA defaults to
+// the commit it is listed under. CreatedAt is an RFC 3339 time; RunsCount, when set, is the
+// suite's latest_check_runs_count.
 type CheckSuite struct {
 	ID         int64
 	AppID      int64
 	Status     string
 	Conclusion string
+	HeadSHA    string
+	CreatedAt  string
+	RunsCount  *int
 }
 
-// CheckRun is a check run on a commit. Status defaults to "completed".
+// CheckRun is a check run on a commit. Status defaults to "completed"; SuiteID to 1; HeadSHA to the
+// commit it is listed under.
 type CheckRun struct {
 	ID         int64
 	AppID      int64
+	SuiteID    int64
 	Name       string
 	Status     string
 	Conclusion string
+	HeadSHA    string
 }
 
-// Status is a commit status.
+// Status is a commit status. CreatedAt defaults to a time that grows with ID.
 type Status struct {
-	ID      int64
-	Context string
-	State   string
+	ID        int64
+	Context   string
+	State     string
+	CreatedAt time.Time
 }
 
-// Protection is classic branch protection.
+// AppCheck is a required status check bound to an app (0 or -1: any app).
+type AppCheck struct {
+	Context string
+	AppID   int64
+}
+
+// Protection is classic branch protection. RequiredChecks are contexts with no app; Checks are
+// bound to an app. Strict requires the head to contain the latest base.
 type Protection struct {
 	RequiredChecks []string
+	Checks         []AppCheck
+	Strict         bool
 }
 
-// Rule is an active ruleset rule on the default branch.
+// Rule is an active ruleset rule on the default branch. RequiredChecks and Checks make a
+// required_status_checks rule; Parameters, when set, is the JSON parameters object instead.
 type Rule struct {
 	Type           string
 	RequiredChecks []string
+	Checks         []AppCheck
+	Strict         bool
+	Parameters     string
+}
+
+// CompareCommit is a commit of a comparison with its parents.
+type CompareCommit struct {
+	SHA     string
+	Parents []string
+}
+
+// Compare is the answer to a commit comparison. NoFiles omits the file list, as GitHub does after
+// the first page. Commits are listed page by page, 100 at a time.
+type Compare struct {
+	Status    string
+	AheadBy   int
+	BehindBy  int
+	Base      string
+	MergeBase string
+	Commits   []CompareCommit
+	Files     []File
+	NoFiles   bool
 }
 
 // Update runs fn on the stored repository while holding the fake's lock, so a test can change
@@ -150,6 +191,13 @@ func baseRef(repo *Repository, p PullRequest) string {
 		return p.BaseRef
 	}
 	return repo.DefaultBranch
+}
+
+// TipOf is the commit a branch of the repository points at: the fake's own for the default branch
+// unless a test set one. It is empty for an unknown branch.
+func TipOf(repo *Repository, branch string) string {
+	sha, _ := tipOf(repo, branch)
+	return sha
 }
 
 func tipOf(repo *Repository, branch string) (string, bool) {
@@ -409,7 +457,12 @@ func (s *Server) branchCall(w http.ResponseWriter, r *http.Request, repo *Reposi
 	defer s.mu.Unlock()
 	if n := len(rest); n >= 2 && rest[n-1] == "protection" {
 		if repo.ProtectionStatus != 0 {
-			writeJSON(w, repo.ProtectionStatus, map[string]string{"message": SecretMarker})
+			writeJSON(w, repo.ProtectionStatus, map[string]string{"message": messageOr(repo.ProtectionMessage)})
+			return
+		}
+		if repo.ProtectionRaw != "" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(repo.ProtectionRaw))
 			return
 		}
 		if repo.Protection == nil {
@@ -417,10 +470,15 @@ func (s *Server) branchCall(w http.ResponseWriter, r *http.Request, repo *Reposi
 			return
 		}
 		checks := []map[string]any{}
-		for _, c := range repo.Protection.RequiredChecks {
-			checks = append(checks, map[string]any{"context": c})
+		for _, c := range repo.Protection.Checks {
+			checks = append(checks, map[string]any{"context": c.Context, "app_id": c.AppID})
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"required_status_checks": map[string]any{"strict": false, "contexts": []string{}, "checks": checks}})
+		contexts := append([]string{}, repo.Protection.RequiredChecks...)
+		out := map[string]any{"required_status_checks": nil}
+		if len(checks) > 0 || len(contexts) > 0 || repo.Protection.Strict {
+			out["required_status_checks"] = map[string]any{"strict": repo.Protection.Strict, "contexts": contexts, "checks": checks}
+		}
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 	branch := strings.Join(rest, "/")
@@ -432,24 +490,117 @@ func (s *Server) branchCall(w http.ResponseWriter, r *http.Request, repo *Reposi
 	writeJSON(w, http.StatusOK, map[string]any{"name": branch, "commit": map[string]any{"sha": sha}})
 }
 
+func messageOr(m string) string {
+	if m == "" {
+		return SecretMarker
+	}
+	return m
+}
+
 func (s *Server) ruleCall(w http.ResponseWriter, r *http.Request, repo *Repository) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if repo.RulesStatus != 0 {
-		writeJSON(w, repo.RulesStatus, map[string]string{"message": SecretMarker})
+		writeJSON(w, repo.RulesStatus, map[string]string{"message": messageOr(repo.RulesMessage)})
 		return
 	}
-	out := []map[string]any{}
+	if p, _ := strconv.Atoi(r.URL.Query().Get("page")); p > 1 && repo.RulesLaterStatus != 0 {
+		writeJSON(w, repo.RulesLaterStatus, map[string]string{"message": messageOr(repo.RulesMessage)})
+		return
+	}
+	if repo.RulesRaw != "" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(repo.RulesRaw))
+		return
+	}
+	out := []json.RawMessage{}
 	for _, rule := range repo.Rules {
 		item := map[string]any{"type": rule.Type, "ruleset_id": 1}
-		if len(rule.RequiredChecks) > 0 {
+		switch {
+		case rule.Parameters != "":
+			item["parameters"] = json.RawMessage(rule.Parameters)
+		case len(rule.RequiredChecks) > 0 || len(rule.Checks) > 0 || rule.Strict:
 			checks := []map[string]any{}
 			for _, c := range rule.RequiredChecks {
 				checks = append(checks, map[string]any{"context": c})
 			}
-			item["parameters"] = map[string]any{"required_status_checks": checks}
+			for _, c := range rule.Checks {
+				checks = append(checks, map[string]any{"context": c.Context, "integration_id": c.AppID})
+			}
+			item["parameters"] = map[string]any{"required_status_checks": checks, "strict_required_status_checks_policy": rule.Strict}
 		}
-		out = append(out, item)
+		raw, _ := json.Marshal(item)
+		out = append(out, raw)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) compareCall(w http.ResponseWriter, r *http.Request, repo *Repository, spec string) {
+	base, head, ok := strings.Cut(spec, "...")
+	if !ok {
+		notFound(w)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, found := repo.Compares[spec]
+	if !found {
+		tip, _ := tipOf(repo, repo.DefaultBranch)
+		if base != tip {
+			notFound(w)
+			return
+		}
+		for _, p := range repo.PullRequests {
+			if p.HeadSHA == head {
+				c = Compare{Status: "ahead", AheadBy: 1, Base: base, MergeBase: base, Commits: []CompareCommit{{SHA: head, Parents: []string{base}}}, Files: p.Files}
+				found = true
+			}
+		}
+		if !found {
+			notFound(w)
+			return
+		}
+	}
+	if c.Base == "" {
+		c.Base = base
+	}
+	if c.MergeBase == "" {
+		c.MergeBase = base
+	}
+	per, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+	pg, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if per < 1 || per > 100 {
+		per = 30
+	}
+	pg = max(pg, 1)
+	from, to := min((pg-1)*per, len(c.Commits)), min(pg*per, len(c.Commits))
+	commits := []map[string]any{}
+	for _, x := range c.Commits[from:to] {
+		parents := []map[string]any{}
+		for _, p := range x.Parents {
+			parents = append(parents, map[string]any{"sha": p})
+		}
+		commits = append(commits, map[string]any{"sha": x.SHA, "parents": parents})
+	}
+	out := map[string]any{
+		"status": c.Status, "ahead_by": c.AheadBy, "behind_by": c.BehindBy,
+		"base_commit": map[string]any{"sha": c.Base}, "merge_base_commit": map[string]any{"sha": c.MergeBase},
+		"commits": commits,
+	}
+	if pg == 1 && !c.NoFiles {
+		files := []map[string]any{}
+		for _, f := range c.Files {
+			status := f.Status
+			if status == "" {
+				status = "modified"
+			}
+			item := map[string]any{"filename": f.Filename, "status": status, "additions": f.Additions, "deletions": f.Deletions}
+			if f.PreviousFilename != "" {
+				item["previous_filename"] = f.PreviousFilename
+			}
+			files = append(files, item)
+		}
+		out["files"] = files
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -469,7 +620,18 @@ func (s *Server) commitFacts(w http.ResponseWriter, r *http.Request, repo *Repos
 			if c.Conclusion != "" {
 				conclusion = c.Conclusion
 			}
-			suites = append(suites, map[string]any{"id": c.ID, "head_sha": sha, "status": status, "conclusion": conclusion, "app": map[string]any{"id": c.AppID, "slug": "app"}})
+			head := c.HeadSHA
+			if head == "" {
+				head = sha
+			}
+			item := map[string]any{"id": c.ID, "head_sha": head, "status": status, "conclusion": conclusion, "app": map[string]any{"id": c.AppID, "slug": "app"}}
+			if c.CreatedAt != "" {
+				item["created_at"] = c.CreatedAt
+			}
+			if c.RunsCount != nil {
+				item["latest_check_runs_count"] = *c.RunsCount
+			}
+			suites = append(suites, item)
 		}
 		from, to, pageNo, last := page(r, len(suites))
 		s.link(w, r, pageNo, last)
@@ -485,7 +647,15 @@ func (s *Server) commitFacts(w http.ResponseWriter, r *http.Request, repo *Repos
 			if c.Conclusion != "" {
 				conclusion = c.Conclusion
 			}
-			runs = append(runs, map[string]any{"id": c.ID, "name": c.Name, "head_sha": sha, "status": status, "conclusion": conclusion, "app": map[string]any{"id": c.AppID}})
+			head := c.HeadSHA
+			if head == "" {
+				head = sha
+			}
+			suite := c.SuiteID
+			if suite == 0 {
+				suite = 1
+			}
+			runs = append(runs, map[string]any{"id": c.ID, "name": c.Name, "head_sha": head, "status": status, "conclusion": conclusion, "app": map[string]any{"id": c.AppID}, "check_suite": map[string]any{"id": suite}})
 		}
 		from, to, pageNo, last := page(r, len(runs))
 		s.link(w, r, pageNo, last)
@@ -493,7 +663,11 @@ func (s *Server) commitFacts(w http.ResponseWriter, r *http.Request, repo *Repos
 	default:
 		statuses := []map[string]any{}
 		for _, c := range repo.Statuses[sha] {
-			statuses = append(statuses, map[string]any{"id": c.ID, "context": c.Context, "state": c.State})
+			created := c.CreatedAt
+			if created.IsZero() {
+				created = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(c.ID) * time.Second)
+			}
+			statuses = append(statuses, map[string]any{"id": c.ID, "context": c.Context, "state": c.State, "created_at": created.UTC().Format(time.RFC3339)})
 		}
 		from, to, pageNo, last := page(r, len(statuses))
 		s.link(w, r, pageNo, last)

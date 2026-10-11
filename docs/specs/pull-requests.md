@@ -111,13 +111,39 @@ A delegated agent that needs a merge asks its parent, whose own call is answerab
 - Every tool needs the actor's session project to equal the `project_id` argument, and fails closed
   when the session has no project. Merge tools are listed only for actors that hold
   `open_pull_request`; a completed task may only read status.
-- A 403 on the branch-protection or rules read means "rules are unavailable on this plan": the
-  evidence records `github_rules_unavailable_on_plan` and continues with CI. Only the status code
-  is used, never the message text. A 403 on any other read is an ordinary failure
-  (`github_unavailable`, retried). A 403 on the PUT is `merge_refused_403`. A permission-denied 403
-  on the two rule reads cannot be told from a plan 403.
-- Required checks and statuses must have a result; with no CI at all nothing merges. A
-  `merge_queue` rule always routes to approval.
+- A 403 on the branch-protection or rules read means "rules are unavailable on this plan" only
+  when it is the first page of the read and its JSON `message` is exactly `Upgrade to GitHub Pro or
+make this repository public to enable this feature.` The evidence then records
+  `github_rules_unavailable_on_plan` and continues with CI. Any other 403 (a permission refusal, a
+  secondary limit that reads as 403, the same text on a later page, a near miss of the text) is an
+  ordinary failure (`github_unavailable`, retried) and nothing merges: an unreadable ruleset must not
+  erase a required check. The earlier status-only rule could not tell these apart, and a token
+  without the permission would have been treated as a repository with no rules. The exact text is
+  the only signal GitHub gives for the plan limit, so a change to it fails closed until this
+  constant is updated. A 403 on the PUT is `merge_refused_403`. Evidence refusals never repeat the
+  upstream body.
+- Requirements are read with their full meaning and anything not supported blocks the automatic
+  route (the proposal takes the approval route with an unavailable reason, and the merge is
+  refused): classic and ruleset required checks keep their app (`app_id` / `integration_id`; `-1` or
+  absent means any app); strict (up-to-date) policy; required reviews, restrictions, enabled
+  conversation resolution, signature, lock and creation blocks; a `pull_request` rule with review,
+  code-owner, last-push, thread-resolution requirements or a merge-method list without `squash`;
+  required workflows and every other known rule type; unknown rule types; and malformed or
+  unknown-field documents. `strict` is `branch_out_of_date` when GitHub reports the branch behind
+  and `unsupported_strict_status_checks` otherwise. Deletion, non-fast-forward and required-linear
+  -history rules are ignored because a squash merge cannot break them. `merge_queue` always routes
+  to approval.
+- CI is judged at the exact head. Every suite and run must name that head; a run of a suite that
+  was not listed is an inconsistent read. Only a completed `success` counts. `neutral`, `skipped`
+  and every other conclusion fail; `queued`, `in_progress`, `pending`, `waiting` and `requested` wait.
+  A suite with a failing conclusion fails the merge even when a newer run of the same app passes. A
+  suite with no runs that was created more than 10 minutes ago and has not completed is abandoned
+  and ignored; a fresh one waits. A required (context, app) pair with no result waits, and with no
+  CI at all nothing merges.
+- The merge inventory (see [Merge inventory](#merge-inventory)) is computed against the current
+  default-branch tip with the compare endpoint and the merge settings are read with the
+  permissions that expose `allow_squash_merge`; an absent setting refuses the merge. The compare
+  endpoint is on the client's allowlist (Contents read).
 - The Observer for the task projection (PR state and CI at the exact head, five minutes fresh) is
   not implemented: G8b is not merged. When it lands, an observer over `github.App.PullRequest` and
   the check reads belongs in `internal/github`.

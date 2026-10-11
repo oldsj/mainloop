@@ -133,12 +133,28 @@ type Repository struct {
 	Runs     map[string][]CheckRun
 	Statuses map[string][]Status
 	// Protection is classic branch protection of the default branch; nil means none.
-	// ProtectionStatus, when set, is the status the protection read answers instead.
-	Protection       *Protection
-	ProtectionStatus int
-	// Rules are the active ruleset rules; RulesStatus, when set, is the status that read answers.
-	Rules       []Rule
-	RulesStatus int
+	// ProtectionStatus, when set, is the status the protection read answers instead, with
+	// ProtectionMessage as its message (default: an upstream-looking secret marker).
+	// ProtectionRaw, when set, is the JSON the read answers instead of Protection.
+	Protection        *Protection
+	ProtectionStatus  int
+	ProtectionMessage string
+	ProtectionRaw     string
+	// Rules are the active ruleset rules; RulesStatus, when set, is the status that read answers
+	// (RulesMessage its message; RulesLaterStatus the status for pages after the first only).
+	// RulesRaw, when set, is the JSON array the read answers instead of Rules.
+	Rules            []Rule
+	RulesStatus      int
+	RulesMessage     string
+	RulesLaterStatus int
+	RulesRaw         string
+	// OmitSquash leaves allow_squash_merge out of the repository answer, as GitHub does for a
+	// token that has no Contents access (the fake also leaves it out for such a token).
+	OmitSquash bool
+	// Compares holds the answers to commit comparisons, keyed "base...head". A comparison of the
+	// default branch tip with the head of a pull request that has none is answered as a head one
+	// commit ahead of the base, listing the pull request's files.
+	Compares map[string]Compare
 	// MergeStatus, when set, is the status a merge request answers instead of merging.
 	MergeStatus int
 }
@@ -418,7 +434,8 @@ func need(method string, segs []string) map[string]string {
 		return map[string]string{"pull_requests": "write"}
 	case method == http.MethodPut && len(rest) == 3 && rest[0] == "pulls" && rest[2] == "merge":
 		return map[string]string{"pull_requests": "write", "contents": "write"}
-	case method == http.MethodGet && len(rest) == 1 && rest[0] == "commits":
+	case method == http.MethodGet && len(rest) == 1 && rest[0] == "commits",
+		method == http.MethodGet && len(rest) == 2 && rest[0] == "compare":
 		return read("contents")
 	case method == http.MethodGet && len(rest) == 3 && rest[0] == "commits" && rest[2] == "statuses":
 		return read("statuses")
@@ -482,9 +499,12 @@ func (s *Server) repoCall(w http.ResponseWriter, r *http.Request, segs []string)
 			"id": id, "name": repo.Name, "full_name": repo.Owner + "/" + repo.Name,
 			"owner":       map[string]any{"login": repo.Owner, "avatar_url": repo.AvatarURL},
 			"description": repo.Description, "default_branch": repo.DefaultBranch,
-			"html_url":           "https://github.com/" + repo.Owner + "/" + repo.Name,
-			"open_issues_count":  repo.Issues + openCount(repo),
-			"allow_squash_merge": !repo.NoSquash, "archived": repo.Archived,
+			"html_url":          "https://github.com/" + repo.Owner + "/" + repo.Name,
+			"open_issues_count": repo.Issues + openCount(repo),
+			"archived":          repo.Archived,
+		}
+		if !repo.OmitSquash && (s.tokenPerm(r, "contents") != "") {
+			out["allow_squash_merge"] = !repo.NoSquash
 		}
 		s.mu.Unlock()
 		writeJSON(w, http.StatusOK, out)
@@ -498,6 +518,8 @@ func (s *Server) repoCall(w http.ResponseWriter, r *http.Request, segs []string)
 		s.branchCall(w, r, repo, rest[1:])
 	case rest[0] == "rules":
 		s.ruleCall(w, r, repo)
+	case rest[0] == "compare" && len(rest) == 2:
+		s.compareCall(w, r, repo, rest[1])
 	}
 }
 
@@ -553,6 +575,12 @@ func (s *Server) commits(w http.ResponseWriter, r *http.Request, repo *Repositor
 	}
 	s.link(w, r, pageNo, last)
 	writeJSON(w, http.StatusOK, out)
+}
+
+// tokenPerm is the level the request's token holds for a permission, or "".
+func (s *Server) tokenPerm(r *http.Request, name string) string {
+	raw, _ := strings.CutPrefix(r.Header.Get("Authorization"), "token ")
+	return s.tokens[raw].perms[name]
 }
 
 // TokenAllows reports whether value is a live token the fake minted for owner/name that grants
