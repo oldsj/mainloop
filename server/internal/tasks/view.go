@@ -206,6 +206,7 @@ func projection(t dbq.Task) api.TaskProjection {
 		CiState: api.TaskProjectionCiState(t.CiState), PrState: api.TaskProjectionPrState(t.PrState),
 		PendingApprovalIds: []string{}, PrUrl: t.PrUrl, PrHeadSha: t.PrHeadSha, CiHeadSha: t.CiHeadSha,
 		ObservedAt: t.ProjectedAt, Branch: t.CheckoutBranch,
+		Repository: t.PrRepository, PrDescription: descriptionFor(t),
 	}
 	out.PrNumber = intp(t.PrNumber)
 	// Reads stay DB-only. Every CI state needs an exact head and a fresh observation; a

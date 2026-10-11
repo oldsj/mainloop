@@ -6732,6 +6732,59 @@ components:
         - reason
       title: TaskOperation
       type: object
+    TaskPRDescription:
+      additionalProperties: false
+      description: >-
+        Untrusted PR text from one validated observation. The excerpt is at most
+        16384 UTF-8 bytes, ends at a character boundary, and contains no NUL.
+        Length and SHA-256 cover the full body. This grants no approval or authority.
+      type: object
+      required:
+        [
+          repository,
+          branch,
+          pr_number,
+          attempt_id,
+          head_sha,
+          excerpt,
+          byte_length,
+          digest,
+          truncated,
+          fetched_at
+        ]
+      properties:
+        repository:
+          type: string
+          maxLength: 200
+          pattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
+        branch:
+          type: string
+          minLength: 1
+          maxLength: 255
+        pr_number:
+          type: integer
+          minimum: 1
+        attempt_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+        head_sha:
+          type: string
+          pattern: '^[0-9a-f]{40}$'
+        excerpt:
+          type: string
+          maxLength: 16384
+        byte_length:
+          type: integer
+          minimum: 0
+        digest:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        truncated:
+          type: boolean
+        fetched_at:
+          type: string
+          format: date-time
     TaskProjection:
       additionalProperties: false
       properties:
@@ -6789,6 +6842,11 @@ components:
             - type: 'null'
           default: null
           title: Pr Head Sha
+        pr_description:
+          anyOf:
+            - $ref: '#/components/schemas/TaskPRDescription'
+            - type: 'null'
+          x-omitempty: false
         pr_state:
           default: unknown
           enum:

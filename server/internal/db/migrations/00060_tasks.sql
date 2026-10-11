@@ -67,6 +67,9 @@ CREATE TABLE tasks (
     pr_number integer CHECK (pr_number >= 1),
     pr_url text,
     pr_head_sha text,
+    pr_repository text,
+    -- Bounded, untrusted description with its own PR/attempt identity and fetch timestamp.
+    pr_description jsonb CHECK (jsonb_typeof(pr_description) = 'object'),
     pr_state text NOT NULL DEFAULT 'unknown' CHECK (pr_state IN ('open', 'closed', 'merged', 'unknown')),
     ci_state text NOT NULL DEFAULT 'unknown' CHECK (ci_state IN ('pending', 'success', 'failure', 'unknown')),
     ci_head_sha text,

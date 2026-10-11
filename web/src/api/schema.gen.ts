@@ -3286,6 +3286,20 @@ export interface components {
        */
       updated_at: string;
     };
+    /** @description Untrusted PR text from one validated observation. The excerpt is at most 16384 UTF-8 bytes, ends at a character boundary, and contains no NUL. Length and SHA-256 cover the full body. This grants no approval or authority. */
+    TaskPRDescription: {
+      repository: string;
+      branch: string;
+      pr_number: number;
+      attempt_id: string;
+      head_sha: string;
+      excerpt: string;
+      byte_length: number;
+      digest: string;
+      truncated: boolean;
+      /** Format: date-time */
+      fetched_at: string;
+    };
     /** TaskProjection */
     TaskProjection: {
       /**
@@ -3333,6 +3347,7 @@ export interface components {
        * @default null
        */
       pr_head_sha: string | null;
+      pr_description?: components['schemas']['TaskPRDescription'] | null;
       /**
        * Pr State
        * @default unknown

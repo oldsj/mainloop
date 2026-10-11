@@ -2,9 +2,11 @@ package tasks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
@@ -35,6 +37,8 @@ type Observation struct {
 	PRHeadRef string
 	PRRepo    string
 	PRHeadSHA string
+	// PRBody is nil for unavailable text; a pointer to an empty string is an observed empty body.
+	PRBody *string
 	// PRState is open, closed or merged.
 	PRState string
 	// CIState is pending, success or failure for CIHeadSHA; unknown when GitHub gave no complete
@@ -96,8 +100,8 @@ func eqPtr[T comparable](a, b *T) bool {
 
 // ProjectionSweep refreshes the stored GitHub observation of code tasks that are still open. It
 // changes only the projection: it never moves a task's status, and a task with no change gets a
-// new observation time and no new version or event. An error from GitHub leaves the stored values
-// as they were. It needs an Observer.
+// new observation time and no new version or event. A failed observation clears cached facts.
+// It needs an Observer.
 func (s *Service) ProjectionSweep() reconcile.Sweep {
 	return reconcile.Sweep{Name: "task-projection", Every: s.Limits.ProjectionEvery, Run: s.runProjection}
 }
@@ -126,12 +130,24 @@ func (s *Service) runProjection(ctx context.Context) error {
 
 // project observes one task and stores the result.
 func (s *Service) project(ctx context.Context, id, branch, repo string) error {
+	before, err := dbq.New(s.Pool).GetTaskByID(ctx, id)
+	if err != nil {
+		return err
+	}
 	obs, err := s.Observer.Observe(ctx, repo, branch)
 	if err != nil {
 		// Degrade to unknown rather than keep showing a state nobody can vouch for.
 		s.log().WarnContext(ctx, "task projection", "task", id, "error", err)
 		// Capture the failed read before DB work too; unknown facts still need a sweep time.
 		obs = Observation{ObservedAt: time.Now()}
+	}
+	// As on main, unsupported body text makes the observation unavailable. NUL beyond
+	// the excerpt is allowed: it is hashed but never stored in JSONB.
+	if obs.PRBody != nil {
+		body := *obs.PRBody
+		if !utf8.ValidString(body) || strings.ContainsRune(body[:min(len(body), descriptionLimit)], 0) {
+			obs = Observation{ObservedAt: obs.ObservedAt}
+		}
 	}
 	pr, url, head, prState, ciState, ciHead := normalize(obs, repo, branch)
 	var observedAt *time.Time
@@ -143,18 +159,32 @@ func (s *Service) project(ctx context.Context, id, branch, repo string) error {
 		if err != nil {
 			return nil, err
 		}
-		if TaskFinal(cur.Status) {
+		if TaskFinal(cur.Status) || !eqPtr(before.CurrentAttemptID, cur.CurrentAttemptID) ||
+			cur.CheckoutBranch == nil || *cur.CheckoutBranch != branch {
 			return nil, nil
 		}
+		var repository *string
+		if pr != nil {
+			repository = nonEmpty(strings.ToLower(repo))
+		}
+		description := describe(obs, cur.CurrentAttemptID, repo, branch)
+		raw, err := json.Marshal(description)
+		if err != nil {
+			return nil, err
+		}
+		if description == nil {
+			raw = nil
+		}
 		if eqPtr(cur.PrNumber, pr) && eqPtr(cur.PrUrl, url) && eqPtr(cur.PrHeadSha, head) &&
-			cur.PrState == prState && cur.CiState == ciState && eqPtr(cur.CiHeadSha, ciHead) {
+			cur.PrState == prState && cur.CiState == ciState && eqPtr(cur.CiHeadSha, ciHead) &&
+			eqPtr(cur.PrRepository, repository) && sameDescription(cur.PrDescription, description) {
 			return nil, q.TouchTaskProjection(ctx, dbq.TouchTaskProjectionParams{
-				ID: cur.ID, ObservedAt: observedAt,
+				ID: cur.ID, ObservedAt: observedAt, PrDescription: raw,
 			})
 		}
 		after, err := q.SetTaskProjection(ctx, dbq.SetTaskProjectionParams{
 			ID: cur.ID, PrNumber: pr, PrUrl: url, PrHeadSha: head, PrState: prState, CiState: ciState, CiHeadSha: ciHead,
-			ObservedAt: observedAt,
+			ObservedAt: observedAt, PrRepository: repository, PrDescription: raw,
 		})
 		if err != nil {
 			return nil, err

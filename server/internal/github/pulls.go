@@ -83,10 +83,12 @@ type PullRequestInfo struct {
 	Merged         bool
 	MergeCommitSHA string
 	// Mergeable is nil while GitHub is still working it out.
-	Mergeable       *bool
-	MergeableState  string
-	Title           string
-	Body            string
+	Mergeable      *bool
+	MergeableState string
+	Title          string
+	Body           string
+	// BodyAvailable distinguishes an observed empty body from null or missing text.
+	BodyAvailable   bool
 	Additions       int
 	Deletions       int
 	ChangedFiles    int
@@ -193,21 +195,21 @@ type refJSON struct {
 }
 
 type pullJSON struct {
-	Number         int     `json:"number"`
-	State          string  `json:"state"`
-	Draft          bool    `json:"draft"`
-	Merged         bool    `json:"merged"`
-	MergeCommitSHA *string `json:"merge_commit_sha"`
-	Mergeable      *bool   `json:"mergeable"`
-	MergeableState string  `json:"mergeable_state"`
-	Title          string  `json:"title"`
-	Body           *string `json:"body"`
-	Additions      int     `json:"additions"`
-	Deletions      int     `json:"deletions"`
-	ChangedFiles   int     `json:"changed_files"`
-	HTMLURL        string  `json:"html_url"`
-	Head           refJSON `json:"head"`
-	Base           refJSON `json:"base"`
+	Number         int       `json:"number"`
+	State          string    `json:"state"`
+	Draft          bool      `json:"draft"`
+	Merged         bool      `json:"merged"`
+	MergeCommitSHA *string   `json:"merge_commit_sha"`
+	Mergeable      *bool     `json:"mergeable"`
+	MergeableState string    `json:"mergeable_state"`
+	Title          string    `json:"title"`
+	Body           *pullBody `json:"body"`
+	Additions      int       `json:"additions"`
+	Deletions      int       `json:"deletions"`
+	ChangedFiles   int       `json:"changed_files"`
+	HTMLURL        string    `json:"html_url"`
+	Head           refJSON   `json:"head"`
+	Base           refJSON   `json:"base"`
 }
 
 func (p pullJSON) info() PullRequestInfo {
@@ -228,7 +230,7 @@ func (p pullJSON) info() PullRequestInfo {
 		HTMLURL: p.HTMLURL, Head: head, Base: base, HeadRepoMissing: missing,
 	}
 	if p.Body != nil {
-		out.Body = *p.Body
+		out.Body, out.BodyAvailable = string(*p.Body), true
 	}
 	if p.MergeCommitSHA != nil {
 		out.MergeCommitSHA = *p.MergeCommitSHA

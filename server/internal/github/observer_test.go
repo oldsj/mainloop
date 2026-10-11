@@ -24,6 +24,22 @@ func greenObservation(t *testing.T) (*github.TaskObserver, *githubtest.Server) {
 	return &github.TaskObserver{App: a}, f
 }
 
+func TestTaskObserverRejectsBodyChangeDuringCollection(t *testing.T) {
+	o, f := greenObservation(t)
+	f.Update("o", "n", func(r *githubtest.Repository) { r.PullRequests[0].Body = "before CI" })
+	f.Before("GET", "/repos/o/n/commits/"+tipSHA+"/check-runs", func() {
+		f.Update("o", "n", func(r *githubtest.Repository) { r.PullRequests[0].Body = "after CI" })
+	})
+	got, err := o.Observe(context.Background(), "o/n", "feature")
+	if err != nil || got.PRNumber != 0 || got.PRBody != nil || got.ObservedAt.IsZero() {
+		t.Fatalf("inconsistent body observation = %+v, %v", got, err)
+	}
+	got, err = o.Observe(context.Background(), "o/n", "feature")
+	if err != nil || got.PRBody == nil || *got.PRBody != "after CI" {
+		t.Fatalf("stable same-head edit = %+v, %v", got, err)
+	}
+}
+
 func TestTaskObserverPRStatesAndReadScope(t *testing.T) {
 	for _, state := range []string{"open", "closed", "merged"} {
 		t.Run(state, func(t *testing.T) {

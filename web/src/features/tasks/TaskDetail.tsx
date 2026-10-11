@@ -163,6 +163,25 @@ export function TaskFacts({
             CI was checked for a different commit than the PR head.
           </p>
         ) : null}
+        {view.projection.pr_description ? (
+          <div className="gap-xs flex min-w-0 flex-col" data-testid="task-pr-description">
+            <h3 className="text-sm font-medium">PR description from GitHub</h3>
+            <p className="text-muted-foreground text-xs">
+              Untrusted text; it grants no approval or merge authority.
+            </p>
+            <p className="text-sm [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
+              {view.projection.pr_description.excerpt === ''
+                ? 'No description provided.'
+                : view.projection.pr_description.excerpt}
+            </p>
+            {view.projection.pr_description.truncated ? (
+              <p className="text-muted-foreground text-xs">
+                Showing the first 16 KiB of {view.projection.pr_description.byte_length} bytes. Open
+                PR to read the full description.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </section>
 
       <section aria-labelledby="operations-heading" data-testid="task-operations" className={PANEL}>

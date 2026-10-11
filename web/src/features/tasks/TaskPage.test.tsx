@@ -71,6 +71,75 @@ describe('task page layout', () => {
     expect(screen.getByTestId('task-attempts')).toHaveTextContent('Attempt 1 · claude');
   });
 
+  it('renders the PR description as literal text and marks a truncated excerpt', async () => {
+    const excerpt = '<img src=x onerror="alert(1)">\n<script>alert(1)</script>\n**Approved**';
+    const described = view(
+      {},
+      {
+        projection: projection({
+          pr_description: {
+            repository: 'o/p1',
+            branch: 'feature',
+            pr_number: 7,
+            attempt_id: 'attempt-1',
+            head_sha: 'a'.repeat(40),
+            excerpt,
+            byte_length: 20000,
+            digest: 'b'.repeat(64),
+            truncated: true,
+            fetched_at: '2026-10-11T00:00:00Z'
+          }
+        })
+      }
+    );
+    server.use(...serveTaskPage(taskScreen(described)));
+    renderTasks('/tasks/task-1');
+
+    const panel = await screen.findByTestId('task-pr-description');
+    expect(panel.querySelector('p.whitespace-pre-wrap')?.textContent).toBe(excerpt);
+    expect(panel.querySelector('img, script, strong')).toBeNull();
+    expect(panel).toHaveTextContent('Untrusted text; it grants no approval or merge authority.');
+    expect(panel).toHaveTextContent('Showing the first 16 KiB of 20000 bytes.');
+  });
+
+  it('distinguishes an observed empty description from unavailable text', async () => {
+    const page = taskScreen(
+      view(
+        {},
+        {
+          projection: projection({
+            pr_description: {
+              repository: 'o/p1',
+              branch: 'feature',
+              pr_number: 7,
+              attempt_id: 'attempt-1',
+              head_sha: 'a'.repeat(40),
+              excerpt: '',
+              byte_length: 0,
+              digest: 'b'.repeat(64),
+              truncated: false,
+              fetched_at: '2026-10-11T00:00:00Z'
+            }
+          })
+        }
+      )
+    );
+    server.use(...serveTaskPage(page));
+    const { queryClient } = renderTasks('/tasks/task-1');
+
+    expect(await screen.findByTestId('task-pr-description')).toHaveTextContent(
+      'No description provided.'
+    );
+    expect(screen.queryByText(/Showing the first 16 KiB/)).not.toBeInTheDocument();
+    page.view = view({}, { projection: projection({ pr_description: null }) });
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId('task-pr-description')).not.toBeInTheDocument()
+    );
+  });
+
   it('marks observed facts stale and says each is observed separately', async () => {
     const stale = view({}, { projection: projection({ observed_at: '2020-01-01T00:00:00Z' }) });
     server.use(...serveTaskPage(taskScreen(stale)));

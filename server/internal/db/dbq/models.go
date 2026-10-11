@@ -552,6 +552,8 @@ type Task struct {
 	PrNumber            *int32
 	PrUrl               *string
 	PrHeadSha           *string
+	PrRepository        *string
+	PrDescription       json.RawMessage
 	PrState             string
 	CiState             string
 	CiHeadSha           *string

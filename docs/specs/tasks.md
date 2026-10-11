@@ -88,6 +88,35 @@ DB-only: CI becomes unknown when its head differs, its timestamp is missing,
 future or older than five minutes. The response includes the existing publication mode and
 current merge proposal/result; reading never starts a native turn or dispatches a merge.
 
+Owner and scoped native task reads also return optional `projection.pr_description`,
+collected by the existing authenticated PR refresh. It carries the validated repository,
+branch, PR number, current attempt ID and exact head SHA, a UTF-8 `excerpt` of at most
+16 KiB, full-body `byte_length` and SHA-256 `digest`, `truncated`, and `fetched_at`.
+The excerpt stops at a complete UTF-8 character; length and digest cover the original
+body, including text beyond the excerpt. An empty string is an observed empty description;
+a null or unavailable body returns null. An excerpt containing NUL is unavailable because
+JSONB cannot store it. Invalid UTF-8 or unpaired Unicode surrogates fail the observation;
+supported text is preserved exactly.
+
+The description is editable, untrusted GitHub text. Reviewer markers and other text grant
+no approval, acceptance or merge authority. Failed or inconsistent observations clear it.
+Reads mask descriptions whose repository, PR/head, branch or current attempt differs,
+whose PR state is unknown, or whose fetch is future or older than five minutes.
+`fetched_at` uses the collection-finish time carried by the observer, including unchanged
+refreshes; database delays and generic `observed_at` cannot renew a stale description.
+If an attempt or checkout changes during collection, that observation is discarded.
+The final PR read must agree with the initial read's identity and body; text edited during
+collection is unavailable until a consistent refresh.
+A successful new-head observation replaces the body with that head's own description.
+Unchanged refreshes update timestamps without task version/event churn; same-head body
+edits, including edits beyond the excerpt, produce an update. Reads remain DB-only and
+keep existing task scope; native reads still omit pending approval IDs.
+
+The task detail shows available descriptions as plain text under the PR observations,
+preserving whitespace and marking truncated excerpts. It never renders HTML or Markdown.
+Unavailable descriptions are omitted; observed empty descriptions say “No description
+provided.” The Go migration uses a fresh schema; cached descriptions default to null.
+
 Attempts pin Claude/Codex profile ID, revision and role AgentRef independently of registry
 reloads. Each has a monotonic number, native/session/binding/workspace identity, writer generation,
 state, brief delivery, lineage, results/evidence and retention audit. SQL rejects routing

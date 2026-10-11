@@ -20,15 +20,16 @@ var (
 	ErrObservationStale = errors.New("github: observation stale")
 )
 
-// TaskObservation contains only PR identity and CI facts. The app wiring converts it to
+// TaskObservation contains PR identity, untrusted body text and CI facts. The app wiring converts it to
 // tasks.Observation: importing tasks here would create a cycle through workspaces and projects.
-// PR description and merge-policy evidence belong to their own projections.
+// Merge-policy evidence belongs to its own projection.
 type TaskObservation struct {
 	PRNumber  int
 	PRURL     string
 	PRHeadRef string
 	PRRepo    string
 	PRHeadSHA string
+	PRBody    *string
 	PRState   string
 	CIState   string
 	CIHeadSHA string
@@ -46,7 +47,7 @@ type TaskObserver struct {
 }
 
 // Observe reads every page before judging CI and re-reads the PR after collection. A moved
-// head or identity is not observed. Freshness is the age of this read, not the age of the CI job:
+// head, identity or body is not observed. Freshness is the age of this read, not the age of the CI job:
 // an old job freshly read for this exact head is valid. Persisted observations also need the
 // consumer's five-minute age guard after this method returns.
 func (o *TaskObserver) Observe(ctx context.Context, repository, branch string) (observation TaskObservation, err error) {
@@ -119,7 +120,8 @@ func (o *TaskObserver) Observe(ctx context.Context, repository, branch string) (
 		return absentOrError(err)
 	}
 	if !taskPR(fresh, repo, branch) || fresh.Head != pr.Head || fresh.Base != pr.Base ||
-		fresh.State != pr.State || fresh.Merged != pr.Merged {
+		fresh.State != pr.State || fresh.Merged != pr.Merged || fresh.Body != pr.Body ||
+		fresh.BodyAvailable != pr.BodyAvailable {
 		return TaskObservation{}, nil
 	}
 	state := pr.State
@@ -130,6 +132,9 @@ func (o *TaskObserver) Observe(ctx context.Context, repository, branch string) (
 		PRNumber: pr.Number, PRURL: fmt.Sprintf("%s/pull/%d", repo.HTMLURL(), pr.Number),
 		PRHeadRef: pr.Head.Ref, PRRepo: repo.FullName(), PRHeadSHA: pr.Head.SHA, PRState: state,
 		CIState: ci,
+	}
+	if fresh.BodyAvailable {
+		out.PRBody = &fresh.Body
 	}
 	if ci != "unknown" {
 		out.CIHeadSHA = pr.Head.SHA

@@ -20,7 +20,7 @@ func TestProductionObserverWiringProjectsAndPublishes(t *testing.T) {
 	sha := strings.Repeat("a", 40)
 	f.AddRepo(githubtest.Repository{
 		Owner: "o", Name: "p1", ID: 1,
-		PullRequests: []githubtest.PullRequest{{Number: 7, HeadRef: "feature", HeadSHA: sha}},
+		PullRequests: []githubtest.PullRequest{{Number: 7, HeadRef: "feature", HeadSHA: sha, Body: "Production adapter body"}},
 		Runs:         map[string][]githubtest.CheckRun{sha: {{ID: 1, AppID: 2, Name: "test", Conclusion: "success"}}},
 	})
 	gh, err := github.NewApp(github.Options{AppID: fmt.Sprint(githubtest.AppID), PrivateKey: githubtest.PrivateKey(), BaseURL: f.URL})
@@ -41,6 +41,7 @@ func TestProductionObserverWiringProjectsAndPublishes(t *testing.T) {
 	got := r.view(r.own, id)
 	if got.Projection.PrNumber == nil || *got.Projection.PrNumber != 7 ||
 		string(got.Projection.CiState) != "success" || got.Projection.CiHeadSha == nil || *got.Projection.CiHeadSha != sha ||
+		got.Projection.PrDescription == nil || got.Projection.PrDescription.Excerpt != "Production adapter body" ||
 		r.updates(id) != before+1 || got.Task.Status != "running" {
 		t.Fatalf("production projection = %+v, events %d", got, r.updates(id))
 	}
@@ -63,7 +64,7 @@ func TestReviewCollectionTimeSurvivesPersistenceDelay(t *testing.T) {
 			sha := strings.Repeat("a", 40)
 			f.AddRepo(githubtest.Repository{
 				Owner: "o", Name: "p1", ID: 1,
-				PullRequests: []githubtest.PullRequest{{Number: 7, HeadRef: "feature", HeadSHA: sha}},
+				PullRequests: []githubtest.PullRequest{{Number: 7, HeadRef: "feature", HeadSHA: sha, Body: "Delayed body"}},
 				Runs:         map[string][]githubtest.CheckRun{sha: {{ID: 1, AppID: 2, Name: "test", Conclusion: "success"}}},
 			})
 			gh, err := github.NewApp(github.Options{AppID: fmt.Sprint(githubtest.AppID), PrivateKey: githubtest.PrivateKey(), BaseURL: f.URL})
@@ -100,6 +101,14 @@ func TestReviewCollectionTimeSurvivesPersistenceDelay(t *testing.T) {
 			}
 			if string(got.Projection.CiState) != "unknown" {
 				t.Fatalf("six-minute-old observation was restamped fresh: %+v", got.Projection)
+			}
+			if got.Projection.PrDescription != nil {
+				t.Fatal("six-minute-old description was restamped fresh")
+			}
+			stored := r.str(`SELECT pr_description->>'fetched_at' FROM tasks WHERE id = $1`, id)
+			fetchedAt, err := time.Parse(time.RFC3339Nano, stored)
+			if err != nil || !fetchedAt.Equal(finished) {
+				t.Fatalf("stored fetch time = %q, want %v: %v", stored, finished, err)
 			}
 			if got.Projection.ObservedAt == nil || !got.Projection.ObservedAt.Equal(finished) {
 				t.Fatalf("observation time = %v, want collection finish %v", got.Projection.ObservedAt, finished)

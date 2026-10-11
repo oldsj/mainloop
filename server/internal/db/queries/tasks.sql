@@ -336,13 +336,14 @@ LIMIT $1;
 -- name: SetTaskProjection :one
 UPDATE tasks
 SET pr_number = $2, pr_url = $3, pr_head_sha = $4, pr_state = $5, ci_state = $6, ci_head_sha = $7,
+    pr_repository = sqlc.narg(pr_repository), pr_description = sqlc.narg(pr_description),
     projected_at = sqlc.narg(observed_at), version = version + 1, updated_at = now()
 WHERE id = $1
 RETURNING *;
 
 -- Refreshes the observation time without a new version or event.
 -- name: TouchTaskProjection :exec
-UPDATE tasks SET projected_at = sqlc.narg(observed_at) WHERE id = $1;
+UPDATE tasks SET projected_at = sqlc.narg(observed_at), pr_description = sqlc.narg(pr_description) WHERE id = $1;
 
 -- name: ReserveAttemptWorkspaceCreate :one
 -- The caller holds the task lock, so a drain cannot race the reservation. A stale claim cannot
