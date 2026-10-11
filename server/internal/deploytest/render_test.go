@@ -32,6 +32,7 @@ type rendered struct {
 	policies     []networkingv1.NetworkPolicy
 	clusterRoles []rbacv1.ClusterRole
 	bindings     []rbacv1.ClusterRoleBinding
+	roleBindings []rbacv1.RoleBinding
 }
 
 // render builds a kustomization with the local kubectl (client-side, offline).
@@ -102,6 +103,10 @@ func render(t *testing.T, path string) rendered {
 			var b rbacv1.ClusterRoleBinding
 			mustUnmarshal(t, raw, &b)
 			r.bindings = append(r.bindings, b)
+		case "RoleBinding":
+			var b rbacv1.RoleBinding
+			mustUnmarshal(t, raw, &b)
+			r.roleBindings = append(r.roleBindings, b)
 		}
 	}
 	return r
@@ -460,7 +465,7 @@ func TestNoClusterScopedSecretAccess(t *testing.T) {
 }
 
 func TestFeatureFlagsDefaultOff(t *testing.T) {
-	flags := []string{"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_MERGE_TOOLS_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED"}
+	flags := []string{"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_MERGE_TOOLS_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED", "MAINLOOP_OWNER_POLICY_WRITES_ENABLED"}
 	for _, path := range overlays {
 		t.Run(path, func(t *testing.T) {
 			data := render(t, path).configMaps["mainloop-config"].Data
@@ -589,4 +594,67 @@ func TestLiveDev(t *testing.T) {
 			t.Errorf("trust bundle script does not build the bundle: %s", script)
 		}
 	})
+}
+
+// The backend publishes per-session MCP credential Secrets into kagent, so its ServiceAccount
+// needs the production Role there. `make dev-agents` applies the binding.
+func TestLiveDevBackendMayPublishAgentCredentials(t *testing.T) {
+	live := render(t, "overlays/dev-live")
+	if got := live.backend(t).ServiceAccountName; got != "mainloop-backend" {
+		t.Fatalf("backend ServiceAccount %q, want mainloop-backend", got)
+	}
+	var binding *rbacv1.RoleBinding
+	for _, b := range render(t, "overlays/dev-live/kagent").roleBindings {
+		if b.Name == "mainloop-dev-agent-tokens" {
+			binding = &b
+		}
+	}
+	if binding == nil {
+		t.Fatal("no RoleBinding mainloop-dev-agent-tokens in the dev-live kagent render")
+	}
+	if binding.Namespace != "kagent" {
+		t.Errorf("namespace %q, want kagent", binding.Namespace)
+	}
+	if binding.RoleRef.Kind != "Role" || binding.RoleRef.Name != "mainloop-agent-tokens" {
+		t.Errorf("roleRef %+v, want Role mainloop-agent-tokens", binding.RoleRef)
+	}
+	want := rbacv1.Subject{Kind: "ServiceAccount", Name: "mainloop-backend", Namespace: "mainloop-dev"}
+	if len(binding.Subjects) != 1 || binding.Subjects[0] != want {
+		t.Errorf("subjects %+v, want only %+v", binding.Subjects, want)
+	}
+}
+
+// The Kind overlays (`make dev`) still run the Python image, which has neither the Go binary nor
+// anything to run `migrate up`.
+func TestKindOverlaysKeepThePythonBackendRunnable(t *testing.T) {
+	for _, path := range []string{"overlays/kind", "overlays/dev", "overlays/test"} {
+		t.Run(path, func(t *testing.T) {
+			pod := render(t, path).backend(t)
+			for _, c := range pod.InitContainers {
+				if c.Name == "migrate" {
+					t.Error("migrate initContainer needs the Go binary")
+				}
+			}
+			cs := containers(pod)
+			for _, c := range append(slices.Clone(pod.InitContainers), pod.Containers...) {
+				if slices.Contains(c.Command, "/usr/local/bin/mainloop") {
+					t.Errorf("%s runs /usr/local/bin/mainloop, absent from the Python image", c.Name)
+				}
+			}
+			if got := strings.Join(cs["git"].Command, " "); got != "python -m mainloop.git_app" {
+				t.Errorf("git command %q, want python -m mainloop.git_app", got)
+			}
+			for _, p := range []*corev1.Probe{cs["git"].ReadinessProbe, cs["git"].LivenessProbe} {
+				if p == nil || p.Exec == nil || !slices.Contains(p.Exec.Command, "python") {
+					t.Errorf("git probe %+v, want the Python socket check", p)
+				}
+			}
+			if got := strings.Join(cs["mcp"].Command, " "); got != "uvicorn mainloop.mcp_app:app --host 0.0.0.0 --port 8002" && path != "overlays/dev" {
+				t.Errorf("mcp command %q", got)
+			}
+			if len(cs["backend"].Command) > 0 && path != "overlays/dev" {
+				t.Errorf("backend command %v, want the image's own CMD", cs["backend"].Command)
+			}
+		})
+	}
 }

@@ -336,8 +336,18 @@ What runs and syncs: the Go server and the React app.
   `web/package.json` or `pnpm-lock.yaml` runs the workspace `pnpm install` in the pod.
   `node_modules`, `dist` and test output do not sync.
 - The images already hold the source they were built from, so a pod serves before the
-  first sync lands. A `migrate` initContainer runs `mainloop migrate up` from that
-  baked-in source on every pod start; a later sync is picked up by the next restart.
+  first sync lands. A `migrate` initContainer runs `mainloop migrate up` on every pod
+  start, but it sees only that baked-in source, never synced files. After syncing a new
+  migration, apply it yourself in the backend container:
+
+  ```bash
+  kubectl --context admin@internal-01 -n mainloop-dev exec deploy/mainloop-backend -c backend -- \
+    go run ./cmd/mainloop migrate up
+  ```
+
+  (Under `devspace dev` the serving pod is `mainloop-backend-devspace`; see Reset below
+  for addressing it.)
+
 - The Go services need no `models` or Python sync, and nothing runs Python.
 
 The UI is `https://mainloop-dev.olds.network` (tailnet only, through the same
@@ -352,24 +362,33 @@ Go toolchain, `git`, `watchexec`) and `ghcr.io/oldsj/mainloop-web-dev`
 `<short SHA>` and `go-react`. The overlay runs `go-react`. Pushes to `main` still publish
 the Python and Svelte `mainloop-{backend,frontend}-dev:latest` images. Nothing is built
 locally on each run; the pods pull the moving tag and the sync overlays the working tree.
-The packages are public, so no pull secret is needed.
+The pods carry no pull secret, so after the first build of each of the two `-dev` packages
+make it public once in the GitHub UI (package settings, change visibility); until then the
+pods sit in `ImagePullBackOff`.
 
 Data: a one-instance CloudNativePG cluster on `local-path` storage. CNPG creates
 the database credentials. Purging deletes the data.
 
 Reset: the overlay sets `MAINLOOP_ALLOW_RESET=1`, which lets `mainloop migrate reset`
-drop the schema and migrate back to the latest version. Run it in the backend container,
-then restart the pod so the listeners reconnect:
+drop the schema and migrate back to the latest version. Run it in the backend container of
+the pod that is serving, then delete that pod so the listeners reconnect. While
+`devspace dev` is running (`make dev-live`), the serving pod is `mainloop-backend-devspace`
+and the Deployment's own pod is replaced; otherwise it is the Deployment's
+`mainloop-backend` pod. Select it by label so both states work:
 
 ```bash
-kubectl --context admin@internal-01 -n mainloop-dev exec deploy/mainloop-backend -c backend -- \
-  go run ./cmd/mainloop migrate reset
-kubectl --context admin@internal-01 -n mainloop-dev rollout restart deploy/mainloop-backend
+K="kubectl --context admin@internal-01 -n mainloop-dev"
+POD=$($K get pod -l app=mainloop-backend -o name | head -n1)
+$K exec "$POD" -c backend -- go run ./cmd/mainloop migrate reset
+$K delete "$POD"
 ```
 
-The first deploy of the Go server onto a database that the Python backend created needs
-the database emptied by hand first (no legacy migration); the same reset does it.
-`make dev-live-purge` also drops the data, along with the namespace.
+The Go server keeps its tables in the `mainloop` schema; the old Python backend's tables
+sit in `public`. So the first deploy onto a database the Python backend created needs
+no emptying: `migrate up` works beside them, and `migrate reset` drops only `mainloop`.
+To drop the old Python tables as well:
+`kubectl --context admin@internal-01 -n mainloop-dev exec mainloop-pg-1 -c postgres -- psql -d mainloop -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'`.
+`make dev-live-purge` drops all the data, along with the namespace.
 
 Settings (`k8s/apps/mainloop/overlays/dev-live`): `DEV_MODE=true`; merge tools,
 owner writes, Git transport and the push gate are off; every kagent role uses
@@ -401,9 +420,12 @@ namespace. The prefix is the namespace itself, so production keeps `mainloop-mcp
 `mainloop-dev-git-{read,push}-*`. Secrets are deleted only by exact name. The Git origin
 settings accept only the configured namespace's two origins.
 
+`make dev-agents` also applies a RoleBinding (`mainloop-dev-agent-tokens`, in `kagent`) that
+gives `mainloop-dev:mainloop-backend` production's `mainloop-agent-tokens` Role, so it can
+create, read and delete its credential Secrets there. Only the API container writes them;
+the MCP and Git containers verify tokens against the database and need nothing more.
 The dev agents still cannot call Mainloop tools until the infrastructure repository adds
-mainloop-dev's MCP credential tuple and origin to kagent's service policy and lets
-`mainloop-dev:mainloop-backend` create and delete its Secrets in `kagent`.
+mainloop-dev's MCP credential tuple and origin to kagent's service policy.
 
 Git through the dev proxies also needs a kagent change. kagent's service policy
 (`controlauth/policy.go` in the `oldsj/kagent` fork) accepts only production's Git origins,

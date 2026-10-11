@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# The Kind overlays (kind, dev, test; `make dev`) still run the frozen Python
+# mainloop-backend image, which has no /usr/local/bin/mainloop. This puts the
+# base's Go-only parts back to what the Python image needs. Delete it with the
+# Python backend and the Kind overlays' use of it.
+patches:
+  - path: backend-patch.yaml
