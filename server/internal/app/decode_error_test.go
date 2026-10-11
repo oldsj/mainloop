@@ -25,7 +25,7 @@ func TestRequestDecodeError(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			handler(rec, httptest.NewRequest(http.MethodPost, "/chat", nil), c.err)
+			handler(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), c.err)
 			var body map[string]string
 			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 				t.Fatalf("body is not {detail}: %q", rec.Body.String())
