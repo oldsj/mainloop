@@ -528,8 +528,8 @@ func (s *Server) prepare(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("no running actor"))
 	}
 	if !s.gitCredentialsCountable(sess.GetId()) {
-		// kagent's preparation check counts a Git proxy credential only when its header and
-		// secret key are exactly "authorization"; any other spelling leaves the count short, and
+		// kagent's preparation check needs exactly one read and one push Git proxy credential, each
+		// with header and secret key exactly "authorization"; any other count or spelling fails it, and
 		// kagent answers with this generic refusal, whatever the Actor's state.
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			errors.New("Current prepared runtime identity is unavailable")) //nolint:staticcheck // kagent's own wording
@@ -548,21 +548,30 @@ func (s *Server) prepare(
 	return connect.NewResponse(&api.PrepareSessionWorkspaceResponse{Receipt: receipt}), nil
 }
 
-// gitCredentialsCountable reports whether every Git proxy credential the Session was created with is
-// spelled the way kagent's preparation check counts it; s.mu is held.
+// gitCredentialsCountable reports whether the Session was created with exactly one read and one
+// push Git proxy credential, spelled the way kagent's preparation check counts them (header and
+// secret key exactly "authorization"); s.mu is held. kagent hard-codes the proxy origins with
+// the `mainloop` namespace; the fake takes any namespace so a test namespace works, but nothing else
+// (no port, path or trailing slash).
 func (s *Server) gitCredentialsCountable(sessionID string) bool {
+	read, push := 0, 0
 	for requestID, id := range s.byReq {
 		if id != sessionID {
 			continue
 		}
 		for _, c := range s.first[requestID].GetCredentials() {
-			if strings.HasPrefix(c.GetOrigin(), "http://mainloop-git-") &&
-				(c.GetHeader() != "authorization" || c.GetSecretRef().GetKey() != "authorization") {
-				return false
+			if c.GetHeader() != "authorization" || c.GetSecretRef().GetKey() != "authorization" {
+				continue
+			}
+			switch {
+			case proxyOrigin(c.GetOrigin(), "read"):
+				read++
+			case proxyOrigin(c.GetOrigin(), "push"):
+				push++
 			}
 		}
 	}
-	return true
+	return read == 1 && push == 1
 }
 
 func (s *Server) getAgent(
@@ -902,4 +911,14 @@ func (s *Server) CreateRequests() []*api.CreateSessionRequest {
 		out[i] = proto.CloneOf(m)
 	}
 	return out
+}
+
+// proxyOrigin reports whether origin is exactly http://mainloop-git-<service>.<namespace>.svc.cluster.local.
+func proxyOrigin(origin, service string) bool {
+	ns, ok := strings.CutPrefix(origin, "http://mainloop-git-"+service+".")
+	if !ok {
+		return false
+	}
+	ns, ok = strings.CutSuffix(ns, ".svc.cluster.local")
+	return ok && ns != "" && !strings.ContainsAny(ns, "./:")
 }

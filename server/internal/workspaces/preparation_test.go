@@ -27,13 +27,14 @@ const prepSHA = "0123456789abcdef0123456789abcdef01234567"
 func preparedWorkspace(t *testing.T, h *harness) wsRow {
 	t.Helper()
 	h.fake.Actors = true
+	h.withGitProxies()
 	h.cfg.Workspaces.OperationWait = 10e6
 	w, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("feature")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := h.row(w.WorkspaceId)
-	h.exec(`UPDATE workspaces SET ref=$2 WHERE id=$1`, r.ID, prepSHA)
+	h.exec(`UPDATE workspaces SET ref=$2, environment=$3 WHERE id=$1`, r.ID, prepSHA, testEnvironment)
 	h.exec(`INSERT INTO workspace_preparations (id, idempotency_key, action_id) VALUES ($1, 'k:'||$1, 'prep:'||$2)`, r.ID, r.RequestID)
 	// The create op was only queued; make the Session.
 	claims, err := Table().Claim(bg, h.svc.Pool, "create-test", time.Minute, 1)
@@ -143,21 +144,23 @@ func TestPreparationWakesAnIdleSessionBeforeAsking(t *testing.T) {
 	}
 }
 
-// kagent counts a Git proxy credential for preparation only when its header is spelled exactly
-// "authorization"; with any other spelling it refuses every pass with "Current prepared runtime
-// identity is unavailable" and the preparation can never be confirmed.
-func TestPreparationOfASessionWithAGitReadReferenceIsNotRefusedAsAnUnavailableIdentity(t *testing.T) {
+// kagent prepares a Session only if it holds exactly one read and one push Git proxy reference,
+// each with header and key spelled "authorization"; otherwise it refuses every pass with "Current
+// prepared runtime identity is unavailable" and the preparation can never be confirmed.
+func TestPreparationOfASessionWithBothGitReferencesIsNotRefusedAsAnUnavailableIdentity(t *testing.T) {
 	h := newHarness(t, nil)
-	h.withGitRead()
 	r := preparedWorkspace(t, h)
-	var read int
+	var read, push int
 	for _, c := range h.fake.CreateRequests()[0].GetCredentials() {
-		if strings.HasPrefix(c.GetOrigin(), "http://mainloop-git-") {
+		switch {
+		case strings.HasPrefix(c.GetOrigin(), "http://mainloop-git-read."):
 			read++
+		case strings.HasPrefix(c.GetOrigin(), "http://mainloop-git-push."):
+			push++
 		}
 	}
-	if read != 1 {
-		t.Fatalf("git proxy references on the create = %d, want 1", read)
+	if read != 1 || push != 1 {
+		t.Fatalf("git proxy references on the create = %d read, %d push, want 1 each", read, push)
 	}
 	if got := prepareOnce(t, h, r.ID); got != dbstate.PreparationConfirmed {
 		t.Fatalf("state = %s, want confirmed\n%s", got, h.logs.String())
@@ -226,6 +229,9 @@ func (f *fakeRefs) CommitSHA(_ context.Context, _ github.Repo, ref string) (stri
 	return f.sha, f.err
 }
 
+// testEnvironment is the pinned environment a workspace row carries when its project has a selection.
+const testEnvironment = `{"environment_id":"env","version_id":"v","image":"example.test/dev@sha256:abc","platform":"linux/amd64","policy_identity":"policy"}`
+
 // selectEnvironment gives the harness project a validated environment, as the owner's selection does.
 func selectEnvironment(h *harness) {
 	h.t.Helper()
@@ -246,6 +252,7 @@ func TestCreateWithAnEnvironmentPinsTheCheckoutToACommit(t *testing.T) {
 	if _, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("first")}); err != nil {
 		t.Fatal(err)
 	}
+	h.withGitProxies()
 	selectEnvironment(h)
 
 	w, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("second")})
@@ -340,6 +347,7 @@ func TestCreateRetryReusesTheStoredCommitAndAnOutageIsRetryable(t *testing.T) {
 	if _, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("first")}); err != nil {
 		t.Fatal(err)
 	}
+	h.withGitProxies()
 	selectEnvironment(h)
 	id := newID()
 	w, err := h.svc.CreateWithRequestID(bg, id, api.CreateWorkspaceRequest{Repo: ptr("oldsj/mainloop"), Branch: ptr("second")})
@@ -367,6 +375,7 @@ func TestCreateWithAnEnvironmentRefusesAnUnpinnableRef(t *testing.T) {
 	if _, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("first")}); err != nil {
 		t.Fatal(err)
 	}
+	h.withGitProxies()
 	selectEnvironment(h)
 	n := h.workspaceCount()
 	_, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("second")})
@@ -411,6 +420,7 @@ func gatedWorkspace(t *testing.T) (*harness, *sessions.Service, api.WorkspaceLif
 	if _, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("first")}); err != nil {
 		t.Fatal(err)
 	}
+	h.withGitProxies()
 	selectEnvironment(h)
 	w, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("second")})
 	if err != nil {

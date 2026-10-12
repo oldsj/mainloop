@@ -191,7 +191,7 @@ func TestRepliesForAnotherSessionAreOutcomeUnknown(t *testing.T) {
 
 func TestPrepareReceiptMustBelongToTheRequest(t *testing.T) {
 	c, srv, _ := setup(t)
-	created, err := c.CreateSession(ctx, &api.CreateSessionRequest{RequestId: "r"})
+	created, err := c.CreateSession(ctx, &api.CreateSessionRequest{RequestId: "r", Credentials: gitProxyCredentials()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,5 +491,33 @@ func TestEmptyIdentifiersAreRefusedWithoutARequest(t *testing.T) {
 	mustBe[*kagent.SessionError](t, err)
 	if n := len(srv.Requests()); n != 0 {
 		t.Fatalf("%d requests reached kagent", n)
+	}
+}
+
+// The fake refuses preparation as kagent does when the Session does not hold exactly one read and
+// one push Git proxy reference, so a reference-less environment Session fails in tests as it would live.
+func TestPrepareNeedsExactlyOneReadAndOnePushReference(t *testing.T) {
+	read, push := gitProxyCredentials()[0], gitProxyCredentials()[1]
+	cases := map[string][]*api.SessionCredential{
+		"none":                nil,
+		"read only":           {read},
+		"push only":           {push},
+		"two reads":           {read, read},
+		"wrong key":           {read, {Origin: push.Origin, Header: "authorization", SecretRef: &api.SecretKeyReference{Name: "x", Key: "Authorization"}}},
+		"origin with a port":  {read, {Origin: "http://mainloop-git-push.mainloop.svc.cluster.local:80", Header: "authorization", SecretRef: push.SecretRef}},
+		"origin with a slash": {read, {Origin: push.Origin + "/", Header: "authorization", SecretRef: push.SecretRef}},
+	}
+	for name, creds := range cases {
+		t.Run(name, func(t *testing.T) {
+			c, _, _ := setup(t)
+			created, err := c.CreateSession(ctx, &api.CreateSessionRequest{RequestId: "r", Credentials: creds})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = c.PrepareSessionWorkspace(ctx, &api.PrepareSessionWorkspaceRequest{SessionId: created.GetId(), ActionId: "a"})
+			if err == nil || !strings.Contains(err.Error(), "prepared runtime identity is unavailable") {
+				t.Fatalf("err = %v", err)
+			}
+		})
 	}
 }

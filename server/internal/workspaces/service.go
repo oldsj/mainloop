@@ -705,6 +705,11 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 	if err != nil {
 		return plan{}, err
 	}
+	// kagent admits nothing to a Session it has not prepared, and prepares only one that holds both
+	// Git proxy references: refuse now rather than make a workspace that can never take a turn.
+	if env != nil && !s.gitReferencesAvailable(project.HTMLURL) {
+		return plan{}, &InvalidError{gitUnavailable}
+	}
 	// A workspace with an environment is prepared by kagent against one exact commit, so the base
 	// is fixed to a full SHA now and every retry of this create reuses it.
 	if env != nil && !gitref.IsSHA(ref) {

@@ -114,7 +114,7 @@ its existing flag. Push credentials remain separate from MCP credentials.
 
 ## Git capabilities (source support, default off)
 
-`GIT_TRANSPORT_ENABLED` freezes MCP/read/eligible-push references before original CreateSession.
+`GIT_TRANSPORT_ENABLED` freezes MCP and read references, and a push reference (reserved for a writable task attempt, inert for any other environment workspace), before original CreateSession.
 It requires the existing `AGENT_TOKEN_KEY` and exact sanctioned Mainloop service origins.
 Domain-separated HMAC derives independent `gread_` and `push_` values from immutable issuance,
 binding and original create identities. PostgreSQL stores hashes, references, current runtime

@@ -129,7 +129,7 @@ func TestSessionLifecycle(t *testing.T) {
 	srv.AddAgent("kagent", "claude-workspace")
 	ref := &api.ResourceReference{Namespace: "kagent", Name: "claude-workspace"}
 
-	created, err := c.CreateSession(ctx, &api.CreateSessionRequest{Agent: ref, RequestId: "req-1", Name: "work"})
+	created, err := c.CreateSession(ctx, &api.CreateSessionRequest{Agent: ref, RequestId: "req-1", Name: "work", Credentials: gitProxyCredentials()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestSessionLifecycle(t *testing.T) {
 		t.Fatalf("created %v", created)
 	}
 
-	again, err := c.CreateSession(ctx, &api.CreateSessionRequest{Agent: ref, RequestId: "req-1", Name: "work"})
+	again, err := c.CreateSession(ctx, &api.CreateSessionRequest{Agent: ref, RequestId: "req-1", Name: "work", Credentials: gitProxyCredentials()})
 	if err != nil || again.GetId() != created.GetId() {
 		t.Fatalf("same request id must return the same session: %v, %v", again, err)
 	}
@@ -930,3 +930,15 @@ func mustBe[T error](t *testing.T, err error) {
 }
 
 func readJSON(r *http.Request, v any) error { return json.NewDecoder(r.Body).Decode(v) }
+
+// gitProxyCredentials are the two references kagent's preparation check counts, one for each Git
+// proxy; a Session without both cannot be prepared.
+func gitProxyCredentials() []*api.SessionCredential {
+	ref := func(service string) *api.SessionCredential {
+		return &api.SessionCredential{
+			Origin: "http://mainloop-git-" + service + ".mainloop.svc.cluster.local", Header: "authorization",
+			SecretRef: &api.SecretKeyReference{Name: "git-" + service, Key: "authorization"},
+		}
+	}
+	return []*api.SessionCredential{ref("read"), ref("push")}
+}

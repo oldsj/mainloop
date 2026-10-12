@@ -123,6 +123,9 @@ that stored selection. Recovery retries the persisted request id; a replacement 
 request id. Default changes and CLI/runtime updates never change the recorded environment. kagent's reported development environment and runtime composition
 are stored separately when present. The workspace view displays the short resolved digest.
 Projects without a selection retain the legacy CreateSession request without that field.
+A workspace with a selection also needs the Git read transport and the push gate (kagent prepares it
+only with one read and one push reference), so creation is refused with `git_transport_required`
+when they are not configured.
 
 Selection requires kagent's runtime composition feature and service-token authentication
 to be enabled. Static validation is metadata evidence, not a live composition proof.
