@@ -518,10 +518,6 @@ redeployed after them). Not re-run on the Go server:
 - The review repairs: the idle re-check under the lock, the archived-session delete retry, the
   preview header filtering and the cross-origin write check.
 
-The tracked [Kind overlay](../../k8s/apps/mainloop/overlays/kind/README.md) includes dedicated
-workspace Harnesses with `git.origins`, `sessionIdleTTL: 0s` and `onQuiesce: Full`. Production
-Harnesses remain the responsibility of the kagent installation.
-
 ## Workspace environment resolution
 
 Workspace creation resolves the project's explicit version or accepted default once,

@@ -21,7 +21,7 @@ Go and web checks have no Make wrapper. Run them directly, as listed in [CONTRIB
 
 Runs the Go server and the React app on a local [Kind](https://kind.sigs.k8s.io) cluster, with PostgreSQL in the same cluster. It needs no shared cluster, 1Password or GitHub App. Secrets are random values generated on your machine and stored only in that cluster.
 
-Prerequisites: Docker, `kind`, `kubectl` and [DevSpace](https://www.devspace.sh). This was tested with kind v0.33.0, kubectl v1.37.0 and DevSpace v6.3.21. The first build pulls base images and needs several GB of free disk. If Docker runs out of space, `docker builder prune -f` clears its build cache.
+Prerequisites: Docker, `kind`, `kubectl`, [DevSpace](https://www.devspace.sh) and `openssl` (the secrets script uses it to generate random values). This was tested with kind v0.33.0, kubectl v1.37.0 and DevSpace v6.3.21. The first build pulls base images and needs several GB of free disk. If Docker runs out of space, `docker builder prune -f` clears its build cache.
 
 From the repository root:
 
