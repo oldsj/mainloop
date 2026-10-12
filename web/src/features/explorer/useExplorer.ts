@@ -16,7 +16,12 @@ import { useOwnerTaskPoll, useTaskList } from '@/features/tasks/queries';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { buildExplorer, type ExplorerNode, type Target } from './model';
 
-export function useExplorer(): { nodes: ExplorerNode[]; ready: boolean; failed: boolean } {
+/** `lastVisit` is the shell's baseline for "Since you were here"; without it the group is left out. */
+export function useExplorer(lastVisit: number | null = null): {
+  nodes: ExplorerNode[];
+  ready: boolean;
+  failed: boolean;
+} {
   // The tree is the owner's view of attention, so it polls while it is on screen.
   useAttentionPoll();
   // Owner tasks poll the same way, so a task that stops needing the owner leaves the tree on its own.
@@ -37,9 +42,10 @@ export function useExplorer(): { nodes: ExplorerNode[]; ready: boolean; failed: 
         workspaces: workspaces.data ?? [],
         projects: keepValid(projects.data, projectRowSchema),
         schedules: schedules.data?.pages.flatMap((page) => page.items) ?? [],
-        online
+        online,
+        lastVisit
       }),
-    [tasks.data, attention.data, workspaces.data, projects.data, schedules.data, online]
+    [tasks.data, attention.data, workspaces.data, projects.data, schedules.data, online, lastVisit]
   );
 
   return {
@@ -53,51 +59,32 @@ export function useExplorer(): { nodes: ExplorerNode[]; ready: boolean; failed: 
 export function useOpenTarget() {
   const navigate = useNavigate();
   return (target: Target) => {
-    // The tab is cleared so a phone shows the page in the chat pane, as session rows do.
+    // Each move starts the search afresh (the root keeps `?view=`), so the explorer tab is left and a
+    // phone shows the page in the chat pane.
     switch (target.to) {
       case 'chat':
-        void navigate({
-          to: '/',
-          search: (prev) => ({ ...prev, tab: undefined, hitl: target.hitl })
-        });
+        void navigate({ to: '/', search: {} });
+        return;
+      case 'needs':
+        void navigate({ to: '/inbox', search: { item: target.item } });
         return;
       case 'task':
-        void navigate({
-          to: '/tasks/$id',
-          params: { id: target.id },
-          search: (prev) => ({ ...prev, tab: undefined })
-        });
+        void navigate({ to: '/tasks/$id', params: { id: target.id }, search: {} });
         return;
       case 'session':
-        void navigate({
-          to: '/sessions/$id',
-          params: { id: target.id },
-          search: (prev) => ({ ...prev, tab: undefined })
-        });
+        void navigate({ to: '/sessions/$id', params: { id: target.id }, search: {} });
         return;
       case 'workspace':
-        void navigate({
-          to: '/workspaces/$id',
-          params: { id: target.id },
-          search: (prev) => ({ ...prev, tab: undefined })
-        });
+        void navigate({ to: '/workspaces/$id', params: { id: target.id }, search: {} });
         return;
       case 'project':
-        void navigate({
-          to: '/projects/$id',
-          params: { id: target.id },
-          search: (prev) => ({ ...prev, tab: undefined })
-        });
+        void navigate({ to: '/projects/$id', params: { id: target.id }, search: {} });
         return;
       case 'schedule':
-        void navigate({
-          to: '/schedules/$id',
-          params: { id: target.id },
-          search: (prev) => ({ ...prev, tab: undefined })
-        });
+        void navigate({ to: '/schedules/$id', params: { id: target.id }, search: {} });
         return;
       case 'health':
-        void navigate({ to: '/health', search: (prev) => ({ ...prev, tab: undefined }) });
+        void navigate({ to: '/health', search: {} });
         return;
     }
   };
@@ -109,6 +96,6 @@ export function useAsk() {
   return (text: string) =>
     void navigate({
       to: '/',
-      search: (prev) => ({ ...prev, tab: undefined, prefill: text })
+      search: { prefill: text }
     });
 }

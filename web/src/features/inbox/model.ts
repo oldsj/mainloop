@@ -95,9 +95,17 @@ export function withoutActivityItem(list: unknown, queueItemId: string): Activit
   return activityItems(list).filter((item) => item.queue_item_id !== queueItemId);
 }
 
+/**
+ * The key a Needs-you entry is known by: its approval request id when it has one, else its queue
+ * item id. A task's pending approval ids are these keys, so a task link can name its row.
+ */
+export function attentionKey(item: AttentionItem): string {
+  return item.queue_item?.hitl_request_id ?? item.queue_item?.id ?? item.id;
+}
+
 /** The element id a Needs-you entry is linked by. It matches the id the frozen inbox used. */
 export function attentionAnchor(item: AttentionItem): string {
-  return `attention-${item.queue_item?.hitl_request_id ?? item.queue_item?.id ?? item.id}`;
+  return `attention-${attentionKey(item)}`;
 }
 
 /** The task an entry belongs to: its own task id, else the `/tasks/<id>` link it carries. */

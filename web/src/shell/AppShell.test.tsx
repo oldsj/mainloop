@@ -4,16 +4,23 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { attentionRead } from '@/features/inbox/test/handlers';
-import { attentionSnapshot, hitlAttentionItem } from '@/features/inbox/test/fixtures';
+import { createFakeHITL } from '@/features/hitl/handlers';
+import { activityRead, attentionRead, respondPost } from '@/features/inbox/test/handlers';
+import {
+  attentionItem,
+  attentionSnapshot,
+  hitlAttentionItem,
+  queueItem
+} from '@/features/inbox/test/fixtures';
 import { writeLastVisit } from '@/features/home/lastVisit';
 import { projectsRead, serveProjectPage } from '@/features/projects/test/handlers';
 import { project } from '@/features/projects/test/fixtures';
-import { tasksList } from '@/features/tasks/test/handlers';
+import { serveTaskPage, taskScreen, tasksList } from '@/features/tasks/test/handlers';
+import { hitlView } from '@/test/fixtures/hitl';
 import type * as ConnectionModule from '@/api/connection';
 import { connection } from '@/api/connection';
 import { server } from '@/test/msw/server';
-import { view } from '@/test/fixtures/tasks';
+import { projection, view } from '@/test/fixtures/tasks';
 import { createAppRouter } from '@/router';
 
 // The banner reads one shared connection; a test flips its probe to take the app offline and back.
@@ -107,7 +114,7 @@ describe('shell switch', () => {
     expect(screen.getByTestId('tab-chat')).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it.each(['sessions', 'inbox', 'projects'])(
+  it.each(['sessions', 'projects'])(
     'maps the old ?tab=%s value to the explorer tab',
     async (legacy) => {
       setViewport(false);
@@ -348,35 +355,41 @@ describe('home work placement', () => {
     );
   }
 
-  it('puts the strip above the thread in the desktop main column, not in the explorer', async () => {
+  it('keeps the desktop centre to the chat alone, with what changed in the explorer', async () => {
     setViewport(true);
     serveFailedSinceVisit();
     await renderAt('/');
-    const main = screen.getByRole('main');
-    expect(await within(main).findByTestId('since-strip')).toBeInTheDocument();
     const aside = screen.getByRole('complementary', { name: 'Explorer' });
-    expect(within(aside).queryByTestId('since-strip')).toBeNull();
-    expect(screen.queryByTestId('work-list')).toBeNull();
+    expect(
+      await within(aside).findByRole('treeitem', { name: 'Since you were here, 1' })
+    ).toBeInTheDocument();
+    const main = screen.getByRole('main');
+    expect(within(main).queryByText('Since you were here')).toBeNull();
+    expect(within(main).getByTestId('main-thread')).toBeInTheDocument();
+    // One scroll in the centre: the thread's own. The pane around it does not scroll.
+    expect(main.className).toContain('overflow-hidden');
+    expect(main.className).not.toContain('overflow-y-auto');
   });
 
-  it('shows the strip as one line above the thread on the phone chat tab', async () => {
+  it('shows what changed in the phone explorer, not above the chat', async () => {
     setViewport(false);
+    const user = userEvent.setup();
     serveFailedSinceVisit();
     await renderAt('/');
-    const strip = await screen.findByTestId('since-strip');
-    expect(strip).toBeVisible();
-    expect(strip.className).toContain('flex');
-    expect(within(strip).getByTestId('since-failed')).toHaveAttribute('href', '/tasks/fail-1');
-    expect(screen.queryByTestId('work-list')).toBeNull();
+    expect(screen.queryByText('Since you were here')).toBeNull();
+    expect(screen.getByRole('main').className).toContain('overflow-hidden');
+    await user.click(screen.getByTestId('tab-explorer'));
+    const row = await screen.findByRole('treeitem', { name: '1 task failed, Broke' });
+    await user.click(within(row).getByText('1 task failed'));
+    await waitFor(() =>
+      expect(screen.getByTestId('tab-chat')).toHaveAttribute('aria-pressed', 'true')
+    );
   });
 
-  it('keeps the strip to home: a task or agent page on the phone chat tab has none', async () => {
-    setViewport(false);
-    serveFailedSinceVisit();
+  it('lets other pages scroll in the main pane', async () => {
+    setViewport(true);
     await renderAt('/health');
-    await screen.findByTestId('compact-shell');
-    expect(screen.queryByTestId('since-strip')).toBeNull();
-    expect(screen.getByTestId('tab-chat')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('main').className).toContain('overflow-y-auto');
   });
 
   it('records this visit when the shell opens, so the next one compares against it', async () => {
@@ -472,5 +485,122 @@ describe('chat starters', () => {
     expect(
       await within(group).findByRole('button', { name: 'Start a task in acme/widgets' })
     ).toBeInTheDocument();
+  });
+});
+
+describe('answer view', () => {
+  const planReview = queueItem({
+    id: 'q-plan',
+    item_type: 'plan_review',
+    task_id: null,
+    title: 'Review the plan',
+    content: 'Approve or revise the migration plan.'
+  });
+
+  it('answers a queue item with no task from the tree, in the centre column', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    const bodies: unknown[] = [];
+    server.use(
+      attentionRead(() => HttpResponse.json(attentionSnapshot([attentionItem(planReview)]))),
+      respondPost(async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ status: 'ok', message: 'Sent' });
+      })
+    );
+    const router = await renderAt('/');
+    const tree = await screen.findByRole('tree');
+    await user.click(await within(tree).findByText('Review the plan'));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/inbox'));
+    expect(router.state.location.search).toMatchObject({ item: 'q-plan' });
+    const main = screen.getByRole('main');
+    await within(main).findByRole('heading', { name: 'Inbox' });
+    expect(within(main).queryByTestId('main-thread')).toBeNull();
+    const row = main.querySelector('[data-attention-key="q-plan"]');
+    expect(row).toHaveAttribute('aria-current', 'true');
+    await user.type(within(main).getByLabelText('Reply to Review the plan'), 'Ship it');
+    await user.click(within(main).getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(bodies).toEqual([{ response: 'Ship it' }]));
+  });
+
+  it('opens the answer view from the Needs you group, with Activity beside it', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    server.use(
+      attentionRead(() => HttpResponse.json(attentionSnapshot([attentionItem(planReview)]))),
+      activityRead(() => HttpResponse.json([]))
+    );
+    const router = await renderAt('/');
+    const group = await screen.findByRole('treeitem', { name: 'Needs you, 1' });
+    await user.click(within(group).getByText('Needs you'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/inbox'));
+    await user.click(await screen.findByRole('button', { name: 'Activity' }));
+    expect(router.state.location.search).toMatchObject({ show: 'activity' });
+    expect(screen.getByRole('button', { name: 'Activity' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+  });
+
+  it('lands a task approval link on its answer card', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    const waiting = view(
+      { reason: 'approval' },
+      { projection: projection({ pending_approval_ids: ['approval-1'] }) }
+    );
+    server.use(
+      ...serveTaskPage(taskScreen(waiting)),
+      attentionRead(() => HttpResponse.json(attentionSnapshot([hitlAttentionItem('approval-1')]))),
+      ...createFakeHITL({ 'approval-1': hitlView('approval-1') }).handlers
+    );
+    const router = await renderAt('/tasks/task-1');
+    await user.click(await screen.findByRole('link', { name: 'Open Inbox' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/inbox'));
+    const main = screen.getByRole('main');
+    await waitFor(() =>
+      expect(main.querySelector('[data-attention-key="approval-1"]')).toHaveAttribute(
+        'aria-current',
+        'true'
+      )
+    );
+  });
+
+  it('opens on the phone over the chat pane, with a way back to the explorer', async () => {
+    setViewport(false);
+    const user = userEvent.setup();
+    server.use(
+      attentionRead(() => HttpResponse.json(attentionSnapshot([attentionItem(planReview)])))
+    );
+    const router = await renderAt('/?tab=explorer');
+    await user.click(await within(await screen.findByRole('tree')).findByText('Review the plan'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/inbox'));
+    expect(await screen.findByRole('heading', { name: 'Inbox' })).toBeVisible();
+    await user.click(screen.getByRole('link', { name: 'Back to Explorer' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(screen.getByTestId('tab-explorer')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('sends an old ?tab=inbox link to the answer view', async () => {
+    setViewport(false);
+    server.use(
+      attentionRead(() => HttpResponse.json(attentionSnapshot([attentionItem(planReview)])))
+    );
+    const router = await renderAt('/?tab=inbox');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/inbox'));
+    expect(router.state.location.search).not.toHaveProperty('tab');
+    expect(await screen.findByText('Review the plan')).toBeInTheDocument();
+  });
+});
+
+describe('answer view on desktop', () => {
+  it('goes back to the chat from its back link', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    const router = await renderAt('/inbox');
+    await user.click(await screen.findByRole('link', { name: 'Back to chat' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(await screen.findByTestId('main-thread')).toBeInTheDocument();
   });
 });

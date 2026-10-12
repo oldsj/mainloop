@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root';
 import { Route as IndexRouteImport } from './routes/index';
 import { Route as AgentsRouteImport } from './routes/agents';
 import { Route as HealthRouteImport } from './routes/health';
+import { Route as InboxRouteImport } from './routes/inbox';
 import { Route as ProjectsIdRouteImport } from './routes/projects.$id';
 import { Route as SchedulesIndexRouteImport } from './routes/schedules.index';
 import { Route as SchedulesIdRouteImport } from './routes/schedules.$id';
@@ -33,6 +34,11 @@ const AgentsRoute = AgentsRouteImport.update({
 const HealthRoute = HealthRouteImport.update({
   id: '/health',
   path: '/health',
+  getParentRoute: () => rootRouteImport,
+} as any);
+const InboxRoute = InboxRouteImport.update({
+  id: '/inbox',
+  path: '/inbox',
   getParentRoute: () => rootRouteImport,
 } as any);
 const ProjectsIdRoute = ProjectsIdRouteImport.update({
@@ -75,6 +81,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute;
   '/agents': typeof AgentsRoute;
   '/health': typeof HealthRoute;
+  '/inbox': typeof InboxRoute;
   '/projects/$id': typeof ProjectsIdRoute;
   '/schedules/$id': typeof SchedulesIdRoute;
   '/schedules/new': typeof SchedulesNewRoute;
@@ -87,6 +94,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute;
   '/agents': typeof AgentsRoute;
   '/health': typeof HealthRoute;
+  '/inbox': typeof InboxRoute;
   '/projects/$id': typeof ProjectsIdRoute;
   '/schedules/$id': typeof SchedulesIdRoute;
   '/schedules/new': typeof SchedulesNewRoute;
@@ -100,6 +108,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute;
   '/agents': typeof AgentsRoute;
   '/health': typeof HealthRoute;
+  '/inbox': typeof InboxRoute;
   '/projects/$id': typeof ProjectsIdRoute;
   '/schedules/$id': typeof SchedulesIdRoute;
   '/schedules/new': typeof SchedulesNewRoute;
@@ -114,6 +123,7 @@ export interface FileRouteTypes {
     | '/'
     | '/agents'
     | '/health'
+    | '/inbox'
     | '/projects/$id'
     | '/schedules/$id'
     | '/schedules/new'
@@ -126,6 +136,7 @@ export interface FileRouteTypes {
     | '/'
     | '/agents'
     | '/health'
+    | '/inbox'
     | '/projects/$id'
     | '/schedules/$id'
     | '/schedules/new'
@@ -138,6 +149,7 @@ export interface FileRouteTypes {
     | '/'
     | '/agents'
     | '/health'
+    | '/inbox'
     | '/projects/$id'
     | '/schedules/$id'
     | '/schedules/new'
@@ -151,6 +163,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute;
   AgentsRoute: typeof AgentsRoute;
   HealthRoute: typeof HealthRoute;
+  InboxRoute: typeof InboxRoute;
   ProjectsIdRoute: typeof ProjectsIdRoute;
   SchedulesIdRoute: typeof SchedulesIdRoute;
   SchedulesNewRoute: typeof SchedulesNewRoute;
@@ -181,6 +194,13 @@ declare module '@tanstack/react-router' {
       path: '/health';
       fullPath: '/health';
       preLoaderRoute: typeof HealthRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    '/inbox': {
+      id: '/inbox';
+      path: '/inbox';
+      fullPath: '/inbox';
+      preLoaderRoute: typeof InboxRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     '/projects/$id': {
@@ -239,6 +259,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AgentsRoute: AgentsRoute,
   HealthRoute: HealthRoute,
+  InboxRoute: InboxRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   SchedulesIdRoute: SchedulesIdRoute,
   SchedulesNewRoute: SchedulesNewRoute,

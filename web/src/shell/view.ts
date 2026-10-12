@@ -7,7 +7,10 @@ export type View = (typeof VIEWS)[number];
 export const TABS = ['chat', 'explorer'] as const;
 export type Tab = (typeof TABS)[number];
 
-/** Tab values from before the explorer. Links such as TaskDetail's `tab: 'inbox'` still send them. */
+/**
+ * Tab values from before the explorer, kept so old links still land: `sessions` and `projects` open
+ * the Explorer tab, and `inbox` is sent to the answer view at `/inbox` by the root route.
+ */
 const LEGACY_TABS = ['sessions', 'inbox', 'projects'] as const;
 
 /** Search params every route shares. Tab and view live in the URL so links can set them. */
@@ -38,6 +41,11 @@ function subscribe(onChange: () => void) {
   const query = window.matchMedia(DESKTOP_QUERY);
   query.addEventListener('change', onChange);
   return () => query.removeEventListener('change', onChange);
+}
+
+/** The layout in use: `?view=` if the URL sets it, else the viewport's. */
+export function useShellView(requested: View | undefined): View {
+  return resolveView(requested, useIsWide());
 }
 
 export function useIsWide(): boolean {

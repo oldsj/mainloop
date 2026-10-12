@@ -3,8 +3,14 @@
  * it leads and what "Ask Mainloop" prefills. Pure, so the rules test without a QueryClient. Every
  * fact comes from the existing reads; nothing here decides what a task or session is allowed to do.
  */
-import type { AttentionItem } from '@/features/inbox/model';
-import { statusLine, workGroup } from '@/features/home/model';
+import { attentionKey, type AttentionItem } from '@/features/inbox/model';
+import {
+  countText,
+  sinceCounts,
+  statusLine,
+  workGroup,
+  type SinceCounts
+} from '@/features/home/model';
 import type { ProjectRow } from '@/features/projects/model';
 import type { ScheduleView } from '@/features/schedules/model';
 import { sessionTone, workspaceTone, type WorkspaceBadgeFields } from '@/features/sessions/model';
@@ -14,7 +20,8 @@ import { isCurrent } from '@/lib/sessionStatus';
 
 /** Where a row leads. The shell turns it into a route; the tree never builds URLs itself. */
 export type Target =
-  | { to: 'chat'; hitl?: string }
+  | { to: 'chat' }
+  | { to: 'needs'; item?: string }
   | { to: 'task'; id: string }
   | { to: 'session'; id: string }
   | { to: 'workspace'; id: string }
@@ -47,12 +54,16 @@ export interface ExplorerSource {
   workspaces: WorkspaceBadgeFields[];
   projects: ProjectRow[];
   schedules: ScheduleView[];
-  /** Whether the backend answered the last read. Drives the health row. */
+  /** Whether the backend answered the last read. Drives the Insights row. */
   online: boolean;
+  /** The last app open, in ms, for "Since you were here". Null on a first visit or with storage blocked. */
+  lastVisit?: number | null;
+  /** The clock the finished window is measured from, in ms. Defaults to now. */
+  now?: number;
 }
 
-/** How many finished tasks the collapsed "Finished recently" group lists. */
-export const FINISHED_LIMIT = 10;
+/** How far back "Finished recently" reaches: tasks completed or cancelled in the last seven days. */
+export const FINISHED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** The short form of an ID, as the rest of the app shows it. */
 export const shortId = (id: string) => id.slice(0, 8);
@@ -61,7 +72,7 @@ const byUpdatedDesc = (a: TaskView, b: TaskView) =>
   Date.parse(b.task.updated_at) - Date.parse(a.task.updated_at);
 
 /** Node ids a group starts expanded with. Everything else starts folded. */
-export const DEFAULT_EXPANDED: ReadonlySet<string> = new Set(['mainloop', 'needs']);
+export const DEFAULT_EXPANDED: ReadonlySet<string> = new Set(['mainloop', 'needs', 'since']);
 
 export function askPrefill(node: Pick<ExplorerNode, 'label'>, target: Target): string | undefined {
   switch (target.to) {
@@ -132,17 +143,62 @@ export function workspaceNode(workspace: WorkspaceBadgeFields, parent: string): 
   };
 }
 
+/** What an owner action is called in an Ask Mainloop prefill. */
+const KIND: Record<string, string> = {
+  approval: 'approval',
+  question: 'question',
+  owner_decision: 'decision'
+};
+
+/**
+ * An owner action. It opens the answer view on its own row, so a question, plan review or approval
+ * is answered there whether or not it belongs to a task.
+ */
 function attentionNode(item: AttentionItem, parent: string): ExplorerNode {
-  const hitl = item.queue_item?.hitl_request_id ?? undefined;
-  const target: Target = item.task_id ? { to: 'task', id: item.task_id } : { to: 'chat', hitl };
+  const target: Target = { to: 'needs', item: attentionKey(item) };
   return {
     id: `${parent}/attention:${item.id}`,
     label: item.title,
     detail: item.needed,
     tone: 'attention',
     target,
+    ask: item.task_id
+      ? `About ${KIND[item.kind] ?? 'request'} ${item.title} (task ${shortId(item.task_id)}): `
+      : `About ${KIND[item.kind] ?? 'request'} ${item.title}: `,
     children: []
   };
+}
+
+/** The "Since you were here" rows, in the order the strip used. Each opens the most recent task it counts. */
+const SINCE: { key: keyof SinceCounts; label: string; tone: Tone }[] = [
+  { key: 'waiting', label: 'waiting on you', tone: 'attention' },
+  { key: 'failed', label: 'failed', tone: 'bad' },
+  { key: 'merged', label: 'merged', tone: 'ok' }
+];
+
+/**
+ * What changed since the last app open, as a group. It is left out when nothing changed or there is
+ * no baseline, so it never shows empty.
+ */
+function sinceNode(source: ExplorerSource): ExplorerNode[] {
+  const counts = sinceCounts(source.tasks, source.lastVisit ?? null);
+  const children = SINCE.flatMap(({ key, label, tone }): ExplorerNode[] => {
+    const [latest] = counts[key];
+    if (!latest) return [];
+    return [
+      {
+        id: `since/${key}`,
+        label: `${countText(counts[key].length, 'task')} ${label}`,
+        detail: latest.task.title,
+        tone,
+        target: { to: 'task', id: latest.task.id },
+        children: []
+      }
+    ];
+  });
+  if (children.length === 0) return [];
+  const count = SINCE.reduce((sum, { key }) => sum + counts[key].length, 0);
+  return [{ id: 'since', label: 'Since you were here', count, children }];
 }
 
 /** A row that says the group is empty. It has no target, so it is only read, not opened. */
@@ -156,8 +212,9 @@ export function mainloopState(needs: number, working: number): { label: string; 
 }
 
 /**
- * The top-level tree, in the order the owner sees it: Mainloop, Needs you, Working, Projects,
- * Schedules, Finished recently, Health.
+ * The top-level tree, in the order the owner sees it: Mainloop, Needs you, Since you were here
+ * (only when something changed), Working, Projects, Schedules, Finished recently, Insights (the
+ * health row; its page is still `/health`).
  */
 export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
   const groups = {
@@ -171,14 +228,19 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
   }
 
   // Needs you: owner actions first, then failed or blocked tasks that no action already names.
+  // A task that has an owner action is listed here only, never also under Working.
   const needs = source.attention.map((item) => attentionNode(item, 'needs'));
+  const now = source.now ?? Date.now();
+  const finishedSince = now - FINISHED_WINDOW_MS;
   for (const view of [...source.tasks].sort(byUpdatedDesc)) {
     const group = workGroup(view, null);
-    if (group === 'working') groups.working.push(view);
-    if ((group === 'needs-you' || group === 'blocked') && !attentionTasks.has(view.task.id)) {
+    const named = attentionTasks.has(view.task.id);
+    if (group === 'working' && !named) groups.working.push(view);
+    if ((group === 'needs-you' || group === 'blocked') && !named) {
       needs.push(taskNode(view, source, 'needs'));
     }
-    if (view.task.status === 'completed' || view.task.status === 'cancelled') {
+    const finished = view.task.status === 'completed' || view.task.status === 'cancelled';
+    if (finished && Date.parse(view.task.updated_at) >= finishedSince) {
       groups.finished.push(view);
     }
   }
@@ -231,9 +293,11 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
       id: 'needs',
       label: 'Needs you',
       count: needs.length,
+      target: { to: 'needs' },
       tone: needs.length > 0 ? 'attention' : undefined,
       children: needs.length > 0 ? needs : [note('needs/none', 'Nothing needs you')]
     },
+    ...sinceNode(source),
     {
       id: 'working',
       label: 'Working',
@@ -259,11 +323,11 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
       id: 'finished',
       label: 'Finished recently',
       count: finished.length,
-      children: finished.slice(0, FINISHED_LIMIT).map((view) => taskNode(view, source, 'finished'))
+      children: finished.map((view) => taskNode(view, source, 'finished'))
     },
     {
       id: 'health',
-      label: 'Health',
+      label: 'Insights',
       detail: source.online ? 'Connected' : 'Offline',
       tone: source.online ? 'ok' : 'bad',
       target: { to: 'health' },

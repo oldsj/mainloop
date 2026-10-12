@@ -116,29 +116,34 @@ function ExplorerBody({
 }
 
 /** Desktop: the explorer down the right of the main chat. Resizable, and folds to a rail. */
-export function ExplorerAside() {
+export function ExplorerAside({ lastVisit = null }: { lastVisit?: number | null }) {
   const { prefs, update } = useExplorerPrefs();
-  const { nodes, ready, failed } = useExplorer();
+  const { nodes, ready, failed } = useExplorer(lastVisit);
   const { open, ask, toggle } = useTree(update);
-  const drag = useRef<{ startX: number; startWidth: number } | null>(null);
+  const drag = useRef<{ startX: number; startWidth: number; width: number } | null>(null);
+  // The width while a drag is in progress. It is drawn from here and saved only when the drag ends.
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
   const needs = needsCount(nodes);
 
   const setWidth = (width: number) => update((prev) => ({ ...prev, width: clampWidth(width) }));
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
-    drag.current = { startX: event.clientX, startWidth: prefs.width };
+    drag.current = { startX: event.clientX, startWidth: prefs.width, width: prefs.width };
   };
   // The panel sits on the right, so dragging left widens it.
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const start = drag.current;
     if (!start) return;
-    const width = clampWidth(start.startWidth + (start.startX - event.clientX));
+    start.width = clampWidth(start.startWidth + (start.startX - event.clientX));
     // Each move is a render only; the width is written once, when the drag ends.
-    update((prev) => (prev.width === width ? prev : { ...prev, width }));
+    setDragWidth(start.width);
   };
   const onPointerUp = () => {
+    const start = drag.current;
     drag.current = null;
+    setDragWidth(null);
+    if (start && start.width !== prefs.width) setWidth(start.width);
   };
   const onHandleKey = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'ArrowLeft') setWidth(prefs.width + RESIZE_STEP);
@@ -181,7 +186,7 @@ export function ExplorerAside() {
     <aside
       aria-label="Explorer"
       data-testid="explorer-aside"
-      style={{ width: prefs.width }}
+      style={{ width: dragWidth ?? prefs.width }}
       className="border-border relative flex min-h-0 shrink-0 flex-col border-l"
     >
       {/* A focusable window splitter (WAI-ARIA): the separator takes keys, so it is not a plain static element. */}
@@ -199,7 +204,7 @@ export function ExplorerAside() {
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onKeyDown={onHandleKey}
-        className="hover:bg-accent focus-visible:bg-accent absolute inset-y-0 left-0 z-10 w-1 cursor-col-resize touch-none outline-none"
+        className="hover:bg-accent focus-visible:bg-ring absolute inset-y-0 left-0 z-10 w-1 cursor-col-resize touch-none outline-none focus-visible:w-1.5"
       />
       {/* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
       <ExplorerBody
@@ -217,9 +222,9 @@ export function ExplorerAside() {
 }
 
 /** Phone: the same tree, full width, in the Explorer tab. */
-export function ExplorerPane() {
+export function ExplorerPane({ lastVisit = null }: { lastVisit?: number | null }) {
   const { prefs, update } = useExplorerPrefs();
-  const { nodes, ready, failed } = useExplorer();
+  const { nodes, ready, failed } = useExplorer(lastVisit);
   const { open, ask, toggle } = useTree(update);
   return (
     <ExplorerBody

@@ -66,7 +66,7 @@ export function TaskFacts({
               </p>
               <div>
                 <Button asChild variant="outline">
-                  <Link to="/" search={(prev) => ({ ...prev, tab: 'inbox' })}>
+                  <Link to="/inbox" search={{ item: pending[0] }}>
                     Open Inbox
                   </Link>
                 </Button>

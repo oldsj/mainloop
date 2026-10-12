@@ -1,18 +1,41 @@
 import { Link } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import { HITLCard } from '@/features/hitl';
 import { type AnsweredRequest, useAnswered } from '@/features/hitl/hitl-client';
-import { type AttentionItem, attentionAnchor, attentionItems, messageOf, taskIdOf } from './model';
+import {
+  type AttentionItem,
+  attentionAnchor,
+  attentionItems,
+  attentionKey,
+  messageOf,
+  taskIdOf
+} from './model';
 import { QueueCard } from './QueueCard';
 import { useAttention } from './queries';
 
-/** Needs you: what the owner must answer or decide now, in the order the server sent it. */
-export function AttentionList() {
+/**
+ * Needs you: what the owner must answer or decide now, in the order the server sent it. The row
+ * whose key is `selected` (an approval request id or a queue item id) is scrolled into view once
+ * it is listed.
+ */
+export function AttentionList({ selected }: { selected?: string }) {
   const attention = useAttention();
   const items = attentionItems(attention.data);
+
+  // Scrolls once per selected row, when it is first listed, so a later poll does not pull the page back.
+  const scrolled = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selected || scrolled.current === selected) return;
+    const row = Array.from(document.querySelectorAll<HTMLElement>('[data-attention-key]')).find(
+      (el) => el.dataset.attentionKey === selected
+    );
+    if (!row) return;
+    scrolled.current = selected;
+    row.scrollIntoView?.({ block: 'center' });
+  }, [selected, attention.data]);
 
   // A failed refresh keeps the rows already shown, with the error above them.
   const failure = attention.isError ? (
@@ -39,7 +62,7 @@ export function AttentionList() {
   return (
     <div className="flex flex-col">
       {failure}
-      <AttentionRows items={items} refreshFailed={attention.isError} />
+      <AttentionRows items={items} refreshFailed={attention.isError} selected={selected} />
     </div>
   );
 }
@@ -76,9 +99,12 @@ function rowOf(item: AttentionItem): Row {
  */
 export function AttentionRows({
   items,
-  refreshFailed = false
+  refreshFailed = false,
+  selected
 }: {
   items: AttentionItem[];
+  /** The key of the row the owner came to answer. It is marked, so it stands out among the rest. */
+  selected?: string;
   /** The last refresh failed: no rows then means unknown, so the empty state is not shown. */
   refreshFailed?: boolean;
 }) {
@@ -104,7 +130,7 @@ export function AttentionRows({
   return (
     <ul aria-label="Needs you" className="flex flex-col">
       {rows.map((row) => (
-        <NeedsRow key={row.key} row={row} />
+        <NeedsRow key={row.key} row={row} selected={selected} />
       ))}
     </ul>
   );
@@ -161,10 +187,18 @@ function sameRows(a: Row[], b: Row[]): boolean {
   );
 }
 
-function NeedsRow({ row }: { row: Row }) {
+function NeedsRow({ row, selected }: { row: Row; selected?: string }) {
+  const key = row.kind === 'entry' ? attentionKey(row.item) : row.requestId;
+  const mark = key === selected;
+  const className = cn('border-border border-b', mark && 'ring-term-yellow/70 ring-1 ring-inset');
   if (row.kind === 'entry') {
     return (
-      <li id={attentionAnchor(row.item)} className="border-border border-b">
+      <li
+        id={attentionAnchor(row.item)}
+        data-attention-key={key}
+        aria-current={mark ? 'true' : undefined}
+        className={className}
+      >
         <AttentionEntry item={row.item} />
       </li>
     );
@@ -172,7 +206,12 @@ function NeedsRow({ row }: { row: Row }) {
   // One element shape for a listed and a kept request. The lead-in is the server's line, kept with the
   // row, and is left out only when no entry for the request was ever listed here.
   return (
-    <li id={row.item ? attentionAnchor(row.item) : undefined} className="border-border border-b">
+    <li
+      id={row.item ? attentionAnchor(row.item) : undefined}
+      data-attention-key={key}
+      aria-current={mark ? 'true' : undefined}
+      className={className}
+    >
       <div className="gap-sm flex flex-col">
         {row.item?.needed ? (
           <p className="px-md pt-md text-sm break-words">{row.item.needed}</p>

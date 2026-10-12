@@ -185,7 +185,7 @@ describe('task page layout', () => {
     expect(within(panel).getByText('1 pending owner action')).toBeInTheDocument();
     expect(within(panel).getByRole('link', { name: 'Open Inbox' })).toHaveAttribute(
       'href',
-      '/?tab=inbox'
+      '/inbox?item=approval-1'
     );
   });
 

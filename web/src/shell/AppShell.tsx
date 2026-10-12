@@ -3,12 +3,11 @@ import { useLastVisit } from '@/features/home';
 import { ConnectionBanner } from './ConnectionBanner';
 import { CompactShell } from './CompactShell';
 import { DesktopShell } from './DesktopShell';
-import { resolveTab, resolveView, useIsWide, type ShellSearch, type View } from './view';
+import { resolveTab, useShellView, type ShellSearch, type View } from './view';
 
 /** Picks the desktop or compact layout from `?view=` or the viewport. */
 export function AppShell({ view, tab }: { view?: View; tab?: ShellSearch['tab'] }) {
-  const isWide = useIsWide();
-  const resolved = resolveView(view, isWide);
+  const resolved = useShellView(view);
   // One baseline for the whole shell: both layouts compare against the same previous visit.
   const lastVisit = useLastVisit();
   // The banner is the first row of the screen-high column, so it takes height from the shell

@@ -166,3 +166,96 @@ describe('explorer tree mouse and ask', () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 });
+
+describe('explorer tree focus state', () => {
+  const deep: ExplorerNode[] = [
+    {
+      id: 'working',
+      label: 'Working',
+      count: 1,
+      children: [
+        {
+          id: 'working/task:t2',
+          label: 'Pick queue backend',
+          detail: 'Running',
+          tone: 'active',
+          target: { to: 'task', id: 't2' },
+          ask: 'About task Pick queue backend (t2): ',
+          children: [
+            {
+              id: 'working/task:t2/session:s1',
+              label: 'Claude session',
+              detail: 'running',
+              target: { to: 'session', id: 's1' },
+              children: []
+            }
+          ]
+        }
+      ]
+    }
+  ];
+
+  function renderDeep() {
+    render(
+      <ExplorerTree
+        nodes={deep}
+        isExpanded={() => true}
+        onToggle={vi.fn()}
+        onOpen={vi.fn()}
+        onAsk={vi.fn()}
+      />
+    );
+    return userEvent.setup();
+  }
+
+  const row = (name: string) => screen.getByRole('treeitem', { name });
+
+  it('puts the tab stop and selection on the focused level-2 and level-3 rows, not their ancestors', async () => {
+    const user = renderDeep();
+    row('Working, 1').focus();
+    await user.keyboard('{ArrowDown}');
+    const task = row('Pick queue backend, Running');
+    expect(task).toHaveFocus();
+    expect(task).toHaveAttribute('aria-level', '2');
+    expect(task).toHaveAttribute('tabindex', '0');
+    expect(task).toHaveAttribute('aria-selected', 'true');
+    expect(row('Working, 1')).toHaveAttribute('tabindex', '-1');
+    expect(row('Working, 1')).toHaveAttribute('aria-selected', 'false');
+
+    await user.keyboard('{ArrowDown}');
+    const session = row('Claude session, running');
+    expect(session).toHaveFocus();
+    expect(session).toHaveAttribute('aria-level', '3');
+    expect(session).toHaveAttribute('tabindex', '0');
+    expect(session).toHaveAttribute('aria-selected', 'true');
+    for (const name of ['Working, 1', 'Pick queue backend, Running']) {
+      expect(row(name)).toHaveAttribute('tabindex', '-1');
+      expect(row(name)).toHaveAttribute('aria-selected', 'false');
+    }
+  });
+
+  it('draws the ring from keyboard focus on the row itself, so a tree never focused shows none', () => {
+    renderDeep();
+    for (const item of screen.getAllByRole('treeitem')) {
+      // The ring rule targets only the treeitem's own row, while the browser shows focus on it.
+      expect(item.className).toContain('[&:focus-visible>div]:ring-1');
+      expect(item.firstElementChild?.className ?? '').not.toMatch(/(^|\s)ring-1(\s|$)/);
+    }
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('names each row from its label and status, not its buttons', () => {
+    renderDeep();
+    expect(row('Pick queue backend, Running')).toBeInTheDocument();
+    expect(screen.queryByRole('treeitem', { name: /Ask Mainloop/ })).toBeNull();
+  });
+
+  it('draws one indent guide per ancestor', () => {
+    renderDeep();
+    const guides = (name: string) =>
+      within(row(name).firstElementChild as HTMLElement).queryAllByTestId('indent-guide');
+    expect(guides('Working, 1')).toHaveLength(0);
+    expect(guides('Pick queue backend, Running')).toHaveLength(1);
+    expect(guides('Claude session, running')).toHaveLength(2);
+  });
+});

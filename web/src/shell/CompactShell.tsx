@@ -4,7 +4,6 @@ import { useState, type ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import { ChatStarters, ExplorerPane, useNeedsCount } from '@/features/explorer';
-import { HomeStrip } from '@/features/home';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
 import { ThemeSelector } from './ThemeSelector';
@@ -34,7 +33,7 @@ function TabPane({ active, children }: { active: boolean; children: ReactNode })
  * <1024 px: two panes, Chat and Explorer, switched by a bottom tab bar. The tab lives in the URL.
  * A pane is built the first time it opens and stays mounted after that, so a draft survives a
  * switch. The Explorer tab always shows the Needs-you count, so attention keeps polling while the
- * chat is open. The Chat tab opens with the "Since you were here" line above the thread.
+ * chat is open. On home the Chat tab is the Mainloop chat alone; "Since you were here" lives in the explorer.
  */
 export function CompactShell({
   tab,
@@ -73,16 +72,18 @@ export function CompactShell({
           <ThemeSelector />
         </nav>
       </header>
-      <main id={MAIN_ID} tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto outline-none">
+      {/* The home chat owns its scroll, so the pane around it does not scroll as well. */}
+      <main
+        id={MAIN_ID}
+        tabIndex={-1}
+        className={cn(
+          'min-h-0 flex-1 outline-none',
+          onHome && tab === 'chat' ? 'overflow-hidden' : 'overflow-y-auto'
+        )}
+      >
         {opened.has('chat') && (
           <TabPane active={tab === 'chat'}>
             <div className="flex h-full min-h-0 flex-col">
-              {/* The strip belongs to home only; task and agent pages open in the same tab. */}
-              {onHome && (
-                <PanelBoundary name="Since you were here">
-                  <HomeStrip lastVisit={lastVisit} compact />
-                </PanelBoundary>
-              )}
               {onHome && <ChatStarters />}
               <div className="min-h-0 flex-1">{children}</div>
             </div>
@@ -91,7 +92,7 @@ export function CompactShell({
         {opened.has('explorer') && (
           <TabPane active={tab === 'explorer'}>
             <PanelBoundary name="Explorer">
-              <ExplorerPane />
+              <ExplorerPane lastVisit={lastVisit} />
             </PanelBoundary>
           </TabPane>
         )}

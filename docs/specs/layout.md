@@ -8,24 +8,27 @@ the loading message. Retrying requests the details for the current project.
 
 ## Desktop
 
-- Chat takes the main area. The **since you were here** strip sits above the thread on the home route (`/`).
+- On home (`/`) the centre column is the Mainloop chat alone: one scroll (the thread), the composer at the bottom, nothing stacked above or below it. Other pages scroll in the same column.
 - Explorer panel on the right, styled like an IDE sidebar. It is resizable (240–480 px, default 384) and collapses to a thin rail with the Needs-you count. Width, collapsed state and each node’s expanded state are kept per browser in local storage.
-- Explorer tree, top to bottom: **Mainloop** (idle, working or waiting on you; its children are the live sessions; clicking it opens the main chat), **Needs you** (expanded by default, with a count), **Working**, **Projects** (each project holds its tasks, and each task its sessions and workspaces), **Schedules**, **Finished recently** (collapsed by default, capped at ten), and **Health** (one row whose dot shows the backend connection).
-- Each tree row has an **Ask Mainloop** button, visible on hover or focus. It opens the main chat with the composer filled, not sent, for example `About task <title> (<short id>): `. The **a** key does the same from a focused row. A context menu and long-press are not built.
-- The tree is keyboard driven: up and down move, right expands, left collapses, Enter opens, and the focused row has a visible ring.
+- Explorer tree, top to bottom: **Mainloop** (idle, working or waiting on you; its children are the live sessions; clicking it opens the main chat), **Needs you** (expanded by default, with a count), **Working**, **Projects** (each project holds its tasks, and each task its sessions and workspaces), **Schedules**, **Finished recently** (tasks completed or cancelled in the last seven days; collapsed by default; its count matches its rows), and **Insights** (one row whose dot shows the backend connection; it opens `/health`). **Since you were here** sits right after Needs you, expanded, when anything changed since the last app open; each row (for example **1 task failed**) opens the most recent task it counts. A task with an owner action is listed under Needs you only, never also under Working.
+- Selecting **Needs you**, or any row in it, opens the answer view (`/inbox`) in the centre column in place of the chat, with the chosen item scrolled into view and marked. It holds **Needs you** (questions, plan reviews and approvals, answered in place) and **Activity**. A task's **Open Inbox** link and old `?tab=inbox` links open it too. A back link returns to the chat (desktop) or the Explorer tab (phone).
+- Rows are one dense line on desktop (label, status, count) with indent guides per level.
+- Each tree row, including Needs-you rows, has an **Ask Mainloop** button, visible on hover or keyboard focus. It opens the main chat with the composer filled, not sent, for example `About task <title> (<short id>): `. The **a** key does the same from a focused row. A context menu and long-press are not built.
+- Keyboard access: up and down move, right expands, left collapses, Enter opens. A ring marks the row with keyboard focus only.
 - The explorer header carries the hint **Ask Mainloop to start, stop or change anything.**
 - There is no create button for tasks, agents or workspaces in the header or the explorer. Work starts from the main chat. The **New workspace** control stays on the project page (repository, optional branch).
 - The header has a **health** link to orchestration health and the theme selector.
-- Empty main chat shows suggestion chips: **What needs me?**, **Start a task in <first project>:**, **What’s running?** and **Pause a schedule:**. Each fills the composer without sending.
+- An empty main chat shows suggestion chips above the thread (they go once the thread has messages): **What needs me?**, **Start a task in <first project>:**, **What’s running?** and **Pause a schedule:**. Each fills the composer without sending.
 
 ## Mobile
 
 - The header has an icon link to orchestration health, labelled "Orchestration health", and the theme selector.
-- Bottom tab bar with two tabs, **Chat** and **Explorer**. The Explorer tab shows the Needs-you count, and its accessible name includes it. The explorer shows the same tree full width.
+- Bottom tab bar with two tabs, **Chat** and **Explorer**. The Explorer tab shows the Needs-you count, and its accessible name includes it. The explorer shows the same tree full width. Rows are 44 px touch targets with the status on a second line, and the Ask Mainloop button is always shown.
+- The answer view opens over the Chat tab, with a back link to the Explorer tab.
 - Chat tab active by default on load
 - Tab bar hidden on desktop viewports
 - Touch targets sized appropriately for mobile interaction
-- Old `?tab=` values (`sessions`, `inbox`, `projects`) open the Explorer tab.
+- Old `?tab=` values `sessions` and `projects` open the Explorer tab; `?tab=inbox` opens the answer view.
 - Switching tabs keeps what each tab holds, such as a draft or an open tree. A tab is built the first time it opens.
 - The header and tab bar stay clear of the device’s safe areas (notch, rounded corners and the home indicator).
 
@@ -40,11 +43,9 @@ the loading message. Retrying requests the details for the current project.
 ## Home
 
 - **Not mounted (superseded by the explorer)**: the work list component is kept but no route renders it. Its grouping, for reference: tasks grouped as **Needs you**, **Working**, **Blocked or failed**, and **Finished since you last looked**. A task appears once, in the first group that fits. Each row shows the title, project, a one-line status with its reason (a task waiting on approval reads **Waiting for your approval**), the relative last update time, and links to the task. Running and queued tasks are current work, so **Working** always shows; with nothing running it reads **Nothing running. Start work from the main chat.** Each group shows five rows, then a **Show all (N)** toggle that becomes **Show fewer**, so a long list does not push Sessions and Inbox out of reach.
-- **Since you were here**: counts of tasks waiting on you, failed, and merged since the last visit, each linking to the most recent one. It is hidden when nothing changed, and on a first visit, which has no baseline. On the phone it is one line that scrolls sideways rather than wrapping, and it shows only on the main chat (`/`), not above agent or task pages.
-- **Last visit**: kept per browser in local storage. The app shell reads it once when it opens and records the current time, so the desktop explorer and the phone tabs share one baseline. Because the desktop explorer shows on every route, the visit is the app's last open, not only the last time home was shown. This is deliberate: the baseline is the last app open, not the last home view. If storage is blocked, the strip and the finished group simply have no baseline.
+- **Since you were here**: counts of tasks waiting on you, failed, and merged since the last visit, each linking to the most recent one. It is an explorer group (see Desktop), on both layouts. It is left out when nothing changed, and on a first visit, which has no baseline.
+- **Last visit**: kept per browser in local storage. The app shell reads it once when it opens and records the current time, so the desktop explorer and the phone tabs share one baseline. Because the desktop explorer shows on every route, the visit is the app's last open, not only the last time home was shown. This is deliberate: the baseline is the last app open, not the last home view. If storage is blocked, the Since you were here group has no baseline and is left out.
 - **Updates**: the list refreshes from the same task invalidation as the task pages. The relative times refresh each minute on the page.
-- **Placement**: the strip sits above the main chat, on desktop and on the phone Chat tab, and only on the home route.
-- **Not proven**: the strip with content in a browser. Phone (390×844) and desktop (1440×900) layouts were checked in a browser against fixtures with no tasks, so only the empty states were seen; the strip and list rows are covered by unit tests.
 
 ## Tasks
 
@@ -61,7 +62,6 @@ server reports; it never decides a task's state locally.
 
 ## React status (F5)
 
-- **Implemented:** the desktop inbox panel is always mounted, so its **Needs you** tab carries the count and polls while the page is visible. The compact Inbox tab shows the same panel. Inbox buttons, links and the reply field are at least 44 px tall.
-- **Implemented:** on the compact tab bar the Inbox tab carries two badges: the attention count (`InboxBadge`) and the owner-task count (`TasksBadge`). The tab's accessible name includes both counts. Both counts keep polling while another compact tab is open, pause while hidden, and share the visible polling cadence. Details: [inbox.md](inbox.md#react-status-f5).
-- **Not built:** a header badge on desktop. The design notes do not ask for one; the desktop count sits on the **Needs you** tab.
-- **Not proven:** layout at phone width in a browser. Playwright journeys are deferred to F9.
+- **Superseded by the explorer:** the always-mounted inbox panel and the compact Inbox tab with its two badges. Attention and owner tasks now poll while the explorer is mounted, on both layouts; the Explorer tab and the desktop rail carry the Needs-you count; and the answer view at `/inbox` mounts the same inbox panel. Inbox buttons, links and the reply field are at least 44 px tall.
+- **Not built:** a header badge on desktop. The design notes do not ask for one; the desktop count sits on the explorer's Needs you row and the collapsed rail.
+- **Checked in a browser (fixtures, not live):** 390×844 and 1440×900 against the MSW dev server. Playwright journeys are deferred to F9.

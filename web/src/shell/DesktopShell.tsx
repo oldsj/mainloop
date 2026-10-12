@@ -3,15 +3,15 @@ import { Activity } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
-import { HomeStrip } from '@/features/home';
 import { ChatStarters, ExplorerAside } from '@/features/explorer';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
 import { ThemeSelector } from './ThemeSelector';
 
 /**
- * ≥1024 px: the main pane, with the explorer on the right. The "Since you were here" line sits
- * above the home thread, as it does on the phone.
+ * ≥1024 px: the main pane, with the explorer on the right. On home the main pane is the Mainloop
+ * chat alone, which owns the only scroll; "Since you were here" lives in the explorer. Other pages
+ * scroll in the main pane.
  */
 export function DesktopShell({
   children,
@@ -43,20 +43,17 @@ export function DesktopShell({
         <main
           id={MAIN_ID}
           tabIndex={-1}
-          className="flex min-w-0 flex-1 flex-col overflow-y-auto outline-none"
-        >
-          {onHome && (
-            <PanelBoundary name="Since you were here">
-              <HomeStrip lastVisit={lastVisit} />
-            </PanelBoundary>
+          className={cn(
+            'flex min-w-0 flex-1 flex-col outline-none',
+            onHome ? 'overflow-hidden' : 'overflow-y-auto'
           )}
-          <div className="flex min-h-0 flex-1 flex-col">
-            {onHome && <ChatStarters />}
-            <div className="min-h-0 flex-1">{children}</div>
-          </div>
+        >
+          {/* Shown only while the thread is empty, so it never shares the screen with a scrolling thread. */}
+          {onHome && <ChatStarters />}
+          <div className="min-h-0 flex-1">{children}</div>
         </main>
         <PanelBoundary name="Explorer">
-          <ExplorerAside />
+          <ExplorerAside lastVisit={lastVisit} />
         </PanelBoundary>
       </div>
     </div>
