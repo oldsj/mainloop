@@ -6,7 +6,7 @@ import (
 
 // AggregationVersion identifies the rules Summarize applies. A stored summary records the version
 // that built it.
-const AggregationVersion = 1
+const AggregationVersion = 2
 
 // Summary is the rollup of one turn: counts and token totals, never any text.
 type Summary struct {
@@ -18,8 +18,23 @@ type Summary struct {
 	InputTokens           *int64         `json:"input_tokens"`
 	OutputTokens          *int64         `json:"output_tokens"`
 	UsageCoverage         string         `json:"usage_coverage"`
+	Reorientation         Reorientation  `json:"reorientation"`
 	Inclusion             string         `json:"inclusion"`
 	ChildAttribution      string         `json:"child_attribution"`
+}
+
+// Reorientation counts how much a turn re-read before it worked. A read or edit that failed is not
+// counted. It carries no path: summaries outlive the observations they came from.
+type Reorientation struct {
+	Reads int `json:"reads"`
+	// RereadCalls are the read calls of a path the same turn had already read.
+	RereadCalls int `json:"reread_calls"`
+	// RereadsFromEarlierTurns are the paths this turn read that an earlier turn of the session had
+	// read or edited.
+	RereadsFromEarlierTurns int `json:"rereads_from_earlier_turns"`
+	Edits                   int `json:"edits"`
+	// ReadsBeforeFirstEdit is null when the turn made no edit.
+	ReadsBeforeFirstEdit *int `json:"reads_before_first_edit"`
 }
 
 // repeatedFailure is how many times the same failure must happen in a turn to count as a group.
@@ -34,8 +49,9 @@ type failureGroup struct {
 // always be rebuilt from them. The turn is complete only when the first event starts it, the last
 // ends it with complete coverage, every sequence number from 1 to the last is present, and every
 // tool call has exactly one start and one result that agree. Anything else is partial, and a
-// partial turn never claims complete usage.
-func Summarize(events []Event) Summary {
+// partial turn never claims complete usage. earlier holds the paths the session's earlier turns read
+// or edited (nil when there are none); it only feeds Reorientation.RereadsFromEarlierTurns.
+func Summarize(events []Event, earlier map[string]bool) Summary {
 	events = slices.Clone(events)
 	slices.SortFunc(events, func(a, b Event) int { return int(a.Sequence - b.Sequence) })
 
@@ -149,6 +165,7 @@ func Summarize(events []Event) Summary {
 	}
 
 	s := Summary{
+		Reorientation: reorientation(events, results, earlier),
 		Failures: failures, Categories: categories, RepeatedFailureGroups: repeated, UnresolvedCalls: unresolved,
 		FrictionCoverage: "partial", UsageCoverage: "unknown", Inclusion: "tree_inclusive", ChildAttribution: "unavailable",
 	}
@@ -163,6 +180,43 @@ func Summarize(events []Event) Summary {
 		}
 	}
 	return s
+}
+
+// reorientation counts the turn's reads and edits from the started phase of each call, in order. A
+// call whose result is an error or a denial did not read or edit anything; a call with no result
+// yet counts, because the turn may still be running.
+func reorientation(events []Event, results map[string]*Tool, earlier map[string]bool) Reorientation {
+	var r Reorientation
+	read := map[string]bool{}
+	for i := range events {
+		t := events[i].Tool
+		if t == nil || t.Phase != "started" || (t.Action != "read" && t.Action != "edit") {
+			continue
+		}
+		if res := results[t.CallKey]; res != nil && (res.Outcome == "error" || res.Outcome == "denied") {
+			continue
+		}
+		if t.Action == "edit" {
+			r.Edits++
+			if r.ReadsBeforeFirstEdit == nil {
+				n := r.Reads
+				r.ReadsBeforeFirstEdit = &n
+			}
+			continue
+		}
+		r.Reads++
+		if t.Path == nil {
+			continue
+		}
+		switch {
+		case read[*t.Path]:
+			r.RereadCalls++
+		case earlier[*t.Path]:
+			r.RereadsFromEarlierTurns++
+		}
+		read[*t.Path] = true
+	}
+	return r
 }
 
 func samePath(a, b *string) bool {

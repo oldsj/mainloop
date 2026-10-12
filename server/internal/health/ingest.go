@@ -276,7 +276,7 @@ func rebuildTurn(ctx context.Context, q *dbq.Queries, in Input, attr dbq.GetHeal
 		return fmt.Errorf("health: read turn: %w", err)
 	}
 	events := make([]Event, 0, len(rows))
-	var last time.Time
+	var first, last time.Time
 	for _, r := range rows {
 		var raw any
 		if err := json.Unmarshal(r.Payload, &raw); err != nil {
@@ -290,8 +290,24 @@ func rebuildTurn(ctx context.Context, q *dbq.Queries, in Input, attr dbq.GetHeal
 		if r.OccurredAt.After(last) {
 			last = r.OccurredAt
 		}
+		if first.IsZero() || r.OccurredAt.Before(first) {
+			first = r.OccurredAt
+		}
 	}
-	summary, err := json.Marshal(Summarize(events))
+	var earlier map[string]bool
+	if len(rows) > 0 {
+		paths, err := q.ListHealthEarlierPaths(ctx, dbq.ListHealthEarlierPathsParams{
+			OwnerID: in.OwnerID, Gateway: in.Gateway, SessionID: in.SessionID, TurnKey: turnKey, OccurredAt: first,
+		})
+		if err != nil {
+			return fmt.Errorf("health: earlier paths: %w", err)
+		}
+		earlier = make(map[string]bool, len(paths))
+		for _, p := range paths {
+			earlier[p] = true
+		}
+	}
+	summary, err := json.Marshal(Summarize(events, earlier))
 	if err != nil {
 		return err
 	}

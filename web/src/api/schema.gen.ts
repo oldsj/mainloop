@@ -4365,8 +4365,22 @@ export interface components {
       failures: number | null;
       repeated_failure_groups: number | null;
       unresolved_calls: number;
+      reorientation?: components['schemas']['HealthReorientation'];
       /** @enum {string} */
       coverage: 'complete' | 'partial' | 'unknown';
+    };
+    /** @description How much a turn re-read before it worked, counted from the Read and Edit tool calls the turn reported. Absent where the turn was summarised before this was collected. On a total it is the sum over the turns that have it. A read or edit that failed is not counted. Compactions are not here: the harness does not report them yet. */
+    HealthReorientation: {
+      /** @description Read calls. */
+      reads: number;
+      /** @description Read calls of a path the same turn had already read. */
+      reread_calls: number;
+      /** @description Paths this turn read that an earlier turn of the same session had read or edited. */
+      rereads_from_earlier_turns: number;
+      /** @description Edit calls. */
+      edits: number;
+      /** @description Read calls before the first edit; null when the turn made no edit. */
+      reads_before_first_edit: number | null;
     };
     HealthTurnSummary: {
       failures: number;
@@ -4381,6 +4395,7 @@ export interface components {
       output_tokens: number | null;
       /** @enum {string} */
       usage_coverage: 'complete' | 'partial' | 'unknown';
+      reorientation?: components['schemas']['HealthReorientation'];
       /** @enum {string} */
       inclusion: 'tree_inclusive';
       /** @enum {string} */
