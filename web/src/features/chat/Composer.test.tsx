@@ -163,3 +163,32 @@ describe('Composer prefill', () => {
     expect(onPrefillUsed).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('Composer prefill when the conversation arrives later', () => {
+  const PREFILL = 'Start a task in acme/widgets: ';
+
+  it('keeps the prefill when the main thread gets its conversation id after the prefill', async () => {
+    const props = { busy: false, offline: false, onSend: vi.fn() };
+    const { rerender } = render(<Composer draftKey="new" prefill={PREFILL} {...props} />);
+    await waitFor(() => expect(input().value).toBe(PREFILL));
+
+    rerender(<Composer draftKey="conv-1" prefill={PREFILL} {...props} />);
+
+    expect(input().value).toBe(PREFILL);
+    expect(loadDraft('conv-1')).toBe(PREFILL);
+    expect(loadDraft('new')).toBe('');
+    expect(props.onSend).not.toHaveBeenCalled();
+  });
+
+  it('keeps text typed before the conversation existed, and does not overwrite a stored draft', async () => {
+    saveDraft('conv-1', 'already here');
+    const props = { busy: false, offline: false, onSend: vi.fn() };
+    const { rerender } = render(<Composer draftKey="new" {...props} />);
+    await userEvent.type(input(), 'typed early');
+
+    rerender(<Composer draftKey="conv-1" {...props} />);
+
+    expect(input().value).toBe('typed earlyalready here');
+    expect(loadDraft('conv-1')).toBe('typed earlyalready here');
+  });
+});

@@ -841,3 +841,20 @@ describe('task publication and session ID', () => {
     expect(scoped.queryByText('session-1')).toBeNull();
   });
 });
+
+describe('task attempt session link', () => {
+  it('links the attempt session by its full ID, shows 8 characters with a copy button', async () => {
+    server.use(...serveTaskPage(taskScreen(view())));
+    renderTasks('/tasks/task-1');
+
+    await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
+    const attempts = screen.getByTestId('task-attempts');
+    const link = within(attempts).getByRole('link', { name: 'session' });
+    expect(link).toHaveAttribute('href', '/sessions/session-1');
+    expect(within(attempts).getByText('session-')).toBeInTheDocument();
+    expect(
+      within(attempts).getByRole('button', { name: 'Copy full attempt session ID' })
+    ).toBeInTheDocument();
+    expect(within(attempts).queryByText('session-1')).toBeNull();
+  });
+});

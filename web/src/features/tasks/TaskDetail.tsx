@@ -281,13 +281,16 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
                   </p>
                 ) : null}
                 {attempt.session_id ? (
-                  <Link
-                    to="/sessions/$id"
-                    params={{ id: attempt.session_id }}
-                    className="text-foreground inline-flex min-h-11 items-center text-xs underline"
-                  >
-                    session {attempt.session_id}
-                  </Link>
+                  <div className="gap-sm flex flex-wrap items-center">
+                    <Link
+                      to="/sessions/$id"
+                      params={{ id: attempt.session_id }}
+                      className="text-foreground inline-flex min-h-11 items-center text-xs underline"
+                    >
+                      session
+                    </Link>
+                    <ShortId id={attempt.session_id} label="attempt session" />
+                  </div>
                 ) : null}
               </li>
             ))}

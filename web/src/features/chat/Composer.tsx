@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Button } from '@/components/ui/button';
-import { loadDraft, saveDraft } from './drafts';
+import { clearDraft, loadDraft, NEW_CONVERSATION, saveDraft } from './drafts';
 
 const MAX_HEIGHT_PX = 160;
 
@@ -73,7 +73,17 @@ export function Composer({
   // the old text never flashes under the new key.
   if (shownKey !== draftKey) {
     setShownKey(draftKey);
-    setText(loadDraft(draftKey));
+    const stored = loadDraft(draftKey);
+    if (shownKey === NEW_CONVERSATION && text) {
+      // The main thread has no conversation id until its first read. Text typed or prefilled before
+      // then moves to the conversation's draft, ahead of any draft it already holds.
+      const carried = stored ? text + stored : text;
+      clearDraft(shownKey);
+      saveDraft(draftKey, carried);
+      setText(carried);
+    } else {
+      setText(stored);
+    }
   }
 
   const disabled = busy || loading || unavailable || offline || closed || sending;

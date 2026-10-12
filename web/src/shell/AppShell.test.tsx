@@ -320,7 +320,7 @@ describe('project page title', () => {
     setViewport(true);
     server.use(...serveProjectPage());
     await renderAt('/projects/project-a');
-    await waitFor(() => expect(document.title).toBe('acme/widgets - mainloop'));
+    await waitFor(() => expect(document.title).toBe('acme/widgets · Mainloop'));
     expect(document.querySelectorAll('title')).toHaveLength(1);
   });
 });
