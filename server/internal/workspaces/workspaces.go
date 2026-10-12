@@ -24,6 +24,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
 )
@@ -36,6 +37,7 @@ type Kagent interface {
 	ResumeSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	DeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	ListSessions(ctx context.Context) ([]*kagentapi.Session, error)
+	PrepareSessionWorkspace(ctx context.Context, req *kagentapi.PrepareSessionWorkspaceRequest) (*kagentapi.WorkspacePreparationReceipt, error)
 }
 
 // Deliveries is the message delivery ledger as the lifecycle needs it. The delivery slice supplies
@@ -69,11 +71,22 @@ type Service struct {
 	GitPush *GitPush
 	// Projects creates the project of a workspace requested by repository.
 	Projects ProjectImporter
+	// Refs resolves a checkout ref to a commit SHA for workspaces that kagent prepares. Nil keeps
+	// the ref as given.
+	Refs RefResolver
 	// Now is the clock for retry-window decisions; nil means time.Now.
 	Now func() time.Time
 	// PollEvery is how often a waiting request re-reads its operation; zero means 50ms.
 	PollEvery time.Duration
 }
+
+// RefResolver names the commit a ref points at. *github.App satisfies it.
+type RefResolver interface {
+	CommitSHA(ctx context.Context, repo github.Repo, ref string) (string, error)
+}
+
+// WithRefs resolves the checkout ref of a workspace with a development environment to a commit SHA.
+func WithRefs(r RefResolver) Option { return func(s *Service) { s.Refs = r } }
 
 // ProjectImporter is the one way a project is created: [projects.Service.Import].
 type ProjectImporter interface {

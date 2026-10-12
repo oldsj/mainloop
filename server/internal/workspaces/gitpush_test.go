@@ -551,3 +551,34 @@ func TestWorkspacePushReservationBeforeRPCAndNoTransactionAcrossIO(t *testing.T)
 		t.Fatal("enrollment retained a connection across native, metadata or Secret I/O")
 	}
 }
+
+// kagent parks an idle Actor and attests the runtime only while one runs, so enrollment wakes the
+// Session and waits for the Actor instead of looping on an unattested runtime.
+func TestWorkspacePushEnrollmentWakesAnIdleActor(t *testing.T) {
+	h := newHarness(t, nil)
+	w, _, u := queuedPushWorkspace(t, h, "feature/test", true)
+	createPushSession(t, h)
+	activatePushAttempt(h, w.ID)
+	tamper := h.fake.TamperSession
+	awake := false
+	h.fake.TamperSession = func(proc string, n *ka.Session) {
+		tamper(proc, n)
+		if proc == kagent.ProcGetSession && !awake {
+			n.RuntimeAssociation = nil
+		}
+	}
+	if err := reconcilePush(t, h, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	if h.fake.Count(kagent.ProcResumeSession) != 1 || u.metadata != 0 || pushCredentials(h, w.ID) != 0 {
+		t.Fatalf("idle Actor: resumes=%d metadata=%d credentials=%d", h.fake.Count(kagent.ProcResumeSession), u.metadata, pushCredentials(h, w.ID))
+	}
+	awake = true
+	if err := reconcilePush(t, h, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	r, err := h.dq.GetWorkspacePushReservation(bg, w.ID)
+	if err != nil || r.State != string(dbstate.GitGrantPublished) || pushCredentials(h, w.ID) != 1 {
+		t.Fatalf("awake Actor was not enrolled: %v %s", err, r.State)
+	}
+}

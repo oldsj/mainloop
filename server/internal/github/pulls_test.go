@@ -291,3 +291,20 @@ func TestCheckReadsRefuseWhatIsNotThisCommitsEvidence(t *testing.T) {
 		})
 	}
 }
+
+func TestCommitSHA(t *testing.T) {
+	app, _ := pullApp(t, nil)
+	ctx := context.Background()
+	if sha, err := app.CommitSHA(ctx, repoON, "feature"); err != nil || sha != tipSHA {
+		t.Fatalf("branch = %q, %v", sha, err)
+	}
+	if sha, err := app.CommitSHA(ctx, repoON, tipSHA); err != nil || sha != tipSHA {
+		t.Fatalf("sha = %q, %v", sha, err)
+	}
+	if _, err := app.CommitSHA(ctx, repoON, "gone"); !errors.Is(err, github.ErrNotFound) {
+		t.Errorf("unknown ref = %v", err)
+	}
+	if _, err := app.CommitSHA(ctx, repoON, "a b"); !errors.Is(err, github.ErrBranchName) {
+		t.Errorf("bad ref = %v", err)
+	}
+}

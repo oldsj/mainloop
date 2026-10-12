@@ -19,6 +19,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/events"
+	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/gitref"
 	"github.com/oldsj/mainloop/server/internal/projects"
 )
@@ -529,6 +530,13 @@ func (s *Service) create(ctx context.Context, body api.CreateWorkspaceRequest, r
 		if err != nil {
 			return nil, err
 		}
+		if p.insert.Environment != nil {
+			if err := q.InsertWorkspacePreparation(ctx, dbq.InsertWorkspacePreparationParams{
+				ID: p.id, IdempotencyKey: "workspace-preparation:" + requestID, ActionID: preparationActionID(requestID),
+			}); err != nil {
+				return nil, err
+			}
+		}
 		if op, err = s.insertOp(ctx, q, p.id, dbstate.OpCreate, nil); err != nil {
 			return nil, err
 		}
@@ -697,6 +705,13 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 	if err != nil {
 		return plan{}, err
 	}
+	// A workspace with an environment is prepared by kagent against one exact commit, so the base
+	// is fixed to a full SHA now and every retry of this create reuses it.
+	if env != nil && s.Refs != nil && !gitref.IsSHA(ref) {
+		if ref, err = s.resolveRef(ctx, project, ref); err != nil {
+			return plan{}, err
+		}
+	}
 	portJSON, err := json.Marshal(ports)
 	if err != nil {
 		return plan{}, err
@@ -711,6 +726,26 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 			IdleTimeoutMinutes: int32(idle), Environment: env, RequestID: uuid.NewString(),
 		},
 	}, nil
+}
+
+// resolveRef turns a branch, tag or commit of the project's repository into the full commit SHA it
+// names. A ref GitHub does not have is the caller's error; failing to ask is retryable.
+func (s *Service) resolveRef(ctx context.Context, project dbq.Project, ref string) (string, error) {
+	repo, err := github.ParseRepo(project.HTMLURL)
+	if err != nil {
+		return "", &InvalidError{"checkout_ref_unavailable: the project's repository is not a GitHub repository"}
+	}
+	if ref == "" {
+		ref = "HEAD"
+	}
+	sha, err := s.Refs.CommitSHA(ctx, repo, ref)
+	if errors.Is(err, github.ErrNotFound) || errors.Is(err, github.ErrBranchName) {
+		return "", &InvalidError{"checkout_ref_unavailable: " + ref + " is not a branch, tag or commit of the repository"}
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve checkout ref: %w", err)
+	}
+	return sha, nil
 }
 
 // environment resolves the project's selected development environment to the exact image the

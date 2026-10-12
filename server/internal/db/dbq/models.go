@@ -786,6 +786,22 @@ type WorkspaceOp struct {
 	CreatedAt      time.Time
 }
 
+type WorkspacePreparation struct {
+	ID             string
+	IdempotencyKey string
+	ActionID       string
+	State          string
+	SetupProfile   string
+	SetupDigest    string
+	Detail         string
+	Attempts       int32
+	NextAttemptAt  time.Time
+	LeaseOwner     *string
+	LeaseUntil     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 type WorkspacePushReservation struct {
 	ID             string
 	IdempotencyKey string

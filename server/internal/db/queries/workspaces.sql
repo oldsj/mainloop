@@ -311,3 +311,26 @@ SELECT (EXISTS (SELECT 1 FROM workspaces WHERE agent_namespace = $1 AND agent_na
 SELECT count(*) FROM agent_bindings b
 WHERE b.role = 'main' AND b.main_pending AND b.kagent_session_id IS NULL
   AND b.kagent_create_request_id IS NOT NULL;
+
+-- name: InsertWorkspacePreparation :exec
+-- A workspace made with a development environment owes kagent one workspace preparation.
+INSERT INTO workspace_preparations (id, idempotency_key, action_id)
+VALUES ($1, $2, $3);
+
+-- name: GetWorkspacePreparation :one
+SELECT * FROM workspace_preparations WHERE id = $1;
+
+-- name: RequestWorkspacePreparation :exec
+-- Freezes the profile before kagent is asked, so a replay sends the same request.
+UPDATE workspace_preparations
+SET state = 'requested', setup_profile = $2, setup_digest = $3, updated_at = now()
+WHERE id = $1 AND state IN ('planned', 'requested');
+
+-- name: SettleWorkspacePreparation :execrows
+UPDATE workspace_preparations
+SET state = sqlc.arg(state), detail = sqlc.arg(detail), lease_owner = NULL, lease_until = NULL, updated_at = now()
+WHERE id = sqlc.arg(id) AND state IN ('planned', 'requested');
+
+-- name: GetWorkspaceAttemptRole :one
+-- The role of the task attempt a workspace was made for; no row for a standalone workspace.
+SELECT a.role FROM task_attempts a WHERE a.workspace_request_id = $1;

@@ -6,6 +6,7 @@ package kagenttest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -136,7 +137,21 @@ type Server struct {
 	// Set them before the first request.
 	TamperSession func(proc string, s *api.Session)
 	TamperReceipt func(*api.WorkspacePreparationReceipt)
-	TamperAgent   func(*api.Agent)
+	// PrepareClassification is the classification the fake gives a prepared workspace's receipt;
+	// empty means "confirmed". Use "pending" to keep a preparation open.
+	PrepareClassification string
+	// RequirePreparation makes a send to a Session with a workspace and a development environment
+	// fail, as kagent does, until its workspace preparation is confirmed.
+	RequirePreparation bool
+	// Actors gives every READY Session a running Actor, and so a runtime association. Without it no
+	// Session carries one.
+	Actors bool
+	// IdleActors, with Actors, parks a Session's Actor until it is resumed: an idle Session carries no
+	// runtime association, and a workspace cannot be prepared.
+	IdleActors  bool
+	active      map[string]bool
+	prepares    []*api.PrepareSessionWorkspaceRequest
+	TamperAgent func(*api.Agent)
 	// TamperSchedule edits a schedule in a ScheduledRunService reply, without changing the stored one.
 	TamperSchedule func(proc string, sc *api.ScheduledRun)
 	// TamperExecution edits the execution a TriggerScheduledRun reply carries.
@@ -234,6 +249,13 @@ func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Request(nil), s.requests...)
+}
+
+// PrepareRequests returns the workspace preparations kagent accepted, in order.
+func (s *Server) PrepareRequests() []*api.PrepareSessionWorkspaceRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*api.PrepareSessionWorkspaceRequest(nil), s.prepares...)
 }
 
 // Count returns how many requests had this key.
@@ -461,6 +483,10 @@ func (s *Server) resume(
 		return nil, err
 	}
 	sess.State = api.RuntimeState_RUNTIME_STATE_READY
+	if s.active == nil {
+		s.active = map[string]bool{}
+	}
+	s.active[sess.GetId()] = true
 	return connect.NewResponse(&api.ResumeSessionResponse{Session: s.out(kagent.ProcResumeSession, sess)}), nil
 }
 
@@ -494,12 +520,21 @@ func (s *Server) prepare(
 ) (*connect.Response[api.PrepareSessionWorkspaceResponse], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.lookup(req.Msg.GetSessionId()); err != nil {
+	sess, err := s.lookup(req.Msg.GetSessionId())
+	if err != nil {
 		return nil, err
 	}
-	receipt := &api.WorkspacePreparationReceipt{
-		Original: proto.CloneOf(req.Msg), ContextId: req.Msg.GetSessionId(),
+	if s.Actors && !s.actorRunning(sess.GetId()) {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("no running actor"))
 	}
+	receipt := &api.WorkspacePreparationReceipt{
+		Original: proto.CloneOf(req.Msg), ContextId: req.Msg.GetSessionId(), Classification: "confirmed",
+	}
+	if s.PrepareClassification != "" {
+		receipt.Classification = s.PrepareClassification
+	}
+	sess.WorkspacePreparation = proto.CloneOf(receipt)
+	s.prepares = append(s.prepares, proto.CloneOf(req.Msg))
 	if s.TamperReceipt != nil {
 		s.TamperReceipt(receipt)
 	}
@@ -664,6 +699,12 @@ func (s *Server) listTasks(p a2a.ListTasksRequest) *a2a.ListTasksResponse {
 // send streams the next script, or the default turn.
 func (s *Server) send(w http.ResponseWriter, r *http.Request, call rpcCall, msg *a2a.Message) {
 	s.mu.Lock()
+	if sess := s.sessions[msg.ContextID]; s.RequirePreparation && sess.GetWorkspace() != nil &&
+		sess.GetDevelopmentEnvironment() != nil && sess.GetWorkspacePreparation().GetClassification() != "confirmed" {
+		s.mu.Unlock()
+		writeEnvelope(w, call.ID, nil, &RPCError{Code: -32600, Message: "reply does not match the pending input request"})
+		return
+	}
 	var steps []Step
 	scripted := len(s.scripts) > 0
 	if scripted {
@@ -788,11 +829,26 @@ func AgentPath(namespace, name string) string {
 // changes the stored one, and applies the tamper hook. The caller holds s.mu.
 func (s *Server) out(proc string, sess *api.Session) *api.Session {
 	cp := proto.CloneOf(sess)
+	if s.Actors && sess.GetState() == api.RuntimeState_RUNTIME_STATE_READY {
+		// A prepared Session is settled: no operation is open, and the runtime is pinned.
+		cp.Operation = api.RuntimeOperation_RUNTIME_OPERATION_NONE
+		cp.PreparedRevision = "revision-" + sess.GetId()
+		cp.RuntimeComposition = &api.RuntimeComposition{PayloadImage: "example.test/harness@sha256:def", Provider: "claude", Schema: 1}
+	}
+	if sess.GetState() == api.RuntimeState_RUNTIME_STATE_READY && s.actorRunning(sess.GetId()) {
+		cp.RuntimeAssociation = &api.RuntimeAssociation{
+			GenerationId: "gen-" + sess.GetId(), Atespace: "ate", ActorName: "actor-" + sess.GetId(),
+			ActorUid: "uid-" + sess.GetId(), Phase: "active", CurrentActive: true,
+		}
+	}
 	if s.TamperSession != nil {
 		s.TamperSession(proc, cp)
 	}
 	return cp
 }
+
+// actorRunning reports whether the Session's Actor is running; s.mu is held.
+func (s *Server) actorRunning(id string) bool { return s.Actors && (!s.IdleActors || s.active[id]) }
 
 // sameContract reports whether a replayed create matches the request that made the Session for the
 // same request id: the Agent, the workspace, the environment and the credentials all have to match,

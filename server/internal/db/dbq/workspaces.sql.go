@@ -303,6 +303,18 @@ func (q *Queries) GetWorkspaceActivity(ctx context.Context, id string) (time.Tim
 	return activity, err
 }
 
+const getWorkspaceAttemptRole = `-- name: GetWorkspaceAttemptRole :one
+SELECT a.role FROM task_attempts a WHERE a.workspace_request_id = $1
+`
+
+// The role of the task attempt a workspace was made for; no row for a standalone workspace.
+func (q *Queries) GetWorkspaceAttemptRole(ctx context.Context, workspaceRequestID *string) (dbstate.AttemptRole, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceAttemptRole, workspaceRequestID)
+	var role dbstate.AttemptRole
+	err := row.Scan(&role)
+	return role, err
+}
+
 const getWorkspaceByRequestID = `-- name: GetWorkspaceByRequestID :one
 SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
 FROM workspaces w
@@ -500,6 +512,31 @@ func (q *Queries) GetWorkspaceOp(ctx context.Context, id string) (WorkspaceOp, e
 		&i.LastError,
 		&i.QuietSince,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getWorkspacePreparation = `-- name: GetWorkspacePreparation :one
+SELECT id, idempotency_key, action_id, state, setup_profile, setup_digest, detail, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM workspace_preparations WHERE id = $1
+`
+
+func (q *Queries) GetWorkspacePreparation(ctx context.Context, id string) (WorkspacePreparation, error) {
+	row := q.db.QueryRow(ctx, getWorkspacePreparation, id)
+	var i WorkspacePreparation
+	err := row.Scan(
+		&i.ID,
+		&i.IdempotencyKey,
+		&i.ActionID,
+		&i.State,
+		&i.SetupProfile,
+		&i.SetupDigest,
+		&i.Detail,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -750,6 +787,23 @@ func (q *Queries) InsertWorkspaceOp(ctx context.Context, arg InsertWorkspaceOpPa
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const insertWorkspacePreparation = `-- name: InsertWorkspacePreparation :exec
+INSERT INTO workspace_preparations (id, idempotency_key, action_id)
+VALUES ($1, $2, $3)
+`
+
+type InsertWorkspacePreparationParams struct {
+	ID             string
+	IdempotencyKey string
+	ActionID       string
+}
+
+// A workspace made with a development environment owes kagent one workspace preparation.
+func (q *Queries) InsertWorkspacePreparation(ctx context.Context, arg InsertWorkspacePreparationParams) error {
+	_, err := q.db.Exec(ctx, insertWorkspacePreparation, arg.ID, arg.IdempotencyKey, arg.ActionID)
+	return err
 }
 
 const insertWorkspacePushReservation = `-- name: InsertWorkspacePushReservation :exec
@@ -1172,6 +1226,24 @@ func (q *Queries) PublishWorkspacePushReservation(ctx context.Context, arg Publi
 	return result.RowsAffected(), nil
 }
 
+const requestWorkspacePreparation = `-- name: RequestWorkspacePreparation :exec
+UPDATE workspace_preparations
+SET state = 'requested', setup_profile = $2, setup_digest = $3, updated_at = now()
+WHERE id = $1 AND state IN ('planned', 'requested')
+`
+
+type RequestWorkspacePreparationParams struct {
+	ID           string
+	SetupProfile string
+	SetupDigest  string
+}
+
+// Freezes the profile before kagent is asked, so a replay sends the same request.
+func (q *Queries) RequestWorkspacePreparation(ctx context.Context, arg RequestWorkspacePreparationParams) error {
+	_, err := q.db.Exec(ctx, requestWorkspacePreparation, arg.ID, arg.SetupProfile, arg.SetupDigest)
+	return err
+}
+
 const retryWorkspaceOp = `-- name: RetryWorkspaceOp :execrows
 UPDATE workspace_ops
 SET state = 'retrying', failures = failures + 1,
@@ -1233,6 +1305,26 @@ WHERE workspace_id = $1 AND state <> 'revoked'
 func (q *Queries) RevokeWorkspacePushReservation(ctx context.Context, workspaceID string) error {
 	_, err := q.db.Exec(ctx, revokeWorkspacePushReservation, workspaceID)
 	return err
+}
+
+const settleWorkspacePreparation = `-- name: SettleWorkspacePreparation :execrows
+UPDATE workspace_preparations
+SET state = $1, detail = $2, lease_owner = NULL, lease_until = NULL, updated_at = now()
+WHERE id = $3 AND state IN ('planned', 'requested')
+`
+
+type SettleWorkspacePreparationParams struct {
+	State  string
+	Detail string
+	ID     string
+}
+
+func (q *Queries) SettleWorkspacePreparation(ctx context.Context, arg SettleWorkspacePreparationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, settleWorkspacePreparation, arg.State, arg.Detail, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const touchWorkspace = `-- name: TouchWorkspace :execrows

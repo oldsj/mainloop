@@ -45,6 +45,7 @@ func (s *Service) Loop() reconcile.Loop {
 func (s *Service) Register(r *reconcile.Runner) {
 	r.Add(s.Loop())
 	r.Add(s.pushEnrollmentLoop())
+	r.Add(s.preparationLoop())
 	r.AddSweep(reconcile.Sweep{Name: "workspace-push-release", Every: time.Minute, Run: s.releaseEndedPush})
 	for _, sw := range s.sweeps() {
 		r.AddSweep(sw)

@@ -23,6 +23,11 @@ func (s *Service) ReadySession(ctx context.Context, sessionID string, workspaceI
 	if err := t.checkSendFence(ctx); err != nil {
 		return err
 	}
+	if workspaceID != nil {
+		if err := t.workspacePrepared(ctx); err != nil {
+			return err
+		}
+	}
 	if workspaceID != nil && s.Waker != nil {
 		if err := s.Waker.Wake(ctx, *workspaceID); err != nil {
 			return fmt.Errorf("wake the workspace: %w", err)

@@ -215,8 +215,10 @@ workspace operations.
   workspace creation. The repo route resolves before inserting or touching the project, and
   enrollment reuses that verified SHA. The selected workspace branch is unchanged. Create
   retries and runtime replacements reuse the stored SHA; existing workspace refs are never
-  rewritten. With either
-  flag off, an empty request uses the stored project default if present, otherwise the remote
+  rewritten. A workspace created with a selected development environment resolves its
+  checkout the same way whenever the GitHub App client is configured, because preparation needs
+  the full SHA. With either
+  flag off and no environment, an empty request uses the stored project default if present, otherwise the remote
   default at clone time; no GitHub ref resolution is performed during admission.
 - Under both gates, owner workspace preparation selects kagent's `agent` profile from the
   authoritative native binding role, preserving the selected development environment. Its
@@ -577,11 +579,28 @@ operations in progress hold preparation without failing its durable state. A def
 conflicting action, or historical receipt from a fresh settled READY observation of the original
 runtime displays `failed` with "Workspace preparation failed; replace the session". Retrying
 cannot choose another action for that Session. A confirmed action is observed without calling
-Prepare again, which would open a new challenge. Owner (`agent`) setup remains unprepared
-pending the separate owner-profile integration; every Git-enrolled send requires confirmed
-preparation for its current issuance/create identity while both flags are enabled. A turn count
-retained from a previous native Session cannot bypass that gate. Disabling either flag preserves
-the existing preparation-free behavior.
+Prepare again, which would open a new challenge. Owner workspaces use the `agent` profile.
+Every send to a workspace Session with a selected development environment requires confirmed
+preparation. A turn count retained from a previous native Session cannot bypass that gate.
+Workspaces without an environment have no preparation and keep the preparation-free behavior.
+
+Preparation is a durable intent, not a side effect of the first send. Creating a workspace with a
+development environment stores a `workspace_preparations` row (`planned`, `requested`,
+`confirmed` or `failed`) in the same transaction as the workspace, keyed by the create request
+ID. The `workspace-preparation` loop waits for a READY Session, wakes it if kagent has no
+running Actor (preparation needs one), reads the Session's receipt before anything else, and
+only then calls `PrepareSessionWorkspace` with the checkout stored on the workspace. The setup
+profile is chosen from the binding role on the first call and then frozen on the row; the
+pinned setup digests belong to the kagent harness release and change with it. The checkout must
+already be a full commit SHA. A workspace that is not prepared within 30 minutes of creation, or
+that kagent reports as definitely failed, becomes `failed` and its detail names the cause.
+A send waits (bounded by the delivery hold) while the row is not `confirmed` and settles as
+failed once it is `failed`; kagent would otherwise refuse the message with an unrelated
+"reply does not match the pending input request" error.
+
+Push enrollment also needs a running Actor: kagent attests the runtime only while one runs, and
+parks an idle Actor. Enrollment resumes the Session and looks again instead of treating an
+unattested runtime as final.
 
 ## Task-backed workspaces
 

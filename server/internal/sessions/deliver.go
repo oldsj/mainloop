@@ -212,6 +212,9 @@ func (t *turn) ensureKagentSession(ctx context.Context) (string, error) {
 		if t.ksid == "" {
 			return "", errWorkspaceNotReady
 		}
+		if err := t.workspacePrepared(ctx); err != nil {
+			return "", err
+		}
 		if t.s.Waker != nil {
 			if err := t.s.Waker.Wake(ctx, *t.d.WorkspaceID); err != nil {
 				return "", fmt.Errorf("wake the workspace: %w", err)
@@ -257,10 +260,32 @@ func (t *turn) ensureKagentSession(ctx context.Context) (string, error) {
 	}
 }
 
+// workspacePrepared returns nil when the workspace needs no preparation or kagent has confirmed it.
+// kagent admits nothing to a prepared-workspace Session before then, and refuses a send with an
+// error that looks like a bad reply, so callers wait for it instead of sending.
+func (t *turn) workspacePrepared(ctx context.Context) error {
+	p, err := dbq.New(t.s.Pool).GetWorkspacePreparation(ctx, *t.d.WorkspaceID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil
+	case err != nil:
+		return err
+	case p.State == dbstate.PreparationFailed:
+		return fmt.Errorf("%w: %s", errWorkspacePreparationFailed, p.Detail)
+	case p.State != dbstate.PreparationConfirmed:
+		return errWorkspacePreparing
+	}
+	return nil
+}
+
 // Failures of a workspace session's send that wait for the workspace or that no retry fixes.
 var (
 	errWorkspaceNotReady    = errors.New("the workspace has no kagent session yet")
 	errWorkspaceSessionGone = errors.New("the workspace's kagent session no longer exists")
+	// errWorkspacePreparing waits for kagent to confirm the workspace's preparation.
+	errWorkspacePreparing = errors.New("the workspace is not prepared yet")
+	// errWorkspacePreparationFailed is final: the session must be replaced.
+	errWorkspacePreparationFailed = errors.New("workspace preparation failed; replace the session")
 )
 
 // createHitDeleted reports a create that kagent refused because its request id belongs to a
@@ -453,13 +478,13 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 		if errors.Is(err, reconcile.ErrLeaseLost) {
 			return reconcile.Retry(), err
 		}
-		if errors.Is(err, errWorkspaceNotReady) {
+		if errors.Is(err, errWorkspaceNotReady) || errors.Is(err, errWorkspacePreparing) {
 			// The workspace is still being made, so the delivery waits. A workspace that never gets its
 			// Session would hold the turn open for ever, so the wait has an end.
 			age := time.Since(t.d.CreatedAt)
 			if hold := t.s.opts().UncertainHold; age > hold {
 				return t.settle(ctx, dbstate.DeliveryFailed,
-					"not sent: the workspace had no kagent session after "+hold.String(), nil, false)
+					"not sent: the workspace was not ready after "+hold.String()+": "+err.Error(), nil, false)
 			}
 			t.s.log().WarnContext(ctx, "delivery is waiting for its workspace's kagent session",
 				"message_id", t.c.ID, "workspace", *t.d.WorkspaceID, "age", age.Round(time.Second))
@@ -475,7 +500,8 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 			return t.settle(ctx, dbstate.DeliveryFailed, "not sent: "+err.Error(), nil, false)
 		}
 		var cfg *kagent.ConfigError
-		if errors.As(err, &cfg) || errors.Is(err, errWorkspaceSessionGone) {
+		if errors.As(err, &cfg) || errors.Is(err, errWorkspaceSessionGone) ||
+			errors.Is(err, errWorkspacePreparationFailed) {
 			return t.settle(ctx, dbstate.DeliveryFailed,
 				"not sent: could not prepare the kagent session: "+err.Error(), nil, false)
 		}

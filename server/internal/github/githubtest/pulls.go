@@ -677,3 +677,19 @@ func (s *Server) commitFacts(w http.ResponseWriter, r *http.Request, repo *Repos
 		writeJSON(w, http.StatusOK, statuses[from:to])
 	}
 }
+
+// commitCall answers GET /commits/{ref}: a branch resolves to its tip and a full SHA to itself;
+// anything else is GitHub's 422 for an unknown ref.
+func (s *Server) commitCall(w http.ResponseWriter, repo *Repository, ref string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sha, ok := tipOf(repo, ref)
+	if !ok && len(ref) == 40 {
+		sha, ok = ref, true
+	}
+	if !ok {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "No commit found for SHA: " + ref})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sha": sha})
+}

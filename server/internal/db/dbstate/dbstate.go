@@ -165,3 +165,11 @@ const (
 	OpGaveUp    WorkspaceOpState = "gave_up"
 	OpCancelled WorkspaceOpState = "cancelled"
 )
+
+// Workspace preparation states (workspace_preparations.state).
+const (
+	PreparationPlanned   = "planned"
+	PreparationRequested = "requested"
+	PreparationConfirmed = "confirmed"
+	PreparationFailed    = "failed"
+)
