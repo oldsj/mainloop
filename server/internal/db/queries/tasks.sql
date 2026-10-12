@@ -456,6 +456,32 @@ WHERE mode = 'coordination' AND status = 'waiting' AND reason = 'reconciliation'
 ORDER BY updated_at, id
 LIMIT $1;
 
+-- name: ListMergedPublicationTasks :many
+-- Code tasks waiting for their publication whose own pull request is observed merged and that the
+-- merge service settled: a merged candidate for that exact repository, PR number and head, proposed
+-- by one of the task's own attempt sessions. A merge by anyone else is only observed. The newest
+-- proposal is the one the task points at. With task_id it re-reads one task, under its lock.
+SELECT DISTINCT ON (t.id) t.id, p.id AS proposal_id
+FROM tasks t
+JOIN task_attempts a ON a.task_id = t.id AND a.binding_id IS NOT NULL
+JOIN merge_proposals p ON p.session_id = a.binding_id AND p.owner_id = t.owner_id
+JOIN merge_candidates c ON c.id = p.candidate_id
+WHERE t.mode = 'code' AND t.status = 'waiting' AND t.reason = 'publication'
+  AND t.pr_state = 'merged' AND t.pr_number IS NOT NULL AND t.pr_head_sha IS NOT NULL
+  AND c.state = 'merged' AND c.owner_id = t.owner_id AND c.project_id = t.project_id
+  AND c.pr_number = t.pr_number AND c.head_sha = t.pr_head_sha AND lower(c.repository) = t.pr_repository
+  AND (sqlc.narg(task_id)::text IS NULL OR t.id = sqlc.narg(task_id))
+ORDER BY t.id, p.created_at DESC, p.id DESC
+LIMIT $1;
+
+-- name: CompleteTaskMerged :one
+-- Completes a task the merge service merged. Only the completion sweep calls it.
+UPDATE tasks
+SET status = 'completed', reason = NULL, decision_attempt_id = NULL, decision_report_id = NULL,
+    decision_action = NULL, merge_proposal_id = $3, version = version + 1, updated_at = now()
+WHERE id = $1 AND version = $2
+RETURNING *;
+
 -- name: DeferAttemptResolve :one
 -- An unconfirmed stop that kagent still did not settle: count the look and wait before the next.
 UPDATE task_attempts

@@ -609,6 +609,7 @@ type Task struct {
 	ProjectedAt         *time.Time
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
+	MergeProposalID     *string
 }
 
 type TaskArtifact struct {

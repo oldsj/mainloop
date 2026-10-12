@@ -199,8 +199,7 @@ func eligibility(t dbq.Task) map[string]api.TaskEligibility {
 }
 
 // projection is what the GitHub observation last saw of the task's pull request. It is a cache:
-// nothing here says the task is done. Fields that need services this slice does not own stay
-// unknown.
+// nothing here says the task is done. Fields the merge service has not settled stay unknown.
 func projection(t dbq.Task) api.TaskProjection {
 	out := api.TaskProjection{
 		CiState: api.TaskProjectionCiState(t.CiState), PrState: api.TaskProjectionPrState(t.PrState),
@@ -209,6 +208,14 @@ func projection(t dbq.Task) api.TaskProjection {
 		Repository: t.PrRepository, PrDescription: descriptionFor(t),
 	}
 	out.PrNumber = intp(t.PrNumber)
+	// A verified merged observation of the task's own pull request is a merged publication, whoever
+	// merged it. It does not complete the task: that needs the merge service's settlement, which
+	// is what sets the proposal.
+	if t.PrState == prMerged {
+		merged := string(api.TaskProjectionPrStateMerged)
+		out.MergeState = &merged
+	}
+	out.MergeProposalId = t.MergeProposalID
 	// Reads stay DB-only. Every CI state needs an exact head and a fresh observation; a
 	// sweep preserves the collection-finish time in projected_at, including unchanged facts.
 	if t.ProjectedAt == nil || t.PrHeadSha == nil || *t.PrHeadSha == "" || t.CiHeadSha == nil ||
