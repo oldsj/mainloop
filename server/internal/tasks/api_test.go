@@ -86,7 +86,7 @@ func TestRESTTaskLifecycle(t *testing.T) {
 	create := map[string]any{"request_id": "req-1", "title": "Plan", "brief": "Brief", "mode": "code", "project_id": "p1",
 		"checkout": map[string]any{"branch": "task/x"}}
 	op := r.do("POST", "/tasks", create, 202)
-	if op["kind"] != "create" || op["state"] != "requested" || op["reason"] != "provisioning_unavailable" ||
+	if op["kind"] != "create" || op["state"] != "requested" || op["reason"] != nil ||
 		op["principal_key"] != "owner:local-dev-user" || op["request_id"] != "req-1" {
 		t.Fatalf("create operation = %v", op)
 	}
@@ -107,7 +107,7 @@ func TestRESTTaskLifecycle(t *testing.T) {
 
 	got := r.do("GET", "/tasks/"+id, nil, 200)
 	task := got["task"].(map[string]any)
-	if task["status"] != "queued" || task["reason"] != "provisioning_unavailable" || task["version"] != 1.0 ||
+	if task["status"] != "queued" || task["reason"] != nil || task["version"] != 1.0 ||
 		task["checkout"].(map[string]any)["branch"] != "task/x" || task["owner_id"] != "local-dev-user" {
 		t.Fatalf("task = %v", task)
 	}

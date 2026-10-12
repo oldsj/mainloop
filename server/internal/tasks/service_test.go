@@ -165,13 +165,13 @@ func TestCreateRecordsTaskAndOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if op.Kind != "create" || op.State != "requested" || op.LastConfirmedStep != "requested" || op.TaskId == nil ||
-		op.Reason == nil || *op.Reason != "provisioning_unavailable" || op.PrincipalKey != "owner:owner-1" ||
+		op.Reason != nil || op.PrincipalKey != "owner:owner-1" ||
 		op.AttemptId != nil || len(op.RequestDigest) != 64 {
 		t.Fatalf("operation = %+v", op)
 	}
 	v := e.view(e.own, *op.TaskId)
 	tk := v.Task
-	if tk.Status != "queued" || tk.Reason == nil || *tk.Reason != "provisioning_unavailable" || tk.Version != 1 ||
+	if tk.Status != "queued" || tk.Reason != nil || tk.Version != 1 ||
 		tk.RootTaskId != tk.Id || tk.ParentTaskId != nil || tk.AssignedProfileId != "claude" ||
 		tk.SelectionSource != "installation_default" || tk.ProviderConstraint != nil || tk.CurrentAttemptId != nil ||
 		tk.Checkout != nil || *tk.ProjectId != "p1" || *tk.TopicId != "tp1" {

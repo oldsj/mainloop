@@ -2,6 +2,7 @@ package tasks_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -384,6 +385,59 @@ func TestSlowWorkspaceSessionAborts(t *testing.T) {
 	}
 	if n := r.count(`SELECT count(*) FROM workspaces`); n != 0 {
 		t.Fatalf("workspaces left = %d removed=%v evidence=%q brief=%q ws=%q", n, r.ws.removed, r.str(`SELECT array_to_string(evidence_refs, ',') FROM task_attempts WHERE task_id = $1`, child), r.str(`SELECT brief_delivery_id FROM task_attempts WHERE task_id = $1`, child), r.str(`SELECT workspace_id FROM task_attempts WHERE task_id = $1`, child))
+	}
+}
+
+// TestCreateResponseStaysHonestThroughATransientProvisioningRetry guards against the synchronous
+// create response carrying a terminal-sounding reason for a hiccup the reconcile loop's own retry
+// resolves a moment later: the caller must not need to poll task_get to learn that it worked.
+func TestCreateResponseStaysHonestThroughATransientProvisioningRetry(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	_, sup := r.supervisor()
+	r.ws.failTimes = 1
+	op, err := r.create(sup, tasks.CreateInput{Mode: dbstate.TaskModeCode, Checkout: &tasks.Checkout{Branch: "feat"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.State != "requested" || op.Reason != nil || op.AttemptId != nil {
+		t.Fatalf("create response = %+v, want requested/no reason/no attempt despite the coming retry", op)
+	}
+	child := *op.TaskId
+	r.eventually("provisioned despite the transient hiccup", func() bool { return r.opState(child) == "completed" })
+	if r.taskStatus(child) != "running" {
+		t.Fatalf("task status = %s, want running", r.taskStatus(child))
+	}
+	if r.ws.madeCount() != 1 {
+		t.Fatalf("workspaces made = %d, want 1", r.ws.madeCount())
+	}
+}
+
+// TestCreateResponseStaysHonestWhenProvisioningExhausts is the other side of the same contract: a
+// create whose provisioning never recovers still answers its synchronous response the same honest
+// way (nothing attempted yet), and the genuine failure appears only once retries are exhausted, in
+// the operation the caller polls, not retrofitted into the original response.
+func TestCreateResponseStaysHonestWhenProvisioningExhausts(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	_, sup := r.supervisor()
+	r.svc.Limits.ProvisionWindow = 50 * time.Millisecond
+	r.ws.fail = errors.New("tasks: persistent transport failure")
+	op, err := r.create(sup, tasks.CreateInput{Mode: dbstate.TaskModeCode, Checkout: &tasks.Checkout{Branch: "feat"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.State != "requested" || op.Reason != nil || op.AttemptId != nil {
+		t.Fatalf("create response = %+v, want requested/no reason/no attempt even though this one will fail", op)
+	}
+	child := *op.TaskId
+	r.eventually("failed once retries exhaust", func() bool { return r.taskStatus(child) == "failed" })
+	got, err := r.svc.Operation(context.Background(), r.own, op.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "blocked" || got.Reason == nil || *got.Reason != "provisioning_unavailable" {
+		t.Fatalf("settled operation = %+v, want blocked/provisioning_unavailable", got)
 	}
 }
 

@@ -7,12 +7,14 @@ SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(key)::text, 0));
 -- Tasks
 
 -- name: InsertTask :one
+-- reason stays NULL: a new task has nothing wrong with it yet, and provisioning has not been
+-- attempted. See Service.Create.
 INSERT INTO tasks (
     id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief,
     mode, assigned_profile_id, selection_source, provider_constraint, checkout_branch, checkout_ref,
-    checkout_depth, reason
+    checkout_depth
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'provisioning_unavailable'
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
 )
 RETURNING *;
 
