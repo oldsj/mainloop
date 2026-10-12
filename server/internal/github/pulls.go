@@ -805,3 +805,27 @@ func deref(s *string) string {
 	}
 	return *s
 }
+
+// CommitSHA resolves a branch, tag or commit to the full SHA of the commit it names. A ref GitHub
+// does not know (404, or 422 for an ambiguous or malformed one) is [ErrNotFound]; any other failure
+// keeps its own error, so a caller can tell "no such ref" from "could not ask".
+func (a *App) CommitSHA(ctx context.Context, repo Repo, ref string) (string, error) {
+	p, err := branchPath(ref)
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		SHA string `json:"sha"`
+	}
+	err = a.call(ctx, repo, Permissions{"contents": Read}, http.MethodGet, repoPath(repo, "commits", p), nil, &out)
+	if status, ok := StatusOf(err); ok && status == http.StatusUnprocessableEntity {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	if !isSHA(out.SHA) {
+		return "", ErrUnavailable
+	}
+	return out.SHA, nil
+}

@@ -215,13 +215,15 @@ workspace operations.
   workspace creation. The repo route resolves before inserting or touching the project, and
   enrollment reuses that verified SHA. The selected workspace branch is unchanged. Create
   retries and runtime replacements reuse the stored SHA; existing workspace refs are never
-  rewritten. With either
-  flag off, an empty request uses the stored project default if present, otherwise the remote
+  rewritten. A workspace created with a selected development environment resolves its
+  checkout the same way whenever the GitHub App client is configured, because preparation needs
+  the full SHA. With either
+  flag off and no environment, an empty request uses the stored project default if present, otherwise the remote
   default at clone time; no GitHub ref resolution is performed during admission.
-- Under both gates, owner workspace preparation selects kagent's `agent` profile from the
-  authoritative native binding role, preserving the selected development environment. Its
+- Owner workspace preparation (no task attempt) selects kagent's `agent` profile, preserving
+  the selected development environment. Its
   fixed standing context permits direct work with the owner, with no delegation or task/report
-  duties. The first send waits for confirmed preparation through the existing readiness path.
+  duties. The first send waits for confirmed preparation (below).
 - Before the first kagent call, creation transactionally stores the owner project, session,
   checkout and a per-binding `workspace` MCP grant with its non-secret credential reference.
   The reference uses a unique Secret key for this session. Claude and Codex workspaces use the
@@ -536,7 +538,8 @@ selection as `development_environment`. Replacement and uncertain-create recover
 that stored selection. Recovery retries the persisted request id; a replacement uses a fresh
 request id. Default changes and CLI/runtime updates never change the recorded environment. kagent's reported development environment and runtime composition
 are stored separately when present. The workspace view displays the short resolved digest.
-Projects without a selection retain the legacy CreateSession request without that field.
+Projects without a selection retain the legacy CreateSession request without that field;
+delegated code tasks for them are refused (see [tasks](tasks.md)).
 
 Selection requires kagent's runtime composition feature and service-token authentication
 to be enabled. Static validation is metadata evidence, not a live composition proof.
@@ -566,22 +569,43 @@ same-session non-turn Suspend/Resume warmup and final fresh GetSession precede u
 UUID storage alone grants no authority. Unknown outcomes recover the original tuple; history
 without a plan is held rather than retrofitted. Default/protected workspaces receive read only.
 
-With both flags enabled, delegated supervisor/child sessions also prepare their checkout and
-native setup after read publication and before the first turn. Mainloop selects the setup
-profile only from its authoritative binding role; request data and receipts cannot select or
-change it. The original create plan and confirmed runtime association supply the fixed inputs.
-A durable requested action (including a lost reply), or a pending/uncertain receipt, displays
-`resuming` with "Preparing workspace". Ordinary suspension/resume keeps its lifecycle status,
-even when kagent temporarily projects a receipt as historical. Non-READY observations and
-operations in progress hold preparation without failing its durable state. A definite failure,
-conflicting action, or historical receipt from a fresh settled READY observation of the original
-runtime displays `failed` with "Workspace preparation failed; replace the session". Retrying
-cannot choose another action for that Session. A confirmed action is observed without calling
-Prepare again, which would open a new challenge. Owner (`agent`) setup remains unprepared
-pending the separate owner-profile integration; every Git-enrolled send requires confirmed
-preparation for its current issuance/create identity while both flags are enabled. A turn count
-retained from a previous native Session cannot bypass that gate. Disabling either flag preserves
-the existing preparation-free behavior.
+A workspace created with a selected development environment is prepared before it takes its
+first message: kagent admits nothing to such a Session until its workspace preparation is
+confirmed, and it words the refusal as a bad reply. This applies to owner workspaces and to
+delegated supervisor and child workspaces alike. Workspaces without an environment have no
+preparation and keep the preparation-free behavior. The checkout must be a full commit SHA, so
+creation refuses with `checkout_ref_unavailable` when a selected environment is set and the ref
+cannot be pinned (GitHub does not have it, or no GitHub App client is configured).
+
+Preparation is a durable intent, not a side effect of the first send. Creating the workspace
+stores a `workspace_preparations` row (`planned`, `requested`, `confirmed` or `failed`) in the
+same transaction, keyed by the create request ID. The `workspace-preparation` loop:
+
+- waits for a READY Session with no operation in progress, and wakes it if kagent has no
+  running Actor (preparation needs one);
+- reads the Session's receipt before anything else. A confirmed receipt settles the row. A
+  definite failure, a receipt for another action, or a historical receipt fails it at once
+  (kagent keeps one preparation per Session, so a historical receipt never becomes current);
+  a pending or uncertain receipt is waited on without calling Prepare again, which would open
+  a new challenge;
+- otherwise calls `PrepareSessionWorkspace` with the checkout stored on the workspace. The setup
+  profile is chosen from the role of the task attempt the workspace serves (supervisor and child;
+  `agent` when there is none) on the first call and then frozen on the row. The pinned setup
+  digests belong to the kagent release the harnesses run and must change with it; a test fails
+  when the vendored kagent API pin moves without them. `InvalidArgument`, `PermissionDenied` and
+  `AlreadyExists` replies fail the row; other errors retry with the loop's backoff.
+
+A row that is not confirmed 30 minutes after creation fails, but only after a last read of the
+receipt, so a late confirmation still counts. A failed row's detail names the cause.
+
+A send waits (bounded by the delivery hold) while the row is not `confirmed` and settles as
+failed, with that detail, once it is `failed`. Disabling either flag does not change this gate.
+The workspace lifecycle view does not report preparation; the owner sees a failed preparation in
+the delivery detail ("workspace preparation failed; replace the session") and the logs.
+
+Push enrollment also needs a running Actor: kagent attests the runtime only while one runs, and
+parks an idle Actor. Enrollment resumes the Session and looks again instead of treating an
+unattested runtime as final.
 
 ## Task-backed workspaces
 

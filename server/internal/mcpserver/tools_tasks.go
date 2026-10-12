@@ -108,7 +108,11 @@ func (s *Server) taskPrincipal(ctx context.Context, a agentauth.Actor) (tasks.Pr
 func taskFailure(err error) error {
 	var r *tasks.Error
 	if errors.As(err, &r) {
-		return failure(strconv.Itoa(r.Status), r.Reason)
+		reason := r.Reason
+		if reason == tasks.ReasonEnvironmentRequired {
+			reason += ": the owner must select a development environment on the project page (Environment section), then delegate again"
+		}
+		return failure(strconv.Itoa(r.Status), reason)
 	}
 	return err
 }

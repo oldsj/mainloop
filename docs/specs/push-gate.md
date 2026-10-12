@@ -53,7 +53,8 @@ Every grant freezes the branch, owner, native Session, writer generation, option
 policy version and a digest of the confirmed native runtime. Fresh GetSession must match the
 stored checkout, Agent and accepted development environment and show READY with no operation,
 a prepared revision, composition and current active generation/atespace/Actor name/UID. Runtime
-replacement refuses the old grant. A copied Session ID or client header supplies no authority.
+replacement refuses the old grant. Enrollment resumes a Session whose Actor kagent has parked,
+because the runtime association exists only while an Actor runs. A copied Session ID or client header supplies no authority.
 
 Owner workspace writers require a held binding claim. Delegated writers additionally require the
 active current G8b task attempt, the same binding/session/workspace, the exact held branch claim

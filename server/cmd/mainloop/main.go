@@ -164,8 +164,12 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		remote = gh
 	}
 	projectSvc := projects.NewService(cfg, pool, remote, gate, attn.NeedsOwner, log)
-	wsSvc := workspaces.New(cfg, pool, kc, reg, creds, sessions.NewLedger(cfg, pool), projectSvc, log,
-		workspaceOptions(cfg, gate, gitReadFor(cfg, pool, creds, log))...)
+	wsOpts := workspaceOptions(cfg, gate, gitReadFor(cfg, pool, creds, log))
+	if gh != nil {
+		// A workspace kagent prepares starts from one exact commit, so its base ref is resolved here.
+		wsOpts = append(wsOpts, workspaces.WithRefs(gh))
+	}
+	wsSvc := workspaces.New(cfg, pool, kc, reg, creds, sessions.NewLedger(cfg, pool), projectSvc, log, wsOpts...)
 	healthSvc := health.NewService(cfg, pool, kc, log)
 	live := progress.New(hub)
 	svc := sessions.NewService(cfg, pool, kc, reg, creds, healthSvc, wsSvc, live, log)

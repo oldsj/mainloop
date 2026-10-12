@@ -174,6 +174,14 @@ func (s *Service) enrollPush(ctx context.Context, c reconcile.Claim) (reconcile.
 	if n.GetState() != ka.RuntimeState_RUNTIME_STATE_READY || n.GetOperation() != ka.RuntimeOperation_RUNTIME_OPERATION_NONE {
 		return reconcile.Retry(), nil
 	}
+	// The push gate attests the runtime only while kagent has an Actor running for the Session, and
+	// kagent parks an idle Actor. Wake it (resume joins an operation under way) and look again.
+	if ra := n.GetRuntimeAssociation(); ra.GetGenerationId() == "" || ra.GetActorUid() == "" || !ra.GetCurrentActive() {
+		if _, err := s.Kagent.ResumeSession(ctx, *w.KagentSessionID); err != nil && !notFoundErr(err) {
+			return reconcile.Retry(), err
+		}
+		return reconcile.RetryAfter(preparationRecheck), nil
+	}
 	ref, err := frozenReference(w.GitPushCredential)
 	if err != nil {
 		return reconcile.Retry(), err

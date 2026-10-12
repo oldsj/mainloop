@@ -456,6 +456,8 @@ func need(method string, segs []string) map[string]string {
 		return read("statuses")
 	case method == http.MethodGet && len(rest) == 3 && rest[0] == "commits" && (rest[2] == "check-suites" || rest[2] == "check-runs"):
 		return read("checks")
+	case method == http.MethodGet && len(rest) >= 2 && rest[0] == "commits":
+		return read("contents")
 	case method == http.MethodGet && len(rest) == 3 && rest[0] == "branches" && rest[2] == "protection":
 		return read("administration")
 	case method == http.MethodGet && len(rest) >= 2 && rest[0] == "branches":
@@ -527,8 +529,10 @@ func (s *Server) repoCall(w http.ResponseWriter, r *http.Request, segs []string)
 		s.pullCall(w, r, repo, rest)
 	case rest[0] == "commits" && len(rest) == 1:
 		s.commits(w, r, repo)
-	case rest[0] == "commits":
+	case rest[0] == "commits" && len(rest) == 3 && (rest[2] == "statuses" || rest[2] == "check-suites" || rest[2] == "check-runs"):
 		s.commitFacts(w, r, repo, rest[1], rest[2])
+	case rest[0] == "commits":
+		s.commitCall(w, repo, strings.Join(rest[1:], "/"))
 	case rest[0] == "branches":
 		s.branchCall(w, r, repo, rest[1:])
 	case rest[0] == "rules":

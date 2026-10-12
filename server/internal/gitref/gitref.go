@@ -39,3 +39,16 @@ func Valid(s string) bool {
 func ValidCheckoutRef(s string) bool {
 	return Valid(s) && !strings.HasPrefix(s, "refs/")
 }
+
+// IsSHA reports whether s is a full lower-case hex commit SHA.
+func IsSHA(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
