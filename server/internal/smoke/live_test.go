@@ -539,3 +539,48 @@ func TestGHCLIReadyNamesAMissingGH(t *testing.T) {
 		t.Errorf("Ready() = %v, want a not-installed error", err)
 	}
 }
+
+func TestLiveGitPushProbeSendsTheConfiguredHost(t *testing.T) {
+	// The push listener refuses any Host but its own; the stub does the same, so the probe passes only
+	// when it sends the configured name instead of the port-forward's address.
+	const pushHost = "mainloop-git-push.ns.svc.cluster.local"
+	var mu sync.Mutex
+	var hosts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hosts = append(hosts, r.Host)
+		mu.Unlock()
+		if r.Host != pushHost {
+			statusHandler(http.StatusForbidden, "host_denied req-1")(w, r)
+			return
+		}
+		statusHandler(http.StatusUnauthorized, "authentication_required req-1")(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	for _, tc := range []struct {
+		name, host, want string
+		status           Status
+	}{
+		{"configured", pushHost, pushHost, OK},
+		{"empty keeps the URL host", "", strings.TrimPrefix(srv.URL, "http://"), Fail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mu.Lock()
+			hosts = nil
+			mu.Unlock()
+			opts := liveOptions(t, &fakeLive{}, 1)
+			opts.GitPush = srv.URL
+			opts.GitPushHost = tc.host
+			c := statusesOf(runLive(opts))["git-push"]
+			if c.Status != tc.status {
+				t.Errorf("git-push = %v, want %s", c, tc.status)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(hosts) != 1 || hosts[0] != tc.want {
+				t.Errorf("push listener saw Host %q, want exactly [%q]", hosts, tc.want)
+			}
+		})
+	}
+}

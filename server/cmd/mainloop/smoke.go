@@ -23,9 +23,9 @@ const (
 )
 
 // Each mode refuses the flags that only the other mode uses, so a live-only option cannot look like it
-// applied to a read-only run. Flags both modes use (base-url, git-push-url, api-host, timeout) are not listed.
+// applied to a read-only run. Flags both modes use (base-url, git-push-url, api-host, git-push-host, timeout) are not listed.
 var (
-	smokeReadOnlyFlags = []string{"mcp-url", "git-url", "kagent", "namespace"}
+	smokeReadOnlyFlags = []string{"mcp-url", "git-url", "mcp-host", "git-read-host", "kagent", "namespace"}
 	smokeLiveFlags     = []string{"budget", "project-id", "repo", "app-login", "provider", "merge-tools", "deadline", "step-deadline", "poll-interval"}
 )
 
@@ -43,6 +43,9 @@ func runSmoke(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	gitURL := fs.String("git-url", "", "read-only: git read listener base URL (default: in-cluster mainloop-git-read)")
 	kagentProbeFlag := fs.Bool("kagent", false, "read-only: also run the kagent probe; only meaningful in the cluster")
 	apiHost := fs.String("api-host", "", "Host header for owner API requests, for a port-forward")
+	gitPushHost := fs.String("git-push-host", "", "Host header for git push probes, for a port-forward")
+	mcpHost := fs.String("mcp-host", "", "read-only: Host header for the MCP probe, for a port-forward")
+	gitReadHost := fs.String("git-read-host", "", "read-only: Host header for the git read probe, for a port-forward")
 	timeout := fs.Duration("timeout", 15*time.Second, "deadline for each request")
 	projectID := fs.String("project-id", "", "live: the project to run in")
 	repo := fs.String("repo", "", "live: owner/name of the disposable test repository")
@@ -78,7 +81,7 @@ func runSmoke(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 
 	if *live {
 		return runSmokeLive(ctx, stdout, stderr, liveFlags{
-			baseURL: *baseURL, gitPushURL: *gitPushURL, apiHost: *apiHost, timeout: *timeout,
+			baseURL: *baseURL, gitPushURL: *gitPushURL, apiHost: *apiHost, gitPushHost: *gitPushHost, timeout: *timeout,
 			projectID: *projectID, repo: *repo, appLogin: *appLogin, provider: *provider, mergeTools: *mergeTools,
 			budget: *budget, deadline: *deadline, stepDeadline: *stepDeadline, pollInterval: *pollInterval,
 		})
@@ -125,10 +128,13 @@ func runSmoke(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	}
 	var checks []smoke.Check
 	smoke.ReadOnly(ctx, smoke.ReadOptions{
-		Endpoints: endpoints,
-		APIHost:   *apiHost,
-		Timeout:   *timeout,
-		Kagent:    kagentCheck,
+		Endpoints:   endpoints,
+		APIHost:     *apiHost,
+		MCPHost:     *mcpHost,
+		GitReadHost: *gitReadHost,
+		GitPushHost: *gitPushHost,
+		Timeout:     *timeout,
+		Kagent:      kagentCheck,
 	}, func(c smoke.Check) {
 		checks = append(checks, c)
 		_, _ = fmt.Fprintln(stdout, c)
@@ -140,9 +146,9 @@ func runSmoke(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 }
 
 type liveFlags struct {
-	baseURL, gitPushURL, apiHost, projectID, repo, appLogin, provider, mergeTools string
-	timeout, deadline, stepDeadline, pollInterval                                 time.Duration
-	budget                                                                        int
+	baseURL, gitPushURL, apiHost, gitPushHost, projectID, repo, appLogin, provider, mergeTools string
+	timeout, deadline, stepDeadline, pollInterval                                              time.Duration
+	budget                                                                                     int
 }
 
 // runSmokeLive refuses unless every target is named, then runs the budgeted live path. It has no
@@ -165,6 +171,7 @@ func runSmokeLive(ctx context.Context, stdout, stderr io.Writer, f liveFlags) in
 	opts := smoke.LiveOptions{
 		Endpoints:    smoke.Endpoints{API: api, GitPush: gitPush},
 		APIHost:      f.apiHost,
+		GitPushHost:  f.gitPushHost,
 		ProjectID:    f.projectID,
 		Repo:         f.repo,
 		AppLogin:     f.appLogin,

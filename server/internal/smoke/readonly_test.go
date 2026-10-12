@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -309,6 +310,77 @@ func TestRefusalCodeIsOnlyAPlainWord(t *testing.T) {
 	for body, want := range tests {
 		if got := refusalCode(body); got != want {
 			t.Errorf("refusalCode(%q) = %q, want %q", body, got, want)
+		}
+	}
+}
+
+// hostRecorder answers a git discovery or MCP request the way a healthy gate does, and records the Host
+// header of each request it gets.
+type hostRecorder struct {
+	srv   *httptest.Server
+	mu    sync.Mutex
+	hosts []string
+}
+
+func newHostRecorder(t *testing.T, status int, body string) *hostRecorder {
+	t.Helper()
+	rec := &hostRecorder{}
+	rec.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.mu.Lock()
+		rec.hosts = append(rec.hosts, r.Host)
+		rec.mu.Unlock()
+		statusHandler(status, body)(w, r)
+	}))
+	t.Cleanup(rec.srv.Close)
+	return rec
+}
+
+func (r *hostRecorder) seen() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.hosts...)
+}
+
+func TestProbesSendTheConfiguredHost(t *testing.T) {
+	push := newHostRecorder(t, http.StatusUnauthorized, "authentication_required req-1")
+	read := newHostRecorder(t, http.StatusUnauthorized, "")
+	mcp := newHostRecorder(t, http.StatusUnauthorized, "")
+	opts := healthyOptions(t)
+	opts.GitPush, opts.GitRead, opts.MCP = push.srv.URL, read.srv.URL, mcp.srv.URL
+	opts.GitPushHost = "mainloop-git-push.ns.svc.cluster.local"
+	opts.GitReadHost = "mainloop-git-read.ns.svc.cluster.local"
+	opts.MCPHost = "mainloop-mcp.ns.svc.cluster.local"
+
+	checks := runReadOnly(opts)
+	for name, want := range map[string]struct {
+		rec  *hostRecorder
+		host string
+	}{
+		"git-push": {push, opts.GitPushHost},
+		"git-read": {read, opts.GitReadHost},
+		"mcp":      {mcp, opts.MCPHost},
+	} {
+		if c := findCheck(t, checks, name); c.Status != OK {
+			t.Errorf("%s = %v, want ok", name, c)
+		}
+		if got := want.rec.seen(); len(got) != 1 || got[0] != want.host {
+			t.Errorf("%s listener saw Host %q, want exactly [%q]", name, got, want.host)
+		}
+	}
+}
+
+func TestProbesKeepTheURLHostWhenNoneIsConfigured(t *testing.T) {
+	push := newHostRecorder(t, http.StatusUnauthorized, "authentication_required req-1")
+	read := newHostRecorder(t, http.StatusUnauthorized, "")
+	mcp := newHostRecorder(t, http.StatusUnauthorized, "")
+	opts := healthyOptions(t)
+	opts.GitPush, opts.GitRead, opts.MCP = push.srv.URL, read.srv.URL, mcp.srv.URL
+
+	runReadOnly(opts)
+	for name, rec := range map[string]*hostRecorder{"git-push": push, "git-read": read, "mcp": mcp} {
+		want := strings.TrimPrefix(rec.srv.URL, "http://")
+		if got := rec.seen(); len(got) != 1 || got[0] != want {
+			t.Errorf("%s listener saw Host %q, want exactly [%q]", name, got, want)
 		}
 	}
 }

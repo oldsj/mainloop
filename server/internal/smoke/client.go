@@ -80,8 +80,8 @@ func newCaller(host string, timeout time.Duration) caller {
 	return caller{http: client, host: host, timeout: timeout}
 }
 
-// probe sends one request and returns the status and the first 256 bytes of the body.
-func (c caller) probe(ctx context.Context, method, target string, header http.Header) (int, string, error) {
+// probe sends one request, with host as its Host header when set, and returns the status and the first 256 bytes of the body.
+func (c caller) probe(ctx context.Context, method, target, host string, header http.Header) (int, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, target, nil)
@@ -90,6 +90,9 @@ func (c caller) probe(ctx context.Context, method, target string, header http.He
 	}
 	for k, v := range header {
 		req.Header[k] = v
+	}
+	if host != "" {
+		req.Host = host
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
