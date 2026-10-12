@@ -481,3 +481,11 @@ full path.
 
 Teardown: `make dev-live-purge` deletes everything DevSpace deployed, including
 the namespace, the database and the dev agents.
+
+Previews do not work on this instance. The overlay sets no `SUBSTRATE_PREVIEW_BASE_URL`, so
+the ports API returns `http://<port>--<workspace>--preview.localhost:8001` links. No gateway
+route serves a preview wildcard for the dev host. The `atenet-router-ingress` NetworkPolicy in
+`ate-system` admits port 8081 only from the `mainloop` namespace's backend, so the proxy's
+tunnel dial from `mainloop-dev` times out and the proxy answers 503 "Workspace waking up" on
+every request. Proving previews needs an infra change (a base domain, a wildcard route and a
+policy entry for `mainloop-dev`); until then they are proven in production.
