@@ -6,7 +6,7 @@ spec:
   claude: {}
   workload:
     # Production pin; `make dev-harness` overrides it through DevSpace.
-    image: ghcr.io/oldsj/kagent-claude-harness:0.0.0-7286de6@sha256:3e1bcea66512fe4c419a4ba289840495dfe5ccaded8a76484bed3b82fe3795d3
+    image: ghcr.io/oldsj/kagent-claude-harness:0.0.0-d8936d9@sha256:4312831060b279f69ca9d773c8af72d08e05331f7f4ceefe6c46fb1f46c62c6e
   substrate:
     workerPoolRef:
       name: kagent-default
