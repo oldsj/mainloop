@@ -263,9 +263,11 @@ func (s *Service) selectProfile(ctx context.Context, q *dbq.Queries, in CreateIn
 	return selection{profile: prof, source: dbstate.SelectionInstallationDefault}, nil
 }
 
-// Create records a task and its create operation. It queues the task with reason
-// provisioning_unavailable and leaves the operation requested: the task has no attempt until
-// provisioning picks the operation up. A repeat of the same request returns the same operation.
+// Create records a task and its create operation, both with no reason: nothing has gone wrong
+// yet, and provisioning has not been attempted. It leaves the operation requested: the task has
+// no attempt until provisioning picks the operation up. A repeat of the same request returns the
+// same operation. Reason provisioning_unavailable is reserved for an operation the reconcile loop
+// has actually blocked, never for one merely awaiting its first look.
 func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (api.TaskOperation, error) {
 	if !p.canManage() {
 		return api.TaskOperation{}, refusal(403, ReasonManagementDenied)
@@ -292,11 +294,10 @@ func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (api.
 		if err != nil {
 			return nil, err
 		}
-		reason := dbstate.ReasonProvisioningUnavailable
 		op, err = q.InsertTaskOperation(ctx, dbq.InsertTaskOperationParams{
 			ID: uuid.NewString(), OwnerID: p.OwnerID, PrincipalKey: p.Key(), RequestID: in.RequestID,
 			RequestDigest: dig, RequestPayload: payload, Kind: dbstate.TaskOpCreate, TaskID: &t.ID,
-			State: dbstate.TaskOpRequested, LastConfirmedStep: dbstate.TaskOpRequested, Reason: &reason,
+			State: dbstate.TaskOpRequested, LastConfirmedStep: dbstate.TaskOpRequested,
 		})
 		if err != nil {
 			return nil, err

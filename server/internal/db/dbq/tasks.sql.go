@@ -1079,9 +1079,9 @@ const insertTask = `-- name: InsertTask :one
 INSERT INTO tasks (
     id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief,
     mode, assigned_profile_id, selection_source, provider_constraint, checkout_branch, checkout_ref,
-    checkout_depth, reason
+    checkout_depth
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'provisioning_unavailable'
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
 )
 RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id
 `
@@ -1106,6 +1106,8 @@ type InsertTaskParams struct {
 }
 
 // Tasks
+// reason stays NULL: a new task has nothing wrong with it yet, and provisioning has not been
+// attempted. See Service.Create.
 func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) (Task, error) {
 	row := q.db.QueryRow(ctx, insertTask,
 		arg.ID,

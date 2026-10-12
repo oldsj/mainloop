@@ -37,7 +37,10 @@ type fakeWorkspaces struct {
 	// unready leaves new workspaces without a kagent Session.
 	unready bool
 	// fail makes creates return this error, as a request that can never succeed would.
-	fail      error
+	fail error
+	// failTimes makes the next failTimes creates return a transient error, then succeed, as a
+	// capacity hiccup the reconcile loop's own retry resolves would.
+	failTimes int
 	deleteErr error
 	// gate holds the next create until it is closed, then returns gateErr if set, otherwise commits
 	// the workspace. entered is told when a create is waiting.
@@ -72,6 +75,10 @@ func (f *fakeWorkspaces) CreateWithRequestID(ctx context.Context, requestID stri
 		return api.WorkspaceLifecycle{WorkspaceId: w.ID, SessionId: w.ID}, nil
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return api.WorkspaceLifecycle{}, err
+	}
+	if f.failTimes > 0 {
+		f.failTimes--
+		return api.WorkspaceLifecycle{}, errors.New("tasks: transient capacity hiccup")
 	}
 	if f.fail != nil {
 		return api.WorkspaceLifecycle{}, f.fail
