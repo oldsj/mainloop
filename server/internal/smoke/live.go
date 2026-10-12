@@ -399,9 +399,11 @@ func (r *liveRun) readGitHub(ctx context.Context, path string, out any) error {
 // Otherwise it is the read's own error.
 func readFailure(runCtx, stepCtx context.Context, err error) error {
 	switch {
-	case runCtx.Err() != nil:
+	// Only an expired deadline is reported as one: the step context is already cancelled when this runs,
+	// so a read that failed at once keeps its own error.
+	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
 		return errors.New("overall deadline")
-	case stepCtx.Err() != nil:
+	case errors.Is(stepCtx.Err(), context.DeadlineExceeded):
 		return errors.New("step deadline")
 	}
 	return err
