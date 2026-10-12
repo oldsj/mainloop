@@ -80,9 +80,7 @@ only `linux/arm64` images (15 minutes each):
 - `ghcr.io/oldsj/mainloop-web-dev`
 
 Both receive `<first seven commit SHA characters>` and `main` tags; `main` is the
-mutable one. The shared `mainloop-dev` overlay still pins `go-react`, the tag of the
-retired migration branch, so both images also keep a `go-react` alias until that
-overlay and its render test move to `main` together. Step outputs
+mutable one, and the shared `mainloop-dev` overlay pins it. Step outputs
 provide the short SHA and digest; summaries record source, tags and digest, with no
 job-level output. These are application dev targets, not the multiarchitecture
 workspace image. Publishing them does not start or update the shared instance.

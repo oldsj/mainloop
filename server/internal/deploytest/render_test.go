@@ -500,8 +500,8 @@ func TestLiveDev(t *testing.T) {
 	r := render(t, "overlays/dev-live")
 	pod := r.backend(t)
 
-	t.Run("images are the arm64 go-react dev images", func(t *testing.T) {
-		const server, web = "ghcr.io/oldsj/mainloop-server-dev:go-react", "ghcr.io/oldsj/mainloop-web-dev:go-react"
+	t.Run("images are the arm64 main dev images", func(t *testing.T) {
+		const server, web = "ghcr.io/oldsj/mainloop-server-dev:main", "ghcr.io/oldsj/mainloop-web-dev:main"
 		for _, c := range append(slices.Clone(pod.InitContainers), pod.Containers...) {
 			if c.Image != server {
 				t.Errorf("%s: image %s, want %s", c.Name, c.Image, server)

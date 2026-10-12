@@ -5,10 +5,8 @@ name: Publish live dev images
 #
 #   mainloop-server-dev:<sha7> and :main
 #   mainloop-web-dev:<sha7> and :main
-#   mainloop-server-dev:go-react and mainloop-web-dev:go-react (transitional alias)
 #
-# The dev-live overlay still pins go-react, the tag of the retired migration branch.
-# The alias stays until the overlay and its render test move to main together.
+# The dev-live overlay pins :main, so the mutable tag is what the shared instance pulls.
 
 on:
   push:
@@ -73,7 +71,6 @@ jobs:
           tags: |
             ghcr.io/oldsj/mainloop-${{ matrix.image }}-dev:${{ steps.tag.outputs.sha }}
             ghcr.io/oldsj/mainloop-${{ matrix.image }}-dev:main
-            ghcr.io/oldsj/mainloop-${{ matrix.image }}-dev:go-react
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -90,6 +87,6 @@ jobs:
           {
             printf '### %s (linux/arm64, --target=dev)\n\n' "$IMAGE"
             printf 'Source commit: `%s`\n\n' "$GITHUB_SHA"
-            printf 'Tags: `%s:%s`, `%s:main`, `%s:go-react`\n\n' "$IMAGE" "$TAG" "$IMAGE" "$IMAGE"
+            printf 'Tags: `%s:%s`, `%s:main`\n\n' "$IMAGE" "$TAG" "$IMAGE"
             printf 'Digest: `%s`\n' "$DIGEST"
           } >> "$GITHUB_STEP_SUMMARY"

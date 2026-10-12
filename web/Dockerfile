@@ -15,8 +15,6 @@ RUN npm install -g pnpm@9.15.9 --fetch-timeout=30000 --fetch-retries=1 \
 USER 1001:1001
 WORKDIR /app
 COPY --chown=1001:1001 package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
-COPY --chown=1001:1001 packages/ui/package.json ./packages/ui/package.json
-COPY --chown=1001:1001 frontend/package.json ./frontend/package.json
 COPY --chown=1001:1001 web/package.json ./web/package.json
 RUN pnpm install --frozen-lockfile --filter web...
 COPY --chown=1001:1001 web ./web
@@ -32,10 +30,9 @@ FROM node:24-alpine AS web
 WORKDIR /app
 RUN npm install -g pnpm@9.15.9 --fetch-timeout=30000 --fetch-retries=1
 
-# Install from the lockfile. Every workspace manifest is needed for --frozen-lockfile to match.
+# Install from the lockfile. Its importers are the root and web/, so both manifests are needed for
+# --frozen-lockfile to match.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
-COPY packages/ui/package.json ./packages/ui/package.json
-COPY frontend/package.json ./frontend/package.json
 COPY web/package.json ./web/package.json
 RUN pnpm install --frozen-lockfile --filter web...
 
