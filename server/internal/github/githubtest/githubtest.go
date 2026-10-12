@@ -494,6 +494,14 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, segs []string
 	return repo
 }
 
+// tokenHas reports whether the request's installation token carries the permission at any level.
+func (s *Server) tokenHas(r *http.Request, name string) bool {
+	raw, _ := strings.CutPrefix(r.Header.Get("Authorization"), "token ")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tokens[raw].perms[name] != ""
+}
+
 func (s *Server) repoCall(w http.ResponseWriter, r *http.Request, segs []string) {
 	needs := need(r.Method, segs)
 	if needs == nil {
@@ -505,6 +513,15 @@ func (s *Server) repoCall(w http.ResponseWriter, r *http.Request, segs []string)
 		return
 	}
 	rest := segs[3:]
+	if r.Method == http.MethodPost && len(rest) == 1 && rest[0] == "pulls" && !s.tokenHas(r, "contents") {
+		// GitHub checks the head branch with the token and, without Contents access, cannot see
+		// it: a private repository answers 422, not 403.
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"message": "Validation Failed",
+			"errors":  []map[string]string{{"resource": "PullRequest", "field": "head", "code": "invalid"}},
+		})
+		return
+	}
 	switch {
 	case len(rest) == 0:
 		s.mu.Lock()

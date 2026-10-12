@@ -19,6 +19,11 @@ for up to `Settle` (20 s by default) before it returns the state it has. The MCP
 loops, so a call that is cut off or repeated never sends a second PR or merge: the row is the
 authority and the loop is the only sender.
 
+The loop logs each creation that ends refused, uncertain or created (creation id and reason or PR
+number, never GitHub free text), and the MCP process logs each refused tool call with the tool name
+and the session binding; the log line carries the refusal text, which can include branch names. `Settle` is set by the service constructors the processes use; a bare
+`Service` with a zero `Settle` returns at once.
+
 ### `open_pull_request`
 
 States of a `pr_creations` row: `pending` (written; nothing sent) → `dispatching` (the claimer
@@ -233,7 +238,9 @@ Pull requests read/write, Administration read, Workflows read/write, and Metadat
 Tokens request Metadata read for repository lookup and branch rules, Contents read for branches
 and commits, Administration read for classic protection, Checks read
 for runs/suites, Commit statuses read for status contexts, Pull requests read for PRs,
-files, reviews and comments, Pull requests write for PR creation and review-comment reactions, and
+files, reviews and comments, Pull requests write with Contents read for PR creation (GitHub checks
+the head branch with the same token and answers a private repository with 422 `head invalid`, not
+403, when Contents is missing), Pull requests write for review-comment reactions, and
 Contents write for squash merge. Current API callers do not need Workflows write;
 that registration permission is not included in their tokens.
 

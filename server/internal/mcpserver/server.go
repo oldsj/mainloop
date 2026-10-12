@@ -172,6 +172,8 @@ func (s *Server) call(actor agentauth.Actor, t Tool) mcp.ToolHandler {
 			if !ok {
 				s.Log.ErrorContext(ctx, "mcp tool failed", "tool", t.Name, "session", actor.BindingID, "error", err)
 				msg = "[500] internal error"
+			} else {
+				s.Log.InfoContext(ctx, "mcp tool refused", "tool", t.Name, "session", actor.BindingID, "result", msg)
 			}
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: msg}}}, nil
 		}

@@ -886,3 +886,11 @@ func (r *runtimeFake) template(ref kagent.AgentRef, name string) {
 	}
 	r.templates[ref] = name
 }
+
+// A bare Service returns at once, so the constructor the processes use must set the wait the spec
+// promises; without it merge_pull_request answers "evaluating" before the loop has run.
+func TestNewServiceWaitsForTheLoopToSettle(t *testing.T) {
+	if got := merge.NewService(&config.Config{}, nil, nil, nil, nil).Settle; got != merge.DefaultSettle || got < 10*time.Second {
+		t.Fatalf("Settle = %v, want %v", got, merge.DefaultSettle)
+	}
+}
