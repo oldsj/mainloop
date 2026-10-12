@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,9 +9,18 @@ import { attentionSnapshot } from '@/features/inbox/test/fixtures';
 import { writeLastVisit } from '@/features/home/lastVisit';
 import { serveProjectPage } from '@/features/projects/test/handlers';
 import { tasksList } from '@/features/tasks/test/handlers';
+import type * as ConnectionModule from '@/api/connection';
+import { connection } from '@/api/connection';
 import { server } from '@/test/msw/server';
 import { view } from '@/test/fixtures/tasks';
 import { createAppRouter } from '@/router';
+
+// The banner reads one shared connection; a test flips its probe to take the app offline and back.
+const reach = vi.hoisted(() => ({ up: true }));
+vi.mock('@/api/connection', async (importOriginal) => {
+  const actual = await importOriginal<typeof ConnectionModule>();
+  return { ...actual, connection: actual.createConnection({ probe: async () => reach.up }) };
+});
 
 // The shell reads several endpoints at once; past the limiter's burst, reads would wait out the default waits.
 vi.mock('@/api/middleware', async (importOriginal) => {
@@ -400,5 +409,35 @@ describe('home work placement', () => {
     await renderAt('/');
     const recorded = Number(window.localStorage.getItem('mainloop.home.lastVisit'));
     expect(Math.abs(recorded - Date.now())).toBeLessThan(10_000);
+  });
+});
+
+describe('offline banner', () => {
+  afterEach(async () => {
+    reach.up = true;
+    await act(async () => {
+      await connection.check();
+    });
+  });
+
+  it.each([
+    ['compact', false, 'compact-shell'],
+    ['desktop', true, 'desktop-shell']
+  ])('sits in the screen-high column above main in the %s shell', async (_name, wide, shell) => {
+    setViewport(wide);
+    await renderAt('/');
+    reach.up = false;
+    await act(async () => {
+      await connection.check();
+    });
+
+    const banner = await screen.findByTestId('connection-banner');
+    const column = banner.parentElement;
+    expect(column).toHaveClass('h-dvh');
+    expect(column).toContainElement(screen.getByTestId(shell));
+    const main = screen.getByRole('main');
+    expect(column).toContainElement(main);
+    expect(banner.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    if (!wide) expect(column).toContainElement(screen.getByTestId('mobile-tab-bar'));
   });
 });

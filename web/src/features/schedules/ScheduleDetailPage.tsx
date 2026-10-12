@@ -96,7 +96,9 @@ function ScheduleEditor({ id, latest }: { id: string; latest: ScheduleView }) {
   // Pause and resume wait while a conflict shows. They would accept the newer version under edits made to the old one.
   const holding = conflict === 'changed';
   const busy = update.isPending;
-  const paused = base.config.paused;
+  // The label reads the newest read, as the card badge does, so the two cannot disagree. The write
+  // still goes to `base`'s etag, so a change made elsewhere is a conflict, not a silent overwrite.
+  const paused = latest.config.paused;
 
   // A write that succeeded is the version the page holds from now on.
   function accept(view: ScheduleView) {

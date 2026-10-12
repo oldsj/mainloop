@@ -89,9 +89,9 @@ function GroupSection({
   const shown = expanded ? rows : rows.slice(0, ROW_CAP);
   return (
     <section aria-labelledby={`work-${group}`} className="px-md py-sm min-w-0">
-      <h2 id={`work-${group}`} className="text-muted-foreground text-xs font-medium">
+      <h3 id={`work-${group}`} className="text-muted-foreground text-xs font-medium">
         {HEADINGS[group]} {rows.length > 0 && <span>({rows.length})</span>}
-      </h2>
+      </h3>
       {rows.length === 0 ? (
         <p className="text-muted-foreground mt-xs text-sm">
           Nothing running. Start work from the main chat.

@@ -70,6 +70,24 @@ describe('groupWork', () => {
     expect(row?.statusLine).toBe('Waiting · awaiting CI');
   });
 
+  it('says a task waiting on approval is waiting for the owner, not running', () => {
+    const byReason = groupWork(
+      [view({ id: 'gate', status: 'running', reason: 'approval' })],
+      LAST_VISIT
+    );
+    expect(byReason['needs-you'][0]?.statusLine).toBe('Waiting for your approval');
+    const byPending = groupWork(
+      [
+        view(
+          { id: 'pend', status: 'running' },
+          { projection: projection({ pending_approval_ids: ['req-1'] }) }
+        )
+      ],
+      LAST_VISIT
+    );
+    expect(byPending['needs-you'][0]?.statusLine).toBe('Waiting for your approval');
+  });
+
   it('returns empty groups, not missing ones, for an empty list', () => {
     expect(groupWork([], LAST_VISIT)).toEqual({
       'needs-you': [],

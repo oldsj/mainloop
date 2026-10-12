@@ -313,6 +313,29 @@ describe('schedule page', () => {
     expect(store.view.config.paused).toBe(true);
   });
 
+  it('labels the pause button from the same read as the badge', async () => {
+    const store = serveEnforced();
+    const user = userEvent.setup();
+    const { queryClient } = renderSchedules('/schedules/sch-1');
+    await screen.findByRole('button', { name: 'Pause' });
+
+    // Another client pauses the schedule while the page is open. The newest read drives both the
+    // badge and the button, so they agree; the click still targets the version the page holds.
+    store.view = schedule({
+      etag: 'etag-2',
+      config: { ...store.view.config, paused: true }
+    });
+    createSseApplier(queryClient)({
+      event: 'schedule:updated',
+      data: JSON.stringify({ schedule_id: 'sch-1' })
+    });
+
+    expect(await screen.findByRole('button', { name: 'Resume' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(store.writes).toHaveLength(1));
+    expect(store.writes[0]).toMatchObject({ ifMatch: '"etag-1"', body: { paused: false } });
+  });
+
   it('does not overwrite another client’s save made while the user is editing', async () => {
     const store = serveEnforced();
     const user = userEvent.setup();

@@ -115,6 +115,15 @@ describe('Work list', () => {
     ).toHaveTextContent('Fresh merge');
   });
 
+  it('makes the group headings sub-headings of the Work heading', async () => {
+    serve([view({ id: 'run', title: 'Runner', status: 'running', updated_at: minutesAgo(3) })]);
+    renderHome();
+    expect(
+      await screen.findByRole('heading', { level: 3, name: 'Working (1)' })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Work' })).toBeInTheDocument();
+  });
+
   it('says the list could not load instead of showing an empty list', async () => {
     server.use(tasksList(() => HttpResponse.json({ detail: 'boom' }, { status: 500 })));
     server.use(projectsList(PROJECTS));
