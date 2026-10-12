@@ -1,31 +1,26 @@
 #!/usr/bin/env bash
-# Deploy mainloop to Kind cluster
+# Apply the Kind overlay and wait until PostgreSQL and both app Deployments are ready.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-mainloop-test}"
-KIND_CONTEXT="kind-${KIND_CLUSTER_NAME}"
+CLUSTER_NAME="${KIND_CLUSTER_NAME:-mainloop-local}"
+CONTEXT="kind-${CLUSTER_NAME}"
 
-echo "=== Deploying to Kind cluster ==="
-echo "Using context: ${KIND_CONTEXT}"
+if ! kubectl --context "${CONTEXT}" get secret mainloop-secrets -n mainloop >/dev/null 2>&1; then
+  echo "ERROR: mainloop-secrets is missing in ${CONTEXT}; run 'make kind-secrets' first" >&2
+  exit 1
+fi
 
-# Delete old deployments and wait for pods to terminate
-echo "Cleaning up old deployments..."
-kubectl --context="${KIND_CONTEXT}" delete deployment mainloop-frontend mainloop-backend -n mainloop --ignore-not-found=true --wait=true
-kubectl --context="${KIND_CONTEXT}" wait --for=delete pod -l 'app in (mainloop-frontend, mainloop-backend)' -n mainloop --timeout=60s 2>/dev/null || true
+echo "=== Applying the Kind overlay to ${CONTEXT} ==="
+kubectl --context "${CONTEXT}" apply -k "${REPO_ROOT}/k8s/apps/mainloop/overlays/kind"
 
-# Apply test overlay
-echo "Applying manifests..."
-kubectl --context="${KIND_CONTEXT}" apply -k "${REPO_ROOT}/k8s/apps/mainloop/overlays/test" --server-side
+# The overlay names the images :kind. A rebuild reloads them under the same name, so apply alone
+# leaves the old pods running. Restart the app pods to pick up the newly loaded images.
+kubectl --context "${CONTEXT}" rollout restart deployment/mainloop-backend deployment/mainloop-frontend -n mainloop
 
-# Wait for deployments
-echo "Waiting for deployments..."
-kubectl --context="${KIND_CONTEXT}" rollout status deployment/mainloop-backend -n mainloop --timeout=120s
-kubectl --context="${KIND_CONTEXT}" rollout status deployment/mainloop-frontend -n mainloop --timeout=120s
-kubectl --context="${KIND_CONTEXT}" rollout status statefulset/postgres -n mainloop --timeout=120s
-
-echo "=== Deployment complete ==="
-echo "Frontend: http://localhost:5173"
-echo "Backend:  http://localhost:8081"
-kubectl --context="${KIND_CONTEXT}" get pods -n mainloop
+echo "=== Waiting for PostgreSQL and the app ==="
+kubectl --context "${CONTEXT}" rollout status statefulset/mainloop-postgres -n mainloop --timeout=180s
+kubectl --context "${CONTEXT}" rollout status deployment/mainloop-backend -n mainloop --timeout=180s
+kubectl --context "${CONTEXT}" rollout status deployment/mainloop-frontend -n mainloop --timeout=180s
+kubectl --context "${CONTEXT}" get pods -n mainloop

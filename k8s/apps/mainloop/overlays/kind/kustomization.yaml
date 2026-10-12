@@ -1,18 +1,19 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# No namespace transformer: integration resources must remain in kagent.
-components:
-  - ../../components/python-backend
+
+# Local Kind cluster for trying Mainloop out (docs/dev-environment.md#kind). Runs the Go server and
+# React app with a local PostgreSQL. kagent, Substrate, the GitHub App and Tailscale exposure are
+# not configured here, so the stack boots without them. Images are built on the host and loaded
+# into Kind; nothing is pulled from ghcr.io.
 
 resources:
   - ../../base
-  - ../../../../integrations/kagent
-  - ../../../../integrations/kagent/kind
   - postgres.yaml
+
 patches:
   - path: configmap.yaml
   - path: deployments.yaml
-  - path: services.yaml
+
 images:
   - name: ghcr.io/oldsj/mainloop-backend
     newName: mainloop-backend

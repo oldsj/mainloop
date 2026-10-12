@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -27,12 +28,15 @@ const manifests = "../../../k8s/apps/mainloop"
 // rendered is one kustomization after `kubectl kustomize`, split by kind.
 type rendered struct {
 	deployments  map[string]appsv1.Deployment
+	statefulSets map[string]appsv1.StatefulSet
 	configMaps   map[string]corev1.ConfigMap
 	services     map[string]corev1.Service
 	policies     []networkingv1.NetworkPolicy
 	clusterRoles []rbacv1.ClusterRole
 	bindings     []rbacv1.ClusterRoleBinding
 	roleBindings []rbacv1.RoleBinding
+	// objects is "Kind/name" for every object, so a test can assert what is absent.
+	objects []string
 }
 
 // render builds a kustomization with the local kubectl (client-side, offline).
@@ -51,9 +55,10 @@ func render(t *testing.T, path string) rendered {
 	}
 
 	r := rendered{
-		deployments: map[string]appsv1.Deployment{},
-		configMaps:  map[string]corev1.ConfigMap{},
-		services:    map[string]corev1.Service{},
+		deployments:  map[string]appsv1.Deployment{},
+		statefulSets: map[string]appsv1.StatefulSet{},
+		configMaps:   map[string]corev1.ConfigMap{},
+		services:     map[string]corev1.Service{},
 	}
 	docs := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(out)))
 	for {
@@ -78,11 +83,16 @@ func render(t *testing.T, path string) rendered {
 			continue
 		}
 		name := meta.Metadata.Name
+		r.objects = append(r.objects, meta.Kind+"/"+name)
 		switch meta.Kind {
 		case "Deployment":
 			var d appsv1.Deployment
 			mustUnmarshal(t, raw, &d)
 			r.deployments[name] = d
+		case "StatefulSet":
+			var s appsv1.StatefulSet
+			mustUnmarshal(t, raw, &s)
+			r.statefulSets[name] = s
 		case "ConfigMap":
 			var c corev1.ConfigMap
 			mustUnmarshal(t, raw, &c)
@@ -156,7 +166,7 @@ func serverContainers(pod corev1.PodSpec) []corev1.Container {
 	return out
 }
 
-var overlays = []string{"base", "overlays/prod", "overlays/dev-live"}
+var overlays = []string{"base", "overlays/prod", "overlays/dev-live", "overlays/kind"}
 
 func TestServerContainersRunTheGoBinary(t *testing.T) {
 	for _, path := range overlays {
@@ -630,37 +640,81 @@ func TestLiveDevBackendMayPublishAgentCredentials(t *testing.T) {
 	}
 }
 
-// The Kind overlays (`make dev`) still run the Python image, which has neither the Go binary nor
-// anything to run `migrate up`.
-func TestKindOverlaysKeepThePythonBackendRunnable(t *testing.T) {
-	for _, path := range []string{"overlays/kind", "overlays/dev", "overlays/test"} {
-		t.Run(path, func(t *testing.T) {
-			pod := render(t, path).backend(t)
-			for _, c := range pod.InitContainers {
-				if c.Name == "migrate" {
-					t.Error("migrate initContainer needs the Go binary")
-				}
+// The Kind overlay (`make dev`) runs the same Go images as prod against a local PostgreSQL. It must
+// boot without kagent, the GitHub App or a registry pull, and its Services and origin must match
+// the port forwards in devspace.yaml and the Makefile.
+func TestKindOverlayBootsWithoutKagentOrGitHubApp(t *testing.T) {
+	r := render(t, "overlays/kind")
+
+	for _, o := range r.objects {
+		if lower := strings.ToLower(o); strings.Contains(lower, "kagent") || strings.Contains(lower, "substrate") {
+			t.Errorf("%s: the local stack must not depend on kagent or Substrate", o)
+		}
+	}
+	if n := len(r.clusterRoles) + len(r.bindings) + len(r.roleBindings); n != 0 {
+		t.Errorf("Kind renders %d RBAC objects; the local stack needs none", n)
+	}
+
+	// Reached only through port forwards, so nothing is exposed on the node.
+	for name, s := range r.services {
+		if s.Spec.Type != "" && s.Spec.Type != corev1.ServiceTypeClusterIP {
+			t.Errorf("Service %s is %s, want ClusterIP", name, s.Spec.Type)
+		}
+	}
+	for name, port := range map[string]int32{"mainloop-frontend": 3000, "mainloop-backend": 8000} {
+		if !slices.ContainsFunc(r.services[name].Spec.Ports, func(p corev1.ServicePort) bool { return p.Port == port }) {
+			t.Errorf("Service %s lacks port %d, which the port forwards target", name, port)
+		}
+	}
+
+	// Images are built on the host and loaded into Kind, so nothing may pull from a registry.
+	for name, d := range r.deployments {
+		pod := d.Spec.Template.Spec
+		if len(pod.ImagePullSecrets) != 0 {
+			t.Errorf("%s: imagePullSecrets %v; Kind has no ghcr pull secret", name, pod.ImagePullSecrets)
+		}
+		for _, c := range append(slices.Clone(pod.InitContainers), pod.Containers...) {
+			if want := "mainloop-" + strings.TrimPrefix(name, "mainloop-") + ":kind"; c.Image != want {
+				t.Errorf("%s/%s: image %s, want %s", name, c.Name, c.Image, want)
 			}
-			cs := containers(pod)
-			for _, c := range append(slices.Clone(pod.InitContainers), pod.Containers...) {
-				if slices.Contains(c.Command, "/usr/local/bin/mainloop") {
-					t.Errorf("%s runs /usr/local/bin/mainloop, absent from the Python image", c.Name)
-				}
+			if c.ImagePullPolicy == corev1.PullAlways {
+				t.Errorf("%s/%s: imagePullPolicy Always would bypass the loaded image", name, c.Name)
 			}
-			if got := strings.Join(cs["git"].Command, " "); got != "python -m mainloop.git_app" {
-				t.Errorf("git command %q, want python -m mainloop.git_app", got)
-			}
-			for _, p := range []*corev1.Probe{cs["git"].ReadinessProbe, cs["git"].LivenessProbe} {
-				if p == nil || p.Exec == nil || !slices.Contains(p.Exec.Command, "python") {
-					t.Errorf("git probe %+v, want the Python socket check", p)
-				}
-			}
-			if got := strings.Join(cs["mcp"].Command, " "); got != "uvicorn mainloop.mcp_app:app --host 0.0.0.0 --port 8002" && path != "overlays/dev" {
-				t.Errorf("mcp command %q", got)
-			}
-			if len(cs["backend"].Command) > 0 && path != "overlays/dev" {
-				t.Errorf("backend command %v, want the image's own CMD", cs["backend"].Command)
-			}
-		})
+		}
+	}
+
+	// The backend reaches the PostgreSQL StatefulSet through DB_HOST.
+	data := r.configMaps["mainloop-config"].Data
+	db, ok := r.statefulSets["mainloop-postgres"]
+	if !ok {
+		t.Fatal("no mainloop-postgres StatefulSet")
+	}
+	if data["DB_HOST"] != db.Spec.ServiceName {
+		t.Errorf("DB_HOST %q, want the PostgreSQL Service %q", data["DB_HOST"], db.Spec.ServiceName)
+	}
+	dbService, ok := r.services[db.Spec.ServiceName]
+	if !ok {
+		t.Fatalf("no Service %s for the PostgreSQL StatefulSet", db.Spec.ServiceName)
+	}
+	if !maps.Equal(dbService.Spec.Selector, db.Spec.Selector.MatchLabels) {
+		t.Errorf("PostgreSQL Service selector %v does not match the StatefulSet %v", dbService.Spec.Selector, db.Spec.Selector.MatchLabels)
+	}
+	if data["DB_PORT"] != "5432" {
+		t.Errorf("DB_PORT %q, want 5432", data["DB_PORT"])
+	}
+
+	// The API's Origin check compares these exact values, so they must match the port forward.
+	origin := data["FRONTEND_SCHEME"] + "://" + data["FRONTEND_DOMAIN"]
+	if origin != "http://localhost:5173" {
+		t.Errorf("origin %s, want http://localhost:5173 to match the port forward", origin)
+	}
+	frontend := containers(r.deployments["mainloop-frontend"].Spec.Template.Spec)["frontend"]
+	if got := envByName(frontend)["ORIGIN"].Value; got != origin {
+		t.Errorf("frontend ORIGIN %q, want %q", got, origin)
+	}
+
+	// `make dev-reset` wipes this database, and only this one.
+	if data["MAINLOOP_ALLOW_RESET"] != "1" {
+		t.Errorf("MAINLOOP_ALLOW_RESET %q, want 1 for dev-reset", data["MAINLOOP_ALLOW_RESET"])
 	}
 }

@@ -1,28 +1,21 @@
 #!/usr/bin/env bash
-# Build and load images into Kind cluster
+# Build the server and web images from this checkout and load them into the Kind cluster.
+# `make dev` does not use this script: DevSpace builds and loads its own images. This is the path
+# for `make kind-up` and `make kind-load`, which deploy without DevSpace.
 set -euo pipefail
 
-CLUSTER_NAME="${KIND_CLUSTER_NAME:-mainloop-test}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+CLUSTER_NAME="${KIND_CLUSTER_NAME:-mainloop-local}"
 
-echo "=== Building and loading images into Kind cluster ==="
+# The web bundle bakes in its API URL at build time. It must match the API port forward in
+# docs/dev-environment.md#kind.
+API_URL=http://localhost:8000
 
-cd "${REPO_ROOT}"
+echo "=== Building images ==="
+docker build --target prod -t mainloop-backend:kind "${REPO_ROOT}/server"
+docker build -f "${REPO_ROOT}/web/Dockerfile" --build-arg "VITE_API_URL=${API_URL}" -t mainloop-frontend:kind "${REPO_ROOT}"
 
-# Build images with test tag (shares cache with make dev)
-echo "Building backend..."
-docker build -f backend/Dockerfile -t mainloop-backend:test .
-
-echo "Building frontend..."
-docker build -f frontend/Dockerfile \
-  --build-arg VITE_API_URL=http://localhost:8081 \
-  -t mainloop-frontend:test .
-
-# Load images into Kind
-echo "Loading images into Kind cluster..."
-kind load docker-image mainloop-backend:test --name "${CLUSTER_NAME}"
-kind load docker-image mainloop-frontend:test --name "${CLUSTER_NAME}"
-
+echo "=== Loading images into kind-${CLUSTER_NAME} ==="
+kind load docker-image mainloop-backend:kind mainloop-frontend:kind --name "${CLUSTER_NAME}"
 echo "=== Images loaded ==="
-docker exec "${CLUSTER_NAME}-control-plane" crictl images | grep mainloop || true

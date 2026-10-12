@@ -1,51 +1,35 @@
 #!/usr/bin/env bash
-# Create K8s secrets from .env file
+# Create mainloop-secrets with random local values. An existing Secret is kept: a new database
+# password would not match the PostgreSQL volume that already holds the old one.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-ENV_FILE="${REPO_ROOT}/.env"
-KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-mainloop-test}"
-KIND_CONTEXT="kind-${KIND_CLUSTER_NAME}"
+CLUSTER_NAME="${KIND_CLUSTER_NAME:-mainloop-local}"
+CONTEXT="kind-${CLUSTER_NAME}"
 
-echo "=== Creating secrets from .env file ==="
+kubectl --context "${CONTEXT}" create namespace mainloop --dry-run=client -o yaml | kubectl --context "${CONTEXT}" apply -f -
 
-if [[ ! -f ${ENV_FILE} ]]; then
-  echo "ERROR: .env file not found at ${ENV_FILE}"
-  echo "Copy .env.example to .env and configure it first"
-  exit 1
+if kubectl --context "${CONTEXT}" get secret mainloop-secrets -n mainloop >/dev/null 2>&1; then
+  echo "mainloop-secrets already exists; keeping it"
+  exit 0
 fi
 
-# Source the .env file
-set -a
-# shellcheck source=/dev/null
-source "${ENV_FILE}"
-set +a
-
-# Create mainloop namespace if not exists
-kubectl --context="${KIND_CONTEXT}" create namespace mainloop --dry-run=client -o yaml | kubectl --context="${KIND_CONTEXT}" apply -f -
-
-# Create mainloop-secrets secret (for backend control-plane access)
-echo "Creating mainloop-secrets..."
-kubectl --context="${KIND_CONTEXT}" create secret generic mainloop-secrets \
-  --namespace mainloop \
-  --from-literal=github-token="${GITHUB_TOKEN-}" \
-  --from-literal=db-username=mainloop \
-  --from-literal=db-password=mainloop \
-  --dry-run=client -o yaml | kubectl --context="${KIND_CONTEXT}" apply -f -
-
-# Create ghcr-secret (optional - for pulling from GHCR if needed)
-if [[ -n ${GHCR_TOKEN-} ]]; then
-  echo "Creating ghcr-secret..."
-  kubectl --context="${KIND_CONTEXT}" create secret docker-registry ghcr-secret \
-    --namespace mainloop \
-    --docker-server=ghcr.io \
-    --docker-username="${GHCR_USER-}" \
-    --docker-password="${GHCR_TOKEN}" \
-    --dry-run=client -o yaml | kubectl --context="${KIND_CONTEXT}" apply -f -
-else
-  echo "Skipping ghcr-secret (GHCR_TOKEN not set - using local images)"
-fi
-
+echo "=== Creating mainloop-secrets with random local values ==="
+db_password="$(openssl rand -hex 24)"
+agent_token_key="$(openssl rand -hex 32)"
+# The manifest goes to kubectl on stdin, so the values never appear in a process argument list.
+kubectl --context "${CONTEXT}" apply -f - <<SECRET
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mainloop-secrets
+  namespace: mainloop
+type: Opaque
+stringData:
+  db-username: mainloop
+  db-password: ${db_password}
+  agent-token-key: ${agent_token_key}
+  # Empty on purpose: without a GitHub App the server keeps git transport and pushes off.
+  github-app-id: ""
+  github-app-private-key: ""
+SECRET
 echo "=== Secrets created ==="
-kubectl --context="${KIND_CONTEXT}" get secrets -n mainloop

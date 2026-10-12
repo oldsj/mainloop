@@ -1,25 +1,16 @@
 #!/usr/bin/env bash
-# Create Kind cluster for mainloop testing
+# Create the local Kind cluster if it does not exist yet.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLUSTER_NAME="${KIND_CLUSTER_NAME:-mainloop-test}"
+CLUSTER_NAME="${KIND_CLUSTER_NAME:-mainloop-local}"
 
-echo "=== Creating Kind cluster: ${CLUSTER_NAME} ==="
-
-# Check if cluster already exists
-if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
+if kind get clusters 2>/dev/null | grep -qx "${CLUSTER_NAME}"; then
   echo "Cluster ${CLUSTER_NAME} already exists"
-  kubectl cluster-info --context "kind-${CLUSTER_NAME}" || true
   exit 0
 fi
 
-# Create cluster
-kind create cluster --config "${SCRIPT_DIR}/cluster-config.yaml"
-
-# Wait for control plane
-echo "Waiting for control plane..."
-kubectl wait --for=condition=Ready nodes --all --timeout=120s
-
+echo "=== Creating Kind cluster: ${CLUSTER_NAME} ==="
+kind create cluster --name "${CLUSTER_NAME}" --config "${SCRIPT_DIR}/cluster-config.yaml"
+kubectl --context "kind-${CLUSTER_NAME}" wait --for=condition=Ready nodes --all --timeout=120s
 echo "=== Cluster ${CLUSTER_NAME} ready ==="
-kubectl cluster-info --context "kind-${CLUSTER_NAME}"

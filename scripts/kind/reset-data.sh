@@ -1,28 +1,16 @@
 #!/usr/bin/env bash
-# Reset the local development database
+# Wipe the local Kind database with `mainloop migrate reset`, then restart the backend so its
+# listeners reconnect. This deletes all Mainloop data in that cluster.
 set -euo pipefail
 
-CLUSTER_NAME="${KIND_CLUSTER_NAME:-mainloop-test}"
+CLUSTER_NAME="${KIND_CLUSTER_NAME:-mainloop-local}"
 CONTEXT="kind-${CLUSTER_NAME}"
 
-echo "=== Using context: ${CONTEXT} ==="
+echo "=== Resetting the database in ${CONTEXT} ==="
+kubectl --context "${CONTEXT}" exec -n mainloop deployment/mainloop-backend -c backend -- /usr/local/bin/mainloop migrate reset
 
-echo "=== Resetting database ==="
-# Drop both public and dbos schemas to fully reset state
-kubectl --context "${CONTEXT}" exec -n mainloop postgres-0 -- psql -U mainloop -d mainloop -c "
-DROP SCHEMA IF EXISTS dbos CASCADE;
-DROP SCHEMA IF EXISTS public CASCADE;
-CREATE SCHEMA public;
-"
-
-echo "=== Restarting backend to reinitialize DBOS ==="
-# Try DevSpace deployment first, fall back to kind deployment
-if kubectl --context "${CONTEXT}" get deployment/mainloop-backend-devspace -n mainloop &>/dev/null; then
-  kubectl --context "${CONTEXT}" rollout restart deployment/mainloop-backend-devspace -n mainloop
-  kubectl --context "${CONTEXT}" rollout status deployment/mainloop-backend-devspace -n mainloop --timeout=60s
-elif kubectl --context "${CONTEXT}" get deployment/mainloop-backend -n mainloop &>/dev/null; then
-  kubectl --context "${CONTEXT}" rollout restart deployment/mainloop-backend -n mainloop
-  kubectl --context "${CONTEXT}" rollout status deployment/mainloop-backend -n mainloop --timeout=60s
-fi
-
+echo "=== Restarting the backend ==="
+kubectl --context "${CONTEXT}" rollout restart deployment/mainloop-backend -n mainloop
+kubectl --context "${CONTEXT}" rollout status deployment/mainloop-backend -n mainloop --timeout=180s
 echo "=== Reset complete ==="
+echo "If localhost:8000 stops answering, restart 'make dev' to reattach the API port forward."
