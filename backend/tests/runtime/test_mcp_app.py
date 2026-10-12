@@ -448,9 +448,10 @@ class RevocationTests(unittest.IsolatedAsyncioTestCase):
                     "credential_ref": reference,
                     "token_hash": "fixture-hash",
                     "credential_cleanup_pending": False,
+                    "credential_identity": None,
                 },
-                {"credential_ref": reference},
-                {"credential_ref": reference},
+                {"credential_ref": reference, "credential_identity": None},
+                {"credential_ref": reference, "credential_identity": None},
             ]
         )
 

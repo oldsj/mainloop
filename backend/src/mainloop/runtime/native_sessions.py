@@ -42,6 +42,7 @@ from mainloop.runtime.kagent_client import (
     KagentError,
     KagentSession,
     OutcomeUnknown,
+    PreparationTimestamp,
     RuntimeOperation,
     RuntimeState,
     SendNotAccepted,
@@ -57,8 +58,16 @@ from mainloop.runtime.kagent_client import (
 from mainloop.runtime.standing import content_hash
 from mainloop.sse import notify_session_message
 from mainloop.tasks import lifecycle
+from pydantic import ValidationError
 
 from models import NativeDeliveryInfo, NativeSessionInfo, SessionStatus
+from models.session import (
+    NativePreparationActionInfo,
+    NativePreparationObservation,
+    NativePreparationReceiptInfo,
+    NativePreparationTimestamp,
+    NativeRuntimeAssociationInfo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -236,9 +245,14 @@ async def binding_agent_ref(binding: dict, *, conn=None) -> AgentRef:
 
     A delegated attempt routes to the AgentRef pinned when it was admitted, never to the live
     registry, so a later provider configuration change cannot move a running attempt. Every
-    other binding keeps the registry-resolved ref. A supervisor is delegated by definition, so a
-    missing attempt is an error rather than a fall back to the registry.
+    new main binding pins its own main AgentRef. Other bindings keep the registry-resolved
+    ref. A supervisor is delegated by definition, so a missing attempt is an error rather
+    than a fall back to the registry.
     """
+    if binding["role"] == "main" and binding.get("main_agent_ref"):
+        data = binding["main_agent_ref"]
+        data = json.loads(data) if isinstance(data, str) else data
+        return AgentRef(data["namespace"], data["name"])
     attempt = await attempt_row(binding, conn=conn)
     if attempt is None:
         if binding["role"] == "supervisor":
@@ -307,8 +321,9 @@ class Ledger:
         await connection.execute(
             """INSERT INTO native_bindings
                (session_id,kind,role,parent_session_id,topic_id,token_hash,
-                mcp_grant_kind,credential_ref)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)""",
+                mcp_grant_kind,credential_ref,main_user_id)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,
+                       CASE WHEN $3='main' THEN (SELECT user_id FROM sessions WHERE id=$1) END)""",
             session_id,
             kind,
             role,
@@ -427,12 +442,14 @@ class Ledger:
                 )
         return True
 
-    async def bump_turns(self, session_id: str) -> None:
-        async with db.connection() as conn:
-            await conn.execute(
-                "UPDATE native_bindings SET turns=turns+1, updated_at=NOW() WHERE session_id=$1",
-                session_id,
-            )
+    async def bump_turns(self, session_id: str, *, conn=None) -> None:
+        if conn is None:
+            async with db.connection() as owned:
+                return await self.bump_turns(session_id, conn=owned)
+        await conn.execute(
+            "UPDATE native_bindings SET turns=turns+1, updated_at=NOW() WHERE session_id=$1",
+            session_id,
+        )
 
     @staticmethod
     async def _lock_deliveries(conn, session_id: str) -> None:
@@ -501,13 +518,21 @@ class Ledger:
             held = await conn.fetchval(
                 "SELECT queue_held FROM native_bindings WHERE session_id=$1", session_id
             )
+            pending = await conn.fetchval(
+                "SELECT main_provider_pending FROM native_bindings WHERE session_id=$1",
+                session_id,
+            )
+            if pending and source in ("user", "brief"):
+                raise ValueError(
+                    "The main provider is being prepared; retry its provider selection first."
+                )
             if source == "user" and held:
                 await conn.execute(
                     "UPDATE native_bindings SET queue_held=FALSE WHERE session_id=$1",
                     session_id,
                 )
                 held = False
-            state = "queued" if busy or held else "recorded"
+            state = "queued" if busy or held or pending else "recorded"
             message_id = await self._insert_message(
                 conn, session_id, conversation_id, text, state, source
             )
@@ -720,10 +745,23 @@ class Ledger:
         evidence_ref: str | None = None,
         detail: str | None = None,
         revalidate_report: bool = False,
+        conn=None,
     ) -> bool:
         """Move a delivery only if it is still in ``from_states``; true when this call moved it."""
         detail = safe_detail(detail)
-        async with db.connection() as conn, conn.transaction():
+        if conn is None:
+            async with db.connection() as owned:
+                return await self.transition(
+                    message_id,
+                    state,
+                    from_states=from_states,
+                    task_id=task_id,
+                    evidence_ref=evidence_ref,
+                    detail=detail,
+                    revalidate_report=revalidate_report,
+                    conn=owned,
+                )
+        async with conn.transaction():
             if revalidate_report:
                 # Preparation has not claimed a send. Recheck recipient authority atomically
                 # with failure classification, using the established ledger-before-row order.
@@ -940,6 +978,7 @@ class Ledger:
                      AND state='queued'
                      AND NOT EXISTS (SELECT 1 FROM native_deliveries WHERE session_id=$1 AND state = ANY($2))
                      AND NOT COALESCE((SELECT queue_held FROM native_bindings WHERE session_id=$1), FALSE)
+                     AND NOT COALESCE((SELECT main_provider_pending FROM native_bindings WHERE session_id=$1), FALSE)
                    RETURNING message_id""",
                 session_id,
                 list(OPEN_STATES),
@@ -971,15 +1010,19 @@ class Ledger:
         return [dict(r) for r in rows]
 
     async def mirror_reply(
-        self, conversation_id: str, message_id: str, text: str
+        self, conversation_id: str, message_id: str, text: str, *, conn=None
     ) -> bool:
-        async with db.connection() as conn:
-            result = await conn.execute(
-                "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ($1,$2,'assistant',$3,NOW()) ON CONFLICT (id) DO NOTHING",
-                message_id,
-                conversation_id,
-                text,
-            )
+        if conn is None:
+            async with db.connection() as owned:
+                return await self.mirror_reply(
+                    conversation_id, message_id, text, conn=owned
+                )
+        result = await conn.execute(
+            "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ($1,$2,'assistant',$3,NOW()) ON CONFLICT (id) DO NOTHING",
+            message_id,
+            conversation_id,
+            text,
+        )
         return str(result).endswith(" 1")
 
     async def sessions_with_open_work(self) -> list[str]:
@@ -1439,6 +1482,8 @@ async def _ensure_kagent_session(binding: dict) -> KagentSession:
     the standing context again, because ``standing_hash`` belongs to the Session it went to.
     """
     binding.update(await ledger.get_binding(binding["session_id"]) or {})
+    if binding.get("main_provider_pending"):
+        raise PreSendRefused("main provider selection is pending")
     legacy_child = binding["role"] == "child" and not await is_delegated(binding)
     for replaced in (False, True):
         if binding["kagent_session_id"] is None:
@@ -1971,33 +2016,39 @@ async def _finalize(
     else:
         new_state = "failed"
         detail = f"task {state}: {proj.failure_text.strip() or 'kagent gave no reason'}"
-    moved = await ledger.transition(
-        message_id,
-        new_state,
-        from_states=_RESOLVABLE,
-        task_id=proj.task_id,
-        # A receipt alone does not prove native failure: transport/config/preparation
-        # failures also use delivery state 'failed'. Only the observed FAILED outcome
-        # gets this durable marker, which task lifecycle qualification revalidates.
-        evidence_ref=(
-            f"a2a:task/{proj.task_id}" + ("#failed" if state == "failed" else "")
-            if proj.task_id
-            else None
-        ),
-        detail=detail,
-    )
-    if not moved:
-        return None
     reply = proj.text
-    if reply:
-        session = await db.get_session(session_id)
-        reply_id = assistant_message_id(session_id, proj.task_id or message_id)
-        if await ledger.mirror_reply(session.conversation_id, reply_id, reply):
-            await notify_session_message(
-                session.user_id, session_id, reply_id, "assistant"
+    session = await db.get_session(session_id)
+    reply_id = assistant_message_id(session_id, proj.task_id or message_id)
+    mirrored = False
+    # Retirement and new admissions must see completion, its reply and its turn
+    # accounting together. Any failed side effect rolls back the terminal claim.
+    async with db.connection() as conn, conn.transaction():
+        await Ledger._lock_deliveries(conn, session_id)
+        moved = await ledger.transition(
+            message_id,
+            new_state,
+            from_states=_RESOLVABLE,
+            task_id=proj.task_id,
+            # Only observed native failure qualifies as failure evidence.
+            evidence_ref=(
+                f"a2a:task/{proj.task_id}" + ("#failed" if state == "failed" else "")
+                if proj.task_id
+                else None
+            ),
+            detail=detail,
+            conn=conn,
+        )
+        if not moved:
+            return None
+        if reply:
+            mirrored = await ledger.mirror_reply(
+                session.conversation_id, reply_id, reply, conn=conn
             )
+        if state == "completed":
+            await ledger.bump_turns(session_id, conn=conn)
+    if mirrored:
+        await notify_session_message(session.user_id, session_id, reply_id, "assistant")
     if state == "completed":
-        await ledger.bump_turns(session_id)
         return reply or None
     return None
 
@@ -2499,6 +2550,78 @@ async def reconcile_loop(interval: float = 3.0) -> None:
         await asyncio.sleep(interval)
 
 
+def _preparation_time(
+    value: PreparationTimestamp | None,
+) -> NativePreparationTimestamp | None:
+    return (
+        NativePreparationTimestamp(seconds=value.seconds, nanos=value.nanos)
+        if value is not None
+        else None
+    )
+
+
+def _preparation_observation(runtime: KagentSession) -> NativePreparationObservation:
+    """Project explicit safe fields only; never serialize the runtime or original request."""
+    association = runtime.runtime_association
+    saved = runtime.workspace_preparation
+    receipt = None
+    receipt_status = "missing" if saved is None else "unavailable"
+    # A foreign nested receipt is neither this Session's evidence nor owner-visible data.
+    if (
+        saved is not None
+        and saved.original.session_id == runtime.id
+        and saved.context_id == runtime.context_id
+    ):
+        original = saved.original
+        try:
+            receipt = NativePreparationReceiptInfo(
+                original=NativePreparationActionInfo(
+                    session_id=original.session_id,
+                    action_id=original.action_id or None,
+                    create_request_id=original.create_request_id or None,
+                    generation_id=original.generation_id or None,
+                    actor_uid=original.actor_uid or None,
+                    prepared_revision=original.prepared_revision or None,
+                    setup_profile=original.setup_profile or None,
+                    setup_digest=original.setup_digest or None,
+                ),
+                context_id=saved.context_id,
+                classification=saved.classification or None,
+                historical=saved.historical,
+                challenge_id=saved.challenge_id or None,
+                observation_sequence=saved.observation_sequence,
+                effect_observed_at=_preparation_time(saved.effect_observed_at),
+                observed_at=_preparation_time(saved.observed_at),
+            )
+            receipt_status = "observed"
+        except ValidationError:
+            # Retain the valid runtime observation without leaking invalid values/errors.
+            pass
+    try:
+        return NativePreparationObservation(
+            session_id=runtime.id,
+            context_id=runtime.context_id,
+            context_confirmed=runtime.context_confirmed,
+            state=runtime.state.name.lower(),
+            operation=runtime.operation.name.lower(),
+            prepared_revision=runtime.prepared_revision or None,
+            runtime_association=(
+                NativeRuntimeAssociationInfo(
+                    generation_id=association.generation_id,
+                    actor_uid=association.actor_uid,
+                    phase=association.phase,
+                    current_active=association.current_active,
+                )
+                if association is not None
+                else None
+            ),
+            receipt_status=receipt_status,
+            receipt=receipt,
+        )
+    except ValidationError as exc:
+        raise OutcomeUnknown("Malformed kagent preparation observation") from exc
+
+
 async def identity(session_id: str) -> NativeSessionInfo | None:
     binding = await get_binding(session_id)
     if binding is None:
@@ -2519,11 +2642,12 @@ async def identity(session_id: str) -> NativeSessionInfo | None:
         for r in rows
     ]
     state, note = None, None
+    preparation_observation = None
     if binding["kagent_session_id"]:
         try:
-            state = (
-                await get_client().get_session(binding["kagent_session_id"])
-            ).state.name.lower()
+            runtime = await get_client().get_session(binding["kagent_session_id"])
+            state = runtime.state.name.lower()
+            preparation_observation = _preparation_observation(runtime)
         except Unreachable as exc:
             note = f"kagent unreachable: {exc}"
         except KagentError as exc:
@@ -2539,6 +2663,7 @@ async def identity(session_id: str) -> NativeSessionInfo | None:
         agent_name=(await binding_agent_ref(binding)).name,
         kagent_session_id=binding["kagent_session_id"],
         session_state=state,
+        preparation_observation=preparation_observation,
         model=binding["model"],
         turns=binding["turns"],
         turn_in_flight=any(d.state in OPEN_STATES for d in deliveries),

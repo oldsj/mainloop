@@ -18,7 +18,7 @@ You (phone/laptop)
     ▼
 ┌─────────────────────────────────────────────────────┐
 │                   Main Thread                        │
-│       Native Claude Code session via kagent          │
+│       Native Claude Code or Codex via kagent         │
 │                                                      │
 │   user@mainloop$ research X      ← inline sessions  │
 │   ├── [research X] thinking...   ← threaded reply   │
@@ -33,7 +33,7 @@ You (phone/laptop)
        └──────────────┘  └──────────────┘
 ```
 
-- **Main thread**: One continuous native conversation; delegated sessions surface results back
+- **Main thread**: One product conversation with an explicitly selected Claude Code or Codex main; delegated sessions surface results back. [Idle provider switching](docs/specs/chat.md#selecting-the-main-provider) preserves product history and creates a new native identity.
 - **Sessions**: Native Claude Code or Codex work with their own conversations; appear as colored threads in your timeline
 - **Notifications**: Slack-style thread replies notify you when sessions need attention or complete
 - **Persistence**: Mainloop stores conversations, delivery records, and workspace lifecycle state in PostgreSQL; native history remains with the provider CLI in its kagent Session
@@ -153,7 +153,7 @@ You stay in main thread, checking in on agents and spawning new ones as needed.
 
 **Guides**:
 
-- [Performance](docs/performance.md) - Measured development timings, workspace limits, and proposed tuning
+- [Performance](docs/performance.md) - Measured development timings, workspace limits, gVisor qualification attempts, and proposed tuning
 - [Architecture](docs/architecture.md) - Workspaces, delivery, previews, and agent tools
 - [Contributing](CONTRIBUTING.md) - Local setup, development commands, and contribution guidance
 
@@ -168,10 +168,12 @@ on port 8002. Service `mainloop-mcp` serves port 80 at
 `http://mainloop-mcp.mainloop.svc.cluster.local/mcp`; it exposes no REST API.
 The Substrate egress gateway replaces the agent's literal `Authorization: Bearer
 kagent-credential-injected` placeholder with its binding credential. Mainloop stores a token
-hash on the binding and creates a runtime-owned `kagent/mainloop-mcp-<binding-id>` Secret
+hash on the binding and creates a runtime-owned `kagent/mainloop-mcp-<credential-identity>` Secret
 with the full header in its `authorization` key, labeled `mainloop.dev/actor-egress=true`
 and `mainloop.dev/purpose=mcp`. Terminal or archived bindings lose tool access; cleanup
 deletes their Secret.
+Ordinary bindings use their binding ID as the credential identity. A main-provider switch
+uses a fresh credential identity so the retained old native Session loses tool authority.
 
 A **NetworkPolicy-enforcing CNI is required**. The REST API has no application authorization;
 its port 8000 must admit only the frontend and the Tailscale gateway. MCP port 8002 admits
@@ -191,11 +193,12 @@ Main and child AgentTemplates must bind that RemoteMCPServer.
 Mainloop uses three kinds of kagent Agent, named by settings. Agent templates and harnesses
 remain owned by the kagent installation.
 
-| Setting                                          | Runs                                      | Harness requirements                                                                         |
-| ------------------------------------------------ | ----------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `KAGENT_MAIN_AGENT` (`mainloop-main`)            | the main thread                           | `sessionIdleTTL: 0s`                                                                         |
-| `KAGENT_WORKSPACE_CLAUDE_AGENT` / `_CODEX_AGENT` | workspaces and sessions the owner starts  | `sessionIdleTTL: 0s`, `git.origins` (the repository hosts), `snapshotPolicy.onQuiesce: Full` |
-| `KAGENT_CLAUDE_AGENT` / `KAGENT_CODEX_AGENT`     | child agents the main thread delegates to | default TTL and snapshot scope                                                               |
+| Setting                                           | Runs                                      | Harness requirements                                                                         |
+| ------------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `KAGENT_MAIN_AGENT` (`mainloop-main`)             | the Claude main thread                    | `sessionIdleTTL: 0s`                                                                         |
+| `KAGENT_MAIN_CODEX_AGENT` (`mainloop-main-codex`) | the Codex main thread                     | `sessionIdleTTL: 0s`                                                                         |
+| `KAGENT_WORKSPACE_CLAUDE_AGENT` / `_CODEX_AGENT`  | workspaces and sessions the owner starts  | `sessionIdleTTL: 0s`, `git.origins` (the repository hosts), `snapshotPolicy.onQuiesce: Full` |
+| `KAGENT_CLAUDE_AGENT` / `KAGENT_CODEX_AGENT`      | child agents the main thread delegates to | default TTL and snapshot scope                                                               |
 
 A workspace needs its own Agents because kagent measures idle time from the last A2A event
 (previews and `ResumeSession` do not count) and deletes the Session and its actor on expiry,

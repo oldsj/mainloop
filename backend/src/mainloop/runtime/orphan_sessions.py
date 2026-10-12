@@ -47,7 +47,8 @@ async def _bound_ids() -> tuple[set[str], int]:
     """Return every kagent Session id a binding names, and the count of bindings with none."""
     async with db.connection() as conn:
         rows = await conn.fetch(
-            "SELECT kagent_session_id FROM native_bindings WHERE kagent_session_id IS NOT NULL"
+            """SELECT kagent_session_id FROM native_bindings WHERE kagent_session_id IS NOT NULL
+               UNION SELECT kagent_session_id FROM main_native_history WHERE kagent_session_id IS NOT NULL"""
         )
         unresolved = await conn.fetchval(
             "SELECT count(*) FROM native_bindings WHERE kagent_session_id IS NULL"

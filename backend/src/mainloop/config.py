@@ -1,6 +1,7 @@
 """Configuration management."""
 
 import re
+from typing import Literal
 from urllib.parse import quote_plus, urlsplit
 
 from mainloop.runtime.control_credentials import read_control_token
@@ -156,6 +157,9 @@ class Settings(BaseSettings):
 
     kagent_namespace: str = "kagent"
     kagent_main_agent: str = "mainloop-main"
+    # First-use default only. Existing main ownership changes through the owner API.
+    main_provider: Literal["claude", "codex"] = "claude"
+    kagent_main_codex_agent: str = "mainloop-main-codex"
     # Child agents (delegated by the main thread) run on these.
     kagent_claude_agent: str = "claude-subscription"
     kagent_codex_agent: str = "codex-subscription-https"

@@ -56,7 +56,12 @@ def registry() -> ProviderRegistry:
             configuration_revision="native-v1",
             agents={
                 "main": ProviderAgentRef(
-                    namespace=settings.kagent_namespace, name=settings.kagent_main_agent
+                    namespace=settings.kagent_namespace,
+                    name=(
+                        settings.kagent_main_agent
+                        if kind == "claude"
+                        else settings.kagent_main_codex_agent
+                    ),
                 ),
                 "supervisor": ProviderAgentRef(
                     namespace=settings.kagent_namespace,

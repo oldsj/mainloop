@@ -7,6 +7,7 @@ Nothing here imports the owner API, publishes credentials, or enables a producti
 
 import asyncio
 import base64
+import logging
 import re
 import uuid
 from collections.abc import AsyncIterator
@@ -42,6 +43,88 @@ from models.push_gate import (
 )
 
 RuntimeAssociation = GitRuntimeAssociation
+
+# Closed vocabulary: a syntactically valid TransportError code can still be
+# untrusted text. Never format it, a request field, or an exception into logs.
+_DENIAL_CODES = frozenset(
+    """
+    attempt_not_current authentication_denied authentication_required
+    authority_changed authority_unavailable binding_scope binding_unavailable
+    body_identity_changed body_limit branch_mismatch capability_duplicate
+    capability_encoding capability_placement combined_pack_limit command_framing
+    command_invalid command_limit commit_required content_type credential_changed
+    credential_revoked credential_stamp_changed credential_stamp_required
+    credential_unavailable credential_unpublished default_branch
+    default_objects_unavailable deletion delta_header discovery_body disk_limit
+    disk_spool_required disk_unavailable duplicate_header git_inventory
+    git_key_mismatch git_key_unavailable git_output_limit git_plan_conflict
+    git_protocol git_scope_conflict git_scope_revoked git_scope_unavailable
+    git_transport_disabled git_validation grant_changed grant_kind grant_revoked
+    host_denied http_body_length http_compression http_disconnected http_framing
+    invalid_branch metadata_scope metadata_unavailable nested_dispatch_denied
+    non_fast_forward pack_checksum pack_compression pack_delta_offset
+    pack_expansion_limit pack_header pack_limit pack_object_size
+    pack_trailing_or_truncated pack_truncated path_invalid pkt_header pkt_length
+    pkt_limit pkt_truncated policy_mismatch private_spool_required
+    production_authority_absent protected_branch publication_cancelled
+    publication_context_required publication_evidence_conflict publication_unknown
+    publication_unresolved ref_invalid ref_namespace remote_ref_changed
+    repository_mismatch repository_unavailable response_limit route_denied
+    routing_header runtime_changed runtime_unattested seed_framing seed_read_only
+    session_archived session_terminal shallow_invalid single_ref_required
+    stale_writer_generation transport_unavailable unsupported_capability
+    upstream_advertisement upstream_credential_required upstream_credential_unavailable
+    upstream_framing upstream_http upstream_object_format upstream_receipt
+    upstream_reflection upstream_service upstream_unavailable validated_object_limit
+    validation_timeout writer_claim_lost
+    """.split()
+)
+_DENIAL_STAGES = frozenset(
+    {
+        "configuration",
+        "listener_flags",
+        "listener_route",
+        "request",
+        "authentication",
+        "binding",
+        "body",
+        "probe_authority",
+        "commands",
+        "validation",
+        "dispatch_authority",
+        "upstream_read",
+        "remote_ref",
+        "publication_record",
+        "dispatch",
+        "response",
+    }
+)
+_logger = logging.getLogger(__name__)
+
+
+def log_git_denial(request_id: str, code: str, stage: str):
+    """Emit only server-generated correlation and closed diagnostic fields."""
+    safe_id = (
+        request_id
+        if type(request_id) is str and re.fullmatch(r"[0-9a-f]{32}", request_id)
+        else uuid.uuid4().hex
+    )
+    safe_code = (
+        code if type(code) is str and code in _DENIAL_CODES else "transport_unavailable"
+    )
+    safe_stage = stage if type(stage) is str and stage in _DENIAL_STAGES else "unknown"
+    _logger.warning(
+        "git_request_denied request_id=%s code=%s stage=%s",
+        safe_id,
+        safe_code,
+        safe_stage,
+    )
+
+
+@dataclass
+class _RequestTrace:
+    request_id: str
+    stage: str = "configuration"
 
 
 class TrustedBinding(BaseModel):
@@ -158,6 +241,8 @@ class GitApplication:
         if scope["type"] != "http":
             return
         request_id = uuid.uuid4().hex
+        trace = _RequestTrace(request_id)
+        denial_code = None
         try:
             if (
                 self.authority is None
@@ -170,7 +255,7 @@ class GitApplication:
                 + self.limits.validation_seconds
                 + self.limits.dispatch_seconds
             ):
-                result, content_type = await self.handle(scope, receive, request_id)
+                result, content_type = await self.handle(scope, receive, trace)
             status = 200
         except asyncio.CancelledError:
             raise
@@ -179,6 +264,7 @@ class GitApplication:
             code = (
                 exc.code if isinstance(exc, TransportError) else "transport_unavailable"
             )
+            denial_code = code
             result = f"{code} {request_id}\n".encode()
             content_type = "text/plain"
             status = (
@@ -199,8 +285,12 @@ class GitApplication:
             )
             try:
                 self.upstream.check_output(result, (*self.response_secrets, *known))
-            except TransportError:
+            except TransportError as exc:
                 result, status = b"", 503
+                denial_code = exc.code
+                trace.stage = "response"
+        if denial_code is not None:
+            log_git_denial(request_id, denial_code, trace.stage)
         await send(
             {
                 "type": "http.response.start",
@@ -360,9 +450,13 @@ class GitApplication:
             if reason:
                 raise TransportError(reason)
 
-    async def handle(self, scope, receive, request_id):
+    async def handle(self, scope, receive, trace):
+        request_id = trace.request_id
+        trace.stage = "request"
         repository, service, discovery, protocol, token, length = self.request(scope)
+        trace.stage = "authentication"
         binding = await self.authority.authenticate(token, self.purpose)
+        trace.stage = "binding"
         self.binding(binding, repository)
         secrets = (
             *self.response_secrets,
@@ -371,15 +465,18 @@ class GitApplication:
             b"Bearer " + token.encode(),
         )
         if discovery or self.purpose == "git-read":
+            trace.stage = "body"
             body = bytearray()
             async for chunk in self.chunks(receive, length):
                 body.extend(chunk)
             if discovery and body:
                 raise TransportError("discovery_body")
+            trace.stage = "dispatch_authority"
             async with self.authority.authorize_dispatch(binding, None) as proof:
                 self.binding(proof.binding, repository)
                 if proof.binding.association != binding.association:
                     raise TransportError("runtime_changed")
+                trace.stage = "upstream_read"
                 if discovery:
                     data = await self.upstream.discovery(
                         service, protocol=protocol, secrets=secrets
@@ -401,12 +498,29 @@ class GitApplication:
                 f"application/x-{service}-{'advertisement' if discovery else 'result'}",
             )
         async with self.slot:
+            trace.stage = "body"
             async with receive_spool(
                 self.chunks(receive, length), self.spool_root, self.limits
             ) as (work, body, digest, size):
+                # Git probes auth before streaming a large RPC. Only a complete
+                # flush-only body is a probe; it confers no publication authority.
+                if size == 4 and body.read_bytes() == b"0000":
+                    trace.stage = "probe_authority"
+                    async with self.authority.authorize_dispatch(
+                        binding, None
+                    ) as proof:
+                        current = proof.binding
+                        self.binding(current, repository)
+                        if (
+                            current.association != binding.association
+                            or current.grant != binding.grant
+                        ):
+                            raise TransportError("runtime_changed")
+                        return b"", "application/x-git-receive-pack-result"
                 # Parse/scope denial precedes even trusted read/seed traffic.
                 from mainloop.push_gate.protocol import receive_commands
 
+                trace.stage = "commands"
                 with body.open("rb") as source:
                     commands = receive_commands(source, self.limits)
                 reason = authorize(
@@ -418,6 +532,7 @@ class GitApplication:
                 )
                 if reason:
                     raise TransportError(reason)
+                trace.stage = "validation"
                 async with asyncio.timeout(self.limits.validation_seconds):
                     seed = (
                         self.seed_upstream_factory(binding, self.upstream)
@@ -439,6 +554,7 @@ class GitApplication:
                         self.limits,
                         secrets=secrets,
                     )
+                trace.stage = "dispatch_authority"
                 async with self.authority.authorize_dispatch(
                     binding, prepared
                 ) as proof:
@@ -458,6 +574,7 @@ class GitApplication:
                     )
                     if reason:
                         raise TransportError(reason)
+                    trace.stage = "remote_ref"
                     actual = advertised_refs(
                         await self.upstream.discovery(
                             "git-receive-pack", secrets=secrets
@@ -469,6 +586,7 @@ class GitApplication:
                         != prepared.commands.update.old_oid
                     ):
                         raise TransportError("remote_ref_changed")
+                    trace.stage = "publication_record"
                     prepared.verify_identity()
                     attempt = PublicationAttempt(
                         request_id=request_id,
@@ -495,6 +613,7 @@ class GitApplication:
                     # Shield a finite dispatch/outcome task from request cancellation.
                     # Retain the authority context until its durable classification ends.
                     cancelled = asyncio.Event()
+                    trace.stage = "dispatch"
                     outcome = asyncio.create_task(
                         self.dispatch(evidence, prepared, secrets, cancelled)
                     )

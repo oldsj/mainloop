@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from dataclasses import asdict, dataclass
 from typing import Protocol
 
@@ -19,6 +20,7 @@ FINISHED_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
 class Store(Protocol):
+    def intent_scope(self, binding: dict) -> AbstractAsyncContextManager[Store]: ...
     async def binding_by_token_hash(self, token_hash: str) -> dict | None: ...
     async def get_binding(self, session_id: str) -> dict | None: ...
     async def topic(self, user_id: str, name: str, *, create: bool) -> dict | None: ...
@@ -190,13 +192,14 @@ class AgentService:
         }
 
     async def topic_open(self, ctx: Ctx, name: str, status: str | None) -> dict:
-        topic = await self.store.topic(
-            ctx.binding["user_id"], name.strip() or INBOX, create=True
-        )
-        if status is not None:
-            await self.store.set_topic_status(
-                topic["id"], status[: policy.NOTE_MAX_CHARS]
+        async with self.store.intent_scope(ctx.binding) as store:
+            topic = await store.topic(
+                ctx.binding["user_id"], name.strip() or INBOX, create=True
             )
+            if status is not None:
+                await store.set_topic_status(
+                    topic["id"], status[: policy.NOTE_MAX_CHARS]
+                )
         return {"text": f"topic {topic['name']} ready", "topic": topic["name"]}
 
     async def record(self, ctx: Ctx, kind: str, text: str, topic: str | None) -> dict:
@@ -206,13 +209,14 @@ class AgentService:
             )
         if not text.strip():
             raise HTTPException(status_code=400, detail="text is required")
-        t = await self.store.topic(ctx.binding["user_id"], topic or INBOX, create=True)
-        rid = await self.store.add_record(
-            t["id"],
-            kind,
-            text.strip()[: policy.NOTE_MAX_CHARS],
-            ctx.binding["session_id"],
-        )
+        async with self.store.intent_scope(ctx.binding) as store:
+            t = await store.topic(ctx.binding["user_id"], topic or INBOX, create=True)
+            rid = await store.add_record(
+                t["id"],
+                kind,
+                text.strip()[: policy.NOTE_MAX_CHARS],
+                ctx.binding["session_id"],
+            )
         return {"text": f"{kind} recorded in {t['name']} ({rid[:8]})", "id": rid}
 
     async def done(self, ctx: Ctx, record_id: str) -> dict:
@@ -220,7 +224,8 @@ class AgentService:
             raise HTTPException(
                 status_code=400, detail="give at least 8 characters of the pending id"
             )
-        ok = await self.store.close_pending(ctx.binding["user_id"], record_id)
+        async with self.store.intent_scope(ctx.binding) as store:
+            ok = await store.close_pending(ctx.binding["user_id"], record_id)
         if not ok:
             raise HTTPException(status_code=404, detail="no such open pending item")
         return {"text": "pending closed"}

@@ -6,7 +6,9 @@ application service; committed report notifications use its existing reconciler 
 
 from __future__ import annotations
 
+import json
 import uuid
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from mainloop.config import settings
 from mainloop.db import db
@@ -19,56 +21,172 @@ from mainloop.runtime.standing import (
     render_standing,
 )
 
-from models import MainThread, Session, SessionStatus
+from models import Session, SessionStatus
 
 INBOX = "inbox"
 
 
-async def ensure_main_session(user_id: str) -> dict:
+async def _claim_main_owner(
+    conn, user_id: str, locks: AsyncExitStack, *, replace_inactive: bool
+) -> dict | None:
+    """Reconcile the current-owner slot without deleting historical bindings.
+
+    The caller holds the bootstrap lock and transaction. Keep authority and
+    credential locks through commit, ordering replacement against admitted work.
+    """
+    from mainloop.push_gate import lifecycle as push_lifecycle
+    from mainloop.runtime.agent_credentials import _binding_lock, revoke_deferred
+    from mainloop.tasks import lifecycle
+
+    candidates = await conn.fetch(
+        """SELECT b.session_id FROM native_bindings b
+           WHERE b.main_user_id=$1
+           ORDER BY b.session_id""",
+        user_id,
+    )
+    current = None
+    inactive = []
+    for candidate in candidates:
+        sid = candidate["session_id"]
+        await locks.enter_async_context(push_lifecycle.locked(conn, sid))
+        await locks.enter_async_context(lifecycle.locked(conn, sid))
+        await locks.enter_async_context(_binding_lock(conn, sid))
+        row = await conn.fetchrow(
+            """SELECT b.*,s.user_id,s.status,s.archived_at FROM native_bindings b
+               JOIN sessions s ON s.id=b.session_id WHERE b.session_id=$1 FOR UPDATE OF b,s""",
+            sid,
+        )
+        if row is None:
+            continue
+        if row["user_id"] != user_id or row["main_user_id"] != user_id:
+            raise ValueError("main owner changed during bootstrap")
+        valid = (
+            row["role"] == "main"
+            and row["mcp_grant_kind"] == "coordination"
+            and row["token_hash"] is not None
+            and row["kagent_deleted_at"] is None
+            and row["archived_at"] is None
+            and row["status"] not in ("completed", "failed", "cancelled")
+        )
+        if valid:
+            if current is not None or row["main_owner_id"] not in (None, user_id):
+                raise ValueError("competing current main owners")
+            # Keep the same public binding shape as get_binding.
+            current = await native_sessions.get_binding(sid, conn=conn)
+        else:
+            inactive.append(row)
+    # Membership survives migration and revocation. Only ordinary bootstrap may
+    # turn an inactive retained main into a new product/native identity.
+    if current is None and inactive and not replace_inactive:
+        row = inactive[0]
+        reason = (
+            "session_terminal"
+            if row["archived_at"] is not None
+            or row["status"] in ("completed", "failed", "cancelled")
+            else "binding_revoked"
+        )
+        raise lifecycle.LifecycleDenied(reason)
+    if replace_inactive:
+        for row in inactive:
+            sid = row["session_id"]
+            # Commit revocation and cleanup intent with releasing ownership. The
+            # old native ID, pinned Agent, history and delivery receipts stay put.
+            if row["main_owner_id"] is not None or row["token_hash"] is not None:
+                await revoke_deferred(conn, sid)
+                await conn.execute(
+                    "UPDATE native_bindings SET main_owner_id=NULL WHERE session_id=$1",
+                    sid,
+                )
+    if current is not None:
+        if current["main_owner_id"] is None:
+            await conn.execute(
+                "UPDATE native_bindings SET main_owner_id=$2 WHERE session_id=$1",
+                current["session_id"],
+                user_id,
+            )
+        current["main_owner_id"] = user_id
+    return current
+
+
+async def ensure_main_session(user_id: str, *, replace_inactive: bool = True) -> dict:
     """Return the user's single native main-thread binding, creating it on first use.
 
     Its conversation is the user's most recent main-thread conversation, so existing history
     carries over. The session row and its binding are written in one transaction, under a
     per-user lock, so a failure leaves neither and concurrent first requests share one.
+    Provider operations refuse an inactive current owner; bootstrap replaces it.
     """
-    query = """SELECT b.* FROM native_bindings b JOIN sessions s ON s.id=b.session_id
-               WHERE b.role='main' AND s.user_id=$1 AND s.archived_at IS NULL ORDER BY b.created_at LIMIT 1"""
-    async with db.connection() as conn:
-        row = await conn.fetchrow(query, user_id)
-    if row:
-        return dict(row)
-    async with db.connection() as conn:
+    async with db.connection() as conn, AsyncExitStack() as locks:
         async with conn.transaction():
             await conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtext($1))", f"main-thread:{user_id}"
             )
-            row = await conn.fetchrow(query, user_id)
+            row = await _claim_main_owner(
+                conn, user_id, locks, replace_inactive=replace_inactive
+            )
             if row:
                 return dict(row)
             # Reused on the next attempt if the transaction below rolls back.
-            thread = await db.get_main_thread_by_user(user_id)
-            if not thread:
-                thread = await db.create_main_thread(
-                    MainThread(user_id=user_id, workflow_run_id="native")
+            thread_id = await conn.fetchval(
+                "SELECT id FROM main_threads WHERE user_id=$1 ORDER BY created_at LIMIT 1",
+                user_id,
+            )
+            if not thread_id:
+                thread_id = str(
+                    uuid.uuid5(uuid.NAMESPACE_URL, f"main-thread:{user_id}")
                 )
-            convs = await db.list_conversations(user_id, limit=1)
-            conversation = convs[0] if convs else await db.create_conversation(user_id)
+                await conn.execute(
+                    "INSERT INTO main_threads(id,user_id,workflow_run_id) VALUES($1,$2,'native') ON CONFLICT DO NOTHING",
+                    thread_id,
+                    user_id,
+                )
+            conversation_id = await conn.fetchval(
+                """SELECT c.id FROM conversations c WHERE c.user_id=$1
+                   AND NOT EXISTS (
+                     SELECT 1 FROM sessions s WHERE s.conversation_id=c.id
+                     AND NOT EXISTS (SELECT 1 FROM native_bindings b
+                                     WHERE b.session_id=s.id
+                                     AND b.main_user_id=$1)
+                   ) ORDER BY c.updated_at DESC LIMIT 1""",
+                user_id,
+            )
+            if not conversation_id:
+                conversation_id = str(uuid.uuid4())
+                await conn.execute(
+                    "INSERT INTO conversations(id,user_id,title) VALUES($1,$2,'Main thread')",
+                    conversation_id,
+                    user_id,
+                )
+            from mainloop.providers import registry
+
+            kind = settings.main_provider
+            profile = registry().resolve(kind, "main", selecting=True)
+            if profile.native_provider != kind:
+                raise ValueError("main provider profile must match its native provider")
+            ref = profile.agents["main"]
             session = await db.create_session(
                 Session(
                     id=str(uuid.uuid4()),
                     user_id=user_id,
-                    main_thread_id=thread.id,
+                    main_thread_id=thread_id,
                     title="Main thread",
-                    description="Native Claude main thread",
+                    description=f"Native {kind} main thread",
                     prompt="",
-                    conversation_id=conversation.id,
+                    conversation_id=conversation_id,
                     status=SessionStatus.IDLE,
                 ),
                 conn=conn,
             )
-            return await native_sessions.create_binding(
-                session.id, "claude", role="main", conn=conn
+            await native_sessions.create_binding(
+                session.id, kind, role="main", conn=conn
             )
+            await conn.execute(
+                "UPDATE native_bindings SET main_owner_id=$2,main_agent_ref=$3::jsonb WHERE session_id=$1",
+                session.id,
+                user_id,
+                json.dumps(ref.model_dump()),
+            )
+            return await native_sessions.get_binding(session.id, conn=conn)
 
 
 async def _topic_lines(user_id: str) -> list[TopicLine]:
@@ -130,7 +248,7 @@ async def render_for_binding(binding: dict) -> str:
             """SELECT m.role, m.content FROM messages m
                WHERE m.conversation_id=$1
                  AND NOT EXISTS (SELECT 1 FROM native_deliveries d WHERE d.message_id=m.id
-                                 AND (d.state = ANY($3) OR d.state='queued'))
+                                 AND (d.state = ANY($3) OR d.state IN ('queued','failed','cancelled')))
                ORDER BY m.created_at DESC LIMIT $2""",
             session.conversation_id,
             settings.main_carry_over_messages,
@@ -158,6 +276,51 @@ async def auto_report(session_id: str, reply: str) -> None:
 
 class PgStore:
     """``agent_tools.Store`` over Postgres and the native-session delivery path."""
+
+    def __init__(self, conn=None):
+        self._conn = conn
+
+    @asynccontextmanager
+    async def _connection(self):
+        if self._conn is not None:
+            yield self._conn
+        else:
+            async with db.connection() as conn:
+                yield conn
+
+    @asynccontextmanager
+    async def intent_scope(self, binding: dict):
+        """Fence admitted MCP intent against retirement and grant revocation.
+
+        Revalidation and every write use one transaction on the authority lock's
+        connection. An authentication snapshot alone cannot authorize a mutation.
+        """
+        from mainloop.db.tasks import TaskError
+        from mainloop.tasks import lifecycle
+
+        async with db.connection() as conn, lifecycle.authority_locked(
+            conn, binding["session_id"]
+        ), conn.transaction():
+            fresh = await conn.fetchrow(
+                """SELECT b.*,s.user_id,s.status,s.archived_at FROM native_bindings b
+                   JOIN sessions s ON s.id=b.session_id WHERE b.session_id=$1 FOR SHARE OF b,s""",
+                binding["session_id"],
+            )
+            if (
+                not fresh
+                or not fresh["token_hash"]
+                or fresh["token_hash"] != binding.get("token_hash")
+                or fresh["role"] != binding["role"]
+                or fresh["mcp_grant_kind"] != binding.get("mcp_grant_kind")
+                or fresh["mcp_grant_kind"] != "coordination"
+                or fresh["user_id"] != binding["user_id"]
+                or fresh["archived_at"]
+                or fresh["kagent_deleted_at"]
+                or fresh["status"] in ("completed", "failed", "cancelled")
+            ):
+                raise TaskError(403, "inactive_principal")
+            await lifecycle.check(conn, binding["session_id"], "create")
+            yield PgStore(conn)
 
     async def binding_by_token_hash(self, token_hash: str) -> dict | None:
         async with db.connection() as conn:
@@ -198,7 +361,7 @@ class PgStore:
             )
 
     async def topic(self, user_id: str, name: str, *, create: bool) -> dict | None:
-        async with db.connection() as conn:
+        async with self._connection() as conn:
             row = await conn.fetchrow(
                 "SELECT * FROM topics WHERE user_id=$1 AND name=$2", user_id, name
             )
@@ -213,7 +376,7 @@ class PgStore:
         return dict(row) if row else None
 
     async def set_topic_status(self, topic_id: str, status_line: str) -> None:
-        async with db.connection() as conn:
+        async with self._connection() as conn:
             await conn.execute(
                 "UPDATE topics SET status_line=$2, updated_at=NOW() WHERE id=$1",
                 topic_id,
@@ -227,7 +390,7 @@ class PgStore:
         self, topic_id: str, kind: str, text: str, session_id: str | None
     ) -> str:
         rid = str(uuid.uuid4())
-        async with db.connection() as conn:
+        async with self._connection() as conn:
             await conn.execute(
                 "INSERT INTO topic_records (id, topic_id, kind, text, session_id) VALUES ($1,$2,$3,$4,$5)",
                 rid,
@@ -243,7 +406,7 @@ class PgStore:
 
     async def close_pending(self, user_id: str, record_id: str) -> bool:
         """Close one open pending item by id prefix; ambiguous or unknown prefixes close nothing."""
-        async with db.connection() as conn:
+        async with self._connection() as conn:
             rows = await conn.fetch(
                 """SELECT r.id FROM topic_records r JOIN topics t ON t.id=r.topic_id
                    WHERE t.user_id=$1 AND r.kind='pending' AND r.status='open'

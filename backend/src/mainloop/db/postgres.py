@@ -12,6 +12,7 @@ from mainloop.db.environment_schema import ENVIRONMENT_MIGRATION_SQL
 from mainloop.db.git_transport_schema import GIT_TRANSPORT_MIGRATION_SQL
 from mainloop.db.health_schema import HEALTH_MIGRATION_SQL
 from mainloop.db.hitl_schema import HITL_MIGRATION_SQL
+from mainloop.db.main_provider_schema import MAIN_PROVIDER_MIGRATION_SQL
 from mainloop.db.merge_schema import MERGE_MIGRATION_SQL
 from mainloop.db.push_gate_schema import PUSH_GATE_MIGRATION_SQL
 from mainloop.db.task_schema import TASK_MIGRATION_SQL
@@ -482,6 +483,7 @@ MIGRATION_SQL += PUSH_GATE_MIGRATION_SQL
 MIGRATION_SQL += TASK_MIGRATION_SQL
 MIGRATION_SQL += GIT_TRANSPORT_MIGRATION_SQL
 MIGRATION_SQL += HEALTH_MIGRATION_SQL
+MIGRATION_SQL += MAIN_PROVIDER_MIGRATION_SQL
 
 
 class Database:

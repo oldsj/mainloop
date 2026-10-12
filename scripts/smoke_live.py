@@ -176,8 +176,15 @@ def run(args, base):
         f"Delegate exactly one code task on project {args.project_id}, repository {args.repo}, "
         f"provider_profile_id {args.provider}, checkout.branch {branch}, request_id {request_id}. "
         f"Create only docs/smoke-{request_id}.md containing a short smoke verification note. "
-        "Commit the file, git push through the publication gate, open_pull_request, "
-        "wait for exact-head CI using foreground waits, merge_pull_request, then report completed. "
+        "Commit the file, git push through the publication gate, open_pull_request. "
+        "Direct the delegated native actor to use Mainloop task_get projection as its exact-head CI reader. "
+        "Before Mainloop merge_pull_request, require ci_state=success and "
+        "pr_head_sha=ci_head_sha=the pushed PR head SHA. "
+        "While CI is pending, wait in the foreground and reread task_get; "
+        "do not report blocked merely because CI is pending. "
+        "Do not require a generic GitHub workflow reader. "
+        "Mainloop merge_pull_request independently validates fresh complete CI, policy and SHA. "
+        "Then merge_pull_request and report completed. "
         "Never bypass policy or answer approval cards. Do not delegate additional tasks."
     )
     view, pr = None, {}

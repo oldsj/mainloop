@@ -1,5 +1,6 @@
 """Read observations and transactional task events; no turns or merge dispatch."""
 
+import hashlib
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -7,7 +8,10 @@ from mainloop.db import tasks as store
 from mainloop.runtime.policy import PolicyError
 from mainloop.tasks.principal import TaskPrincipal
 
+from models.task import TaskPRDescription
+
 MAX_CI_AGE = timedelta(minutes=5)
+MAX_DESCRIPTION_AGE = timedelta(minutes=5)
 # Merge readiness when GitHub rules on the base would refuse Mainloop's merge.
 POLICY_BLOCKED = "blocked_by_branch_rules"
 # A rule block outranks these proposal states; merge writes and outcomes do not.
@@ -36,7 +40,7 @@ def ci_state(ci, head_sha, *, now=None):
     return "unknown"
 
 
-def observed(previous, *, repository, branch, number, pr, ci, observed_at):
+def observed(previous, *, repository, branch, number, attempt_id, pr, ci, observed_at):
     """Require the PR identity to match the task's durable linkage."""
     if (
         pr.number != number
@@ -64,6 +68,22 @@ def observed(previous, *, repository, branch, number, pr, ci, observed_at):
             merge_state = None
     elif state != "open" and merge_state == POLICY_BLOCKED:
         merge_state = None
+    description = None
+    if pr.body is not None:
+        # Match GitHubMergeClient.evidence's 16 KiB description convention.
+        source = pr.body.encode("utf-8")
+        description = TaskPRDescription(
+            repository=repository.lower(),
+            branch=branch,
+            pr_number=number,
+            attempt_id=attempt_id,
+            head_sha=pr.head.sha,
+            excerpt=source[:16384].decode("utf-8", errors="ignore"),
+            byte_length=len(source),
+            digest=hashlib.sha256(source).hexdigest(),
+            truncated=len(source) > 16384,
+            fetched_at=observed_at,
+        )
     return previous.model_copy(
         update={
             "repository": repository.lower(),
@@ -71,6 +91,7 @@ def observed(previous, *, repository, branch, number, pr, ci, observed_at):
             "pr_number": number,
             "pr_url": f"https://github.com/{repository}/pull/{number}",
             "pr_head_sha": pr.head.sha,
+            "pr_description": description,
             "pr_state": state,
             "ci_state": ci_state(ci, pr.head.sha, now=observed_at),
             "ci_head_sha": ci.get("head_sha") if ci else None,
@@ -260,6 +281,7 @@ class Projection:
                     repository=repository,
                     branch=task.checkout.branch,
                     number=number,
+                    attempt_id=attempt.id,
                     pr=pr,
                     ci=ci,
                     observed_at=datetime.now(UTC),
@@ -280,6 +302,7 @@ class Projection:
                         "ci_state": "unknown",
                         "ci_head_sha": None,
                         "pr_state": "unknown",
+                        "pr_description": None,
                         "observed_at": now,
                     }
                 )
@@ -290,8 +313,9 @@ class Projection:
                 await store.admission_lock(conn)
                 task, _ = await publication.current(conn, binding)
                 current = await store.projection(conn, task.id)
-                comparable = value.model_dump(exclude={"observed_at"})
-                if comparable == current.model_dump(exclude={"observed_at"}):
+                exclude = {"observed_at": True, "pr_description": {"fetched_at"}}
+                comparable = value.model_dump(exclude=exclude)
+                if comparable == current.model_dump(exclude=exclude):
                     # Refresh age without duplicate events/parent notifications.
                     await conn.execute(
                         "UPDATE tasks SET projection=$2::jsonb WHERE id=$1",
@@ -314,6 +338,30 @@ async def read(conn, task):
     install a scheduler, send a native turn or call the merge service.
     """
     value = await store.projection(conn, task.id)
+    description = value.pr_description
+    if description is not None and (
+        (
+            description.repository,
+            description.branch,
+            description.pr_number,
+            description.attempt_id,
+            description.head_sha,
+        )
+        != (
+            value.repository,
+            value.branch,
+            value.pr_number,
+            task.current_attempt_id,
+            value.pr_head_sha,
+        )
+        or task.checkout is None
+        or description.branch != task.checkout.branch
+        or value.pr_state == "unknown"
+        or not timedelta(0)
+        <= datetime.now(UTC) - description.fetched_at
+        <= MAX_DESCRIPTION_AGE
+    ):
+        value = value.model_copy(update={"pr_description": None})
     if value.ci_state == "success" and (
         value.ci_head_sha != value.pr_head_sha
         or value.observed_at is None

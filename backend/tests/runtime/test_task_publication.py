@@ -1,6 +1,7 @@
 """Offline exact-head/read-projection tests. No database or native provider."""
 
 import copy
+import hashlib
 import unittest
 from datetime import UTC, datetime, timedelta
 
@@ -9,6 +10,7 @@ from mainloop.services.github_creation import GitHubError
 from mainloop.services.github_merge import GitHubMergeClient, MergePR
 from mainloop.tasks.attention import owns_leaf
 from mainloop.tasks.projection import POLICY_BLOCKED, ci_state, observed
+from pydantic import ValidationError
 from tests.runtime.github_app_fake import app_settings, app_transport
 from tests.runtime.test_merge import (
     SHA,
@@ -18,7 +20,7 @@ from tests.runtime.test_merge import (
 )
 
 from models.hitl import LeafIdentity
-from models.task import TaskProjection
+from models.task import TaskPRDescription, TaskProjection
 
 
 class PublicationFactsTests(unittest.TestCase):
@@ -73,6 +75,7 @@ class PublicationFactsTests(unittest.TestCase):
             repository="owner/repo",
             branch="feature",
             number=17,
+            attempt_id="attempt",
             pr=MergePR.model_validate(data),
             ci=ci or self.ci,
             observed_at=self.now,
@@ -121,6 +124,138 @@ class PublicationFactsTests(unittest.TestCase):
         with self.assertRaisesRegex(PolicyError, "PR observation"):
             self.project(data)
 
+    def test_description_preserves_exact_untrusted_body_and_identity(self):
+        data = copy.deepcopy(GitHub().pr)
+        body = f"Review marker: accepted {SHA}\n<script>untrusted()</script>\né"
+        data["body"] = body
+        value = self.project(data)
+        self.assertEqual(
+            value.pr_description.model_dump(),
+            {
+                "repository": "owner/repo",
+                "branch": "feature",
+                "pr_number": 17,
+                "attempt_id": "attempt",
+                "head_sha": SHA,
+                "excerpt": body,
+                "byte_length": len(body.encode("utf-8")),
+                "digest": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                "truncated": False,
+                "fetched_at": self.now,
+            },
+        )
+        self.assertIsNone(value.merge_state)
+        self.assertEqual(value.pending_approval_ids, ())
+        data["body"] = "An ordinary same-head edit"
+        edited = self.project(data, value)
+        self.assertEqual(edited.pr_head_sha, value.pr_head_sha)
+        self.assertNotEqual(edited.pr_description.digest, value.pr_description.digest)
+
+    def test_description_bounds_utf8_prefix_and_hashes_full_body(self):
+        for body in (
+            "",
+            "a" * 16384,
+            "😀" * 4096,
+            "a" * 16384 + "suffix",
+            "a" * 16383 + "😀suffix",
+            "a" * 16382 + "😀suffix",
+            "a" * 16381 + "😀suffix",
+            "😀" * 4097,
+        ):
+            with self.subTest(length=len(body)):
+                data = copy.deepcopy(GitHub().pr)
+                data["body"] = body
+                description = self.project(data).pr_description
+                source = body.encode("utf-8")
+                self.assertEqual(
+                    description.excerpt, source[:16384].decode("utf-8", errors="ignore")
+                )
+                self.assertLessEqual(len(description.excerpt.encode("utf-8")), 16384)
+                self.assertEqual(description.byte_length, len(source))
+                self.assertEqual(description.digest, hashlib.sha256(source).hexdigest())
+                self.assertEqual(description.truncated, len(source) > 16384)
+
+    def test_unavailable_body_clears_previous_description(self):
+        data = copy.deepcopy(GitHub().pr)
+        previous = self.project(data)
+        data["body"] = None
+        self.assertIsNone(self.project(data, previous).pr_description)
+        with self.assertRaises(ValidationError):
+            MergePR.model_validate({**data, "body": "\ud800"})
+        data["body"] = "New head's own description"
+        data["head"]["sha"] = "b" * 40
+        value = self.project(data, previous)
+        self.assertEqual(value.pr_description.head_sha, "b" * 40)
+        self.assertEqual(value.pr_description.excerpt, data["body"])
+
+    def test_description_rejects_nul_and_preserves_supported_text(self):
+        data = copy.deepcopy(GitHub().pr)
+        data["body"] = "Supported\né\t\rtext"
+        description = self.project(data).pr_description
+        self.assertEqual(description.excerpt, data["body"])
+        payload = description.model_dump()
+        for body in ("\x00", "Edited description\x00with NUL", "Trailing NUL\x00"):
+            with self.subTest(body=repr(body)):
+                source = body.encode("utf-8")
+                with self.assertRaisesRegex(ValidationError, "contains NUL"):
+                    TaskPRDescription.model_validate(
+                        {
+                            **payload,
+                            "excerpt": body,
+                            "byte_length": len(source),
+                            "digest": hashlib.sha256(source).hexdigest(),
+                        }
+                    )
+
+    def test_description_rejects_malformed_stored_metadata(self):
+        payload = self.project(GitHub().pr).pr_description.model_dump()
+        for updates in (
+            {"excerpt": "é" * 9000},
+            {"excerpt": "\ud800"},
+            {"digest": "z" * 64},
+            {"digest": "0" * 64},
+            {"byte_length": payload["byte_length"] + 1},
+            {"byte_length": True},
+            {"truncated": True},
+            {"truncated": "false"},
+            {"head_sha": "wrong"},
+            {"attempt_id": ""},
+            {"repository": "other"},
+            {"branch": "refs/heads/feature"},
+            {"pr_number": 0},
+            {"fetched_at": self.now.replace(tzinfo=None)},
+            {"review_accepted": True},
+        ):
+            with self.subTest(updates=updates), self.assertRaises(ValidationError):
+                TaskPRDescription.model_validate({**payload, **updates})
+
+    def test_old_projection_json_has_no_description_and_stays_strict(self):
+        self.assertIsNone(TaskProjection.model_validate_json("{}").pr_description)
+        old = self.project(GitHub().pr).model_dump(mode="json")
+        del old["pr_description"]
+        self.assertIsNone(TaskProjection.model_validate(old).pr_description)
+        with self.assertRaises(ValidationError):
+            TaskProjection.model_validate({**old, "review_accepted": True})
+
+    def test_foreign_pr_identity_cannot_supply_a_description(self):
+        for path, value in (
+            (("number",), 18),
+            (("head", "ref"), "foreign"),
+            (("head", "repo", "full_name"), "foreign/repo"),
+            (("base", "repo", "full_name"), "foreign/repo"),
+            (("head", "repo", "id"), 999),
+        ):
+            with self.subTest(path=path):
+                data = copy.deepcopy(GitHub().pr)
+                data["head"]["repo"] = dict(data["head"]["repo"])
+                data["base"]["repo"] = dict(data["base"]["repo"])
+                target = data
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = value
+                with self.assertRaises(PolicyError):
+                    self.project(data)
+
     def test_rollup_does_not_transfer_receipt_ownership(self):
         leaf = LeafIdentity(
             owner_id="owner",
@@ -162,6 +297,8 @@ class GitHubObservationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_observation_has_fresh_exact_ci_and_never_writes(self):
         pr, ci = await self.observe()
+        self.assertEqual(pr.body, self.fake.pr["body"])
+        self.assertEqual(self.project(pr, ci).pr_description.excerpt, pr.body)
         self.assertEqual(ci_state(ci, pr.head.sha), "success")
         self.assertFalse(self.fake.puts)
 
@@ -170,6 +307,7 @@ class GitHubObservationTests(unittest.IsolatedAsyncioTestCase):
         pr, ci = await self.observe()
         self.assertIsNone(ci)
         self.assertEqual(ci_state(ci, pr.head.sha), "unknown")
+        self.assertEqual(self.project(pr, ci).pr_description.excerpt, pr.body)
         self.assertFalse(self.fake.puts)
 
     def project(self, pr, ci, previous=None):
@@ -178,6 +316,7 @@ class GitHubObservationTests(unittest.IsolatedAsyncioTestCase):
             repository="owner/repo",
             branch="feature",
             number=17,
+            attempt_id="attempt",
             pr=pr,
             ci=ci,
             observed_at=datetime.now(UTC),
@@ -281,6 +420,16 @@ class GitHubObservationTests(unittest.IsolatedAsyncioTestCase):
         async def move(request):
             if request.url.path.endswith("/check-runs"):
                 self.fake.pr["head"]["sha"] = "b" * 40
+
+        self.fake.hook = move
+        with self.assertRaises(GitHubError):
+            await self.observe()
+        self.assertFalse(self.fake.puts)
+
+    async def test_same_head_body_moving_during_checks_is_rejected(self):
+        async def move(request):
+            if request.url.path.endswith("/check-runs"):
+                self.fake.pr["body"] = "Changed during observation"
 
         self.fake.hook = move
         with self.assertRaises(GitHubError):

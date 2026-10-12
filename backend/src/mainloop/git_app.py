@@ -3,6 +3,7 @@
 import asyncio
 import signal
 import tempfile
+import uuid
 from contextlib import ExitStack, asynccontextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -11,7 +12,7 @@ import uvicorn
 from mainloop.config import settings
 from mainloop.db import db
 from mainloop.push_gate.protocol import DEFAULT_LIMITS, TransportError
-from mainloop.push_gate.transport import create_git_applications
+from mainloop.push_gate.transport import create_git_applications, log_git_denial
 from mainloop.push_gate.transport_authority import PostgresTransportAuthority
 from mainloop.push_gate.upstream import GitHubAppUpstream
 from mainloop.runtime.agent_identity import require_token_key
@@ -40,15 +41,24 @@ class GitListener:
         if not settings.git_transport_enabled or (
             self.template.purpose == "git-push" and not settings.push_gate_enabled
         ):
-            return await Response("git_transport_disabled\n", status_code=403)(
-                scope, receive, send
-            )
+            request_id = uuid.uuid4().hex
+            log_git_denial(request_id, "git_transport_disabled", "listener_flags")
+            return await Response(
+                "git_transport_disabled\n",
+                status_code=403,
+                headers={"x-mainloop-request-id": request_id},
+            )(scope, receive, send)
         try:
             repository, *_ = self.template.request(scope)
-        except (TransportError, ValueError):
-            return await Response("route_denied\n", status_code=403)(
-                scope, receive, send
-            )
+        except (TransportError, ValueError) as exc:
+            request_id = uuid.uuid4().hex
+            code = exc.code if isinstance(exc, TransportError) else "route_denied"
+            log_git_denial(request_id, code, "listener_route")
+            return await Response(
+                "route_denied\n",
+                status_code=403,
+                headers={"x-mainloop-request-id": request_id},
+            )(scope, receive, send)
         # Parsing a route grants no authority. The core authenticates, checks the
         # bound repository and revalidates dispatch before any token mint or Git I/O.
         upstream = self.upstream_factory(repository, self.common["limits"])

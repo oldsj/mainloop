@@ -1,6 +1,7 @@
 """Shared application seams on isolated PostgreSQL with fake GitHub and kagent."""
 
 import asyncio
+import hashlib
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -68,6 +69,216 @@ class TaskApplicationIntegrationTests(MergeFixture):
             transport=httpx.ASGITransport(app=api.app), base_url="http://fixture"
         ) as client:
             return await client.get(f"/tasks/{self.task.id}")
+
+    async def refresh_pr_description(self):
+        cls = github_merge.GitHubMergeClient
+        with patch.object(
+            github_merge,
+            "GitHubMergeClient",
+            lambda repository: cls(
+                repository, transport=app_transport(self.fake.handle)
+            ),
+        ):
+            await projection.Projection().refresh(db, self.task.id)
+
+    async def test_pr_description_refresh_edits_without_timestamp_event_churn(self):
+        parent, _ = await self.child()
+        await self.prepare()
+        await self.refresh_pr_description()
+        task, value = await self.view()
+        parent_version = (await self.view(parent))[0].version
+        description = value.pr_description
+        self.assertEqual(description.excerpt, self.fake.pr["body"])
+        self.assertEqual(description.attempt_id, self.attempt.id)
+        self.assertEqual(description.head_sha, self.args["expected_sha"])
+        events = await self.pool.fetchval("SELECT count(*) FROM task_events")
+        await self.refresh_pr_description()
+        unchanged, refreshed = await self.view()
+        self.assertEqual(unchanged.version, task.version)
+        self.assertEqual((await self.view(parent))[0].version, parent_version)
+        self.assertEqual(
+            await self.pool.fetchval("SELECT count(*) FROM task_events"), events
+        )
+        self.assertGreater(refreshed.pr_description.fetched_at, description.fetched_at)
+        self.fake.pr["body"] = "Same head, edited description"
+        await self.refresh_pr_description()
+        edited, value = await self.view()
+        self.assertEqual(edited.version, task.version + 1)
+        self.assertEqual(value.pr_description.excerpt, self.fake.pr["body"])
+        self.assertEqual(value.pr_description.head_sha, description.head_sha)
+        self.assertEqual(
+            await self.pool.fetchval("SELECT count(*) FROM task_events"), events + 2
+        )
+        self.assertEqual((await self.view(parent))[0].version, parent_version + 1)
+        # An edit beyond the excerpt still changes the full-body digest/version.
+        self.fake.pr["body"] = "a" * 16384 + "first tail"
+        await self.refresh_pr_description()
+        before, value = await self.view()
+        self.fake.pr["body"] = "a" * 16384 + "second tail"
+        await self.refresh_pr_description()
+        after, edited = await self.view()
+        self.assertEqual(after.version, before.version + 1)
+        self.assertEqual(edited.pr_description.excerpt, value.pr_description.excerpt)
+        self.assertNotEqual(edited.pr_description.digest, value.pr_description.digest)
+        self.assertEqual(
+            edited.pr_description.digest,
+            hashlib.sha256(self.fake.pr["body"].encode()).hexdigest(),
+        )
+        self.assertFalse(self.fake.puts)
+        self.assertFalse(self.gateway.sent)
+
+    async def test_failed_or_unavailable_pr_description_does_not_retain_prior_body(
+        self,
+    ):
+        from mainloop.mcp_app import invoke
+        from mainloop.runtime.agent_identity import token_for
+        from mainloop.runtime.agent_tools import AgentService
+
+        await self.prepare()
+        agent = AgentService(PgStore(), [])
+        ctx = await agent.authenticate(token_for(self.sid))
+        original = self.fake.pr["body"]
+        for failure in (
+            "upstream",
+            "malformed",
+            "nul",
+            "absent",
+            "null",
+            "head",
+            "body",
+        ):
+            with self.subTest(failure=failure):
+                self.fake.pr["body"] = original
+                await self.refresh_pr_description()
+                self.assertIsNotNone((await self.view())[1].pr_description)
+                if failure == "upstream":
+                    self.fake.errors["/pulls/17"] = 503
+                elif failure == "malformed":
+                    self.fake.pr["body"] = {"not": "text"}
+                elif failure == "nul":
+                    self.fake.pr["body"] = "Edited description\x00with NUL"
+                elif failure == "absent":
+                    del self.fake.pr["body"]
+                elif failure == "null":
+                    self.fake.pr["body"] = None
+                else:
+
+                    async def move(request, failure=failure):
+                        if request.url.path.endswith("/check-runs"):
+                            if failure == "head":
+                                self.fake.pr["head"]["sha"] = "b" * 40
+                            else:
+                                self.fake.pr["body"] = "Body moved during fetch"
+
+                    self.fake.hook = move
+                try:
+                    await self.refresh_pr_description()
+                    task, value = await self.view()
+                    self.assertIsNone(value.pr_description)
+                    self.assertIsNone(
+                        (await self.get(self.user)).json()["projection"][
+                            "pr_description"
+                        ]
+                    )
+                    native = await invoke(agent, ctx, "task_get", {"task_id": task.id})
+                    self.assertFalse(native.isError, native.content)
+                    self.assertIsNone(
+                        native.structuredContent["projection"]["pr_description"]
+                    )
+                    self.assertIsNotNone(value.observed_at)
+                    self.assertNotEqual(task.status, "completed")
+                finally:
+                    self.fake.errors.clear()
+                    self.fake.hook = None
+                    self.fake.pr["head"]["sha"] = self.args["expected_sha"]
+        self.assertFalse(self.fake.puts)
+        self.assertFalse(self.gateway.sent)
+
+    async def test_pr_description_read_masks_stale_identity_and_attempt(self):
+        await self.prepare()
+        await self.refresh_pr_description()
+        task, value = await self.view()
+        description = value.pr_description
+        cases = [
+            {"repository": "other/repo"},
+            {"branch": "other-task"},
+            {"pr_number": 18},
+            {"head_sha": "d" * 40},
+            {"attempt_id": "previous-attempt"},
+            {"fetched_at": datetime.now(UTC) - timedelta(minutes=6)},
+            {"fetched_at": datetime.now(UTC) + timedelta(minutes=1)},
+        ]
+        for updates in cases:
+            with self.subTest(updates=updates):
+                changed = value.model_copy(
+                    update={
+                        "pr_description": description.model_copy(update=updates),
+                        # Generic refresh time cannot renew the successful body fetch.
+                        "observed_at": datetime.now(UTC),
+                    }
+                )
+                await self.pool.execute(
+                    "UPDATE tasks SET projection=$2::jsonb WHERE id=$1",
+                    task.id,
+                    changed.model_dump_json(),
+                )
+                self.assertIsNone(
+                    (await self.get(self.user)).json()["projection"]["pr_description"]
+                )
+        # Even a matching cache branch cannot disagree with the task checkout.
+        changed = value.model_copy(
+            update={
+                "branch": "other-task",
+                "pr_description": description.model_copy(
+                    update={"branch": "other-task"}
+                ),
+            }
+        )
+        await self.pool.execute(
+            "UPDATE tasks SET projection=$2::jsonb WHERE id=$1",
+            task.id,
+            changed.model_dump_json(),
+        )
+        self.assertIsNone(
+            (await self.get(self.user)).json()["projection"]["pr_description"]
+        )
+
+    async def test_native_task_get_exposes_same_description_with_existing_scope(self):
+        from mainloop.mcp_app import invoke
+        from mainloop.runtime.agent_identity import token_for
+        from mainloop.runtime.agent_tools import AgentService
+
+        parent, _ = await self.child()
+        await self.prepare()
+        await self.refresh_pr_description()
+        task, value = await self.view()
+        await self.pool.execute(
+            "UPDATE tasks SET projection=$2::jsonb WHERE id=$1",
+            task.id,
+            value.model_copy(
+                update={"pending_approval_ids": ("owner-card",)}
+            ).model_dump_json(),
+        )
+        agent = AgentService(PgStore(), [])
+        ctx = await agent.authenticate(token_for(self.sid))
+        calls, reads = len(self.fake.calls), len(self.gateway.reads)
+        owner = (await self.get(self.user)).json()["projection"]
+        result = await invoke(agent, ctx, "task_get", {"task_id": task.id})
+        self.assertFalse(result.isError, result.content)
+        native = result.structuredContent["projection"]
+        self.assertEqual(native["pr_description"], owner["pr_description"])
+        self.assertEqual(native["pending_approval_ids"], [])
+        self.assertEqual(owner["pending_approval_ids"], ["owner-card"])
+        with patch.object(projection, "read", wraps=projection.read) as read:
+            foreign = await invoke(agent, ctx, "task_get", {"task_id": parent.id})
+            self.assertTrue(foreign.isError)
+            self.assertNotIn(value.pr_description.excerpt, str(foreign))
+            read.assert_not_called()
+        self.assertEqual(
+            (len(self.fake.calls), len(self.gateway.reads)), (calls, reads)
+        )
+        self.assertFalse(self.fake.puts)
+        self.assertFalse(self.gateway.sent)
 
     async def test_task_get_authorizes_before_projection_and_stays_db_only(self):
         await self.prepare()

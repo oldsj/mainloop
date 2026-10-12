@@ -1,6 +1,7 @@
 """Context model (plan r7) with fakes only: no cluster, no agents, no Postgres, no credentials."""
 
 import unittest
+from contextlib import asynccontextmanager
 from unittest.mock import patch
 
 from mainloop.runtime import agent_tools, policy
@@ -170,6 +171,10 @@ class FakeStore:
     async def binding_by_token_hash(self, h):
         sid = self.tokens.get(h)
         return self.bindings.get(sid) if sid else None
+
+    @asynccontextmanager
+    async def intent_scope(self, binding):
+        yield self
 
     async def get_binding(self, sid):
         return self.bindings.get(sid)
