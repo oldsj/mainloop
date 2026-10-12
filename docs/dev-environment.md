@@ -489,3 +489,23 @@ route serves a preview wildcard for the dev host. The `atenet-router-ingress` Ne
 tunnel dial from `mainloop-dev` times out and the proxy answers 503 "Workspace waking up" on
 every request. Proving previews needs an infra change (a base domain, a wildcard route and a
 policy entry for `mainloop-dev`); until then they are proven in production.
+
+### Testing approvals on dev
+
+The overlay's `claude-workspace-dev-template` has no approval gate. To test the Approve and
+Reject flow on this instance, gate a tool temporarily and restore the template afterwards.
+
+1. Add `tools: [whoami]` and `requireApproval: true` to the template's `mcp` binding (next to
+   `server`), and apply it with `kubectl --context admin@internal-01 -n kagent apply`. Do not
+   commit the change; the overlay stays ungated.
+2. A template change reaches only new native sessions. Switch the main chat's provider away and
+   back (`PUT /api/main-thread/provider` with `codex`, then `claude`) so the main chat starts a
+   fresh session on the new template.
+3. Ask the main chat to call `whoami`. The turn parks and raises a request in Inbox and in the
+   chat. Answer it within 5 minutes. A turn parked for about 6 minutes loses its tool call:
+   the agent-side connection is cut at about 360 s, an approval after that resumes into a
+   dead call, and the agent reports "The call timed out." This is a known kagent issue; Mainloop's
+   request stays pending and answerable meanwhile.
+4. Restore: re-apply the template from `k8s/apps/mainloop/overlays/dev-live/kagent/claude.yaml`
+   (`make dev-agents`), then switch the provider away and back again so the main chat drops the
+   gated session.
