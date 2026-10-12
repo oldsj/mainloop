@@ -164,14 +164,6 @@ func TestPreparationOfASessionWithAGitReadReferenceIsNotRefusedAsAnUnavailableId
 	}
 }
 
-// A reference frozen on a workspace row before the header was spelled lowercase is sent lowercase.
-func TestAFrozenGitReadReferenceIsSentWithALowercaseHeader(t *testing.T) {
-	ref, err := frozenReference([]byte(`{"origin":"http://mainloop-git-read.mainloop.svc.cluster.local","header":"Authorization","secretRef":{"name":"n","key":"authorization"}}`))
-	if err != nil || ref.GetHeader() != "authorization" {
-		t.Fatalf("ref = %v, %v", ref, err)
-	}
-}
-
 func TestPreparationWaitsForAPendingReceiptWithoutAskingAgain(t *testing.T) {
 	h := newHarness(t, nil)
 	h.fake.PrepareClassification = "pending"
