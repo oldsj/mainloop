@@ -143,4 +143,36 @@ describe('tasksNeedingOwner', () => {
     const running = view({ id: 'running', reason: null }, { attempts: [attempt()] });
     expect(tasksNeedingOwner([running])).toEqual([]);
   });
+
+  it('includes a waiting/publication task whose PR is open with green CI', () => {
+    const stalled = view(
+      { id: 'stalled', status: 'waiting', reason: 'publication' },
+      { projection: projection({ pr_state: 'open', ci_state: 'success' }) }
+    );
+    expect(tasksNeedingOwner([stalled]).map((v) => v.task.id)).toEqual(['stalled']);
+  });
+
+  it('excludes a waiting/publication task whose CI has not gone green yet', () => {
+    const pending = view(
+      { id: 'pending', status: 'waiting', reason: 'publication' },
+      { projection: projection({ pr_state: 'open', ci_state: 'pending' }) }
+    );
+    expect(tasksNeedingOwner([pending])).toEqual([]);
+  });
+
+  it('excludes a waiting/publication task whose PR already merged', () => {
+    const merged = view(
+      { id: 'merged', status: 'waiting', reason: 'publication' },
+      { projection: projection({ pr_state: 'merged', ci_state: 'success' }) }
+    );
+    expect(tasksNeedingOwner([merged])).toEqual([]);
+  });
+
+  it('excludes an open, green PR on a task that is not waiting on publication', () => {
+    const running = view(
+      { id: 'running', status: 'running', reason: null },
+      { projection: projection({ pr_state: 'open', ci_state: 'success' }) }
+    );
+    expect(tasksNeedingOwner([running])).toEqual([]);
+  });
 });

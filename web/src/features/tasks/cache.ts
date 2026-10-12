@@ -89,10 +89,29 @@ export function unreadableTaskCount(rows: unknown[]): number {
 
 const OWNER_REASONS = new Set<string>(['owner_decision', 'approval']);
 
-/** A task that waits on the owner: a pending approval, or a reason that needs a decision. */
+/**
+ * A task waiting on publication whose pull request is open with green CI: nothing automated
+ * will move it further, and only the owner can merge or otherwise follow up. Kept apart from
+ * `OWNER_REASONS` since `publication` is not a policy approval gate; this checks the observed
+ * PR/CI facts instead of the reason alone.
+ */
+function publicationStalled(view: TaskView): boolean {
+  return (
+    view.task.status === 'waiting' &&
+    view.task.reason === 'publication' &&
+    view.projection.pr_state === 'open' &&
+    view.projection.ci_state === 'success'
+  );
+}
+
+/**
+ * A task that waits on the owner: a pending approval, a reason that needs a decision, or an
+ * open, CI-green pull request that has not been merged.
+ */
 export function needsOwner(view: TaskView): boolean {
   if ((view.projection.pending_approval_ids ?? []).length > 0) return true;
-  return view.task.reason != null && OWNER_REASONS.has(view.task.reason);
+  if (view.task.reason != null && OWNER_REASONS.has(view.task.reason)) return true;
+  return publicationStalled(view);
 }
 
 export function tasksNeedingOwner(views: TaskView[]): TaskView[] {
