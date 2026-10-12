@@ -4,8 +4,16 @@ import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection } from '@/api';
 import { server } from '@/test/msw/server';
+import { attempt, view } from '@/test/fixtures/tasks';
 import { attentionSnapshot, session } from './test/fixtures';
-import { attentionRead, otherListReads, problem, serveList, serveSession } from './test/handlers';
+import {
+  attentionRead,
+  otherListReads,
+  problem,
+  serveList,
+  serveSession,
+  tasksRead
+} from './test/handlers';
 import { renderSessions } from './test/render';
 
 // The list's reads would otherwise queue behind the app's read limiter. See fastReads.ts.
@@ -217,5 +225,28 @@ describe('sessions list', () => {
       expect(screen.queryByTestId('sessions-refresh-error')).not.toBeInTheDocument()
     );
     expect(screen.getByText('Cached job')).toBeInTheDocument();
+  });
+});
+
+describe('task-titled sessions', () => {
+  it("names a task's session by the task title, with the repository beside it", async () => {
+    // serveList's own empty task list would win if it came first, so the task read goes ahead of it.
+    server.use(
+      tasksRead([
+        view(
+          { id: 'task-1', title: 'Fix login redirect race' },
+          { attempts: [attempt({ session_id: 's1' })] }
+        )
+      ]),
+      ...serveList([
+        session({ id: 's1', title: 'mainloop', repo_url: 'https://github.com/acme/app' }),
+        session({ id: 's2', title: 'Plain run', repo_url: 'https://github.com/acme/app' })
+      ])
+    );
+    renderSessions('/');
+    const tasked = await screen.findByRole('link', { name: /Fix login redirect race/ });
+    expect(within(tasked).getByText('acme/app')).toBeInTheDocument();
+    expect(within(tasked).queryByText('mainloop')).toBeNull();
+    expect(screen.getByRole('link', { name: /Plain run/ })).toBeInTheDocument();
   });
 });

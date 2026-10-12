@@ -20,11 +20,12 @@ the loading message. Retrying requests the details for the current project.
 ## Mobile
 
 - The header has an icon link to orchestration health, labelled "Orchestration health", beside the new-session icon.
-- Bottom tab bar with Chat, Sessions and Inbox tabs (the Sessions tab includes the "+ agent" link)
+- Bottom tab bar with Chat, Sessions, Inbox and Projects tabs (the Sessions tab includes the "+ agent" link). It has at most five tabs, each labelled in one short word.
 - Chat tab active by default on load
 - Tab bar hidden on desktop viewports
 - Touch targets sized appropriately for mobile interaction
-- Tabs switch between the Chat, Sessions and Inbox views
+- Tabs switch between the Chat, Sessions, Inbox and Projects views
+- A session bound to a task is listed under the task's title, with the repository as secondary text. Other sessions keep their own title.
 - Sessions use the same current/history filters as desktop. Inbox contains **Needs you** and
   **Activity**; the Inbox badge excludes Activity. Filter and inbox-view controls are at least
   44px tall and wrap within the available width.

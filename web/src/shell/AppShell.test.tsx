@@ -262,6 +262,43 @@ describe('page titles and focus', () => {
   });
 });
 
+describe('compact projects tab', () => {
+  it('has four short tabs, with Projects among them', async () => {
+    setViewport(false);
+    await renderAt('/');
+    const bar = screen.getByTestId('mobile-tab-bar');
+    const tabs = within(bar).getAllByRole('button');
+    expect(tabs.length).toBeLessThanOrEqual(5);
+    expect(tabs.map((tab) => tab.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+      '[CHAT]',
+      '[SESSIONS]',
+      '[INBOX]',
+      '[PROJECTS]'
+    ]);
+    expect(screen.getByTestId('tab-projects')).toHaveAttribute('aria-label', 'Projects');
+  });
+
+  it('opens the projects panel from its tab, and keeps it mounted after switching away', async () => {
+    setViewport(false);
+    const user = userEvent.setup();
+    await renderAt('/');
+    await user.click(screen.getByTestId('tab-projects'));
+    const projects = await screen.findByTestId('projects-panel');
+    expect(screen.getByTestId('tab-projects')).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByTestId('tab-chat'));
+    expect(projects).not.toBeVisible();
+    await user.click(screen.getByTestId('tab-projects'));
+    expect(screen.getByTestId('projects-panel')).toBe(projects);
+    expect(projects).toBeVisible();
+  });
+
+  it('opens from the URL with ?tab=projects', async () => {
+    setViewport(false);
+    await renderAt('/?tab=projects');
+    expect(await screen.findByTestId('projects-panel')).toBeVisible();
+  });
+});
+
 describe('compact tab state', () => {
   it('keeps an opened tab mounted when switching away and back', async () => {
     setViewport(false);

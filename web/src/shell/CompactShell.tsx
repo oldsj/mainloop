@@ -1,5 +1,5 @@
 import { Link, useNavigate } from '@tanstack/react-router';
-import { Activity, Inbox, ListTree, MessageSquare, Plus } from 'lucide-react';
+import { Activity, FolderGit2, Inbox, ListTree, MessageSquare, Plus } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
@@ -7,14 +7,15 @@ import { InboxBadge, unresolvedCount, useAttention } from '@/features/inbox';
 import { ownerTaskText, TasksBadge, tasksNeedingOwner, useTaskList } from '@/features/tasks';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
-import { InboxPanel, SessionsPanel } from './slots';
+import { InboxPanel, ProjectsPanel, SessionsPanel } from './slots';
 import { ThemeSelector } from './ThemeSelector';
 import type { Tab } from './view';
 
 const TAB_ITEMS = [
   { tab: 'chat', label: 'Chat', Icon: MessageSquare },
   { tab: 'sessions', label: 'Sessions', Icon: ListTree },
-  { tab: 'inbox', label: 'Inbox', Icon: Inbox }
+  { tab: 'inbox', label: 'Inbox', Icon: Inbox },
+  { tab: 'projects', label: 'Projects', Icon: FolderGit2 }
 ] as const satisfies readonly { tab: Tab; label: string; Icon: unknown }[];
 
 /**
@@ -94,6 +95,13 @@ export function CompactShell({ tab, children }: { tab: Tab; children: ReactNode 
           <TabPane active={tab === 'inbox'}>
             <PanelBoundary name="Inbox">
               <InboxPanel />
+            </PanelBoundary>
+          </TabPane>
+        )}
+        {opened.has('projects') && (
+          <TabPane active={tab === 'projects'}>
+            <PanelBoundary name="Projects">
+              <ProjectsPanel />
             </PanelBoundary>
           </TabPane>
         )}

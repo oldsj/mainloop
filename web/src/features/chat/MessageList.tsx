@@ -13,6 +13,8 @@ export const SHOW_BUTTON_PX = 100;
 export interface MessageListProps {
   messages: Message[];
   notices: Map<string, DeliveryNotice>;
+  /** Message ids Mainloop wrote on the owner's behalf; they show as collapsed assignments. */
+  assignments?: ReadonlySet<string>;
   agentKind?: 'claude' | 'codex' | null;
   /** Where the messages were written, shown in each prompt label. */
   context?: string;
@@ -26,6 +28,7 @@ export interface MessageListProps {
 export function MessageList({
   messages,
   notices,
+  assignments,
   agentKind,
   context,
   loaded,
@@ -86,6 +89,7 @@ export function MessageList({
               agentKind={agentKind}
               context={context}
               notice={notices.get(message.id)}
+              assignment={assignments?.has(message.id)}
               retryDisabled={retryDisabled}
               onRetry={onRetry}
             />

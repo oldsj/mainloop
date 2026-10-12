@@ -6,6 +6,7 @@ import {
   boundedText,
   MAIN_PROVIDERS,
   providerLabel,
+  providerNeedsAttention,
   providerStateWords,
   type MainProviderControl
 } from './mainProvider';
@@ -145,6 +146,16 @@ export function MainThreadHeader({
 }: MainThreadHeaderProps) {
   const [open, setOpen] = useState(false);
   const { native } = info;
+  // The provider row is a detail while the provider is ready; a failed, switching or unavailable
+  // provider shows it inline so the owner sees it without opening anything.
+  const providerInline =
+    provider !== undefined &&
+    providerNeedsAttention(info, {
+      offline,
+      selecting: provider.selecting,
+      unconfirmed: provider.unconfirmed,
+      notice: provider.notice
+    });
   const model = (
     native?.model ?? agentLabel(native?.kind as 'claude' | 'codex' | undefined)
   ).replace(/^claude-/, '');
@@ -196,10 +207,15 @@ export function MainThreadHeader({
         </button>
       </div>
 
-      {provider ? <ProviderRow info={info} offline={offline} provider={provider} /> : null}
+      {provider && providerInline ? (
+        <ProviderRow info={info} offline={offline} provider={provider} />
+      ) : null}
 
       {open ? (
         <div id="main-thread-details" className="border-border border-t">
+          {provider && !providerInline ? (
+            <ProviderRow info={info} offline={offline} provider={provider} />
+          ) : null}
           {provider ? (
             <p className="px-md py-xs" data-testid="mt-provider-help">
               Conversation and tasks stay. Switching starts a fresh native session; prior native

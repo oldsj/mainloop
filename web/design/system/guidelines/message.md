@@ -19,6 +19,7 @@ One user or assistant message in a conversation. A user message also carries its
 - **Sent:** no notice; the message is plain.
 - **Failed (not sent):** a `Failed` notice with the short reason from the server (up to 300 characters). Retry is offered only on the newest user message, and only when nothing is in flight.
 - **Unconfirmed:** an `Unconfirmed` notice. No Retry, because the original may have been accepted. The message stays locked until the server reports the outcome.
+- **Assignment:** a message Mainloop wrote on the owner's behalf, such as a delegated brief (its delivery's `source` is not `user`). It is a collapsed "Assignment from Mainloop" disclosure with the time, not a message from "You". Its text opens on demand.
 - **Loading:** a placeholder row of the same height as a short message, so the list does not jump.
 - **Stale:** a reloaded message keeps its last known state and shows the time it was last confirmed.
 - **Error:** if the history cannot load, keep the last known messages and show a retry control above the list.

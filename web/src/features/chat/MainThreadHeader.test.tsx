@@ -100,6 +100,9 @@ describe('MainThreadHeader', () => {
   });
 });
 
+/** A ready or not-started provider lives under details, so a test that reads it opens them first. */
+const openDetails = () => userEvent.click(screen.getByTestId('mt-details-toggle'));
+
 /** Idle provider controls, with the ones a test needs overridden. */
 const control = (overrides: Partial<MainProviderControl> = {}): MainProviderControl => ({
   selecting: false,
@@ -154,11 +157,15 @@ describe('MainThreadHeader main provider row', () => {
       'failed',
       'none confirmed'
     ]
-  ])('shows the %s status in words, not colour alone', (_status, provider, words, effective) => {
-    view(withProvider(provider), { provider: control() });
-    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent(words);
-    expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent(effective);
-  });
+  ])(
+    'shows the %s status in words, not colour alone',
+    async (_status, provider, words, effective) => {
+      view(withProvider(provider), { provider: control() });
+      if (provider?.status === 'ready' || provider?.status === 'not_started') await openDetails();
+      expect(screen.getByTestId('mt-provider-status')).toHaveTextContent(words);
+      expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent(effective);
+    }
+  );
 
   it('says so when the provider state is unknown, and the select is held', () => {
     view(withProvider(null), { provider: control({ switchBlocked: true }) });
@@ -167,8 +174,9 @@ describe('MainThreadHeader main provider row', () => {
     expect(screen.getByRole('option', { name: 'unknown' })).toBeInTheDocument();
   });
 
-  it('holds the select while the control says the switch is blocked', () => {
+  it('holds the select while the control says the switch is blocked', async () => {
     view(withProvider(providerFixture()), { provider: control({ switchBlocked: true }) });
+    await openDetails();
     expect(screen.getByTestId('mt-provider-select')).toBeDisabled();
   });
 
@@ -183,10 +191,11 @@ describe('MainThreadHeader main provider row', () => {
     expect(screen.getByTestId('mt-provider-retry')).toBeEnabled();
   });
 
-  it('holds Retry while its own rule says so', () => {
+  it('holds Retry while its own rule says so', async () => {
     view(withProvider(providerFixture()), {
       provider: control({ retryOffered: true, retryBlocked: true })
     });
+    await openDetails();
     expect(screen.getByTestId('mt-provider-retry')).toBeDisabled();
   });
 
@@ -200,6 +209,7 @@ describe('MainThreadHeader main provider row', () => {
   it('offers the other provider and reports the choice', async () => {
     const select = vi.fn();
     view(withProvider(providerFixture()), { provider: control({ select }) });
+    await openDetails();
     await userEvent.selectOptions(screen.getByLabelText('Main provider'), 'codex');
     expect(select).toHaveBeenCalledWith('codex');
   });
@@ -241,6 +251,7 @@ describe('MainThreadHeader main provider row', () => {
   it('offers Retry only when the control offers it, and runs it on request', async () => {
     const retry = vi.fn();
     const { rerender } = view(withProvider(providerFixture()), { provider: control() });
+    await openDetails();
     expect(screen.queryByTestId('mt-provider-retry')).toBeNull();
     rerender(
       <MainThreadHeader
@@ -274,6 +285,23 @@ describe('MainThreadHeader main provider row', () => {
   it('hides the row when no provider controls are given', () => {
     view(withProvider(providerFixture()));
     expect(screen.queryByTestId('mt-provider')).toBeNull();
+  });
+
+  it('keeps a ready provider under details, out of the summary line', async () => {
+    view(withProvider(providerFixture()), { provider: control() });
+    expect(screen.queryByTestId('mt-provider-select')).toBeNull();
+    await openDetails();
+    expect(screen.getByTestId('mt-provider-select')).toHaveValue('claude');
+  });
+
+  it.each([
+    ['failed', providerFixture({ status: 'failed', effective_provider: null, error: 'x' })],
+    ['pending', providerFixture({ status: 'pending', effective_provider: null })],
+    ['unknown', null]
+  ])('shows a %s provider under the summary without opening details', (_name, provider) => {
+    view(withProvider(provider), { provider: control() });
+    expect(screen.getByTestId('mt-provider-status')).toBeInTheDocument();
+    expect(screen.getByTestId('mt-provider-select')).toBeInTheDocument();
   });
 
   it('explains what a switch keeps, under details', async () => {

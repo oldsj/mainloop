@@ -630,3 +630,15 @@ async function confirmDelete(user: ReturnType<typeof userEvent.setup>) {
   const dialog = await screen.findByRole('alertdialog');
   await user.click(within(dialog).getByRole('button', { name: 'Delete workspace' }));
 }
+
+describe('workspace identity', () => {
+  it('shows the workspace ID as its first 8 characters, with a copy control for the full ID', async () => {
+    const full = '6f1c2a9e-4b7d-4e8a-9c3f-0d2b1a7e5f10';
+    server.use(...serveWorkspace(workspaceFixture({ workspace_id: full })));
+    renderWorkspace('/workspaces/w1');
+    await heading();
+    expect(screen.getByText('6f1c2a9e')).toBeInTheDocument();
+    expect(screen.queryByText(full)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Copy full workspace ID' })).toBeInTheDocument();
+  });
+});

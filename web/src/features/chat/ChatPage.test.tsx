@@ -126,6 +126,29 @@ describe('loading', () => {
   });
 });
 
+describe('assignments in the main thread', () => {
+  it("shows a message Mainloop sent as a collapsed assignment, and the owner's own as You", async () => {
+    setup({
+      mainThread: mainThreadFixture({
+        conversation_id: CONVERSATION_ID,
+        native: nativeFixture({
+          deliveries: [deliveryFixture({ message_id: 'm-brief', source: 'brief' })]
+        })
+      }),
+      messages: [
+        messageFixture({ id: 'm-brief', content: 'Brief for the parser' }),
+        messageFixture({ id: 'm-own', content: 'my own words' })
+      ]
+    });
+    await screen.findByText('my own words');
+    const block = screen.getByTestId('assignment-block');
+    expect(block).not.toHaveAttribute('open');
+    expect(within(block).getByText('Brief for the parser')).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: /^Assignment from Mainloop/ })).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: /^You/ })).toHaveTextContent('my own words');
+  });
+});
+
 describe('sending', () => {
   it('shows the message at once, posts it with the conversation id, and clears the draft', async () => {
     const { state } = setup(existing());
@@ -797,12 +820,15 @@ function idleThread(
 }
 
 const providerSelect = () => screen.getByTestId('mt-provider-select');
+// A ready provider lives under the header's details, so a test that reads it opens them first.
+const openDetails = () => userEvent.click(screen.getByTestId('mt-details-toggle'));
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('the main provider', () => {
   it('sends one explicit selection and shows the provider once it is confirmed', async () => {
     const { state } = setup(idleThread());
     await screen.findByText('build it');
+    await openDetails();
     await userEvent.selectOptions(providerSelect(), 'codex');
     await waitFor(() =>
       expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Codex')
@@ -815,6 +841,7 @@ describe('the main provider', () => {
   it('sends nothing when the provider that is already ready is chosen', async () => {
     const { state } = setup(idleThread());
     await screen.findByText('build it');
+    await openDetails();
     await userEvent.selectOptions(providerSelect(), 'claude');
     await pause(20);
     expect(state.providerPosts).toHaveLength(0);
@@ -832,6 +859,7 @@ describe('the main provider', () => {
       messages: [messageFixture({ id: 'm1', content: 'build it' })]
     });
     await screen.findByText('build it');
+    await openDetails();
     expect(providerSelect()).toBeDisabled();
     expect(input()).toBeDisabled();
   });
@@ -889,6 +917,7 @@ describe('the main provider', () => {
     const { state } = setup(idleThread(), {});
     state.rejectNextProvider = { status: 409, detail: 'Main provider is busy.' };
     await screen.findByText('build it');
+    await openDetails();
     await userEvent.selectOptions(providerSelect(), 'codex');
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Provider change blocked (409): Main provider is busy.'
@@ -902,6 +931,7 @@ describe('the main provider', () => {
     const { state } = setup(idleThread());
     state.lostProvider = 'unrecorded';
     await screen.findByText('build it');
+    await openDetails();
     await userEvent.selectOptions(providerSelect(), 'codex');
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Provider selection was not confirmed'
@@ -926,6 +956,7 @@ describe('the main provider', () => {
     const { state } = setup(idleThread());
     state.failProviderReads = 1;
     await screen.findByText('build it');
+    await openDetails();
     await userEvent.selectOptions(providerSelect(), 'codex');
     expect(await screen.findByText(/Could not confirm provider state/)).toBeInTheDocument();
     expect(providerSelect()).toBeDisabled();
@@ -969,6 +1000,8 @@ describe('the main provider', () => {
       )
     );
     await screen.findByText('build it');
+    // The row moves into details once the restart makes the provider ready, so open them first.
+    await openDetails();
     await userEvent.click(screen.getByTestId('mt-provider-restart'));
     await waitFor(() => expect(input()).toBeEnabled());
     expect(state.providerPosts).toEqual([{ provider: 'claude', restart_failed: true }]);
@@ -978,6 +1011,7 @@ describe('the main provider', () => {
   it('does not let an older read overwrite a newer selection', async () => {
     const { queryClient, state } = setup(idleThread());
     await screen.findByText('build it');
+    await openDetails();
     const stale = state.mainThread;
     // A read of the thread that started before the selection, and answers after it.
     server.use(
@@ -1004,6 +1038,7 @@ describe('the main provider', () => {
       )
     );
     await screen.findByText('build it');
+    await openDetails();
     expect(providerSelect()).toBeDisabled();
     expect(screen.getByTestId('mt-provider-status')).toHaveAttribute('role', 'status');
     await userEvent.click(screen.getByTestId('mt-provider-retry'));
@@ -1040,6 +1075,7 @@ describe('the main provider', () => {
       )
     );
     await screen.findByText('build it');
+    await openDetails();
     // The read at mount, then a poll on the interval, both still find the switch pending.
     await waitFor(() => expect(state.providerReads).toBeGreaterThanOrEqual(2), {
       timeout: POLL_MS * 3
@@ -1070,6 +1106,7 @@ describe('the main lock while a send, a stop or a load is in flight', () => {
   it('locks the selection and the main input while a send is in flight', async () => {
     const { state, endTurn, hold } = setup(idleThread());
     await screen.findByText('build it');
+    await openDetails();
     const release = hold('chat');
     await userEvent.type(input(), 'next step{Enter}');
     await waitFor(() => expect(state.chatPosts).toHaveLength(1));
@@ -1097,6 +1134,7 @@ describe('the main lock while a send, a stop or a load is in flight', () => {
       })
     );
     await screen.findByText('build it');
+    await openDetails();
     const release = hold('stop-turn');
     await userEvent.click(await screen.findByTestId('mt-stop-turn'));
     await waitFor(() => expect(state.stopped).toEqual([MAIN_SESSION_ID]));
@@ -1118,6 +1156,8 @@ describe('the main lock while a send, a stop or a load is in flight', () => {
   it('locks the selection and the main input until the conversation is read', async () => {
     const { hold } = setup(idleThread());
     const release = hold('conversation');
+    await screen.findByTestId('mt-details-toggle');
+    await openDetails();
     expect(await screen.findByTestId('mt-provider-select')).toBeDisabled();
     expect(input()).toBeDisabled();
 
@@ -1215,6 +1255,7 @@ describe('refusal codes from the backend', () => {
     const { state } = setup(idleThread());
     state.rejectNextProvider = { status: 409, detail: 'Raw server prose.', code };
     await screen.findByText('build it');
+    await openDetails();
     await userEvent.selectOptions(providerSelect(), 'codex');
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(`${text} State is refreshed; no automatic retry.`);
@@ -1230,6 +1271,7 @@ describe('refusal codes from the backend', () => {
       code: 'mystery' as RefusalCode
     };
     await screen.findByText('build it');
+    await openDetails();
     await userEvent.selectOptions(providerSelect(), 'codex');
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Provider change blocked (409): Main provider is busy. State is refreshed; no automatic retry.'

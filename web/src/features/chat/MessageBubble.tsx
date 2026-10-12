@@ -16,6 +16,8 @@ export interface MessageBubbleProps {
   agentKind?: 'claude' | 'codex' | null;
   /** The message was not delivered, or its delivery is unconfirmed. */
   notice?: Notice;
+  /** Mainloop wrote it on the owner's behalf (a delegated brief): collapsed, not "You". */
+  assignment?: boolean;
   retryDisabled?: boolean;
   onRetry?: (message: Message) => void;
 }
@@ -26,6 +28,7 @@ export function MessageBubble({
   context = 'main',
   agentKind,
   notice,
+  assignment = false,
   retryDisabled,
   onRetry
 }: MessageBubbleProps) {
@@ -36,6 +39,31 @@ export function MessageBubble({
     : message.content;
   const report = isUser ? parseChildReport(message.content) : null;
   const author = `${isUser ? 'user' : agentLabel(agentKind)}@${context}$`;
+
+  if (isUser && assignment && !report) {
+    return (
+      <article
+        aria-label={`Assignment from Mainloop, ${messageTime(message.created_at)}`}
+        className="px-md py-sm border-border w-full border-l-2 bg-transparent"
+      >
+        <details data-testid="assignment-block">
+          <summary className="text-muted-foreground min-h-11 cursor-pointer text-xs md:text-sm">
+            Assignment from Mainloop · {messageTime(message.created_at)}
+          </summary>
+          <div className="mt-xs min-w-0">
+            <Markdown className="text-foreground text-sm md:text-base">{content}</Markdown>
+          </div>
+        </details>
+        {notice ? (
+          <DeliveryNotice
+            notice={notice}
+            retryDisabled={retryDisabled}
+            onRetry={onRetry ? () => onRetry(message) : undefined}
+          />
+        ) : null}
+      </article>
+    );
+  }
 
   return (
     <article

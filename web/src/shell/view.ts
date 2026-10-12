@@ -4,7 +4,7 @@ import { z } from 'zod';
 export const VIEWS = ['desktop', 'compact'] as const;
 export type View = (typeof VIEWS)[number];
 
-export const TABS = ['chat', 'sessions', 'inbox'] as const;
+export const TABS = ['chat', 'sessions', 'inbox', 'projects'] as const;
 export type Tab = (typeof TABS)[number];
 
 /** Search params every route shares. Tab and view live in the URL so links can set them. */

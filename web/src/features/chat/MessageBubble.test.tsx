@@ -24,6 +24,29 @@ describe('MessageBubble', () => {
     expect(screen.getByText(/<b>raw<\/b>/)).toBeInTheDocument();
   });
 
+  it('shows an assignment collapsed, with its text on demand and no "You" label', async () => {
+    render(
+      <MessageBubble
+        message={messageFixture({ role: 'user', content: 'Build the **parser** brief' })}
+        agentKind="claude"
+        assignment
+      />
+    );
+    const block = screen.getByTestId('assignment-block');
+    expect(block).not.toHaveAttribute('open');
+    expect(screen.getByRole('article', { name: /^Assignment from Mainloop/ })).toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: /^You/ })).toBeNull();
+    await userEvent.click(within(block).getByText(/Assignment from Mainloop/));
+    expect(block).toHaveAttribute('open');
+    expect(within(block).getByText('parser')).toBeInTheDocument();
+  });
+
+  it('keeps a message from the owner labelled "You" when no assignment is given', () => {
+    render(<MessageBubble message={messageFixture({ role: 'user', content: 'hi' })} />);
+    expect(screen.getByRole('article', { name: /^You/ })).toBeInTheDocument();
+    expect(screen.queryByTestId('assignment-block')).toBeNull();
+  });
+
   it('labels the prompt with the thread it was written in', () => {
     render(
       <MessageBubble

@@ -23,6 +23,8 @@ export interface SessionRowProps {
   session: SessionRowFields;
   workspace?: WorkspaceBadgeFields;
   providers: ProviderFields[];
+  /** The title of the task this session belongs to. Shown in place of the session title. */
+  taskTitle?: string;
 }
 
 /**
@@ -30,12 +32,14 @@ export interface SessionRowProps {
  * `aria-current` while open. The `tab` search param is cleared so that a tap in the compact shell
  * opens the page rather than leaving the sessions tab showing.
  */
-export function SessionRow({ session, workspace, providers }: SessionRowProps) {
+export function SessionRow({ session, workspace, providers, taskTitle }: SessionRowProps) {
   const running = session.status === 'active';
   const kind = agentLabel(
     nativeProviderFor(workspace?.manifest.agent_kind ?? session.agent_kind, providers)
   );
   const repo = session.repo_url?.replace('https://github.com/', '');
+  // A task's sessions are all named after the repository, so the task's title tells them apart.
+  const name = taskTitle || session.title;
 
   return (
     <Link
@@ -61,7 +65,7 @@ export function SessionRow({ session, workspace, providers }: SessionRowProps) {
           ) : null}
           <h3 className="truncate text-sm font-medium group-aria-[current=page]:font-bold">
             {session.parent_session_id ? <span data-testid="child-marker">↳ </span> : null}
-            {session.title}
+            {name}
           </h3>
           {session.topic ? (
             <span

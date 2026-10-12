@@ -22,6 +22,7 @@ import {
   type WorkspaceLifecycle
 } from './model';
 import { useTasks, useWorkspace, useWorkspaceActions } from './queries';
+import { ShortId } from './ShortId';
 import { WorkspaceManifest } from './WorkspaceManifest';
 import { WorkspacePreviews } from './WorkspacePreviews';
 
@@ -117,9 +118,9 @@ export function WorkspacePage({ id }: { id: string }) {
         <div className="gap-sm flex flex-wrap items-start justify-between">
           <div className="min-w-0">
             <h1 className="text-lg font-medium">Workspace</h1>
-            <p className="text-muted-foreground font-mono text-xs break-all">
-              {workspace.workspace_id}
-            </p>
+            <div className="text-muted-foreground">
+              <ShortId id={workspace.workspace_id} label="workspace" />
+            </div>
           </div>
           <WorkspaceLifecycleBadge workspace={workspace} />
         </div>

@@ -5,6 +5,8 @@ import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Skeleton } from '@/components/shared/skeleton';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
+import { useTaskList } from '@/features/tasks';
+import { taskForSession } from '@/lib/taskState';
 import { SessionRow } from './SessionRow';
 import { sessionCounts, visibleSessions, workspaceFor } from './model';
 import { useAttention, useProviders, useWorkspaces } from './queries';
@@ -28,6 +30,7 @@ export function SessionsPanel() {
   const attention = useAttention();
   const providers = useProviders();
   const workspaces = useWorkspaces();
+  const tasks = useTaskList();
   const [showFinished, setShowFinished] = useState(false);
   const [showIdle, setShowIdle] = useState(false);
 
@@ -135,6 +138,7 @@ export function SessionsPanel() {
                 session={session}
                 workspace={workspaceFor(workspaces.data ?? [], session.id)}
                 providers={providers.data ?? []}
+                taskTitle={taskForSession(tasks.data ?? [], session.id)?.view.task.title}
               />
             </li>
           ))}

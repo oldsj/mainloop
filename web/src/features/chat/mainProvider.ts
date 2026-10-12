@@ -129,6 +129,21 @@ export function mainInputLock(
   }
 }
 
+/**
+ * Whether the provider row shows without opening the thread's details: the provider is failed,
+ * switching, unknown or unconfirmed, the thread is offline, or the last selection left a notice.
+ * A provider that is ready, or not started yet, stays in the details.
+ */
+export function providerNeedsAttention(
+  info: MainThreadInfo | null | undefined,
+  state: { offline: boolean; selecting: boolean; unconfirmed: boolean; notice: string | null }
+): boolean {
+  if (state.offline || state.selecting || state.unconfirmed || state.notice) return true;
+  const provider = info?.provider;
+  if (!provider) return true;
+  return provider.status !== 'not_started' && !providerReady(provider);
+}
+
 /** The state words for the provider row: the request in progress and the read state come first. */
 export function providerStateWords(
   provider: MainProviderInfo | null | undefined,

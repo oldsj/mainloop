@@ -18,11 +18,11 @@ Status words, most urgent first: **unreachable** (the backend cannot be reached,
 - **Model:** the model name without the `claude-` prefix; the agent kind when the session has no model.
 - **Pending:** shown only when topics are waiting on the owner; the sum across topics.
 - **Stop:** shown only while a turn is in flight. Disabled while the stop request runs ("stopping…") and while offline.
-- **Details:** closed by default. Open shows the identity strip (supplied by the sessions slice) and the topic index, `name (status line) [n pending]`, or "none yet".
+- **Details:** closed by default; it also holds the provider row unless the provider needs attention (see Provider row). Open shows the identity strip (supplied by the sessions slice) and the topic index, `name (status line) [n pending]`, or "none yet".
 
 ## Provider row
 
-Shown under the summary once the main has a provider state: the owner's select (Claude or Codex), the effective provider, state words, and Retry or Restart after a failed start or write.
+Inside the details while the provider is ready or not started yet. It moves up under the summary when the provider is failed, switching, unknown or unconfirmed, the thread is offline, or the last selection left a notice, so a problem is never hidden behind the toggle. It holds the owner's select (Claude or Codex), the effective provider, state words, and Retry or Restart after a failed start or write.
 
 - **Select:** labelled "Main provider". Held while the header is held: offline, a send or stop in flight, the thread or conversation still loading, a switch pending, or a turn or delivery open. Choosing the ready provider again sends nothing.
 - **State words:** offline (selection unavailable), selecting, provider state unconfirmed, state unknown, not started (starts with your next message), preparing, failed, ready, waiting to switch. Plain text beside the select, in a polite `role="status"` region so a change is announced without moving focus.

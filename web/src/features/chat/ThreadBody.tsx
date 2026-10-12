@@ -1,5 +1,6 @@
 import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Composer } from './Composer';
+import { assignmentIds } from './assignments';
 import { MessageList } from './MessageList';
 import type { ThreadView } from './useThread';
 
@@ -52,6 +53,7 @@ export function ThreadBody({
       <MessageList
         messages={thread.messages}
         notices={thread.notices}
+        assignments={assignmentIds(thread.native?.deliveries)}
         agentKind={thread.native?.kind as 'claude' | 'codex' | undefined}
         context={thread.context}
         loaded={thread.loaded}
