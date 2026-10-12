@@ -30,6 +30,22 @@ describe('workGroup', () => {
     expect(workGroup(failedButAsking, LAST_VISIT)).toBe('needs-you');
   });
 
+  it('puts a waiting/publication task with an open, green, unmerged PR in Needs you, never Working', () => {
+    const stalled = view(
+      { id: 'd', status: 'waiting', reason: 'publication' },
+      { projection: projection({ pr_state: 'open', ci_state: 'success' }) }
+    );
+    expect(workGroup(stalled, LAST_VISIT)).toBe('needs-you');
+  });
+
+  it('keeps a waiting/publication task in Working while CI has not gone green', () => {
+    const ciPending = view(
+      { id: 'e', status: 'waiting', reason: 'publication' },
+      { projection: projection({ pr_state: 'open', ci_state: 'pending' }) }
+    );
+    expect(workGroup(ciPending, LAST_VISIT)).toBe('working');
+  });
+
   it('puts failed and blocked tasks in Blocked or failed', () => {
     expect(workGroup(view({ status: 'failed' }), LAST_VISIT)).toBe('blocked');
     expect(workGroup(view({ status: 'blocked' }), LAST_VISIT)).toBe('blocked');
