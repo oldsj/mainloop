@@ -108,6 +108,38 @@ Parallel workers must not silently introduce competing implementations of shared
 
 Fan-out is limited by cohesion as well as compute and model capacity. When a supervisor can no longer track active candidates, decisions, dependencies, and integration risks, the batch stops growing or splits along stable subsystem boundaries.
 
+## Tasks, goals and agent context
+
+Status: proposed direction, not implemented.
+
+Agents in Mainloop currently receive less context than prior native-harness workflows, task state is split between the database and external note files, and there is no way to see where a running supervisor stands in its work without opening it.
+
+### Agent context
+
+- Claude Code reads `CLAUDE.md`, not `AGENTS.md`. Repositories keep `AGENTS.md` as the single source and add a `CLAUDE.md` that imports it (`@AGENTS.md`), so Claude and Codex agents load the same nested project instructions natively.
+- An owner-level instruction document, stored in Mainloop and rendered into every main, supervisor, and child brief, would carry communication style, evidence rules, no-hidden-subagents, and review expectations shared across projects. Bounded in size, versioned, and visible in the UI.
+- Briefs should state what the agent is — its role, that it runs in an isolated workspace, which tools it has, and what it may not do — rather than adding another prompt layer. This extends the existing brief construction instead of layering on top of it.
+
+### Tasks as the native unit
+
+- Mainloop's durable tasks become the source of truth for work: a tree of goal, supervisor, and children, each with status, plan, decisions, reports, PRs, and evidence. External note files stop being authoritative for task state.
+- An explorer view shows each parent task's progress without opening it: children done, running, blocked, or waiting on the owner, and the latest report line.
+- A task page shows the plan and decision log as structured records (see [Context and continuity](#context-and-continuity) items 2–3), not free text only.
+
+### Export, not sync
+
+- Mainloop can export tasks as Markdown, one folder per task with frontmatter carrying status and links, into a git repository that external note tools may render. Export only: edits flow back through Mainloop, never by syncing files back in.
+
+### Goals with guardrails
+
+- A goal is a long-running supervisor task with explicit limits set at creation: token or quota budget, wall-clock budget, maximum concurrent children, maximum repair attempts per child, allowed projects and paths, and decisions reserved for the owner that raise approval cards. This extends the bounded-autonomy direction already set out for [Phase 2](#phase-2-cohesive-queues-and-bounded-autonomy).
+- A goal has a "done when" condition the supervisor must prove with evidence — a merged PR, a live check — rather than claim. It stops and asks the owner when a limit is reached, when repairs stop converging, or when a reserved decision comes up.
+- Goals share the same task tree and explorer progress as other work.
+
+### Slices
+
+In rough order: agent context docs (this section, plus a repository `CLAUDE.md`); explorer progress showing child state counts and the latest report line per parent task, reusing existing task reads without new server API where a count can be derived; a task-steering tool for sending messages into running tasks; the owner policy document rendered into briefs; goal limits and done-when conditions on supervisor tasks; Markdown export and one-time import of prior note archives.
+
 ## Scheduling and capacity
 
 Work moves through explicit states such as proposed, planned, ready, running, waiting, held, accepted, and cancelled. Dependency-blocked work is not ready.
