@@ -13,10 +13,11 @@ read from kagent.
 
 ## Go server (migration slice G5)
 
-The sections below are the pre-cutover reference for the retired Python backend (history before `e776537`). This
-section is the Go server's lifecycle in `server/internal/workspaces`. Labels: **implemented** is
+This section is the Go server's lifecycle in `server/internal/workspaces`. Labels: **implemented** is
 in the code and covered by fake-backed tests against a scratch PostgreSQL; **proposed** is not
 built; nothing here has been measured against a live kagent.
+
+History before `e776537` describes the retired Python backend. Where other text on this page differs from the Go status, the Go status is current.
 
 ### Implemented
 
@@ -169,9 +170,6 @@ Not proven:
 - The shell mount for `/workspaces/$id`. Route tests attach the real route; the shell is unchanged.
 - Live event refresh of the workspace page. The SSE applier is tested with the page mounted, not a
   real event stream.
-
-Differences from the retired SvelteKit page: a suspended workspace uses the muted tone, not purple. The token
-set has no purple tone.
 
 ## Lifecycle
 
@@ -363,8 +361,7 @@ Held reports after a stopped turn do not prevent parking.
 
 ## Go preview proxy
 
-Status: implemented in the Go server (G12, tests against fakes). The retired Python proxy
-(`backend/src/mainloop/runtime/preview_proxy.py`, before `e776537`) is history.
+Status: implemented in the Go server (G12, tests against fakes).
 
 The Go server routes a request whose `Host` parses as a preview host to the proxy, ahead of the
 API middleware (so the Host guard, API Origin guard, CORS and body validation never see it); the
@@ -480,16 +477,16 @@ delete those workspaces first. The exit status is non-zero if any delete failed.
 
 ## Scope and evidence
 
-This is a fresh cutover: old sessions are deleted, with no data migration, backfill or
-credential retrofit. Standalone `/agents` sessions have no workspace grant. New owner and
+Existing sessions are not migrated, backfilled or given credentials retroactively. Standalone `/agents` sessions have no workspace grant. New owner and
 delegated workspaces use the shared enrollment path.
 
 Fake-backed unit tests and opt-in PostgreSQL tests cover these paths. Earlier revisions ran
 against a scratch PostgreSQL; the M7 continuation tests and manifests still require supervisor
 execution against the frozen candidate. Source inspection is not execution evidence.
 
-**Verified live** on a Kind cluster running the kagent fork and Substrate (images built from this
-work before the review repairs; they were not redeployed after them):
+**Verified live before the cutover**, on the Python backend, on a Kind cluster running the kagent
+fork and Substrate (images built from this work before the review repairs; they were not
+redeployed after them). Not re-run on the Go server:
 
 - Creating a workspace, a first turn that sees the checkout, a second turn on the same Session,
   and the K1 markers outside `.git`.

@@ -4,7 +4,9 @@ Sessions are native Claude Code or Codex work started from the home thread or th
 
 ## Go server status (G6a, G6b)
 
-Status: **implemented** for the main session (G6a) and the session routes (G6b) in `server/internal/sessions`; tests use a scratch PostgreSQL and the fake kagent. **Not measured** against a live kagent. The rest of this page is the pre-cutover reference, written for the retired Python backend (history before `e776537`). Where it differs, this status is current.
+Status: **implemented** for the main session (G6a) and the session routes (G6b) in `server/internal/sessions`; tests use a scratch PostgreSQL and the fake kagent. **Not measured** against a live kagent.
+
+History before `e776537` describes the retired Python backend. Where other text on this page differs from the Go status, the Go status is current.
 
 - The main session is created by the reconciler (a periodic sweep) and by the first `POST /chat`, never by a GET. Concurrent first calls share one session.
 - Delivery states in the Go ledger: `recorded`, `sending`, `delivered`, `completed`, `failed`, `cancelled`, `uncertain`. `queued` arrives with the report queue. Only `recorded` is ever sent: the claimer commits `sending` before the kagent call, holds no database lock or transaction across it, and fences every outcome write on its lease and attempt count, so a claimer that lost its lease changes nothing.
@@ -13,7 +15,7 @@ Status: **implemented** for the main session (G6a) and the session routes (G6b) 
 - The main session cannot be archived (a database trigger refuses it). At most one main binding exists in the whole database; the owner is a single user for now, so the index is global.
 - A task that finished while no process was watching is finalized from `GetTask` on restart. A task parked for input keeps the turn open.
 - Failure reasons are stored with best-effort redaction and a 300 character cut (see [chat](chat.md)).
-- Routes (G6b), all owner-only and all on the same ledger: `POST /sessions` (create), `GET /sessions` (the owner's sessions except the main thread, newest first), `GET /sessions/{id}`, `GET /sessions/{id}/conversation`, `GET /sessions/{id}/native`, `POST /sessions/{id}/message`, `POST /sessions/{id}/stop-turn`, `POST /sessions/{id}/cancel`, `POST /sessions/{id}/archive`. Another owner's session and an unknown id are both `404`. `needs_owner` is the attention visibility rule ([inbox](inbox.md)): true while the session has a visible attention item. The list reads it for every session in one query, the detail and conversation routes read it for the one session, and a session just created reads false; its status stays the session's own (only the inbox snapshot reports `waiting_on_user`); the task-backed (delegated) cancel path of the Python backend is not ported.
+- Routes (G6b), all owner-only and all on the same ledger: `POST /sessions` (create), `GET /sessions` (the owner's sessions except the main thread, newest first), `GET /sessions/{id}`, `GET /sessions/{id}/conversation`, `GET /sessions/{id}/native`, `POST /sessions/{id}/message`, `POST /sessions/{id}/stop-turn`, `POST /sessions/{id}/cancel`, `POST /sessions/{id}/archive`. Another owner's session and an unknown id are both `404`. `needs_owner` is the attention visibility rule ([inbox](inbox.md)): true while the session has a visible attention item. The list reads it for every session in one query, the detail and conversation routes read it for the one session, and a session just created reads false; its status stays the session's own (only the inbox snapshot reports `waiting_on_user`).
 - `POST /sessions/{id}/message` records the message and its delivery exactly like `POST /chat`, with one open turn per session: `409` while a delivery is `recorded`, `sending` or `delivered` or an `uncertain` one is inside its hold. It is also `409` for a cancelled or failed session, an archived one, one without a native binding, a workspace whose Session does not exist yet, and a task-owned session whose attempt has requested a stop.
 - A task attempt's stop intent permanently closes its session to new messages, regardless of
   activity status (including `completed`). Message recording checks the retained attempt's
@@ -27,7 +29,7 @@ Status: **implemented** for the main session (G6a) and the session routes (G6b) 
   began. A changed outcome requires another observation before writer resources are released.
   Completed standalone and adopted scheduled sessions remain resumable; they have no product
   task attempt.
-- Stop turn cancels the A2A task with `CancelTask` (the kagent client and `kagenttest` both have it). It takes no lock (cancel is the one that takes the per-session send lock); the one-open-turn index and the fenced writes keep it consistent with a send. A delivery still `recorded` is cancelled without any kagent call. The task is cancelled outside any transaction; the delivery ends `cancelled`, the queue is held, and the partial reply and the stop note go into one message in one transaction (the note's id is derived from the delivery, so the delivery loop and the stop call settle the same turn once). Results: `stopped`, `finished` (the task had already ended, and its real outcome is recorded), `no_open_turn`. A task that is not visible yet or still running after the cancel is `409` and nothing changes; a kagent error is `502`. An `uncertain` delivery counts as open while it is inside its hold; one past the hold is skipped, since it no longer blocks sends and the delivery loop fails it, so it cannot mask a newer running turn (the Python backend looked only at recorded, sending and delivered). The stop is not repeated blindly.
+- Stop turn cancels the A2A task with `CancelTask` (the kagent client and `kagenttest` both have it). It takes no lock (cancel is the one that takes the per-session send lock); the one-open-turn index and the fenced writes keep it consistent with a send. A delivery still `recorded` is cancelled without any kagent call. The task is cancelled outside any transaction; the delivery ends `cancelled`, the queue is held, and the partial reply and the stop note go into one message in one transaction (the note's id is derived from the delivery, so the delivery loop and the stop call settle the same turn once). Results: `stopped`, `finished` (the task had already ended, and its real outcome is recorded), `no_open_turn`. A task that is not visible yet or still running after the cancel is `409` and nothing changes; a kagent error is `502`. An `uncertain` delivery counts as open while it is inside its hold; one past the hold is skipped, since it no longer blocks sends and the delivery loop fails it, so it cannot mask a newer running turn. The stop is not repeated blindly.
 - Cancel closes the session's open deliveries except task-owned `sending` and `uncertain` rows,
   whose claims and unresolved outcomes are retained for reconciliation without replay. It then
   sets the sticky `cancelled` status and an `unknown` agent outcome in one transaction (task
@@ -146,8 +148,7 @@ another Session or context, repeats the workspace preparation or the runtime ass
 carries a receipt that names no original request, or has runtime fields that cannot be projected
 (an unknown state or operation, an identity outside its bounds). The duplicate check runs on the raw
 reply before protobuf merges the copies, in the kagent client's session codec, and also refuses a
-repeated singular field inside the receipt; the call then has an unknown outcome, as the retired Python
-client. A reply that carries the Session or the receipt twice at its top level (for example a
+repeated singular field inside the receipt; the call then has an unknown outcome. A reply that carries the Session or the receipt twice at its top level (for example a
 split `GetSessionResponse.session`) is refused the same way, while the repeated `sessions` of a list
 reply stay allowed. A Session that states no context id is shown with its own id as the context and
 `context_confirmed: false`, read through a display-only client call (`ObserveSession`); delivery,
@@ -166,7 +167,7 @@ separately from a failed connection or a 404.
 
 ## Evidence boundary
 
-Measured on the kagent spike cluster (live, 2026-10-04): re-sending a `messageId` whose task had completed started a second task, so Mainloop relies on never re-sending, not on kagent deduplication. The kagent client and delivery handling are tested against a fake A2A and SessionService gateway with sanitized fixtures (`server/internal/kagent/testdata`). These are fixture tests, not live proof. The Kind session-resume proof in `docs/spikes/k8s-herdr-agents.md` is historical and does not prove the kagent path.
+Measured on the kagent spike cluster (live, 2026-10-04): re-sending a `messageId` whose task had completed started a second task, so Mainloop relies on never re-sending, not on kagent deduplication. The kagent client and delivery handling are tested against a fake A2A and SessionService gateway with sanitized fixtures (`server/internal/kagent/testdata`). These are fixture tests, not live proof.
 
 ## Observed sessions needing input
 
@@ -197,8 +198,8 @@ fence keeps writer and capacity reservations. Clearing checks the attempt before
 same locked database connection; a terminal session badge alone is insufficient. Superseded
 attempts cannot take this immediate-delete clearing path.
 
-Fresh cutover deletes old sessions; there is no old-shape migration, legacy workspace enrollment,
-or transcript conversion. The task-session checks have fake runtime and PostgreSQL evidence only;
+Existing sessions are not migrated, and there is no legacy workspace enrollment or transcript
+conversion. The task-session checks have fake runtime and PostgreSQL evidence only;
 there is no live native-agent, Kubernetes or retained-source handoff qualification in this slice.
 
 ## React status

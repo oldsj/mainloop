@@ -5,7 +5,8 @@ plane stores messages and delivery state; native Claude Code and Codex sessions 
 Sessions. Branch workspace Sessions have their own git checkout. Mainloop uses attention as a compute
 budget: active workspaces run, while inactive workspaces are suspended until needed.
 
-These diagrams describe implemented code paths; they do not claim a live cluster proof. Known
+Production has run the Go/React stack since 2026-10-12, and read-only smoke run 11 passed. These
+diagrams describe implemented code paths; they do not claim further live cluster proof. Known
 verification gaps are listed below.
 
 ## System overview
@@ -142,12 +143,13 @@ the workspace again after its idle timeout.
   own; the owner and port checks live in Mainloop.
 - The backend reaches Substrate only through the router CONNECT path.
 - Workspace lifecycle, preview and idle-out have fake-backed and Postgres-backed tests. They were
-  also verified live on a Kind cluster before the Go/React cutover, on the retired Python backend: create, first and second turn, idle-out, a message to a
-  suspended workspace, a suspend racing a message, wake-on-preview from a suspended workspace
-  (one `ResumeSession` for concurrent previews) and stopping a turn. Still unverified live: the
-  cold-clone first turn against the client's 30 second timeout, the K1 negative cases, stopping a
-  parked turn, WebSocket previews of a suspended workspace, and the review repairs (they were not
-  redeployed). `docs/specs/workspaces.md` lists both. No live run of the Go server is recorded here yet.
+  also verified live on a Kind cluster before the Go/React cutover, on the retired Python backend:
+  create, first and second turn, idle-out, a message to a suspended workspace, a suspend racing a
+  message, wake-on-preview from a suspended workspace (one `ResumeSession` for concurrent previews)
+  and stopping a turn. Still unverified live: the cold-clone first turn against the client's 30
+  second timeout, the K1 negative cases, stopping a parked turn, WebSocket previews of a suspended
+  workspace, and the review repairs (they were not redeployed). `docs/specs/workspaces.md` lists
+  both. No live write-path run of the Go server is recorded here yet.
 - The Agent Harness's git origins and `onQuiesce: Full` are kagent installation settings.
 
 ## Glossary

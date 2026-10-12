@@ -188,5 +188,4 @@ receive-pack receipt: remote equality proves convergence, not which request caus
 External operator changes and runtime failure can occur after the last observation and cannot
 recall an already admitted push. Git's old-head compare-and-swap rejects a changed remote head.
 Native credential attachment, Actor egress containment, packaging, GitOps rollout and live use
-remain release gates. The retired Python implementation was the behavioral reference; its lack of
-an unknown resolver and connection locks through dispatch are deliberately superseded here.
+remain release gates.

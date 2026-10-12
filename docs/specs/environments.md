@@ -5,6 +5,8 @@ and project selection. New workspaces resolve and pin the selected environment;
 existing sessions keep their recorded environment. There are no environment MCP tools
 or agent-facing environment controls.
 
+History before `e776537` describes the retired Python backend. Where other text on this page differs from the Go status, the Go status is current.
+
 ## Registration and validation
 
 `POST /environments` accepts `name`, `source_kind` (`prebuilt_image` by default),
@@ -97,48 +99,6 @@ selection. Cross-owner selection without a grant returns 403. Revocation blocks
 new selections; existing selections remain visible with `access_revoked: true`.
 They are not silently deleted or activated.
 
-## Internal package build-input preparation
-
-Implemented: `prepare_package_build(parent, declaration, policy,
-parent_source_receipt)` in `mainloop.environments.build_inputs` is a pure internal
-compiler for structured apt additions on an explicitly policy-approved Debian
-Linux arm64 parent. It has no API or MCP entry point and performs no installation,
-build, fetch, credential access or persistence. The trusted caller must supply and
-authenticate the policy snapshot and actual parent-filesystem source inventory;
-request metadata and ambient settings cannot establish that authority.
-
-Preparation requires a current `oci-static-v2` parent, its immutable platform and
-config digests, a matching policy content digest and matching source/keyring
-inventory digest. The policy explicitly permits package names and exact requested
-versions, including whether an unpinned request is allowed. The compiler accepts
-at most 32 distinct packages, 128 characters per name/version and 16 KiB of
-canonical request JSON. It rejects repository overrides, caller-provided resolved
-versions, generator or metadata evidence, extra fields, options, architecture
-qualifiers, whitespace, URL/VCS installers and wildcards. apk and other platforms
-are unsupported by this compiler; their existing metadata models remain available.
-
-The result contains deterministic tar context bytes holding only a Dockerfile,
-its SHA256 digest and canonical UTF-8 JSON input-manifest bytes and digest. The
-recipe uses the parent platform digest, build-time `USER 0:0`, fixed apt commands
-with JSON argv package operands, fixed cleanup and final `USER 65532:65532`.
-It requires apt 2.0 or later and uses literal `?exact-name(...)` selectors,
-preserving an explicitly permitted version suffix or unpinned request. A fixed
-metadata check requires an exact real package record for every operand before
-installation; missing names, virtual-only providers and unavailable versions fail
-closed. Dotted names remain valid and cannot trigger apt's bare-name regex fallback.
-Selectors and names enter the fixed check as positional argv, never shell source.
-The manifest correlates parent environment/version/index/platform/config, request
-and scope identifiers, policy, source inventory, generator and context identities.
-Every result has `execution_authorized: false`. Input identity is deterministic;
-live apt resolution and output are not claimed to be reproducible or resolved.
-
-This checks supplied content and policy consistency; it does not authenticate an
-actor, grant use/derive rights, approve a policy or qualify a runtime. Maintainer
-scripts and inherited parent content remain untrusted execution for a later
-isolated, credential-free executor. Synthetic receipts in offline tests establish
-engineering behavior only. Compilation changes no version, default, selection or
-native session, and does not complete the environment builder.
-
 ## Not yet implemented
 
 Build execution, controlled-repository definition ingress, trusted publication,
@@ -206,7 +166,7 @@ above holds for these routes, with these details:
   status (422).
 - Registry reads happen before any transaction opens. A refresh then locks the environment row and
   inserts the version in a second transaction. A failed registration or refresh stores nothing.
-  Refresh always appends a version, as the retired Python backend did.
+  Refresh always appends a version.
 - Selection locks the project row, then the environment row. Grant and revoke lock the environment
   row first and then check the project. A concurrent grant, revoke and selection cannot deadlock;
   two concurrent selections at the same revision give one 200 and one 409.
@@ -215,6 +175,5 @@ above holds for these routes, with these details:
 - Registry and validation limits (4 MiB, 30 s read, 90 s validation and refresh) are measured by
   unit tests with short budgets, not against a live registry.
 
-Not yet in the Go server: workspace environment resolution, the package build-input compiler and
-the project UI. The sections for those describe the retired Python backend and SvelteKit frontend (history before `e776537`). No live
+The package build-input compiler from the retired Python backend is not in the Go server. No live
 GHCR run has been made, so the CDN hop is proven against the fake transport only.

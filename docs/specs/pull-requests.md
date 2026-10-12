@@ -7,9 +7,9 @@ tool discovery does not enroll a binding.
 
 ## Go server (migration slice G10)
 
-This section describes the Go server in `server/internal/{prs,merge}`. The sections after it
-describe the retired Python backend (history before `e776537`) and stay as the reference for behaviour not repeated here
-(evidence inventory, summary text, web rendering). Where they differ, this section is current.
+This section describes the Go server in `server/internal/{prs,merge}`.
+
+History before `e776537` describes the retired Python backend. Where other text on this page differs from the Go status, the Go status is current.
 
 ### Both tools are durable intents
 
@@ -156,10 +156,8 @@ make this repository public to enable this feature.` The evidence then records
   `github_rules_unavailable_on_plan` and continues with CI. Any other 403 (a permission refusal, a
   secondary limit that reads as 403, the same text on a later page, a near miss of the text) is an
   ordinary failure (`github_unavailable`, retried) and nothing merges: an unreadable ruleset must not
-  erase a required check. The earlier status-only rule could not tell these apart, and a token
-  without the permission would have been treated as a repository with no rules. The exact text is
-  the only signal GitHub gives for the plan limit, so a change to it fails closed until this
-  constant is updated. A 403 on the PUT is `merge_refused_403`. Evidence refusals never repeat the
+  erase a required check. The exact text is the only signal GitHub gives for the plan limit, so a
+  change to it fails closed until this constant is updated. A 403 on the PUT is `merge_refused_403`. Evidence refusals never repeat the
   upstream body.
 - Requirements are read with their full meaning and anything not supported blocks the automatic
   route (the proposal takes the approval route with an unavailable reason, and the merge is
@@ -244,22 +242,10 @@ Merge evidence repository reads, including the final refresh, request Contents w
 Ordinary repository identity reads retain Metadata read. `allow_squash_merge` remains
 required and must explicitly be true; a missing setting still refuses the merge.
 See [GitHub's repository API](https://docs.github.com/en/rest/repos/repos#get-a-repository).
-The remaining evidence reads use the permissions above. Generic evidence refusals log
-only the failed evidence step and exception class on the server; the agent receives
-the existing `complete GitHub merge evidence unavailable` message, without upstream
-bodies or exception text.
+The remaining evidence reads use the permissions above.
 
 PR/project monitoring uses the same repository-scoped transport and App auth.
-Legacy issue creation and issue-detail helpers additionally need Issues write/read;
-they fail closed if the App does not grant those permissions. The registration above
-does not grant Issues permissions. Other issue/comment helpers use the permitted
-Pull requests scope where GitHub supports it. Listing or creating reactions on issue comments
-(including general PR discussion comments) requires Issues read/write. Mainloop refuses these
-operations before HTTP with `GitHub App issue-comment reactions require Issues permissions,
-which are not granted`. Reactions on pull-request review comments keep Pull requests scope;
-the App registration is unchanged. See [GitHub's reaction API](https://docs.github.com/en/rest/reactions/reactions).
-This migration changes backend REST
-authentication; the separate default-off Git publication transport retains its own
+The separate default-off Git publication transport has its own
 credential contract in [Git authority](push-gate.md).
 
 Requests go only to `https://api.github.com`,
@@ -331,13 +317,6 @@ row. If another caller has already settled the intent, its recorded result wins.
 matching PR listing cannot replace a recorded refusal or attach that PR to the task;
 the caller returns the same refusal as subsequent request-ID replays.
 
-The migration preserves legacy uncertain intents and their request mappings; missing PRs
-or age cannot prove an earlier POST failed. A legacy intent can be recovered using
-`Database.refuse_pr_creation` only with trusted evidence of a definite creation POST
-refusal, storing a sanitized result without inventing discarded validation details.
-This releases the tuple for a new request ID while every old ID returns the same refusal.
-Unverified legacy intents retain their existing fence.
-
 GitHub does not provide a head-SHA precondition for PR creation. Mainloop validates the head
 immediately before POST and verifies the response; if the branch changes during creation,
 the outcome stays uncertain. Default-branch movement before dispatch refuses creation; no
@@ -395,8 +374,7 @@ Claude and Codex public tool names are derived exactly from the configured alias
 The proposal presentation snapshot and summary digest include a server-computed
 template/provider/config-entry digest. Mainloop compares it with fresh Session, Agent,
 and config reads when the owner responds; a changed or missing mapping blocks positive
-approval while leaving rejection available. Legacy per-session config is rejected and
-pending requests using it must be reissued. The template contents and RemoteMCPServer
+approval while leaving rejection available. Per-session config is rejected. The template contents and RemoteMCPServer
 identity are not pinned by this simple mapping, so a reviewed template edit can redirect
 the alias. GitOps review, protected-route filtering, and the recorded-consent gate still
 apply. No API accepts these records from an actor.
@@ -608,8 +586,7 @@ The complete suite inventory is retained, with ignored suites additionally recor
 in `ci.ignored_suites`, including suite ID, app ID/slug, creation time, reported run
 count and reason. The proposal CI inventory digest covers these decisions, while
 summary result/pass/fail/pending counts exclude ignored suites and report
-`ignored_suite_count` separately. Older proposals without this field retain their
-original summary digests. CI remains outside `pinned()` candidate identity: every
+`ignored_suite_count` separately. CI remains outside `pinned()` candidate identity: every
 evaluation reads it afresh, so a suite can age past the grace period within the
 existing deadline, and newly appearing runs or requirements can prevent an ignore.
 The uncertain merge intent records the fresh CI evidence accepted at dispatch;

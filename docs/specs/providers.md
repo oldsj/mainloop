@@ -73,6 +73,7 @@ is malformed. The default-provider write is a compare-and-swap on the preference
 missing or other owner's project returns 404 `project_not_found`. A profile must be enabled and
 have a `supervisor` Agent, otherwise the write returns 422.
 
+History before `e776537` describes the retired Python backend. Where other text on this page differs from the Go status, the Go status is current.
+
 Not yet in the Go server (proposed, later slices): task selection precedence, attempt pinning,
-qualification and `TASK_DEFAULT_PROVIDER_PROFILE_ID`. The rest of this page is the pre-cutover
-reference, written for the retired Python backend (history before `e776537`).
+qualification and `TASK_DEFAULT_PROVIDER_PROFILE_ID`.

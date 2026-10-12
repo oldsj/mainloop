@@ -105,6 +105,8 @@ they provide no live-provider proof.
 Labels: **implemented** means built in `web/src/features/inbox` and covered by component, model or
 poll tests against MSW fakes. Nothing here is live-proven.
 
+History before `e776537` describes the retired Python backend. Where other text on this page differs from the Go status, the Go status is current.
+
 - **Implemented:** the **Needs you** list from `GET /attention`. A HITL row shows the shared request card from `features/hitl`. A request this browser answered stays as a card with its receipt, in the same place in the list, until reload, even after the server stops listing it. Focus stays on that card. Other queue rows show option buttons, a free-text reply for open questions and plan reviews, a folded plan, and a **View PR** link only for `https` URLs. A row without a queue item links to its task. The empty state says **Nothing needs you**.
 - **Implemented:** the **Activity** view from `GET /activity`, read only while it is open. Provider reports keep the server's `unverified` label and link to their task.
 - **Implemented:** **Dismiss notice** on an Activity row the server marks `dismissible` (an input notice with no structured request reference), through `POST /queue/{id}/dismiss` with the row's `queue_item_id`. The client does not copy the rule. The row leaves Activity at once. A refusal, including a `409`, restores the row and shows the server's reason above the list. That reason clears once the re-read removes the row. Both Needs you and Activity re-read once the request settles, so the owner sees the current state.
@@ -123,8 +125,7 @@ poll tests against MSW fakes. Nothing here is live-proven.
 ## Go HITL observer and response dispatch
 
 Status: implemented in the Go server (G9a, `server/internal/hitl`, migration `00070_hitl`), with
-tests against an in-memory kagent. Nothing here has run against a live kagent. The Go slice
-covers a subset of the retired Python observer.
+tests against an in-memory kagent. Nothing here has run against a live kagent.
 
 Built:
 
