@@ -17,10 +17,6 @@ lint:
       extra_packages:
         - prettier-plugin-tailwindcss
   ignore:
-    # CLAUDE.md only imports AGENTS.md and intentionally has no top-level heading
-    - linters: [markdownlint]
-      paths:
-        - CLAUDE.md
     # K8s security best practices - remaining issues are acceptable for internal Tailscale-only services
     # Fixed: container security contexts, health probes, RBAC over-permissions
     # Remaining: image tags/digests, readOnlyRootFilesystem, NetworkPolicy, etc.
