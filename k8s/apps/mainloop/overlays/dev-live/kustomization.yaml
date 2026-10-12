@@ -23,11 +23,11 @@ patches:
 components:
   - control-auth
 
-# The -dev images carry the Go toolchain (server) and Vite (web), built from go-react.
+# The -dev images carry the Go toolchain (server) and Vite (web), built from main.
 images:
   - name: ghcr.io/oldsj/mainloop-backend
     newName: ghcr.io/oldsj/mainloop-server-dev
-    newTag: go-react
+    newTag: main
   - name: ghcr.io/oldsj/mainloop-frontend
     newName: ghcr.io/oldsj/mainloop-web-dev
-    newTag: go-react
+    newTag: main

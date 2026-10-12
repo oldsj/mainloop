@@ -82,7 +82,7 @@ seven competing branches while validation is held, and proves they succeed after
 
 Policy requires a known default branch. That branch, every previously observed default and
 protected patterns override the allowed patterns. Patterns match case sensitively, with `*`
-covering nested branch names as in Python's `fnmatchcase`; malformed patterns refuse. An empty
+covering nested branch names; malformed patterns refuse. An empty
 allowlist permits other valid feature branches. `SetPolicy` is an internal compare-and-swap:
 versions increase by one and former defaults cannot be removed. Existing grants remain subject
 to the current policy. A remote default disagreement refuses publication until trusted metadata
@@ -191,5 +191,4 @@ receive-pack receipt: remote equality proves convergence, not which request caus
 External operator changes and runtime failure can occur after the last observation and cannot
 recall an already admitted push. Git's old-head compare-and-swap rejects a changed remote head.
 Native credential attachment, Actor egress containment, packaging, GitOps rollout and live use
-remain release gates. The frozen Python implementation is the behavioral reference; its lack of
-an unknown resolver and connection locks through dispatch are deliberately superseded here.
+remain release gates.

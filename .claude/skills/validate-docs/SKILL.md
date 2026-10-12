@@ -12,7 +12,7 @@ Validate that ALL features claimed in README are documented in specs and tested.
 The README is the product's promise to users. Every feature advertised must be:
 
 1. Specified in `docs/specs/` (source of truth for behavior)
-2. Tested in `frontend/tests/` (proof it works)
+2. Tested in `web/src/` (proof it works)
 
 ## Workflow
 
@@ -58,7 +58,7 @@ For each bullet point/assertion in a spec, search for a test that verifies it:
 
 ```bash
 # Example: search for test covering "No sessions yet" message
-grep -r "No sessions yet" frontend/tests/
+grep -r "No sessions yet" web/src/
 ```
 
 Track coverage for each spec assertion.

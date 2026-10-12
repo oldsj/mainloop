@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, go-react]
+    branches: [main]
   pull_request:
-    branches: [main, go-react]
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -14,64 +14,9 @@ permissions:
   contents: read
   actions: read
 
-env:
-  UV_HTTP_TIMEOUT: '30'
-  UV_HTTP_RETRIES: '1'
-
 jobs:
-  backend-tests:
-    name: Backend unit and PostgreSQL tests
-    # go-react replaces the frozen Python and Svelte code; main keeps testing it.
-    if: github.ref != 'refs/heads/go-react' && github.base_ref != 'go-react'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: mainloop
-          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
-          POSTGRES_DB: postgres
-          POSTGRES_INITDB_ARGS: --no-sync
-        ports:
-          - 5432:5432
-        options: >-
-          --tmpfs /var/lib/postgresql/data:rw,size=2g
-          --health-cmd "pg_isready -U mainloop -d postgres"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      MAINLOOP_TEST_DATABASE_URL: postgresql://mainloop:ci-${{ github.run_id }}-${{ github.run_attempt }}@localhost:5432/postgres
-      AGENT_TOKEN_KEY: ci-key-${{ github.run_id }}-${{ github.run_attempt }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-          cache-dependency-glob: backend/uv.lock
-      - uses: azure/setup-kubectl@v4
-        with:
-          version: v1.34.1
-      - name: Disable durability on the disposable PostgreSQL service
-        env:
-          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
-        run: |
-          docker exec "$POSTGRES_CONTAINER" psql -U mainloop -d postgres -v ON_ERROR_STOP=1 \
-            -c 'ALTER SYSTEM SET fsync = off' \
-            -c 'ALTER SYSTEM SET synchronous_commit = off' \
-            -c 'ALTER SYSTEM SET full_page_writes = off' \
-            -c "ALTER SYSTEM SET max_wal_size = '128MB'" \
-            -c 'SELECT pg_reload_conf()'
-      - name: Run offline fixtures and scratch PostgreSQL tests
-        run: make test-backend
-
-  frontend-unit:
-    name: Frontend unit tests
-    if: github.ref != 'refs/heads/go-react' && github.base_ref != 'go-react'
+  command-deadlines:
+    name: Command deadline and cleanup tests
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -81,11 +26,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - uses: pnpm/action-setup@v4
       - name: Test command deadlines and process cleanup
         run: make test-timeouts
-      - name: Check frontend diagnostics and run unit tests
-        run: make check-frontend test-frontend
 
   lint:
     name: Lint
@@ -106,40 +48,3 @@ jobs:
         env:
           GITHUB_EVENT_BEFORE: ${{ github.event.pull_request.base.sha || github.event.before }}
           GITHUB_EVENT_AFTER: ${{ github.event.pull_request.head.sha || github.event.after }}
-
-  build:
-    name: Build ${{ matrix.image }}
-    if: github.ref != 'refs/heads/go-react' && github.base_ref != 'go-react'
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: backend
-            file: backend/Dockerfile
-            context: .
-            tag: mainloop-backend:test
-          - image: frontend
-            file: frontend/Dockerfile
-            context: .
-            tag: mainloop-frontend:test
-            build-args: VITE_API_URL=http://localhost:8081
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build image
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.file }}
-          build-args: ${{ matrix.build-args }}
-          tags: ${{ matrix.tag }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

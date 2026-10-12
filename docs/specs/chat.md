@@ -4,7 +4,9 @@ The home chat is the user's native Claude Code main session, run by a kagent Age
 
 ## Go server status (G6a, G6b)
 
-Status: **implemented** in `server/internal/sessions`, proven by tests against a scratch PostgreSQL and the fake kagent (`kagenttest`). **Not measured** against a live kagent. The sections below describe the frozen Python backend until the cutover; where they differ, this section is the Go behavior.
+Status: **implemented** in `server/internal/sessions`, proven by tests against a scratch PostgreSQL and the fake kagent (`kagenttest`). **Not measured** against a live kagent.
+
+History before `e776537` describes the retired Python backend. Where other text on this page differs from the Go status, the Go status is current.
 
 - `POST /chat` records the user message and a delivery row in one transaction and answers `200` with `pending: true`, `message: null`, `spawned_session_id: null` and `delivery_message_id`. It makes no kagent call; a reconcile loop delivers the row. `conversation_id`, when sent, must be the main session's (`404` otherwise). An empty or over-long message is `422`. A second message is `409` while a turn is open (`recorded`, `sending` or `delivered`) or while an `uncertain` delivery is within its hold (30 minutes by default, `SESSION_UNCERTAIN_HOLD_SECONDS`). The open-turn rule is a partial unique index on `deliveries(session_id)`, not only a check.
 - `POST /chat` has no message id in the request, so the API gives each call a new id. The service call `Send(messageID, …)` is idempotent per id: repeating an id records nothing new.
@@ -40,7 +42,7 @@ The main composer is locked while the provider is selecting, its state is unconf
 
 While a switch is pending, `POST /chat` returns `409`. The orphan sweep refuses to run while a main create is pending and says so in its report, with the repeat that settles it. A child report to the main waits in the report queue and is delivered by the normal delivery reconciliation once the target is ready.
 
-Bootstrap reuses a main only while its binding has active coordination authority. Otherwise it creates the replacement and releases the old owner slot in one transaction; concurrent requests share one replacement, on the first-use provider, and the old binding's credential is revoked. The Go/React server is greenfield, so there is no backfill or migration of earlier main rows.
+Bootstrap reuses a main only while its binding has active coordination authority. Otherwise it creates the replacement and releases the old owner slot in one transaction; concurrent requests share one replacement, on the first-use provider, and the old binding's credential is revoked. Earlier main rows are not backfilled or migrated.
 
 ## Sending messages
 
@@ -79,9 +81,8 @@ blocked connections) passed on a Cilium cluster and needs a NetworkPolicy-enforc
 ## Initial installation and history boundary
 
 New main and child sessions retain their coordination grants, and new owner workspaces enroll
-only through the normal workspace creation path. Migration preserves active main/child hashes
-and references but leaves existing `agent` workspaces ungranted; observed standalone sessions
-still receive no binding or credential. An unresolved create keeps its original grant and
+only through the normal workspace creation path. Existing `agent` workspaces stay ungranted, and
+observed standalone sessions still receive no binding or credential. An unresolved create keeps its original grant and
 credential-reference contract. Existing native history is not rewritten or transferred.
 
 A definitively failed initial child start is terminal and revokes tool identity through durable

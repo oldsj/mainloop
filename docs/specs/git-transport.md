@@ -1,14 +1,14 @@
 # Git read transport (Go server)
 
-Status: implemented in `server/`, not proven live. `docs/specs/push-gate.md` still describes the
-frozen Python sidecar; this file covers the Go replacement for the read side only. Push
-(`git-receive-pack`) is a later slice and is refused today.
+Status: implemented in `server/`, not proven live. The push policy is in `docs/specs/push-gate.md`;
+this file covers the read side only. Pushes (`git-receive-pack`) go through the separate
+push gate on port 8004.
 
 ## What it does
 
 A workspace's agent clones and fetches its repository through `mainloop-git-read`, never from
 GitHub directly and never with a GitHub credential. `mainloop serve-git` listens on port 8003
-for reads (and on 8004 with probes only, until the push slice) and streams the Git smart-HTTP
+for reads and streams the Git smart-HTTP
 upload-pack protocol to GitHub using a GitHub App installation token that stays inside the
 server.
 
@@ -74,8 +74,7 @@ The 60-second idle watchdog starts before upload and resets on response reads; u
 wait for the first response byte share that initial bound. There is no per-capability or listener
 concurrency cap; admission limits need a separate capacity policy.
 
-Difference from the Python sidecar: gzip request bodies are accepted and inflated under the same
-size cap; Python refused all compression.
+Gzip request bodies are accepted and inflated under the same size cap.
 
 ## Configuration
 

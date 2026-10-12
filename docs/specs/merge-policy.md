@@ -6,6 +6,8 @@ decision receipts, plus background inventory discovery and task-bound owner cont
 described below. Disabled merge execution is described in [Pull requests](pull-requests.md#merge-tools-implemented-disabled-by-default); shared inbox/chat controls remain a separate slice.
 Production enablement still requires the isolation and native capability evidence below.
 
+History before `e776537` describes the retired Python backend. Where other text on this page differs from the Go status, the Go status is current.
+
 A newly enrolled owner workspace may discover and invoke merge tools only when the existing
 `MAINLOOP_MERGE_TOOLS_ENABLED=true` gate is enabled, and its PR identity must satisfy the same
 server-resolved project/repository/branch scope used by PR creation. Workspace enrollment does
@@ -13,8 +15,7 @@ not change merge policy, mint HITL consent, enable production flags or grant own
 The normal production manifests keep merge tools disabled.
 
 > **Go server.** The merge states, consent rule, nested-agent rule and GitHub 403 handling of the
-> Go server are in [Pull requests](pull-requests.md#go-server-migration-slice-g10). The 403 rule
-> below (an _exact_ plan-unavailable message) is the Python rule; Go decides by status code.
+> Go server are in [Pull requests](pull-requests.md#go-server-migration-slice-g10).
 
 ## Owner policy
 
@@ -118,7 +119,7 @@ Each proposal presentation snapshot and summary digest includes a server-compute
 reference containing template name, provider, and a digest of the matched config entry. Mainloop
 re-reads the Session, Agent, and config when the owner responds. A changed or missing mapping
 reference makes positive approval unavailable; rejection remains available. Pending requests
-using the retired per-session config are not migrated and must be reissued. Existing immutable
+using a per-session merge config are not migrated and must be reissued. Existing immutable
 receipts remain readable for reconciliation.
 
 This simple mapping does not pin AgentTemplate contents or RemoteMCPServer identity. A reviewed
@@ -307,7 +308,7 @@ rotates candidates across passes and restarts, and spaces attempts by at least t
 Expired evaluations are immediately eligible. Earlier evaluations whose receipt references
 were not stored before intent claim are discovered from immutable invocation/receipt
 records and revalidated through the same exact consent gate. There is no separate worker, new ledger,
-or DBOS workflow. Each pass has its own bounded scheduling share (25 seconds including
+or workflow engine. Each pass has its own bounded scheduling share (25 seconds including
 selection), with no connection or publication/candidate lock held between passes.
 
 Every evaluation validates the same owner, leaf binding/runtime, proposal, invocation
@@ -346,7 +347,7 @@ the credential. After release, agents cannot authenticate to read status. Owner/
 the stored merged outcome, PR URL and publication projection independently of the native binding.
 
 Tests feed real observer/owner-API results from isolated PostgreSQL and a fake gateway into the
-shared Svelte renderer and response builder. Seeded states supplement this for provider labels,
+shared renderer and response builder. Seeded states supplement this for provider labels,
 escaping, malformed payloads and merge slots. This is not deployed or browser/live-agent proof.
 
 ### Web request card and submit state

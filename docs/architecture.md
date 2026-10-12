@@ -5,15 +5,16 @@ plane stores messages and delivery state; native Claude Code and Codex sessions 
 Sessions. Branch workspace Sessions have their own git checkout. Mainloop uses attention as a compute
 budget: active workspaces run, while inactive workspaces are suspended until needed.
 
-These diagrams describe implemented code paths; they do not claim a live cluster proof. Known
+Production has run the Go/React stack since 2026-10-12, and read-only smoke run 11 passed. These
+diagrams describe implemented code paths; they do not claim further live cluster proof. Known
 verification gaps are listed below.
 
 ## System overview
 
 ```mermaid
 flowchart LR
-  person["Browser or phone"] --> app["SvelteKit app"]
-  app <--> api["FastAPI + DBOS (current, being removed)"]
+  person["Browser or phone"] --> app["React app"]
+  app <--> api["Go server (serve-api)"]
   api --> data[("PostgreSQL<br/>messages, deliveries, workspace state")]
   api -->|"agent turns (A2A) and Sessions"| kagent["kagent gateway"]
   person -->|tailnet preview URL| preview["Mainloop preview proxy"]
@@ -61,9 +62,9 @@ resumes it before sending. A new message resumes a suspended Session, and so doe
 request (below).
 
 **One open turn per session** is enforced in PostgreSQL, not in memory. Recording a message takes
-`pg_advisory_xact_lock(hashtext(...))` for the session, then decides `recorded` or `queued` from
+a transaction-scoped PostgreSQL advisory lock (`pg_advisory_xact_lock`) on the session's key, then decides `recorded` or `queued` from
 the open deliveries in the same transaction. The REST and MCP containers both write the ledger,
-so the in-process `asyncio` lock only orders work inside one process.
+so the in-process lock only orders work inside one process.
 
 No wake or suspend latency has been measured against kagent. The live checks that are still
 owed are listed in `docs/specs/workspaces.md`.
@@ -73,8 +74,8 @@ owed are listed in `docs/specs/workspaces.md`.
 ```mermaid
 sequenceDiagram
   actor Owner
-  participant UI as SvelteKit
-  participant Mainloop as FastAPI + DBOS (current, being removed)
+  participant UI as React app
+  participant Mainloop as Go server (serve-api)
   participant DB as PostgreSQL
   participant Kagent as kagent gateway
   participant Agent as Native agent session
@@ -142,12 +143,13 @@ the workspace again after its idle timeout.
   own; the owner and port checks live in Mainloop.
 - The backend reaches Substrate only through the router CONNECT path.
 - Workspace lifecycle, preview and idle-out have fake-backed and Postgres-backed tests. They were
-  also verified live on a Kind cluster: create, first and second turn, idle-out, a message to a
-  suspended workspace, a suspend racing a message, wake-on-preview from a suspended workspace
-  (one `ResumeSession` for concurrent previews) and stopping a turn. Still unverified live: the
-  cold-clone first turn against the client's 30 second timeout, the K1 negative cases, stopping a
-  parked turn, WebSocket previews of a suspended workspace, and the review repairs (they were not
-  redeployed). `docs/specs/workspaces.md` lists both.
+  also verified live on a Kind cluster before the Go/React cutover, on the retired Python backend:
+  create, first and second turn, idle-out, a message to a suspended workspace, a suspend racing a
+  message, wake-on-preview from a suspended workspace (one `ResumeSession` for concurrent previews)
+  and stopping a turn. Still unverified live: the cold-clone first turn against the client's 30
+  second timeout, the K1 negative cases, stopping a parked turn, WebSocket previews of a suspended
+  workspace, and the review repairs (they were not redeployed). `docs/specs/workspaces.md` lists
+  both. No live write-path run of the Go server is recorded here yet.
 - The Agent Harness's git origins and `onQuiesce: Full` are kagent installation settings.
 
 ## Glossary
@@ -165,14 +167,14 @@ the workspace again after its idle timeout.
 Default-off Git enrollment stores an immutable original create plan, purpose hashes and current
 field-20 runtime association in PostgreSQL. Native creation freezes MCP/read/optional-push refs
 before bytes; durable owned non-turn warmup and fresh GetSession precede usable Git publication.
-Native send confirms required publication. Injectable P1 ASGI listeners use a PostgreSQL adapter
+Native send confirms required publication. Injectable listeners use a PostgreSQL adapter
 with one caller-owned connection through ordered dispatch/outcome locks. Each quarantine seed
 read revalidates the same credential stamp. No transaction spans external I/O.
 
 The existing publication ledger fences unresolved Git writes by owner/repository/branch across
 rotation, restart and successors. Cancellation revokes both purposes while retaining source,
 claim and operation state. Independent cleanup tombstones delete Git Secrets with UID
-preconditions. Tracked source and GitOps manifests include the `mainloop.git_app` backend-image
+preconditions. Tracked source and GitOps manifests include the `git` container (`serve-git`) from the backend image
 sidecar, `mainloop-git-read` / `mainloop-git-push` port-80 Services, and ingress restricted to
 `ate-system` pods labelled `app=atenet-egress` on listener ports 8003/8004. The upstream uses
 repository-scoped GitHub App installation tokens with `contents: read` for fetches and
@@ -256,25 +258,25 @@ namespace-scoped publisher Role does not grant the provider that access. Keep th
 pinned and repeat the gateway regression proof on every Substrate/agentgateway upgrade: HTTP injection is not a portable guarantee of
 other dataplanes. The proposed atenet cleartext allowlist patch is parked and is not required.
 
-The companion's hash-only live gateway proof established HTTP/HTTPS injection and placeholder
+The hash-only live gateway proof established HTTP/HTTPS injection and placeholder
 isolation on that pinned stock dataplane. The joint proof (a native agent calling the Mainloop MCP
 server through the gateway, and blocked connections) passed on a Cilium cluster; the Kind
 overlay's default CNI does not enforce NetworkPolicy, so the blocked-connection check needs a
 policy-enforcing CNI. The Secret holds the complete `Bearer ml_…` header value; NetworkPolicy
 remains required.
 
-## Target architecture (in progress)
+## Repository layout
 
-Proposed, not implemented. The sections above describe the current code. The direction is in
-[ROADMAP.md](../ROADMAP.md#implementation-direction-proposed).
+The sections above describe the implemented code. The migration and its direction are in
+[ROADMAP.md](../ROADMAP.md#implementation-direction-implemented).
 
-| Path                                               | Role (target)                                                                                            |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `api/`                                             | Wire contract (`openapi.yaml`) and the MCP tool manifest. Go and TypeScript types are generated from it. |
-| `server/`                                          | Go backend, one binary. Replaces `backend/`.                                                             |
-| `web/`                                             | React frontend and its static server. Replaces `frontend/`.                                              |
-| `backend/`, `models/`, `frontend/`, `packages/ui/` | Frozen until deleted: bug fixes and the contract conformance test only.                                  |
+| Path                                               | Role                                                                                                      |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `api/`                                             | Wire contract (`openapi.yaml`) and the MCP tool manifest. Go and TypeScript types are generated from it.  |
+| `server/`                                          | Go server, one binary: `serve-api`, `serve-mcp`, `serve-git`, `migrate` and operator commands.            |
+| `web/`                                             | React app (Vite) and its static server (`web/serve`).                                                     |
+| `backend/`, `models/`, `frontend/`, `packages/ui/` | Retired Python and SvelteKit code, replaced by `server/` and `web/`. Git history before `e776537` has it. |
 
-Durable work moves from DBOS to a Postgres reconciler. Each side effect is an intent row with an
-explicit state and an idempotency key, and no database lock is held across network I/O. The
-deployment shape stays the same, so infrastructure changes are image and commit pin bumps.
+Durable work runs as a Postgres reconciler; DBOS is removed. Each side effect is an intent row with an
+explicit state and an idempotency key, and no database lock is held across network I/O. Deployment
+changes are image and commit pin bumps applied through GitOps.

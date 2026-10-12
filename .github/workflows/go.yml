@@ -2,26 +2,28 @@ name: Go
 
 on:
   pull_request:
-    branches: [main, go-react]
+    branches: [main]
     paths:
       - server/**
       - web/src/features/chat/testdata/**
       - api/**
-      - backend/src/mainloop/mcp_app.py
-      - backend/src/mainloop/runtime/policy.py
-      - models/**
       - scripts/export-mcp-tools.py
+      - backend/pyproject.toml
+      - backend/uv.lock
+      - backend/src/mainloop/**
+      - models/**
       - .github/workflows/go.yml
   push:
-    branches: [main, go-react]
+    branches: [main]
     paths:
       - server/**
       - web/src/features/chat/testdata/**
       - api/**
-      - backend/src/mainloop/mcp_app.py
-      - backend/src/mainloop/runtime/policy.py
-      - models/**
       - scripts/export-mcp-tools.py
+      - backend/pyproject.toml
+      - backend/uv.lock
+      - backend/src/mainloop/**
+      - models/**
       - .github/workflows/go.yml
 
 concurrency:
@@ -121,16 +123,23 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
-      - name: Compare api/mcp-tools.json with the Python registry
-        run: uv run --frozen --project backend --python 3.13 python scripts/export-mcp-tools.py --check
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Compare api/mcp-tools.json with the Python exporter and the Go tool registry
+        run: make check-mcp-tools
 
   image:
     name: Build prod image
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: .
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Build (no push)
-        run: docker build --target prod --tag mainloop-server:ci .
+        run: docker build -f server/Dockerfile --target prod --tag mainloop-server:ci server

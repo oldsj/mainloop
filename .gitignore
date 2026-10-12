@@ -42,11 +42,6 @@ gcp-credentials.json
 # Personal k8s config (for open source - keeps your domains private)
 k8s/apps/mainloop/overlays/*/personal-config-patch.yaml
 
-# Build outputs
-/frontend/.svelte-kit/
-/frontend/build/
-/frontend/dist/
-
 # Logs
 *.log
 npm-debug.log*
@@ -64,9 +59,9 @@ yarn-error.log*
 /.nyc_output
 
 # Playwright
-/frontend/playwright-report/
-/frontend/test-results/
-/frontend/blob-report/
+/web/playwright-report/
+/web/test-results/
+/web/blob-report/
 /.playwright-mcp/
 
 # Misc

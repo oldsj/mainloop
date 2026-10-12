@@ -15,100 +15,91 @@ When documents differ, do not silently blend future design with current behavior
 
 ## Architectural direction
 
-- Migration: new backend work goes in `server/` (Go), and new frontend work goes in `web/` (React). `backend/`, `models/`, `frontend/`, and `packages/ui/` are frozen until they are deleted: bug fixes and the contract conformance test only.
-- `api/openapi.yaml` (in progress) is the wire contract. Go and TypeScript types are generated from it, so change the contract first.
+- The Go server in `server/` owns the API, MCP tools, Git transport, migrations and background work. The React app in `web/` calls the API through the generated client only.
+- `api/openapi.yaml` is the wire contract. Go and TypeScript types are generated from it, so change the contract first, then regenerate.
 - Durable side effects follow the reconciler rule, not a workflow engine: write a durable intent row with an explicit state and an idempotency key, check the remote state before any retry, and never hold a DB lock or transaction across network I/O.
 - Mainloop's control plane owns durable product state, policy, message delivery, attention, routing, and audit records.
 - Development work runs in isolated workspaces through native Codex, Claude, or qualified local-agent sessions.
 - Preserve native session identity, history, tools, compaction, and provider-specific behavior. Do not introduce a proprietary model loop unless the roadmap and task explicitly call for it.
 - Use explicit runtime adapters and avoid competing session owners, schedulers, or terminal managers.
 - Kubernetes is the intended workspace lifecycle and isolation target. Deploy Kubernetes changes through GitOps; do not directly mutate Argo-managed resources without an explicitly documented operational exception.
+- Native Claude Code and Codex sessions run as kagent harness agents, from the `oldsj/kagent` fork. Go code uses the kagent client in `server/internal/kagent` (in progress). The Substrate workspace adapter is being removed; do not extend it, and do not add the superseded worker or another workspace runtime.
 - Keep task lifecycle, agent activity, message delivery, user attention, workspace health, and publication state as separate concepts.
 - Parallel work is limited by architectural cohesion, not just worker capacity. Resolve shared contracts and helpers before dispatching independent consumers.
-
-Native Claude Code and Codex sessions run as kagent harness agents, from the `oldsj/kagent` fork. New code uses the kagent client in `server/internal/kagent` (in progress); the Python client in `backend/src/mainloop/runtime/` serves only the frozen backend. The Substrate workspace adapter is being removed; do not extend it, and do not add the superseded worker or another workspace runtime.
 
 ## Project structure
 
 ```text
-api/           OpenAPI contract and MCP tool manifest (in progress)
-server/        Go backend for new work (in progress)
-web/           React frontend for new work (in progress)
-backend/       Frozen FastAPI backend, PostgreSQL access, and orchestration
-frontend/      Frozen SvelteKit 5 application and Playwright tests
-models/        Frozen shared Python/Pydantic models
-packages/ui/   Frozen shared frontend theme and UI package
-k8s/           Kubernetes bases and overlays
+api/           OpenAPI contract (openapi.yaml) and MCP tool manifest (mcp-tools.json)
+server/        Go server: one binary, cmd/mainloop, with a subcommand per process
+web/           React app (Vite, TanStack Router, Tailwind); design system in web/design/
+k8s/           Kubernetes bases, overlays and kagent integration (apps/mainloop, integrations/kagent)
 docs/specs/    User-visible behavior specifications
-scripts/       Development and test automation
+scripts/       Development and CI helper scripts
 ```
 
 ## Development conventions
 
 - Preserve unrelated user changes. Inspect `git status` before editing and keep the patch scoped.
-- Use `uv run` for project Python commands and `uv add` for Python dependencies. Do not invoke system `python`/`python3` or edit dependency lists manually.
-- Use `pnpm` for JavaScript and TypeScript dependencies and scripts.
-- Run Make targets from the repository root.
-- Validate external data at the boundary: against `api/openapi.yaml` in new code, with Pydantic in the frozen backend.
-- New frontend code in `web/` uses React and TypeScript and calls the API only through the generated client, never hardcoded endpoints. Frozen `frontend/` code uses Svelte 5 runes and routes API calls through `frontend/src/lib/api.ts`.
+- Go: run commands from `server/`. Add dependencies with `go get`, then run `go mod tidy`. Do not edit `*.gen.go` files; run `go generate ./...` instead.
+- JavaScript: use `pnpm` to install and run `web/` scripts. CI calls tools from `web/node_modules/.bin` directly.
+- Validate external data at the boundary against `api/openapi.yaml`.
+- New frontend code in `web/` uses React and TypeScript and calls the API only through the generated client in `web/src/api`, never hardcoded endpoints.
 - Use explicit HTML behavior such as `type="button"` and safe external-link attributes.
-- Prefer deleting obsolete code when a migration is complete rather than retaining unused compatibility paths.
+- Run Make targets from the repository root.
+- Prefer deleting obsolete code over keeping unused compatibility paths.
 
-Common development commands, run from the repository root:
+## Common development commands
 
 ```bash
-make dev          # DevSpace + Kind with hot reload
-make dev-stop     # stop the development environment
-make dev-reset    # reset local development data
-make dev-clear-cache
-scripts/dev-ui.sh up     # this worktree's frontend (Vite, hot reload) against the shared Kind backend
+# API: needs a PostgreSQL 16 server and AGENT_TOKEN_KEY (see server/README.md)
+cd server && go run ./cmd/mainloop serve-api          # :8000
+
+# UI with hot reload on http://127.0.0.1:5173; forwards /api to MAINLOOP_API_PROXY (default 127.0.0.1:8000)
+pnpm --dir web dev
+
+# Shared live instance in namespace mainloop-dev (see docs/dev-environment.md)
+make dev-live             # deploy, then sync server/ and web/ and stream logs
+make dev-live-status      # pods, database, route and dev agents
+make dev-live-purge       # delete the namespace and the *-dev agents (typed confirmation)
 ```
-
-`scripts/dev-ui.sh` is safe with several worktrees running at once: each gets its own Vite port and they share one backend port-forward. The Kind backend itself is shared, so a backend image loaded from one worktree serves all of them.
-
-For the shared live instance on the cluster (`make dev-live`, namespace `mainloop-dev`), see [docs/dev-environment.md](docs/dev-environment.md#live-dev-instance).
-
-The local Kubernetes workflow requires DevSpace and Kind. Python packages are managed by `uv`; JavaScript packages are managed by `pnpm`.
-
-DevSpace synchronizes source into the containers. If a Svelte store change appears stale after hot reload, force recompilation of the importing component or clear the Vite cache; a browser refresh alone may retain a stale module reference.
 
 ## Verification
 
-Run the smallest checks that establish confidence for the changed area, then expand when risk warrants it.
-
-Common commands:
+Run the smallest checks that establish confidence for the changed area, then expand when risk warrants it. These match the CI jobs in `.github/workflows/`.
 
 ```bash
-make test-backend        # offline backend + scratch PostgreSQL; 60s/test, 9m/suite
-make fmt                 # format and check files changed from main
-make lint                # lint files changed from main
-pnpm check               # workspace frontend/type checks
+# Repository lint and format (trunk; changed files against origin/main)
+make lint
+make fmt                  # applies fixes, then rechecks
+make lint-all             # whole repository; slow
+
+# Server (run from server/). Database tests need MAINLOOP_TEST_DATABASE_URL, a
+# disposable PostgreSQL 16 server; they skip without it, and CI always sets it.
+go test -race ./...
+golangci-lint run ./...
+go generate ./... && git status --short    # generated code must not change
+
+# API contract (run from the repository root)
+pnpm --package=@redocly/cli@2.54.3 dlx redocly lint api/openapi.yaml
+
+# Web (run from the repository root, then web/)
+pnpm install --frozen-lockfile --filter web...
+cd web
+node_modules/.bin/tsc -b
+node_modules/.bin/eslint .
+node_modules/.bin/vitest run
+node_modules/.bin/vite build
+pnpm build:design && pnpm check:design    # CI also installs Chromium first
 ```
 
-Use `make install-backend install-frontend` for bounded dependency setup and
-`dev-postgres run make check` for the complete offline check set inside
-`dev-postgres`'s command budget (515 seconds with an image that predates deadline
-export), plus up to 30 seconds for cleanup. [Foreground deadline table](docs/dev-environment.md#foreground-deadlines)
-lists all caps and timeout diagnostics, including CI jobs.
+`web/` has a Playwright config and an `e2e` script, but no CI job runs it. Run browser tests only when a task asks for them, and only against a known target.
 
-Set `MAINLOOP_TEST_DATABASE_URL` to a disposable PostgreSQL server first, or use
-`dev-postgres run make test-backend` in the development image. The capped command
-requires PostgreSQL so database coverage cannot silently skip. Use
-`TEST_ARGS='tests.runtime.test_merge_acceptance'` for a focused run and
-`MAINLOOP_TEST_TIMINGS=/path/to/timings.json` for module/test timing evidence.
-Timeouts print the active test or fixture and all thread stacks, then fail the run.
+## Live and cluster work
 
-In a Mainloop workspace, `dev-postgres run make check` is the one command that
-installs dependencies and runs all offline checks. Run only the backend suite with
-`dev-postgres run make test-backend`; it also installs its dependencies.
-The helper starts and stops scratch PostgreSQL and exports `MAINLOOP_TEST_DATABASE_URL`.
-Run checks in the foreground and wait for them to finish before ending your turn.
-
-The Playwright suites (`fast`, `mobile`, `e2e`) and the live worker e2e script are disabled: CI no longer runs them, and `make test`, `make test-run`, `make test-ci`, `make test-worker-e2e`, and the frontend `pnpm test` scripts refuse to start unless `ENABLE_E2E=1` is set. The specs and test files are kept for reference and for a deliberate opt-in run.
-
-Some historical tests and Make targets invoke live agents, external services, containers, or Kubernetes. Do not run the browser `e2e` tests, live-agent tests, subscription-consuming commands, deployments, destructive resets, or production commands unless the task explicitly requires them and their target is known. Default automated tests for new native-agent adapters must use sanitized fixtures or fakes; keep live proofs opt-in and bounded.
-
-For Kubernetes commands, always specify the intended context. Tests must not rely on a developer's current context or mutate production resources.
+- Default automated tests for native-agent adapters must use sanitized fixtures or fakes. Keep live proofs opt-in and bounded.
+- Do not run live-agent tests, `mainloop smoke --live`, subscription-consuming commands, deployments, destructive resets (`mainloop migrate reset`), or production commands unless the task explicitly requires them and their target is known.
+- For Kubernetes commands, always specify the intended context. Tests must not rely on a developer's current context or mutate production resources.
 
 ## Documentation
 

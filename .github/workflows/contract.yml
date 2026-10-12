@@ -2,13 +2,13 @@ name: Contract
 
 on:
   pull_request:
-    branches: [main, go-react]
+    branches: [main]
     paths:
       - api/**
       - redocly.yaml
       - .github/workflows/contract.yml
   push:
-    branches: [main, go-react]
+    branches: [main]
     paths:
       - api/**
       - redocly.yaml

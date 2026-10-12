@@ -105,6 +105,8 @@ they provide no live-provider proof.
 Labels: **implemented** means built in `web/src/features/inbox` and covered by component, model or
 poll tests against MSW fakes. Nothing here is live-proven.
 
+History before `e776537` describes the retired Python backend. Where other text on this page differs from the Go status, the Go status is current.
+
 - **Implemented:** the **Needs you** list from `GET /attention`. A HITL row shows the shared request card from `features/hitl`. A request this browser answered stays as a card with its receipt, in the same place in the list, until reload, even after the server stops listing it. Focus stays on that card. Other queue rows show option buttons, a free-text reply for open questions and plan reviews, a folded plan, and a **View PR** link only for `https` URLs. A row without a queue item links to its task. The empty state says **Nothing needs you**.
 - **Implemented:** the **Activity** view from `GET /activity`, read only while it is open. Provider reports keep the server's `unverified` label and link to their task.
 - **Implemented:** **Dismiss notice** on an Activity row the server marks `dismissible` (an input notice with no structured request reference), through `POST /queue/{id}/dismiss` with the row's `queue_item_id`. The client does not copy the rule. The row leaves Activity at once. A refusal, including a `409`, restores the row and shows the server's reason above the list. That reason clears once the re-read removes the row. Both Needs you and Activity re-read once the request settles, so the owner sees the current state.
@@ -116,15 +118,14 @@ poll tests against MSW fakes. Nothing here is live-proven.
 - **Implemented:** the session page (`features/sessions/SessionChatSlot`) shows the session's pending requests as cards at the end of the conversation, in the same scroll as the messages. Its state reads **needs you** while a request is pending, in place of working, ready or idle. Failed and unconfirmed delivery still show as such.
 - **Not built:** answered requests in **Activity**. The server's `/activity` query reads queue items only (`source_kind = 'queue'`), so an answered HITL request is not returned. The receipt lasts only for this page visit; the server must return answered HITL items before Activity can show them.
 - **Not built:** the notification toast. The plan drops it (production never creates notification rows, and the inbox covers attention), but F4's result assigned it to F5. The supervisor needs to settle this.
-- **Not built:** the frozen app's `?inbox=<id>` parameter. The deep link is `/inbox?item=<id>`.
+- **Not built:** the retired SvelteKit app's `?inbox=<id>` parameter. The deep link is `/inbox?item=<id>`.
 - **Not built:** skeleton loading, and the **Last checked** and offline timestamps. Loading shows a status line. A failed refresh keeps the rows already shown.
 - **Not proven:** the 390 px layout of the request card and merge SHAs, which the vitest tests do not measure. The Playwright journeys for inbox (the answer view, Needs you, Activity, dismiss at phone width), deferred to F9 (`web/e2e/**`). Also not proven: live SSE delivery, poll timing in a real browser, and any run against the Go server.
 
 ## Go HITL observer and response dispatch
 
 Status: implemented in the Go server (G9a, `server/internal/hitl`, migration `00070_hitl`), with
-tests against an in-memory kagent. Nothing here has run against a live kagent. The Python
-observer above is frozen reference; the Go slice covers a subset of it.
+tests against an in-memory kagent. Nothing here has run against a live kagent.
 
 Built:
 
@@ -209,8 +210,7 @@ Not built:
 ## Go attention, activity and queue (G9b)
 
 Status: implemented in the Go server (`server/internal/attention`), with tests against scratch
-PostgreSQL. Nothing here has run against a live cluster. The Python `attention.py` is frozen
-reference.
+PostgreSQL. Nothing here has run against a live cluster.
 
 - **Items.** One `attention_items` row per thing that needs the owner. Sources: `hitl_request`
   (from the HITL observer; item id `hitl:<request id>`), `task_decision` (from `tasks.decision_*`;

@@ -1,315 +1,25 @@
-# Mainloop development image
+# Development environment
 
-The optional `.devcontainer/devcontainer.json` builds a source-free Linux development
-image from the repository root. Its build context is confined to the repository;
-`Dockerfile.dockerignore` exports only the definition, Trunk configuration and the
-dependency manifests and lockfiles; no application source enters the image.
-No hooks, Features, mounts, credentials, or native agent runtime are included.
+Local checks run from the repository root and from `server/` and `web/`. [CONTRIBUTING.md](../CONTRIBUTING.md#verification) lists the commands and [AGENTS.md](../AGENTS.md#verification) lists the matching CI jobs. This page covers the root Make targets, their foreground caps, and the shared live dev instance.
 
-```bash
-docker build -f .devcontainer/Dockerfile -t mainloop-dev .
-```
+## Make targets and caps
 
-The image declares `USER 65532:65532` and also supports root actors. It includes
-Python 3.13.7, Node 24.8.0, pnpm 9.15.9, uv 0.8.22, PostgreSQL 16.15,
-kubectl 1.34.1, and Trunk 1.25.0. The base is pinned to an OCI index digest;
-downloaded tools are SHA256 checked. PostgreSQL packages have exact version
-pins and use the signed PGDG repository. Debian supporting packages use signed
-Debian repositories. Trunk installs the repository's exact enabled tools and
-separate Go/Node/Python lint runtimes during the image build. The tool receipt
-is `/opt/mainloop-lint/tool-checksums.txt`; its shared cache is under
-`/home/nonroot/.cache`, readable and writable by 65532 and root.
-Changing `.trunk/trunk.yaml` requires rebuilding the image to update this closure.
+The root Make targets run under `scripts/with-timeout.mjs`. A cap is a maximum; a timeout means the check did not finish, not that it failed.
 
-Copy or clone a checkout into `/workspace` and run all offline checks:
+| Target          | Cap   | Runs                                                                             |
+| --------------- | ----- | -------------------------------------------------------------------------------- |
+| `make lint`     | 120 s | `trunk check --upstream origin/main` (changed files)                             |
+| `make fmt`      | 180 s | `trunk fmt --upstream origin/main`, then `trunk check --upstream origin/main -y` |
+| `make lint-all` | 240 s | `trunk check -a` (whole repository)                                              |
+| `make fmt-all`  | 300 s | `trunk fmt -a`, then `trunk check -a -y`                                         |
 
-```bash
-dev-postgres run make check
-```
+`make lint` and `make fmt` compare against `origin/main`, so fetch it first.
 
-Make targets for backend tests and frontend checks, tests, builds and development
-servers install their locked dependencies first. A multi-target Make invocation
-installs frontend dependencies once; warm installs reuse the package caches.
-Trunk supplies its own lint runtimes, so formatting and lint need no project venv.
-The installers still validate the environment on each invocation: a lockfile-only
-stamp would miss deleted packages, changed workspace manifests and lifecycle hooks.
-`uv sync` and `pnpm install` reuse the image's prewarmed caches (below);
-`make check` invokes each installer once. It does not cache successful checks or
-skip checks on a warm tree.
-Standalone frontend targets have a separate 120-second install phase before
-the check, test or build cap. The aggregate cap is 565 seconds, including
-cold installs; standalone, that plus 30 seconds of cleanup ends inside a ten-minute
-turn. Under a `dev-postgres` that exports its deadline, the cap is clamped to one
-second before the command's deadline (540 seconds minus setup), leaving room for
-`make check`'s own cleanup (at most seven seconds there). An older image's
-`dev-postgres` (570 s / 540 s minus setup) exports no deadline, so `make check`
-recognises it and uses a static 515 seconds instead. With such an image,
-`dev-postgres run make test-backend` still has a 550-second cap above that budget;
-an image that exports deadlines clamps it.
-
-## Prewarmed dependency caches
-
-The image build fills a uv cache and a pnpm store from `backend/uv.lock` and
-`pnpm-lock.yaml`, so `make install-backend` and `make install-frontend` copy
-packages locally instead of downloading and extracting them. A separate build
-stage does this with a stub `models` package and without installing either
-project; only the caches reach the final image. The image sets:
-
-| Variable                           | Value                            |
-| ---------------------------------- | -------------------------------- |
-| `UV_CACHE_DIR`                     | `/opt/mainloop-cache/uv`         |
-| `npm_config_store_dir`             | `/opt/mainloop-cache/pnpm-store` |
-| `UV_LINK_MODE`                     | `copy`                           |
-| `npm_config_package_import_method` | `copy`                           |
-
-The caches sit outside `$HOME` and `/data` because workspace runtimes move `HOME`
-and `XDG_CACHE_HOME` onto the durable `/data` volume, which would hide them.
-Installs copy rather than hardlink: linking a file from a read-only image layer
-forces an overlay copy-up per file, and measured 60–80 s for the backend against
-about 1 s for a copy. The directory is writable by 65532 and root, so a lockfile
-newer than the image still installs: uv and pnpm download only the missing
-packages into the container's copy of the cache. Offline, a stale lockfile fails
-as it would without a cache. A workspace whose `node_modules` came from a
-different pnpm store is purged and reinstalled once, without a prompt.
-
-Lockfile and manifest changes rebuild the image through the workflow below.
-Until the new image is selected, workspaces download only the difference.
-
-`make lint` requires a fetched `origin/main`. Dependency sync needs the approved
-package registries. Offline, such as in an agent workspace, Trivy uses its built-in
-checks and Trunk skips update checks. CI fetches the latest checks, so results can
-differ slightly.
-Guarded browser, live-agent, and cluster suites are separate opt-in checks.
-
-## Foreground deadlines
-
-Run `dev-postgres run make check` for locked dependency installation and the complete offline
-check set. Formatting completes first, so checks cannot read source while it is
-being rewritten. Then two lanes run concurrently:
-
-- Backend installation and tests, with the configured backend worker count unchanged.
-- Supervisor regressions, one frontend install, frontend diagnostics, unit tests,
-  application build and one complete changed-file Trunk lint pass.
-
-Frontend diagnostics and build run sequentially because they both generate
-`.svelte-kit` files. The build also validates bundling and adapter output beyond
-type diagnostics. Svelte-check retains all configured source, test and generated
-route-type coverage; generated build output is already outside its tsconfig's
-include patterns. Its one-shot CLI does not offer a persistent incremental cache.
-The lint pass does not apply fixes while tests are reading source. Use `make fmt`
-to apply lint fixes as well as formatting before checking again.
-
-Every step has a deadline and a `[step]` output prefix. Failures are recorded while
-independent checks continue; a failed frontend install blocks its three consumers.
-The final table lists step seconds, status and total wall time, including cleanup.
-Logs and machine-readable `timings.json` go to `.cache/check/`; set
-`MAINLOOP_CHECK_LOG_DIR` to retain a run elsewhere. Each step log retains up to
-8 MiB plus a truncation marker, while console output continues. Repeated runs
-overwrite these files. `make check-non-backend` uses the same runner and caps for
-measuring the non-backend lane while backend work is in progress.
-
-The aggregate deadline still leaves room under the native harness's ten-minute
-foreground limit. Each step uses `scripts/with-timeout.mjs`; cancellation forwards
-INT/QUIT/TERM to active supervisors and waits for their process-group cleanup
-before printing the table. When the aggregate deadline sends TERM, the inner table
-records cancellation and the outer cap reports timeout 124. CI splits these checks
-into bounded jobs.
-
-| Command or phase                                             | Cap                       | Coverage                                                                     |
-| ------------------------------------------------------------ | ------------------------- | ---------------------------------------------------------------------------- |
-| `make check`                                                 | 565 s + cleanup           | Clamped under an enclosing deadline; 515 s under an older `dev-postgres`     |
-| `make check-non-backend`                                     | 565 s + cleanup           | Same formatting/frontend/lint lane, without backend installation or tests    |
-| `make install`                                               | 240 s total               | Frontend, backend and shared models                                          |
-| `make install-frontend`, `install-backend`, `install-models` | 120 s each                | Includes lifecycle hooks, Python selection and package builds                |
-| pnpm/uv network reads                                        | 30 s, one retry           | pnpm retry delay 1–5 s; uv exports `UV_HTTP_TIMEOUT=30`, `UV_HTTP_RETRIES=1` |
-| `make test-backend`                                          | 550 s                     | Includes install; runner: 60 s/test or fixture, 180 s imports, 540 s/suite   |
-| `make test-timeouts`                                         | 90 s                      | Command supervisors, parallel lanes, log bounds and cancellation cleanup     |
-| `make test-timeout-integration`                              | 180 s                     | Opt-in real Make/backend and development-image PG16 cleanup regressions      |
-| `make check-frontend`, root/frontend `pnpm check`            | 120 s                     | Sync and Svelte diagnostics                                                  |
-| `make test-frontend`, frontend `pnpm test:unit`              | 60 s                      | Node unit tests                                                              |
-| `make frontend-build`, root/frontend `pnpm build`            | 240 s                     | Vite application build; shares CPUs with the backend lane in `make check`    |
-| `make lint`, root/frontend `pnpm lint`                       | 120 s                     | Changed-file Trunk or package linters                                        |
-| `make fmt`, root `pnpm format`                               | 180 s total               | Both format and follow-up check                                              |
-| `make lint-all`, `make fmt-all`                              | 240 s / 300 s             | Whole-repository Trunk                                                       |
-| `make build-backend`, `make build-frontend`                  | 480 s each                | Local Docker image builds                                                    |
-| `make build-all`, `make build-all-parallel`                  | 550 s / 480 s total       | Serial or parallel image builds                                              |
-| `dev-postgres run` / supplied command                        | 570 s / 540 s minus setup | Reserves 30 s for teardown; at most 595 s including cancellation cleanup     |
-| PostgreSQL init / start / readiness / stop                   | 30 s / 35 s / 5 s / 15 s  | `pg_ctl` also has 30 s start and 10 s stop waits                             |
-| Scripted Docker Git fetch / tool download                    | 120 s / about 95 s        | Git low-speed cutoff 30 s; curl connect 10 s, transfer 45 s, one retry       |
-| Dev-image Trunk installation                                 | 300 s                     | Includes lint tool/runtime downloads                                         |
-| Dev-image uv cache / pnpm store prewarm                      | 240 s each                | Downloads every locked package once per image build                          |
-| CI backend / frontend checks / lint                          | 10 min / 5 min / 5 min    | Recent successful jobs: 269–505 s / 11–14 s / 18 s                           |
-| CI app build and publish jobs                                | 8 min                     | Recent successful builds 12–126 s; publish 19–80 s                           |
-| CI dev-image build or publish / index                        | 10 min / 3 min            | Recent native builds 162–249 s; index 12 s                                   |
-
-`scripts/with-timeout.mjs` requires the installed Node runtime, starts an isolated
-process group, announces its deadline and elapsed time, and returns 124 with
-"timed out after N s" on expiry. Deadlines bound command execution; cleanup may
-then take up to 30 seconds, including after ordinary exits that leave descendants.
-Each cap exports its absolute deadline as `MAINLOOP_TIMEOUT_DEADLINE_MS`. A nested
-cap, including the backend runner's suite cap, expires up to one second before its
-parent, so the innermost cap reports the timeout; its cleanup runs inside the
-parent's longer grace. The startup line shows when a cap was clamped. A table's cap is therefore
-a maximum: inside `make check`, the backend step, `make test-backend` and the
-runner end before the aggregate deadline.
-It forwards INT/QUIT/TERM unchanged, uses TERM for expiry or ordinary completion,
-then KILL when the cleanup budget expires. Nested owners inherit the remaining
-cleanup budget, reserving up to one second before their parent's escalation;
-the backend supervisor observes this contract while keeping its own five-second
-maximum. `--grace SECONDS` can assign a smaller cleanup window. Normal exit codes pass through. Make itself
-returns 2 for a failed recipe and prints the helper's 124. PostgreSQL startup
-explicitly retains its server on success; `dev-postgres` owns its shutdown.
-If shutdown cannot confirm the server has stopped, it retains PGDATA and reports
-the path instead of deleting live data. PostgreSQL admits work only with a
-25-second cancellation budget: eight seconds for active-phase cleanup, 15 seconds
-for stop plus one second of escalation, and one second for removal. Its supplied
-command's deadline includes setup and can be tighter than a standalone Make cap.
-
-For the explicit real-process regressions, set `MAINLOOP_TIMEOUT_TEST_IMAGE` to
-an existing local development image and run `make test-timeout-integration`.
-The regression never pulls an image; it runs isolated, network-disabled PG16
-containers, injects a seven-second stop delay, and removes its containers.
-
-Use the install targets rather than bare `uv sync` or `pnpm install` in agent
-turns: request timeouts alone do not bound many downloads or install hooks.
-The request settings also apply in CI and Docker dependency layers. Interactive
-servers, log followers and opt-in live/cluster suites are outside this offline
-check set. CI job caps include action setup and image pulls; Docker Git fetch
-uses coreutils' process-group timeout because its Go stage has no Node runtime.
-
-Earlier amd64 image qualification ran uncapped backend discovery and the
-frontend/lint checks as both 65532 and root, with networking disabled after
-dependency sync. That historical backend run covered 615 tests without skips.
-Frontend unit tests passed 34 tests;
-the two existing integration-fixture tests skipped without their optional inputs.
-Local arm64 verification awaits an available arm64 builder or QEMU registration.
-
-`dev-postgres run COMMAND` creates scratch PGDATA at `/data/test-postgres`, with
-socket and temporary directories at `/data/test-postgres-socket` and
-`/data/test-postgres-tmp`. Override `DEV_POSTGRES_ROOT` or `DEV_POSTGRES_PORT`
-(default 5432) for an isolated test run. It refuses existing directories, waits
-for readiness, prints and exports `MAINLOOP_TEST_DATABASE_URL`, and stops and
-removes its scratch directories on command completion, failure, or termination.
-The scratch superuser uses trust authentication on loopback and the private
-socket only. Root launches PostgreSQL as uid 65532; the supplied command retains
-the caller's user. This helper is for disposable test environments.
-Stop PostgreSQL before parking a workspace; Full-restore support is unproven.
-
-Scratch PostgreSQL skips `initdb`'s sync and disables `fsync`,
-`synchronous_commit`, and `full_page_writes`.
-These settings remove disk durability costs from SQL integration tests; never use
-this helper for persistent data. CI uses the same settings and a 512 MiB tmpfs for
-PGDATA, with `max_wal_size=128MB` to keep WAL inside that memory budget.
-In a workspace with sufficient shared memory, `DEV_POSTGRES_ROOT` may
-point to a dedicated directory under `/dev/shm`; the default remains `/data`.
-Keep build/package caches and `TMPDIR` at their usual locations, outside `/tmp`.
-
-`make test-backend` runs the same offline unittest discovery in CI and workspaces.
-It requires `MAINLOOP_TEST_DATABASE_URL` and already-synced backend dependencies.
-`MAINLOOP_TEST_WORKERS` overrides the default `min(os.cpu_count(), 6)` processes,
-further limited to one per 512 MiB of available memory; set it to `1` for serial execution.
-`make check` defaults `MAINLOOP_TEST_RESERVE_CPUS=0`, so the backend uses all six
-CPUs in a six-CPU workspace while the other lane runs concurrently. Set a reserve
-explicitly to leave CPUs for other work; at least one backend worker remains.
-Workers are separate interpreters started with fork and exec, not forked copies
-of the supervisor. Each worker discovers the whole suite, derives the same
-deterministic module plan and runs only its share, so there is no separate
-discovery pass. The supervisor requires every worker's inventory to match and the
-shares to cover it exactly once. The run summary starts with the run's status (`complete`,
-`failed`, `timed_out` or `cancelled`) and reports tests run out of those planned.
-After it, each worker that died from a signal or never reported a result gets a
-line naming the signal or exit code, the last deadline phase it entered, and its
-modules; ordinary test failures appear in the merged failure summary instead.
-Every test, including setup, teardown, cleanups and async runner shutdown, has a
-fatal 60-second deadline; module/class fixtures also have 60-second
-deadlines, including suites returned by `load_tests` hooks. Discovery and imports
-have 180 seconds: parallel workers import beside other checks on a shared host. On a timeout,
-the runner prints the active test/fixture and all thread stacks. The whole run has
-a 540-second cap (earlier under an enclosing deadline) with up to five seconds for stack dumping and process cleanup,
-leaving headroom under the harness's ten-minute foreground limit. The Make wrapper additionally
-bounds uv startup. CI's job cap is ten minutes.
-The supervisor kills every worker process group on timeout or cancellation, including
-test subprocesses, then drops this run's class/template databases within the same
-cleanup budget; failures report the cleanup phase, exception type and remaining
-shared budget. `dev-postgres` also removes its disposable cluster. Success requires
-every planned ID to execute exactly once, including skips and expected failures.
-Each worker migrates one empty template in its own database namespace. Schema and
-fixture-isolation tests retain independent class clones. Explicitly qualified
-data-only classes reuse a worker database after all rows and sequences are reset;
-subclasses must opt in themselves. Task fixture cleanup deletes the same foreign-key
-table closure as TRUNCATE CASCADE without rewriting relation/index files. It uses
-replication mode only inside its own cleanup transaction in an owned scratch database;
-normal security and foreign-key triggers are restored before test assertions run,
-including when cleanup fails. Migration tests still execute the real migrations.
-The fixture role needs permission to set `session_replication_role`; the disposable
-server from `dev-postgres` provides this.
-Git transport fixtures copy an immutable worker seed into independent writable
-repositories; actual Git clients, upload/receive-pack and validation remain real.
-Scratch PostgreSQL allows 100 connections, matching CI's default, to accommodate
-six worker pools and their fixture/admin connections.
-
-The runner reports the slowest 15 modules and tests. Module totals include class
-and module fixtures; test totals include setup/teardown and async runner shutdown.
-Save machine-readable
-evidence with `MAINLOOP_TEST_TIMINGS=/path/to/timings.json`; completed test and fixture
-records are saved incrementally and survive timeouts. Existing module timings at
-that path balance the next run, longest module first. Modules without a recording
-use the committed weights in `backend/tests/module_weights.json`, so a fresh
-checkout is balanced too. The committed weights are seconds in a 6-vCPU gVisor
-workspace, where PostgreSQL-backed modules run about ten times slower than on a
-fast amd64 host; only their ratios matter. `make check` saves timings to
-`.cache/check/backend-timings.json` (or under `MAINLOOP_CHECK_LOG_DIR`). Refresh the
-committed weights from a complete workspace run with
-`jq -S '.modules | map_values(. * 100 | round / 100 | if . < 0.01 then 0.01 else . end)' TIMINGS > backend/tests/module_weights.json`.
-A focused run uses
-`make test-backend TEST_ARGS='tests.runtime.test_merge_acceptance'`.
-Successful HTTP request logs are suppressed; warning/error logs and all test
-assertions remain enabled.
-Asyncio debug checks and slow-callback warnings remain enabled. Standalone workers
-capture at most five callback/future/task creation frames without consulting
-linecache; source lines load only when a diagnostic renders them. Asyncio removes
-some internal frames, so the retained creation stack can be shorter. Ordinary
-stack extraction, exception and timeout tracebacks remain complete. Set
-`MAINLOOP_TEST_DEBUG_STACK_DEPTH=10` when diagnosing resource creation sites.
-Python 3.13's accelerated Future/Task caches the stack helper at import time;
-the standalone worker installs it before importing asyncio. Importing the runner
-into a process that already loaded asyncio only updates Handle capture.
-
-PostgreSQL classes explicitly marked `reuse_database = True` or `reuse_pool = True`
-keep one debug loop and pool per class. Each test still has its own context and
-clears all fixture rows and sequences before setup; leftover tasks are cancelled
-and asynchronous generators closed after cleanup, including failed setup.
-These flags are not inherited. `reuse_pool` retains a separate class database;
-`reuse_database` also allows a shared worker database. Qualified classes must keep
-the table/sequence catalog stable. Schema-changing classes otherwise retain fresh
-loops and per-test pools. Cached resets reject existing transactions, check the
-exact owned database, and use a single implicit transaction; FK/security triggers
-are restored on failure.
-
-Changes to `dev-postgres` require publishing a new development image through the
-workflow below, then pinning/selecting its immutable digest for workspaces.
-Editing the checkout alone does not update the installed helper in existing images.
-
-The **Mainloop dev image** workflow validates pull requests with native amd64
-(`ubuntu-latest`) and arm64 (`ubuntu-24.04-arm`) builds, without registry login
-or publishing. Each architecture uses its own GitHub Actions cache. Only pushes
-to `main` publish `ghcr.io/oldsj/mainloop-dev`: the native jobs push by digest,
-then a merge job publishes the combined multi-arch index with `<full SHA>`,
-`sha-<full SHA>`, and `latest` tags after both builds succeed. The merge job output
-and summary record the index digest for immutable registration. New runs cancel
-older runs for the same ref; a cancelled run may leave untagged architecture
-digests, so use a fully successful run. No image is published by local builds.
-Once environment registration is available, register the published immutable
-`ghcr.io/oldsj/mainloop-dev@sha256:…` digest, or register this definition at an
-exact source commit, then select the accepted version for the project. This
-document does not claim that registration or runtime composition is implemented.
+Go and web checks have no Make wrapper. Run them directly, as listed in [CONTRIBUTING.md](../CONTRIBUTING.md#verification).
 
 ## Live dev instance
 
-`mainloop-dev` is a shared, prototype instance for fast iteration. It runs in
-namespace `mainloop-dev` on the production cluster, next to production
-`mainloop`, but DevSpace deploys and owns it directly; it is not Argo-managed.
-Production still changes only through pull requests, CI and GitOps.
+`mainloop-dev` is a shared, prototype instance for fast iteration. It runs in namespace `mainloop-dev` on the production cluster, next to production `mainloop`, but DevSpace deploys and owns it directly; it is not Argo-managed. Production still changes only through pull requests, CI and GitOps.
 
 ```bash
 make dev-live          # deploy mainloop-dev, then sync and stream logs (Ctrl-C stops sync)
@@ -319,62 +29,28 @@ make dev-harness       # build arm64 harness images from ../kagent, apply them t
 make dev-live-purge    # delete namespace mainloop-dev and the *-dev agents (typed confirmation)
 ```
 
-All targets use kube context `admin@internal-01` through DevSpace profile `live` in
-`devspace.yaml`, whose pipelines (`build`, `dev`, `deploy`, `deploy-agents`, `purge`)
-refuse any other context or namespace. Use these targets or `scripts/dev-live.sh`:
-raw `devspace sync`, `restart`, `enter`, `logs` and `attach` with `-p live` are not
-guarded and act on whatever `--kube-context` and `-n` say. `make dev` and the Kind
-setup are unchanged.
+All targets use kube context `admin@internal-01` through DevSpace profile `live` in `devspace.yaml`, whose pipelines (`build`, `dev`, `deploy`, `deploy-agents`, `purge`) refuse any other context or namespace. Use these targets or `scripts/dev-live.sh`: raw `devspace sync`, `restart`, `enter`, `logs` and `attach` with `-p live` are not guarded and act on whatever `--kube-context` and `-n` say. This page covers only the `live` profile.
 
 What runs and syncs: the Go server and the React app.
 
-- `server/` syncs into `/src` in the backend, MCP and Git containers. Each runs
-  `watchexec` over `go run ./cmd/mainloop serve-api|serve-mcp|serve-git`, so a change
-  rebuilds and restarts only that listener. A change to `go.mod` or `go.sum` runs
-  `go mod download` in the pod. Test files, `testdata`, `.git` and build output do not sync.
-- `web/` syncs into `/app/web` in the frontend, where Vite hot-reloads. A change to
-  `web/package.json` or `pnpm-lock.yaml` runs the workspace `pnpm install` in the pod.
-  `node_modules`, `dist` and test output do not sync.
-- The images already hold the source they were built from, so a pod serves before the
-  first sync lands. A `migrate` initContainer runs `mainloop migrate up` on every pod
-  start, but it sees only that baked-in source, never synced files. After syncing a new
-  migration, apply it yourself in the backend container:
+- `server/` syncs into `/src` in the backend, MCP and Git containers. Each runs `watchexec` over `go run ./cmd/mainloop serve-api|serve-mcp|serve-git`, so a change rebuilds and restarts only that listener. A change to `go.mod` or `go.sum` runs `go mod download` in the pod. Test files, `testdata`, `.git` and build output do not sync.
+- `web/` syncs into `/app/web` in the frontend, where Vite hot-reloads. A change to `web/package.json` or `pnpm-lock.yaml` runs the workspace `pnpm install` in the pod. `node_modules`, `dist` and test output do not sync.
+- The images already hold the source they were built from, so a pod serves before the first sync lands. A `migrate` initContainer runs `mainloop migrate up` on every pod start, but it sees only that baked-in source, never synced files. After syncing a new migration, apply it yourself in the backend container:
 
   ```bash
   kubectl --context admin@internal-01 -n mainloop-dev exec deploy/mainloop-backend -c backend -- \
     go run ./cmd/mainloop migrate up
   ```
 
-  (Under `devspace dev` the serving pod is `mainloop-backend-devspace`; see Reset below
-  for addressing it.)
+  (Under `devspace dev` the serving pod is `mainloop-backend-devspace`; see Reset below for addressing it.)
 
-- The Go services need no `models` or Python sync, and nothing runs Python.
+The UI is `https://mainloop-dev.olds.network` (tailnet only, through the same Envoy gateway as production). The browser calls `/api` on that host, and Vite forwards it to the backend Service (`MAINLOOP_API_PROXY`), so the backend needs no route of its own. Vite accepts the gateway host through `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`.
 
-The UI is `https://mainloop-dev.olds.network` (tailnet only, through the same
-Envoy gateway as production). The browser calls `/api` on that host, and Vite
-forwards it to the backend Service (`MAINLOOP_API_PROXY`), so the backend needs no route
-of its own. Vite accepts the gateway host through `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`.
+Images: the **Publish live dev images** workflow builds arm64 images on each push to `main` and pushes `ghcr.io/oldsj/mainloop-server-dev` (`server/Dockerfile --target dev`: Go toolchain, `git`, `watchexec`) and `ghcr.io/oldsj/mainloop-web-dev` (`web/Dockerfile --target dev`: node 24, pnpm, Vite on `0.0.0.0:3000`), each tagged `<short SHA>` and `main`. The overlay pulls the `main` tag. The pods pull the moving tag and the sync overlays the working tree. The pods carry no pull secret, so after the first build of each of the two `-dev` packages make it public once in the GitHub UI (package settings, change visibility); until then the pods sit in `ImagePullBackOff`.
 
-Images: the **Publish live dev images** workflow builds arm64 images on each push to
-`go-react` and pushes `ghcr.io/oldsj/mainloop-server-dev` (`server/Dockerfile --target dev`:
-Go toolchain, `git`, `watchexec`) and `ghcr.io/oldsj/mainloop-web-dev`
-(`web/Dockerfile --target dev`: node 24, pnpm, Vite on `0.0.0.0:3000`), each tagged
-`<short SHA>` and `go-react`. The overlay runs `go-react`. Pushes to `main` still publish
-the Python and Svelte `mainloop-{backend,frontend}-dev:latest` images. Nothing is built
-locally on each run; the pods pull the moving tag and the sync overlays the working tree.
-The pods carry no pull secret, so after the first build of each of the two `-dev` packages
-make it public once in the GitHub UI (package settings, change visibility); until then the
-pods sit in `ImagePullBackOff`.
+Data: a one-instance CloudNativePG cluster on `local-path` storage. CNPG creates the database credentials. Purging deletes the data.
 
-Data: a one-instance CloudNativePG cluster on `local-path` storage. CNPG creates
-the database credentials. Purging deletes the data.
-
-Reset: the overlay sets `MAINLOOP_ALLOW_RESET=1`, which lets `mainloop migrate reset`
-drop the schema and migrate back to the latest version. Run it in the backend container of
-the pod that is serving, then delete that pod so the listeners reconnect. While
-`devspace dev` is running (`make dev-live`), the serving pod is `mainloop-backend-devspace`
-and the Deployment's own pod is replaced; otherwise it is the Deployment's
-`mainloop-backend` pod. Select it by label so both states work:
+Reset: the overlay sets `MAINLOOP_ALLOW_RESET=1`, which lets `mainloop migrate reset` drop the schema and migrate back to the latest version. Run it in the backend container of the pod that is serving, then delete that pod so the listeners reconnect. While `devspace dev` is running (`make dev-live`), the serving pod is `mainloop-backend-devspace` and the Deployment's own pod is replaced; otherwise it is the Deployment's `mainloop-backend` pod. Select it by label so both states work:
 
 ```bash
 K="kubectl --context admin@internal-01 -n mainloop-dev"
@@ -383,26 +59,13 @@ $K exec "$POD" -c backend -- go run ./cmd/mainloop migrate reset
 $K delete "$POD"
 ```
 
-The Go server keeps its tables in the `mainloop` schema; the old Python backend's tables
-sit in `public`. So the first deploy onto a database the Python backend created needs
-no emptying: `migrate up` works beside them, and `migrate reset` drops only `mainloop`.
-To drop the old Python tables as well:
+The Go server keeps its tables in the `mainloop` schema. A database first used by the retired Python backend may still have tables in `public`. `migrate reset` does not touch them. To drop them as well:
 `kubectl --context admin@internal-01 -n mainloop-dev exec mainloop-pg-1 -c postgres -- psql -d mainloop -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'`.
 `make dev-live-purge` drops all the data, along with the namespace.
 
-Settings (`k8s/apps/mainloop/overlays/dev-live`): `DEV_MODE=true`; merge tools,
-owner writes, Git transport and the push gate are off; every kagent role uses
-`claude-workspace-dev` or `codex-workspace-dev`; `MAINLOOP_MCP_HOSTS` lists the
-`mainloop-mcp` Service names in `mainloop-dev`; the `control-auth` component is on. Dev work
-targets `oldsj/testrepo` only through the dev agents' instructions: Mainloop has no repository
-allowlist, and the shared production GitHub App can reach every repository it is installed
-on. With Git transport off, nothing reaches GitHub today.
+Settings (`k8s/apps/mainloop/overlays/dev-live`): `DEV_MODE=true`; merge tools, owner writes, Git transport and the push gate are off; every kagent role uses `claude-workspace-dev` or `codex-workspace-dev`; `MAINLOOP_MCP_HOSTS` lists the `mainloop-mcp` Service names in `mainloop-dev`; the `control-auth` component is on. Dev work targets `oldsj/testrepo` only through the dev agents' instructions: Mainloop has no repository allowlist, and the shared production GitHub App can reach every repository it is installed on. With Git transport off, nothing reaches GitHub today.
 
-Secrets are not in this repository. The infrastructure repository supplies them from
-production's existing items (mainloop-dev shares production's GitHub App, agent token
-key and kagent control principal). The server needs `agent-token-key` and the kagent control
-Secrets to start, because it has no fallback for the token key; the GitHub App keys are
-optional, so without them the instance runs with GitHub unavailable:
+Secrets are not in this repository. The infrastructure repository supplies them from production's existing items (mainloop-dev shares production's GitHub App, agent token key and kagent control principal). The server needs `agent-token-key` and the kagent control Secrets to start, because it has no fallback for the token key; the GitHub App keys are optional, so without them the instance runs with GitHub unavailable:
 
 | Secret in `mainloop-dev` | Keys                                      | Without it                                              |
 | ------------------------ | ----------------------------------------- | ------------------------------------------------------- |
@@ -411,52 +74,22 @@ optional, so without them the instance runs with GitHub unavailable:
 | `kagent-control-token`   | `current`                                 | The pods wait on the missing volume; no kagent sessions |
 | `kagent-control-ca`      | `ca.crt` (cert-manager)                   | As above                                                |
 
-Agent paths are per namespace. `MAINLOOP_NAMESPACE` (default `mainloop`, set to
-`mainloop-dev` here) sets the origins agents call, `http://mainloop-mcp.<ns>.svc.cluster.local`
-and `http://mainloop-git-{read,push}.<ns>.svc.cluster.local`, the MCP server's accepted Host,
-and the prefix of the per-binding credential Secrets Mainloop writes in the shared `kagent`
-namespace. The prefix is the namespace itself, so production keeps `mainloop-mcp-*` and
-`mainloop-git-{read,push}-*`, and mainloop-dev writes `mainloop-dev-mcp-*` and
-`mainloop-dev-git-{read,push}-*`. Secrets are deleted only by exact name. The Git origin
-settings accept only the configured namespace's two origins.
+Agent paths are per namespace. `MAINLOOP_NAMESPACE` (default `mainloop`, set to `mainloop-dev` here) sets the origins agents call, `http://mainloop-mcp.<ns>.svc.cluster.local` and `http://mainloop-git-{read,push}.<ns>.svc.cluster.local`, the MCP server's accepted Host, and the prefix of the per-binding credential Secrets Mainloop writes in the shared `kagent` namespace. The prefix is the namespace itself, so production keeps `mainloop-mcp-*` and `mainloop-git-{read,push}-*`, and mainloop-dev writes `mainloop-dev-mcp-*` and `mainloop-dev-git-{read,push}-*`. Secrets are deleted only by exact name. The Git origin settings accept only the configured namespace's two origins.
 
-`make dev-agents` also applies a RoleBinding (`mainloop-dev-agent-tokens`, in `kagent`) that
-gives `mainloop-dev:mainloop-backend` production's `mainloop-agent-tokens` Role, so it can
-create, read and delete its credential Secrets there. Only the API container writes them;
-the MCP and Git containers verify tokens against the database and need nothing more.
-kagent's service policy (infrastructure repository) accepts mainloop-dev's MCP credential
-tuple (`mainloop-dev-mcp-*`, origin `http://mainloop-mcp.mainloop-dev.svc.cluster.local`), so the
-dev agents can call Mainloop tools.
+`make dev-agents` also applies a RoleBinding (`mainloop-dev-agent-tokens`, in `kagent`) that gives `mainloop-dev:mainloop-backend` production's `mainloop-agent-tokens` Role, so it can create, read and delete its credential Secrets there. Only the API container writes them; the MCP and Git containers verify tokens against the database and need nothing more. kagent's service policy (infrastructure repository) accepts mainloop-dev's MCP credential tuple (`mainloop-dev-mcp-*`, origin `http://mainloop-mcp.mainloop-dev.svc.cluster.local`), so the dev agents can call Mainloop tools.
 
-Git through the dev proxies also needs a kagent change. kagent's service policy
-(`controlauth/policy.go` in the `oldsj/kagent` fork) accepts only production's Git origins,
-`http://mainloop-git-{read,push}.mainloop.svc.cluster.local`, with the
-`mainloop-git-{read,push}-*` patterns. A Git tuple for mainloop-dev would make the policy
-invalid and stop the shared kagent controller, so mainloop-dev keeps Git transport off.
+Git through the dev proxies also needs a kagent change. kagent's service policy (`controlauth/policy.go` in the `oldsj/kagent` fork) accepts only production's Git origins, `http://mainloop-git-{read,push}.mainloop.svc.cluster.local`, with the `mainloop-git-{read,push}-*` patterns. A Git tuple for mainloop-dev would make the policy invalid and stop the shared kagent controller, so mainloop-dev keeps Git transport off.
 
-Production and mainloop-dev share one kagent principal, so each can list the other's
-Sessions. `mainloop-sweep-kagent-sessions` and unbound HITL discovery only consider Sessions
-on the Agents their own settings name (`KAGENT_*_AGENT` and provider profiles), so keep the
-two instances' Agents disjoint, as the `*-dev` names do. HITL for an existing local binding
-retains its pinned Agent identity after configuration changes; creator, ownership,
-lifecycle and stored identity checks still apply.
+Production and mainloop-dev share one kagent principal, so each can list the other's Sessions. `mainloop sweep-orphans` and unbound HITL discovery only consider Sessions on the Agents their own settings name (`KAGENT_*_AGENT` and provider profiles), so keep the two instances' Agents disjoint, as the `*-dev` names do. HITL for an existing local binding retains its pinned Agent identity after configuration changes; creator, ownership, lifecycle and stored identity checks still apply.
 
-Smoke: `mainloop smoke --read-only` probes a running instance: health, the owner reads, the
-event stream, the MCP and Git listeners' refusals, and with `--kagent` the kagent probe. It
-sends no writes and spends no quota, so run it after each deploy. Run it in the backend
-container, where the in-cluster Service names resolve:
+Smoke: `mainloop smoke --read-only` probes a running instance: health, the owner reads, the event stream, the MCP and Git listeners' refusals, and with `--kagent` the kagent probe. It sends no writes and spends no quota, so run it after each deploy. Run it in the backend container, where the in-cluster Service names resolve:
 
 ```bash
 kubectl --context admin@internal-01 -n mainloop-dev exec deploy/mainloop-backend -c backend -- \
   go run ./cmd/mainloop smoke --read-only --kagent
 ```
 
-Git transport is off here, so `git-read` and `git-push` report `skip` and no run can reach
-merge on this instance. The live run (`smoke --live`) therefore needs an instance with git
-transport on. It drives one task from chat to merge and spends quota. Run it from an operator
-machine, not the pod: the pod has no `gh` login, and the live path reads GitHub through the
-operator's `gh auth status`. It checks `gh` before anything else and refuses, spending no budget,
-when `gh` is missing or not logged in. Open two port-forwards first, each in its own terminal:
+Git transport is off here, so `git-read` and `git-push` report `skip` and no run can reach merge on this instance. The live run (`smoke --live`) therefore needs an instance with git transport on. It drives one task from chat to merge and spends quota. Run it from an operator machine, not the pod: the pod has no `gh` login, and the live path reads GitHub through the operator's `gh auth status`. It checks `gh` before anything else and refuses, spending no budget, when `gh` is missing or not logged in. Open two port-forwards first, each in its own terminal:
 
 ```bash
 kubectl --context admin@internal-01 -n mainloop-dev port-forward svc/mainloop-backend 8000:8000
@@ -479,8 +112,7 @@ in dev mode: outside it each listener refuses a Host it does not serve, and a po
 `127.0.0.1`. See [live-smoke.md](live-smoke.md). Only a run that reaches completion proves the
 full path.
 
-Teardown: `make dev-live-purge` deletes everything DevSpace deployed, including
-the namespace, the database and the dev agents.
+Teardown: `make dev-live-purge` deletes everything DevSpace deployed, including the namespace, the database and the dev agents.
 
 Previews do not work on this instance. The overlay sets no `SUBSTRATE_PREVIEW_BASE_URL`, so
 the ports API returns `http://<port>--<workspace>--preview.localhost:8001` links. No gateway

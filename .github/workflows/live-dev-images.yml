@@ -3,12 +3,14 @@ name: Publish live dev images
 # --target=dev images for the shared mainloop-dev instance (`make dev-live`).
 # DevSpace pulls the mutable tag and syncs the working tree over the image source.
 #
-#   main      mainloop-{backend,frontend}-dev:<sha7> and :latest (the frozen Python/Svelte stack)
-#   go-react  mainloop-{server,web}-dev:<sha7> and :go-react     (the Go/React stack)
+#   mainloop-server-dev:<sha7> and :main
+#   mainloop-web-dev:<sha7> and :main
+#
+# The dev-live overlay pins :main, so the mutable tag is what the shared instance pulls.
 
 on:
   push:
-    branches: [main, go-react]
+    branches: [main]
   workflow_dispatch: {}
 
 permissions:
@@ -22,13 +24,20 @@ concurrency:
 jobs:
   publish:
     name: Publish ${{ matrix.image }}-dev (arm64)
-    # Dev pods pull a mutable tag, so only these two branches publish (also via workflow_dispatch).
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/go-react'
+    # Dev pods pull a mutable tag, so only main publishes (also via workflow_dispatch).
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(github.ref == 'refs/heads/go-react' && '{"include":[{"image":"server","context":"server","dockerfile":"server/Dockerfile","moving":"go-react"},{"image":"web","context":".","dockerfile":"web/Dockerfile","moving":"go-react"}]}' || '{"include":[{"image":"backend","context":".","dockerfile":"backend/Dockerfile","moving":"latest"},{"image":"frontend","context":".","dockerfile":"frontend/Dockerfile","moving":"latest"}]}') }}
+      matrix:
+        include:
+          - image: server
+            context: server
+            dockerfile: server/Dockerfile
+          - image: web
+            context: .
+            dockerfile: web/Dockerfile
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -61,7 +70,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/oldsj/mainloop-${{ matrix.image }}-dev:${{ steps.tag.outputs.sha }}
-            ghcr.io/oldsj/mainloop-${{ matrix.image }}-dev:${{ matrix.moving }}
+            ghcr.io/oldsj/mainloop-${{ matrix.image }}-dev:main
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -73,12 +82,11 @@ jobs:
         env:
           IMAGE: ghcr.io/oldsj/mainloop-${{ matrix.image }}-dev
           TAG: ${{ steps.tag.outputs.sha }}
-          MOVING: ${{ matrix.moving }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           {
             printf '### %s (linux/arm64, --target=dev)\n\n' "$IMAGE"
             printf 'Source commit: `%s`\n\n' "$GITHUB_SHA"
-            printf 'Tags: `%s:%s`, `%s:%s`\n\n' "$IMAGE" "$TAG" "$IMAGE" "$MOVING"
+            printf 'Tags: `%s:%s`, `%s:main`\n\n' "$IMAGE" "$TAG" "$IMAGE"
             printf 'Digest: `%s`\n' "$DIGEST"
           } >> "$GITHUB_STEP_SUMMARY"
