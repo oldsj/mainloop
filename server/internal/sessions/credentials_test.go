@@ -65,7 +65,7 @@ func TestTheMainThreadIsCreatedWithItsMCPCredential(t *testing.T) {
 		t.Fatalf("create requests = %v", reqs)
 	}
 	c := reqs[0].GetCredentials()[0]
-	if c.GetOrigin() != mcpOrigin || c.GetHeader() != "Authorization" ||
+	if c.GetOrigin() != mcpOrigin || c.GetHeader() != "authorization" ||
 		c.GetSecretRef().GetName() != "mainloop-mcp-"+m.SessionID || c.GetSecretRef().GetKey() != "authorization" {
 		t.Errorf("credential reference = %v", c)
 	}

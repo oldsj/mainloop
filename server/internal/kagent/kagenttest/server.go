@@ -527,6 +527,13 @@ func (s *Server) prepare(
 	if s.Actors && !s.actorRunning(sess.GetId()) {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("no running actor"))
 	}
+	if !s.gitCredentialsCountable(sess.GetId()) {
+		// kagent's preparation check counts a Git proxy credential only when its header and
+		// secret key are exactly "authorization"; any other spelling leaves the count short, and
+		// kagent answers with this generic refusal, whatever the Actor's state.
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			errors.New("Current prepared runtime identity is unavailable")) //nolint:staticcheck // kagent's own wording
+	}
 	receipt := &api.WorkspacePreparationReceipt{
 		Original: proto.CloneOf(req.Msg), ContextId: req.Msg.GetSessionId(), Classification: "confirmed",
 	}
@@ -539,6 +546,23 @@ func (s *Server) prepare(
 		s.TamperReceipt(receipt)
 	}
 	return connect.NewResponse(&api.PrepareSessionWorkspaceResponse{Receipt: receipt}), nil
+}
+
+// gitCredentialsCountable reports whether every Git proxy credential the Session was created with is
+// spelled the way kagent's preparation check counts it; s.mu is held.
+func (s *Server) gitCredentialsCountable(sessionID string) bool {
+	for requestID, id := range s.byReq {
+		if id != sessionID {
+			continue
+		}
+		for _, c := range s.first[requestID].GetCredentials() {
+			if strings.HasPrefix(c.GetOrigin(), "http://mainloop-git-") &&
+				(c.GetHeader() != "authorization" || c.GetSecretRef().GetKey() != "authorization") {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (s *Server) getAgent(

@@ -10,8 +10,10 @@ import (
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
 )
 
-// authorizationHeader is the header the MCP bearer travels in.
-const authorizationHeader = "Authorization"
+// authorizationHeader is the header the MCP bearer travels in. kagent compares session credential
+// headers byte for byte against lowercase (preparation refuses a session that spells one otherwise), so
+// it is spelled lowercase.
+const authorizationHeader = "authorization"
 
 // SessionCredentials publishes the binding's MCP credential and returns the reference a kagent
 // CreateSession carries, so the session's agent can reach the MCP server at origin. It runs before

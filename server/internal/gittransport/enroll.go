@@ -107,12 +107,13 @@ func (e *Enroller) Enroll(ctx context.Context, workspaceID string) (Enrollment, 
 
 // Reference returns the kagent credential reference for a workspace's read capability: the agent's
 // egress sends the capability from the Secret to origin, the git read Service. The bearer travels
-// in the Authorization header. The Secret's name is derived from the workspace id alone, so the
+// in the Authorization header, spelled lowercase because kagent's preparation check compares it
+// exactly. The Secret's name is derived from the workspace id alone, so the
 // reference can be built, with nothing issued, wherever a session's credentials are listed: on
 // create and on a replayed create alike.
 func Reference(creds *agentauth.Credentials, origin, workspaceID string) *kagentapi.SessionCredential {
 	return &kagentapi.SessionCredential{
-		Origin: origin, Header: "Authorization",
+		Origin: origin, Header: "authorization",
 		SecretRef: &kagentapi.SecretKeyReference{
 			Name: creds.SecretName(dbstate.CredentialGitRead, workspaceID), Key: k8ssecrets.DataKey,
 		},

@@ -184,7 +184,7 @@ func TestReferenceNamesTheCapabilitySecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref.Header != "Authorization" || ref.Origin == "" || ref.SecretRef == nil || ref.SecretRef.Name != en.SecretName || ref.SecretRef.Key != "authorization" {
+	if ref.Header != "authorization" || ref.Origin == "" || ref.SecretRef == nil || ref.SecretRef.Name != en.SecretName || ref.SecretRef.Key != "authorization" {
 		t.Fatalf("reference = %+v, secret %s", ref, en.SecretName)
 	}
 }

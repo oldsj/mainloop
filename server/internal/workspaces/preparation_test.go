@@ -143,6 +143,27 @@ func TestPreparationWakesAnIdleSessionBeforeAsking(t *testing.T) {
 	}
 }
 
+// kagent counts a Git proxy credential for preparation only when its header is spelled exactly
+// "authorization"; with any other spelling it refuses every pass with "Current prepared runtime
+// identity is unavailable" and the preparation can never be confirmed.
+func TestPreparationOfASessionWithAGitReadReferenceIsNotRefusedAsAnUnavailableIdentity(t *testing.T) {
+	h := newHarness(t, nil)
+	h.withGitRead()
+	r := preparedWorkspace(t, h)
+	var read int
+	for _, c := range h.fake.CreateRequests()[0].GetCredentials() {
+		if strings.HasPrefix(c.GetOrigin(), "http://mainloop-git-") {
+			read++
+		}
+	}
+	if read != 1 {
+		t.Fatalf("git proxy references on the create = %d, want 1", read)
+	}
+	if got := prepareOnce(t, h, r.ID); got != dbstate.PreparationConfirmed {
+		t.Fatalf("state = %s, want confirmed\n%s", got, h.logs.String())
+	}
+}
+
 func TestPreparationWaitsForAPendingReceiptWithoutAskingAgain(t *testing.T) {
 	h := newHarness(t, nil)
 	h.fake.PrepareClassification = "pending"

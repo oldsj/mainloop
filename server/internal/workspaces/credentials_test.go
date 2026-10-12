@@ -41,7 +41,7 @@ func TestAWorkspaceSessionIsCreatedWithItsMCPCredential(t *testing.T) {
 	if want := h.cfg.MCPOrigin(); c.GetOrigin() != want {
 		t.Errorf("origin = %q, want %q", c.GetOrigin(), want)
 	}
-	if c.GetHeader() != "Authorization" || c.GetSecretRef().GetName() != "mainloop-mcp-"+w.WorkspaceId || c.GetSecretRef().GetKey() != "authorization" {
+	if c.GetHeader() != "authorization" || c.GetSecretRef().GetName() != "mainloop-mcp-"+w.WorkspaceId || c.GetSecretRef().GetKey() != "authorization" {
 		t.Errorf("credential reference = %v", c)
 	}
 	if a.Cluster.UID(authtest.Namespace, c.GetSecretRef().GetName()) == "" {
