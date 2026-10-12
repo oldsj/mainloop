@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ShortId } from './ShortId';
@@ -36,5 +36,41 @@ describe('ShortId', () => {
     expect(await screen.findByRole('button', { name: 'Copy full workspace ID' })).toHaveTextContent(
       'Failed'
     );
+  });
+});
+
+describe('ShortId copy result', () => {
+  it('announces a copy to screen readers and goes back to Copy after about 3 seconds', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+      render(<ShortId id={FULL} label="session" />);
+      const button = screen.getByRole('button', { name: 'Copy full session ID' });
+      await userEvent.click(button);
+      expect(button).toHaveTextContent('Copied');
+      expect(screen.getByRole('status')).toHaveTextContent('Copied the full ID');
+
+      act(() => {
+        vi.advanceTimersByTime(2900);
+      });
+      expect(button).toHaveTextContent('Copied');
+
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      expect(button).toHaveTextContent(/^Copy$/);
+      expect(screen.getByRole('status')).toHaveTextContent('');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('announces a refused copy', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    render(<ShortId id={FULL} label="session" />);
+    await userEvent.click(screen.getByRole('button', { name: 'Copy full session ID' }));
+    expect(screen.getByRole('status')).toHaveTextContent("Couldn't copy the ID");
   });
 });

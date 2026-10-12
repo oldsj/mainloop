@@ -794,3 +794,50 @@ describe('the held view survives older and malformed reads', () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe('task publication and session ID', () => {
+  it('says Not published yet while the task has no pull request', async () => {
+    server.use(...serveTaskPage(taskScreen(view())));
+    renderTasks('/tasks/task-1');
+
+    await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
+    expect(screen.getByText('Not published yet')).toBeInTheDocument();
+  });
+
+  it('drops the chip once there is a pull request', async () => {
+    server.use(
+      ...serveTaskPage(
+        taskScreen(
+          view(
+            {},
+            {
+              projection: projection({
+                pr_number: 4,
+                pr_state: 'open',
+                pr_url: 'https://github.com/acme/widgets/pull/4'
+              })
+            }
+          )
+        )
+      )
+    );
+    renderTasks('/tasks/task-1');
+
+    await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
+    expect(screen.queryByText('Not published yet')).not.toBeInTheDocument();
+    expect(screen.getByText('#4 open')).toBeInTheDocument();
+  });
+
+  it('shows the session ID as 8 characters with a copy button, not the full ID', async () => {
+    server.use(...serveTaskPage(taskScreen(view())));
+    renderTasks('/tasks/task-1');
+
+    await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
+    const section = screen.getByRole('heading', { level: 2, name: '[WORKSPACE]' }).parentElement;
+    expect(section).not.toBeNull();
+    const scoped = within(section as HTMLElement);
+    expect(scoped.getByText('session-')).toBeInTheDocument();
+    expect(scoped.getByRole('button', { name: 'Copy full session ID' })).toBeInTheDocument();
+    expect(scoped.queryByText('session-1')).toBeNull();
+  });
+});

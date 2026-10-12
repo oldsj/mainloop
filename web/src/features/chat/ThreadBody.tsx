@@ -15,6 +15,10 @@ export interface ThreadBodyProps {
   closedReason?: string | null;
   /** The locked box's placeholder, when the thread's lock is not "closed to new messages". */
   closedPlaceholder?: string;
+  /** Text to put in the composer once, unsent. */
+  prefill?: string;
+  /** Called once the composer has taken `prefill`. */
+  onPrefillUsed?: () => void;
 }
 
 /** The conversation timeline, the send and stop errors, and the composer, for any thread. */
@@ -23,7 +27,9 @@ export function ThreadBody({
   offline,
   label,
   closedReason = null,
-  closedPlaceholder
+  closedPlaceholder,
+  prefill,
+  onPrefillUsed
 }: ThreadBodyProps) {
   const live = useLiveTurn(thread.sessionId, thread.busy, thread.messages);
   return (
@@ -92,6 +98,8 @@ export function ThreadBody({
         offline={offline}
         closed={closedReason !== null}
         closedPlaceholder={closedPlaceholder}
+        prefill={prefill}
+        onPrefillUsed={onPrefillUsed}
         onSend={(text) => thread.send(text, thread.conversationId)}
       />
     </>

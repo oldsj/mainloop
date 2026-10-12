@@ -24,6 +24,12 @@ export interface ComposerProps {
    * back in the box. The caller clears the stored draft on success.
    */
   onSend: (text: string) => Promise<boolean>;
+  /**
+   * Text to put in the box once, unsent, with the caret at its end. The box keeps any text already
+   * there after it. The caller clears the prefill from its own state in `onPrefillUsed`.
+   */
+  prefill?: string;
+  onPrefillUsed?: () => void;
 }
 
 function placeholder(
@@ -50,12 +56,18 @@ export function Composer({
   offline,
   closed = false,
   closedPlaceholder = 'Closed to new messages',
-  onSend
+  onSend,
+  prefill,
+  onPrefillUsed
 }: ComposerProps) {
   const [text, setText] = useState(() => loadDraft(draftKey));
   const [shownKey, setShownKey] = useState(draftKey);
   const [sending, setSending] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
+  // The prefill last applied, so one prefill fills the box once even while its caller re-renders.
+  const appliedPrefill = useRef<string | undefined>(undefined);
+  // Set when a prefill lands, so the caret moves to its end once the box can take focus.
+  const caretToEnd = useRef(false);
 
   // A different conversation shows its own draft. Adjusted while rendering, not in an effect, so
   // the old text never flashes under the new key.
@@ -73,6 +85,27 @@ export function Composer({
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, MAX_HEIGHT_PX)}px`;
   }, [text]);
+
+  useEffect(() => {
+    if (!prefill) appliedPrefill.current = undefined;
+    if (!prefill || prefill === appliedPrefill.current) return;
+    appliedPrefill.current = prefill;
+    const existing = loadDraft(draftKey);
+    const next = existing.trim() ? prefill + existing : prefill;
+    setText(next);
+    saveDraft(draftKey, next);
+    caretToEnd.current = true;
+    onPrefillUsed?.();
+  }, [prefill, draftKey, onPrefillUsed]);
+
+  // The caret goes to the end of a prefill once the box is enabled, so the owner can type on.
+  useEffect(() => {
+    const el = input.current;
+    if (!caretToEnd.current || disabled || !el) return;
+    caretToEnd.current = false;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [disabled, text]);
 
   // Hand focus back when the box unlocks, unless the owner moved it somewhere else.
   const wasDisabled = useRef(disabled);

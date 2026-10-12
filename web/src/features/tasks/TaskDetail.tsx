@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { Button } from '@/components/ui/button';
+import { ShortId } from '@/features/workspaces/ShortId';
 import type { TaskView } from '@/lib/contract';
 import {
   attemptHistory,
@@ -18,6 +19,7 @@ import {
   type Fact,
   type OperationProgress
 } from '@/lib/taskState';
+import { notPublishedYet } from './model';
 
 const HEADING = 'text-muted-foreground text-xs tracking-wide uppercase';
 const PANEL = 'gap-sm p-md border-border flex flex-col border-t';
@@ -113,7 +115,9 @@ export function TaskFacts({
           <dd className="break-all">{workspace.environmentVersionId ?? 'Not reported'}</dd>
         </dl>
         {workspace.sessionId ? (
-          <div>
+          <div className="gap-sm flex flex-wrap items-center">
+            <span className="text-muted-foreground text-sm">Session</span>
+            <ShortId id={workspace.sessionId} label="session" />
             <Button asChild variant="outline" size="sm">
               <Link to="/sessions/$id" params={{ id: workspace.sessionId }}>
                 Open the current session
@@ -129,6 +133,11 @@ export function TaskFacts({
         </h2>
         <div data-testid="task-publication" className="gap-xs flex flex-col text-sm">
           <p>Publication: {facts.publication.label}.</p>
+          {notPublishedYet(view.projection) ? (
+            <p>
+              <StatusBadge label="Not published yet" tone="muted" />
+            </p>
+          ) : null}
           <dl className="gap-xs grid grid-cols-[auto_1fr] items-center text-sm">
             <dt className="text-muted-foreground">PR</dt>
             <dd className="gap-sm flex flex-wrap items-center">

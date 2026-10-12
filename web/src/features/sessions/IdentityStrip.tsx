@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { ShortId } from '@/features/workspaces/ShortId';
 import { agentLabel } from '@/lib/agentLabel';
 import type { Session } from '@/lib/contract';
 import { deliveryNotices } from '@/lib/delivery';
@@ -74,7 +75,12 @@ export function IdentityStrip({ session }: { session: Session }) {
             {info.agent_name}
           </Field>
           <Field label="session" testId="id-session">
-            {info.kagent_session_id?.slice(0, 8) ?? 'pending'} {info.session_state ?? 'unknown'}
+            {info.kagent_session_id ? (
+              <ShortId id={info.kagent_session_id} label="session" />
+            ) : (
+              'pending'
+            )}{' '}
+            {info.session_state ?? 'unknown'}
           </Field>
           <Field label="turns" testId="id-turns">
             {info.turns}
@@ -86,7 +92,7 @@ export function IdentityStrip({ session }: { session: Session }) {
           ) : null}
           {info.parent_session_id ? (
             <Field label="parent" testId="id-parent">
-              {info.parent_session_id.slice(0, 8)}
+              <ShortId id={info.parent_session_id} label="parent session" />
             </Field>
           ) : null}
           {info.topic ? (

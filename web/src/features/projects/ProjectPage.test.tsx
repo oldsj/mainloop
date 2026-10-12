@@ -566,7 +566,7 @@ describe('project page', () => {
     renderProjects(PAGE);
 
     expect(await heading('acme/widgets')).toBeInTheDocument();
-    await waitFor(() => expect(document.title).toBe('acme/widgets - mainloop'));
+    await waitFor(() => expect(document.title).toBe('acme/widgets · Mainloop'));
   });
 
   it('shows when a branch workspace was last active', async () => {
@@ -633,5 +633,21 @@ describe('project page', () => {
 
     const form = await screen.findByTestId('project-workspace-form');
     expect(within(form).getByRole('button', { name: 'New workspace' })).toBeDisabled();
+  });
+});
+
+describe('project page new task', () => {
+  it('opens the main chat with the composer prefilled, and does not send', async () => {
+    server.use(...serveProjectPage());
+    const user = userEvent.setup();
+    const { router } = renderProjects(PAGE);
+    await heading('acme/widgets');
+
+    await user.click(screen.getByRole('button', { name: 'New task' }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(router.state.location.search).toEqual({
+      prefill: 'Start a task in acme/widgets: '
+    });
   });
 });

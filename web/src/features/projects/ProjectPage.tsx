@@ -100,6 +100,11 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
     (workspace) => workspace.manifest.repo_url === project.html_url
   );
 
+  // There is no task-create endpoint yet, so a new task starts in the main chat: the composer is
+  // prefilled with the project name and left unsent for the owner to finish.
+  const startTask = () =>
+    void navigate({ to: '/', search: { prefill: `Start a task in ${project.full_name}: ` } });
+
   const startWorkspace = (target: { branch: string; agentKind: AgentKind }) => {
     if (create.pending || uncertain) return;
     create.mutate(
@@ -116,7 +121,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
       aria-labelledby="project-heading"
       className="gap-lg p-md mx-auto flex w-full max-w-3xl min-w-0 flex-col"
     >
-      <title>{`${project.full_name} - mainloop`}</title>
+      <title>{`${project.full_name} · Mainloop`}</title>
       {detail.isError ? (
         <div data-testid="project-refresh-error">
           <ErrorRecovery
@@ -172,9 +177,14 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
         className="gap-md flex flex-col"
         data-testid="project-tasks"
       >
-        <h2 id="project-tasks-heading" className="text-lg font-medium">
-          Tasks
-        </h2>
+        <div className="gap-sm flex flex-wrap items-center justify-between">
+          <h2 id="project-tasks-heading" className="text-lg font-medium">
+            Tasks
+          </h2>
+          <Button type="button" variant="outline" size="sm" onClick={startTask}>
+            New task
+          </Button>
+        </div>
         {tasks ?? <p className="text-muted-foreground text-sm">No tasks for this project yet.</p>}
       </section>
 

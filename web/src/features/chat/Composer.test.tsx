@@ -115,3 +115,51 @@ describe('Composer', () => {
     expect(status.closest('[data-testid="input-bar"]')).toHaveClass('relative');
   });
 });
+
+describe('Composer prefill', () => {
+  const PREFILL = 'Start a task in acme/widgets: ';
+
+  it('fills the box once, unsent, with the caret at the end, and reports it taken', async () => {
+    const onPrefillUsed = vi.fn();
+    const { onSend } = setup({ prefill: PREFILL, onPrefillUsed });
+    await waitFor(() => expect(input().value).toBe(PREFILL));
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onPrefillUsed).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(input());
+    expect(input().selectionStart).toBe(PREFILL.length);
+    expect(loadDraft('c1')).toBe(PREFILL);
+  });
+
+  it('keeps the owner’s existing text after the prefill', async () => {
+    saveDraft('c1', 'half a thought');
+    setup({ prefill: PREFILL });
+    await waitFor(() => expect(input().value).toBe(PREFILL + 'half a thought'));
+  });
+
+  it('does not refill when the caller re-renders with the same prefill', async () => {
+    const onPrefillUsed = vi.fn();
+    const { rerender } = render(
+      <Composer
+        draftKey="c1"
+        busy={false}
+        offline={false}
+        onSend={vi.fn()}
+        prefill={PREFILL}
+        onPrefillUsed={onPrefillUsed}
+      />
+    );
+    await userEvent.type(input(), 'more');
+    rerender(
+      <Composer
+        draftKey="c1"
+        busy={false}
+        offline={false}
+        onSend={vi.fn()}
+        prefill={PREFILL}
+        onPrefillUsed={() => onPrefillUsed()}
+      />
+    );
+    expect(input().value).toBe(PREFILL + 'more');
+    expect(onPrefillUsed).toHaveBeenCalledTimes(1);
+  });
+});

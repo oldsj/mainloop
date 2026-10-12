@@ -14,10 +14,14 @@ export interface ChatPageProps {
   hitlId?: string;
   /** The native identity strip for the main session, supplied by the sessions slice. */
   renderIdentity?: (sessionId: string) => ReactNode;
+  /** Text to put in the composer once, unsent. */
+  prefill?: string;
+  /** Called once the composer has taken `prefill`, so the caller can clear it. */
+  onPrefillUsed?: () => void;
 }
 
 /** The main thread: header, conversation, pending requests and the composer. */
-export function ChatPage({ hitlId, renderIdentity }: ChatPageProps) {
+export function ChatPage({ hitlId, renderIdentity, prefill, onPrefillUsed }: ChatPageProps) {
   const chat = useThread(MAIN_THREAD);
   const offline = useConnection().status === 'offline';
   const { info } = chat;
@@ -56,6 +60,8 @@ export function ChatPage({ hitlId, renderIdentity }: ChatPageProps) {
         label="main thread"
         closedReason={inputLock}
         closedPlaceholder="Main input is locked"
+        prefill={prefill}
+        onPrefillUsed={onPrefillUsed}
       />
     </div>
   );

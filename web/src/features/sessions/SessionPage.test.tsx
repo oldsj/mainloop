@@ -386,6 +386,7 @@ describe('identity strip', () => {
     expect(screen.getByTestId('id-kind')).toHaveTextContent('claude');
     expect(screen.getByTestId('id-agent')).toHaveTextContent('claude-child');
     expect(screen.getByTestId('id-session')).toHaveTextContent('kagent-s');
+    expect(screen.getByRole('button', { name: 'Copy full session ID' })).toBeInTheDocument();
     expect(screen.getByTestId('id-turns')).toHaveTextContent('4');
   });
 

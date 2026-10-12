@@ -149,6 +149,7 @@ MSW fixtures typed from `api/openapi.yaml`.
 - The box is locked until the thread has loaded, so early typing cannot land in the wrong draft.
 - Drafts are kept per conversation in `sessionStorage`. Only a recorded composer send clears
   its draft; Retry leaves whatever is in the box alone.
+- **Implemented:** the project page's **New task** button opens the main chat with the composer prefilled with `Start a task in <project full name>: `. The text goes in the box once, unsent, with the caret at its end; if the box already holds a draft, the prefill goes before it. The prefill rides in the `prefill` search parameter and is removed from the URL once the composer has taken it, so a refresh does not prefill again. No task is created until the owner sends the message.
 - A conversation that fails to load shows a recovery message, even when it has no messages yet.
 - While a turn is in flight the thread is re-read every two seconds, for six minutes from when
   the turn was first seen in flight, as a fallback to the `session:message` event. The

@@ -3,7 +3,7 @@
  * the wording shared by the page and the tree. Components import from here so the copy lives in
  * one place.
  */
-import type { TaskView } from '@/lib/contract';
+import type { TaskProjection, TaskView } from '@/lib/contract';
 import type { ActionIntent, ActionOutcome } from '@/lib/taskActions';
 import { currentAttempt } from '@/lib/taskState';
 
@@ -72,4 +72,14 @@ export function indentClass(depth: number): string {
   if (depth === 1) return 'pl-md';
   if (depth === 2) return 'pl-lg';
   return 'pl-xl';
+}
+
+/**
+ * True while the task has no pull request. Publication has not happened, so the PR, CI and merge
+ * facts have nothing to describe yet. `publication_state` is a publication mode, not a status, so
+ * it does not decide this.
+ */
+export function notPublishedYet(projection: Partial<TaskProjection> | undefined): boolean {
+  const p = projection ?? {};
+  return p.pr_number == null && !p.pr_url && (p.pr_state ?? 'unknown') === 'unknown';
 }

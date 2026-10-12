@@ -56,3 +56,42 @@ describe('session row selection', () => {
     expect(row).not.toHaveAttribute('aria-current');
   });
 });
+
+describe('session row title', () => {
+  function renderTitled(props: { title: string; taskTitle?: string }) {
+    const root = createRootRoute({ component: Outlet });
+    const router = createRouter({
+      routeTree: root.addChildren([
+        createRoute({
+          getParentRoute: () => root,
+          path: '/sessions/$id',
+          component: () => (
+            <SessionRow
+              session={session({ id: 's1', title: props.title })}
+              providers={[]}
+              taskTitle={props.taskTitle}
+            />
+          )
+        })
+      ]),
+      history: createMemoryHistory({ initialEntries: ['/sessions/s1'] })
+    });
+    render(<RouterProvider router={router} />);
+  }
+
+  it('shows the task title in place of the session title', async () => {
+    renderTitled({ title: 'Session title', taskTitle: 'Add retry button' });
+    const row = await screen.findByRole('link', { name: /Add retry button/ });
+    expect(row).not.toHaveTextContent('Session title');
+  });
+
+  it('falls back to the session title when the task title is missing', async () => {
+    renderTitled({ title: 'Session title' });
+    expect(await screen.findByRole('link', { name: /Session title/ })).toBeInTheDocument();
+  });
+
+  it('falls back to the session title when the task title is empty', async () => {
+    renderTitled({ title: 'Session title', taskTitle: '' });
+    expect(await screen.findByRole('link', { name: /Session title/ })).toBeInTheDocument();
+  });
+});
