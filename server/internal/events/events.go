@@ -25,9 +25,11 @@ type Type string
 
 // The persisted event names, matching the x-sse-events table in api/openapi.yaml.
 const (
-	TypeInboxUpdated     Type = "inbox:updated"
-	TypeScheduleUpdated  Type = "schedule:updated"
-	TypeSessionMessage   Type = "session:message"
+	TypeInboxUpdated    Type = "inbox:updated"
+	TypeScheduleUpdated Type = "schedule:updated"
+	TypeSessionMessage  Type = "session:message"
+	// TypeSessionProgress is live, never stored: it is dispatched to subscribers and carries no id.
+	TypeSessionProgress  Type = "session:progress"
 	TypeTaskUpdated      Type = "task:updated"
 	TypeWorkspaceUpdated Type = "workspace:updated"
 )
@@ -37,9 +39,12 @@ var persisted = map[Type]bool{
 	TypeTaskUpdated: true, TypeWorkspaceUpdated: true,
 }
 
-// Event is one outbox row.
+// Event is one outbox row, or a live event ([Event.Live]).
 type Event struct {
-	ID        int64
+	ID int64
+	// Live marks an event that is not stored: it has no id, is not replayed and is sent without an
+	// `id:` line, so it never moves the client's resume point.
+	Live      bool
 	UserID    string
 	Type      Type
 	Payload   json.RawMessage

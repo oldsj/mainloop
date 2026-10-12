@@ -18,6 +18,26 @@ describe('planSseEvent', () => {
     ]);
   });
 
+  it('sends a progress frame to the live store and invalidates nothing', () => {
+    const data = {
+      session_id: 's1',
+      message_id: 'm1',
+      seq: 1,
+      active: true,
+      started_at: '2026-10-11T12:00:00',
+      status: { kind: 'thinking', label: 'Thinking…' },
+      text: '',
+      text_truncated: false,
+      tools: []
+    };
+    expect(planSseEvent(message('session:progress', data), { firstConnect: false })).toEqual([
+      { kind: 'progress', frame: data }
+    ]);
+    expect(
+      planSseEvent(message('session:progress', { session_id: 's1' }), { firstConnect: false })
+    ).toEqual([{ kind: 'none' }]);
+  });
+
   it('refreshes the schedule list, that schedule and its executions for schedule:updated', () => {
     expect(
       planSseEvent(message('schedule:updated', { schedule_id: 'sch-1' }), { firstConnect: false })

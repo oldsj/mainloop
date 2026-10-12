@@ -57,7 +57,7 @@ func Deps(t testing.TB, cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool
 	}
 	attn := attention.NewService(cfg, pool, log)
 	healthSvc := health.NewService(cfg, pool, nil, log)
-	sessSvc := sessions.NewService(cfg, pool, o.kagent, reg, nil, healthSvc, nil, log)
+	sessSvc := sessions.NewService(cfg, pool, o.kagent, reg, nil, healthSvc, nil, nil, log)
 	d := app.Deps{
 		Config: cfg, Log: log, Pool: pool,
 		Providers: reg,

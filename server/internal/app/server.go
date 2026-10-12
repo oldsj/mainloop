@@ -72,6 +72,8 @@ type Deps struct {
 	// answers 503.
 	Pool *pgxpool.Pool
 	Hub  *events.Hub
+	// Live, when set, brings a stream that joins mid-turn up to date with the running turns.
+	Live events.LiveSource
 	// Registry reads image metadata for environments. Nil means the anonymous OCI client.
 	Registry environments.RegistryClient
 
@@ -136,7 +138,7 @@ func New(d Deps) *Server {
 		ProjectsAPI:     &projects.ProjectsAPI{Svc: d.Projects},
 		ProvidersAPI:    providers.NewAPI(d.Config, d.Pool, d.Providers),
 		EnvironmentsAPI: environments.NewAPI(d.Config, d.Pool, d.Registry),
-		EventsAPI:       events.NewAPI(d.Pool, d.Hub, d.Log, d.Config.Identity.OwnerID),
+		EventsAPI:       events.NewAPI(d.Pool, d.Hub, d.Log, d.Config.Identity.OwnerID, events.WithLive(d.Live)),
 		WorkspacesAPI:   &workspaces.WorkspacesAPI{Svc: d.Workspaces},
 		SessionsAPI:     sessions.NewAPI(d.Sessions),
 		TasksAPI:        &tasks.TasksAPI{Svc: d.Tasks, OwnerID: d.Config.Identity.OwnerID},

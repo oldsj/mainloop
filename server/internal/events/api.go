@@ -29,11 +29,24 @@ const (
 	timestampLayout = "2006-01-02T15:04:05.999999"
 )
 
+// LiveSource holds state that is not stored but that a stream joining late needs.
+type LiveSource interface {
+	// Snapshot returns the current live events of userID, one per running turn.
+	Snapshot(userID string) []Event
+}
+
+// Option tunes [NewAPI].
+type Option func(*EventsAPI)
+
+// WithLive sends src's snapshot to each stream right after it connects and replays.
+func WithLive(src LiveSource) Option { return func(a *EventsAPI) { a.live = src } }
+
 // EventsAPI implements the events tag: GET /events.
 type EventsAPI struct {
 	pool *pgxpool.Pool
 	hub  *Hub
 	log  *slog.Logger
+	live LiveSource
 	// userID is the owner; the owner API has a single user.
 	userID string
 	// heartbeat is HeartbeatInterval, shortened by tests.
@@ -46,8 +59,12 @@ type EventsAPI struct {
 
 // NewAPI builds the handler. pool and hub may be nil (a process that does not serve events), in
 // which case GET /events answers 503.
-func NewAPI(pool *pgxpool.Pool, hub *Hub, log *slog.Logger, ownerID string) *EventsAPI {
-	return &EventsAPI{pool: pool, hub: hub, log: log, userID: ownerID, heartbeat: HeartbeatInterval, now: time.Now, replayBatchSize: replayBatch}
+func NewAPI(pool *pgxpool.Pool, hub *Hub, log *slog.Logger, ownerID string, opts ...Option) *EventsAPI {
+	a := &EventsAPI{pool: pool, hub: hub, log: log, userID: ownerID, heartbeat: HeartbeatInterval, now: time.Now, replayBatchSize: replayBatch}
+	for _, o := range opts {
+		o(a)
+	}
+	return a
 }
 
 // SetHeartbeat overrides the heartbeat interval. For tests.
@@ -234,6 +251,18 @@ func (a *EventsAPI) serve(ctx context.Context, w http.ResponseWriter, sub *Subsc
 		resetHeartbeat()
 	}
 
+	// A turn that is already running has no stored event to replay, so its current state is sent now.
+	// The subscription is open, so a frame the hub also delivers is a newer or equal copy of one the
+	// client orders by seq.
+	if a.live != nil {
+		for _, ev := range a.live.Snapshot(sub.UserID) {
+			if !send(frame(noID, string(ev.Type), ev.Payload)) {
+				return
+			}
+		}
+		resetHeartbeat()
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -242,6 +271,13 @@ func (a *EventsAPI) serve(ctx context.Context, w http.ResponseWriter, sub *Subsc
 			return
 		case ev := <-sub.C:
 			// Rows the replay already sent can arrive again from the hub.
+			if ev.Live {
+				if !send(frame(noID, string(ev.Type), ev.Payload)) {
+					return
+				}
+				resetHeartbeat()
+				continue
+			}
 			if ev.ID <= lastSent {
 				continue
 			}

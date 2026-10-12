@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/oldsj/mainloop/server/internal/app"
@@ -22,6 +23,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/events"
+	"github.com/oldsj/mainloop/server/internal/progress"
 	"github.com/oldsj/mainloop/server/internal/testdb"
 )
 
@@ -33,6 +35,7 @@ type sseEnv struct {
 	server *httptest.Server
 	srv    *app.Server
 	log    *slog.Logger
+	live   *progress.Tracker
 }
 
 // newSSE serves the real owner API on a real listener over a migrated database, with the outbox
@@ -56,7 +59,8 @@ func newSSEWithoutSource(t *testing.T, buffer int, heartbeat time.Duration) *sse
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	hub := events.NewHub(log, buffer)
 	deps := apptest.Deps(t, cfg, log, d.Pool)
-	deps.DB, deps.Hub = d.Pool, hub
+	live := progress.New(hub, progress.WithInterval(0))
+	deps.DB, deps.Hub, deps.Live = d.Pool, hub, live
 	srv := app.New(deps)
 	srv.SetHeartbeat(heartbeat)
 	h, err := srv.Handler()
@@ -64,7 +68,7 @@ func newSSEWithoutSource(t *testing.T, buffer int, heartbeat time.Duration) *sse
 		t.Fatal(err)
 	}
 	ts := httptest.NewServer(apicheck.Wrap(t, h))
-	e := &sseEnv{d: d, hub: hub, server: ts, srv: srv, log: log}
+	e := &sseEnv{d: d, hub: hub, server: ts, srv: srv, log: log, live: live}
 	t.Cleanup(func() {
 		hub.Close()
 		ts.Close()
@@ -477,4 +481,57 @@ func TestSSEEndsWhenPruningOvertakesTheReplay(t *testing.T) {
 	if f := again.mustNext(); f.event != "connected" || f.id != itoa(ids[len(ids)-1]) {
 		t.Fatalf("reconnect = %+v, want a fresh start at %d", f, ids[len(ids)-1])
 	}
+}
+
+func TestSSELiveProgressFramesCarryNoIDAndASnapshotFollowsConnected(t *testing.T) {
+	e := newSSE(t, 16, time.Hour)
+	ref := progress.Ref{UserID: owner, SessionID: "s1", MessageID: "m1", Started: time.Now()}
+	stored := e.publish(t, owner, events.TypeInboxUpdated, map[string]string{})
+
+	// A client that joins mid-turn is told the state as it stands, right after connected.
+	e.live.Observe(ref, &a2a.Task{ID: "t", ContextID: "c", Status: a2a.TaskStatus{State: a2a.TaskStateWorking},
+		Artifacts: []*a2a.Artifact{{ID: "a", Parts: a2a.ContentParts{a2a.NewTextPart("so far")}}}})
+	c := e.connect(t, "")
+	if f := c.mustNext(); f.event != "connected" {
+		t.Fatalf("first frame %+v", f)
+	}
+	f := c.mustNext()
+	if f.event != "session:progress" || f.id != "" || !strings.Contains(f.data, `"text":"so far"`) ||
+		!strings.Contains(f.data, `"active":true`) {
+		t.Fatalf("snapshot frame %+v", f)
+	}
+
+	// Live frames follow with no id, so they never move the resume point; stored events keep theirs.
+	e.live.Observe(ref, &a2a.TaskArtifactUpdateEvent{Append: true, Artifact: &a2a.Artifact{
+		ID: "a", Parts: a2a.ContentParts{a2a.NewTextPart(" and more")}}})
+	f = c.mustNext()
+	if f.event != "session:progress" || f.id != "" || !strings.Contains(f.data, `"text":"so far and more"`) {
+		t.Fatalf("live frame %+v", f)
+	}
+	id := e.publish(t, owner, events.TypeInboxUpdated, map[string]string{})
+	if f = c.mustNext(); f.event != "inbox:updated" || f.id != itoa(id) || id <= stored {
+		t.Fatalf("stored frame %+v (id %d)", f, id)
+	}
+	e.live.End(ref, "reply-1")
+	f = c.mustNext()
+	if f.event != "session:progress" || f.id != "" || !strings.Contains(f.data, `"active":false`) ||
+		!strings.Contains(f.data, `"reply_id":"reply-1"`) {
+		t.Fatalf("closing frame %+v", f)
+	}
+}
+
+func TestSSELiveProgressIsNotReplayedAfterAReconnect(t *testing.T) {
+	e := newSSE(t, 16, time.Hour)
+	ref := progress.Ref{UserID: owner, SessionID: "s1", MessageID: "m1", Started: time.Now()}
+	e.live.Begin(ref)
+	e.live.End(ref, "")
+	last := e.publish(t, owner, events.TypeInboxUpdated, map[string]string{})
+	c := e.connect(t, itoa(last-1))
+	if f := c.mustNext(); f.event != "connected" {
+		t.Fatalf("first frame %+v", f)
+	}
+	if f := c.mustNext(); f.event != "inbox:updated" || f.id != itoa(last) {
+		t.Fatalf("replayed frame %+v", f)
+	}
+	c.expectNoFrame(200 * time.Millisecond)
 }

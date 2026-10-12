@@ -13,20 +13,53 @@ domain events until the slices that own them call `events.Publish`.
 
 Each frame has an `event:` name and a one-line JSON `data:` payload from `api/openapi.yaml`.
 
-| Event               | Stored | Meaning                                            |
-| ------------------- | ------ | -------------------------------------------------- |
-| `connected`         | no     | First frame of every stream; carries `user_id`.    |
-| `heartbeat`         | no     | Sent after 30 seconds without another frame.       |
-| `inbox:updated`     | yes    | Inbox items changed.                               |
-| `schedule:updated`  | yes    | A schedule changed or started an execution.        |
-| `session:message`   | yes    | A mirrored reply landed in a session conversation. |
-| `task:updated`      | yes    | A task changed; read it with `getTask`.            |
-| `workspace:updated` | yes    | The workspace lifecycle projection changed.        |
+| Event               | Stored | Meaning                                                     |
+| ------------------- | ------ | ----------------------------------------------------------- |
+| `connected`         | no     | First frame of every stream; carries `user_id`.             |
+| `heartbeat`         | no     | Sent after 30 seconds without another frame.                |
+| `session:progress`  | no     | Live state of a running turn: partial reply, status, tools. |
+| `inbox:updated`     | yes    | Inbox items changed.                                        |
+| `schedule:updated`  | yes    | A schedule changed or started an execution.                 |
+| `session:message`   | yes    | A mirrored reply landed in a session conversation.          |
+| `task:updated`      | yes    | A task changed; read it with `getTask`.                     |
+| `workspace:updated` | yes    | The workspace lifecycle projection changed.                 |
 
 Stored events carry an `id:` line, the outbox row id. `connected` carries the id the client
 resumes from: the newest event id on a fresh stream, or the client's own `Last-Event-ID` on a
 resume. `heartbeat` has no `id:`, so it never moves the client's resume point. Events reach a
 user in id order, and only that user's events are sent.
+
+## Live progress
+
+Status: **implemented** (`server/internal/progress`), proven by Go tests against the fake kagent and by
+SSE tests; web behaviour is in [chat](chat.md). **Not measured** against a live kagent.
+
+`session:progress` shows what a turn is doing while it runs. It is **not stored**: it has no `id:`
+line and is never replayed, so it never moves the resume point, and the outbox, retention and
+`Last-Event-ID` rules above do not apply to it. It is also not a change notification: a client must
+not re-read state because of it. Durable state is unchanged. The reply is still mirrored once, when
+the turn settles, and announced by `session:message`.
+
+- Each frame is the **whole** live state of one turn (`session_id`, `message_id` of the user message
+  the turn answers, `seq`, `started_at`, `status`, `text`, `tools`), not a delta. A client keeps the
+  frame with the highest `seq` for its `message_id` and replaces the rest; a lost frame costs nothing.
+  `text` keeps the last 16 KiB (`text_truncated`); `tools` keeps the latest 30.
+- Frames come from the kagent task stream the delivery loop already reads: text artifacts (folded
+  by artifact id, appended when kagent says so), tool call and result artifacts, and task status
+  updates. Nothing extra is sent or subscribed to. The state lives in memory, one entry per session
+  with a turn in flight, so the delivery loop and the API must run in one process; a restart drops it
+  and the page falls back to a busy flag and then the reply.
+- Updates are coalesced to at most four frames a second per session: the first goes out at once,
+  later ones inside the interval are folded into one trailing frame.
+- A stream that connects mid-turn receives the current frame of each running turn right after
+  `connected` (and after any replay), so a reload or reconnect shows the partial reply at once.
+- The turn ends with a frame with `active: false`, no text and no tools, sent after the settle
+  commits. `reply_id` names the conversation message that now holds the outcome (the mirrored reply),
+  or is absent when the turn stored none. A client keeps the live bubble until it has read that
+  message, so the final reply replaces the bubble without a gap or a duplicate.
+- `status.kind` is `thinking`, `writing`, `tool` or `waiting`. Tool labels (`Running Bash: go test ./...`,
+  `Reading file.go`) are derived by Mainloop from the tool name and arguments. A turn that waits for the
+  owner reads `Waiting for you`.
 
 ## Resuming
 

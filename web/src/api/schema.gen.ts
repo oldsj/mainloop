@@ -216,16 +216,22 @@ export interface paths {
      *     - inbox:updated - when inbox items change
      *     - schedule:updated - when a schedule changes or starts an execution
      *     - session:message - when a session turn ends: a mirrored reply landed, or the turn failed or was not sent again (re-read the session)
+     *     - session:progress - while a session turn runs: the reply so far, the current step and the tool calls (live, never stored)
      *     - task:updated - when a task changes; read it with getTask
      *     - workspace:updated - when the workspace lifecycle projection changes
      *
      *     The client should reconnect on disconnect with backoff. Native EventSource reconnects after a
      *     dropped stream but not after a non-200 response, so a fetch-based client retries both.
      *
-     *     Stored events (everything except `connected` and `heartbeat`) carry an `id`. `connected` carries
-     *     the id the stream starts from; `heartbeat` has no `id`, so it never moves the client's resume point.
+     *     Stored events (everything except `connected`, `heartbeat` and `session:progress`) carry an `id`. `connected` carries
+     *     the id the stream starts from; `heartbeat` and `session:progress` have no `id`, so they never move the client's resume point.
      *     A reconnect with `Last-Event-ID` replays that user's missed events within the retention window;
      *     a resume point outside it is treated as a fresh connection.
+     *
+     *     Right after `connected` (and any replay) the server sends the current `session:progress` frame of each
+     *     turn that is still running, so a client that connects mid-turn starts from the live state. Each
+     *     frame is the whole live state of one session's turn, replacing the last one; `seq` orders frames of
+     *     a session, so a snapshot that arrives after a newer frame is dropped.
      */
     get: operations['getEvents'];
     put?: never;
@@ -4478,6 +4484,42 @@ export interface components {
       /** @enum {string} */
       role: 'assistant';
     };
+    /** @description `session:progress`: the live state of a running session turn. Never stored and carries no event id; the durable reply still arrives once, as the `session:message` that ends the turn. At most four frames a second per session are sent. */
+    EventSessionProgress: {
+      session_id: string;
+      /** @description The user message the running turn answers. */
+      message_id: string;
+      reply_id?: string;
+      /** @description Orders the frames of one turn. Clients keep the highest. */
+      seq: number;
+      /** @description False in the last frame of a turn, which carries no content. It is sent after the turn's final state is stored. */
+      active: boolean;
+      /** @description When the turn's live progress began, UTC ISO-8601 without an offset. The elapsed time is measured from it. */
+      started_at: string;
+      status: components['schemas']['SessionProgressStatus'];
+      /** @description The reply so far, as markdown. At most 16 KiB; when longer, the end is kept and `text_truncated` is true. */
+      text: string;
+      text_truncated: boolean;
+      /** @description The latest tool calls of the turn, oldest first. */
+      tools: components['schemas']['SessionProgressTool'][];
+    };
+    SessionProgressStatus: {
+      /**
+       * @description `thinking`: no text or tool yet. `writing`: the reply is growing. `tool`: a tool call is running. `waiting`: the turn waits for the owner.
+       * @enum {string}
+       */
+      kind: 'thinking' | 'writing' | 'tool' | 'waiting';
+      /** @description Display text, such as `Thinking…`, `Running Bash: go test ./...` or `Waiting for you`. */
+      label: string;
+    };
+    SessionProgressTool: {
+      id: string;
+      name: string;
+      /** @description A one-line summary of the call, such as `Read server/main.go`. */
+      label: string;
+      /** @enum {string} */
+      state: 'running' | 'done' | 'error';
+    };
     /** @description `workspace:updated`: the durable lifecycle projection. */
     EventWorkspaceUpdated: {
       workspace: components['schemas']['WorkspaceLifecycle'];
@@ -5189,6 +5231,7 @@ export interface operations {
             | components['schemas']['EventInboxUpdated']
             | components['schemas']['EventScheduleUpdated']
             | components['schemas']['EventSessionMessage']
+            | components['schemas']['EventSessionProgress']
             | components['schemas']['EventTaskUpdated']
             | components['schemas']['EventWorkspaceUpdated'];
         };

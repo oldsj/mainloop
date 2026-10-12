@@ -1,9 +1,11 @@
 package events
 
 import (
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"sync"
+	"time"
 )
 
 // Why a subscription ended.
@@ -118,6 +120,12 @@ func (h *Hub) Dispatch(ev Event) {
 			h.endLocked(s, ErrSlowConsumer)
 		}
 	}
+}
+
+// DispatchLive offers a live event, one that is not stored, to every subscriber of its user. It is
+// Dispatch with the Live flag set, so a stream can tell it from an outbox row.
+func (h *Hub) DispatchLive(userID string, typ Type, payload json.RawMessage) {
+	h.Dispatch(Event{UserID: userID, Type: typ, Payload: payload, Live: true, CreatedAt: time.Now()})
 }
 
 // Close ends every subscription and refuses new ones. Streams return, so the HTTP server's

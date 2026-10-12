@@ -22,6 +22,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/kagent"
+	"github.com/oldsj/mainloop/server/internal/progress"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
 )
@@ -505,6 +506,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 	}
 	t.cur, t.ksid = dbstate.DeliverySending, ksid
 	var sendErr error
+	t.s.Progress.Begin(t.progressRef())
 	for ev, err := range t.s.Kagent.SendMessage(ctx, t.agent, kagent.SendParams{
 		Text: text, MessageID: t.c.ID, ContextID: ksid,
 	}) {
@@ -517,6 +519,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 				return reconcile.Retry(), err
 			}
 		}
+		t.s.Progress.Observe(t.progressRef(), ev)
 	}
 
 	switch {
@@ -800,6 +803,7 @@ func (t *turn) advance(ctx context.Context, task *a2a.Task, follow bool) (reconc
 		// take long, so look again less and less often. An input-required park may be a HITL ask: tell
 		// the observer to list this session's tasks now, so the owner sees the request at once instead
 		// of after its scan period. The observer adopts nothing for auth-required, so that one is not hinted.
+		t.s.Progress.Observe(t.progressRef(), task)
 		if st == "input_required" {
 			t.hintHITL(ctx, task)
 		}
@@ -808,10 +812,12 @@ func (t *turn) advance(ctx context.Context, task *a2a.Task, follow bool) (reconc
 		// Still running after we followed it to the end of its stream: look again soon.
 		return reconcile.RetryAfter(t.s.opts().FollowPoll), nil
 	}
+	t.s.Progress.Begin(t.progressRef())
 	for ev, err := range t.s.Kagent.SubscribeToTask(ctx, t.agent, string(task.ID)) {
 		if err != nil || endsTask(ev) {
 			break
 		}
+		t.s.Progress.Observe(t.progressRef(), ev)
 	}
 	if ctx.Err() != nil {
 		return reconcile.Retry(), ctx.Err()
@@ -936,6 +942,7 @@ func (t *turn) settle(
 	ctx context.Context, final dbstate.DeliveryState, detail string, task *a2a.Task, nativeFailure bool,
 ) (reconcile.Outcome, error) {
 	det, ref, tid := finishFields(detail, task, nativeFailure)
+	var stored string
 	err := events.InTxPublish(ctx, t.s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
 		q := dbq.New(tx)
 		id, owner, attempts := t.fence()
@@ -950,6 +957,7 @@ func (t *turn) settle(
 		if err != nil {
 			return nil, err
 		}
+		stored = msg
 		if err := t.returnStandingContext(ctx, tx, final, task); err != nil {
 			return nil, err
 		}
@@ -962,7 +970,23 @@ func (t *turn) settle(
 		return reconcile.Retry(), err
 	}
 	t.cur = final
+	t.s.endProgress(t.d.UserID, t.d.SessionID, t.c.ID, t.d.CreatedAt, stored)
 	return reconcile.Recorded(), nil
+}
+
+// progressRef names this turn for the live progress tracker.
+func (t *turn) progressRef() progress.Ref {
+	return progress.Ref{UserID: t.d.UserID, SessionID: t.d.SessionID, MessageID: t.c.ID, Started: t.d.CreatedAt}
+}
+
+// endProgress tells the live progress tracker that a turn ended and its outcome is stored. stored is
+// the id the session:message event names: a message the turn wrote, or the user message when it wrote none.
+func (s *Service) endProgress(userID, sessionID, deliveryID string, started time.Time, stored string) {
+	reply := stored
+	if stored == deliveryID {
+		reply = ""
+	}
+	s.Progress.End(progress.Ref{UserID: userID, SessionID: sessionID, MessageID: deliveryID, Started: started}, reply)
 }
 
 // ingestHealth stores the health observations of the task in hand in the settling transaction.

@@ -6,3 +6,5 @@ export { ApiError, SendError, TaskApiError } from './errors';
 export { keys } from './keys';
 export { createQueryClient } from './queryClient';
 export type { components, paths } from './schema.gen';
+export { liveProgress } from './liveProgress';
+export type { ProgressFrame } from './liveProgress';

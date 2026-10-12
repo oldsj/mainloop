@@ -3,7 +3,9 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import type { Message } from '@/lib/contract';
 import type { DeliveryNotice } from '@/lib/delivery';
+import type { ProgressFrame } from '@/api';
 import { MessageBubble } from './MessageBubble';
+import { LiveTurn } from './LiveTurn';
 
 /** Within this distance of the end, new messages keep the view pinned to the bottom. */
 export const STICK_PX = 150;
@@ -20,6 +22,8 @@ export interface MessageListProps {
   context?: string;
   /** The thread has been read at least once; before that an empty list means "not loaded". */
   loaded: boolean;
+  /** The turn still running, shown below the last message. */
+  live?: ProgressFrame;
   retryDisabled: boolean;
   onRetry: (message: Message) => void;
 }
@@ -33,7 +37,8 @@ export function MessageList({
   context,
   loaded,
   retryDisabled,
-  onRetry
+  onRetry,
+  live
 }: MessageListProps) {
   const scroller = useRef<HTMLDivElement>(null);
   // True on the first render, so the first load lands on the newest message.
@@ -64,7 +69,7 @@ export function MessageList({
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el && stuck.current) el.scrollTop = el.scrollHeight;
-  }, [messages.length, last?.content, notices]);
+  }, [messages.length, last?.content, notices, live?.seq]);
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -76,7 +81,7 @@ export function MessageList({
         className="gap-sm py-md flex h-full flex-col overflow-y-auto"
         data-testid="message-list"
       >
-        {messages.length === 0 ? (
+        {messages.length === 0 && !live ? (
           <div className="text-muted-foreground m-auto text-center text-sm">
             <p className="text-term-accent">{loaded ? '$ mainloop --help' : '$ connecting'}</p>
             <p>{loaded ? 'Start a conversation to begin' : 'Waiting for the backend…'}</p>
@@ -95,6 +100,7 @@ export function MessageList({
             />
           ))
         )}
+        {live ? <LiveTurn frame={live} context={context} agentKind={agentKind} /> : null}
       </div>
       {showButton ? (
         <Button

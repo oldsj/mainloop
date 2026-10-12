@@ -116,6 +116,7 @@ func (s *Service) endDelivery(ctx context.Context, d dbq.Delivery, from []dbstat
 	}
 	var previous dbstate.DeliveryState
 	moved := false
+	var stored string
 	err := events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
 		q := dbq.New(tx)
 		prev, err := q.EndDelivery(ctx, dbq.EndDeliveryParams{
@@ -138,8 +139,12 @@ func (s *Service) endDelivery(ctx context.Context, d dbq.Delivery, from []dbstat
 		if err != nil {
 			return nil, err
 		}
+		stored = msg
 		return []events.Draft{endedEvent(s.OwnerID, d.SessionID, msg)}, nil
 	})
+	if moved && err == nil {
+		s.endProgress(s.OwnerID, d.SessionID, d.ID, d.CreatedAt, stored)
+	}
 	return previous, moved, err
 }
 
@@ -399,6 +404,9 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 	}
 	if errors.Is(err, errFinishedMeanwhile) {
 		return cancelledResult(finished), nil
+	}
+	for _, c := range closedNow {
+		s.endProgress(s.OwnerID, sessionID, c.d.ID, c.d.CreatedAt, "")
 	}
 	// Reload after the intent commits: an in-flight create may have bound its Session meanwhile.
 	b, err = s.ownedBinding(ctx, sessionID)

@@ -40,6 +40,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
+	"github.com/oldsj/mainloop/server/internal/progress"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
 )
@@ -238,8 +239,10 @@ type Service struct {
 	// Health, when set, stores a finished turn's health observations in the transaction that ends it.
 	// The health recovery sweep collects whatever this misses, so nil only costs a later read.
 	Health HealthSink
-	Log    *slog.Logger
-	Opts   Options
+	// Progress shows a running turn's reply and tool calls live. Nil shows none.
+	Progress *progress.Tracker
+	Log      *slog.Logger
+	Opts     Options
 }
 
 func (s *Service) opts() Options { return s.Opts.withDefaults() }
@@ -506,10 +509,10 @@ func (s *Service) SendTo(ctx context.Context, sessionID, messageID, text string)
 // health stores a finished turn's observations in the transaction that ends it; waker readies a
 // workspace session's runtime before each send. A test with none of these passes nil.
 func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, reg *providers.Registry, creds *agentauth.Credentials,
-	health HealthSink, waker Waker, log *slog.Logger) *Service {
+	health HealthSink, waker Waker, prog *progress.Tracker, log *slog.Logger) *Service {
 	return &Service{
 		Pool: pool, Kagent: k, OwnerID: cfg.Identity.OwnerID, Log: log,
-		Providers: reg, Credentials: creds, Health: health, Waker: waker,
+		Providers: reg, Credentials: creds, Health: health, Waker: waker, Progress: prog,
 		Agent:          kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainAgent},
 		MainProvider:   cfg.Main.Provider,
 		MainCodexAgent: kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainCodexAgent},

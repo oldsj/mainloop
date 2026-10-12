@@ -2,6 +2,7 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import { allKeys, keys } from './keys';
 import type { components } from './schema.gen';
 import type { SseMessage } from './sse';
+import { isProgressFrame, liveProgress, type ProgressFrame } from './liveProgress';
 
 /**
  * What each server event does to the cache (plan §4.4). The map is pure so it can be tested
@@ -16,6 +17,8 @@ import type { SseMessage } from './sse';
  * - `session:message`: that session's conversation and native info, plus the main thread.
  * - `schedule:updated`: the schedule list, that schedule, and its executions. The event names a
  *   change only; the queries re-read.
+ * - `session:progress`: the live bubble of a running turn. It names no change to re-read, so it
+ *   touches no query.
  * - `heartbeat` and anything unknown: nothing.
  */
 type Schemas = components['schemas'];
@@ -50,6 +53,7 @@ export type CacheAction =
   | { kind: 'invalidate'; keys: readonly QueryKey[] }
   | { kind: 'task'; taskId: string; version: number; eventId: string }
   | { kind: 'upsertWorkspace'; workspace: WorkspaceLifecycle }
+  | { kind: 'progress'; frame: ProgressFrame }
   | { kind: 'none' };
 
 export function planSseEvent(
@@ -99,6 +103,8 @@ export function planSseEvent(
         }
       ];
     }
+    case 'session:progress':
+      return isProgressFrame(payload) ? [{ kind: 'progress', frame: payload }] : [{ kind: 'none' }];
     case 'schedule:updated': {
       if (!isScheduleUpdated(payload)) return [{ kind: 'none' }];
       const id = payload.schedule_id;
@@ -138,6 +144,8 @@ export function createSseApplier(queryClient: QueryClient) {
 
   return function apply(message: Pick<SseMessage, 'event' | 'data'>): void {
     const firstConnect = message.event === 'connected' && connects++ === 0;
+    // A new stream sends the state of running turns again right after `connected`.
+    if (message.event === 'connected') liveProgress.reset();
     for (const action of planSseEvent(message, { firstConnect })) {
       switch (action.kind) {
         case 'invalidate':
@@ -161,6 +169,9 @@ export function createSseApplier(queryClient: QueryClient) {
           );
           break;
         }
+        case 'progress':
+          liveProgress.apply(action.frame);
+          break;
         case 'none':
           break;
       }

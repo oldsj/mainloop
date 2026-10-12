@@ -2,6 +2,7 @@ import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Composer } from './Composer';
 import { assignmentIds } from './assignments';
 import { MessageList } from './MessageList';
+import { useLiveTurn } from './useLiveTurn';
 import type { ThreadView } from './useThread';
 
 export interface ThreadBodyProps {
@@ -24,6 +25,7 @@ export function ThreadBody({
   closedReason = null,
   closedPlaceholder
 }: ThreadBodyProps) {
+  const live = useLiveTurn(thread.sessionId, thread.busy, thread.messages);
   return (
     <>
       {thread.loadFailed && !offline ? (
@@ -57,6 +59,7 @@ export function ThreadBody({
         agentKind={thread.native?.kind as 'claude' | 'codex' | undefined}
         context={thread.context}
         loaded={thread.loaded}
+        live={live}
         retryDisabled={thread.busy || thread.sendPending || offline}
         onRetry={(message) => void thread.retry(message)}
       />

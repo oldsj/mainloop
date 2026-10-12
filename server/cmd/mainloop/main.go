@@ -26,6 +26,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/preview"
+	"github.com/oldsj/mainloop/server/internal/progress"
 	"github.com/oldsj/mainloop/server/internal/projects"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/pushgate"
@@ -166,7 +167,8 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	wsSvc := workspaces.New(cfg, pool, kc, reg, creds, sessions.NewLedger(cfg, pool), projectSvc, log,
 		workspaceOptions(cfg, gate, gitReadFor(cfg, pool, creds, log))...)
 	healthSvc := health.NewService(cfg, pool, kc, log)
-	svc := sessions.NewService(cfg, pool, kc, reg, creds, healthSvc, wsSvc, log)
+	live := progress.New(hub)
+	svc := sessions.NewService(cfg, pool, kc, reg, creds, healthSvc, wsSvc, live, log)
 	hitlSvc := hitl.NewService(cfg, pool, hitl.FromClient(kc), svc, svc, svc, log)
 	schedSvc := schedules.NewService(cfg, pool, kc, reg, log)
 	previews, err := preview.New(cfg, pool, wsSvc, log)
@@ -184,7 +186,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	prSvc, mergeSvc := newPullRequestServices(cfg, pool, gh, kc, log)
 
 	handler, err := app.New(app.Deps{
-		Config: cfg, Log: log, DB: pool, Pool: pool, Hub: hub,
+		Config: cfg, Log: log, DB: pool, Pool: pool, Hub: hub, Live: live,
 		Providers: reg, Projects: projectSvc, Tasks: taskSvc, Workspaces: wsSvc, Sessions: svc, Preview: previews,
 		HITL: hitlSvc, Attention: attn, Health: healthSvc, Schedules: schedSvc, Merge: mergeSvc,
 	}).Handler()
