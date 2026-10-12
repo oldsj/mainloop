@@ -373,6 +373,15 @@ describe('home work placement', () => {
     expect(screen.queryByTestId('work-list')).toBeNull();
   });
 
+  it('keeps the strip to home: a task or agent page on the phone chat tab has none', async () => {
+    setViewport(false);
+    serveFailedSinceVisit();
+    await renderAt('/health');
+    await screen.findByTestId('compact-shell');
+    expect(screen.queryByTestId('since-strip')).toBeNull();
+    expect(screen.getByTestId('tab-chat')).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('puts Work above the project list in the Projects tab', async () => {
     setViewport(false);
     const user = userEvent.setup();

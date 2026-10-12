@@ -65,31 +65,62 @@ function Groups({
       {GROUP_ORDER.map((group) => {
         const rows = groups[group];
         if (rows.length === 0 && group !== 'working') return null;
-        return (
-          <section key={group} aria-labelledby={`work-${group}`} className="px-md py-sm min-w-0">
-            <h2 id={`work-${group}`} className="text-muted-foreground text-xs font-medium">
-              {HEADINGS[group]} {rows.length > 0 && <span>({rows.length})</span>}
-            </h2>
-            {rows.length === 0 ? (
-              <p className="text-muted-foreground mt-xs text-sm">
-                Nothing running. Start work from the main chat.
-              </p>
-            ) : (
-              <ul className="mt-xs min-w-0">
-                {rows.map((row) => (
-                  <WorkRowItem
-                    key={row.view.task.id}
-                    row={row}
-                    project={names.get(row.view.task.project_id ?? '') ?? null}
-                    now={now}
-                  />
-                ))}
-              </ul>
-            )}
-          </section>
-        );
+        return <GroupSection key={group} group={group} rows={rows} names={names} now={now} />;
       })}
     </>
+  );
+}
+
+/** Rows shown per group before "Show all", so a long list cannot push Sessions and Inbox away. */
+const ROW_CAP = 5;
+
+function GroupSection({
+  group,
+  rows,
+  names,
+  now
+}: {
+  group: WorkGroup;
+  rows: WorkRow[];
+  names: Map<string, string>;
+  now: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const shown = expanded ? rows : rows.slice(0, ROW_CAP);
+  return (
+    <section aria-labelledby={`work-${group}`} className="px-md py-sm min-w-0">
+      <h2 id={`work-${group}`} className="text-muted-foreground text-xs font-medium">
+        {HEADINGS[group]} {rows.length > 0 && <span>({rows.length})</span>}
+      </h2>
+      {rows.length === 0 ? (
+        <p className="text-muted-foreground mt-xs text-sm">
+          Nothing running. Start work from the main chat.
+        </p>
+      ) : (
+        <>
+          <ul className="mt-xs min-w-0">
+            {shown.map((row) => (
+              <WorkRowItem
+                key={row.view.task.id}
+                row={row}
+                project={names.get(row.view.task.project_id ?? '') ?? null}
+                now={now}
+              />
+            ))}
+          </ul>
+          {rows.length > ROW_CAP ? (
+            <button
+              type="button"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((value) => !value)}
+              className="text-muted-foreground mt-xs min-h-11 text-xs underline"
+            >
+              {expanded ? 'Show fewer' : `Show all (${rows.length})`}
+            </button>
+          ) : null}
+        </>
+      )}
+    </section>
   );
 }
 

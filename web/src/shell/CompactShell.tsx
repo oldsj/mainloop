@@ -1,4 +1,4 @@
-import { Link, useNavigate } from '@tanstack/react-router';
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import { Activity, FolderGit2, Inbox, ListTree, MessageSquare, Plus } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
@@ -57,6 +57,7 @@ export function CompactShell({
   children: ReactNode;
 }) {
   const navigate = useNavigate();
+  const onHome = useRouterState({ select: (state) => state.location.pathname === '/' });
   const needs = unresolvedCount(useAttention().data);
   const tasks = tasksNeedingOwner(useTaskList().data ?? []).length;
   const [opened, setOpened] = useState<ReadonlySet<Tab>>(() => new Set([tab]));
@@ -96,9 +97,12 @@ export function CompactShell({
         {opened.has('chat') && (
           <TabPane active={tab === 'chat'}>
             <div className="flex h-full min-h-0 flex-col">
-              <PanelBoundary name="Since you were here">
-                <HomeStrip lastVisit={lastVisit} compact />
-              </PanelBoundary>
+              {/* The strip belongs to home only; task and agent pages open in the same tab. */}
+              {onHome && (
+                <PanelBoundary name="Since you were here">
+                  <HomeStrip lastVisit={lastVisit} compact />
+                </PanelBoundary>
+              )}
               <div className="min-h-0 flex-1">{children}</div>
             </div>
           </TabPane>

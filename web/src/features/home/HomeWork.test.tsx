@@ -1,4 +1,5 @@
 import { screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it } from 'vitest';
 import { keys } from '@/api';
@@ -196,5 +197,35 @@ describe('Since you were here', () => {
     renderHome();
     await screen.findByText('Broke once');
     expect(screen.queryByTestId('since-strip')).toBeNull();
+  });
+});
+
+describe('Work list cap', () => {
+  it('shows five rows per group with a Show all toggle, and twelve tasks show every row on toggle', async () => {
+    const running = Array.from({ length: 12 }, (_, index) =>
+      view({ id: `run-${index}`, title: `Running task ${index}`, status: 'running' })
+    );
+    serve(running);
+    const user = userEvent.setup();
+    renderHome();
+
+    const working = await screen.findByRole('region', { name: 'Working (12)' });
+    expect(within(working).getAllByTestId('work-row')).toHaveLength(5);
+    const show = within(working).getByRole('button', { name: 'Show all (12)' });
+    expect(show).toHaveAttribute('aria-expanded', 'false');
+
+    await user.click(show);
+    expect(within(working).getAllByTestId('work-row')).toHaveLength(12);
+    expect(within(working).getByRole('button', { name: 'Show fewer' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+  });
+
+  it('shows no toggle for a group of five or fewer rows', async () => {
+    serve([view({ id: 'run-1', title: 'Only one', status: 'running' })]);
+    renderHome();
+    const working = await screen.findByRole('region', { name: 'Working (1)' });
+    expect(within(working).queryByRole('button')).toBeNull();
   });
 });
