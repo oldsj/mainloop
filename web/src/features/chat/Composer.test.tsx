@@ -136,6 +136,14 @@ describe('Composer prefill', () => {
     await waitFor(() => expect(input().value).toBe(PREFILL + 'half a thought'));
   });
 
+  it('does not stack the prefill on a draft that already starts with it', async () => {
+    saveDraft('c1', PREFILL + 'half a thought');
+    const onPrefillUsed = vi.fn();
+    setup({ prefill: PREFILL, onPrefillUsed });
+    await waitFor(() => expect(onPrefillUsed).toHaveBeenCalledTimes(1));
+    expect(input().value).toBe(PREFILL + 'half a thought');
+  });
+
   it('does not refill when the caller re-renders with the same prefill', async () => {
     const onPrefillUsed = vi.fn();
     const { rerender } = render(
