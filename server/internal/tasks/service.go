@@ -385,6 +385,16 @@ func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, i
 		if err != nil || owner != p.OwnerID {
 			return dbq.Task{}, refusal(404, ReasonProjectNotFound)
 		}
+		if in.Mode == dbstate.TaskModeCode {
+			// A code task pushes its branch, and the push gate attests only a workspace pinned to a
+			// development environment. Refuse now, with an action the owner can take, rather than start a
+			// workspace that can never push.
+			if _, err := q.GetWorkspaceEnvironmentVersion(ctx, *project); errors.Is(err, pgx.ErrNoRows) {
+				return dbq.Task{}, refusal(409, ReasonEnvironmentRequired)
+			} else if err != nil {
+				return dbq.Task{}, err
+			}
+		}
 	}
 	if topic != nil {
 		tp, err := q.GetTopic(ctx, *topic)

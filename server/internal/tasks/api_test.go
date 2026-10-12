@@ -37,6 +37,7 @@ func newRest(t *testing.T) *rest {
 		`INSERT INTO projects (id, user_id, owner, name, full_name, html_url) VALUES ('p1', 'local-dev-user', 'o', 'p1', 'o/p1', 'https://example.test/p1')`); err != nil {
 		t.Fatal(err)
 	}
+	d.SelectEnvironment(t, "local-dev-user", "p1")
 	return &rest{t: t, handler: apicheck.Wrap(t, h)}
 }
 

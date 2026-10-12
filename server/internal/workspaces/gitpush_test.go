@@ -237,7 +237,7 @@ func TestWorkspacePushReplayReusesReference(t *testing.T) {
 }
 
 func TestWorkspacePushFailureAndExpiryRelease(t *testing.T) {
-	for _, kind := range []string{"refused", "expired", "failed runtime", "abandoned task"} {
+	for _, kind := range []string{"refused", "expired", "failed runtime", "abandoned task", "no environment"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newHarness(t, nil)
 			w, _, _ := queuedPushWorkspace(t, h, "feature/test", true)
@@ -252,6 +252,10 @@ func TestWorkspacePushFailureAndExpiryRelease(t *testing.T) {
 				h.getState.Store(int32(ka.RuntimeState_RUNTIME_STATE_FAILED))
 			case "abandoned task":
 				h.exec(`UPDATE task_attempts SET state='draining',stop_state='requested' WHERE id='attempt'`)
+			case "no environment":
+				// The task is live and the session ready: only the missing environment ends the wait.
+				activatePushAttempt(h, w.ID)
+				h.exec(`UPDATE workspaces SET environment=NULL WHERE id=$1`, w.ID)
 			}
 			if kind != "refused" {
 				if err := reconcilePush(t, h, w.ID); err != nil {

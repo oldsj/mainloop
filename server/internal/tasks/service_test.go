@@ -48,6 +48,8 @@ func newEnv(t *testing.T) *env {
 		e.exec(`INSERT INTO projects (id, user_id, owner, name, full_name, html_url) VALUES ($1, $2, 'o', $1, 'o/'||$1, 'https://example.test/'||$1)`, id, owner)
 	}
 	e.exec(`INSERT INTO projects (id, user_id, owner, name, full_name, html_url) VALUES ('foreign', 'someone-else', 'o', 'f', 'o/f', 'https://example.test/f')`)
+	e.exec(`INSERT INTO projects (id, user_id, owner, name, full_name, html_url) VALUES ('bare', $1, 'o', 'bare', 'o/bare', 'https://example.test/bare')`, owner)
+	d.SelectEnvironment(t, owner, "p1", "p2")
 	e.exec(`INSERT INTO topics (id, user_id, name) VALUES ('tp1', $1, 'Infra')`, owner)
 	return e
 }
@@ -222,13 +224,14 @@ func TestCreateValidation(t *testing.T) {
 		status int
 		reason string
 	}{
-		"code needs a project":     {tasks.CreateInput{Mode: dbstate.TaskModeCode, Checkout: &tasks.Checkout{Branch: "b"}}, 422, tasks.ReasonCodeNeedsProject},
-		"code needs a checkout":    {tasks.CreateInput{Mode: dbstate.TaskModeCode, ProjectID: "p1"}, 422, tasks.ReasonCodeNeedsCheckout},
-		"coordination no checkout": {tasks.CreateInput{ProjectID: "p1", Checkout: &tasks.Checkout{Branch: "b"}}, 422, tasks.ReasonCoordinationCheckout},
-		"foreign project":          {tasks.CreateInput{ProjectID: "foreign"}, 404, tasks.ReasonProjectNotFound},
-		"missing project":          {tasks.CreateInput{ProjectID: "nope"}, 404, tasks.ReasonProjectNotFound},
-		"missing topic":            {tasks.CreateInput{TopicID: "nope"}, 404, tasks.ReasonTopicNotFound},
-		"unknown provider":         {tasks.CreateInput{ProviderProfileID: "nope"}, 422, tasks.ReasonProviderUnknown},
+		"code needs a project":      {tasks.CreateInput{Mode: dbstate.TaskModeCode, Checkout: &tasks.Checkout{Branch: "b"}}, 422, tasks.ReasonCodeNeedsProject},
+		"code needs a checkout":     {tasks.CreateInput{Mode: dbstate.TaskModeCode, ProjectID: "p1"}, 422, tasks.ReasonCodeNeedsCheckout},
+		"code needs an environment": {tasks.CreateInput{Mode: dbstate.TaskModeCode, ProjectID: "bare", Checkout: &tasks.Checkout{Branch: "b"}}, 409, tasks.ReasonEnvironmentRequired},
+		"coordination no checkout":  {tasks.CreateInput{ProjectID: "p1", Checkout: &tasks.Checkout{Branch: "b"}}, 422, tasks.ReasonCoordinationCheckout},
+		"foreign project":           {tasks.CreateInput{ProjectID: "foreign"}, 404, tasks.ReasonProjectNotFound},
+		"missing project":           {tasks.CreateInput{ProjectID: "nope"}, 404, tasks.ReasonProjectNotFound},
+		"missing topic":             {tasks.CreateInput{TopicID: "nope"}, 404, tasks.ReasonTopicNotFound},
+		"unknown provider":          {tasks.CreateInput{ProviderProfileID: "nope"}, 422, tasks.ReasonProviderUnknown},
 		"brief over the byte limit": {
 			tasks.CreateInput{Brief: strings.Repeat("é", 8193)}, 422, tasks.ReasonBriefTooLong,
 		},

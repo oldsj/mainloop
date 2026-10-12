@@ -33,6 +33,9 @@ the delete intent, and the gate refuses any workspace that has a delete op, in a
 delayed or failing native delete cannot leave a window for a new push. A push already dispatched is
 not recalled. A delete later rejected (for example because a turn is open) leaves the workspace
 without push authority on purpose: it fails closed and the terminal reservation cannot reopen.
+A workspace with no recorded development environment can never be attested, so enrollment ends at
+once: it releases the reservation (and logs why) instead of retrying until the reservation expires.
+Task creation refuses such a project first (`project_environment_required`).
 The release sweep also settles a grant or push credential still planned or published behind an
 already revoked reservation (a crash between `Enroll` and its fence), so the Secret is cleaned up.
 Terminal reservations and their identities cannot reopen or change. No owner policy API is added,

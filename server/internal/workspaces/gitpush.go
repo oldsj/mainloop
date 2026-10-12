@@ -151,6 +151,14 @@ func (s *Service) enrollPush(ctx context.Context, c reconcile.Claim) (reconcile.
 	if !s.GitPush.enabled() || s.Credentials == nil || w.KagentSessionID == nil {
 		return reconcile.Retry(), nil
 	}
+	// A workspace made without a development environment can never be attested, so waiting changes
+	// nothing: end the reservation now. Task creation refuses such a project; this covers a row that
+	// predates the refusal or lost its selection.
+	if _, ok := pushgate.PinnedEnvironment(w.Environment); !ok {
+		s.Log.WarnContext(ctx, "push enrollment ended: workspace has no pinned development environment; select one for the project and start a new task",
+			"workspace", w.ID, "project", w.ProjectID)
+		return reconcile.Recorded(), s.releasePush(ctx, w.ID)
+	}
 	// GetSession is fresh on every retry. The existing Session must already carry the reserved
 	// reference; neither refresh nor enrollment is allowed to retrofit it.
 	n, err := s.Kagent.GetSession(ctx, *w.KagentSessionID)
