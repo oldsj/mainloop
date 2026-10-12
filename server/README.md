@@ -4,16 +4,16 @@ Go backend for Mainloop. One binary, `cmd/mainloop`, with a subcommand per proce
 wire contract is [`../api/openapi.yaml`](../api/openapi.yaml); request validation and routing
 come from it. See [`../ROADMAP.md`](../ROADMAP.md) for direction.
 
-| Command             | Status                                                            |
-| ------------------- | ----------------------------------------------------------------- |
-| `serve-api`         | Owner API on `:8000`. `/health` is real; other operations 501.    |
-| `serve-mcp`         | `:8002`. `/health` only; 501 elsewhere.                           |
-| `serve-git`         | `:8003` (read) and `:8004` (push). `/health` only; 501 elsewhere. |
-| `migrate`           | `up`, `status` and `reset` the database schema.                   |
-| `sweep-orphans`     | Lists orphaned kagent Sessions; `--delete` removes them.          |
-| `smoke --read-only` | Probes a running instance; no writes, no quota.                   |
-| `smoke --live`      | Drives one task from chat to merge; spends quota.                 |
-| `kagent-probe`      | Read-only check that kagent answers.                              |
+| Command             | What it does                                                                                                                                                                                                      |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serve-api`         | Owner API on `:8000`: every operation in the contract, plus workspace preview hosts.                                                                                                                              |
+| `serve-mcp`         | Agent MCP tools on `:8002`. The merge tools appear only with `MAINLOOP_MERGE_TOOLS_ENABLED=true`.                                                                                                                 |
+| `serve-git`         | Git read on `:8003` and the push gate on `:8004`. Read needs `GIT_TRANSPORT_ENABLED` and a GitHub App, and answers 501 without them. Pushes also need `PUSH_GATE_ENABLED`; when it is off, the gate refuses them. |
+| `migrate`           | `up`, `status` and `reset` the database schema.                                                                                                                                                                   |
+| `sweep-orphans`     | Lists orphaned kagent Sessions; `--delete` removes them.                                                                                                                                                          |
+| `smoke --read-only` | Probes a running instance; no writes, no quota.                                                                                                                                                                   |
+| `smoke --live`      | Drives one task from chat to merge; spends quota.                                                                                                                                                                 |
+| `kagent-probe`      | Read-only check that kagent answers.                                                                                                                                                                              |
 
 ## Layout
 
@@ -54,7 +54,6 @@ export DEV_MODE=true                        # accept localhost Hosts and Origins
 export DB_HOST=localhost DB_PORT=5432 DB_NAME=postgres DB_USER=mainloop DB_PASSWORD=...
 go run ./cmd/mainloop serve-api
 curl localhost:8000/health                  # {"database":"ok","status":"healthy"}
-curl -i localhost:8000/attention            # 501 {"detail":"Not implemented"}
 ```
 
 Without `DEV_MODE`, set `FRONTEND_DOMAIN` or `MAINLOOP_API_HOSTS` to the Host name you send.
