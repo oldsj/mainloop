@@ -528,8 +528,8 @@ func (s *Server) prepare(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("no running actor"))
 	}
 	if !s.gitCredentialsCountable(sess.GetId()) {
-		// kagent's preparation check counts a Git proxy credential only when its header and
-		// secret key are exactly "authorization"; any other spelling leaves the count short, and
+		// kagent's preparation check needs exactly one read and one push Git proxy credential, each
+		// with header and secret key exactly "authorization"; any other count or spelling fails it, and
 		// kagent answers with this generic refusal, whatever the Actor's state.
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			errors.New("Current prepared runtime identity is unavailable")) //nolint:staticcheck // kagent's own wording
@@ -548,21 +548,29 @@ func (s *Server) prepare(
 	return connect.NewResponse(&api.PrepareSessionWorkspaceResponse{Receipt: receipt}), nil
 }
 
-// gitCredentialsCountable reports whether every Git proxy credential the Session was created with is
-// spelled the way kagent's preparation check counts it; s.mu is held.
+// gitCredentialsCountable reports whether the Session was created with exactly one read and one
+// push Git proxy credential, spelled the way kagent's preparation check counts them (header and
+// secret key exactly "authorization"); s.mu is held. kagent hard-codes the proxy origins; the fake
+// matches on the Service name so a test namespace works.
 func (s *Server) gitCredentialsCountable(sessionID string) bool {
+	read, push := 0, 0
 	for requestID, id := range s.byReq {
 		if id != sessionID {
 			continue
 		}
 		for _, c := range s.first[requestID].GetCredentials() {
-			if strings.HasPrefix(c.GetOrigin(), "http://mainloop-git-") &&
-				(c.GetHeader() != "authorization" || c.GetSecretRef().GetKey() != "authorization") {
-				return false
+			if c.GetHeader() != "authorization" || c.GetSecretRef().GetKey() != "authorization" {
+				continue
+			}
+			switch {
+			case strings.HasPrefix(c.GetOrigin(), "http://mainloop-git-read."):
+				read++
+			case strings.HasPrefix(c.GetOrigin(), "http://mainloop-git-push."):
+				push++
 			}
 		}
 	}
-	return true
+	return read == 1 && push == 1
 }
 
 func (s *Server) getAgent(

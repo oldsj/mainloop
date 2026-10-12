@@ -101,12 +101,13 @@ func TestTaskWorkspaceWaitForProjectDefaultIsBounded(t *testing.T) {
 }
 
 // Only a workspace that could get a reference waits: a standalone workspace on a project with no
-// default yet is created at once, read-only, as before.
+// default yet is created at once, read-only, as before: it holds the push reference kagent
+// requires but reserves nothing.
 func TestStandaloneWorkspaceDoesNotWaitForProjectDefault(t *testing.T) {
 	h := newHarness(t, nil)
 	w, _, _ := queuedPushWorkspaceWithDefault(t, h, "feature/test", false, "")
 	createPushSession(t, h)
-	if !h.row(w.ID).GitPushDecided || len(h.fake.CreateRequests()) != 1 || len(h.fake.CreateRequests()[0].Credentials) != 2 {
-		t.Fatal("a standalone workspace waited or got a push credential")
+	if !h.row(w.ID).GitPushDecided || len(h.fake.CreateRequests()) != 1 || len(h.fake.CreateRequests()[0].Credentials) != 3 {
+		t.Fatal("a standalone workspace waited or did not get its unreserved push reference")
 	}
 }

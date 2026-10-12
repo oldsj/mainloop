@@ -273,6 +273,11 @@ type unconfirmed struct{ detail string }
 
 func (e *unconfirmed) Error() string { return e.detail }
 
+// unpreparable is a create that could never carry what kagent needs to prepare the workspace.
+type unpreparable struct{ detail string }
+
+func (e *unpreparable) Error() string { return e.detail }
+
 // classify says whether an error will never succeed on retry, with a reason fit to show.
 func classify(err error) (permanent bool, reason string) {
 	var tr *transient
@@ -285,7 +290,10 @@ func classify(err error) (permanent bool, reason string) {
 	var un *kagent.Unreachable
 	var ou *kagent.OutcomeUnknown
 	var uc *unconfirmed
+	var up *unpreparable
 	switch {
+	case errors.As(err, &up):
+		return true, up.detail
 	case errors.Is(err, gittransport.ErrWorkspaceEnded):
 		return true, "the workspace has ended"
 	case errors.Is(err, agentauth.ErrBindingEnded), errors.Is(err, agentauth.ErrInvalidGrant):

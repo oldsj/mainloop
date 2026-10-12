@@ -70,6 +70,16 @@ func (u *localPushUpstream) Push(ctx context.Context, _ github.Repo, body io.Rea
 	return cmd.Output()
 }
 
+// withGitProxies configures what a workspace with a development environment needs: the git read
+// transport and an enabled push gate. kagent prepares a Session only if it holds a reference to each.
+func (h *harness) withGitProxies() *authtest.Env {
+	h.t.Helper()
+	a := h.withGitRead()
+	u := &localPushUpstream{}
+	h.svc.GitPush = &GitPush{Gate: pushgate.NewService(h.svc.Pool, h.svc.Kagent, u, a.Creds), Origin: h.cfg.Git.PushOrigin}
+	return a
+}
+
 func queuedPushWorkspace(t *testing.T, h *harness, branch string, task bool) (wsRow, *authtest.Env, *localPushUpstream) {
 	t.Helper()
 	return queuedPushWorkspaceWithDefault(t, h, branch, task, "main")
@@ -89,7 +99,7 @@ func queuedPushWorkspaceWithDefault(t *testing.T, h *harness, branch string, tas
 	}
 	r := h.row(w.WorkspaceId)
 	h.exec(`UPDATE projects SET default_branch=$2 WHERE id=$1`, r.ProjectID, def)
-	h.exec(`UPDATE workspaces SET environment='{"environment_id":"env","version_id":"v","image":"example.test/dev@sha256:abc","platform":"linux/amd64","policy_identity":"policy"}' WHERE id=$1`, r.ID)
+	h.exec(`UPDATE workspaces SET environment=$2 WHERE id=$1`, r.ID, testEnvironment)
 	if task {
 		h.exec(`INSERT INTO tasks (id,owner_id,project_id,root_task_id,title,brief,mode,assigned_profile_id,selection_source,status,checkout_branch,checkout_ref,checkout_depth)
 		    VALUES ('task',$1,$2,'task','test','test','code','claude','explicit','queued',$3,'main',0)`, owner, r.ProjectID, r.Branch)
@@ -275,8 +285,10 @@ func TestWorkspacePushFailureAndExpiryRelease(t *testing.T) {
 	}
 }
 
-func TestWorkspacePushReadOnlyAndExistingSessionGetNone(t *testing.T) {
-	for _, kind := range []string{"standalone", "default branch", "protected branch", "lost writer", "existing session", "gate without upstream"} {
+// A workspace with an environment that cannot push still holds the push reference kagent needs to
+// prepare it, but no reservation, grant or Secret ever backs that reference.
+func TestWorkspacePushReadOnlyAndExistingSessionGetNoAuthority(t *testing.T) {
+	for _, kind := range []string{"standalone", "default branch", "protected branch", "lost writer", "existing session"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newHarness(t, nil)
 			branch := "feature/test"
@@ -290,15 +302,12 @@ func TestWorkspacePushReadOnlyAndExistingSessionGetNone(t *testing.T) {
 			if kind == "lost writer" {
 				h.exec(`UPDATE workspace_writer_claims SET held=false WHERE attempt_id='attempt'`)
 			}
-			if kind == "gate without upstream" {
-				// The policy-only gate of a process whose push gate is off: it reserves nothing.
-				h.svc.GitPush = &GitPush{Gate: pushgate.NewService(h.svc.Pool, h.svc.Kagent, nil, h.svc.Credentials), Origin: h.cfg.Git.PushOrigin}
-			}
 			if kind == "existing session" {
-				h.svc.GitPush = nil
+				// The Session was made before the decision existed (a row from before the freeze): deciding
+				// now must not retrofit a reference or reserve anything.
 				createPushSession(t, h)
+				h.exec(`DELETE FROM workspace_push_reservations WHERE workspace_id=$1`, w.ID)
 				h.exec(`UPDATE workspaces SET git_push_decided=false,git_push_credential=NULL WHERE id=$1`, w.ID)
-				h.svc.GitPush = &GitPush{Gate: pushgate.NewService(h.svc.Pool, h.svc.Kagent, &localPushUpstream{}, h.svc.Credentials), Origin: h.cfg.Git.PushOrigin}
 				ref, err := h.svc.gitPushForCreate(bg, h.row(w.ID))
 				if err != nil || ref != nil {
 					t.Fatal("existing Session was retrofitted")
@@ -309,8 +318,8 @@ func TestWorkspacePushReadOnlyAndExistingSessionGetNone(t *testing.T) {
 			if _, err := h.dq.GetWorkspacePushReservation(bg, w.ID); !errors.Is(err, pgx.ErrNoRows) {
 				t.Fatal("read-only workspace got a reservation")
 			}
-			if pushCredentials(h, w.ID) != 0 || len(h.fake.CreateRequests()[0].Credentials) != 2 {
-				t.Fatal("read-only workspace got a push credential")
+			if pushCredentials(h, w.ID) != 0 || len(h.fake.CreateRequests()[0].Credentials) != 3 {
+				t.Fatal("read-only workspace got push authority or no push reference")
 			}
 		})
 	}

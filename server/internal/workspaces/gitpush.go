@@ -31,6 +31,20 @@ type GitPush struct {
 // through it would never get an authority.
 func (g *GitPush) enabled() bool { return g != nil && g.Gate != nil && g.Gate.Upstream != nil }
 
+// gitUnavailable is why a workspace with a development environment cannot be created: kagent
+// prepares such a Session only if it holds both Git proxy references.
+const gitUnavailable = "git_transport_required: a development environment needs the git read transport and the push gate, which this server does not have configured for the repository"
+
+// gitReferencesAvailable says whether a workspace on repoURL can carry the read and push references
+// kagent's preparation requires.
+func (s *Service) gitReferencesAvailable(repoURL string) bool {
+	if !s.GitRead.applies(wsRow{RepoURL: repoURL}) || !s.GitPush.enabled() || s.Credentials == nil {
+		return false
+	}
+	_, off := s.Credentials.Secrets.(agentauth.Unconfigured)
+	return !off
+}
+
 func (s *Service) gitPushForCreate(ctx context.Context, w wsRow) (*ka.SessionCredential, error) {
 	var raw json.RawMessage
 	err := pgxTx(ctx, s, func(q *dbq.Queries) error {
@@ -47,32 +61,42 @@ func (s *Service) gitPushForCreate(ctx context.Context, w wsRow) (*ka.SessionCre
 			return nil
 		}
 		var attempt string
-		if cur.KagentSessionID == nil && s.GitPush.enabled() && s.Credentials != nil &&
-			s.GitRead.applies(wsRow(cur)) && len(cur.GitReadCredential) > 0 {
-			_, off := s.Credentials.Secrets.(agentauth.Unconfigured)
-			if !off {
-				a, err := q.GetWorkspacePushAttempt(ctx, w.ID)
-				if err == nil {
-					// A live task attempt with no known default branch cannot be judged yet: freezing
-					// "no push" now would leave the workspace read-only for good. Fail the create
-					// retryably; the project-metadata sweep fills the default, and the create's retry
-					// window bounds the wait and records this reason if GitHub never answers.
-					if a.DefaultBranch == "" {
-						return &unconfirmed{"waiting for the project's default branch from GitHub"}
-					}
-					allowed, policyErr := pushAllowed(ctx, q, cur.ProjectID, cur.Branch)
-					if policyErr != nil {
-						return policyErr
-					}
-					if allowed && cur.Branch != a.DefaultBranch {
-						attempt = a.AttemptID
-						raw, err = protojson.Marshal(pushgate.Reference(s.Credentials, s.GitPush.Origin, w.ID))
-					}
+		if cur.KagentSessionID == nil && s.gitReferencesAvailable(cur.RepoURL) && len(cur.GitReadCredential) > 0 {
+			ref, err := protojson.Marshal(pushgate.Reference(s.Credentials, s.GitPush.Origin, w.ID))
+			if err != nil {
+				return err
+			}
+			// kagent prepares a Session only if it holds exactly one read and one push Git
+			// reference, so every environment-backed workspace carries one. The reference
+			// publishes no bearer and reserves nothing: only a reservation (below) lets
+			// enrollment issue the Secret and a grant.
+			if len(cur.Environment) > 0 {
+				raw = ref
+			}
+			a, err := q.GetWorkspacePushAttempt(ctx, w.ID)
+			if err == nil {
+				// A live task attempt with no known default branch cannot be judged yet: freezing
+				// "no push" now would leave the workspace read-only for good. Fail the create
+				// retryably; the project-metadata sweep fills the default, and the create's retry
+				// window bounds the wait and records this reason if GitHub never answers.
+				if a.DefaultBranch == "" {
+					return &unconfirmed{"waiting for the project's default branch from GitHub"}
 				}
-				if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-					return err
+				allowed, policyErr := pushAllowed(ctx, q, cur.ProjectID, cur.Branch)
+				if policyErr != nil {
+					return policyErr
+				}
+				if allowed && cur.Branch != a.DefaultBranch {
+					attempt = a.AttemptID
+					raw = ref
 				}
 			}
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+		}
+		if cur.KagentSessionID == nil && len(cur.Environment) > 0 && len(raw) == 0 {
+			return &unpreparable{gitUnavailable}
 		}
 		if _, err := q.FreezeWorkspaceGitPush(ctx, dbq.FreezeWorkspaceGitPushParams{ID: w.ID, GitPushCredential: raw}); err != nil {
 			return err
