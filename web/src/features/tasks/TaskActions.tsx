@@ -127,6 +127,11 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
 
   const retry = gate('retry');
   const cancel = gate('cancel');
+  // Retry and reassign need the provider handoff, which is not installed yet. The server reports that
+  // reason, and the owner sees no control for it: a disabled control that cannot work is not shown.
+  const retryHidden = view.actions.retry?.reason === 'handoff_unavailable';
+  const reassignHidden = view.actions.reassign?.reason === 'handoff_unavailable';
+  const handoffHidden = retryHidden || reassignHidden;
   // The dialog closes, sending nothing, once the task has moved on from what the owner confirmed:
   // a new version or attempt, or cancel no longer offered. The owner then re-opens it on the new task.
   const cancelMoved =
@@ -224,51 +229,61 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
       })}
 
       <div className="gap-md flex flex-col">
-        <div className="gap-xs flex flex-col">
-          <Button
-            type="button"
-            variant="outline"
-            data-testid="task-action-retry"
-            disabled={!retry.enabled}
-            onClick={() => void submit('retry')}
-            className="self-start"
-          >
-            {LABELS.retry}
-          </Button>
-          {retry.reason ? <p className="text-muted-foreground text-xs">{retry.reason}</p> : null}
-        </div>
+        {handoffHidden ? (
+          <p data-testid="task-handoff-unavailable" className="text-muted-foreground text-xs">
+            Retry and reassign need the provider handoff, which is not installed yet.
+          </p>
+        ) : null}
 
-        <div className="gap-xs flex flex-col">
-          <label htmlFor="reassign-target" className="text-sm font-medium">
-            Provider to reassign to
-          </label>
-          <select
-            id="reassign-target"
-            value={selected}
-            disabled={targets.length === 0 || sending !== null || !reassignGate.enabled}
-            onChange={(event) => setTarget(event.target.value)}
-            className="border-border text-foreground bg-background px-md min-h-11 rounded-none border text-sm"
-          >
-            {targets.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.display_name} ({profile.native_provider})
-              </option>
-            ))}
-          </select>
-          <Button
-            type="button"
-            variant="outline"
-            data-testid="task-action-reassign"
-            disabled={!reassign.enabled}
-            onClick={() => void submit('reassign', { targetProfileId: selected })}
-            className="self-start"
-          >
-            {LABELS.reassign}
-          </Button>
-          {reassign.reason ? (
-            <p className="text-muted-foreground text-xs">{reassign.reason}</p>
-          ) : null}
-        </div>
+        {retryHidden ? null : (
+          <div className="gap-xs flex flex-col">
+            <Button
+              type="button"
+              variant="outline"
+              data-testid="task-action-retry"
+              disabled={!retry.enabled}
+              onClick={() => void submit('retry')}
+              className="self-start"
+            >
+              {LABELS.retry}
+            </Button>
+            {retry.reason ? <p className="text-muted-foreground text-xs">{retry.reason}</p> : null}
+          </div>
+        )}
+
+        {reassignHidden ? null : (
+          <div className="gap-xs flex flex-col">
+            <label htmlFor="reassign-target" className="text-sm font-medium">
+              Provider to reassign to
+            </label>
+            <select
+              id="reassign-target"
+              value={selected}
+              disabled={targets.length === 0 || sending !== null || !reassignGate.enabled}
+              onChange={(event) => setTarget(event.target.value)}
+              className="border-border text-foreground bg-background px-md min-h-11 rounded-none border text-sm"
+            >
+              {targets.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.display_name} ({profile.native_provider})
+                </option>
+              ))}
+            </select>
+            <Button
+              type="button"
+              variant="outline"
+              data-testid="task-action-reassign"
+              disabled={!reassign.enabled}
+              onClick={() => void submit('reassign', { targetProfileId: selected })}
+              className="self-start"
+            >
+              {LABELS.reassign}
+            </Button>
+            {reassign.reason ? (
+              <p className="text-muted-foreground text-xs">{reassign.reason}</p>
+            ) : null}
+          </div>
+        )}
 
         <div className="gap-xs flex flex-col">
           <Button

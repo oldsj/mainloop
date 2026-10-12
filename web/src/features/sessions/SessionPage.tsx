@@ -26,6 +26,7 @@ import {
 } from './model';
 import {
   useAttention,
+  useNativeSession,
   useSessionActions,
   useSessionDetail,
   useTasks,
@@ -53,6 +54,7 @@ export function SessionPage({ id }: { id: string }) {
   const workspaces = useWorkspaces();
   const tasks = useTasks();
   const actions = useSessionActions(id);
+  const native = useNativeSession(id);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
 
@@ -90,8 +92,11 @@ export function SessionPage({ id }: { id: string }) {
   const archived = Boolean(session.archived_at);
   const workspace = workspaceFor(workspaces.data ?? [], session.id);
   const task = taskForSession(tasks.data ?? [], session.id);
-  // Stop turn is hidden for archived, failed and cancelled sessions, as in the frozen app.
-  const canStop = !archived && session.status !== 'failed' && session.status !== 'cancelled';
+  // Stop turn is offered only while the agent reports a turn in flight. Unknown or malformed native
+  // state hides it, so the page never offers a stop that has nothing to stop.
+  const turnInFlight = native.data?.turn_in_flight === true;
+  const canStop =
+    !archived && turnInFlight && session.status !== 'failed' && session.status !== 'cancelled';
   const canCancel = CANCELLABLE.includes(session.status);
   const canArchive = CLEARABLE.includes(session.status);
 
@@ -135,11 +140,7 @@ export function SessionPage({ id }: { id: string }) {
     <article className="flex min-h-0 flex-col">
       <header className="gap-sm border-border p-md flex flex-col border-b">
         <div className="gap-sm flex items-center">
-          <Button asChild variant="ghost" size="icon">
-            <Link to="/" search={(prev) => ({ ...prev, tab: undefined })} aria-label="Back">
-              <ArrowLeft aria-hidden="true" />
-            </Link>
-          </Button>
+          <BackLink taskId={task?.view.task.id ?? null} projectId={session.project_id} />
           <span data-testid="session-status">
             <StatusBadge
               label={`[${statusLabel(session.status, session.needs_owner)}]`}
@@ -158,7 +159,7 @@ export function SessionPage({ id }: { id: string }) {
         <IdentityStrip session={session} />
       </PanelBoundary>
 
-      {/* Stop turn is offered independently of Cancel, except where the spec hides it. */}
+      {/* Stop turn is offered independently of Cancel, and only while a turn is running. */}
       <section aria-label="Session actions" className="gap-sm p-md flex flex-wrap items-center">
         {canStop ? (
           <Button
@@ -337,5 +338,34 @@ function SessionFailure({
         pending={retrying}
       />
     </div>
+  );
+}
+
+/** Back goes up one level: the session's task, then its project, then the sessions home. */
+function BackLink({ taskId, projectId }: { taskId: string | null; projectId: string | null }) {
+  if (taskId) {
+    return (
+      <Button asChild variant="ghost" size="icon">
+        <Link to="/tasks/$id" params={{ id: taskId }} aria-label="Back to task">
+          <ArrowLeft aria-hidden="true" />
+        </Link>
+      </Button>
+    );
+  }
+  if (projectId) {
+    return (
+      <Button asChild variant="ghost" size="icon">
+        <Link to="/projects/$id" params={{ id: projectId }} aria-label="Back to project">
+          <ArrowLeft aria-hidden="true" />
+        </Link>
+      </Button>
+    );
+  }
+  return (
+    <Button asChild variant="ghost" size="icon">
+      <Link to="/" search={(prev) => ({ ...prev, tab: undefined })} aria-label="Back">
+        <ArrowLeft aria-hidden="true" />
+      </Link>
+    </Button>
   );
 }

@@ -297,6 +297,24 @@ describe('environment selection', () => {
     expect(screen.getByText('Selection store is unavailable')).toBeInTheDocument();
   });
 
+  it('lets the refresh label wrap inside a 390 px phone column', async () => {
+    server.use(
+      environmentsRead([environment()]),
+      versionsRead({ env: [version()] }),
+      selectionRead(() =>
+        HttpResponse.json(selection({ version_id: 'v1', resolved_version_id: 'v1' }))
+      )
+    );
+    renderSection();
+
+    const refresh = await screen.findByRole('button', {
+      name: 'Refresh saved selection and environments'
+    });
+    // The base button never wraps; the header's label may, so the button stays inside the column.
+    expect(refresh).toHaveClass('max-w-full', 'whitespace-normal');
+    expect(refresh).not.toHaveClass('whitespace-nowrap');
+  });
+
   it('a failed refresh keeps the last saved selection with a retry', async () => {
     let failing = false;
     server.use(

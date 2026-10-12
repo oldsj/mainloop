@@ -57,6 +57,23 @@ describe('projects list', () => {
     );
   });
 
+  it('keeps a project whose default branch GitHub has not reported yet', async () => {
+    server.use(projectsRead([project({ default_branch: '' })]));
+    renderProjects('/');
+
+    const list = await screen.findByTestId('projects-list');
+    expect(within(list).getByRole('link', { name: /acme\/widgets/ })).toBeInTheDocument();
+  });
+
+  it('stacks the rows in one column, which fits the 384 px desktop side panel', async () => {
+    server.use(projectsRead([project(), project({ id: 'project-b', full_name: 'acme/gadgets' })]));
+    renderProjects('/');
+
+    const list = await screen.findByTestId('projects-list');
+    expect(list).toHaveClass('grid');
+    expect(list).not.toHaveClass('md:grid-cols-2');
+  });
+
   it('shows the empty state when there are no projects', async () => {
     server.use(projectsRead([]));
     renderProjects('/');

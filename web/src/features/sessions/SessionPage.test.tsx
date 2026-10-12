@@ -47,12 +47,31 @@ describe('session page', () => {
     expect(screen.getByRole('link', { name: 'Back' })).toHaveAttribute('href', '/');
   });
 
-  it('offers cancel and stop turn for an active session', async () => {
-    server.use(...serveSession(session({ id: 's1', status: 'active' })));
+  it('offers cancel and stop turn for an active session with a turn in flight', async () => {
+    server.use(
+      ...serveSession(
+        session({ id: 's1', status: 'active' }),
+        native({ session_id: 's1', turn_in_flight: true })
+      )
+    );
     renderSessions('/sessions/s1');
     await heading('Fix login redirect');
     expect(screen.getByTestId('session-cancel')).toBeInTheDocument();
-    expect(screen.getByTestId('session-stop-turn')).toBeInTheDocument();
+    expect(await screen.findByTestId('session-stop-turn')).toBeInTheDocument();
+  });
+
+  it('keeps cancel but hides Stop turn for an idle session with no turn running', async () => {
+    server.use(
+      ...serveSession(
+        session({ id: 's1', status: 'idle' }),
+        native({ session_id: 's1', turn_in_flight: false })
+      )
+    );
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    expect(await screen.findByTestId('identity-strip')).toBeInTheDocument();
+    expect(screen.getByTestId('session-cancel')).toBeEnabled();
+    expect(screen.queryByTestId('session-stop-turn')).not.toBeInTheDocument();
   });
 
   it('hides cancel for a completed session, and offers Clear', async () => {
@@ -106,11 +125,16 @@ describe('session page', () => {
     expect(screen.queryByTestId('session-stop-turn')).not.toBeInTheDocument();
   });
 
-  it('offers Stop turn for a superseded session, but not Clear', async () => {
-    server.use(...serveSession(session({ id: 's1', status: 'superseded' })));
+  it('offers Stop turn for a superseded session with a turn in flight, but not Clear', async () => {
+    server.use(
+      ...serveSession(
+        session({ id: 's1', status: 'superseded' }),
+        native({ session_id: 's1', turn_in_flight: true })
+      )
+    );
     renderSessions('/sessions/s1');
     await heading('Fix login redirect');
-    expect(screen.getByTestId('session-stop-turn')).toBeInTheDocument();
+    expect(await screen.findByTestId('session-stop-turn')).toBeInTheDocument();
     expect(screen.queryByTestId('session-cancel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('archive-session')).not.toBeInTheDocument();
   });
@@ -276,11 +300,16 @@ describe('cancel', () => {
 
   it('is disabled while the backend is unreachable', async () => {
     connection.reportFailure();
-    server.use(...serveSession(session({ id: 's1', status: 'active' })));
+    server.use(
+      ...serveSession(
+        session({ id: 's1', status: 'active' }),
+        native({ session_id: 's1', turn_in_flight: true })
+      )
+    );
     renderSessions('/sessions/s1');
     await heading('Fix login redirect');
     expect(screen.getByTestId('session-cancel')).toBeDisabled();
-    expect(screen.getByTestId('session-stop-turn')).toBeDisabled();
+    expect(await screen.findByTestId('session-stop-turn')).toBeDisabled();
   });
 });
 
@@ -292,12 +321,15 @@ describe('stop turn and clear', () => {
         posts += 1;
         return HttpResponse.json({ status: 'stopped' });
       }),
-      ...serveSession(session({ id: 's1', status: 'active' }))
+      ...serveSession(
+        session({ id: 's1', status: 'active' }),
+        native({ session_id: 's1', turn_in_flight: true })
+      )
     );
     const user = userEvent.setup();
     renderSessions('/sessions/s1');
     await heading('Fix login redirect');
-    await user.click(screen.getByTestId('session-stop-turn'));
+    await user.click(await screen.findByTestId('session-stop-turn'));
     expect(await screen.findByText('Turn stopped. The session is still open.')).toBeInTheDocument();
     expect(posts).toBe(1);
   });
@@ -377,7 +409,7 @@ describe('identity strip', () => {
     expect(screen.getByTestId('id-delivery-problem')).toHaveTextContent('Failed: refused');
   });
 
-  it('keeps Cancel and Stop turn when the native payload is malformed', async () => {
+  it('keeps Cancel but hides Stop turn when the native payload is malformed', async () => {
     server.use(
       nativeReadWith(() => HttpResponse.json({ session_id: 's1', kind: 'claude', turns: 1 })),
       ...serveSession(session({ id: 's1', status: 'active' }))
@@ -387,11 +419,55 @@ describe('identity strip', () => {
 
     expect(await screen.findByTestId('panel-error-identity')).toBeInTheDocument();
     expect(screen.getByTestId('session-cancel')).toBeEnabled();
-    expect(screen.getByTestId('session-stop-turn')).toBeEnabled();
+    // Without a readable native state the page cannot tell a turn is running, so it offers no Stop.
+    expect(screen.queryByTestId('session-stop-turn')).not.toBeInTheDocument();
+  });
+
+  it('never shows a cancelled session as live, even when the agent still reports ready', async () => {
+    server.use(
+      ...serveSession(
+        session({ id: 's1', status: 'cancelled' }),
+        native({ session_id: 's1', session_state: 'ready' })
+      )
+    );
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+
+    const strip = await screen.findByTestId('identity-strip');
+    expect(within(strip).getByText('cancelled')).toBeInTheDocument();
+    expect(strip).not.toHaveTextContent(/\blive\b/);
   });
 });
 
 describe('task and workspace', () => {
+  it('the back link goes to the task that owns this session', async () => {
+    server.use(
+      tasksRead([
+        view(
+          { id: 'task-1', title: 'Add retry button' },
+          { attempts: [attempt({ task_id: 'task-1', session_id: 's1' })] }
+        )
+      ]),
+      ...serveSession(session({ id: 's1' }))
+    );
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    expect(await screen.findByRole('link', { name: 'Back to task' })).toHaveAttribute(
+      'href',
+      '/tasks/task-1'
+    );
+  });
+
+  it('the back link goes to the project when the session has no task', async () => {
+    server.use(...serveSession(session({ id: 's1', project_id: 'project-a' })));
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    expect(await screen.findByRole('link', { name: 'Back to project' })).toHaveAttribute(
+      'href',
+      '/projects/project-a'
+    );
+  });
+
   it('links to the task that owns this session', async () => {
     server.use(
       tasksRead([

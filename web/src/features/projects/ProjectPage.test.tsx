@@ -259,6 +259,28 @@ describe('project page', () => {
     ]);
   });
 
+  it('holds the workspace form until GitHub has reported the default branch', async () => {
+    const bodies: unknown[] = [];
+    server.use(
+      createWorkspaceWrite(async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ workspace_id: 'ws-9' }, { status: 201 });
+      }),
+      ...serveProjectPage({ project: project({ default_branch: '' }) })
+    );
+    const user = userEvent.setup();
+    renderProjects(PAGE);
+    const form = await screen.findByTestId('project-workspace-form');
+
+    const branch = within(form).getByRole('textbox', { name: 'Workspace branch' });
+    expect(branch).toHaveAttribute('placeholder', 'Default branch pending');
+    expect(within(form).getByText(/default branch is not known yet/)).toBeInTheDocument();
+    const submit = within(form).getByRole('button', { name: 'New workspace' });
+    expect(submit).toBeDisabled();
+    await user.click(submit);
+    expect(bodies).toEqual([]);
+  });
+
   it('an empty branch starts on the default branch', async () => {
     const bodies: Record<string, unknown>[] = [];
     server.use(

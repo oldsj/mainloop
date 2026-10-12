@@ -100,7 +100,9 @@ describe('frozen recovery: lost reply stays resendable', () => {
     ).toBeInTheDocument();
     // The page re-read the task before it offered the resend, so the owner sees the current version.
     expect(screen.getByText(/Acting on version 9, attempt 2\./)).toBeInTheDocument();
-    expect(screen.getByTestId('task-action-reassign')).toBeDisabled();
+    // The handoff is not installed, so the reassign control is not shown; the resend still is.
+    expect(screen.queryByTestId('task-action-reassign')).not.toBeInTheDocument();
+    expect(screen.getByTestId('task-handoff-unavailable')).toBeInTheDocument();
     expect(within(resend).getByRole('button', { name: 'Resend original request' })).toBeEnabled();
 
     const resendButton = within(resend).getByRole('button', { name: 'Resend original request' });

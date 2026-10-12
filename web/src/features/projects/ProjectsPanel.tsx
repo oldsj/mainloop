@@ -107,7 +107,7 @@ export function ProjectsPanel() {
       ) : null}
 
       {rows.length > 0 ? (
-        <ul data-testid="projects-list" className="gap-sm grid md:grid-cols-2">
+        <ul data-testid="projects-list" className="gap-sm grid">
           {rows.map((project) => (
             <ProjectListRow key={project.id} project={project} />
           ))}

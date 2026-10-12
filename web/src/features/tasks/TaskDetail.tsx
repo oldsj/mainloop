@@ -11,6 +11,7 @@ import {
   reasonLabel,
   reportLabel,
   statusLabel,
+  isTerminal,
   statusTone,
   unverifiedSummary,
   workspaceFacts,
@@ -185,8 +186,11 @@ export function TaskFacts({
       </section>
 
       <section aria-labelledby="operations-heading" data-testid="task-operations" className={PANEL}>
+        {/* A finished task with nothing open is not working, so its heading does not say so. */}
         <h2 id="operations-heading" className={HEADING}>
-          [IN PROGRESS]
+          {operations.length === 0 && isTerminal(view.task.status)
+            ? '[OPERATIONS]'
+            : '[IN PROGRESS]'}
         </h2>
         {operations.length === 0 ? (
           <p className="text-muted-foreground text-sm">No operation in progress.</p>

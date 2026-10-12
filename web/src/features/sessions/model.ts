@@ -181,11 +181,14 @@ export function chatClosedReason(session: Pick<Session, 'status' | 'archived_at'
 export function liveWord(opts: {
   native: { deliveries: NativeDelivery[]; session_state: string | null } | undefined;
   offline: boolean;
+  /** A cancelled session is never live, even when the agent still reports ready. */
+  status?: string;
 }): string {
   if (opts.offline) return 'unreachable';
   const status = threadStatus({ offline: false, deliveries: opts.native?.deliveries ?? [] });
   if (status === 'failed') return 'last message failed';
   if (status === 'unconfirmed') return 'last message unconfirmed';
+  if (opts.status === 'cancelled') return 'cancelled';
   const state = opts.native?.session_state;
   if (!state) return 'unknown';
   return state === 'ready' ? 'live' : state;

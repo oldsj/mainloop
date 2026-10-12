@@ -68,7 +68,8 @@ export const projectRowSchema = z.object({
   full_name: z.string().min(1),
   html_url: text,
   description: text.nullable(),
-  default_branch: z.string().min(1),
+  // Empty until GitHub metadata arrives. The row stays listed; the workspace form waits for the branch.
+  default_branch: z.string(),
   avatar_url: text.nullable(),
   open_pr_count: z.number().int().nonnegative(),
   merge_policy: z.enum(MERGE_POLICIES)

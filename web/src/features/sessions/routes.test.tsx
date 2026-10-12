@@ -50,8 +50,9 @@ function servePages(items: SessionFixture[]) {
       const item = items.find((candidate) => candidate.id === params.session_id);
       return item ? HttpResponse.json(item) : new HttpResponse(null, { status: 404 });
     }),
+    // A turn is running, so Stop turn is offered on each page.
     nativeReadWith(({ params }) =>
-      HttpResponse.json(native({ session_id: String(params.session_id) }))
+      HttpResponse.json(native({ session_id: String(params.session_id), turn_in_flight: true }))
     ),
     ...otherListReads()
   ];

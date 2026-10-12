@@ -47,7 +47,9 @@ live in `web/src/features/projects`. The list drops a row that breaks the contra
 rest. The page keeps its last loaded project when a refresh fails. The project page shows the F6
 task tree. The desktop shell mounts the Projects panel. The compact shell has no Projects tab, as
 [layout](layout.md) says. The page links to orchestration health, and its branch rows show when
-each workspace was last active.
+each workspace was last active. While the default branch is still empty, the workspace form shows
+the branch as pending and New workspace stays disabled until GitHub metadata arrives. A project
+with no default branch yet stays listed.
 
 A create that gets no reply, or a 5xx, may still have made a workspace. The form then locks, the
 raw error is hidden, and the owner sees recent workspaces to check against. The check lists the

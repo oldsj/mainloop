@@ -27,7 +27,7 @@ export function IdentityStrip({ session }: { session: Session }) {
   if (!info) return null;
 
   const deliveries = info.deliveries;
-  const live = liveWord({ native: info, offline });
+  const live = liveWord({ native: info, offline, status: session.status });
   const last = deliveries.at(-1);
   const problem = last ? deliveryNotices(deliveries).get(last.message_id) : undefined;
   const provider = agentLabel(nativeProviderFor(info.kind, providers.data ?? []));

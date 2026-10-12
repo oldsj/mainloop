@@ -3,6 +3,7 @@ import { StatusBadge } from '@/components/shared/status-badge';
 import type { TaskView } from '@/lib/contract';
 import {
   buildTree,
+  isTerminal,
   openOperations,
   providerLabel,
   publicationFacts,
@@ -97,7 +98,10 @@ function TaskRow({ view, depth, detached }: { view: TaskView; depth: number; det
             />
           </span>
           {view.task.mode === 'coordination' ? (
-            <StatusBadge label="[SUPERVISOR]" tone="active" />
+            <StatusBadge
+              label="[SUPERVISOR]"
+              tone={isTerminal(view.task.status) ? 'muted' : 'active'}
+            />
           ) : null}
         </span>
         <span className="text-sm font-medium break-words">{view.task.title}</span>

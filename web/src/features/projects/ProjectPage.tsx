@@ -372,10 +372,14 @@ function BranchWorkspaceForm({
   locked: boolean;
   onSubmit: (target: { branch: string; agentKind: AgentKind }) => void;
 }) {
-  const [branch, setBranch] = useState(defaultBranch);
+  // Null until the owner types, so the field follows the default branch when GitHub metadata arrives.
+  const [typed, setTyped] = useState<string | null>(null);
   const [agentKind, setAgentKind] = useState<AgentKind>('claude');
+  const branch = typed ?? defaultBranch;
   const offline = useConnection().status === 'offline';
-  const blocked = offline || pending || locked;
+  // An empty default branch means GitHub metadata has not arrived. A workspace would have no ref to start from.
+  const branchUnknown = defaultBranch === '';
+  const blocked = offline || pending || locked || branchUnknown;
 
   return (
     <form
@@ -391,11 +395,17 @@ function BranchWorkspaceForm({
         Branch
         <input
           aria-label="Workspace branch"
+          placeholder={branchUnknown ? 'Default branch pending' : undefined}
           className="border-border bg-background text-foreground px-md min-h-11 border text-sm"
           value={branch}
-          onChange={(event) => setBranch(event.target.value)}
+          onChange={(event) => setTyped(event.target.value)}
         />
       </label>
+      {branchUnknown ? (
+        <p className="text-muted-foreground text-sm">
+          The default branch is not known yet. Workspaces can start once GitHub metadata arrives.
+        </p>
+      ) : null}
       <AgentRadios prefix="project-workspace-kind" value={agentKind} onChange={setAgentKind} />
       <Button type="submit" disabled={blocked}>
         {pending ? 'Creating…' : 'New workspace'}

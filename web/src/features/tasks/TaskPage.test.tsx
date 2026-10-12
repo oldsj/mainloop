@@ -230,7 +230,7 @@ describe('task page layout', () => {
   });
 
   it('keeps every button a button and every target at least 44px', async () => {
-    server.use(...serveTaskPage(taskScreen(view())));
+    server.use(...serveTaskPage(taskScreen(allowedView())));
     renderTasks('/tasks/task-1');
     await screen.findByTestId('task-action-retry');
 
@@ -329,13 +329,86 @@ describe('task page loading and failure', () => {
   });
 });
 
+describe('back links and finished tasks', () => {
+  it('goes back to the parent task when the task has one', async () => {
+    server.use(...serveTaskPage(taskScreen(view({ parent_task_id: 'task-parent' }))));
+    renderTasks('/tasks/task-1');
+
+    expect(await screen.findByRole('link', { name: 'Back to parent task' })).toHaveAttribute(
+      'href',
+      '/tasks/task-parent'
+    );
+  });
+
+  it('goes back to the project when the task has no parent', async () => {
+    server.use(...serveTaskPage(taskScreen(view({ project_id: 'project-1' }))));
+    renderTasks('/tasks/task-1');
+
+    expect(await screen.findByRole('link', { name: 'Back to project' })).toHaveAttribute(
+      'href',
+      '/projects/project-1'
+    );
+  });
+
+  it('goes back to the sessions home for a task with no parent or project', async () => {
+    server.use(...serveTaskPage(taskScreen(view({ project_id: null }))));
+    renderTasks('/tasks/task-1');
+
+    expect(await screen.findByRole('link', { name: 'Back' })).toHaveAttribute('href', '/');
+  });
+
+  it('a cancelled task with nothing open has no in-progress heading', async () => {
+    server.use(...serveTaskPage(taskScreen(view({ status: 'cancelled' }))));
+    renderTasks('/tasks/task-1');
+
+    await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
+    expect(screen.queryByRole('heading', { name: '[IN PROGRESS]' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '[OPERATIONS]' })).toBeInTheDocument();
+    expect(screen.getByTestId('task-operations')).toHaveTextContent('No operation in progress.');
+  });
+});
+
 describe('owner actions', () => {
-  it('leaves an action off with the server reason when it is not available', async () => {
-    server.use(...serveTaskPage(taskScreen(view())));
+  it('hides retry and reassign while the handoff is not installed, and says so once', async () => {
+    const page = view(
+      {},
+      {
+        actions: {
+          ...view().actions,
+          retry: { available: false, reason: 'handoff_unavailable' },
+          reassign: { available: false, reason: 'handoff_unavailable' }
+        }
+      }
+    );
+    server.use(...serveTaskPage(taskScreen(page)));
+    renderTasks('/tasks/task-1');
+
+    expect(await screen.findByTestId('task-handoff-unavailable')).toHaveTextContent(
+      'Retry and reassign need the provider handoff, which is not installed yet.'
+    );
+    expect(screen.queryByTestId('task-action-retry')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('task-action-reassign')).not.toBeInTheDocument();
+    expect(screen.queryByText('handoff is not available yet')).not.toBeInTheDocument();
+    // Cancel is still offered, so only the dead controls go.
+    expect(screen.getByTestId('task-action-cancel')).toBeEnabled();
+  });
+
+  it('keeps a disabled action with its server reason when the reason is not the handoff', async () => {
+    const page = view(
+      {},
+      {
+        actions: {
+          ...view().actions,
+          retry: { available: false, reason: 'provisioning_unavailable' }
+        }
+      }
+    );
+    server.use(...serveTaskPage(taskScreen(page)));
     renderTasks('/tasks/task-1');
 
     expect(await screen.findByTestId('task-action-retry')).toBeDisabled();
-    expect(screen.getByText('handoff is not available yet')).toBeInTheDocument();
+    expect(screen.getByText('workspace provisioning is not available yet')).toBeInTheDocument();
+    expect(screen.queryByTestId('task-handoff-unavailable')).not.toBeInTheDocument();
   });
 
   it('asks twice before cancelling, and sends the version and attempt the owner saw', async () => {

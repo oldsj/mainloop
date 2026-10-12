@@ -164,6 +164,23 @@ describe('task tree', () => {
     ).toBeInTheDocument();
   });
 
+  it('does not mark a cancelled supervisor task as active', async () => {
+    const cancelled = view(
+      { id: 'task-sup-done', title: 'Supervise done', mode: 'coordination', status: 'cancelled' },
+      {}
+    );
+    server.use(
+      tasksList(() => HttpResponse.json([cancelled])),
+      providersRead()
+    );
+    renderTasks('/', () => <TaskTree />);
+
+    const row = await screen.findByRole('link', { name: /Supervise done/ });
+    const badge = within(row).getByText('[SUPERVISOR]');
+    expect(badge).toHaveClass('text-term-fg-muted');
+    expect(badge).not.toHaveClass('text-term-cyan');
+  });
+
   it('says there are no tasks when the list is empty', async () => {
     server.use(
       tasksList(() => HttpResponse.json([])),

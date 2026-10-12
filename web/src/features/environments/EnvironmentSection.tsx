@@ -119,6 +119,8 @@ export function EnvironmentSection({ projectId }: { projectId: string }) {
         <Button
           type="button"
           variant="outline"
+          // The label wraps inside a 390 px phone column instead of pushing past its edge.
+          className="max-w-full text-left whitespace-normal"
           disabled={selection.isFetching || environmentList.isFetching}
           onClick={() => void refresh()}
         >

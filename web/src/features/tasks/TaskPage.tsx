@@ -83,11 +83,7 @@ export function TaskPage({ id }: { id: string }) {
     <article className="flex min-h-0 flex-col">
       <header className="gap-sm border-border p-md flex flex-col border-b">
         <div className="gap-sm flex items-center">
-          <Button asChild variant="ghost" size="icon">
-            <Link to="/" search={(prev) => ({ ...prev, tab: undefined })} aria-label="Back">
-              <ArrowLeft aria-hidden="true" />
-            </Link>
-          </Button>
+          <BackLink parentTaskId={view.task.parent_task_id} projectId={view.task.project_id} />
           <span data-testid="task-status">
             <StatusBadge
               label={`[${statusLabel(view.task.status)}]`}
@@ -236,5 +232,40 @@ function TaskFailure({
         pending={retrying}
       />
     </div>
+  );
+}
+
+/** Back goes up one level: the parent task, then the project, then the sessions home. */
+function BackLink({
+  parentTaskId,
+  projectId
+}: {
+  parentTaskId: string | null;
+  projectId: string | null;
+}) {
+  if (parentTaskId) {
+    return (
+      <Button asChild variant="ghost" size="icon">
+        <Link to="/tasks/$id" params={{ id: parentTaskId }} aria-label="Back to parent task">
+          <ArrowLeft aria-hidden="true" />
+        </Link>
+      </Button>
+    );
+  }
+  if (projectId) {
+    return (
+      <Button asChild variant="ghost" size="icon">
+        <Link to="/projects/$id" params={{ id: projectId }} aria-label="Back to project">
+          <ArrowLeft aria-hidden="true" />
+        </Link>
+      </Button>
+    );
+  }
+  return (
+    <Button asChild variant="ghost" size="icon">
+      <Link to="/" search={(prev) => ({ ...prev, tab: undefined })} aria-label="Back">
+        <ArrowLeft aria-hidden="true" />
+      </Link>
+    </Button>
   );
 }

@@ -16,7 +16,8 @@ The owner's actions on one task: Retry, Reassign and Cancel. The server decides 
 ## States
 
 - **Available:** the button is enabled. The server reported the action available, nothing is in flight, the connection is up, and no unconfirmed request is held for this task.
-- **Not available:** the button is disabled, and the reason beside it is the server's copy (for example `handoff is not available yet`).
+- **Not available:** the button is disabled, and the reason beside it is the server's copy (for example `workspace provisioning is not available yet`).
+- **Handoff not installed:** while the server reports `handoff_unavailable`, Retry and Reassign are not rendered at all. One plain line says the provider handoff is not installed yet. A disabled control that cannot work is never shown.
 - **Sending:** the button for the action in flight is disabled, and the other actions wait until it settles.
 - **Offline:** every action is disabled with `Mainloop is offline.`
 - **Unconfirmed (lost reply):** the request is kept as **Resend original request**, with its original version, attempt and target, and a **Discard** button. Other actions wait until the owner resends or discards it.

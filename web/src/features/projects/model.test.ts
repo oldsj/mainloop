@@ -30,6 +30,10 @@ describe('boundary schemas', () => {
     ).toBe(true);
   });
 
+  it('accepts a project row whose default branch is still empty', () => {
+    expect(projectRowSchema.safeParse(project({ default_branch: '' })).success).toBe(true);
+  });
+
   it('rejects a project row with an unknown merge policy or an empty id', () => {
     expect(projectRowSchema.safeParse({ ...project(), merge_policy: 'mystery' }).success).toBe(
       false

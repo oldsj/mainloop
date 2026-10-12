@@ -209,6 +209,20 @@ describe('liveWord', () => {
     expect(liveWord({ native: native({ session_state: null }), offline: false })).toBe('unknown');
   });
 
+  it('never shows live or a working state for a cancelled session', () => {
+    const ready = native({ session_state: 'ready' });
+    const busy = native({ session_state: 'busy' });
+    expect(liveWord({ native: ready, offline: false, status: 'cancelled' })).toBe('cancelled');
+    expect(liveWord({ native: busy, offline: false, status: 'cancelled' })).toBe('cancelled');
+  });
+
+  it('still shows a failed delivery for a cancelled session', () => {
+    const failed = native({ deliveries: [delivery({ state: 'failed', detail: 'refused' })] });
+    expect(liveWord({ native: failed, offline: false, status: 'cancelled' })).toBe(
+      'last message failed'
+    );
+  });
+
   it('shows live for ready, and any other agent state as it is', () => {
     expect(liveWord({ native: native({ session_state: 'ready' }), offline: false })).toBe('live');
     expect(liveWord({ native: native({ session_state: 'suspended' }), offline: false })).toBe(
