@@ -4038,6 +4038,15 @@ components:
           description: >-
             Who wrote a user message. `mainloop` marks one Mainloop sent on the owner's behalf (a
             delegated brief, a task report); `user` is the owner's own. Absent on assistant messages.
+        provider:
+          type: string
+          enum:
+            - claude
+            - codex
+          title: Provider
+          description: >-
+            The native agent that actually produced an assistant message, not the provider currently
+            bound to the session. Absent on user messages and whenever the writer cannot be determined.
         created_at:
           type: string
           format: date-time

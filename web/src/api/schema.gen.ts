@@ -1520,6 +1520,12 @@ export interface components {
        */
       source?: 'user' | 'mainloop';
       /**
+       * Provider
+       * @description The native agent that actually produced an assistant message, not the provider currently bound to the session. Absent on user messages and whenever the writer cannot be determined.
+       * @enum {string}
+       */
+      provider?: 'claude' | 'codex';
+      /**
        * Created At
        * Format: date-time
        * @description Creation timestamp

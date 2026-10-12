@@ -76,6 +76,14 @@ SELECT * FROM deliveries WHERE id = $1;
 -- name: ListSessionDeliveries :many
 SELECT * FROM deliveries WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2;
 
+-- The deliveries that can attribute a mirrored reply to a provider: deliver.go sets
+-- kagent_session_id when it sends the message, naming the Session the turn ran on, and derives the
+-- reply's own id from this row (its task id, or its own id for a cancelled turn's stop note) rather
+-- than storing it. The caller recomputes that id to match it to a stored message.
+-- name: ListSessionDeliveriesForProvider :many
+SELECT id, task_id, state, kagent_session_id FROM deliveries
+WHERE session_id = $1 AND kagent_session_id IS NOT NULL;
+
 -- A delivery that stops a new send: an open one, or an uncertain one still inside the hold.
 -- name: GetBlockingDelivery :one
 SELECT id, state FROM deliveries

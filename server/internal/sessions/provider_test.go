@@ -793,3 +793,37 @@ func TestAProviderStateIsOnTheMainThreadView(t *testing.T) {
 		t.Fatalf("native = %+v", info.Native)
 	}
 }
+
+// A reply keeps the label of the provider that actually wrote it, not whatever the main is bound to
+// by the time the conversation is read: a switch must not relabel history.
+func TestAnAssistantReplyCarriesTheProviderThatWroteItAcrossASwitch(t *testing.T) {
+	e := providerEnv(t)
+	stop, _ := e.warm() // completes "one" on Claude, the first-use default
+	defer stop()
+	main := e.mainID()
+
+	e.mustSelect("codex", false)
+	e.waitState(e.send("two"), dbstate.DeliveryCompleted)
+
+	cr, err := e.API().GetConversation(context.Background(), api.GetConversationRequestObject{ConversationId: main})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var providers []api.MessageProvider
+	for _, m := range cr.(api.GetConversation200JSONResponse).Messages {
+		if m.Role != api.MessageRoleAssistant {
+			if m.Provider != nil {
+				t.Fatalf("a user message has provider %q", *m.Provider)
+			}
+			continue
+		}
+		if m.Provider == nil {
+			t.Fatalf("an assistant message has no provider")
+		}
+		providers = append(providers, *m.Provider)
+	}
+	want := []api.MessageProvider{api.MessageProviderClaude, api.MessageProviderCodex}
+	if len(providers) != len(want) || providers[0] != want[0] || providers[1] != want[1] {
+		t.Fatalf("assistant providers = %v, want %v", providers, want)
+	}
+}
