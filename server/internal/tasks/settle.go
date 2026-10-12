@@ -444,14 +444,16 @@ func (s *Service) moveOp(ctx context.Context, c reconcile.Claim, op dbq.TaskOper
 }
 
 // CompleteSweep completes a coordination task whose supervisor reported completion once its
-// children have all ended and its report has reached its recipients. Only the task moves; its
-// attempt is stopped by the settle sweep.
+// children have all ended and its report has reached its recipients, and a code task whose own
+// pull request the merge service merged. Only the task moves; its attempt is stopped by the settle
+// sweep.
 func (s *Service) CompleteSweep() reconcile.Sweep {
 	return reconcile.Sweep{Name: "task-complete", Every: s.Limits.Interval, Run: s.runComplete}
 }
 
 func (s *Service) runComplete(ctx context.Context) error {
-	ids, err := dbq.New(s.Pool).ListReconcilingCoordinationTasks(ctx, 50)
+	q := dbq.New(s.Pool)
+	ids, err := q.ListReconcilingCoordinationTasks(ctx, 50)
 	if err != nil {
 		return err
 	}
@@ -461,7 +463,46 @@ func (s *Service) runComplete(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
+	merged, err := q.ListMergedPublicationTasks(ctx, dbq.ListMergedPublicationTasksParams{Limit: 50})
+	if err != nil {
+		return errors.Join(append(errs, err)...)
+	}
+	for _, m := range merged {
+		if err := s.completeMerged(ctx, m.ID); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	return errors.Join(errs...)
+}
+
+// completeMerged completes a code task that reported completed once the merge service has merged
+// its own pull request: the verified merged publication is the completion gate. A pull request
+// merged by anyone else, or at another head, is only observed and never completes the task. The
+// task moves alone; the settle sweep then drains and stops its attempt and releases its slot.
+// The match is re-read under the task's lock, so a concurrent report, cancel or new projection
+// is seen.
+func (s *Service) completeMerged(ctx context.Context, id string) error {
+	return s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
+		t, err := q.GetTaskByIDForUpdate(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if t.Status != dbstate.TaskWaiting || t.Reason == nil || *t.Reason != dbstate.ReasonPublication {
+			return nil, nil
+		}
+		rows, err := q.ListMergedPublicationTasks(ctx, dbq.ListMergedPublicationTasksParams{Limit: 1, TaskID: &t.ID})
+		if err != nil || len(rows) == 0 {
+			return nil, err
+		}
+		if err := TransitionTask(TaskState{Status: t.Status, Reason: *t.Reason}, TaskState{Status: dbstate.TaskCompleted}); err != nil {
+			return nil, err
+		}
+		after, err := q.CompleteTaskMerged(ctx, dbq.CompleteTaskMergedParams{ID: t.ID, Version: t.Version, MergeProposalID: &rows[0].ProposalID})
+		if err != nil {
+			return nil, err
+		}
+		return []events.Draft{s.updated(after)}, nil
+	})
 }
 
 func (s *Service) completeCoordination(ctx context.Context, id string) error {
