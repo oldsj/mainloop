@@ -17,6 +17,12 @@ import (
 type ReadOptions struct {
 	Endpoints
 	APIHost string
+
+	// Host headers for the probes, for port-forwards to a non-dev instance. Empty keeps the URL's host.
+	MCPHost     string
+	GitReadHost string
+	GitPushHost string
+
 	Timeout time.Duration
 	Kagent  func(ctx context.Context) (string, error)
 
@@ -66,9 +72,9 @@ func ReadOnly(ctx context.Context, opts ReadOptions, emit func(Check)) {
 			})
 		},
 		func() Check { return checkEvents(ctx, c, base, eventsWait) },
-		func() Check { return checkMCP(ctx, c, opts.MCP) },
-		func() Check { return checkGitRead(ctx, c, opts.GitRead) },
-		func() Check { return checkGitPush(ctx, c, opts.GitPush) },
+		func() Check { return checkMCP(ctx, c, opts.MCP, opts.MCPHost) },
+		func() Check { return checkGitRead(ctx, c, opts.GitRead, opts.GitReadHost) },
+		func() Check { return checkGitPush(ctx, c, opts.GitPush, opts.GitPushHost) },
 		func() Check { return checkKagent(ctx, opts.Kagent) },
 	} {
 		emit(check())
@@ -135,10 +141,10 @@ func checkEvents(ctx context.Context, c caller, base string, wait time.Duration)
 }
 
 // checkMCP posts with no bearer. The listener must refuse before it reads the body, so the body is empty.
-func checkMCP(ctx context.Context, c caller, base string) Check {
+func checkMCP(ctx context.Context, c caller, base, host string) Check {
 	const name = "mcp"
 	header := http.Header{"Content-Type": {"application/json"}, "Accept": {"application/json, text/event-stream"}}
-	status, _, err := c.probe(ctx, http.MethodPost, base+"/mcp", header)
+	status, _, err := c.probe(ctx, http.MethodPost, base+"/mcp", host, header)
 	if err != nil {
 		return failCheck(name, err)
 	}
@@ -150,9 +156,9 @@ func checkMCP(ctx context.Context, c caller, base string) Check {
 
 // checkGitRead asks for upload-pack discovery with no capability. A disabled transport answers 501 on
 // every path except /health, which is how the probe tells "off" from "broken".
-func checkGitRead(ctx context.Context, c caller, base string) Check {
+func checkGitRead(ctx context.Context, c caller, base, host string) Check {
 	const name = "git-read"
-	status, _, err := c.probe(ctx, http.MethodGet, base+probeRepo+".git/info/refs?service=git-upload-pack", nil)
+	status, _, err := c.probe(ctx, http.MethodGet, base+probeRepo+".git/info/refs?service=git-upload-pack", host, nil)
 	if err != nil {
 		return failCheck(name, err)
 	}
@@ -169,9 +175,9 @@ func checkGitRead(ctx context.Context, c caller, base string) Check {
 // git_transport_disabled. An enabled gate refuses the missing capability with 401 authentication_required.
 // Any other refusal means the request stopped before that check (a Host, path or route refusal), so the
 // check fails and names the code.
-func checkGitPush(ctx context.Context, c caller, base string) Check {
+func checkGitPush(ctx context.Context, c caller, base, host string) Check {
 	const name = "git-push"
-	status, body, err := c.probe(ctx, http.MethodGet, base+probeRepo+".git/info/refs?service=git-receive-pack", nil)
+	status, body, err := c.probe(ctx, http.MethodGet, base+probeRepo+".git/info/refs?service=git-receive-pack", host, nil)
 	if err != nil {
 		return failCheck(name, err)
 	}

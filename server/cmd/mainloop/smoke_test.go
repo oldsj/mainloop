@@ -133,3 +133,29 @@ func TestSmokeReadOnlyExitsNonZeroOnAFailedCheck(t *testing.T) {
 		t.Errorf("stdout lacks the failed projects line:\n%s", out.String())
 	}
 }
+
+func TestSmokeHostFlagsApplyToTheirMode(t *testing.T) {
+	url, _ := countingServer(t)
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		stderr string
+	}{
+		{"live refuses --mcp-host", []string{"--live", "--budget", "1", "--mcp-host", "x"}, "--mcp-host applies to --read-only only"},
+		{"live refuses --git-read-host", []string{"--live", "--budget", "1", "--git-read-host", "x"}, "--git-read-host applies to --read-only only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			if got := runSmoke(context.Background(), tc.args, &out, &errb); got != exitUsage || !strings.Contains(errb.String(), tc.stderr) {
+				t.Errorf("exit = %d, stderr %q; want usage error containing %q", got, errb.String(), tc.stderr)
+			}
+		})
+	}
+	// --git-push-host is accepted by both modes: read-only sends it to the push probe.
+	var out, errb bytes.Buffer
+	args := []string{"--read-only", "--base-url", url, "--mcp-url", url, "--git-url", url, "--git-push-url", url, "--git-push-host", "push.example"}
+	runSmoke(context.Background(), args, &out, &errb)
+	if strings.Contains(errb.String(), "applies to") {
+		t.Errorf("--git-push-host refused in read-only: %q", errb.String())
+	}
+}

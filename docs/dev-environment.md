@@ -474,9 +474,9 @@ go run ./cmd/mainloop smoke --live --budget 1 \
 
 Every target is named on the command line; nothing defaults. `--budget` is a ceiling from 1 to 3,
 but every run's outcome ends it, so one run starts. Set `--merge-tools` to match the instance:
-with `off`, a run stops after CI and proves no merge. Pass `--api-host` only when the target is not
-in dev mode. The git push listener checks the Host header, and the CLI cannot set it, so outside
-dev mode the git-push probe fails with `host_denied`. Only a run that reaches completion proves the
+with `off`, a run stops after CI and proves no merge. Pass `--api-host` and `--git-push-host` only when the target is not
+in dev mode: outside it each listener refuses a Host it does not serve, and a port-forward sends
+`127.0.0.1`. See [live-smoke.md](live-smoke.md). Only a run that reaches completion proves the
 full path.
 
 Teardown: `make dev-live-purge` deletes everything DevSpace deployed, including

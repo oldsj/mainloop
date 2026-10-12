@@ -35,6 +35,7 @@ var (
 type LiveOptions struct {
 	Endpoints           // API and GitPush are required
 	APIHost      string // Host header for owner API requests, for port-forwards to a non-dev instance
+	GitPushHost  string // Host header for the git push probe, for the same port-forwards
 	ProjectID    string
 	Repo         string // owner/name of the disposable test repository
 	AppLogin     string // the GitHub App login that must perform the merge
@@ -89,7 +90,7 @@ func Live(ctx context.Context, opts LiveOptions, emit func(Check)) {
 		return
 	}
 	c := newCaller(opts.APIHost, opts.Timeout)
-	push := checkGitPush(ctx, c, opts.GitPush)
+	push := checkGitPush(ctx, c, opts.GitPush, opts.GitPushHost)
 	emit(push)
 	gitBlock := ""
 	switch push.Status {
