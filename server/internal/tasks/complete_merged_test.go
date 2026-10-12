@@ -2,6 +2,7 @@ package tasks_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +54,11 @@ func TestMergedPRCompletesTheCodeTaskAndFreesItsAttempt(t *testing.T) {
 	r := newRig(t)
 	id, attempt, binding := r.reportedCode("feat")
 	r.merged("m1", binding, 7)
+	// The child's credentials are live until it settles; another binding's must stay live.
+	for _, c := range []struct{ id, binding, hash string }{{"cred-kid", binding, "a"}, {"cred-other", "other-binding", "b"}} {
+		r.exec(`INSERT INTO credentials (id, kind, binding_id, token_hash, secret_name) VALUES ($1, 'mcp', $2, $3, $1)`,
+			c.id, c.binding, strings.Repeat(c.hash, 64))
+	}
 
 	r.sweep(r.svc.CompleteSweep())
 	v := r.view(r.own, id)
@@ -77,8 +83,14 @@ func TestMergedPRCompletesTheCodeTaskAndFreesItsAttempt(t *testing.T) {
 	if got := r.attemptState(id); got != "completed" {
 		t.Fatalf("attempt = %s; want completed", got)
 	}
-	if r.ses.cancelCount() == 0 {
-		t.Fatal("the session was not cancelled")
+	if r.ses.cancelCountOf(binding) == 0 {
+		t.Fatal("the child's session was not cancelled")
+	}
+	live := func(b string) int {
+		return r.count(`SELECT count(*) FROM credentials WHERE binding_id = $1 AND state IN ('planned', 'published')`, b)
+	}
+	if live(binding) != 0 || live("other-binding") != 1 {
+		t.Fatalf("live credentials: child %d, other %d; want 0 and 1", live(binding), live("other-binding"))
 	}
 	if n := r.count(`SELECT count(*) FROM workspace_writer_claims WHERE attempt_id = $1 AND held`, attempt); n != 0 {
 		t.Fatal("branch claim still held")

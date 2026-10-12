@@ -135,8 +135,9 @@ type fakeSessions struct {
 	mu sync.Mutex
 	// agent overrides what Cancel reports about the agent (stopped, not_running, unknown).
 	agent string
-	// cancels counts Cancel calls.
-	cancels int
+	// cancels counts Cancel calls; cancelled lists the session ids they named.
+	cancels   int
+	cancelled []string
 }
 
 func (f *fakeSessions) Cancel(ctx context.Context, id string) (sessions.CancelResult, error) {
@@ -144,10 +145,24 @@ func (f *fakeSessions) Cancel(ctx context.Context, id string) (sessions.CancelRe
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cancels++
+	f.cancelled = append(f.cancelled, id)
 	if f.agent != "" && err == nil {
 		res.Agent = f.agent
 	}
 	return res, err
+}
+
+// cancelCountOf counts the Cancel calls made for one session.
+func (f *fakeSessions) cancelCountOf(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.cancelled {
+		if c == id {
+			n++
+		}
+	}
+	return n
 }
 
 func (f *fakeSessions) cancelCount() int {
