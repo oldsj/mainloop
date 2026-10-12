@@ -40,30 +40,19 @@ export interface MainThreadHeaderProps {
   provider?: MainProviderControl;
 }
 
-/** The main provider row: the desired select, the confirmed provider, the status and any notice. */
-function ProviderRow({
+/** The select the owner uses to switch the main provider; one per page, always in the top strip. */
+function ProviderSelect({
   info,
-  offline,
   provider
 }: {
   info: MainThreadInfo;
-  offline: boolean;
   provider: MainProviderControl;
 }) {
-  const current = info.provider;
-  const desired: MainProvider | null = current?.desired_provider ?? null;
-  const words = providerStateWords(current, {
-    offline,
-    selecting: provider.selecting,
-    unconfirmed: provider.unconfirmed
-  });
-  const stateError =
-    current?.status === 'failed' && current.error ? boundedText(current.error) : null;
-  const buttonClass = 'border-border text-foreground px-md min-h-11 border disabled:opacity-50';
+  const desired: MainProvider | null = info.provider?.desired_provider ?? null;
 
   return (
-    <div className="gap-sm px-md pb-xs flex flex-wrap items-center" data-testid="mt-provider">
-      <label htmlFor="main-provider-select" className="text-muted-foreground">
+    <>
+      <label htmlFor="main-provider-select" className="sr-only">
         Main provider
       </label>
       <select
@@ -85,6 +74,32 @@ function ProviderRow({
           </option>
         ))}
       </select>
+    </>
+  );
+}
+
+/** The main provider's status row: the confirmed provider, the status, retry/restart and any notice. The select lives in the top strip, not here. */
+function ProviderRow({
+  info,
+  offline,
+  provider
+}: {
+  info: MainThreadInfo;
+  offline: boolean;
+  provider: MainProviderControl;
+}) {
+  const current = info.provider;
+  const words = providerStateWords(current, {
+    offline,
+    selecting: provider.selecting,
+    unconfirmed: provider.unconfirmed
+  });
+  const stateError =
+    current?.status === 'failed' && current.error ? boundedText(current.error) : null;
+  const buttonClass = 'border-border text-foreground px-md min-h-11 border disabled:opacity-50';
+
+  return (
+    <div className="gap-sm px-md pb-xs flex flex-wrap items-center" data-testid="mt-provider">
       <span data-testid="mt-provider-effective">
         effective:{' '}
         {current?.effective_provider ? providerLabel(current.effective_provider) : 'none confirmed'}
@@ -177,6 +192,7 @@ export function MainThreadHeader({
           {statusWords(status)}
         </span>
         <span aria-hidden="true">·</span>
+        {provider ? <ProviderSelect info={info} provider={provider} /> : null}
         <span data-testid="mt-model">{model}</span>
         {pending > 0 ? (
           <>

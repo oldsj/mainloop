@@ -863,11 +863,23 @@ function idleThread(
 }
 
 const providerSelect = () => screen.getByTestId('mt-provider-select');
-// A ready provider lives under the header's details, so a test that reads it opens them first.
+// The select itself always sits in the header's top strip. A ready provider's status and
+// effective-provider text live under details, so a test that reads those opens them first.
 const openDetails = () => userEvent.click(screen.getByTestId('mt-details-toggle'));
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('the main provider', () => {
+  it('shows the select in the top strip with details collapsed, and Codex posts exactly one PUT', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    expect(screen.queryByTestId('main-thread-details')).toBeNull();
+    expect(providerSelect()).toBeVisible();
+    await userEvent.selectOptions(providerSelect(), 'codex');
+    await waitFor(() =>
+      expect(state.providerPosts).toEqual([{ provider: 'codex', restart_failed: false }])
+    );
+  });
+
   it('sends one explicit selection and shows the provider once it is confirmed', async () => {
     const { state } = setup(idleThread());
     await screen.findByText('build it');
@@ -884,7 +896,6 @@ describe('the main provider', () => {
   it('sends nothing when the provider that is already ready is chosen', async () => {
     const { state } = setup(idleThread());
     await screen.findByText('build it');
-    await openDetails();
     await userEvent.selectOptions(providerSelect(), 'claude');
     await pause(20);
     expect(state.providerPosts).toHaveLength(0);
@@ -902,7 +913,6 @@ describe('the main provider', () => {
       messages: [messageFixture({ id: 'm1', content: 'build it' })]
     });
     await screen.findByText('build it');
-    await openDetails();
     expect(providerSelect()).toBeDisabled();
     expect(input()).toBeDisabled();
   });
@@ -960,7 +970,6 @@ describe('the main provider', () => {
     const { state } = setup(idleThread(), {});
     state.rejectNextProvider = { status: 409, detail: 'Main provider is busy.' };
     await screen.findByText('build it');
-    await openDetails();
     await userEvent.selectOptions(providerSelect(), 'codex');
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Provider change blocked (409): Main provider is busy.'

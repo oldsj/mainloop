@@ -120,6 +120,28 @@ const control = (overrides: Partial<MainProviderControl> = {}): MainProviderCont
 
 const withProvider = (provider: MainProviderInfo | null) => mainThreadFixture({ provider });
 
+describe('MainThreadHeader main provider select', () => {
+  it('is visible in the top strip, with no details opened, and chooses the other provider', async () => {
+    const select = vi.fn();
+    view(withProvider(providerFixture()), { provider: control({ select }) });
+    expect(screen.queryByTestId('main-thread-details')).toBeNull();
+    expect(screen.getByLabelText('Main provider')).toBeVisible();
+    await userEvent.selectOptions(screen.getByLabelText('Main provider'), 'codex');
+    expect(select).toHaveBeenCalledWith('codex');
+  });
+
+  it('shows the model name next to the select', () => {
+    view(withProvider(providerFixture()), { provider: control() });
+    expect(screen.getByTestId('mt-model')).toHaveTextContent('sonnet-5-5');
+  });
+
+  it('shows the plain model label when no provider controls are given', () => {
+    view(mainThreadFixture());
+    expect(screen.queryByTestId('mt-provider-select')).toBeNull();
+    expect(screen.getByTestId('mt-model')).toBeInTheDocument();
+  });
+});
+
 describe('MainThreadHeader main provider row', () => {
   it('shows the desired provider, the confirmed one and the status as separate things', () => {
     view(
@@ -174,9 +196,8 @@ describe('MainThreadHeader main provider row', () => {
     expect(screen.getByRole('option', { name: 'unknown' })).toBeInTheDocument();
   });
 
-  it('holds the select while the control says the switch is blocked', async () => {
+  it('holds the select while the control says the switch is blocked', () => {
     view(withProvider(providerFixture()), { provider: control({ switchBlocked: true }) });
-    await openDetails();
     expect(screen.getByTestId('mt-provider-select')).toBeDisabled();
   });
 
@@ -204,14 +225,6 @@ describe('MainThreadHeader main provider row', () => {
       provider: control()
     });
     expect(screen.getByTestId('mt-provider-status')).toHaveAttribute('role', 'status');
-  });
-
-  it('offers the other provider and reports the choice', async () => {
-    const select = vi.fn();
-    view(withProvider(providerFixture()), { provider: control({ select }) });
-    await openDetails();
-    await userEvent.selectOptions(screen.getByLabelText('Main provider'), 'codex');
-    expect(select).toHaveBeenCalledWith('codex');
   });
 
   it('shows the state as offline and holds the select while the backend is unreachable', () => {
@@ -287,11 +300,12 @@ describe('MainThreadHeader main provider row', () => {
     expect(screen.queryByTestId('mt-provider')).toBeNull();
   });
 
-  it('keeps a ready provider under details, out of the summary line', async () => {
+  it('shows the select for a ready provider in the top strip, with its status under details', async () => {
     view(withProvider(providerFixture()), { provider: control() });
-    expect(screen.queryByTestId('mt-provider-select')).toBeNull();
-    await openDetails();
     expect(screen.getByTestId('mt-provider-select')).toHaveValue('claude');
+    expect(screen.queryByTestId('mt-provider-status')).toBeNull();
+    await openDetails();
+    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('ready');
   });
 
   it.each([
