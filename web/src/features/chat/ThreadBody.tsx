@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Composer } from './Composer';
 import { assignmentIds } from './assignments';
@@ -19,6 +20,10 @@ export interface ThreadBodyProps {
   prefill?: string;
   /** Called once the composer has taken `prefill`. */
   onPrefillUsed?: () => void;
+  /** Requests waiting on the owner, shown at the end of the conversation. */
+  requests?: ReactNode;
+  /** Shown in the empty state of a loaded thread. */
+  starters?: ReactNode;
 }
 
 /** The conversation timeline, the send and stop errors, and the composer, for any thread. */
@@ -29,7 +34,9 @@ export function ThreadBody({
   closedReason = null,
   closedPlaceholder,
   prefill,
-  onPrefillUsed
+  onPrefillUsed,
+  requests,
+  starters
 }: ThreadBodyProps) {
   const live = useLiveTurn(thread.sessionId, thread.busy, thread.messages);
   return (
@@ -66,6 +73,8 @@ export function ThreadBody({
         context={thread.context}
         loaded={thread.loaded}
         live={live}
+        requests={requests}
+        starters={starters}
         retryDisabled={thread.busy || thread.sendPending || offline}
         onRetry={(message) => void thread.retry(message)}
       />

@@ -11,7 +11,6 @@ import {
 import { render } from '@testing-library/react';
 import { NewAgentPage } from '../NewAgentPage';
 import { SessionPage } from '../SessionPage';
-import { SessionsPanel } from '../SessionsPanel';
 
 function SessionRoute() {
   const { id } = useParams({ strict: false });
@@ -34,7 +33,11 @@ export function renderSessions(initialPath: string) {
   const root = createRootRoute({ component: Outlet });
   const router = createRouter({
     routeTree: root.addChildren([
-      createRoute({ getParentRoute: () => root, path: '/', component: SessionsPanel }),
+      createRoute({
+        getParentRoute: () => root,
+        path: '/',
+        component: () => <Stub label="Home" />
+      }),
       createRoute({ getParentRoute: () => root, path: '/agents', component: NewAgentPage }),
       createRoute({ getParentRoute: () => root, path: '/sessions/$id', component: SessionRoute }),
       createRoute({

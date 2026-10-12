@@ -1,8 +1,9 @@
 import { ChevronDown, ChevronRight, MessageSquarePlus } from 'lucide-react';
-import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { cn } from '@/components/ui/cn';
 import type { Tone } from '@/lib/taskState';
 import { visibleRows, type ExplorerNode, type Target } from './model';
+import { RowMenu, useLongPress, type RowMenuAction } from './RowMenu';
 
 /** The status dot's colour. Muted is the default, so an unknown state never reads as a problem. */
 const DOT: Record<Tone, string> = {
@@ -25,6 +26,8 @@ export interface ExplorerTreeProps {
  * The explorer tree: `role="tree"` with roving focus. Up and down move, right expands or steps into
  * the first child, left collapses or steps to the parent, Enter opens the row, and `a` asks Mainloop
  * about it. Each row is one treeitem, so a screen reader hears its level, position and state.
+ * A row's actions (Open, Ask Mainloop) are also in a small menu: right-click on desktop, a long
+ * press on the phone, or Shift+F10 and the menu key.
  */
 export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: ExplorerTreeProps) {
   const rows = visibleRows(nodes, isExpanded);
@@ -44,6 +47,25 @@ export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: Exp
     if (node.target) onOpen(node.target);
     else if (node.children.length > 0) onToggle(node.id);
   };
+
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const menuNode = menu ? rows.find((row) => row.node.id === menu.id)?.node : undefined;
+  const openMenu = (node: ExplorerNode, x: number, y: number) => {
+    if (actionsFor(node, onOpen, onAsk).length === 0) return false;
+    setFocusId(node.id);
+    setMenu({ id: node.id, x, y });
+    return true;
+  };
+  const closeMenu = useCallback(() => {
+    setMenu((open) => {
+      if (open) items.current.get(open.id)?.focus();
+      return null;
+    });
+  }, []);
+  const longPress = useLongPress((id, x, y) => {
+    const node = rows.find((row) => row.node.id === id)?.node;
+    if (node) openMenu(node, x, y);
+  });
 
   const onKeyDown = (
     event: KeyboardEvent<HTMLLIElement>,
@@ -84,6 +106,13 @@ export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: Exp
       case 'a':
         if (node.ask) onAsk(node.ask);
         break;
+      case 'ContextMenu':
+      case 'F10': {
+        if (event.key === 'F10' && !event.shiftKey) return;
+        const box = event.currentTarget.firstElementChild?.getBoundingClientRect();
+        openMenu(node, (box?.left ?? 0) + 24, box?.bottom ?? 0);
+        break;
+      }
       default:
         return;
     }
@@ -134,11 +163,20 @@ export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: Exp
             className={cn(
               // A phone row is a 44 px touch target with the status on a second line; desktop is one dense line.
               'group gap-xs px-xs relative flex min-h-11 cursor-default items-center py-1 text-sm lg:min-h-7 lg:py-0',
+              // A long press opens the row menu, not the phone's own text selection or link callout.
+              'select-none [-webkit-touch-callout:none]',
               'hover:bg-accent hover:text-accent-foreground',
+              menu?.id === node.id && 'bg-accent text-accent-foreground',
               node.note && 'text-muted-foreground italic'
             )}
             style={{ paddingLeft: `${(depth - 1) * 12 + 4}px` }}
+            {...longPress.handlers(node.id)}
+            onContextMenu={(event) => {
+              if (openMenu(node, event.clientX, event.clientY)) event.preventDefault();
+            }}
             onClick={() => {
+              // The finger lifting after a long press is not a tap on the row.
+              if (longPress.pressed()) return;
               setFocusId(node.id);
               activate(node);
             }}
@@ -223,8 +261,32 @@ export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: Exp
     });
 
   return (
-    <ul role="tree" aria-label="Mainloop explorer" className="m-0 list-none p-0">
-      {renderLevel(nodes, null, 1)}
-    </ul>
+    <>
+      <ul role="tree" aria-label="Mainloop explorer" className="m-0 list-none p-0">
+        {renderLevel(nodes, null, 1)}
+      </ul>
+      {menu && menuNode ? (
+        <RowMenu
+          label={menuNode.label}
+          x={menu.x}
+          y={menu.y}
+          actions={actionsFor(menuNode, onOpen, onAsk)}
+          onClose={closeMenu}
+        />
+      ) : null}
+    </>
   );
+}
+
+/** A row's menu: Open when it leads somewhere, Ask Mainloop when it has a prefill. */
+function actionsFor(
+  node: ExplorerNode,
+  onOpen: (target: Target) => void,
+  onAsk: (text: string) => void
+): RowMenuAction[] {
+  const { target, ask } = node;
+  return [
+    ...(target ? [{ label: 'Open', run: () => onOpen(target) }] : []),
+    ...(ask ? [{ label: 'Ask Mainloop', run: () => onAsk(ask) }] : [])
+  ];
 }

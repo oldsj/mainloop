@@ -285,7 +285,7 @@ describe('session requests (UI-C)', () => {
     expect(within(slot).getByTestId('session-chat-state')).toHaveTextContent(/^needs you$/);
   });
 
-  it('with pending requests, caps the request list and keeps the composer inside the chat panel', async () => {
+  it('with pending requests, ends the conversation with them in its one scroll and keeps the composer', async () => {
     server.use(
       http.get(`${API_URL}/sessions/s1/hitl`, () => HttpResponse.json(['req-s1', 'req-s2'])),
       ...createFakeHITL({
@@ -295,11 +295,11 @@ describe('session requests (UI-C)', () => {
     );
     const slot = await openSession();
     await within(slot).findByRole('heading', { name: 'Session needs input' });
-    // The request list takes at most 40% of the slot and can shrink, so the panel's floor is kept.
+    // The cards scroll with the conversation, so the slot never splits into two scrollers.
     const requests = within(slot).getByTestId('session-requests-list');
     await waitFor(() => expect(requests.children.length).toBe(2));
-    expect(requests).toHaveClass('max-h-[40%]', 'min-h-0', 'shrink');
-    expect(requests).not.toHaveClass('shrink-0');
+    expect(within(slot).getByTestId('message-list')).toContainElement(requests);
+    expect(requests).not.toHaveClass('overflow-y-auto');
     const panel = within(slot).getByTestId('session-chat-panel');
     expect(panel).toHaveClass('min-h-40', 'flex-1');
     expect(panel).toContainElement(composerOf(slot));

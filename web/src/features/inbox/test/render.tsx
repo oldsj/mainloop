@@ -16,16 +16,20 @@ function Stub({ label }: { label: string }) {
 
 /**
  * Renders the inbox in a small router with the app's paths, so its links can be followed. Register
- * the test's handlers with `server.use` first.
+ * the test's handlers with `server.use` first. `selected` names the Needs-you row to bring to the top.
  */
-export function renderInbox(initialPath = '/') {
+export function renderInbox(initialPath = '/', selected?: string) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
   });
   const root = createRootRoute({ component: Outlet });
   const router = createRouter({
     routeTree: root.addChildren([
-      createRoute({ getParentRoute: () => root, path: '/', component: InboxPanel }),
+      createRoute({
+        getParentRoute: () => root,
+        path: '/',
+        component: () => <InboxPanel selected={selected} />
+      }),
       createRoute({
         getParentRoute: () => root,
         path: '/tasks/$id',

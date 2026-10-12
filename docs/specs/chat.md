@@ -150,11 +150,17 @@ MSW fixtures typed from `api/openapi.yaml`.
 - The box is locked until the thread has loaded, so early typing cannot land in the wrong draft.
 - Drafts are kept per conversation in `sessionStorage`. Only a recorded composer send clears
   its draft; Retry leaves whatever is in the box alone.
-- **Implemented:** the project page's **New task** button opens the main chat with the composer prefilled with `Start a task in <project full name>: `. The text goes in the box once, unsent, with the caret at its end; if the box already holds a draft, the prefill goes before it. The prefill rides in the `prefill` search parameter and is removed from the URL once the composer has taken it, so a refresh does not prefill again. No task is created until the owner sends the message.
+- **Implemented:** a suggestion chip, or **Ask Mainloop** on an explorer row (its button, or the row menu from a right-click, a long press or Shift+F10), opens the main chat with the composer prefilled, for example `Start a task in <project full name>: `. There is no **New task** button. The text goes in the box once, unsent, with the caret at its end; if the box already holds a draft, the prefill goes before it. The prefill rides in the `prefill` search parameter and is removed from the URL once the composer has taken it, so a refresh does not prefill again. No task is created until the owner sends the message.
 - A conversation that fails to load shows a recovery message, even when it has no messages yet.
 - While a turn is in flight the thread is re-read every two seconds, for six minutes from when
   the turn was first seen in flight, as a fallback to the `session:message` event. The
   conversation is read once more when the turn ends. Reads pause while the tab is hidden.
 - Pending requests of the main session and `?hitl=<id>` render through the `features/hitl`
-  approval card, inside an error boundary so a failing card cannot take the thread down.
+  approval card, inside an error boundary so a failing card cannot take the thread down. They sit
+  at the end of the conversation, after the newest message, and scroll with it: the message list
+  is the only scroll in the centre column, and the view stays pinned to the bottom while a card
+  fills in.
+- An empty thread shows suggestion chips inside its empty state (**What needs me?**,
+  **Start a task in <first project>**, **What's running?**, **Pause a schedule**). Each fills the
+  composer, unsent. They go once the thread has a message.
 - The native identity strip in the header details is supplied by the sessions slice.

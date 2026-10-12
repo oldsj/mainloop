@@ -1,9 +1,10 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { z } from 'zod';
 import { ChatPage } from '@/features/chat/ChatPage';
+import { ChatStarters } from '@/features/explorer';
 
 export const Route = createFileRoute('/')({
-  // `hitl` puts that approval card at the top of the thread. `prefill` fills the composer once,
+  // `hitl` puts that approval card at the end of the thread. `prefill` fills the composer once,
   // unsent; it is cleared from the URL as soon as the composer has taken it.
   validateSearch: (search) =>
     z
@@ -23,6 +24,7 @@ function MainThread() {
     <ChatPage
       hitlId={hitl}
       prefill={prefill}
+      starters={<ChatStarters />}
       onPrefillUsed={() =>
         void navigate({
           to: '/',

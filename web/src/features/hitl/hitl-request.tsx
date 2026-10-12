@@ -25,6 +25,7 @@ import {
   unavailableNotes,
   viewProblem
 } from './evidence';
+import { ClampedText } from './clamped-text';
 import { receiptLine } from './receipt';
 import { UnavailableMerge, VerifiedMerge, type LoadMergeDetails } from './merge-review';
 
@@ -283,9 +284,10 @@ export function HITLRequest({
                 <p className="text-muted-foreground">
                   Call: <code>{tool.call_id}</code>
                 </p>
-                <pre className="bg-muted p-sm max-h-64 overflow-auto break-words whitespace-pre-wrap">
-                  {clipText(JSON.stringify(tool.args, null, 2), 16384)}
-                </pre>
+                <ClampedText
+                  what="arguments"
+                  text={clipText(JSON.stringify(tool.args, null, 2), 16384)}
+                />
                 <div className="gap-sm flex flex-wrap">
                   <Button
                     variant="outline"
@@ -496,7 +498,8 @@ export function HITLRequest({
       ) : null}
       <details>
         <summary className="py-sm min-h-11 cursor-pointer">Request data (agent supplied)</summary>
-        <pre className="bg-muted p-sm max-h-64 overflow-auto break-words whitespace-pre-wrap">
+        {/* Already folded by the disclosure, so it shows whole and grows with the page. */}
+        <pre className="bg-muted p-sm [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
           {clipText(JSON.stringify(view.request.payload, null, 2))}
         </pre>
       </details>

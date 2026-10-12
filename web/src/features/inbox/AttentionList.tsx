@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
@@ -16,6 +16,11 @@ import {
 import { QueueCard } from './QueueCard';
 import { useAttention } from './queries';
 
+/** How long the selected row is kept at the top while its card fills in. */
+const SETTLE_MS = 3000;
+/** The owner taking over the scroll ends that early. */
+const STOP_EVENTS = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
+
 /**
  * Needs you: what the owner must answer or decide now, in the order the server sent it. The row
  * whose key is `selected` (an approval request id or a queue item id) is scrolled into view once
@@ -25,17 +30,20 @@ export function AttentionList({ selected }: { selected?: string }) {
   const attention = useAttention();
   const items = attentionItems(attention.data);
 
-  // Scrolls once per selected row, when it is first listed, so a later poll does not pull the page back.
-  const scrolled = useRef<string | null>(null);
+  // Brings the selected row to the top when it is first listed. Cards fill in after that, the selected
+  // one and those above it, so the row is brought back to the top while the list grows, until the owner
+  // scrolls or acts. It keys on the row being listed, not on the data, so a later poll neither pulls
+  // the page back nor ends the settling.
+  const listed = !!selected && items.some((item) => attentionKey(item) === selected);
   useEffect(() => {
-    if (!selected || scrolled.current === selected) return;
+    if (!listed) return;
     const row = Array.from(document.querySelectorAll<HTMLElement>('[data-attention-key]')).find(
       (el) => el.dataset.attentionKey === selected
     );
     if (!row) return;
-    scrolled.current = selected;
-    row.scrollIntoView?.({ block: 'center' });
-  }, [selected, attention.data]);
+    row.scrollIntoView?.({ block: 'start' });
+    return keepAtTop(row);
+  }, [selected, listed]);
 
   // A failed refresh keeps the rows already shown, with the error above them.
   const failure = attention.isError ? (
@@ -65,6 +73,25 @@ export function AttentionList({ selected }: { selected?: string }) {
       <AttentionRows items={items} refreshFailed={attention.isError} selected={selected} />
     </div>
   );
+}
+
+/**
+ * Brings `row` back to the top whenever its list changes size, until the owner scrolls, taps or types,
+ * or `SETTLE_MS` passes. It watches the list, not only the row: cards above it fill in too and push it
+ * down. Returns the function that stops it early.
+ */
+function keepAtTop(row: HTMLElement): (() => void) | undefined {
+  if (typeof ResizeObserver === 'undefined') return undefined;
+  const observer = new ResizeObserver(() => row.scrollIntoView?.({ block: 'start' }));
+  observer.observe(row.parentElement ?? row);
+  const timer = window.setTimeout(() => stop(), SETTLE_MS);
+  const stop = () => {
+    window.clearTimeout(timer);
+    observer.disconnect();
+    for (const type of STOP_EVENTS) window.removeEventListener(type, stop, true);
+  };
+  for (const type of STOP_EVENTS) window.addEventListener(type, stop, true);
+  return stop;
 }
 
 /**
@@ -190,7 +217,11 @@ function sameRows(a: Row[], b: Row[]): boolean {
 function NeedsRow({ row, selected }: { row: Row; selected?: string }) {
   const key = row.kind === 'entry' ? attentionKey(row.item) : row.requestId;
   const mark = key === selected;
-  const className = cn('border-border border-b', mark && 'ring-term-yellow/70 ring-1 ring-inset');
+  // The scroll margin keeps a row brought to the top clear of the sticky Inbox header.
+  const className = cn(
+    'border-border scroll-mt-20 border-b',
+    mark && 'ring-term-yellow/70 ring-1 ring-inset'
+  );
   if (row.kind === 'entry') {
     return (
       <li

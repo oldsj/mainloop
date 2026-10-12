@@ -1,6 +1,6 @@
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { delay, HttpResponse } from 'msw';
+import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection, keys } from '@/api';
 import { session, type SessionFixture } from '@/features/sessions/test/fixtures';
@@ -15,7 +15,6 @@ import {
   type ProjectFixture
 } from './test/fixtures';
 import {
-  createWorkspaceWrite,
   detailRead,
   providersReadWith,
   serveProjectPage,
@@ -283,273 +282,6 @@ describe('project page', () => {
     expect(await screen.findByText('No branch workspaces yet.')).toBeInTheDocument();
   });
 
-  it('starts a workspace on the chosen branch with the chosen agent, then opens it', async () => {
-    const bodies: Record<string, unknown>[] = [];
-    server.use(
-      createWorkspaceWrite(async ({ request }) => {
-        bodies.push((await request.json()) as Record<string, unknown>);
-        return HttpResponse.json({ workspace_id: 'ws-9' }, { status: 201 });
-      }),
-      ...serveProjectPage()
-    );
-    const user = userEvent.setup();
-    renderProjects(PAGE);
-    const form = await screen.findByTestId('project-workspace-form');
-
-    const branch = within(form).getByRole('textbox', { name: 'Workspace branch' });
-    expect(branch).toHaveValue('main');
-    await user.clear(branch);
-    await user.type(branch, 'feature/new');
-    await user.click(screen.getByTestId('project-workspace-kind-codex'));
-    await user.click(within(form).getByRole('button', { name: 'New workspace' }));
-
-    expect(await screen.findByText('Workspace page')).toBeInTheDocument();
-    expect(bodies).toEqual([
-      {
-        project_id: 'project-a',
-        branch: 'feature/new',
-        ref: '',
-        depth: 0,
-        dev: { ports: [], idle_timeout_minutes: 30 },
-        agent_kind: 'codex'
-      }
-    ]);
-  });
-
-  it('holds the workspace form until GitHub has reported the default branch', async () => {
-    const bodies: unknown[] = [];
-    server.use(
-      createWorkspaceWrite(async ({ request }) => {
-        bodies.push(await request.json());
-        return HttpResponse.json({ workspace_id: 'ws-9' }, { status: 201 });
-      }),
-      ...serveProjectPage({ project: project({ default_branch: '' }) })
-    );
-    const user = userEvent.setup();
-    renderProjects(PAGE);
-    const form = await screen.findByTestId('project-workspace-form');
-
-    const branch = within(form).getByRole('textbox', { name: 'Workspace branch' });
-    expect(branch).toHaveAttribute('placeholder', 'Default branch pending');
-    expect(within(form).getByText(/default branch is not known yet/)).toBeInTheDocument();
-    const submit = within(form).getByRole('button', { name: 'New workspace' });
-    expect(submit).toBeDisabled();
-    await user.click(submit);
-    expect(bodies).toEqual([]);
-  });
-
-  it('an empty branch starts on the default branch', async () => {
-    const bodies: Record<string, unknown>[] = [];
-    server.use(
-      createWorkspaceWrite(async ({ request }) => {
-        bodies.push((await request.json()) as Record<string, unknown>);
-        return HttpResponse.json({ workspace_id: 'ws-8' }, { status: 201 });
-      }),
-      ...serveProjectPage()
-    );
-    const user = userEvent.setup();
-    renderProjects(PAGE);
-    const form = await screen.findByTestId('project-workspace-form');
-
-    await user.clear(within(form).getByRole('textbox', { name: 'Workspace branch' }));
-    await user.click(within(form).getByRole('button', { name: 'New workspace' }));
-
-    expect(await screen.findByText('Workspace page')).toBeInTheDocument();
-    expect(bodies[0]).toMatchObject({
-      project_id: 'project-a',
-      branch: 'main',
-      agent_kind: 'claude'
-    });
-  });
-
-  it('a failed branch create keeps the backend message and blocks a second submit', async () => {
-    let posts = 0;
-    server.use(
-      createWorkspaceWrite(async () => {
-        posts += 1;
-        await delay(200);
-        return HttpResponse.json({ detail: 'Branch already has a workspace' }, { status: 409 });
-      }),
-      ...serveProjectPage()
-    );
-    const user = userEvent.setup();
-    renderProjects(PAGE);
-    const form = await screen.findByTestId('project-workspace-form');
-
-    await user.click(within(form).getByRole('button', { name: 'New workspace' }));
-    const pending = await within(form).findByRole('button', { name: 'Creating…' });
-    expect(pending).toBeDisabled();
-    await user.click(pending);
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Branch already has a workspace');
-    expect(posts).toBe(1);
-    expect(within(form).getByRole('button', { name: 'New workspace' })).toBeEnabled();
-  });
-
-  it.each([
-    ['no reply', () => HttpResponse.error()],
-    ['a 500', () => HttpResponse.json({ detail: 'Mainloop is restarting' }, { status: 500 })]
-  ])(
-    'a branch create with %s is locked until the owner checks the workspace list',
-    async (_case, reply) => {
-      let posts = 0;
-      let listReads = 0;
-      const created = workspace({
-        workspace_id: 'ws-7',
-        manifest: { ...workspace().manifest, branch: 'feature/new' }
-      });
-      server.use(
-        createWorkspaceWrite(() => {
-          posts += 1;
-          return reply();
-        }),
-        // The first read is before the create. The re-read after the lost reply finds the new workspace.
-        workspacesReadWith(() => {
-          listReads += 1;
-          return HttpResponse.json(listReads === 1 ? [] : [created]);
-        }),
-        ...serveProjectPage()
-      );
-      const user = userEvent.setup();
-      renderProjects(PAGE);
-      const form = await screen.findByTestId('project-workspace-form');
-
-      const branch = within(form).getByRole('textbox', { name: 'Workspace branch' });
-      await user.clear(branch);
-      await user.type(branch, 'feature/new');
-      await user.click(within(form).getByRole('button', { name: 'New workspace' }));
-
-      const check = await screen.findByTestId('create-check');
-      expect(check).toHaveTextContent('The workspace may have been created.');
-      expect(screen.queryByText('Mainloop is restarting')).not.toBeInTheDocument();
-      expect(await within(check).findByRole('link', { name: /feature\/new/ })).toHaveAttribute(
-        'href',
-        '/workspaces/ws-7'
-      );
-
-      expect(within(form).getByRole('button', { name: 'New workspace' })).toBeDisabled();
-      await user.click(within(form).getByRole('button', { name: 'New workspace' }));
-      expect(posts).toBe(1);
-
-      const acknowledge = within(check).getByRole('button', { name: "I've checked the list" });
-      await waitFor(() => expect(acknowledge).toBeEnabled());
-      await user.click(acknowledge);
-      expect(screen.queryByTestId('create-check')).not.toBeInTheDocument();
-      // The reply that never came marked the backend offline. The health probe clears it, as it would in the app.
-      await act(async () => {
-        await connection.check();
-      });
-      expect(within(form).getByRole('button', { name: 'New workspace' })).toBeEnabled();
-    }
-  );
-
-  it('keeps an in-flight create and its uncertain branch check through navigation', async () => {
-    let posts = 0;
-    let finish!: () => void;
-    const reply = new Promise<void>((resolve) => (finish = resolve));
-    const asked = workspace({
-      workspace_id: 'ws-asked',
-      manifest: { ...workspace().manifest, branch: 'feature/asked' }
-    });
-    server.use(
-      createWorkspaceWrite(async () => {
-        posts++;
-        await reply;
-        return HttpResponse.json({ detail: 'Reply unavailable' }, { status: 500 });
-      }),
-      ...serveProjectPage({ workspaces: [workspace(), asked] })
-    );
-    const user = userEvent.setup();
-    const { router } = renderProjects(PAGE);
-    let form = await screen.findByTestId('project-workspace-form');
-    const branch = within(form).getByRole('textbox', { name: 'Workspace branch' });
-    await user.clear(branch);
-    await user.type(branch, 'feature/asked');
-    await user.click(within(form).getByRole('button', { name: 'New workspace' }));
-    await waitFor(() => expect(posts).toBe(1));
-
-    try {
-      await act(async () => {
-        await router.navigate({ to: '/sessions/$id', params: { id: 's1' } });
-      });
-      await screen.findByText('Session page');
-      await act(async () => {
-        await router.navigate({ to: '/projects/$id', params: { id: 'project-a' } });
-      });
-      form = await screen.findByTestId('project-workspace-form');
-      expect(within(form).getByRole('button', { name: 'Creating…' })).toBeDisabled();
-    } finally {
-      finish();
-    }
-
-    const check = await screen.findByTestId('create-check');
-    await waitFor(() =>
-      expect(within(check).getByRole('button', { name: "I've checked the list" })).toBeEnabled()
-    );
-    await act(async () => {
-      await router.navigate({ to: '/sessions/$id', params: { id: 's1' } });
-    });
-    await screen.findByText('Session page');
-    await act(async () => {
-      await router.navigate({ to: '/projects/$id', params: { id: 'project-a' } });
-    });
-    const restored = await screen.findByTestId('create-check');
-    expect((await within(restored).findAllByRole('link'))[0]).toHaveAttribute(
-      'href',
-      '/workspaces/ws-asked'
-    );
-    form = screen.getByTestId('project-workspace-form');
-    expect(within(form).getByRole('button', { name: 'New workspace' })).toBeDisabled();
-    await user.click(within(form).getByRole('button', { name: 'New workspace' }));
-    expect(posts).toBe(1);
-    await user.click(within(restored).getByRole('button', { name: "I've checked the list" }));
-    expect(screen.queryByTestId('create-check')).not.toBeInTheDocument();
-    expect(within(form).getByRole('button', { name: 'New workspace' })).toBeEnabled();
-  });
-
-  it('lists the requested branch first, then the other workspaces of this repository', async () => {
-    const asked = workspace({
-      workspace_id: 'ws-asked',
-      manifest: { ...workspace().manifest, branch: 'feature/asked' }
-    });
-    const other = workspace({
-      workspace_id: 'ws-other',
-      manifest: { ...workspace().manifest, branch: 'main' }
-    });
-    const elsewhere = workspace({
-      workspace_id: 'ws-elsewhere',
-      manifest: {
-        ...workspace().manifest,
-        repo_url: 'https://github.com/acme/other',
-        branch: 'feature/asked'
-      }
-    });
-    server.use(
-      createWorkspaceWrite(() => HttpResponse.error()),
-      // The server sends newest first; the requested branch still goes ahead of it.
-      ...serveProjectPage({ workspaces: [other, elsewhere, asked] })
-    );
-    const user = userEvent.setup();
-    renderProjects(PAGE);
-    const form = await screen.findByTestId('project-workspace-form');
-
-    const branch = within(form).getByRole('textbox', { name: 'Workspace branch' });
-    await user.clear(branch);
-    await user.type(branch, 'feature/asked');
-    await user.click(within(form).getByRole('button', { name: 'New workspace' }));
-
-    const check = await screen.findByTestId('create-check');
-    await within(check).findByRole('link', { name: /feature\/asked/ });
-    const links = within(check).getAllByRole('link');
-    expect(links.map((link) => link.getAttribute('href'))).toEqual([
-      '/workspaces/ws-asked',
-      '/workspaces/ws-other'
-    ]);
-    expect(
-      within(check).getByText(/A workspace that is still starting may not be listed yet\./)
-    ).toBeInTheDocument();
-  });
-
   it('links to orchestration health for this project', async () => {
     server.use(...serveProjectPage());
     renderProjects(PAGE);
@@ -625,22 +357,16 @@ describe('project page', () => {
 
     expect(await screen.findByText('Still listed')).toBeInTheDocument();
   });
-
-  it('is disabled while the backend is unreachable', async () => {
-    connection.reportFailure();
-    server.use(...serveProjectPage());
-    renderProjects(PAGE);
-
-    const form = await screen.findByTestId('project-workspace-form');
-    expect(within(form).getByRole('button', { name: 'New workspace' })).toBeDisabled();
-  });
 });
 
 describe('project page creates nothing', () => {
-  it('has no new-task button: tasks start from the main chat', async () => {
+  it('has no new-task or new-workspace control: work starts from the main chat', async () => {
     server.use(...serveProjectPage());
     renderProjects(PAGE);
     await heading('acme/widgets');
     expect(screen.queryByRole('button', { name: 'New task' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New workspace' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('project-workspace-form')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /new agent/i })).not.toBeInTheDocument();
   });
 });

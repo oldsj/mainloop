@@ -1,4 +1,2 @@
-/** Public surface of home's work: the grouped task list, the "Since you were here" strip and the visit baseline. */
-export { HomeStrip } from './HomeStrip';
-export { WorkList } from './WorkList';
+/** Public surface of home: the visit baseline that "Since you were here" counts from. */
 export { useLastVisit } from './lastVisit';

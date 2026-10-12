@@ -3,7 +3,7 @@ import { Activity, Compass, MessageSquare } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
-import { ChatStarters, ExplorerPane, useNeedsCount } from '@/features/explorer';
+import { ExplorerPane, useNeedsCount } from '@/features/explorer';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
 import { ThemeSelector } from './ThemeSelector';
@@ -83,10 +83,7 @@ export function CompactShell({
       >
         {opened.has('chat') && (
           <TabPane active={tab === 'chat'}>
-            <div className="flex h-full min-h-0 flex-col">
-              {onHome && <ChatStarters />}
-              <div className="min-h-0 flex-1">{children}</div>
-            </div>
+            <div className="h-full min-h-0">{children}</div>
           </TabPane>
         )}
         {opened.has('explorer') && (

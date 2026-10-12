@@ -1,9 +1,8 @@
-import { Link, useNavigate } from '@tanstack/react-router';
+import { Link } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { StatusBadge } from '@/components/shared/status-badge';
-import { Button } from '@/components/ui/button';
 import { EnvironmentSection } from '@/features/environments/EnvironmentSection';
 import { SessionRow } from '@/features/sessions/SessionRow';
 import { relativeTime, workspaceFor } from '@/features/sessions/model';
@@ -13,9 +12,6 @@ import {
 } from '@/features/sessions/WorkspaceBadges';
 import { agentLabel } from '@/lib/agentLabel';
 import { httpsUrl } from '@/lib/url';
-import { useConnection } from '@/shell/ConnectionBanner';
-import { AgentRadios } from './AgentRadios';
-import { CreateCheck } from './CreateCheck';
 import { MergePolicySection } from './MergePolicySection';
 import {
   agentKindOf,
@@ -28,13 +24,11 @@ import {
   providerRowSchema,
   pullRequestRowSchema,
   sessionRowSchema,
-  workspaceRequest,
   workspaceRowSchema,
-  type AgentKind,
   type CommitRow,
   type PullRequestRow
 } from './model';
-import { useCreateWorkspace, useProjectDetail, useProviders, useWorkspaces } from './queries';
+import { useProjectDetail, useProviders, useWorkspaces } from './queries';
 
 export interface ProjectPageProps {
   id: string;
@@ -47,15 +41,13 @@ export interface ProjectPageProps {
 
 /**
  * One project: its merge policy, environment, open pull requests, branch workspaces, recent commits
- * and sessions. The route keys it by id, so a different project starts on a fresh page.
+ * and sessions. It starts nothing: new work starts from the main chat. The route keys it by id, so
+ * a different project starts on a fresh page.
  */
 export function ProjectPage({ id, tasks }: ProjectPageProps) {
   const detail = useProjectDetail(id);
   const workspaces = useWorkspaces();
   const providers = useProviders();
-  const create = useCreateWorkspace(id);
-  const uncertain = create.uncertain;
-  const navigate = useNavigate();
   // Settings stays folded until the owner opens it, and keeps its state while the page is open.
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -99,17 +91,6 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
   const branchWorkspaces = workspaceRows.filter(
     (workspace) => workspace.manifest.repo_url === project.html_url
   );
-
-  const startWorkspace = (target: { branch: string; agentKind: AgentKind }) => {
-    if (create.pending || uncertain) return;
-    create.mutate(
-      { body: workspaceRequest({ projectId: id, ...target }) },
-      {
-        onSuccess: (workspace) =>
-          void navigate({ to: '/workspaces/$id', params: { id: workspace.workspace_id } })
-      }
-    );
-  };
 
   return (
     <article
@@ -220,25 +201,6 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
         <h2 id="project-workspaces-heading" className="text-lg font-medium">
           Branch workspaces
         </h2>
-        <BranchWorkspaceForm
-          defaultBranch={project.default_branch}
-          pending={create.pending}
-          locked={uncertain !== null}
-          onSubmit={startWorkspace}
-        />
-        {uncertain ? (
-          <CreateCheck
-            repo={project.html_url}
-            branch={uncertain.branch}
-            reading={create.pending}
-            onAcknowledge={create.acknowledge}
-          />
-        ) : create.error ? (
-          <div role="alert" className="text-destructive text-sm">
-            {failureText(create.error)}
-          </div>
-        ) : null}
-
         {workspaces.isError && !workspaces.data ? (
           <ErrorRecovery
             title="Couldn't load branch workspaces"
@@ -381,63 +343,5 @@ function CommitLine({ commit }: { commit: CommitRow }) {
         )}
       </span>
     </li>
-  );
-}
-
-/**
- * Starts a workspace on a branch of this project. The parent owns the request, so a failed create
- * stays in the section, and `pending` disables the button while the request is in flight.
- */
-function BranchWorkspaceForm({
-  defaultBranch,
-  pending,
-  locked,
-  onSubmit
-}: {
-  defaultBranch: string;
-  pending: boolean;
-  /** An earlier create may have started a workspace; no new one until the owner has checked. */
-  locked: boolean;
-  onSubmit: (target: { branch: string; agentKind: AgentKind }) => void;
-}) {
-  // Null until the owner types, so the field follows the default branch when GitHub metadata arrives.
-  const [typed, setTyped] = useState<string | null>(null);
-  const [agentKind, setAgentKind] = useState<AgentKind>('claude');
-  const branch = typed ?? defaultBranch;
-  const offline = useConnection().status === 'offline';
-  // An empty default branch means GitHub metadata has not arrived. A workspace would have no ref to start from.
-  const branchUnknown = defaultBranch === '';
-  const blocked = offline || pending || locked || branchUnknown;
-
-  return (
-    <form
-      data-testid="project-workspace-form"
-      className="gap-md p-md border-border flex flex-col border"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (blocked) return;
-        onSubmit({ branch: branch.trim() || defaultBranch, agentKind });
-      }}
-    >
-      <label className="gap-xs flex flex-col text-sm">
-        Branch
-        <input
-          aria-label="Workspace branch"
-          placeholder={branchUnknown ? 'Default branch pending' : undefined}
-          className="border-border bg-background text-foreground px-md min-h-11 border text-sm"
-          value={branch}
-          onChange={(event) => setTyped(event.target.value)}
-        />
-      </label>
-      {branchUnknown ? (
-        <p className="text-muted-foreground text-sm">
-          The default branch is not known yet. Workspaces can start once GitHub metadata arrives.
-        </p>
-      ) : null}
-      <AgentRadios prefix="project-workspace-kind" value={agentKind} onChange={setAgentKind} />
-      <Button type="submit" disabled={blocked}>
-        {pending ? 'Creating…' : 'New workspace'}
-      </Button>
-    </form>
   );
 }
