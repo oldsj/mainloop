@@ -29,7 +29,7 @@ func (h *harness) withGitRead() *authtest.Env {
 
 func gitReadRefs(creds []*kagentapi.SessionCredential) (refs []*kagentapi.SessionCredential) {
 	for _, c := range creds {
-		if c.GetSecretRef().GetName() != "" && c.GetOrigin() != "" && c.GetHeader() == "Authorization" &&
+		if c.GetSecretRef().GetName() != "" && c.GetOrigin() != "" && c.GetHeader() == "authorization" &&
 			len(c.GetSecretRef().GetName()) > len("mainloop-git-read-") && c.GetSecretRef().GetName()[:len("mainloop-git-read-")] == "mainloop-git-read-" {
 			refs = append(refs, c)
 		}

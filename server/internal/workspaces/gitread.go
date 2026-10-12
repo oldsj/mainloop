@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -49,6 +50,9 @@ func frozenReference(raw json.RawMessage) (*kagentapi.SessionCredential, error) 
 	if err := protojson.Unmarshal(raw, &ref); err != nil {
 		return nil, fmt.Errorf("workspaces: stored git read credential: %w", err)
 	}
+	// Rows frozen before the header was spelled lowercase would otherwise fail kagent's exact
+	// comparison when the workspace is prepared.
+	ref.Header = strings.ToLower(ref.GetHeader())
 	return &ref, nil
 }
 
