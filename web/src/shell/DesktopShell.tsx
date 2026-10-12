@@ -5,11 +5,17 @@ import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
-import { InboxPanel, ProjectsPanel, SessionsPanel } from './slots';
+import { InboxPanel, ProjectsPanel, SessionsPanel, WorkPanel } from './slots';
 import { ThemeSelector } from './ThemeSelector';
 
-/** ≥1024 px: main pane plus a column of sessions, inbox and projects. */
-export function DesktopShell({ children }: { children: ReactNode }) {
+/** ≥1024 px: main pane plus a column of work, sessions, inbox and projects. */
+export function DesktopShell({
+  children,
+  lastVisit
+}: {
+  children: ReactNode;
+  lastVisit: number | null;
+}) {
   return (
     <div data-testid="desktop-shell" className="flex min-h-0 flex-1 flex-col">
       <header className="gap-md border-border px-md flex items-center border-b">
@@ -41,9 +47,12 @@ export function DesktopShell({ children }: { children: ReactNode }) {
           {children}
         </main>
         <aside
-          aria-label="Sessions, inbox and projects"
+          aria-label="Work, sessions, inbox and projects"
           className="divide-border border-border flex w-96 shrink-0 flex-col divide-y overflow-y-auto border-l"
         >
+          <PanelBoundary name="Work">
+            <WorkPanel lastVisit={lastVisit} strip />
+          </PanelBoundary>
           <PanelBoundary name="Sessions">
             <SessionsPanel />
           </PanelBoundary>

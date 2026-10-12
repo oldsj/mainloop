@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { $api } from '@/api';
 import type { components } from '@/api/schema.gen';
+import type { TaskView } from '@/lib/contract';
 import { useTaskList } from '@/features/tasks';
 import { relativeTime, groupWork, type WorkGroup, type WorkRow } from './model';
 
@@ -27,24 +28,40 @@ export function WorkList({ lastVisit }: { lastVisit: number | null }) {
   const projects = $api.useQuery('get', '/projects');
   const names = projectNames(projects.data);
 
-  if (tasks.isError && tasks.data === undefined) {
-    return (
-      <p role="alert" className="px-md py-sm text-term-red text-sm">
-        Couldn’t load tasks. This list fills in when the next read succeeds.
-      </p>
-    );
-  }
-  if (tasks.data === undefined) {
-    return (
-      <p role="status" className="px-md py-sm text-muted-foreground text-sm">
-        Checking your tasks…
-      </p>
-    );
-  }
-
-  const groups = groupWork(tasks.data, lastVisit);
   return (
-    <div data-testid="work-list" className="min-w-0">
+    <section aria-labelledby="work-heading" data-testid="work-list" className="min-w-0">
+      <h2 id="work-heading" className="px-md pt-md text-sm font-medium">
+        Work
+      </h2>
+      {tasks.isError && tasks.data === undefined ? (
+        <p role="alert" className="px-md py-sm text-term-red text-sm">
+          Couldn’t load tasks. This list fills in when the next read succeeds.
+        </p>
+      ) : tasks.data === undefined ? (
+        <p role="status" className="px-md py-sm text-muted-foreground text-sm">
+          Checking your tasks…
+        </p>
+      ) : (
+        <Groups tasks={tasks.data} lastVisit={lastVisit} names={names} now={now} />
+      )}
+    </section>
+  );
+}
+
+function Groups({
+  tasks,
+  lastVisit,
+  names,
+  now
+}: {
+  tasks: TaskView[];
+  lastVisit: number | null;
+  names: Map<string, string>;
+  now: number;
+}) {
+  const groups = groupWork(tasks, lastVisit);
+  return (
+    <>
       {GROUP_ORDER.map((group) => {
         const rows = groups[group];
         if (rows.length === 0 && group !== 'working') return null;
@@ -72,7 +89,7 @@ export function WorkList({ lastVisit }: { lastVisit: number | null }) {
           </section>
         );
       })}
-    </div>
+    </>
   );
 }
 

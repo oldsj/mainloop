@@ -197,12 +197,4 @@ describe('Since you were here', () => {
     await screen.findByText('Broke once');
     expect(screen.queryByTestId('since-strip')).toBeNull();
   });
-
-  it('records this visit so the next one compares against it', async () => {
-    serve([]);
-    renderHome();
-    await screen.findByText('Nothing running. Start work from the main chat.');
-    const recorded = Number(window.localStorage.getItem('mainloop.home.lastVisit'));
-    expect(Math.abs(recorded - Date.now())).toBeLessThan(10_000);
-  });
 });

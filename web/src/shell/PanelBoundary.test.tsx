@@ -13,7 +13,8 @@ vi.mock('./slots', () => ({
     return <section data-testid="sessions-panel">Sessions</section>;
   },
   InboxPanel: () => <section data-testid="inbox-panel">Inbox</section>,
-  ProjectsPanel: () => <section data-testid="projects-panel">Projects</section>
+  ProjectsPanel: () => <section data-testid="projects-panel">Projects</section>,
+  WorkPanel: () => <section data-testid="work-panel">Work</section>
 }));
 
 function setViewport(wide: boolean) {

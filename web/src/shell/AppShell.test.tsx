@@ -6,6 +6,7 @@ import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { attentionRead } from '@/features/inbox/test/handlers';
 import { attentionSnapshot } from '@/features/inbox/test/fixtures';
+import { writeLastVisit } from '@/features/home/lastVisit';
 import { serveProjectPage } from '@/features/projects/test/handlers';
 import { tasksList } from '@/features/tasks/test/handlers';
 import { server } from '@/test/msw/server';
@@ -47,6 +48,7 @@ async function renderAt(url: string) {
 
 afterEach(() => {
   document.documentElement.removeAttribute('data-theme');
+  window.localStorage.clear();
 });
 
 describe('shell switch', () => {
@@ -69,7 +71,7 @@ describe('shell switch', () => {
   it('renders the projects panel in the desktop aside', async () => {
     setViewport(true);
     await renderAt('/');
-    const aside = screen.getByRole('complementary', { name: 'Sessions, inbox and projects' });
+    const aside = screen.getByRole('complementary', { name: 'Work, sessions, inbox and projects' });
     const projects = within(aside).getByTestId('projects-panel');
     expect(await within(projects).findByRole('heading', { name: 'Projects' })).toBeInTheDocument();
   });
@@ -320,5 +322,74 @@ describe('project page title', () => {
     await renderAt('/projects/project-a');
     await waitFor(() => expect(document.title).toBe('acme/widgets - mainloop'));
     expect(document.querySelectorAll('title')).toHaveLength(1);
+  });
+});
+
+describe('home work placement', () => {
+  const MIN = 60_000;
+  const failedNow = () => new Date(Date.now() - MIN).toISOString();
+
+  function serveFailedSinceVisit() {
+    writeLastVisit(Date.now() - 60 * MIN);
+    server.use(
+      tasksList(() =>
+        HttpResponse.json([
+          view({ id: 'fail-1', title: 'Broke', status: 'failed', updated_at: failedNow() })
+        ])
+      )
+    );
+  }
+
+  it('puts the work list and the strip at the top of the desktop aside, above sessions', async () => {
+    setViewport(true);
+    serveFailedSinceVisit();
+    await renderAt('/');
+    const aside = screen.getByRole('complementary', { name: 'Work, sessions, inbox and projects' });
+    const work = within(aside).getByTestId('work-panel');
+    expect(await within(work).findByTestId('since-strip')).toBeInTheDocument();
+    expect(within(work).getByTestId('work-list')).toBeInTheDocument();
+    const sessions = within(aside).getByTestId('sessions-panel');
+    expect(work.compareDocumentPosition(sessions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('keeps the work list and the strip out of the desktop centre column', async () => {
+    setViewport(true);
+    serveFailedSinceVisit();
+    await renderAt('/');
+    await screen.findByTestId('since-strip');
+    const main = screen.getByRole('main');
+    expect(within(main).queryByTestId('work-list')).toBeNull();
+    expect(within(main).queryByTestId('since-strip')).toBeNull();
+  });
+
+  it('shows the strip as one line above the thread on the phone chat tab', async () => {
+    setViewport(false);
+    serveFailedSinceVisit();
+    await renderAt('/');
+    const strip = await screen.findByTestId('since-strip');
+    expect(strip).toBeVisible();
+    expect(strip.className).toContain('flex');
+    expect(within(strip).getByTestId('since-failed')).toHaveAttribute('href', '/tasks/fail-1');
+    expect(screen.queryByTestId('work-list')).toBeNull();
+  });
+
+  it('puts Work above the project list in the Projects tab', async () => {
+    setViewport(false);
+    const user = userEvent.setup();
+    serveFailedSinceVisit();
+    await renderAt('/');
+    await user.click(screen.getByTestId('tab-projects'));
+    const work = await screen.findByTestId('work-list');
+    const projects = await screen.findByTestId('projects-panel');
+    expect(work.compareDocumentPosition(projects) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(work).getByRole('heading', { name: 'Work' })).toBeInTheDocument();
+    expect(within(projects).queryByTestId('since-strip')).toBeNull();
+  });
+
+  it('records this visit when the shell opens, so the next one compares against it', async () => {
+    setViewport(true);
+    await renderAt('/');
+    const recorded = Number(window.localStorage.getItem('mainloop.home.lastVisit'));
+    expect(Math.abs(recorded - Date.now())).toBeLessThan(10_000);
   });
 });

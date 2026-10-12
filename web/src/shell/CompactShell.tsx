@@ -3,11 +3,12 @@ import { Activity, FolderGit2, Inbox, ListTree, MessageSquare, Plus } from 'luci
 import { useState, type ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
+import { HomeStrip } from '@/features/home';
 import { InboxBadge, unresolvedCount, useAttention } from '@/features/inbox';
 import { ownerTaskText, TasksBadge, tasksNeedingOwner, useTaskList } from '@/features/tasks';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
-import { InboxPanel, ProjectsPanel, SessionsPanel } from './slots';
+import { InboxPanel, ProjectsPanel, SessionsPanel, WorkPanel } from './slots';
 import { ThemeSelector } from './ThemeSelector';
 import type { Tab } from './view';
 
@@ -43,9 +44,18 @@ function TabPane({ active, children }: { active: boolean; children: ReactNode })
  * <1024 px: one pane at a time, switched by a bottom tab bar. The tab lives in the URL. A tab is
  * built the first time it opens and stays mounted after that, so a draft or a loaded list survives
  * a switch. The Inbox tab always mounts its badges, so attention keeps polling while another tab is
- * open.
+ * open. The Chat tab opens with the "Since you were here" line above the thread; the Projects tab
+ * opens with the Work list above the project list.
  */
-export function CompactShell({ tab, children }: { tab: Tab; children: ReactNode }) {
+export function CompactShell({
+  tab,
+  lastVisit,
+  children
+}: {
+  tab: Tab;
+  lastVisit: number | null;
+  children: ReactNode;
+}) {
   const navigate = useNavigate();
   const needs = unresolvedCount(useAttention().data);
   const tasks = tasksNeedingOwner(useTaskList().data ?? []).length;
@@ -83,7 +93,16 @@ export function CompactShell({ tab, children }: { tab: Tab; children: ReactNode 
         </nav>
       </header>
       <main id={MAIN_ID} tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto outline-none">
-        {opened.has('chat') && <TabPane active={tab === 'chat'}>{children}</TabPane>}
+        {opened.has('chat') && (
+          <TabPane active={tab === 'chat'}>
+            <div className="flex h-full min-h-0 flex-col">
+              <PanelBoundary name="Since you were here">
+                <HomeStrip lastVisit={lastVisit} compact />
+              </PanelBoundary>
+              <div className="min-h-0 flex-1">{children}</div>
+            </div>
+          </TabPane>
+        )}
         {opened.has('sessions') && (
           <TabPane active={tab === 'sessions'}>
             <PanelBoundary name="Sessions">
@@ -100,6 +119,11 @@ export function CompactShell({ tab, children }: { tab: Tab; children: ReactNode 
         )}
         {opened.has('projects') && (
           <TabPane active={tab === 'projects'}>
+            <div className="border-border border-b">
+              <PanelBoundary name="Work">
+                <WorkPanel lastVisit={lastVisit} />
+              </PanelBoundary>
+            </div>
             <PanelBoundary name="Projects">
               <ProjectsPanel />
             </PanelBoundary>

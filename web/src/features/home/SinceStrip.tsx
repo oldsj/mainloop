@@ -17,19 +17,44 @@ const ITEMS: Item[] = [
 /**
  * "Since you were here": counts of what changed since the last visit. Each count links to the most
  * recent task in that count. Renders nothing when nothing changed, so an empty strip never shows.
+ * The compact form is one line that scrolls sideways rather than wrapping, for the phone chat tab.
  */
-export function SinceStrip({ counts }: { counts: SinceCounts }) {
+export function SinceStrip({
+  counts,
+  compact = false
+}: {
+  counts: SinceCounts;
+  compact?: boolean;
+}) {
   const shown = ITEMS.flatMap((item) => {
     const [latest] = counts[item.key];
     return latest ? [{ ...item, latest, count: counts[item.key].length }] : [];
   });
   if (shown.length === 0) return null;
   return (
-    <section aria-label="Since you were here" data-testid="since-strip" className="px-md py-sm">
-      <h2 className="text-muted-foreground text-xs font-medium">Since you were here</h2>
-      <ul className="gap-sm mt-xs flex flex-wrap">
+    <section
+      aria-label="Since you were here"
+      data-testid="since-strip"
+      className={
+        compact
+          ? 'gap-sm px-md py-xs border-border flex min-w-0 items-center border-b'
+          : 'px-md py-sm'
+      }
+    >
+      {compact ? (
+        <p className="text-muted-foreground shrink-0 text-xs font-medium">Since you were here</p>
+      ) : (
+        <h2 className="text-muted-foreground text-xs font-medium">Since you were here</h2>
+      )}
+      <ul
+        className={
+          compact
+            ? 'gap-sm flex min-w-0 flex-1 items-center overflow-x-auto whitespace-nowrap'
+            : 'gap-sm mt-xs flex flex-wrap'
+        }
+      >
         {shown.map(({ key, label, tone, latest, count }) => (
-          <li key={key}>
+          <li key={key} className="shrink-0">
             <SinceLink
               task={latest}
               text={`${countText(count, 'task')} ${label}`}

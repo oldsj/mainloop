@@ -45,11 +45,11 @@ the loading message. Retrying requests the details for the current project.
 ## Home
 
 - **Work list**: tasks grouped as **Needs you**, **Working**, **Blocked or failed**, and **Finished since you last looked**. A task appears once, in the first group that fits. Each row shows the title, project, a one-line status with its reason, the relative last update time, and links to the task. Running and queued tasks are current work, so **Working** always shows; with nothing running it reads **Nothing running. Start work from the main chat.**
-- **Since you were here**: a strip above the list with counts of tasks waiting on you, failed, and merged since the last visit, each linking to the most recent one. It is hidden when nothing changed, and on a first visit, which has no baseline.
-- **Last visit**: kept per browser in local storage. If storage is blocked, the strip and the finished group simply have no baseline.
+- **Since you were here**: counts of tasks waiting on you, failed, and merged since the last visit, each linking to the most recent one. It is hidden when nothing changed, and on a first visit, which has no baseline. On the phone it is one line that scrolls sideways rather than wrapping.
+- **Last visit**: kept per browser in local storage. The app shell reads it once when it opens and records the current time, so the desktop aside and the phone tabs share one baseline. Because the desktop aside shows on every route, the visit is the app's last open, not only the last time home was shown. If storage is blocked, the strip and the finished group simply have no baseline.
 - **Updates**: the list refreshes from the same task invalidation as the task pages. The relative times refresh each minute on the page.
-- **Placement (this slice)**: the list sits above the main chat, on desktop and on the phone chat tab. Its place in the desktop aside and the phone tab bar needs a shell change that this slice does not make.
-- **Not proven**: layout at phone width in a browser.
+- **Placement**: on desktop the work list and the strip sit at the top of the right-hand aside, above sessions, inbox and projects; the centre column is the chat alone. On the phone the strip sits above the chat on the Chat tab, and the work list sits first in the Projects tab, above the project list. The tab count stays at four.
+- **Not proven**: the strip with content in a browser. Phone (390×844) and desktop (1440×900) layouts were checked in a browser against fixtures with no tasks, so only the empty states were seen; the strip and list rows are covered by unit tests.
 
 ## Tasks
 
