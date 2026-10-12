@@ -163,6 +163,23 @@ describe('the live bubble', () => {
     expect(screen.getByTestId('live-turn-elapsed')).toHaveAttribute('aria-hidden', 'true');
   });
 
+  it('keeps the polite status outside the busy region, which holds back live updates', async () => {
+    const { send } = setup();
+    await screen.findByText('build it');
+    send(
+      frame({
+        text: 'a few words',
+        tools: [{ id: 'c1', name: 'Read', label: 'Reading a.go', state: 'running' }]
+      })
+    );
+    const status = await screen.findByTestId('live-turn-status');
+    expect(status.closest('[aria-busy="true"]')).toBeNull();
+    const busy = live().querySelector('[aria-busy="true"]');
+    expect(busy).not.toBeNull();
+    expect(busy).toContainElement(screen.getByTestId('live-turn-text'));
+    expect(busy).toContainElement(screen.getByTestId('live-turn-tools'));
+  });
+
   it('does not touch the cache: progress asks for no re-read', async () => {
     const { send, state } = setup();
     await screen.findByText('build it');
@@ -197,7 +214,10 @@ describe('the end of the turn', () => {
   it('swaps the bubble for the stored reply with no gap and no duplicate', async () => {
     const { send, state, apply } = setup();
     await screen.findByText('build it');
-    send(frame({ seq: 2, text: 'All done.', status: { kind: 'writing', label: 'Writing…' } }));
+    const tools = [{ id: 'c1', name: 'Read', label: 'Reading main.go', state: 'done' as const }];
+    send(
+      frame({ seq: 2, text: 'All done.', tools, status: { kind: 'writing', label: 'Writing…' } })
+    );
     await screen.findByTestId('live-turn');
 
     // The settle commits: the reply is stored, then the closing frame names it.
@@ -208,10 +228,12 @@ describe('the end of the turn', () => {
         deliveries: [deliveryFixture({ state: 'completed' })]
       })
     };
-    // The closing frame can beat the re-read: the bubble waits for the reply.
-    send(frame({ seq: 3, active: false, reply_id: 'reply-1', text: '', tools: [] }));
+    // The closing frame can beat the re-read: the bubble waits for the reply and keeps showing
+    // what it showed, so nothing blanks in between.
+    send(frame({ seq: 3, active: false, reply_id: 'reply-1', text: 'All done.', tools }));
     expect(live()).toBeInTheDocument();
-    expect(screen.queryByText('All done.', { selector: 'p' })).toBeNull();
+    expect(screen.getByTestId('live-turn-text')).toHaveTextContent('All done.');
+    expect(screen.getByTestId('live-turn-tools')).toHaveTextContent('Reading main.go');
 
     state.messages = [
       ...state.messages,
@@ -222,6 +244,17 @@ describe('the end of the turn', () => {
     );
     await waitFor(() => expect(screen.queryByTestId('live-turn')).toBeNull());
     expect(screen.getAllByText('All done.')).toHaveLength(1);
+  });
+
+  it('keeps the last text when a closing frame carries none', async () => {
+    const { send } = setup();
+    await screen.findByText('build it');
+    const tools = [{ id: 'c1', name: 'Read', label: 'Reading main.go', state: 'done' as const }];
+    send(frame({ seq: 2, text: 'Nearly there.', tools }));
+    await screen.findByTestId('live-turn');
+    send(frame({ seq: 3, active: false, reply_id: 'reply-1', text: '', tools: [] }));
+    expect(screen.getByTestId('live-turn-text')).toHaveTextContent('Nearly there.');
+    expect(screen.getByTestId('live-turn-tools')).toHaveTextContent('Reading main.go');
   });
 
   it('drops the bubble at once when the turn stored no reply', async () => {

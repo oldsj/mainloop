@@ -53,8 +53,12 @@ the turn settles, and announced by `session:message`.
   later ones inside the interval are folded into one trailing frame.
 - A stream that connects mid-turn receives the current frame of each running turn right after
   `connected` (and after any replay), so a reload or reconnect shows the partial reply at once.
-- The turn ends with a frame with `active: false`, no text and no tools, sent after the settle
-  commits. `reply_id` names the conversation message that now holds the outcome (the mirrored reply),
+- A turn is kept in memory until its settle ends it, or a newer message of the same session replaces
+  it. It is never dropped for being quiet: kagent sends nothing while a tool runs, so a long build is
+  not a reason to forget the turn. `seq` only grows for a message id. The kept state is bounded like
+  the frame (the newest 16 KiB of text and 30 tool lines), so a long turn costs a fixed amount.
+- The turn ends with a frame with `active: false` that repeats the last text and tool lines, sent
+  after the settle commits. `reply_id` names the conversation message that now holds the outcome (the mirrored reply),
   or is absent when the turn stored none. A client keeps the live bubble until it has read that
   message, so the final reply replaces the bubble without a gap or a duplicate.
 - `status.kind` is `thinking`, `writing`, `tool` or `waiting`. Tool labels (`Running Bash: go test ./...`,

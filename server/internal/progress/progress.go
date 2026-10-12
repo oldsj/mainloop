@@ -4,7 +4,9 @@
 // It is ephemeral by design. The durable record of a turn is still the mirrored reply the delivery
 // settle writes once; this package only shows what the agent is doing until then. State lives in
 // memory, one entry per session with a turn in flight, overwritten by each update and capped in size
-// (the text at MaxText bytes, the tool lines at MaxTools). Nothing here is stored or replayed: a
+// (the text at MaxText bytes, the tool lines at MaxTools, both in what is kept as well as in what is
+// sent). A turn stays until [Tracker.End] or a newer message of the same session replaces it: kagent
+// says nothing while a tool runs, so quiet is not a reason to forget it. Nothing here is stored or replayed: a
 // restart loses it and the owner sees today's behaviour (a busy flag, then the reply). A database row
 // would add a write per update to a path that must stay cheap, to keep a value nobody needs after the
 // turn ends. The cost of memory is that the delivery loop and the API must share the Tracker, so live
@@ -37,9 +39,9 @@ const (
 	MaxTools = 30
 	// DefaultInterval is the shortest time between frames of one session: four a second.
 	DefaultInterval = 250 * time.Millisecond
-	// staleAfter drops a turn nothing has touched for this long, unless it waits for the owner.
-	// The delivery loop normally ends it; this covers a process that stopped following it.
-	staleAfter = 5 * time.Minute
+	// maxDone bounds how many sessions' last ended message are remembered, to keep a late event from
+	// reviving a turn. Late events arrive within moments of the end, so the oldest are safe to forget.
+	maxDone = 1024
 
 	maxLabel = 120
 
@@ -80,6 +82,7 @@ type Tracker struct {
 	mu    sync.Mutex
 	turns map[string]*turn  // by session id
 	done  map[string]string // session id -> the last message whose turn ended, so a late event cannot revive it
+	order []string          // the keys of done, oldest first, to bound it
 }
 
 // New builds a Tracker that publishes through pub.
@@ -108,8 +111,8 @@ type turn struct {
 	seq     int
 	entries []entry
 	waiting bool
+	cut     bool // bound dropped the start of the text
 
-	touched  time.Time
 	lastSent time.Time
 	dirty    bool
 	timer    *time.Timer
@@ -150,11 +153,14 @@ func (t *Tracker) Observe(ref Ref, ev a2a.Event) {
 	default:
 		return
 	}
+	tr.bound()
 	t.markLocked(tr)
 }
 
-// End removes the turn after its final state is stored, and tells the streams. replyID is the id of
-// the conversation message that now holds the turn's outcome, or empty when the turn wrote none.
+// End removes the turn after its final state is stored, and tells the streams. The closing frame
+// keeps the last text and tool lines, so a page that shows it until the stored reply has been read
+// does not blank in between. replyID is the id of the conversation message that now holds the
+// turn's outcome, or empty when the turn wrote none.
 // Ending a turn that is not tracked does nothing: no client has live state for it.
 func (t *Tracker) End(ref Ref, replyID string) {
 	if t == nil {
@@ -162,7 +168,7 @@ func (t *Tracker) End(ref Ref, replyID string) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.done[ref.SessionID] = ref.MessageID
+	t.markDoneLocked(ref.SessionID, ref.MessageID)
 	tr, ok := t.turns[ref.SessionID]
 	if !ok || tr.ref.MessageID != ref.MessageID {
 		return
@@ -172,10 +178,8 @@ func (t *Tracker) End(ref Ref, replyID string) {
 		tr.timer.Stop()
 	}
 	tr.seq++
-	body := api.EventSessionProgress{
-		SessionId: ref.SessionID, MessageId: ref.MessageID, Seq: tr.seq, Active: false,
-		StartedAt: stamp(ref.Started), Status: status(tr), Text: "", Tools: []api.SessionProgressTool{},
-	}
+	body := tr.body()
+	body.Active = false
 	if replyID != "" {
 		body.ReplyId = &replyID
 	}
@@ -190,12 +194,8 @@ func (t *Tracker) Snapshot(userID string) []events.Event {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var out []events.Event
-	for sid, tr := range t.turns {
+	for _, tr := range t.turns {
 		if tr.ref.UserID != userID {
-			continue
-		}
-		if t.staleLocked(tr) {
-			t.dropLocked(sid, tr)
 			continue
 		}
 		tr.seq++
@@ -216,23 +216,30 @@ func (t *Tracker) turnLocked(ref Ref) *turn {
 		return nil
 	}
 	tr, ok := t.turns[ref.SessionID]
-	if ok && tr.ref.MessageID == ref.MessageID && !t.staleLocked(tr) {
-		tr.touched = t.now()
+	if ok && tr.ref.MessageID == ref.MessageID {
 		return tr
 	}
-	if ok {
+	if ok { // a newer message of the session: the old turn is over whether or not it said so
 		t.dropLocked(ref.SessionID, tr)
 	}
-	tr = &turn{ref: ref, touched: t.now()}
+	tr = &turn{ref: ref}
 	if tr.ref.Started.IsZero() {
-		tr.ref.Started = tr.touched
+		tr.ref.Started = t.now()
 	}
 	t.turns[ref.SessionID] = tr
 	return tr
 }
 
-func (t *Tracker) staleLocked(tr *turn) bool {
-	return !tr.waiting && t.now().Sub(tr.touched) > staleAfter
+// markDoneLocked remembers that a message's turn ended, keeping at most maxDone sessions.
+func (t *Tracker) markDoneLocked(sid, mid string) {
+	if _, ok := t.done[sid]; !ok {
+		if len(t.order) >= maxDone {
+			delete(t.done, t.order[0])
+			t.order = t.order[1:]
+		}
+		t.order = append(t.order, sid)
+	}
+	t.done[sid] = mid
 }
 
 func (t *Tracker) dropLocked(sid string, tr *turn) {
@@ -298,11 +305,69 @@ func norm(s a2a.TaskState) string {
 // snapshot replaces the turn's content with a task's artifacts: the first event of a subscription is
 // the task as it stands, so a handler that took the turn over starts from the right text.
 func (tr *turn) snapshot(task *a2a.Task) {
-	tr.entries = tr.entries[:0]
+	old := tr.entries
+	tr.entries = nil
+	tr.cut = false
 	for _, a := range task.Artifacts {
 		tr.artifact(a, false)
 	}
+	// A task that lists no tool artifact (the final one may carry only the reply) does not erase the
+	// tool lines already seen: keep those the snapshot does not mention, as the older lines.
+	var seen = map[string]bool{}
+	for _, e := range tr.entries {
+		if e.tool != nil {
+			seen[e.tool.id] = true
+		}
+	}
+	var lines []entry
+	for _, e := range old {
+		if e.tool != nil && !seen[e.tool.id] {
+			lines = append(lines, e)
+		}
+	}
+	tr.entries = append(lines, tr.entries...)
 	tr.waiting = waits(task.Status.State)
+	tr.bound()
+}
+
+// bound keeps the stored state within the caps the frame has: the newest MaxText bytes of text and
+// the newest MaxTools tool lines. Without it a long turn would grow without limit and every frame
+// would cost the whole turn.
+func (tr *turn) bound() {
+	tools, budget := 0, MaxText
+	keep := make([]bool, len(tr.entries))
+	for i := len(tr.entries) - 1; i >= 0; i-- {
+		e := &tr.entries[i]
+		if e.tool != nil {
+			keep[i] = tools < MaxTools
+			tools++
+			continue
+		}
+		switch {
+		case budget <= 0:
+			tr.cut = true
+		case len(e.text) <= budget:
+			budget -= len(e.text)
+			keep[i] = true
+		default:
+			cut := len(e.text) - budget
+			for cut < len(e.text) && !utf8.RuneStart(e.text[cut]) {
+				cut++
+			}
+			e.text = e.text[cut:]
+			budget = 0
+			tr.cut = true
+			keep[i] = true
+		}
+	}
+	kept := tr.entries[:0]
+	for i, e := range tr.entries {
+		if keep[i] {
+			kept = append(kept, e)
+		}
+	}
+	clear(tr.entries[len(kept):])
+	tr.entries = kept
 }
 
 // artifact folds one artifact (or an appended chunk of one) into the entries.
@@ -374,7 +439,7 @@ func (tr *turn) text() (string, bool) {
 	}
 	s := strings.Join(parts, "\n\n")
 	if len(s) <= MaxText {
-		return s, false
+		return s, tr.cut
 	}
 	cut := len(s) - MaxText
 	for cut < len(s) && !utf8.RuneStart(s[cut]) {
@@ -447,7 +512,7 @@ func Label(name string, args any) string {
 	}
 	with := func(verb string, detail string) string {
 		if detail == "" {
-			return verb
+			return strings.TrimSuffix(verb, ":")
 		}
 		return verb + " " + detail
 	}

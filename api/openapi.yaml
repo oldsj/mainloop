@@ -9726,14 +9726,14 @@ components:
         reply_id:
           type: string
           description: >-
-          Only in the last frame (`active` false): the id of the conversation message that holds the turn's outcome, a reply or a stop note, which the client keeps showing the live state for until that message is in the conversation. Omitted when the turn wrote no message.
+            Only in the last frame (`active` false): the id of the conversation message that holds the turn's outcome, a reply or a stop note, which the client keeps showing the live state for until that message is in the conversation. Omitted when the turn wrote no message.
         seq:
           type: integer
           minimum: 1
           description: Orders the frames of one turn. Clients keep the highest.
         active:
           type: boolean
-          description: False in the last frame of a turn, which carries no content. It is sent after the turn's final state is stored.
+          description: False in the last frame of a turn. That frame repeats the last text and tool lines, so the client can keep showing them until the stored reply is read, and is sent after the turn's final state is stored.
         started_at:
           type: string
           description: When the turn's live progress began, UTC ISO-8601 without an offset. The elapsed time is measured from it.

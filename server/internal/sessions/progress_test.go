@@ -131,6 +131,9 @@ func TestALiveTurnPublishesGrowingTextAndToolLinesThenEndsNamingTheStoredReply(t
 	if last.Active || last.ReplyId == nil || *last.ReplyId != msgs[1].ID || last.MessageId != id {
 		t.Fatalf("closing frame %+v, reply message %s", last, msgs[1].ID)
 	}
+	if last.Text != "Hello world" || len(last.Tools) != 1 {
+		t.Fatalf("closing frame drops the final text and tool lines: %+v", last)
+	}
 	prevText := ""
 	for i, f := range frames[:len(frames)-1] {
 		if !f.Active || f.MessageId != id {

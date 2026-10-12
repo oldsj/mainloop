@@ -260,13 +260,28 @@ func TestSnapshotFramesAreForTheUserAndNewerThanWhatWasSent(t *testing.T) {
 	}
 }
 
+func TestATaskSnapshotWithoutToolArtifactsKeepsTheToolLinesAlreadySeen(t *testing.T) {
+	c := &capture{}
+	tr := newTracker(c, 0)
+	tr.Observe(ref, call("c1", "Read", map[string]any{"file_path": "main.go"}))
+	tr.Observe(ref, result("c1", "Read", false))
+	tr.Observe(ref, &a2a.Task{
+		ID: "t", ContextID: "c", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted},
+		Artifacts: []*a2a.Artifact{{ID: "a1", Parts: a2a.ContentParts{a2a.NewTextPart("the reply")}}},
+	})
+	f := c.last(t)
+	if f.Text != "the reply" || len(f.Tools) != 1 || f.Tools[0].Label != "Reading main.go" {
+		t.Fatalf("frame %+v", f)
+	}
+}
+
 func TestEndSendsAFinalFrameNamingTheReplyAndForgetsTheTurn(t *testing.T) {
 	c := &capture{}
 	tr := newTracker(c, 0)
 	tr.Observe(ref, text("a1", "partial", false))
 	tr.End(ref, "reply-1")
 	f := c.last(t)
-	if f.Active || f.ReplyId == nil || *f.ReplyId != "reply-1" || f.Text != "" || len(f.Tools) != 0 {
+	if f.Active || f.ReplyId == nil || *f.ReplyId != "reply-1" || f.Text != "partial" {
 		t.Fatalf("frame %+v", f)
 	}
 	if len(tr.Snapshot("u")) != 0 {
@@ -283,6 +298,21 @@ func TestEndSendsAFinalFrameNamingTheReplyAndForgetsTheTurn(t *testing.T) {
 	tr.Begin(next)
 	if f := c.last(t); !f.Active || f.MessageId != "m2" {
 		t.Fatalf("frame %+v", f)
+	}
+}
+
+func TestTheClosingFrameKeepsTheLastTextAndToolLines(t *testing.T) {
+	c := &capture{}
+	tr := newTracker(c, 0)
+	tr.Observe(ref, text("a1", "All done.", false))
+	tr.Observe(ref, call("c1", "Read", map[string]any{"file_path": "main.go"}))
+	tr.Observe(ref, result("c1", "Read", false))
+	live := c.last(t)
+	tr.End(ref, "reply-1")
+	f := c.last(t)
+	if f.Active || f.Text != live.Text || f.TextTruncated != live.TextTruncated || len(f.Tools) != 1 ||
+		f.Tools[0].Label != "Reading main.go" || f.Seq <= live.Seq || f.StartedAt != live.StartedAt {
+		t.Fatalf("closing frame %+v, last live frame %+v", f, live)
 	}
 }
 
@@ -328,20 +358,56 @@ func TestANilTrackerDoesNothing(t *testing.T) {
 	}
 }
 
-func TestAnUntouchedTurnGoesStaleUnlessItWaits(t *testing.T) {
+func TestAQuietTurnIsNotForgottenAndItsSeqNeverRestarts(t *testing.T) {
 	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	c := &capture{}
 	tr := progress.New(c, progress.WithInterval(0), progress.WithClock(func() time.Time { return now }))
-	tr.Begin(ref)
-	waiting := progress.Ref{UserID: "u", SessionID: "s2", MessageID: "w1"}
-	tr.Observe(waiting, a2a.NewStatusUpdateEvent(&a2a.Task{ID: "t", ContextID: "c"}, a2a.TaskStateInputRequired, nil))
-	now = now.Add(6 * time.Minute)
+	tr.Observe(ref, text("a1", "Here is my plan.", false))
+	tr.Observe(ref, call("c1", "Bash", map[string]any{"command": "go test ./..."}))
+	before := c.last(t)
+
+	// kagent says nothing while the tool runs, however long that takes.
+	now = now.Add(40 * time.Minute)
 	snap := tr.Snapshot("u")
 	if len(snap) != 1 {
-		t.Fatalf("snapshot has %d turns, want only the waiting one", len(snap))
+		t.Fatalf("snapshot has %d turns after a long quiet spell, want the running one", len(snap))
 	}
-	var f api.EventSessionProgress
-	if err := json.Unmarshal(snap[0].Payload, &f); err != nil || f.SessionId != "s2" {
-		t.Fatalf("frame %+v, %v", f, err)
+	tr.Observe(ref, result("c1", "Bash", false))
+	after := c.last(t)
+	if after.Seq <= before.Seq {
+		t.Fatalf("seq went from %d to %d: a message's seq must not restart", before.Seq, after.Seq)
+	}
+	if after.Text != "Here is my plan." || len(after.Tools) != 1 ||
+		after.Tools[0].Label != "Running Bash: go test ./..." || after.Tools[0].State != api.SessionProgressToolStateDone {
+		t.Fatalf("state was lost across the quiet spell: %+v", after)
+	}
+}
+
+func TestOnlyEndOrANewerMessageRemovesATurn(t *testing.T) {
+	c := &capture{}
+	tr := newTracker(c, 0)
+	tr.Observe(ref, text("a1", "first", false))
+	next := ref
+	next.MessageID = "m2"
+	tr.Observe(next, text("a1", "second", false))
+	f := c.last(t)
+	if f.MessageId != "m2" || f.Text != "second" || f.Seq != 1 {
+		t.Fatalf("a newer message did not replace the turn: %+v", f)
+	}
+	if n := len(tr.Snapshot("u")); n != 1 {
+		t.Fatalf("snapshot has %d turns, want 1", n)
+	}
+	tr.End(ref, "") // the replaced message's late end changes nothing
+	if n := len(tr.Snapshot("u")); n != 1 {
+		t.Fatalf("a stale End removed the newer turn")
+	}
+}
+
+func TestAResultWithNoStartIsLabelledWithoutAColon(t *testing.T) {
+	c := &capture{}
+	tr := newTracker(c, 0)
+	tr.Observe(ref, result("c9", "Bash", false))
+	if f := c.last(t); len(f.Tools) != 1 || f.Tools[0].Label != "Running Bash" || f.Tools[0].State != api.SessionProgressToolStateDone {
+		t.Fatalf("frame %+v", f)
 	}
 }

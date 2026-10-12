@@ -55,6 +55,34 @@ describe('liveProgress', () => {
     expect(live.get('s1')).toBeUndefined();
   });
 
+  it('keeps the held text and tools when the closing frame carries none', () => {
+    const live = createLiveProgress();
+    const tools = [{ id: 'c1', name: 'Read', label: 'Reading a.go', state: 'done' as const }];
+    live.apply(frame({ seq: 1, text: 'so far', text_truncated: true, tools }));
+    live.apply(frame({ seq: 2, active: false, reply_id: 'r1', text: '', tools: [] }));
+    expect(live.get('s1')).toMatchObject({
+      active: false,
+      reply_id: 'r1',
+      text: 'so far',
+      text_truncated: true,
+      tools
+    });
+  });
+
+  it('shows the closing frame as it is when it carries the final state', () => {
+    const live = createLiveProgress();
+    live.apply(frame({ seq: 1, text: 'so far' }));
+    live.apply(frame({ seq: 2, active: false, reply_id: 'r1', text: 'so far and the end' }));
+    expect(live.get('s1')?.text).toBe('so far and the end');
+  });
+
+  it('does not borrow text from the frame of another message', () => {
+    const live = createLiveProgress();
+    live.apply(frame({ message_id: 'm1', seq: 1, text: 'old turn' }));
+    live.apply(frame({ message_id: 'm2', seq: 1, active: false, reply_id: 'r2' }));
+    expect(live.get('s1')?.text).toBe('');
+  });
+
   it('forgets a closed turn without a reply at once and ignores its late frames', () => {
     const live = createLiveProgress();
     live.apply(frame({ seq: 1 }));
@@ -83,5 +111,14 @@ describe('liveProgress', () => {
     expect(isProgressFrame({ ...frame(), tools: 'no' })).toBe(false);
     expect(isProgressFrame({ ...frame(), status: null })).toBe(false);
     expect(isProgressFrame(null)).toBe(false);
+    const tool = { id: 'c', name: 'Read', label: 'Reading a.go', state: 'done' };
+    expect(isProgressFrame({ ...frame(), tools: [tool], reply_id: 'r' })).toBe(true);
+    expect(isProgressFrame({ ...frame(), tools: [{ ...tool, state: 'lost' }] })).toBe(false);
+    expect(isProgressFrame({ ...frame(), tools: [{ id: 'c' }] })).toBe(false);
+    expect(isProgressFrame({ ...frame(), tools: [null] })).toBe(false);
+    expect(isProgressFrame({ ...frame(), status: { kind: 'dancing', label: 'x' } })).toBe(false);
+    expect(isProgressFrame({ ...frame(), status: { label: 'x' } })).toBe(false);
+    expect(isProgressFrame({ ...frame(), text_truncated: undefined })).toBe(false);
+    expect(isProgressFrame({ ...frame(), reply_id: 7 })).toBe(false);
   });
 });

@@ -42,46 +42,48 @@ export function LiveTurn({ frame, context = 'main', agentKind }: LiveTurnProps) 
   return (
     <article
       aria-label={`${agentLabel(agentKind)}, working`}
-      aria-busy={running}
       data-testid="live-turn"
       className="px-md py-sm bg-card w-full border-l-2 border-dashed opacity-80"
     >
       <div className="gap-xs flex flex-col">
-        <span className="text-term-accent shrink-0 text-xs md:text-sm" aria-hidden="true">
-          {agentLabel(agentKind)}@{context}$
-        </span>
-        {frame.text ? (
-          <div className="min-w-0 flex-1" aria-hidden="true" data-testid="live-turn-text">
-            <Markdown className="text-foreground text-sm md:text-base">
-              {frame.text_truncated ? `…${frame.text}` : frame.text}
-            </Markdown>
-          </div>
-        ) : null}
-        {tools.length > 0 ? (
-          <ul
-            className="text-muted-foreground gap-0 text-xs"
-            aria-hidden="true"
-            data-testid="live-turn-tools"
-          >
-            {hidden > 0 ? <li className="truncate">+{hidden} earlier</li> : null}
-            {tools.map((tool) => (
-              <li key={tool.id || tool.label} className="gap-xs flex min-w-0 items-center">
-                {tool.state === 'running' ? (
-                  <Loader2 className="size-3 shrink-0 motion-safe:animate-spin" />
-                ) : tool.state === 'error' ? (
-                  <X className="text-destructive size-3 shrink-0" />
-                ) : (
-                  <Check className="size-3 shrink-0" />
-                )}
-                <span
-                  className={cn('min-w-0 truncate', tool.state === 'error' && 'text-destructive')}
-                >
-                  {tool.label}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : null}
+        {/* aria-busy holds back the updates of live regions inside it, so the status sits outside. */}
+        <div aria-busy={running} className="gap-xs flex flex-col">
+          <span className="text-term-accent shrink-0 text-xs md:text-sm" aria-hidden="true">
+            {agentLabel(agentKind)}@{context}$
+          </span>
+          {frame.text ? (
+            <div className="min-w-0 flex-1" aria-hidden="true" data-testid="live-turn-text">
+              <Markdown className="text-foreground text-sm md:text-base">
+                {frame.text_truncated ? `…${frame.text}` : frame.text}
+              </Markdown>
+            </div>
+          ) : null}
+          {tools.length > 0 ? (
+            <ul
+              className="text-muted-foreground gap-0 text-xs"
+              aria-hidden="true"
+              data-testid="live-turn-tools"
+            >
+              {hidden > 0 ? <li className="truncate">+{hidden} earlier</li> : null}
+              {tools.map((tool) => (
+                <li key={tool.id || tool.label} className="gap-xs flex min-w-0 items-center">
+                  {tool.state === 'running' ? (
+                    <Loader2 className="size-3 shrink-0 motion-safe:animate-spin" />
+                  ) : tool.state === 'error' ? (
+                    <X className="text-destructive size-3 shrink-0" />
+                  ) : (
+                    <Check className="size-3 shrink-0" />
+                  )}
+                  <span
+                    className={cn('min-w-0 truncate', tool.state === 'error' && 'text-destructive')}
+                  >
+                    {tool.label}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
         <p className="text-muted-foreground gap-xs flex min-w-0 items-baseline text-xs">
           <span
             role="status"
