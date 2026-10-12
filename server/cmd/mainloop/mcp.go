@@ -57,7 +57,11 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		AllowedHosts: cfg.AllowedMCPHosts(),
 		Dev:          cfg.IsDev(),
 	}
-	return httpx.Serve(ctx, log, "mcp", mcpAddr, srv.Handler())
+	handler, err := srv.Handler()
+	if err != nil {
+		return err
+	}
+	return httpx.Serve(ctx, log, "mcp", mcpAddr, handler)
 }
 
 // newCredentials builds the one credential service of this process. In a cluster it publishes

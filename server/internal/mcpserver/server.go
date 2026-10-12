@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -63,9 +64,14 @@ func (s *Server) tools() map[string]Tool {
 	return all
 }
 
-// Handler is the whole listener: health, the two MCP paths, and the Host guard.
-func (s *Server) Handler() http.Handler {
+// Handler is the whole listener: health, the two MCP paths, and the Host guard. It fails if the
+// policy table names a tool the registry does not implement, so a divergence between the two
+// stops the server at startup instead of panicking a later call.
+func (s *Server) Handler() (http.Handler, error) {
 	tools := s.tools()
+	if err := checkToolsImplemented(tools, agentauth.AllTools); err != nil {
+		return nil, err
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -73,7 +79,25 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.Handle(PathOrdinary, s.endpoint(SurfaceOrdinary, tools))
 	mux.Handle(PathApproval, s.endpoint(agentauth.SurfaceApproval, tools))
-	return httpx.Chain(mux, httpx.Standard(s.Log, s.AllowedHosts, s.Dev, "/health"))
+	return httpx.Chain(mux, httpx.Standard(s.Log, s.AllowedHosts, s.Dev, "/health")), nil
+}
+
+// checkToolsImplemented confirms that every name the policy table may hand out is registered.
+// Policy.Tools never returns a name outside names, so checking names here covers every actor and
+// surface at once.
+func checkToolsImplemented(implemented map[string]Tool, names []string) error {
+	var missing []string
+	for _, name := range names {
+		if _, ok := implemented[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	slices.Sort(missing)
+	return fmt.Errorf("mcpserver: policy allows tool(s) %s, which the registry does not implement",
+		strings.Join(missing, ", "))
 }
 
 // SurfaceOrdinary is the surface of /mcp.
@@ -141,8 +165,9 @@ func unauthorized(w http.ResponseWriter) {
 	httpx.WriteError(w, http.StatusUnauthorized, "Unauthorized")
 }
 
-// buildServer registers the tools the actor may use on the surface: the policy table's names. The
-// contract generator, run by a test, fails unless every one of them is implemented.
+// buildServer registers the tools the actor may use on the surface: the policy table's names.
+// Handler already refused to start unless every one of them is implemented, so the lookup below
+// cannot miss.
 func (s *Server) buildServer(st *requestState, tools map[string]Tool) *mcp.Server {
 	name := "mainloop"
 	if st.surface == agentauth.SurfaceApproval {
@@ -150,7 +175,7 @@ func (s *Server) buildServer(st *requestState, tools map[string]Tool) *mcp.Serve
 	}
 	srv := mcp.NewServer(&mcp.Implementation{Name: name, Version: "1"}, nil)
 	for _, tn := range s.Policy.Tools(st.actor, st.surface) {
-		t := tools[tn] // the policy table and the registry are checked equal by the contract generator
+		t := tools[tn]
 		srv.AddTool(&mcp.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema},
 			s.call(st.actor, t))
 	}
