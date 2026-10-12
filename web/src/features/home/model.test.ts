@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskView } from '@/lib/contract';
 import { NOW, projection, view } from '@/test/fixtures/tasks';
-import { countText, groupWork, relativeTime, sinceCounts, workGroup } from './model';
+import { countText, sinceCounts, workGroup } from './model';
 
 const MIN = 60_000;
 const at = (minutesBeforeNow: number) => new Date(NOW - minutesBeforeNow * MIN).toISOString();
 const LAST_VISIT = NOW - 60 * MIN; // the owner was last here an hour ago
 
-const ids = (rows: { view: TaskView }[]) => rows.map((row) => row.view.task.id);
 const viewIds = (views: TaskView[]) => views.map((view) => view.task.id);
 
 describe('workGroup', () => {
@@ -48,56 +47,6 @@ describe('workGroup', () => {
   });
 });
 
-describe('groupWork', () => {
-  it('puts each task in one group and orders each group newest first', () => {
-    const views = [
-      view({ id: 'old-run', status: 'running', updated_at: at(90) }),
-      view({ id: 'new-run', status: 'running', updated_at: at(2) }),
-      view({ id: 'asks', status: 'waiting', reason: 'approval', updated_at: at(30) }),
-      view({ id: 'broke', status: 'failed', updated_at: at(5) }),
-      view({ id: 'done', status: 'completed', updated_at: at(1) }),
-      view({ id: 'stale', status: 'completed', updated_at: at(900) })
-    ];
-    const groups = groupWork(views, LAST_VISIT);
-    expect(ids(groups['needs-you'])).toEqual(['asks']);
-    expect(ids(groups.working)).toEqual(['new-run', 'old-run']);
-    expect(ids(groups.blocked)).toEqual(['broke']);
-    expect(ids(groups.finished)).toEqual(['done']);
-  });
-
-  it('gives each row a one-line status with its reason', () => {
-    const [row] = groupWork([view({ status: 'waiting', reason: 'ci' })], LAST_VISIT).working;
-    expect(row?.statusLine).toBe('Waiting · awaiting CI');
-  });
-
-  it('says a task waiting on approval is waiting for the owner, not running', () => {
-    const byReason = groupWork(
-      [view({ id: 'gate', status: 'running', reason: 'approval' })],
-      LAST_VISIT
-    );
-    expect(byReason['needs-you'][0]?.statusLine).toBe('Waiting for your approval');
-    const byPending = groupWork(
-      [
-        view(
-          { id: 'pend', status: 'running' },
-          { projection: projection({ pending_approval_ids: ['req-1'] }) }
-        )
-      ],
-      LAST_VISIT
-    );
-    expect(byPending['needs-you'][0]?.statusLine).toBe('Waiting for your approval');
-  });
-
-  it('returns empty groups, not missing ones, for an empty list', () => {
-    expect(groupWork([], LAST_VISIT)).toEqual({
-      'needs-you': [],
-      working: [],
-      blocked: [],
-      finished: []
-    });
-  });
-});
-
 describe('sinceCounts', () => {
   it('counts merged, failed and waiting tasks that changed since the visit, newest first', () => {
     const views = [
@@ -129,19 +78,6 @@ describe('sinceCounts', () => {
       failed: [],
       waiting: []
     });
-  });
-});
-
-describe('relativeTime', () => {
-  it('reads recent times in plain words', () => {
-    expect(relativeTime(at(0), NOW)).toBe('just now');
-    expect(relativeTime(at(12), NOW)).toBe('12 min ago');
-    expect(relativeTime(at(180), NOW)).toBe('3 h ago');
-    expect(relativeTime(at(3 * 24 * 60), NOW)).toBe('3 d ago');
-  });
-
-  it('returns nothing for an unreadable time', () => {
-    expect(relativeTime('not a date', NOW)).toBe('');
   });
 });
 

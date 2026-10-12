@@ -1,7 +1,8 @@
-import { render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ExplorerTree } from './ExplorerTree';
+import { LONG_PRESS_MS } from './RowMenu';
 import type { ExplorerNode } from './model';
 
 const nodes: ExplorerNode[] = [
@@ -257,5 +258,134 @@ describe('explorer tree focus state', () => {
     expect(guides('Working, 1')).toHaveLength(0);
     expect(guides('Pick queue backend, Running')).toHaveLength(1);
     expect(guides('Claude session, running')).toHaveLength(2);
+  });
+});
+
+describe('row menu', () => {
+  const row = (name: string) => screen.getByRole('treeitem', { name }).firstElementChild!;
+
+  it('opens on right-click with Open and Ask Mainloop, and runs the chosen one', async () => {
+    const { onOpen, onAsk, user } = renderTree();
+    await user.pointer({ keys: '[MouseRight]', target: row('Fix login') });
+    const menu = screen.getByRole('menu', { name: 'Actions for Fix login' });
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent)
+    ).toEqual(['Open', 'Ask Mainloop']);
+    expect(within(menu).getByRole('menuitem', { name: 'Open' })).toHaveFocus();
+    await user.click(within(menu).getByRole('menuitem', { name: 'Ask Mainloop' }));
+    expect(onAsk).toHaveBeenCalledWith('About task Fix login (t1): ');
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('offers only Open on a row without a prefill, and nothing on a group or a note', async () => {
+    const { user } = renderTree();
+    await user.pointer({ keys: '[MouseRight]', target: row('Mainloop, Idle') });
+    expect(
+      within(screen.getByRole('menu'))
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent)
+    ).toEqual(['Open']);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.getByRole('treeitem', { name: 'Mainloop, Idle' })).toHaveFocus();
+
+    await user.pointer({ keys: '[MouseRight]', target: row('Needs you, 1') });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('opens on a long press on a touch screen, and the lifting finger does not open the row', () => {
+    vi.useFakeTimers();
+    try {
+      const { onOpen } = renderTree();
+      const target = row('Fix login');
+      fireEvent.pointerDown(target, { pointerType: 'touch', clientX: 40, clientY: 60 });
+      act(() => vi.advanceTimersByTime(LONG_PRESS_MS));
+      expect(screen.getByRole('menu', { name: 'Actions for Fix login' })).toBeInTheDocument();
+      fireEvent.pointerUp(target, { pointerType: 'touch' });
+      fireEvent.click(target);
+      expect(onOpen).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('treats a moving finger as a scroll, not a press', () => {
+    vi.useFakeTimers();
+    try {
+      renderTree();
+      const target = row('Fix login');
+      fireEvent.pointerDown(target, { pointerType: 'touch', clientX: 40, clientY: 60 });
+      fireEvent.pointerMove(target, { pointerType: 'touch', clientX: 40, clientY: 90 });
+      act(() => vi.advanceTimersByTime(LONG_PRESS_MS));
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('opens from the keyboard with Shift+F10 and moves between actions with the arrows', async () => {
+    const { onOpen, user } = renderTree();
+    await user.tab();
+    await user.keyboard('{ArrowDown}{ArrowDown}');
+    expect(screen.getByRole('treeitem', { name: 'Fix login' })).toHaveFocus();
+    await user.keyboard('{Shift>}{F10}{/Shift}');
+    const menu = screen.getByRole('menu');
+    await user.keyboard('{ArrowDown}');
+    expect(within(menu).getByRole('menuitem', { name: 'Ask Mainloop' })).toHaveFocus();
+    await user.keyboard('{ArrowDown}{Enter}');
+    expect(onOpen).toHaveBeenCalledWith({ to: 'task', id: 't1' });
+  });
+
+  /** The tree in a scrolling explorer, beside a chat thread and its composer. */
+  function renderBeside() {
+    const view = render(
+      <div>
+        <div data-testid="chat" style={{ overflowY: 'auto' }}>
+          <textarea aria-label="Command" />
+        </div>
+        <div data-testid="explorer" style={{ overflowY: 'auto' }}>
+          <ExplorerTree
+            nodes={nodes}
+            isExpanded={(id) => id === 'needs'}
+            onToggle={vi.fn()}
+            onOpen={vi.fn()}
+            onAsk={vi.fn()}
+          />
+        </div>
+      </div>
+    );
+    return { ...view, user: userEvent.setup() };
+  }
+
+  it('stays open while the chat scrolls, and closes when the explorer scrolls', async () => {
+    const { user } = renderBeside();
+    await user.pointer({ keys: '[MouseRight]', target: row('Fix login') });
+    fireEvent.scroll(screen.getByTestId('chat'));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    fireEvent.scroll(screen.getByTestId('explorer'));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.getByRole('treeitem', { name: 'Fix login' })).toHaveFocus();
+  });
+
+  it('closes when another scroll moves its row', async () => {
+    const { user } = renderBeside();
+    const target = row('Fix login');
+    await user.pointer({ keys: '[MouseRight]', target });
+    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue({ top: 120, left: 0 } as DOMRect);
+    fireEvent.scroll(screen.getByTestId('chat'));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('leaves focus where the owner put it when a scroll closes the menu', async () => {
+    const { user } = renderBeside();
+    await user.pointer({ keys: '[MouseRight]', target: row('Fix login') });
+    const composer = screen.getByRole('textbox', { name: 'Command' });
+    act(() => composer.focus());
+    fireEvent.scroll(screen.getByTestId('explorer'));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(composer).toHaveFocus();
   });
 });

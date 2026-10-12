@@ -10,9 +10,9 @@ import { useConnection } from '@/shell/ConnectionBanner';
 /**
  * The session's conversation: the same timeline and composer as the main thread, reading and
  * sending to this session. The header shows the turn's state and the stop control. Requests the
- * session is waiting on show as cards above the conversation, and the state reads "needs you" while
- * one is pending. A closed session (`closedReason` set) locks the composer, says why, and hides stop.
- * A cancelled session reads `cancelled`, never the agent's own "ready".
+ * session is waiting on show as cards at the end of the conversation, and the state reads
+ * "needs you" while one is pending. A closed session (`closedReason` set) locks the composer, says
+ * why, and hides stop. A cancelled session reads `cancelled`, never the agent's own "ready".
  *
  * The slot takes the height its parent gives it. The message list scrolls inside it and the composer
  * stays at its bottom edge.
@@ -65,13 +65,13 @@ export function SessionChatSlot({
           </button>
         ) : null}
       </div>
-      <SessionRequests sessionId={sessionId} />
       <div className="flex min-h-40 flex-1 flex-col" data-testid="session-chat-panel">
         <ThreadBody
           thread={thread}
           offline={offline}
           label="session conversation"
           closedReason={closedReason}
+          requests={<SessionRequests sessionId={sessionId} />}
         />
       </div>
     </section>

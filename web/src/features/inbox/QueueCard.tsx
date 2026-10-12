@@ -68,7 +68,7 @@ export function QueueCard({ item }: { item: QueueItem }) {
             {planOpen ? 'Hide plan' : 'View plan'}
           </Button>
           {planOpen ? (
-            <pre className="border-border bg-card text-foreground p-md max-h-96 overflow-y-auto border text-xs whitespace-pre-wrap">
+            <pre className="border-border bg-card text-foreground p-md border text-xs break-words whitespace-pre-wrap">
               {item.content}
             </pre>
           ) : null}

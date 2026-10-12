@@ -17,7 +17,6 @@ import {
   providerRowSchema,
   pullRequestRowSchema,
   sessionRowSchema,
-  workspaceRequest,
   workspaceRowSchema
 } from './model';
 import { commit, policy, project, pullRequest, workspace } from './test/fixtures';
@@ -149,31 +148,6 @@ describe('failureText', () => {
       "Couldn't reach Mainloop. Try again when it's back."
     );
     expect(failureText(undefined)).toBe("Couldn't reach Mainloop. Try again when it's back.");
-  });
-});
-
-describe('workspaceRequest', () => {
-  it('sends the project id for a project page create, and the repository for a list create', () => {
-    expect(
-      workspaceRequest({ projectId: 'project-a', branch: 'main', agentKind: 'claude' })
-    ).toEqual({
-      project_id: 'project-a',
-      branch: 'main',
-      ref: '',
-      depth: 0,
-      dev: { ports: [], idle_timeout_minutes: 30 },
-      agent_kind: 'claude'
-    });
-    const fromRepo = workspaceRequest({ repo: 'acme/widgets', branch: '', agentKind: 'codex' });
-    expect(fromRepo).toEqual({
-      repo: 'acme/widgets',
-      branch: '',
-      ref: '',
-      depth: 0,
-      dev: { ports: [], idle_timeout_minutes: 30 },
-      agent_kind: 'codex'
-    });
-    expect(fromRepo).not.toHaveProperty('project_id');
   });
 });
 

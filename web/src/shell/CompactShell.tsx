@@ -3,7 +3,7 @@ import { Activity, Compass, MessageSquare } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
-import { ChatStarters, ExplorerPane, useNeedsCount } from '@/features/explorer';
+import { ExplorerPane, useNeedsCount } from '@/features/explorer';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
 import { ThemeSelector } from './ThemeSelector';
@@ -72,21 +72,20 @@ export function CompactShell({
           <ThemeSelector />
         </nav>
       </header>
-      {/* The home chat owns its scroll, so the pane around it does not scroll as well. */}
+      {/* The home chat owns its scroll, so the pane around it does not scroll as well. It is the
+          containing block too: an absolutely placed descendant (an sr-only label) would otherwise
+          stretch the document, and scrolling a row into view would scroll the whole page. */}
       <main
         id={MAIN_ID}
         tabIndex={-1}
         className={cn(
-          'min-h-0 flex-1 outline-none',
+          'relative min-h-0 flex-1 outline-none',
           onHome && tab === 'chat' ? 'overflow-hidden' : 'overflow-y-auto'
         )}
       >
         {opened.has('chat') && (
           <TabPane active={tab === 'chat'}>
-            <div className="flex h-full min-h-0 flex-col">
-              {onHome && <ChatStarters />}
-              <div className="min-h-0 flex-1">{children}</div>
-            </div>
+            <div className="h-full min-h-0">{children}</div>
           </TabPane>
         )}
         {opened.has('explorer') && (

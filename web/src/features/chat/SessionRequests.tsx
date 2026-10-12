@@ -3,15 +3,15 @@ import { useSessionRequests } from '@/features/hitl/session-requests';
 
 export interface SessionRequestsProps {
   sessionId: string;
-  /** Already shown above by `?hitl=`; not shown twice. */
+  /** Already shown by `?hitl=`; not shown twice. */
   skip?: string;
 }
 
 /**
  * The session's pending requests, each as a card, so the owner can answer without leaving the thread.
  * An answered card stays here with its receipt until the page reloads (see `useSessionRequests`).
- * The list takes at most 40% of its slot and shrinks further when needed, so the chat panel keeps its
- * floor and the composer stays inside the slot.
+ * The cards sit at the end of the conversation and scroll with it: the thread is the centre's one
+ * scroll, so they never get a pane of their own.
  */
 export function SessionRequests({ sessionId, skip }: SessionRequestsProps) {
   const { shown, isError } = useSessionRequests(sessionId, skip);
@@ -19,7 +19,8 @@ export function SessionRequests({ sessionId, skip }: SessionRequestsProps) {
   return (
     <div
       data-testid="session-requests-list"
-      className="border-border max-h-[40%] min-h-0 shrink overflow-y-auto border-b"
+      role="group"
+      className="border-border mx-md flex flex-col border"
       aria-label="Session requests"
     >
       {isError ? (

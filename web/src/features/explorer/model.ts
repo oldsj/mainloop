@@ -169,7 +169,10 @@ function attentionNode(item: AttentionItem, parent: string): ExplorerNode {
   };
 }
 
-/** The "Since you were here" rows, in the order the strip used. Each opens the most recent task it counts. */
+/**
+ * The "Since you were here" rows. The waiting row opens the answer view, on the latest task's action
+ * when one is listed, as the same work does under Needs you; the others open the latest task.
+ */
 const SINCE: { key: keyof SinceCounts; label: string; tone: Tone }[] = [
   { key: 'waiting', label: 'waiting on you', tone: 'attention' },
   { key: 'failed', label: 'failed', tone: 'bad' },
@@ -191,14 +194,24 @@ function sinceNode(source: ExplorerSource): ExplorerNode[] {
         label: `${countText(counts[key].length, 'task')} ${label}`,
         detail: latest.task.title,
         tone,
-        target: { to: 'task', id: latest.task.id },
+        target:
+          key === 'waiting'
+            ? needsTarget(source, latest.task.id)
+            : { to: 'task', id: latest.task.id },
         children: []
       }
     ];
   });
   if (children.length === 0) return [];
-  const count = SINCE.reduce((sum, { key }) => sum + counts[key].length, 0);
+  // A task can be counted twice (failed and waiting on the owner), so the group counts distinct tasks.
+  const count = new Set(SINCE.flatMap(({ key }) => counts[key].map((view) => view.task.id))).size;
   return [{ id: 'since', label: 'Since you were here', count, children }];
+}
+
+/** The answer view, on the task's first listed owner action if it has one. */
+function needsTarget(source: ExplorerSource, taskId: string): Target {
+  const item = source.attention.find((entry) => entry.task_id === taskId);
+  return item ? { to: 'needs', item: attentionKey(item) } : { to: 'needs' };
 }
 
 /** A row that says the group is empty. It has no target, so it is only read, not opened. */

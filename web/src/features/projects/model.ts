@@ -195,19 +195,6 @@ export function keepValid<T>(rows: unknown, schema: z.ZodType<T>): T[] {
   });
 }
 
-/**
- * A repository in one comparable form, so `owner/name`, a GitHub URL and a `.git` URL match the
- * manifest's `repo_url`.
- */
-export function repoKey(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/^(https:\/\/)?(www\.)?github\.com\//, '')
-    .replace(/\.git$/, '')
-    .replace(/\/+$/, '');
-}
-
 /** The agent kind a workspace manifest names, or null when it names none this UI knows. */
 export function agentKindOf(value: string): AgentKind | null {
   return value === 'claude' || value === 'codex' ? value : null;
@@ -217,27 +204,6 @@ export function agentKindOf(value: string): AgentKind | null {
 export function failureText(error: unknown): string {
   if (error instanceof ApiError || error instanceof ContractError) return error.message;
   return "Couldn't reach Mainloop. Try again when it's back.";
-}
-
-/**
- * The body for `POST /workspaces`. The schema marks every field required, so this always sends the
- * server's defaults explicitly: an empty `ref` means the project's default branch, and an empty
- * `branch` lets the server choose one. Ports stay empty and the idle timeout is the server's 30.
- */
-export function workspaceRequest(target: {
-  projectId?: string;
-  repo?: string;
-  branch: string;
-  agentKind: AgentKind;
-}) {
-  return {
-    ...(target.projectId ? { project_id: target.projectId } : { repo: target.repo }),
-    branch: target.branch,
-    ref: '',
-    depth: 0,
-    dev: { ports: [], idle_timeout_minutes: 30 },
-    agent_kind: target.agentKind
-  };
 }
 
 export const POLICY_LABEL: Record<MergePolicy, string> = {

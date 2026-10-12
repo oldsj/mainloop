@@ -9,7 +9,7 @@ import { keys } from '@/api';
 import type { RefusalCode } from '@/api/errors';
 import { server } from '@/test/msw/server';
 import { SessionChatSlot } from '@/features/sessions/SessionChatSlot';
-import { ChatPage } from './ChatPage';
+import { ChatPage, type ChatPageProps } from './ChatPage';
 import { loadDraft, saveDraft, sessionDraftKey } from './drafts';
 import {
   CONVERSATION_ID,
@@ -53,7 +53,7 @@ beforeEach(() => {
 });
 afterEach(() => sessionStorage.clear());
 
-function setup(initial: Partial<ChatBackendState> = {}, props: { hitlId?: string } = {}) {
+function setup(initial: Partial<ChatBackendState> = {}, props: Partial<ChatPageProps> = {}) {
   const backend = createChatBackend(initial);
   server.use(...backend.handlers);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -792,11 +792,33 @@ describe('staying current', () => {
 });
 
 describe('inline requests', () => {
-  it('shows the ?hitl= card at the top', async () => {
+  it('shows the ?hitl= card after the newest message, in the thread’s one scroll', async () => {
     setup(existing(), { hitlId: 'req-1' });
-    expect(await screen.findByTestId('hitl-card')).toHaveTextContent('req-1');
-    const root = screen.getByTestId('main-thread');
-    expect(root.querySelector('[data-testid="hitl-card"]')).toBeTruthy();
+    const card = await screen.findByTestId('hitl-card');
+    expect(card).toHaveTextContent('req-1');
+    const list = screen.getByTestId('message-list');
+    expect(list).toContainElement(card);
+    expect((await screen.findByText('On it.')).compareDocumentPosition(card)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+    // The thread is the only scroller in the page.
+    const scrollers = Array.from(
+      screen.getByTestId('main-thread').querySelectorAll('[class*="overflow-y-auto"]')
+    );
+    expect(scrollers).toEqual([list]);
+  });
+
+  it('shows the starters only in a loaded, empty thread', async () => {
+    setup({}, { starters: <p>try this</p> });
+    expect(screen.queryByText('try this')).toBeNull();
+    expect(await screen.findByText('try this')).toBeInTheDocument();
+    expect(screen.getByTestId('message-list')).toContainElement(screen.getByText('try this'));
+  });
+
+  it('leaves the starters out once the thread has messages', async () => {
+    setup(existing(), { starters: <p>try this</p> });
+    await screen.findByText('On it.');
+    expect(screen.queryByText('try this')).toBeNull();
   });
 
   it('shows the main session’s pending requests once each', async () => {

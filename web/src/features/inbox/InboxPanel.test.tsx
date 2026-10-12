@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { act } from 'react';
 import { HttpResponse, delay } from 'msw';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection, keys } from '@/api';
 import { createSseApplier } from '@/api/invalidation';
 import { createFakeHITL } from '@/features/hitl/handlers';
@@ -221,6 +221,61 @@ describe('Needs you', () => {
     createSseApplier(queryClient)({ event: 'inbox:updated', data: '{}' });
 
     expect(await screen.findByText('Which branch?')).toBeInTheDocument();
+  });
+
+  it('brings the selected row to the top, again as its card grows, until the owner scrolls', async () => {
+    // Each observer fires only while connected, as the real one does.
+    const observers: { fire: () => void; live: boolean }[] = [];
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        entry: { fire: () => void; live: boolean };
+        constructor(callback: ResizeObserverCallback) {
+          this.entry = { fire: () => callback([], this as never), live: false };
+          observers.push(this.entry);
+        }
+        observe() {
+          this.entry.live = true;
+        }
+        disconnect() {
+          this.entry.live = false;
+        }
+      }
+    );
+    const grow = () => observers.filter((o) => o.live).forEach((o) => o.fire());
+    const scrolls: { key?: string; block?: ScrollLogicalPosition }[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: HTMLElement, arg?: unknown) {
+      scrolls.push({
+        key: this.dataset.attentionKey,
+        block: (arg as ScrollIntoViewOptions | undefined)?.block
+      });
+    };
+    try {
+      const rows = ['q-1', 'q-2'].map((id) => attentionItem(queueItem({ id, title: id })));
+      // The refetch adds a row, so the list really changes under the selected one.
+      let reads = 0;
+      const later = attentionItem(queueItem({ id: 'q-3', title: 'q-3' }));
+      server.use(
+        attentionRead(() => HttpResponse.json(attentionSnapshot(reads++ ? [...rows, later] : rows)))
+      );
+      const { queryClient } = renderInbox('/', 'q-2');
+      await waitFor(() => expect(scrolls).toEqual([{ key: 'q-2', block: 'start' }]));
+      act(grow);
+      expect(scrolls).toHaveLength(2);
+      // A refetch re-renders the list but does not end the settling.
+      await act(() => queryClient.refetchQueries({ queryKey: keys.attention() }));
+      expect(await screen.findByText('q-3')).toBeInTheDocument();
+      act(grow);
+      expect(scrolls).toHaveLength(3);
+      // Once the owner scrolls, a later growth leaves the page where they put it.
+      act(() => window.dispatchEvent(new Event('wheel')));
+      act(grow);
+      expect(scrolls).toHaveLength(3);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+      vi.unstubAllGlobals();
+    }
   });
 
   it('caches attention under the key SSE invalidation uses', async () => {

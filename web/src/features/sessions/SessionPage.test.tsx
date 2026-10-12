@@ -334,7 +334,7 @@ describe('stop turn and clear', () => {
     expect(posts).toBe(1);
   });
 
-  it('clears a finished session and returns to the list', async () => {
+  it('clears a finished session and returns to the main chat', async () => {
     let archived = 0;
     server.use(
       sessionAction('archive', () => {
@@ -348,7 +348,7 @@ describe('stop turn and clear', () => {
     await heading('Fix login redirect');
     await user.click(screen.getByTestId('archive-session'));
 
-    expect(await screen.findByRole('heading', { name: 'Sessions' })).toBeInTheDocument();
+    expect(await screen.findByText('Home')).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/');
     expect(archived).toBe(1);
   });
@@ -551,8 +551,14 @@ describe('chat slot layout and state', () => {
     let notify: () => void = () => {};
     const observed: Element[] = [];
     class FakeResizeObserver {
-      constructor(callback: () => void) {
-        notify = callback;
+      // The chat's message list observes too, so every observer is notified. A real observer always
+      // passes a list of entries; this one passes an empty list.
+      constructor(callback: (entries: ResizeObserverEntry[]) => void) {
+        const before = notify;
+        notify = () => {
+          before();
+          callback([]);
+        };
       }
       observe(target: Element) {
         observed.push(target);

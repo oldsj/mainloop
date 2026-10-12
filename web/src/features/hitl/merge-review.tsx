@@ -8,6 +8,7 @@ import type {
 } from '@/lib/contract';
 import { messageTime } from '@/lib/time';
 import { httpsUrl } from '@/lib/url';
+import { ClampedText } from './clamped-text';
 import {
   compareLinkFor,
   evidenceKey,
@@ -351,9 +352,7 @@ export function VerifiedMerge({
       >
         {(state) => (
           <>
-            <pre className="bg-muted p-sm max-h-80 overflow-auto break-words whitespace-pre-wrap">
-              {state.description}
-            </pre>
+            <ClampedText what="description" text={state.description} />
             {state.truncated ? (
               <p className="text-muted-foreground">The saved description is truncated.</p>
             ) : null}

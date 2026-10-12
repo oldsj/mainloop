@@ -3,7 +3,7 @@ import { Activity } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
-import { ChatStarters, ExplorerAside } from '@/features/explorer';
+import { ExplorerAside } from '@/features/explorer';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
 import { ThemeSelector } from './ThemeSelector';
@@ -40,16 +40,15 @@ export function DesktopShell({
         </nav>
       </header>
       <div className="flex min-h-0 flex-1">
+        {/* Relative, so an absolutely placed descendant scrolls with it and never stretches the page. */}
         <main
           id={MAIN_ID}
           tabIndex={-1}
           className={cn(
-            'flex min-w-0 flex-1 flex-col outline-none',
+            'relative flex min-w-0 flex-1 flex-col outline-none',
             onHome ? 'overflow-hidden' : 'overflow-y-auto'
           )}
         >
-          {/* Shown only while the thread is empty, so it never shares the screen with a scrolling thread. */}
-          {onHome && <ChatStarters />}
           <div className="min-h-0 flex-1">{children}</div>
         </main>
         <PanelBoundary name="Explorer">

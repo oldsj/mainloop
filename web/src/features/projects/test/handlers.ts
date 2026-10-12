@@ -46,9 +46,6 @@ export const workspacesRead = (list: WorkspaceFixture[]) =>
 export const workspacesReadWith = (resolve: HttpResponseResolver) =>
   http.get(url('/workspaces'), resolve);
 
-export const createWorkspaceWrite = (resolve: HttpResponseResolver) =>
-  http.post(url('/workspaces'), resolve);
-
 export const providersRead = () =>
   http.get(url('/providers'), () => HttpResponse.json([CLAUDE_PROFILE, CODEX_PROFILE]));
 

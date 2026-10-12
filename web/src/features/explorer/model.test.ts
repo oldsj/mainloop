@@ -256,4 +256,22 @@ describe('since you were here', () => {
       })
     ]);
   });
+
+  it('opens the answer view from the waiting row and counts a task in two rows once', () => {
+    const stuck = view({ id: 'w-1', status: 'failed', reason: 'owner_decision', title: 'Pick' });
+    const attention = [{ ...hitlAttentionItem('req-9'), task_id: 'w-1' }];
+    const since = buildExplorer(source({ tasks: [stuck], attention, lastVisit })).find(
+      (node) => node.id === 'since'
+    );
+    expect(since?.count).toBe(1);
+    expect(since?.children.map((node) => [node.label, node.target])).toEqual([
+      ['1 task waiting on you', { to: 'needs', item: 'req-9' }],
+      ['1 task failed', { to: 'task', id: 'w-1' }]
+    ]);
+    // Without a listed action for the task, the waiting row still opens the answer view.
+    const bare = buildExplorer(source({ tasks: [stuck], lastVisit })).find(
+      (node) => node.id === 'since'
+    );
+    expect(bare?.children[0]?.target).toEqual({ to: 'needs' });
+  });
 });

@@ -1,5 +1,4 @@
-/** Public surface of the inbox feature: the Needs-you and Activity panel, and the unread badge. */
-export { InboxBadge } from './InboxBadge';
+/** Public surface of the inbox feature: the Needs-you and Activity panel. */
 export { InboxPanel } from './InboxPanel';
 export { useAttention } from './queries';
 export { unresolvedCount } from './model';

@@ -392,6 +392,17 @@ describe('home work placement', () => {
     expect(screen.getByRole('main').className).toContain('overflow-y-auto');
   });
 
+  // An absolutely placed sr-only label would otherwise size the document, so bringing a row into view
+  // scrolled the whole page and pushed the header off a phone screen.
+  it.each([
+    ['desktop', true],
+    ['phone', false]
+  ])('makes the main pane the containing block on %s', async (_, wide) => {
+    setViewport(wide);
+    await renderAt('/inbox');
+    expect(screen.getByRole('main')).toHaveClass('relative');
+  });
+
   it('records this visit when the shell opens, so the next one compares against it', async () => {
     setViewport(true);
     await renderAt('/');
@@ -468,6 +479,8 @@ describe('chat starters', () => {
     await renderAt('/');
     const group = await screen.findByRole('group', { name: 'Suggestions' });
     expect(within(group).getByRole('button', { name: 'What needs me?' })).toBeInTheDocument();
+    // Inside the empty thread, not a band of its own above it.
+    expect(screen.getByTestId('message-list')).toContainElement(group);
     expect(within(group).getByRole('button', { name: "What's running?" })).toBeInTheDocument();
     expect(within(group).getByRole('button', { name: 'Pause a schedule' })).toBeInTheDocument();
     expect(within(group).queryByRole('button', { name: /^Start a task in/ })).toBeNull();

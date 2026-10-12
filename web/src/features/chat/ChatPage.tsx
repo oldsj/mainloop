@@ -10,7 +10,7 @@ import { useMainProvider } from './useMainProvider';
 import { MAIN_THREAD, useThread } from './useThread';
 
 export interface ChatPageProps {
-  /** The approval request named by `?hitl=`, shown at the top of the thread. */
+  /** The approval request named by `?hitl=`, shown at the end of the thread with the other requests. */
   hitlId?: string;
   /** The native identity strip for the main session, supplied by the sessions slice. */
   renderIdentity?: (sessionId: string) => ReactNode;
@@ -18,10 +18,18 @@ export interface ChatPageProps {
   prefill?: string;
   /** Called once the composer has taken `prefill`, so the caller can clear it. */
   onPrefillUsed?: () => void;
+  /** Suggestions shown while the thread is empty. */
+  starters?: ReactNode;
 }
 
-/** The main thread: header, conversation, pending requests and the composer. */
-export function ChatPage({ hitlId, renderIdentity, prefill, onPrefillUsed }: ChatPageProps) {
+/** The main thread: header, conversation (ending with any pending requests) and the composer. */
+export function ChatPage({
+  hitlId,
+  renderIdentity,
+  prefill,
+  onPrefillUsed,
+  starters
+}: ChatPageProps) {
   const chat = useThread(MAIN_THREAD);
   const offline = useConnection().status === 'offline';
   const { info } = chat;
@@ -45,15 +53,6 @@ export function ChatPage({ hitlId, renderIdentity, prefill, onPrefillUsed }: Cha
         />
       ) : null}
 
-      <PanelBoundary name="Requests">
-        {hitlId ? (
-          <div className="border-border max-h-[50vh] shrink-0 overflow-y-auto border-b">
-            <HITLCard requestId={hitlId} />
-          </div>
-        ) : null}
-        {info?.session_id ? <SessionRequests sessionId={info.session_id} skip={hitlId} /> : null}
-      </PanelBoundary>
-
       <ThreadBody
         thread={chat}
         offline={offline}
@@ -62,6 +61,19 @@ export function ChatPage({ hitlId, renderIdentity, prefill, onPrefillUsed }: Cha
         closedPlaceholder="Main input is locked"
         prefill={prefill}
         onPrefillUsed={onPrefillUsed}
+        starters={starters}
+        requests={
+          <PanelBoundary name="Requests">
+            {hitlId ? (
+              <div className="border-border mx-md border">
+                <HITLCard requestId={hitlId} />
+              </div>
+            ) : null}
+            {info?.session_id ? (
+              <SessionRequests sessionId={info.session_id} skip={hitlId} />
+            ) : null}
+          </PanelBoundary>
+        }
       />
     </div>
   );
