@@ -15,3 +15,4 @@ resources:
   - remotemcpserver.yaml
   - claude.yaml
   - codex.yaml
+  - agent-tokens.yaml

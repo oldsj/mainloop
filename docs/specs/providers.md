@@ -32,7 +32,8 @@ providers, adapters, malformed AgentRefs and unknown fields fail closed.
 ]
 ```
 
-Explicit default construction uses `KAGENT_NAMESPACE`, `KAGENT_MAIN_AGENT`,
+Explicit default construction uses `KAGENT_NAMESPACE`, `KAGENT_MAIN_AGENT` (the Claude profile's `main` role),
+`KAGENT_MAIN_CODEX_AGENT` (the Codex profile's `main` role, default `mainloop-main-codex`),
 `KAGENT_CLAUDE_AGENT`, `KAGENT_CODEX_AGENT`, workspace Agent settings and the separate
 `KAGENT_SUPERVISOR_CLAUDE_AGENT`/`KAGENT_SUPERVISOR_CODEX_AGENT` settings. Default revision is
 `native-v1`. All capability evidence starts unknown. Configured revisions are operator-owned;
@@ -60,4 +61,18 @@ Evidence states remain `proved`, `partial`, `unsupported`, `unknown`; proved/par
 scope and evidence reference. Existing owner-session APIs retain their configured selection
 behavior until S1; S0 task mutators remain unavailable and cannot create native sessions.
 
-The owner can select Claude or Codex for main in the chat header; see [main provider selection](chat.md#selecting-the-main-provider). This uses the persisted main provider contract, independently of task profile preferences.
+The owner selects Claude or Codex for the main thread with `GET/PUT /main-thread/provider`; see [main provider selection](chat.md#selecting-the-main-provider). That selection uses the persisted main contract and is independent of task profile preferences. The `main` role resolves per provider: a disabled profile cannot be selected for a new main identity, while a pending or finished selection keeps the Agent pinned on its binding.
+
+## Go server status (migration slice G4)
+
+Implemented in `server/` and covered by offline tests with a fake registry: `GET /providers`, the
+`PROVIDER_PROFILES` parser, and `GET/PUT /projects/{id}/default-provider`. Startup fails with the
+validation error when `PROVIDER_PROFILES` or a `KAGENT_*` agent name used by the built-in profiles
+is malformed. The default-provider write is a compare-and-swap on the preference version:
+`expected_version: 0` creates the row, a lost race returns 409 `stale_provider_preference`, and a
+missing or other owner's project returns 404 `project_not_found`. A profile must be enabled and
+have a `supervisor` Agent, otherwise the write returns 422.
+
+Not yet in the Go server (proposed, later slices): task selection precedence, attempt pinning,
+qualification and `TASK_DEFAULT_PROVIDER_PROFILE_ID`. The rest of this page describes the frozen
+Python backend until those slices land.

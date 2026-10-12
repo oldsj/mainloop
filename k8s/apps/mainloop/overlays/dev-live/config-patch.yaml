@@ -11,7 +11,10 @@ data:
   FRONTEND_SCHEME: https
   MAINLOOP_API_HOSTS: mainloop-backend,mainloop-backend.mainloop-dev,mainloop-backend.mainloop-dev.svc,mainloop-backend.mainloop-dev.svc.cluster.local
   MAINLOOP_OWNER_ID: dev-owner
-  # Falls back to the database password for AGENT_TOKEN_KEY until mainloop-secrets exists.
+  # Hosts the MCP listener accepts; in-cluster it must include its own Service name.
+  MAINLOOP_MCP_HOSTS: mainloop-mcp,mainloop-mcp.mainloop-dev,mainloop-mcp.mainloop-dev.svc,mainloop-mcp.mainloop-dev.svc.cluster.local
+  # Lets `mainloop migrate reset` run in this prototype instance (docs/dev-environment.md#live-dev-instance).
+  MAINLOOP_ALLOW_RESET: '1'
   DEV_MODE: 'true'
   IS_TEST_ENV: 'false'
   NATIVE_CHILD_KINDS: claude,codex
@@ -25,11 +28,14 @@ data:
   GIT_TRANSPORT_ENABLED: 'false'
   PUSH_GATE_ENABLED: 'false'
   MAINLOOP_MERGE_TOOLS_ENABLED: 'false'
-  MAINLOOP_OWNER_HITL_WRITES_ENABLED: 'false'
+  MAINLOOP_OWNER_HITL_WRITES_ENABLED: 'true'
   # Dev-only kagent agents; production agents are never used from here.
   KAGENT_NAMESPACE: kagent
   KAGENT_ACTOR_ATESPACE: kagent
   KAGENT_MAIN_AGENT: claude-workspace-dev
+  # Codex main uses the dev workspace Agent, like the Claude main. The default (mainloop-main-codex)
+  # is production's Agent on this shared kagent.
+  KAGENT_MAIN_CODEX_AGENT: codex-workspace-dev
   KAGENT_CLAUDE_AGENT: claude-workspace-dev
   KAGENT_CODEX_AGENT: codex-workspace-dev
   KAGENT_WORKSPACE_CLAUDE_AGENT: claude-workspace-dev

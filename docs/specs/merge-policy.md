@@ -12,6 +12,10 @@ server-resolved project/repository/branch scope used by PR creation. Workspace e
 not change merge policy, mint HITL consent, enable production flags or grant owner REST access.
 The normal production manifests keep merge tools disabled.
 
+> **Go server.** The merge states, consent rule, nested-agent rule and GitHub 403 handling of the
+> Go server are in [Pull requests](pull-requests.md#go-server-migration-slice-g10). The 403 rule
+> below (an _exact_ plan-unavailable message) is the Python rule; Go decides by status code.
+
 ## Owner policy
 
 New projects and existing projects migrated from the schema without policy columns default
@@ -23,7 +27,9 @@ repository refresh and project upsert preserve owner choices. There is no reposi
 Policy mutation is **disabled by default**, returning 503 without updating policy or audit.
 An operator may set `MAINLOOP_OWNER_POLICY_WRITES_ENABLED=true` only after establishing
 owner-route isolation for both direct and external-gateway access. Only the exact value
-`true` enables writes; no development-mode bypass exists. This is a deployment opt-in,
+`true` enables writes (`TRUE`, `1`, `t` and an empty value leave them off without failing
+startup); no development-mode bypass exists. `MAINLOOP_OWNER_HITL_WRITES_ENABLED` and
+`MAINLOOP_MERGE_TOOLS_ENABLED` follow the same exact-value rule. This is a deployment opt-in,
 not requester authentication: once enabled the existing network boundary must exclude
 actors whether they omit Authorization or present an MCP bearer. No manifest enables it here.
 
@@ -195,7 +201,7 @@ responses and internal generic status/response mutations reject HITL cards.
 `POST /hitl/{request_id}/respond` accepts `action_id` and a complete typed `response`. This route
 is disabled unless **`MAINLOOP_OWNER_HITL_WRITES_ENABLED=true`** exactly. Like the policy gate,
 this is an operator opt-in after proving owner-route isolation, not request authentication.
-No manifest enables it. Fresh ownership/task checks, exact batch validation, sorted verified
+Only the live dev overlay (`overlays/dev-live`, a single-owner prototype) enables it. Fresh ownership/task checks, exact batch validation, sorted verified
 leaf locks and route revalidation precede immutable recording. Same action/body is idempotent;
 another action or contradictory batch cannot take any already-recorded leaf member.
 
@@ -260,6 +266,12 @@ The owner policy response includes `writes_enabled`, derived from the same exact
 server gate used by PUT. The project page displays the current value and protected globs even
 when editing is disabled. Saving carries the displayed policy version; a conflict or uncertain
 save re-reads the current policy before another explicit save.
+
+React status (migration F7): the project page's merge policy section
+(`web/src/features/projects/MergePolicySection.tsx`) follows this contract. A refused save, such as
+the 503 while owner writes are off, shows the server's reason as text and locks the section until
+the owner refreshes. A refresh rebuilds the form from the re-read policy only after that read
+finishes. Proven by offline component tests against MSW handlers; not proven against a live server.
 
 HITL GET/POST responses include display context from owner-scoped observed/bound session rows,
 a verified leaf provider when available, and `writes_enabled`. `GET /sessions/{id}/hitl` lists
@@ -337,6 +349,30 @@ Tests feed real observer/owner-API results from isolated PostgreSQL and a fake g
 shared Svelte renderer and response builder. Seeded states supplement this for provider labels,
 escaping, malformed payloads and merge slots. This is not deployed or browser/live-agent proof.
 
+### Web request card and submit state
+
+The React client (`web/src/features/hitl`) renders `HITLCard` and `HITLRequest` against the
+contract in `api/openapi.yaml`. The Go endpoints and request cards have isolated PostgreSQL,
+fake-runtime and component test coverage; this is not deployed proof.
+
+- All cards for one request id share one state machine and one query-cache entry. Only one
+  submit per request is in flight. The card polls only while the tab is visible and stops once
+  a decision is delivered.
+- A send waits 90 seconds. A timeout or network failure locks the request as uncertain, says
+  not to submit again, and re-reads it. The lock clears only when the re-read shows a recorded
+  decision. A 5xx is treated the same way. A 4xx shows the server's detail and refreshes.
+- A refused send (503) with the owner-write gate off is shown as "Responding is disabled on the
+  server. Nothing was recorded." only after a re-read proves the request is still unanswered and
+  writes are off. Otherwise the 503 locks the request as uncertain. The disabled state also shows
+  whenever the read reports `writes_enabled=false` and no decision exists.
+- If a re-read after an uncertain send shows no recorded decision, the card titles the state "No
+  decision was recorded" and says "Reload to answer again." "Refresh status" re-reads but keeps the
+  lock while no decision is recorded. Reloading the page is what lets the owner answer again.
+- A request view missing its session identity or payload renders an error state with a refresh
+  action instead of the card.
+- Controls follow the server: they are off while the read is stale, the request is not
+  answerable, writes are off, a decision exists, or a send is in flight.
+
 ## GitHub plan availability
 
 Mainloop merge policy does not require GitHub paid branch protection or rulesets.
@@ -380,3 +416,25 @@ attention recovery and confirmed task runtime cleanup are integrated. Uncertain-
 handoff holds, atomic PR-claim/attempt association and any native parent publication notification remain
 serialized integration dependencies. Local PostgreSQL/fake-upstream regressions qualify these
 application seams; no new production activation or live-provider qualification follows.
+
+### Go merge card context (A1)
+
+Implemented with scratch PostgreSQL, fake kagent identity reads and React component tests.
+`HITLView.merge` now carries each configured merge tool's proposal id, repository, PR number,
+head/base names and SHAs, candidate state/deadline, summary digest and the bounded immutable
+`MergeSummary` already stored at preparation. This includes title/description excerpt, path
+preview and counts, policy/protected-path reasons, and captured CI. These values render as text;
+full description, paths and checks still load through `GetHITLMergeDetails` paging. **Open PR** and
+**Compare diff** use canonical GitHub links built from the server's stored repository, PR number
+and refs. The repository must be a valid full name, the PR number positive, and compare refs valid
+and path-encoded; malformed or missing values withhold the affected link.
+
+The runtime Session must still run on the recorded Agent. That Agent's named `template_name`
+and the binding's provider must select exactly one merge configuration, whose public tool name
+matches the native call. The proposal must belong to the same owner, project and session, and the
+binding must still name the request's runtime. Inline, unknown or ambiguous templates, other
+runtime Agents, and cross-scope proposal ids yield unavailable context. The observer performs the
+same resolution before binding proposal attention, so browser reads are not needed to populate
+the inbox. Native tool arguments alone are never verified context. A stale request, ended
+candidate, or passed deadline marks the context stale; unavailable captured evidence remains
+unavailable. Merge execution retains its existing consent and fresh-evidence checks.

@@ -1,0 +1,4 @@
+repo: oldsj/kagent
+commit: ce402bf76151bf9492e5dda53f310547794c3190
+paths: go/api/gen/kagent/api/v1alpha1/{common.pb.go,runtime.pb.go,sessions.pb.go,agents.pb.go,scheduled_runs.pb.go}
+notes: message files copied verbatim; gRPC stubs are not copied. Refresh with scripts/sync-kagent-api.sh <commit>.

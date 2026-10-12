@@ -93,16 +93,19 @@ image, so use a fully successful run for a pin update.
 
 ```text
 mainloop/
-├── backend/       # Python FastAPI + DBOS workflows
-├── frontend/      # SvelteKit + Tailwind v4 (mobile-first responsive)
-├── models/        # Shared Pydantic models
-├── packages/ui/   # Design tokens + theme.css
+├── api/           # OpenAPI contract shared by server/ and web/
+├── server/        # Go backend (in progress, replaces backend/)
+├── web/           # React frontend (in progress, replaces frontend/)
+├── backend/       # Frozen Python FastAPI backend
+├── frontend/      # Frozen SvelteKit frontend
+├── models/        # Frozen shared Pydantic models
+├── packages/ui/   # Frozen design tokens + theme.css
 └── k8s/           # Kubernetes manifests
 ```
 
 ## UI
 
-- **Mobile**: Bottom tab bar (Chat / Sessions)
+- **Mobile**: Bottom tab bar (Chat / Explorer)
 - **Desktop**: Chat with always-visible Sessions sidebar
 
 **Chat** — your main thread with inline sessions:

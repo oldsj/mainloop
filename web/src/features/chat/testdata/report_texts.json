@@ -1,0 +1,32 @@
+[
+  {
+    "name": "a child task completed",
+    "task_id": "0a1b2c3d-1111-4222-8333-444455556666",
+    "child": true,
+    "attempt": 1,
+    "outcome": "completed",
+    "summary": "did a thing",
+    "owner_action": "",
+    "text": "[report from child task 0a1b2c3d-1111-4222-8333-444455556666 attempt 1; completed; unverified claim]\ndid a thing"
+  },
+  {
+    "name": "a child task blocked on the owner",
+    "task_id": "9f8e7d6c-1111-4222-8333-444455556666",
+    "child": true,
+    "attempt": 2,
+    "outcome": "blocked",
+    "summary": "the schema is ambiguous",
+    "owner_action": "decide the schema",
+    "text": "[report from child task 9f8e7d6c-1111-4222-8333-444455556666 attempt 2; blocked; unverified claim]\nthe schema is ambiguous\nOwner action needed: decide the schema"
+  },
+  {
+    "name": "a top-level task failed",
+    "task_id": "5e4d3c2b-1111-4222-8333-444455556666",
+    "child": false,
+    "attempt": 1,
+    "outcome": "failed",
+    "summary": "the build broke",
+    "owner_action": "",
+    "text": "[report from task 5e4d3c2b-1111-4222-8333-444455556666 attempt 1; failed; unverified claim]\nthe build broke"
+  }
+]

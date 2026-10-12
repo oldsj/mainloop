@@ -11,6 +11,168 @@ ports and the idle timeout. `agent_kind` accepts a configured [provider profile]
 or alias; existing Claude/Codex selection is unchanged. Everything about the running state is
 read from kagent.
 
+## Go server (migration slice G5)
+
+The sections below describe the frozen Python backend, which still serves production. This
+section is the Go server's lifecycle in `server/internal/workspaces`. Labels: **implemented** is
+in the code and covered by fake-backed tests against a scratch PostgreSQL; **proposed** is not
+built; nothing here has been measured against a live kagent.
+
+### Implemented
+
+- MCP credential (G6c): before `CreateSession` the create publishes the workspace's MCP credential (role `agent`, grant `workspace`) and sends its reference with the request; a delete that replays the create sends the same reference and issues nothing. Delete and the drop of a refused create revoke the credential in the same transaction that removes the rows. If the credential cannot be issued because the Secret name is still owed a delete, the create retries; if the binding has ended, the create is rejected. With no Secret store (outside a cluster) the workspace is created without a credential and a warning is logged.
+- Git read: with `GIT_TRANSPORT_ENABLED`, a GitHub App and a cluster, the create also enrolls the workspace for git read (`gittransport.Enroller.Enroll`, idempotent) before `CreateSession` and sends the capability's reference after the MCP one. Only a GitHub repository gets one. The decision, including "no git read", is frozen on the workspace row (`git_read_decided`, `git_read_credential`) before the first `CreateSession`, so a restart that turns git read on or off cannot change the credentials of a retry or of the delete's replay: both send the frozen set, and the replay enrolls and issues nothing. The credential service revokes the capability with the workspace. With any of the three missing, the workspace is created as before.
+- Git push (G11c): with the read transport and push gate configured, creation freezes an optional push reference after read enrollment and before the first `CreateSession`. A writable code-task attempt is found through its attempt-derived request ID and must hold the exact repository/branch writer generation. Standalone and default-branch workspaces get no push reference. The durable reservation is keyed by the attempt, freezes the reference, and cannot transfer to another workspace. Creation retries and deletion replays reuse that reference and never mint another reservation. Already-created Sessions receive no new reference.
+- Push enrollment runs separately after the native Session is freshly observed READY with no operation and exactly one matching reference. The task caller must have attached the workspace and activated the current writer before `pushgate.Service.Enroll` can publish its grant and Secret. Creation refusal, runtime failure/deletion, task abandonment and reservation expiry release push authority. A delete request revokes push authority in the same transaction that records the delete intent, not when the delete completes; a first-attempt refusal releases it in its outcome transaction; other abandoned/expired reservations are reconciled automatically, and the release sweep also revokes any grant or push credential left behind a revoked reservation. A delete later rejected (for example because a turn is open) leaves the surviving workspace without push authority on purpose: the reservation is terminal and the workspace fails closed. A task workspace whose project has no known default branch yet waits to be created, retrying until the `project-metadata` sweep fills it or the create retry window ends (`gave_up`, with the reason recorded), instead of being created read-only for good. No database transaction spans native, metadata or Secret calls. Local tests include a real push from the workspace credential to a bare repository; live kagent and GitHub remain unmeasured.
+- Caller request id: `CreateWithRequestID` takes a UUID and is idempotent on it. A repeat call, concurrent or later, returns the workspace the first call made (waiting for its create the same way) and makes no second kagent Session; `LookupByRequestID` finds one by that id. The id is also the kagent request id. The HTTP API does not take one yet; the tasks service derives it from the attempt.
+
+- Every lifecycle change is a durable `workspace_ops` row (`create`, `suspend`, `resume`,
+  `delete`) with a state (`pending`, `retrying`, `succeeded`, `rejected`, `gave_up`, `cancelled`)
+  and an idempotency key. One operation is open per workspace; asking for the kind that is
+  already open joins it, and a different kind is `409`. A delete cancels the others. The API
+  inserts the row, wakes the reconcile loop and waits up to `WORKSPACE_OPERATION_WAIT_SECONDS`
+  (default 30) for the result; if the operation is still going it answers with the workspace as
+  it stands and the loop carries on.
+- The Agent (namespace and name) is resolved when the workspace is made and stored on its row.
+  Every replay and the orphan sweep use that stored reference, so a config change between
+  attempts cannot turn a replay into a different request.
+- The workspace id is the kagent Session id. The row stores a stable `request_id`, which
+  `CreateSession` sends on every attempt, so a retry, a refresh or a restarted process can only
+  get the one Session back. The loop records `attempts` before it calls kagent and holds no
+  transaction or lock across the call. Outcomes are fenced on the lease, so a cancelled or
+  superseded operation is never overwritten.
+- Create retries: a transient error retries after 15 seconds, doubling to 120 seconds, until 600
+  seconds have passed since the first failure, then the operation is `gave_up` and the workspace
+  is `failed` until **refresh**. A permanent error (`INVALID_ARGUMENT`, `NOT_FOUND`,
+  `ALREADY_EXISTS`, `PERMISSION_DENIED`, `UNIMPLEMENTED`, `UNAUTHENTICATED`, a kagent
+  configuration refusal) is `rejected` at once. So is `FAILED_PRECONDITION` when kagent says the
+  request id belongs to a Session that was deleted: a replay cannot bring it back. Any other
+  `FAILED_PRECONDITION` (the Agent has no ready revision yet, its golden preparation failed,
+  composition is not configured) is transient and retries.
+  Refusal of the first attempt removes the rows, publishes `workspace:updated` with the failed
+  state (there is no removal event; clients drop the workspace when they next list) and returns
+  `422`. A refusal after earlier attempts of unknown outcome keeps the rows, so a Session an
+  earlier attempt made can still be found and deleted; the workspace shows as failed. The rows
+  are dropped only while that create is still the latest and nothing is open, so a Refresh that
+  lands after the refusal keeps them. Refresh sends a new create operation with a fresh window.
+  The three timings are
+  `WORKSPACE_CREATE_RETRY_INITIAL_SECONDS`, `_MAX_SECONDS` and `_WINDOW_SECONDS`.
+- Suspend and resume are operations. Suspend is refused (`409`) while a delivery is open and is
+  cancelled if activity arrived after the idle check picked the workspace. Resume touches the
+  workspace's activity and calls `ResumeSession` only for a suspended Session. A Session that is
+  failed or deleted refuses the resume (`409`). A resume that finds the Session already ready (a caller read it suspended just before another resume finished) changes nothing and publishes no `workspace:updated` event; only a retried attempt does, since an earlier attempt may have resumed it without recording that. That resume still advances the workspace's last activity (it is the idle-suspend keepalive), so `last_active_at` can move with no event; a client sees the new value at its next event or read.
+- Delete removes the rows only after kagent confirms: `DeleteSession` must report the same Session
+  as deleted, or answer not found. Anything else keeps the rows and returns `502`; the operation
+  keeps retrying. A workspace whose create was never sent is removed without calling kagent. One
+  whose create may have been sent replays the idempotent create first and deletes whatever comes
+  back. The replay carries the same credential reference the create sent (the deterministic
+  `mainloop-mcp-<id>` Secret, even if the credential is revoked by now), because kagent answers a
+  replay whose credentials differ with `AlreadyExists`. If the replay is refused for good (or kagent says the request id belongs to a deleted
+  Session) the rows are removed: no Session exists, or the orphan sweep reclaims it. A reply
+  without a Session id is not trusted and the delete retries. Delete is refused (`409`) while a delivery is open.
+- Archiving a session deletes its kagent Session: a sweep (`WORKSPACE_ARCHIVED_DELETE_SECONDS`,
+  default 60) deletes the Session of every archived binding that has no open delivery, and marks
+  `kagent_deleted_at` only after kagent confirms. A failed delete is tried again on the next pass.
+  An archived workspace whose create outcome was never known has no Session id to delete by: once
+  its create op is closed (given up or succeeded without a bound id) and no op is open, the same
+  sweep starts a delete op for it, which replays the create, deletes what comes back and removes the
+  rows. A workspace with a create op still open is left to that op.
+- Idle suspend: a sweep (`WORKSPACE_IDLE_CHECK_SECONDS`, default 60) suspends a running workspace that has been quiet for its idle timeout (1
+  to 1440 minutes, default 30). Quiet means no preview traffic (`Touch`), no resume and no
+  delivery activity, and no open delivery. A Session kagent no longer has, or that is failed or
+  being deleted, rejects the idle suspend and marks the workspace as handled until it is used
+  again, so it is not queued every pass; a Session that is mid-change is looked at again shortly.
+  With the delivery ledger wired (G6b) a workspace with a `recorded`, `sending` or `delivered`
+  delivery, or an `uncertain` one inside its hold, is never picked, and a delivery that finished
+  recently counts as activity. The sweep is not registered when no ledger is set, and the server
+  logs once that idle suspend is off.
+- Orphan sweep: a Session in kagent that was created for `KAGENT_USER_ID`, belongs to one of the
+  configured provider profiles' Agents or to any Agent a create was ever sent to (`kagent_agents`, kept after the row that named it is settled or purged), is not deleted, is at least `WORKSPACE_ORPHAN_MIN_AGE_SECONDS`
+  old (default 600) and that no binding names, is an orphan. It runs on a schedule
+  (`WORKSPACE_ORPHAN_SWEEP_SECONDS`, default 3600) and deletes; the command
+  `mainloop sweep-orphans` lists them and `--delete` removes them. Both refuse to delete while a
+  binding exists that has no Session id yet and whose create was requested (the binding records the
+  create request id before the call; a create that was never sent does not count), because that
+  create may own a listed Session. A create of a session that has since finished is settled by the
+  session service's `resolve-session-creates` sweep, which replays it with its request id, Agent and
+  credential reference and deletes what comes back, so a cancelled session never blocks the sweep for ever. Each Session is checked against the database again just before it is
+  deleted. The exit status is non-zero if a delete failed or deletion was blocked, and the
+  scheduled pass logs a warning when it is blocked. kagent records every Session made with the
+  control token as created by the same user, so the creator does not tell Mainloop instances
+  apart: only distinct Agent names do. Instances that share a kagent must never have shared
+  Agents, or one instance's sweep deletes the other's Sessions. An Agent a deployment once used
+  (a workspace row or a session create named it) stays in its orphan sweep (`kagent_agents`) after
+  the configuration stops naming it. `mainloop sweep-orphans` prints the Agent set it covers
+  (`agent   <namespace>/<name>`) before the orphans, and `--forget-agent <namespace>/<name>`
+  deletes one from that set and exits. It refuses an Agent the current configuration names, one
+  that a workspace or an unsettled create still names (forgetting it would stop the sweep reclaiming
+  a Session that landed there), one that is not in the set, an empty value, and a combination with
+  `--delete`; the flag checks run before the command reads configuration or the database.
+- Every state change publishes `workspace:updated` in the same transaction as the change. The
+  event carries the workspace lifecycle; it is not a removal notice.
+- `Wake(workspaceID)` is what a message to a workspace session calls before it is sent. It waits
+  for an open suspend to finish (up to `WORKSPACE_OPERATION_WAIT_SECONDS`, over at most four
+  rounds), then resumes the workspace if it is not running, so the message finds a running Session
+  and is sent once. A workspace with an open delete is refused, one that is gone is not found, and
+  one kagent has not confirmed in time or that stays busy is an error the delivery loop retries
+  without sending. The sender commits its delivery first: an open delivery makes a suspend that
+  has not yet reached kagent stand down, and one already in flight is waited for.
+- `WakeForPreview(workspaceID)` does not wait out other work, unlike `Wake`. It and
+  `Touch(workspaceID)` are the entry points the preview proxy calls. A running workspace is only
+  touched. If a suspend or a create is open it returns `ErrBusy` at once, and the proxy answers its
+  waking page (`503`, `Retry-After: 2`) instead of holding the request; an open delete is refused
+  (`409`). Otherwise a resume operation is queued once for any number of concurrent callers, and the
+  call returns when the Session is ready (a bounded wait) or fails with `502`/`409`.
+- Preview URLs are `<port>--<workspace>--preview.<host>` built from `SUBSTRATE_PREVIEW_BASE_URL`, ports sorted
+  by number.
+- The preview proxy (G12, `server/internal/preview`), described under "Go preview proxy" in the
+  preview section below. Tests cover it with a fake router and dev server; it has not been run
+  against a real Substrate router.
+
+### Proposed, not built
+
+- Checkout SHA resolution and lifecycle publication projection. The Git read/push transports and
+  per-workspace MCP grants are implemented above, but the lifecycle response still reports
+  `publication_mode: read_only` with reason `disabled`; it does not yet project the push grant.
+
+## React status (migration slice F8)
+
+The React workspace page (`web/src/features/workspaces`, route `/workspaces/$id`) is tested with
+MSW against the OpenAPI contract. Labels follow the Go section's: **implemented** is in the code
+and covered by those tests.
+
+Implemented in the React client:
+
+- Lifecycle and publication badges. Suspend shows only when the workspace is running, and Resume
+  only when it is suspended. Refresh is always available. Delete asks for confirmation first.
+- A control cannot be submitted twice. After a `409` the page re-reads the workspace before it
+  offers a retry, and it shows the backend's message.
+- A failed action keeps its message when its row or section unmounts. Moving to another workspace
+  clears it.
+- The repository is a link only for `http` and `https` URLs. The image digest shows its first 19
+  characters, or "unknown" when it does not parse.
+- Preview links are offered only for `http` and `https` URLs. A bad row is dropped and counted; the
+  rest still show. Opening a suspended workspace's preview wakes it on the Go side (G12, the
+  preview proxy, described below); the React page only links to the preview.
+- A failed refresh keeps the cached data on screen, with an inline error and a retry.
+- A later read that cannot be parsed keeps the last good workspace on screen, with a notice that it
+  could not be read. A failed action's notice and its failed detail both show.
+- An action the server accepted, whose result cannot be read, says the action may have gone through.
+  The page then re-reads the workspace, which settles the state.
+- Delete names what is removed: the branch, or the read-only publication. A delete whose reply is
+  lost is checked by a re-read; if that finds the workspace gone, the page says so and drops the
+  cached copy.
+
+Not proven:
+
+- Live kagent behaviour. Nothing here has run against a real workspace.
+- The shell mount for `/workspaces/$id`. Route tests attach the real route; the shell is unchanged.
+- Live event refresh of the workspace page. The SSE applier is tested with the page mounted, not a
+  real event stream.
+
+Differences from the frozen page: a suspended workspace uses the muted tone, not purple. The token
+set has no purple tone.
+
 ## Lifecycle
 
 | Observed state | User label | Meaning                                                                                              |
@@ -32,16 +194,19 @@ workspace operations.
 - A workspace is created from a project or straight from a repository. Naming a repository
   (`owner/name` or `https://github.com/owner/name[.git]`) finds the owner's project for it, or
   creates one, in the same request. Repository names are matched case-insensitively (GitHub's
-  rule): `Foo/Bar` and `foo/bar` are one project, shown with the case it was first created with.
+  rule): `Foo/Bar` and `foo/bar` are one project, shown with the case GitHub reports once its
+  metadata has been read (the import and the `project-metadata` sweep rewrite it from GitHub).
   The desktop sidebar's **New workspace** control (next to the project list) takes a repository
   and an optional branch, and both it and the project page let the owner choose Claude Code
   (the default) or Codex. The selected agent kind is stored in the workspace manifest and shown
   in workspace and session lists. Creation opens the workspace; a `422` and other API errors show
   inline.
-- A project created this way stores the canonical `https://github.com/owner/name` URL and no
-  default branch. `POST /projects/{id}/refresh` (no UI calls it yet) records the default branch
-  from GitHub. A project that already exists for that repository keeps its stored URL and
-  metadata. A bad `branch` or `ref` is refused before any project is created; the project does
+- A project created this way goes through the same import as `POST /projects`, so there is one
+  way to create a project. It stores the canonical `https://github.com/owner/name` URL and, when
+  the GitHub App can read the repository within the import's time limit, GitHub's default branch;
+  otherwise the default branch stays empty until the `project-metadata` sweep fills it. There is
+  no refresh route. A project that already exists for that repository is reused and its metadata
+  is refreshed from GitHub when the App can read it, so its URL and display case follow GitHub. A bad `branch` or `ref` is refused before any project is created; the project does
   outlive a workspace that kagent then rejects, so a retry finds it again.
 - With both `GIT_TRANSPORT_ENABLED` and `PUSH_GATE_ENABLED` enabled, enrollment resolves the
   checkout base through the repository-scoped GitHub App client to a full commit SHA before
@@ -107,9 +272,12 @@ workspace operations.
 - Resume calls `ResumeSession` only when the Session is suspended and counts as activity. A
   suspend or resume keeps the workspace grant and its token hash.
 - Delete is refused (`409`) while a delivery is open. If the create's outcome was never known,
-  delete first resolves it with the same idempotent `CreateSession` (the stored request id) that
-  **refresh** uses, including after cancellation has revoked the bearer: a Session found there is
-  deleted without republishing the credential or restoring its hash. A rejected retry or an outcome that is still
+  delete first resolves it with the same idempotent `CreateSession` (the stored request id and the
+  same credential reference) that **refresh** uses, including after cancellation has revoked the
+  bearer: a Session found there is deleted without republishing the credential or restoring its hash.
+  Removing the rows deletes the session row before revoking the binding's credentials, so a concurrent
+  `Issue` (which locks the session row `FOR SHARE`) either finishes first and is revoked, or finds the
+  binding gone. A rejected retry or an outcome that is still
   unknown returns `502` and keeps the rows: a rejected retry cannot prove that the earlier
   unknown request created nothing. kagent's `DeleteSession`
   must confirm (a Session it does not know counts as confirmed) before the rows are removed;
@@ -146,8 +314,8 @@ identity. Routes that fetch a row by id (threads, conversations, queue items, pr
 notifications) also check that the row belongs to that user and answer `404` otherwise. A later
 multi-user setup reads the identity a trusted gateway sets, in `current_user()` only.
 Access to the tailnet, plus the in-cluster NetworkPolicy, is the security boundary. The API also
-refuses a non-GET request that carries an `Origin` other than the frontend's, a localhost
-development origin (development mode only) or its own, so another origin's page (the agent's preview page, for one)
+refuses a non-GET request that carries an `Origin` other than the frontend's, a loopback
+development origin (`localhost`, `127.0.0.1` or `[::1]`, any port; development mode only) or its own, so another origin's page (the agent's preview page, for one)
 cannot make a browser post a cancel, archive, suspend or resume.
 
 **Host check.** The API answers `404` to any `Host` that is not the frontend domain
@@ -193,6 +361,58 @@ open delivery. It is skipped when the Session is not ready, is mid-operation, or
 suspended. The main thread is excluded by role and never suspended by Mainloop idle-out.
 Held reports after a stopped turn do not prevent parking.
 
+## Go preview proxy
+
+Status: implemented in the Go server (G12, tests against fakes). The Python proxy
+(`backend/src/mainloop/runtime/preview_proxy.py`) is frozen reference.
+
+The Go server routes a request whose `Host` parses as a preview host to the proxy, ahead of the
+API middleware (so the Host guard, API Origin guard, CORS and body validation never see it); the
+request id, access log and panic recovery still wrap it. Any other host is the API.
+
+- **Host.** `<port>--<workspace>--preview.<domain>` exactly as above, matched case-insensitively
+  against `SUBSTRATE_PREVIEW_BASE_URL`: the Host's port must equal the base URL's port, and a base
+  URL with no port means the Host has no port (so `:443` is refused for `https://x`, and no port is
+  refused for `https://x:443`). The label is at most 63 characters, the port is 1 to 65535 with no
+  leading zero, and the workspace id is a lower-case DNS-label-shaped id that may contain `--`.
+- **Admission.** The owner's workspace must exist, not be archived and have a live kagent Session,
+  and the port must be in its declared `ports`: `404` otherwise for the workspace, `403` for the
+  port. The lookup repeats at every tunnel dial, so a workspace archived or re-bound between the
+  check and the connect gets no tunnel (`404`).
+- **Origin.** As specified above, checked first. A refused WebSocket handshake is an HTTP `403`
+  (the Go proxy answers before upgrading, so there is no close code `4403`), and an `Upgrade` that
+  is not a `GET` WebSocket handshake is `400`.
+- **Methods.** `CONNECT`, `TRACE` and `TRACK` are `405` before any lookup, wake or tunnel.
+- **Wake.** `workspaces.Service.WakeForPreview`, whose result is trusted for 5 seconds so a page
+  load's many requests do not each ask kagent; the idle clock is still touched on each request.
+  Inside those 5 seconds a suspend by the owner (or an idle suspend that already passed its activity
+  re-check) is not noticed: a request there can reach the router while the workspace is suspended.
+  The window is narrow and owner-only; the per-request touch makes a later idle suspend back off.
+  Not confirmed in time, or another workspace operation is in progress, shows a `503` "Workspace
+  waking up" page with `Retry-After: 2`; a workspace that cannot be resumed is `409`; any other
+  failure is `502`.
+- **Tunnel.** `CONNECT actor-upstream:<port>` to `SUBSTRATE_ROUTER_ADDRESS` with
+  `ate-target-actor: <KAGENT_ACTOR_ATESPACE>/session-<kagent session id>`, timed by
+  `SUBSTRATE_PREVIEW_CONNECT_TIMEOUT_SECONDS`. A router refusal before anything was sent is retried
+  once, then the waking page; a failure after the request was forwarded is `502` and is never
+  replayed. One tunnel per request (no pooling), no compression, streaming responses are flushed
+  at once, and the dev server has 60 seconds to start answering.
+- **Headers.** The `Host` sent upstream is `actor-upstream:<port>`. Besides the headers listed above,
+  requests also lose any `X-Envoy-*` header (the gateway's client address), and hop-by-hop headers
+  go. Responses lose every upstream `Set-Cookie`, including on the WebSocket `101`, so a dev server
+  cannot set cookies on the owner's domain.
+- **Request cap.** A body over 10 MiB is `413`: at once when `Content-Length` says so, and cut off
+  when a streamed body runs over.
+- **Keep-awake.** A WebSocket takes a lease row (`preview_leases`) when it opens; an HTTP request
+  takes one if it is still running after 10 seconds. The holder renews every 20 seconds (lease TTL
+  60 seconds) and deletes the row on close. A reconcile sweep every 20 seconds, under the runner's
+  sweep lease, calls `Touch` for every workspace with an unexpired lease and prunes rows expired
+  for over a minute. A holder that crashes stops renewing, so its lease lapses without cleanup; the
+  workspace idles out after the usual timeout.
+
+Not covered: WebSocket close codes `4403`/`4404`/`1013` (see Origin above), per-session pooling of
+tunnels, and behaviour against a real router.
+
 ## Orphaned kagent Sessions
 
 A Session kagent holds for `KAGENT_USER_ID` with no `native_bindings` row cannot be found from
@@ -221,13 +441,15 @@ delete those workspaces first. The exit status is non-zero if any delete failed.
 - `POST /projects` imports a repository for the current owner: `{repo}` with no extra fields.
   It accepts the same strictly validated GitHub references as workspace creation below.
   Returns the stored `Project` with `201`, including when it already exists. Repeated and
-  concurrent mixed-case imports share one project per owner; an existing row keeps its URL,
-  display case and cached metadata and updates its last-used time. Another owner's row is
+  concurrent mixed-case imports share one project per owner; an existing row is reused, updates
+  its last-used time and takes its URL, display case and metadata from GitHub when the App can read
+  it. Another owner's row is
   never reused. Invalid repository references return a sanitized `400`; invalid request
   shapes return `422`, before any database effects.
-  Import makes no GitHub metadata request and starts no workspace or native Session. A new
-  project has an empty (unknown) default branch until the existing refresh endpoint records
-  it. It creates no task, capability or push grant, selects no environment, and does not
+  Import starts no workspace or native Session. It makes one best-effort GitHub read, bounded
+  by a time limit; if that read fails, the project is still recorded with an empty (unknown)
+  default branch and the `project-metadata` sweep fills it later. There is no refresh route. The
+  import creates no task, capability or push grant, selects no environment, and does not
   enable merging. This owner REST endpoint allows project import before explicit environment
   selection and Actor creation; a frontend import control is not implemented by this endpoint.
 - `POST /workspaces` creates a workspace:
@@ -242,7 +464,8 @@ delete those workspaces first. The exit status is non-zero if any delete failed.
     `project_id` is `404`.
   - `ref` defaults to the project's default branch, or is empty (the remote's default) when the
     project has none recorded.
-    The associated session's `base_branch` preserves that ref, including the empty string.
+    The associated session's `base_branch` preserves that ref, including the empty string; it is
+    never replaced by a fixed `main`.
     Legacy NULL base refs are read as empty, so they do not break session list or detail requests.
   - `branch` is the local branch to create or switch to. When empty it is always a new
     `mainloop/<8 hex>` branch, whatever `ref` or the project's default is, so the working branch
@@ -332,8 +555,8 @@ saved receipt can retain the original generation even when the current runtime d
 Missing or unavailable receipts do not mean unprepared, and confirmed historical evidence
 does not authorize current work. GET neither refreshes receipt timestamps nor re-Prepares,
 wakes, dispatches, or changes lifecycle/publication state. These fields are implemented with
-fake-backed coverage; they are not live proof of preparation or a diagnosis of installed
-configuration and runtime admission failures.
+fake-backed coverage (`kagenttest`); they are not live proof of preparation or a diagnosis of
+installed configuration and runtime admission failures.
 
 The [push gate contract](push-gate.md) defines feature-branch publication scope and
 protected branches. Source supports frozen native enrollment, deferred read/push publication

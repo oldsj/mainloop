@@ -1,11 +1,11 @@
-# REST (backend) and MCP share one Deployment and one image, and both initialise
-# the schema, so both get the same explicit configuration.
+# REST (backend), MCP and Git share one Deployment and one image, and all read the same
+# configuration; the migrate initContainer needs only the database.
 #
 # envFrom has no merge key, so listing it here replaces the base list: the
 # whole mainloop-secrets Secret is no longer imported. env is merged by name.
 #
-# One replica runs DBOS, so replace pods instead of surging a second one, and size the MCP
-# container for its small footprint (the base requests are for the REST container).
+# The API process runs the reconcilers, so replace pods instead of surging a second one, and
+# size the MCP container for its small footprint (the base requests are for the REST container).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,6 +16,19 @@ spec:
     type: Recreate
   template:
     spec:
+      initContainers:
+        - name: migrate
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-pg-app
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-pg-app
+                  key: password
       containers:
         - name: backend
           envFrom: &envFrom

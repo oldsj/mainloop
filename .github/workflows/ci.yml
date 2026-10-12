@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, go-react]
   pull_request:
-    branches: [main]
+    branches: [main, go-react]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,6 +21,8 @@ env:
 jobs:
   backend-tests:
     name: Backend unit and PostgreSQL tests
+    # go-react replaces the frozen Python and Svelte code; main keeps testing it.
+    if: github.ref != 'refs/heads/go-react' && github.base_ref != 'go-react'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
@@ -69,6 +71,7 @@ jobs:
 
   frontend-unit:
     name: Frontend unit tests
+    if: github.ref != 'refs/heads/go-react' && github.base_ref != 'go-react'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -106,6 +109,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.image }}
+    if: github.ref != 'refs/heads/go-react' && github.base_ref != 'go-react'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     strategy:

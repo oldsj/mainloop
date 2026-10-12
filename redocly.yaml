@@ -1,0 +1,7 @@
+# Redocly lint rules for the Mainloop API contract (api/openapi.yaml).
+extends:
+  - recommended
+
+rules:
+  # No licence is chosen for the API document; the repository LICENSE.md governs.
+  info-license: off

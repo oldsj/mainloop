@@ -47,6 +47,11 @@ coordination mode, selected profile/source, optional inherited owner provider co
 status/reason, current attempt, version and timestamps. Code requires an owner-owned project
 and typed branch/ref/depth. Coordination has no checkout or repository authority.
 
+The server refuses a code task's checkout with 422 `invalid_checkout` when the branch or ref is
+not a plain git name (a leading `-`, `..`, `@`, a `.lock` ending, spaces or any of `~^:?*[\`, empty
+components, over 255 bytes) or starts with `refs/`, or when the depth is outside 0..1000. A brief over
+16,384 bytes is refused with 422 `brief_too_long`. REST and MCP share these checks.
+
 An omitted checkout `depth` is 0, which clones full history; a positive
 value requests that shallow depth. Existing tasks keep the depth stored in their snapshot.
 
@@ -79,35 +84,38 @@ with no such settlement can leave the task blocked and its runtime reservation h
 the parent can use `task_cancel` to dispose of that runtime safely.
 
 Task GET authorizes the task before reading its cached publication projection. Reads stay
-DB-only: successful CI becomes unknown when its head differs, its timestamp is missing,
+DB-only: CI becomes unknown when its head differs, its timestamp is missing,
 future or older than five minutes. The response includes the existing publication mode and
 current merge proposal/result; reading never starts a native turn or dispatches a merge.
 
 Owner and scoped native task reads also return optional `projection.pr_description`,
 collected by the existing authenticated PR refresh. It carries the validated repository,
 branch, PR number, current attempt ID and exact head SHA, a UTF-8 `excerpt` of at most
-16 KiB, full-body `byte_length` and SHA-256 `digest`, `truncated`, and the successful
-`fetched_at` timestamp. The excerpt stops at a complete UTF-8 character; length and
-digest cover the original body, including text beyond the excerpt. An empty string is
-an observed empty description; a null or unavailable body returns null.
-An excerpt containing NUL is unavailable because JSONB cannot store it; supported
-text is preserved exactly.
+16 KiB, full-body `byte_length` and SHA-256 `digest`, `truncated`, and `fetched_at`.
+The excerpt stops at a complete UTF-8 character; length and digest cover the original
+body, including text beyond the excerpt. An empty string is an observed empty description;
+a null or unavailable body returns null. An excerpt containing NUL is unavailable because
+JSONB cannot store it. Invalid UTF-8 or unpaired Unicode surrogates fail the observation;
+supported text is preserved exactly.
 
-The description is editable, untrusted GitHub text. Reviewer markers and other text
-grant no approval, acceptance or merge authority. Failed or inconsistent observations
-clear it. Reads mask descriptions whose PR/head, branch or attempt differs, or whose
-successful fetch is future or older than five minutes. Generic `observed_at` cannot
-renew a stale description. A successful new-head observation replaces the old body
-with that head's own description. Unchanged refreshes update timestamps without task
-version/event churn; same-head body edits, including edits beyond the excerpt, produce
-an update. Reads remain DB-only and keep existing task scope; native reads still omit
-pending approval IDs.
+The description is editable, untrusted GitHub text. Reviewer markers and other text grant
+no approval, acceptance or merge authority. Failed or inconsistent observations clear it.
+Reads mask descriptions whose repository, PR/head, branch or current attempt differs,
+whose PR state is unknown, or whose fetch is future or older than five minutes.
+`fetched_at` uses the collection-finish time carried by the observer, including unchanged
+refreshes; database delays and generic `observed_at` cannot renew a stale description.
+If an attempt or checkout changes during collection, that observation is discarded.
+The final PR read must agree with the initial read's identity and body; text edited during
+collection is unavailable until a consistent refresh.
+A successful new-head observation replaces the body with that head's own description.
+Unchanged refreshes update timestamps without task version/event churn; same-head body
+edits, including edits beyond the excerpt, produce an update. Reads remain DB-only and
+keep existing task scope; native reads still omit pending approval IDs.
 
-Old stored projections default the description to null. Shared models remain strict:
-backend and MCP readers must use matching models when this field starts being stored.
-Older readers reject the added key even when null; rollback requires stopping writers
-and removing that key from cached task projections before restoring those readers.
-This does not change a native runtime's payload or MCP tool arguments.
+The task detail shows available descriptions as plain text under the PR observations,
+preserving whitespace and marking truncated excerpts. It never renders HTML or Markdown.
+Unavailable descriptions are omitted; observed empty descriptions say “No description
+provided.” The Go migration uses a fresh schema; cached descriptions default to null.
 
 Attempts pin Claude/Codex profile ID, revision and role AgentRef independently of registry
 reloads. Each has a monotonic number, native/session/binding/workspace identity, writer generation,
@@ -265,8 +273,23 @@ Frozen handoff operation states, not an implemented S0 handoff:
 ```
 
 Attempt states are `creating`, `active`, `draining`, `fenced`, `superseded`, `failed`,
-`cancelled`, `completed`. Capacity remains held separately until confirmed fencing/termination;
+`cancelled`, `completed`. Allowed moves: `creating` to `active` or `draining`; `active` to
+`draining`; `draining` to `fenced`; `fenced` to `superseded`, `failed`, `cancelled` or `completed`. Capacity remains held separately until confirmed fencing/termination;
 reporting alone never releases it. Unknown creates/stops/publication retain their reservation.
+
+A stop request permanently closes the attempt's session to new messages, even if the session's
+activity status is `completed`. The retained attempt's `stop_state` is the send fence: it changes
+from `none` to `requested` with the move to `draining`, and stays non-`none` through unresolved
+stops, confirmation and settlement. Recording a message checks it in the recording transaction;
+dispatching an already-recorded message checks it before native preparation. The admission
+transaction serializes with stop: a committed decision before stop permits the native send, and
+a stop committed first refuses admission. Cancellation retains task-owned `sending` and
+`uncertain` deliveries and their claims until reconciliation resolves them, without replay.
+Stop confirmation requires no unresolved admitted delivery and a native observation showing all
+tasks final, with no delivery outcome change since that observation began. A `delivered` message
+has been accepted by a native task that may still be working, so a late delivery or recovery
+requires another observation before releasing the branch writer claim and capacity. This does
+not change ordinary standalone or adopted scheduled sessions.
 
 Verified merged coding tasks enter automatic runtime cleanup through the existing task
 reconciler. It waits for all outstanding native deliveries and held child attempts, drains and
@@ -439,3 +462,55 @@ The response contains:
 
 Detail reads fetch at most 101 rows to detect truncation. This snapshot confers
 no execution authority; task admission and publication policy remain authoritative.
+
+## React status (F6)
+
+Labels: **implemented** means built in `web/` and covered by component tests against MSW. Nothing here is live-proven.
+
+- **Implemented:** the task page at `/tasks/$id`. It shows the status, title, brief and parent link, then these sections in order: `[PROVIDER]`, `[WORKSPACE]`, `[PR · CI · MERGE]`, `[IN PROGRESS]`, `[ACTIONS]`, `[ATTEMPTS]`, `[REPORTS]` and `[CHILD TASKS]`. A pending owner action links to the Inbox. A provider summary is labelled as unverified. A finished task with no open operation shows `[OPERATIONS]` rather than `[IN PROGRESS]`, and a finished supervisor task shows its `[SUPERVISOR]` badge muted.
+- **Implemented:** owner actions are Retry, Reassign and Cancel task. Each is enabled only when the server reports it available, nothing is in flight, the connection is up, and no unconfirmed request is held. While the server reports the handoff unavailable, Retry and Reassign are not shown at all; one line says the handoff is not installed yet. Every submission carries the version and attempt the owner saw. Reassign offers only the enabled other providers that offer the role; the server still decides whether the target is accepted. Cancel asks in an in-app dialog; **Keep running** sends nothing. If the task changes while that dialog is open, the dialog closes and sends nothing, and one line says so. That line stays until the owner acts again; a new **Cancel task** asks again, on the version now shown.
+- **Implemented:** a lost reply (no response, or a 5xx) is kept as **Resend original request** with its original version, attempt, target and request ID. **Discard** drops it. A 409 or 404 re-reads the task before the notice appears. The notice shows the backend's message, and the reason code beneath it as `Server reason: <code>`.
+- **Implemented:** an unconfirmed request is kept only while its task stays on screen. Leaving the page drops it, so a later visit offers no **Resend**. A resend carries the original expected version and request ID, which the server checks. Whether that stops a doubled change when the first request was recorded is not proven against a live backend.
+- **Implemented:** version-gated live updates. An older task read never replaces a newer one held. A `task:updated` event refetches the task only when its version is newer than the held one. The task list takes its membership from the latest read. A failed refresh keeps the last view under "Showing the last known state" with **Retry loading**. Only a successful task read clears that line.
+- **Implemented:** the project task tree (`TaskTree`) and the tasks count (`TasksBadge`), both exported from `web/src/features/tasks`. A row shows CI only when the PR head, the CI head and the observation agree and are fresh. Otherwise it shows `CI unknown`. The compact count caps at `99+`, as the inbox badge does. A row this page cannot read is not shown, and the list says how many: "1 task could not be read and is not shown."
+- **Wording:** while the connection is down, every action is disabled with "Mainloop is offline." A resend waits for the connection probe to confirm the link, so a lost reply on a dead link cannot be resent blindly.
+- **Wording:** the task list is read under its own query key, below the `keys.tasks()` prefix. It does not share the sessions list's `['get', '/tasks']` query. Live invalidation still reaches it. A task page reads its parent by id and its children through the list's `parent_task_id` filter, so it does not read the whole list.
+- **Implemented:** the tasks count is mounted on the compact **Inbox** tab, and its words are part of that tab's accessible name. The tree is not mounted in the shell: the project route that would show it is not part of this slice.
+- **Implemented:** the compact task count has a shared visible-only poll fallback for missed live events, using the same task-list cache as the tree and badge. Task detail and list reads consume cancellation signals, so leaving their last observer or hiding an active poll cancels its read.
+- **Not proven:** any run against a live backend, the live SSE stream (the event handling is tested through the applier, not a real stream), and layout at phone width in a browser.
+
+## Go status (G8a)
+
+Labels: **implemented** means built in `server/` and covered by tests on a scratch PostgreSQL. Nothing here is live-proven.
+
+- **Implemented:** the task record (migration `00060_tasks`): tasks, attempts, operations, artifacts, reports and event deliveries. The database refuses a changed owner, mode or hierarchy, a version that goes down, a second unfenced attempt for a task, and a writer generation that does not rise by exactly one.
+- **Implemented:** the task, attempt and operation state machines in `server/internal/tasks`. Every allowed and refused move is tested.
+- **Implemented:** `GET /tasks`, `GET /tasks/{id}`, `GET /task-operations/{id}` and `POST /tasks`, `/tasks/{id}/retry`, `/reassign` and `/cancel`. Reads carry the task version. Writes answer 202 with an operation. An operation is keyed by owner, principal and request ID. The same request ID with the same payload returns the stored operation; with a different payload it answers 409 `request_payload_conflict`.
+- **Implemented:** the MCP tools `delegate`, `report`, `task_get`, `task_history` (the same read as `task_get`), `task_list` and `task_cancel`, with the per-actor visibility in `api/mcp-tools.json`. A supervisor or child binding authenticates only while its attempt is the task's current, live attempt. `whoami` returns the task fields. Only an `active` attempt authenticates; `creating` does not. A child also needs its parent's current attempt to be `active` and the parent task to be open. Every write re-checks the caller's attempt under the task lock, so an attempt drained after authentication is refused with 403 `inactive_principal`. Merge status stays readable only when merge tools are on, the grant is `workspace`, and the attempt is still `active` and current while its task is `completed`; G10 adds the condition that the task has a merged proposal. `owner_action` is accepted only with `blocked`; a later blocked report with a new `owner_action` replaces the earlier decision even when the status does not change. Agent reads blank the owner-only fields: operation `principal_key`, `request_payload`, `request_digest`, and attempt `evidence_refs`, `result_ref`, `brief_delivery_id`, `retention_hold`.
+- **Implemented:** every task change commits with its `task:updated` event in one transaction, from the API and the MCP process alike. A rolled-back change publishes nothing.
+- **Implemented:** the preview lookup refuses a workspace owned by a task attempt unless that attempt is `active` and the task's current one.
+- **Implemented (G8b):** `delegate` and `POST /tasks` record the task and a `create` operation, and the reconcile loops below provision it. Cancel of a task with no attempt completes at once and ends the task's `requested` create operation (`blocked`, no reason), so a cancelled task is never provisioned. Cancel of a task with an attempt moves the operation to `draining`; the attempt is stopped, fenced and ended.
+- **Blocked by contract:** retry and reassign return a `blocked` operation with reason `handoff_unavailable`, and the task view reports both actions as unavailable. The F6 page shows what the server reports, so Reassign stays disabled.
+- **Not built:** the publication projection beyond the GitHub observation (G8b), and the Python behaviors listed under G8b as not built.
+
+## Go status (G8b)
+
+Labels: **implemented** means built in `server/` and covered by tests on a scratch PostgreSQL with fakes. The tests use a fake workspace runtime, the real sessions service with no kagent client, and fake GitHub observations or the production observer against `githubtest`. Nothing here is live-proven.
+
+- **Implemented:** provisioning (`task-operations` loop). A `requested` create operation locks the task, re-checks it is open, and inserts the attempt (`creating`, capacity held, writer claim for a code task) in one transaction. A coordination task then gets its session and binding from the sessions service. A code attempt also stores an immutable `workspace_request_id`, derived from its attempt ID, before calling the workspace service's idempotent `CreateWithRequestID`. A replay looks up only that request ID before retrying, so an owner's workspace on the same project and branch is never adopted, briefed or deleted by the attempt. The attempt waits for its workspace's kagent Session, then goes `creating → active`, the task `running`, and the brief reaches the agent as one ledger message with a derived id, written before the attempt notes it, so a replay finds it. An interrupted create never makes a second workspace, session or brief.
+- **Implemented:** workspace cleanup for an attempt that never received its brief. Cancel and abort delete only the workspace with the attempt's request ID. Each workspace service call has a durable reservation (`workspace_creates_inflight`), committed under the task lock before the call and released when it returns, without a transaction across the call. A drain prevents new reservations; a stale operation claim cannot reserve a call. The settle sweep also checks final attempts until `workspace_cleanup_confirmed`: the workspace is absent and every reserved call has returned. Ending the create operation alone is not proof of absence. A workspace that commits after cancel completed is deleted on return when attachment is refused, or by the sweep if the return was lost or deletion was unconfirmed. An interrupted process that never records its call's return leaves cleanup unresolved; the sweep continues checking its request ID without assuming that a timeout proves absence. Attempts that received a brief retain their workspace for inspection.
+- **Implemented:** unresolved final workspace cleanup uses a separate batch of at most 50 attempts per settle sweep, so it cannot consume the runtime stop resolver's batch. Each unresolved look, including an observation or deletion error, durably advances `workspace_cleanup_after` with exponential backoff from 5 seconds to a 5-minute cap. Unchecked cleanup precedes deferred cleanup; due retries are ordered by their retry time. A returning create clears the retry time for a prompt fresh look. Retry time never releases an uncertain reservation or confirms absence. Owner cancel of an already-final task records a completed no-op and preserves its outcome; the settle sweep still finishes runtime disposal and pending workspace cleanup independently.
+- **Implemented:** delegate brief prefix. The agent's first message opens with its role and tool guidance (`whoami`, `task_get`, the pull request tools for code, `report`) and then `## Assigned work` with the brief as written. Code tasks add the workspace-environment notes. The stored brief is unchanged.
+- **Implemented:** writer claims. A code task claims `(owner, repository, branch)`. The generation rises by exactly one when a released claim is taken again. A branch that another attempt holds leaves the create `requested` with no attempt until the holder is fenced or the provision window passes.
+- **Implemented:** capacity. `TASK_MAX_CHILDREN_PER_PARENT` (3) and `TASK_MAX_CHILDREN_GLOBAL` (6) count child tasks that hold a slot: an attempt with `capacity_held`, or a task with no attempt yet. A refusal is 409 `child_capacity` or `global_capacity`, decided under an owner-wide lock. A slot is freed only when the attempt is fenced with the runtime stop confirmed. The stop is a durable state on the attempt, `stop_state`: `none` while it runs, `requested` from the moment it moves to `draining` (written in the same transaction, before any kagent call, so a crash leaves the request), `confirmed` once the stop observer has proven the session stopped, and `unresolved` after the bound. The database refuses `creating`/`active` with anything but `none`, `draining` with `none`, and `fenced` without `confirmed`, so a claim and slot cannot be released on a guess. Only the observer confirms: the result of cancelling the session in the sessions ledger only closes Mainloop's own open deliveries, and `evidence_refs` is a diagnostic record that nothing reads for safety. The observer takes every kagent context the session has used (the binding's, and each delivery's own), lists all the tasks in each, and cancels any that is not final; a read error, a task it cannot read, or a task it had to cancel means "not stopped yet". A message that was sent but that no kagent task carries yet counts as possibly running until the sessions ledger's hold (`SESSION_UNCERTAIN_HOLD_SECONDS`, 1800) has passed since its row last changed, so an owner cancel that races an in-flight send keeps the claim and slot until the landed turn is stopped; a message that was never sent cannot be running. A resolver (in the settle sweep, or in the cancel operation that is waiting) asks the observer with backoff. After 6 looks without a confirmation the attempt becomes `unresolved` and its task is blocked (`blocked` / `reconciliation`) if still open, and the resolver keeps looking at the slowest pace; a later confirmation still ends the task `cancelled` and releases the claim and slot. A task that already ended (a child cancelled with its parent) is not blocked: it keeps its claim and slot until the stop is confirmed.
+- **Implemented:** abort. A refused workspace, a workspace session that does not start within `TASK_PROVISION_WINDOW_SECONDS` (900), or a branch that stays held takes the attempt `creating → draining → fenced → failed`, fails the task, and blocks the create operation (`provisioning_unavailable`). A cancel that arrives mid-provision removes a workspace the agent never used and ends the task `cancelled`, not `failed`; an abort that finds the attempt already taken by a cancel blocks its create operation and leaves the task to the cancel. A workspace request that can never succeed (invalid, or a project that does not exist) aborts at once instead of retrying; any other create failure (database, transport) is retried with backoff only within the provision window, then aborts.
+- **Implemented:** settlement. Drain, stop the session, revoke credentials, release the claim, fence, final. Every step is idempotent on the attempt's stored state. Lock order is the task, then its child tasks in id order, then the attempt; a supervisor's drain cancels its open children in the same transaction (task, child tasks in id order, attempt), so they stop even while the supervisor's own stop is unconfirmed; their attempts then settle on their own. A child's report and every child write also hold the parent's current attempt `FOR SHARE` and refuse when it is not `active` or the parent task is closed. A sweep (`task-settle`) finishes attempts left behind by a crash, and ends the attempts of completed coordination tasks. The attempt of a code task that reported `completed` stays live for merge status.
+- **Implemented:** reports to parents (`task-event-deliveries` loop). Each report row sends its text (`[report from child task <id> attempt <n>; <outcome>; unverified claim]`, plus `Owner action needed:` when set) to `parent-task:<id>` and, for `blocked` and `failed`, to the main thread, through the sessions ledger under a derived message id. A busy session (one open turn) is retried later. A parent that ended after the report committed gets no message: the delivery is `cancelled` and the report stays on the child. A ledger row that failed is sent again under a new id, three sends in all (a parent that has ended meanwhile gets no message and the delivery is `cancelled`). A row that ended `cancelled` is the owner stopping the parent's turn, or the parent's session ending: the report is not sent over it, the delivery ends `cancelled`, and the child is not blocked. After three failed sends the delivery is `uncertain`, `native-delivery-failed:<id>: <detail>` is written to the reporting attempt, and its task becomes `blocked` / `reconciliation`. The first brief is sent and watched the same way: a send to a session that has ended, been archived or is missing gives up at once (`brief-delivery-failed` evidence and `blocked` / `reconciliation`), while a busy session or one whose workspace is not ready is tried again. In the `task-briefs` sweep, a ledger row that failed is sent again under the next derived id, three sends in all, then the attempt gets `brief-delivery-failed` evidence and its task becomes `blocked` / `reconciliation`. A session that has ended or been archived gives up at once the same way; a busy session, or one whose workspace is not ready, is tried again on the next pass. A row that ended `cancelled` is the owner stopping the turn and steering the child: the attempt is left as it is and the brief is not sent again.
+- **Implemented:** GitHub observation (`task-projection` sweep, every `TASK_PROJECTION_SECONDS`, 60). For open code tasks with an attempt it reads the pull request and CI of the task's branch through an `Observer`, stores them on the task and publishes `task:updated`. CI in any state counts only when its head equals the pull request head; otherwise it is `unknown`. A pull request for another branch or repository is ignored, and a PR identity read error makes the projection unavailable. A CI-only error keeps the freshly rechecked PR and description with CI `unknown` and no CI head SHA; partial CI pages are discarded. A moved or missing PR, cancellation or stale observation is not kept. An unchanged observation only refreshes `projected_at` (no version, no event). A projection never changes a task's status.
+- **Implemented (G10b):** the production GitHub observer is installed in `serve-api` when the GitHub App is configured. It lists all PR states for the task branch, prefers the newest open PR and otherwise the newest closed or merged PR, and validates both repositories and the branch. That pick applies only when the task has no recorded PR (see the next item). It reads all check-run and commit-status pages for the exact PR head, uses the latest run of each `(app, name)` and latest status of each context, then re-reads the PR. A changed head or identity is not observed. No results mean `unknown`; a failure outranks pending, and only successful results from every reported check/context give `success`. Skipped, neutral and unfamiliar results fail closed. This is CI observation, not merge-policy readiness: required checks, rules and check suites are evaluated by the merge service.
+- **Implemented (PRLINK):** a task links the pull request its current attempt opened through Mainloop. The sweep reads the newest `created` `pr_creations` row whose session id is the attempt's binding id (the binding is unique to the attempt) and whose owner, project and head branch are the task's, and passes its PR number to the observer as the expected PR. The observer then reads only that PR and reports it open, closed or merged; if it is missing, or is not a PR for the task's branch and repository, it reports no PR and does not pick another from the branch, so a second PR on the branch, or one someone else opened, never replaces it. A new attempt has a new binding, so it does not inherit the previous attempt's PR, as on main. With no such row (the agent opened the PR outside Mainloop, or has not opened one) the branch pick above applies.
+- **Implemented (G10b):** observations are read afresh on every sweep, with a five-minute collection bound. The observer captures `observed_at` when collection finishes, before database work, and persistence preserves it in `projected_at` for both changed and unchanged facts. A database delay never refreshes old evidence. Task reads use only the database and mask CI to `unknown` when `projected_at` is absent, in the future or older than five minutes, or the CI head does not equal the PR head. Job completion time is independent of observation freshness. Rate limits (including rate-limit 403s) and 5xx/transport failures are classified for a later sweep; other 4xx refusals fail closed. A 404 means absent: no PR when its read is missing, or a known PR with `unknown` CI when a CI source is missing. The observer makes no repository writes and requests read permissions only.
+- **Implemented:** retry and reassign return the `blocked` operation (`handoff_unavailable`, source attempt set) on every path after the target provider is validated; a task that is already final refuses with 409 `task_terminal`.
+- **Implemented:** agent views. An agent sees the reports of its task's current attempt only, no artifacts, no checkpoint or manifest refs, and no `pending_approval_ids`. Python also showed continuation reports and the continuation artifact pair for a linked continuation; no continuation exists until handoff is built.
+- **Not built:** handoff (retry and reassign) and the publication projection that decides a task's merge state. Without a configured GitHub App, the observation sweep does nothing.
+- **Not proven:** any run against kagent, a real workspace, GitHub or a cluster.

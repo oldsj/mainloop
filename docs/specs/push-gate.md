@@ -1,208 +1,192 @@
 # Git publication authority
 
-## Implemented source, default off
+## Go implementation and evidence
 
-`GIT_TRANSPORT_ENABLED` and `PUSH_GATE_ENABLED` default to `false`. Source includes injectable
-read/push ASGI applications, PostgreSQL authority and native enrollment callers. Tracked GitOps
-manifests now include the `mainloop.git_app` backend-image sidecar, port-80 Services
-`mainloop-git-read` and `mainloop-git-push` in `mainloop`, and a separate ingress NetworkPolicy
-allowing only `ate-system` pods labelled `app=atenet-egress` to listener ports 8003 and 8004.
-The sidecar shares one database pool, kagent client and pack-validation slot across both ports;
-repository upstreams are request-local. Its disk-backed, bounded emptyDir holds quarantine data.
-Read requires `GIT_TRANSPORT_ENABLED`; push also requires `PUSH_GATE_ENABLED`. Disabled listeners
-refuse every HTTP request before authentication, token minting or upstream traffic. With Git
-transport off, startup needs no database or GitHub App connection. Flags remain off by default.
-These are installed source/manifests, not a deployed image or live Actor containment proof.
-Real local PostgreSQL with fake kagent/Kubernetes and a fixed local Git upstream proves source
-behavior only.
+The Go gate serves synthetic receive-pack advertisements and validated single-branch pushes on
+`serve-git` port 8004. It requires `GIT_TRANSPORT_ENABLED`, `PUSH_GATE_ENABLED` and a configured
+GitHub App. Disabled requests refuse before authentication or upstream traffic. Port 8003 keeps
+the read transport. `/health` and `/ready` remain listener probes.
 
-Trusted outbound clients use the existing GitHub App authenticator outside the actor. Each Git
-operation obtains a cached installation token scoped to the authenticated repository with only
-`contents: read` for upload-pack (including quarantine seeds), or `contents: write` for
-receive-pack/discovery. Tokens are minted only after current dispatch authority succeeds, never
-from an Actor-supplied credential. The existing “GitHub App not installed on <repo>” refusal
-remains fail-closed. Mint failures never dispatch Git traffic; credentials and upstream exception
-text never become Git responses or logs. No PAT is used by the production listeners.
-Actor capabilities are independent for the exact origins
-`http://mainloop-git-read.mainloop.svc.cluster.local` and
-`http://mainloop-git-push.mainloop.svc.cluster.local`. Neither purpose grants MCP or owner API
-access. No new GitHub principal is introduced. Legacy random hash-only grants
-remain compatible when Git transport is disabled; they publish no Git Secret and cannot
-authenticate on the new listener. Storing a Session UUID no longer enrolls a grant.
+Scratch PostgreSQL, fake Kubernetes Secrets, a fake GitHub App API and local bare repositories
+prove branch creation, fast-forward, real smart-HTTP `git push`, replay, refusals and uncertainty
+resolution. Workspace creation tests additionally prove creation-time attachment, replay,
+readiness and release; a credential read from a fake workspace Secret publishes through the real
+gate to a local bare repository. No live GitHub, Actor containment or production rollout is claimed.
 
-## Frozen enrollment and publication
+Native workspace creation freezes the lowercase `authorization` reference from
+`pushgate.Reference` before `CreateSession`. Only a current code-task attempt with the exact held
+writer generation, repository and feature branch reserves one; standalone and default-branch
+workspaces freeze no push reference. The durable `workspace_push_reservations` intent uses the
+attempt as its idempotency key and the attempt's native creation request ID as its identity.
+Retries and deletion replays carry the saved reference, even after release or configuration changes.
+The native idempotent create checks the original request before returning or creating its Session.
 
-After workspace/attempt admission commits, Mainloop freezes the original CreateSession identity,
-owner/project/repository/branch, Agent, checkout, accepted development environment,
-MCP/read/optional-push references, attempt/claim generation and reserved push version. Default
-and protected workspaces reserve read only; coordination sessions receive no Git plan. Historical
-or dispatched bindings without a plan cannot be retrofitted. Missing dispatch history is a hold.
+The workspace enrollment reconciler freshly reads the native Session on every retry. It requires
+READY, no operation and exactly one matching creation-time reference before calling
+`Service.Enroll`, which freezes the active task/writer authority and runtime and publishes the
+immutable Secret. No reference is added to an existing Session. A refused, abandoned, failed,
+deleted or expired creation releases the reservation; release also revokes any push grant and
+credential, with Secret deletion handled by the existing credential cleanup loop. The reservation
+expires after the configured workspace create retry window if enrollment never completes.
+A delete request revokes the reservation, grant and push credential in the transaction that records
+the delete intent, and the gate refuses any workspace that has a delete op, in any state, so a
+delayed or failing native delete cannot leave a window for a new push. A push already dispatched is
+not recalled. A delete later rejected (for example because a turn is open) leaves the workspace
+without push authority on purpose: it fails closed and the terminal reservation cannot reopen.
+The release sweep also settles a grant or push credential still planned or published behind an
+already revoked reservation (a crash between `Enroll` and its fence), so the Secret is cleaned up.
+Terminal reservations and their identities cannot reopen or change. No owner policy API is added,
+and authentication never issues credentials.
 
-With the push gate enabled, a workspace writer plan needs the project's default branch. When the
-cached value is empty (as on every freshly imported project), Mainloop reads the repository's
-default branch through the repository-scoped GitHub App client before reserving any references,
-whatever checkout ref was requested, and stores it through the same atomic project-metadata and
-protected-branch-policy update the owner metadata refresh uses. If GitHub cannot supply it, no
-plan or enrollment is frozen and creation holds: a task attempt stays `creating` with evidence
-`git-hold:default_branch_unavailable` and the next reconciliation pass retries. Mainloop never
-guesses a default branch and never freezes a feature-branch writer into a read-only plan because
-metadata is missing. A writer whose plan has no push reference records why on its task attempt
-as `git-push-absent:<reason>` (for example `default_branch` or `protected_branch`).
+## Authority and policy
 
-New plans spell the Git read and push reference header as lowercase `authorization`, the exact
-form kagent's preparation check counts; it requires exactly one read and one push reference at
-the configured origins, each with Secret key `authorization`. The MCP reference is unchanged.
-Plans frozen earlier keep their original bytes and digest; publication and cleanup reuse each
-plan's frozen references.
+A push bearer is a published `git_push` credential bound to a published grant and enrolled
+repository. Read, MCP and another workspace's credentials supply no push authority. The stored
+workspace, session, binding and project must agree on owner and repository; ended, archived,
+superseded or deleted bindings refuse. Repository names compare without case; branches compare
+with case.
 
-With both gates enabled, new task and owner workspace checkouts resolve to full commit SHAs
-through the repository-scoped GitHub App commits endpoint (`contents: read`) before admission
-rows and the create plan are frozen. Empty refs resolve GitHub's current default branch; explicit
-branches, tags and SHAs are verified. An unavailable ref refuses creation. Retries reuse the
-frozen SHA; handoff successors retain their verified `remote_sha`, and existing refs are untouched.
+Every grant freezes the branch, owner, native Session, writer generation, optional task attempt,
+policy version and a digest of the confirmed native runtime. Fresh GetSession must match the
+stored checkout, Agent and accepted development environment and show READY with no operation,
+a prepared revision, composition and current active generation/atespace/Actor name/UID. Runtime
+replacement refuses the old grant. A copied Session ID or client header supplies no authority.
 
-Issuance uses HMAC-SHA256 with the existing `AGENT_TOKEN_KEY`, a versioned Git domain, independent
-purpose and immutable issuance/version/binding/create identity. Read values start with `gread_`;
-push values retain `push_`. PostgreSQL stores hashes and references, never capability or App-token bytes.
-Missing keys and recovery hash mismatches fail closed, without rotating the issuance.
+Owner workspace writers require a held binding claim. Delegated writers additionally require the
+active current G8b task attempt, the same binding/session/workspace, the exact held branch claim
+and writer generation, the correct role and an open active parent when present. Authority is
+checked before processing and again after seed reads and remote-ref discovery, before committing
+dispatch. Short transactions serialize admission against writer release and credential/policy
+changes; no database transaction or row lock spans native, Secret or GitHub I/O.
 
-The complete tuple and dispatch marker commit before CreateSession bytes. Usable Git Secrets
-remain absent. Mainloop runs a durable, owned non-turn Suspend/Resume warmup on the same Session,
-then obtains a fresh GetSession. READY, Create, List and Resume replies supply no Git association.
-Confirmation requires the exact stored Session/context/Agent/checkout/environment, prepared
-revision, reported composition and current active field-20 generation/atespace/Actor name/UID.
-The confirmed association is immutable. A changed generation or UID refuses old capabilities.
-kagent suspends an idle actor but keeps its Session READY, and a fresh GetSession then has no
-running association. Every readiness check (before admission and again before send bytes) first
-calls `ResumeSession`, which wakes only that Session's current generation and actor UID under
-kagent's lifecycle fencing and is a no-op for a running actor. It refuses a changed actor, a
-revoked generation, an active turn or pending idle work. Its reply is not an observation: the
-fresh GetSession must still match the frozen association. An unknown activation outcome is
-reconciled by GetSession and never replayed in the same attempt; while kagent holds the
-operation, nothing is sent. kagent keeps that READY/RESUME operation until a ResumeSession joins
-it, so the next readiness check makes its one activation call before waiting for readiness, and
-then attests a fresh GetSession. A failure in the send guard before turn bytes is recorded as
-`failed` with `not sent:`, not as an uncertain delivery.
+Before reading a receive body, the gate commits a leased admission claim for its repository and
+branch, then reserves `min(body limit, disk budget)` bytes from a process-wide scratch budget.
+Separate pods share the branch claim; each pod has its own disk budget. Another live admission
+for that branch or insufficient unreserved scratch returns HTTP 503 with the closed
+`admission_busy` code and `Retry-After: 1`, before reading the body or creating any spool file.
+Admission also blocks writer release/transfer. Claims and reservations remain held through
+scratch cleanup and are released on every outcome. A crashed handler's claim expires after the
+bounded request/dispatch/persistence window; stale handlers cannot reserve or dispatch a
+publication, and their cleanup cannot release a successor's claim.
 
-Read publication follows confirmation; delegated creating targets receive read only. Push follows
-active/current admission. Native send confirms required publications before external turn bytes.
-With both flags enabled, workspace setup additionally requires a nonhistorical confirmed
-workspace preparation receipt. Mainloop commits one stable preparation action and its original
-request before dispatch, using only the frozen create plan, confirmed runtime association and
-authoritative binding role. The `prepare_receipt` row initially contains only that local
-`original` request reservation, without a remote classification; it grants no preparation
-authority. Lost replies with no receipt retry identical bytes and the same action. Pending or
-uncertain receipts are polled without reissuing Prepare; confirmed receipts never open another
-challenge. ALREADY_EXISTS, definite failure, receipt identity/profile disagreement and historical
-receipts hold the enrollment for Session replacement. A failed preparation keeps a bounded,
-secret-free reason: `prepare_receipt.failure` records Mainloop's failure code, the gRPC status
-when kagent refused Prepare, and Mainloop's own count of kagent-acceptable Git references
-(`git_refs: {read, push}`); the task attempt gains matching evidence such as
-`git-prepare-failed:git_prepare_failed:grpc=9:git-refs read=1 push=0`. Runtime error text is
-never stored. A non-READY Session or an operation in
-progress holds preparation without failing its durable state. kagent temporarily projects
-historical receipts during ordinary suspension/resume; only a fresh settled READY observation
-of the original runtime can classify history as terminal. The authoritative binding role alone
-selects the profile: owner `agent` maps to kagent `agent` with setup digest
-`a5fb1bb1e406ff7937b9d9e2e862dff43925d4df54d4bdd9fb010d7e2825ccb3` pinned to Standing at
-kagent `796e90b5`; supervisor and child mappings and digests are unchanged. Every native
-send requires durable `prepare_state=confirmed` for its current issuance/create identity when
-both flags are enabled. A binding's previous turn count grants no preparation authority.
-Unknown create recovery, including revoked cancellation recovery, uses the complete original
-tuple without restoring hashes or republishing. Replacement requires a new create identity.
+Before validation, the body reservation must expand to the full per-quarantine disk allowance.
+That allowance covers the body, seed pack, repository files and temporary Git output in the same
+process-wide budget. Validation is consequently serialized at the pod's disk budget; other
+branches can spool concurrently before validation, but insufficient validation capacity returns
+the same retryable `admission_busy` refusal. Capacity stays reserved through dispatch and cleanup.
+The eight-branch regression checks real quarantine sizes against this reservation, refuses the
+seven competing branches while validation is held, and proves they succeed after cleanup.
 
-Git Secrets are immutable Opaque objects named `mainloop-git-read-<issuance-id>` and optional
-`mainloop-git-push-<issuance-id>`, with one `authorization` key containing the complete Bearer
-value, and actor-egress/purpose/binding/issuance labels. Publication creates or compares the exact
-existing object, never overwrites conflicts, and records its UID. Lost replies regenerate the
-same tuple/value/version. A read-only tuple cannot later gain a push reference.
+Policy requires a known default branch. That branch, every previously observed default and
+protected patterns override the allowed patterns. Patterns match case sensitively, with `*`
+covering nested branch names as in Python's `fnmatchcase`; malformed patterns refuse. An empty
+allowlist permits other valid feature branches. `SetPolicy` is an internal compare-and-swap:
+versions increase by one and former defaults cannot be removed. Existing grants remain subject
+to the current policy. A remote default disagreement refuses publication until trusted metadata
+and policy agree.
 
-## Current dispatch authority
+The `project-metadata` sweep (see [projects](projects.md#metadata)) is what makes them agree. It
+fills an empty `projects.default_branch`. A task workspace whose project default is still empty
+when it is created does not freeze a "no push" decision: creation fails retryably ("waiting for
+the project's default branch from GitHub") until the sweep fills the default, and the create's
+retry window bounds the wait, after which the workspace operation is `gave_up` with that reason.
+A workspace created with a known default is unaffected, and a reservation can only be made once
+the default is known. On every successful refresh the sweep calls `AdvanceDefaultBranch`, which reads the
+policy and moves the new default in through `SetPolicy`'s compare-and-swap, keeping the owner's
+patterns and retiring the old default into the previous defaults, so pushes to either are refused.
+A project with no policy yet is left for enrollment, and a policy already naming the branch is not
+changed, so a policy that lags the project row (a gate-off period, an older build) is repaired by
+the next pass. A lost swap or a GitHub error leaves everything as it was and is retried by the next
+pass. The policy advances before the project row, so a failure between the two is refused as a
+disagreement until the next pass completes it.
 
-Every request resolves an immutable server-side credential stamp. Read proof requires owned
-project/session/workspace repository agreement, a live binding and its exact enrolled runtime.
-Default/protected reads need no PushGrant. Delegated reads also require current creating/active
-attempt, exact role/depth/tree, live parent ancestry and held claim generation. Creating read
-preparation grants no MCP, preview, resume or turn admission.
+Exactly one `refs/heads/<granted-branch>` update is allowed, creating a branch or fast-forwarding
+its trusted current head. Deletion, tags, notes, multiple refs, rewind/divergence, protected or
+default branches, missing objects and missing authority refuse. LFS routes and push certificates
+are unsupported.
 
-Push additionally requires a live grant and policy. Owner grants leave attempt/writer-generation
-unset but carry their binding-owned claim generation. Delegated grants pair attempt and writer
-generation; branch claim generation equals writer generation. No Actor header, copied Session,
-URL or client issuance material supplies authority. Publication allows exactly one stored branch
-creation or trusted fast-forward. Repository identity is case-insensitive, branch identity is
-case-sensitive. Default, previous defaults and protected patterns override the allowlist. Tags,
-notes, deletion, multiple refs, rewind/divergence, missing ancestry/metadata and LFS uploads deny.
-Policy versions increase by one and preserve observed defaults; no default-release API exists.
+## Protocol and quarantine
 
-One dedicated caller-owned connection retains policy → tree authority → publication → runtime →
-credential locks through dispatch/outcome; admission and row transactions follow. No transaction
-spans metadata, GetSession, Secret or Git I/O. Fresh metadata precedes current GetSession and SQL
-revalidation. Another fresh GetSession after remote-ref discovery gates DISPATCHING.
+The Host is the configured push Service host (loopback is also permitted in development).
+The Host, route and header policy is shared with the git read transport (`server/internal/gitroute`),
+so both refuse the same routing headers: `Forwarded`, `X-Forwarded-*` and its underscore spelling,
+`X-Real-IP`, `Via`, `X-Envoy-*`, `X-Actor*`, `X-Session*`, `Upgrade`, `Proxy-Authorization` and the
+method/URL override headers, compared case-insensitively, before any authentication or upstream call.
+Duplicate headers, control characters, gzip,
+other HTTP encodings, contradictory framing and non-v0 Git protocols refuse. Neither client
+headers nor paths are forwarded upstream. Responses return a server-generated 32-digit hex
+correlation ID in `x-mainloop-request-id`. Refusal logs contain only that ID and closed code/stage
+fields, plus standard log metadata. Unknown classifications become `transport_unavailable` or
+`unknown`; request fields, packet content, credentials and exception text are omitted.
 
-Quarantine seed discovery/upload-pack uses a request-local fixed upstream read facade. Each read
-revalidates the original stamp without substituting another issuance. The facade has no receive
-port and reuses an existing dispatch connection. Spooling and CPU/object validation remain outside
-locks. Production construction requires this factory; P1 parsing/pack/body/resource rules remain.
+Git's exact complete four-byte `0000` receive-pack probe returns HTTP 200 with an empty
+`application/x-git-receive-pack-result`, after route, framing, authentication, binding, policy,
+runtime, writer-generation and unresolved-publication checks. It creates no publication, seeds no
+objects, mints no App token and sends no upstream traffic. It holds normal admission while
+checking at most five bytes in memory and creates no spool file. Empty, truncated, extra-byte and
+shallow-only bodies remain invalid. The subsequent real POST passes independent validation.
 
-Before streaming a large smart-HTTP push, Git may POST a four-byte `0000` probe to
-receive-pack. Only this exact complete body is accepted as a probe, after normal route,
-framing, purpose-bound authentication and binding checks. Current dispatch authority,
-writer/branch policy, runtime association and unresolved-publication fences are rechecked
-before returning HTTP 200 with an empty receive-pack result. The probe creates no publication
-record, seeds no objects and dispatches no upstream Git traffic. Empty, truncated, extra-byte
-and shallow-only bodies remain invalid. The subsequent real POST independently passes the
-unchanged one-ref, object/resource, ancestry, runtime and durable dispatch checks; a successful
-probe proves no publication.
+Receive bodies spool privately on disk under `/var/lib/mainloop/git`, with mode 0700 and current
+process ownership; tmpfs/ramfs and symlink roots refuse. Spool files are removed on every outcome.
+Defaults are 256 MiB body, 256 KiB commands, 100,000 objects, 512 MiB reconstructed objects, 2 GiB
+scratch disk and 64 MiB free reserve. Spooling, validation and dispatch each have a 60-second bound.
+The configured body and command limits are used by the listener. The fixed configuration disk
+budget is sized below the 3 GiB spool volume; configuration rejects a body limit above 2 GiB.
+Each copy stops at `min(body limit, disk budget) + 1` bytes, and checks remaining free space
+before each body/seed allocation to preserve the 64 MiB reserve. Seed limits include existing
+repository files. Before every Git subprocess, available space must cover its entire remaining
+reserved disk allowance plus the 64 MiB headroom. A non-commit branch head
+returns HTTP 403 with `commit_required`.
 
-Wrapper and core refusals log only a generated correlation ID and closed denial code/stage
-fields. Unknown codes use `transport_unavailable`; unknown stages use `unknown`. Logs omit
-request fields, credentials, packet contents and exception text. The correlation ID is returned
-in `x-mainloop-request-id`; wrapper status/body behavior remains unchanged. Core responses keep
-their existing safe code/ID behavior, including empty 503 responses on reflected output.
+Strict pkt-lines require lowercase SHA-1 OIDs, one command and supported report-status
+capabilities. Distinct nonzero `shallow <oid>` lines are accepted only before commands and are
+forwarded unchanged. They never create trusted ancestry: validation seeds full history for the
+target and default branches through the repository-scoped read port.
 
-Shallow clients (a checkout with a positive depth; depth 0 clones full history) send `shallow <oid>` lines before the
-command list. The gate accepts distinct, lowercase, non-zero SHA-1 lines only in that position and
-forwards them upstream inside the unchanged body. They grant nothing: ref policy, old-oid,
-fast-forward and fsck checks run against the quarantine's full-history seed of the target and
-default branches, so a push whose history connects only through a client graft is refused.
-Push certificates remain unsupported.
+Before seeding, bounded zlib parsing checks PACK framing, object/expanded-size bounds, SHA-1
+checksum and trailing bytes. Git then runs in a private bare quarantine with `index-pack --strict`
+(and `--fix-thin` for incoming objects), `fsck --strict`, commit-type and ancestry checks. A measured
+object inventory checks reconstructed count and size, including thin bases. `prlimit` caps each
+Git subprocess at 1 GiB address space, 30 CPU seconds, 64 descriptors and the remaining file
+budget. Hooks, protocols, inherited configuration, replacements and credential helpers are
+disabled. Outputs and filesystem use are capped. Shallow grafts cannot excuse missing history.
 
-## Durable uncertainty and cleanup
+GitHub read tokens are scoped to one repository with `contents:read`; metadata and publication
+use independently scoped `metadata:read` and `contents:write` App tokens behind the shared GitHub
+endpoint allowlist. Redirects are refused and replies are bounded. Tokens remain inside the
+adapter. Raw receive replies/progress are never relayed or stored: only a locally synthesized
+report and bounded receipt classification reach the client or ledger.
 
-The existing publication ledger stores immutable request/update/version/body/association/stamp
-and measured validation facts before committing DISPATCHING. Transitions remain PENDING →
-DISPATCHING/REJECTED and DISPATCHING → CONFIRMED/REJECTED/UNKNOWN. Identity disagreement, repeated
-dispatch and terminal reopening deny. Record/transition require the active request context and
-never acquire another pool connection. The shielded outcome retains its connection and locks.
+## Publication ledger and uncertainty
 
-P1's validated unpack and sole matching ref receipt supplies confirmation/rejection. Stored
-receipts contain bounded classification, ref, validation flag and failure code, not raw progress
-or error text. HTTP 200, local validation or remote SHA equality cannot prove publication.
-Timeout/cancellation/partial upload/malformed or lost reply/receipt persistence failure retains
-UNKNOWN or committed DISPATCHING. No automatic resend or uncertainty resolution occurs.
+A validated command and immutable body/authority identity reserve a `pending` intent before
+seed/CPU work while the earlier admission claim still holds the branch. The publication fence
+retains unresolved durable outcomes after transient admission is released.
+The workspace and server-generated request ID supply the operation's idempotency key; the ID is
+also retained for correlation with refusal logs. A confirmed identical body and credential return
+the recorded result without dispatching again. An explicit retry after rejection creates a new
+intent and independently checks the current remote head before any publication. Pending, dispatching and unknown
+publications block another push or probe, and a database trigger blocks writer release/transfer.
+After an active handler has released admission, an unresolved publication continues to refuse
+with `publication_unresolved` until the resolver establishes its outcome.
+The audit ledger survives workspace/session deletion.
 
-Unresolved writes fence immutable owner/repository/branch across grant IDs, rotations, restarts
-and successors. Reservation/release, settlement, supersession, replacement and destructive
-cleanup consult the same fence. Cancellation revokes both purposes and may record confirmed
-native deletion, while retaining source identity, claim and pending operation. Task publication
-snapshots include `git-push:<grant>:<request>`. Invalid historical scope/evidence is a hold.
+After measured validation and fresh authority/ref checks, the handler commits `dispatching`
+before sending upstream bytes. An unpack report and exactly one matching ref report classify
+confirmation or rejection. HTTP 200 alone proves neither. Cancellation after admission does not
+cancel bounded dispatch/outcome persistence. Lost, malformed, reflected or incomplete replies,
+timeouts and uncertain persistence retain `unknown` or an unresolved committed row. Immutable
+identity cannot change and terminal states cannot reopen.
 
-Revocation is unconditional after flags are disabled. Short caller transactions queue independent
-cleanup tombstones before terminal/archive/replacement mutation. Cached values then fail despite
-cleanup outages. After commit, cleanup reads the exact intended object if a UID reply was lost,
-records its UID and deletes with a UID precondition. Missing objects are clean; outages, conflicts
-and same-name replacements retain the hold. Audit/claim tombstones survive binding deletion.
-MCP cleanup keeps its separate existing behavior.
+The `serve-api` reconciler claims expired pending/dispatching rows and unknown rows. It observes
+the remote ref without a transaction and never resends the body. Abandoned pending intents are
+rejected as not dispatched. For uncertain dispatches, the exact new head confirms remote
+convergence; the unchanged old head rejects it. A third head, unavailable remote or incomplete
+historical evidence retains the fence with backoff. Resolver evidence is distinguished from a
+receive-pack receipt: remote equality proves convergence, not which request caused it.
 
-## Remaining release gates
-
-Native handoff/retention/checkout adapters, published packaging/image provenance, GitOps rollout,
-old-session inventory/drain and actual Actor/provider/cache qualification remain separate gates.
-Runtime must support frozen refs with delayed Git values and remove effective direct GitHub/PAT
-paths from actors. Usable Secrets cannot be published early to work around bootstrap failures.
-
-GetSession is a fresh observation, not atomic attestation across PostgreSQL, kagent and GitHub.
-Normal fencing waits for dispatched outcome. Independent operator deletion/runtime failure
-cannot recall an already dispatched push; operators must fence Mainloop first. GitHub admin
-default-rename is also an external race. Source fixtures establish no live enforcement or MVP
-readiness.
+External operator changes and runtime failure can occur after the last observation and cannot
+recall an already admitted push. Git's old-head compare-and-swap rejects a changed remote head.
+Native credential attachment, Actor egress containment, packaging, GitOps rollout and live use
+remain release gates. The frozen Python implementation is the behavioral reference; its lack of
+an unknown resolver and connection locks through dispatch are deliberately superseded here.

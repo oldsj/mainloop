@@ -2,6 +2,52 @@
 
 Sessions are native Claude Code or Codex work started from the home thread or the `/agents` page. Mainloop keeps the product session, workspace lifecycle, native binding, and message delivery as separate records.
 
+## Go server status (G6a, G6b)
+
+Status: **implemented** for the main session (G6a) and the session routes (G6b) in `server/internal/sessions`; tests use a scratch PostgreSQL and the fake kagent. **Not measured** against a live kagent. The rest of this page describes the frozen Python backend until each slice lands.
+
+- The main session is created by the reconciler (a periodic sweep) and by the first `POST /chat`, never by a GET. Concurrent first calls share one session.
+- Delivery states in the Go ledger: `recorded`, `sending`, `delivered`, `completed`, `failed`, `cancelled`, `uncertain`. `queued` arrives with the report queue. Only `recorded` is ever sent: the claimer commits `sending` before the kagent call, holds no database lock or transaction across it, and fences every outcome write on its lease and attempt count, so a claimer that lost its lease changes nothing.
+- kagent is retried only when it says the message was not accepted, with the same message id and inside the send retry budget (the kagent client does this). Every other doubt makes the delivery `uncertain`, and it is settled by looking the message up (`GetTask`, else `ListTasks`), never by sending again. A `sending` row reclaimed after a crash goes straight to `uncertain` and is looked up. If no task shows the message once the hold has passed, the delivery fails with "not sent again" and the owner may send a new message.
+- Before a send, the loop makes the binding's kagent Session usable: it creates it on first use (idempotent by request id), resumes a suspended one, and waits for it to be ready (`SESSION_READY_WAIT_SECONDS`, 60 by default). When kagent no longer has the Session (its idle TTL, or deleted out of band) the binding gets a new create request id in a write fenced on the delivery's claim, and a new Session is created (the binding's standing hash is cleared, so the new Session's first message carries the recent conversation again, see the chat spec). A task parked for input or auth is read again at growing intervals up to `SESSION_PARKED_MAX_SECONDS` (300); a failed read backs off the same way. A delivery whose binding is gone fails. The binding records the create request id and the Agent before every create call (`agent_bindings.kagent_create_request_id`, `kagent_create_agent_namespace`/`_name`). They stay set once the Session id is stored and are cleared only when a create is settled or the Session is replaced, so every reader (the orphan sweep, the resolve sweep) also requires `kagent_session_id IS NULL`. A `resolve-session-creates` sweep (every 5 minutes) settles such a binding whose session has no open delivery: it first rotates the binding's `kagent_request_id` (one UPDATE, fenced on the binding still being unbound, the same create request id and no open delivery), so a message that arrives mid-sweep creates its own Session under the new id and the sweep only deletes the one its replay returns. It then replays the create under the old id with the Agent stored on the binding and the same credential reference the create sent. kagent answering that the id belongs to a deleted Session settles it; `AlreadyExists` (a contract mismatch) also settles it, with a warning, leaving the Session to the orphan sweep; a Session that comes back is deleted (confirmed `DELETED`) first. A later send then finds the id deleted and replaces it as above. A delivery stuck because its Agent cannot be resolved logs at error level once past the uncertain hold; one waiting for a workspace that never gets a Session fails after that hold. A workspace's Session is only ever resumed through the workspace service (`Wake`), never directly. A native or main session follows the configured Agent: a create under a new request id uses it, and so does a replacement Session. A configuration change between a lost create reply and the next send does not fail the message: the send replays the create under the old request id with the new Agent, kagent answers `AlreadyExists`, and the turn treats that like a deleted request id and replaces it, so the message completes on a new Session on the renamed Agent. The Session that landed on the old Agent is then an orphan: every Agent a create was ever sent to is kept (`kagent_agents`, written with the marker and with a workspace), so the orphan sweep deletes it.
+- The main session cannot be archived (a database trigger refuses it). At most one main binding exists in the whole database; the owner is a single user for now, so the index is global.
+- A task that finished while no process was watching is finalized from `GetTask` on restart. A task parked for input keeps the turn open.
+- Failure reasons are stored with best-effort redaction and a 300 character cut (see [chat](chat.md)).
+- Routes (G6b), all owner-only and all on the same ledger: `POST /sessions` (create), `GET /sessions` (the owner's sessions except the main thread, newest first), `GET /sessions/{id}`, `GET /sessions/{id}/conversation`, `GET /sessions/{id}/native`, `POST /sessions/{id}/message`, `POST /sessions/{id}/stop-turn`, `POST /sessions/{id}/cancel`, `POST /sessions/{id}/archive`. Another owner's session and an unknown id are both `404`. `needs_owner` is the attention visibility rule ([inbox](inbox.md)): true while the session has a visible attention item. The list reads it for every session in one query, the detail and conversation routes read it for the one session, and a session just created reads false; its status stays the session's own (only the inbox snapshot reports `waiting_on_user`); the task-backed (delegated) cancel path of the Python backend is not ported.
+- `POST /sessions/{id}/message` records the message and its delivery exactly like `POST /chat`, with one open turn per session: `409` while a delivery is `recorded`, `sending` or `delivered` or an `uncertain` one is inside its hold. It is also `409` for a cancelled or failed session, an archived one, one without a native binding, a workspace whose Session does not exist yet, and a task-owned session whose attempt has requested a stop.
+- A task attempt's stop intent permanently closes its session to new messages, regardless of
+  activity status (including `completed`). Message recording checks the retained attempt's
+  `stop_state` in its transaction. Already-recorded deliveries check it before native preparation;
+  the admission transaction then serializes with stop. A committed admission decision before
+  stop permits the native send, while a stop committed first refuses admission and cancels the
+  delivery without sending. Preparation that overlaps a stop rechecks before later native calls
+  and admission. A `delivered` message has been accepted by a native task that may still be
+  working. Stop confirmation waits for `sending` and `uncertain` outcomes to resolve and a fresh
+  native observation showing every task final, with no delivery outcome change since observation
+  began. A changed outcome requires another observation before writer resources are released.
+  Completed standalone and adopted scheduled sessions remain resumable; they have no product
+  task attempt.
+- Stop turn cancels the A2A task with `CancelTask` (the kagent client and `kagenttest` both have it). It takes no lock (cancel is the one that takes the per-session send lock); the one-open-turn index and the fenced writes keep it consistent with a send. A delivery still `recorded` is cancelled without any kagent call. The task is cancelled outside any transaction; the delivery ends `cancelled`, the queue is held, and the partial reply and the stop note go into one message in one transaction (the note's id is derived from the delivery, so the delivery loop and the stop call settle the same turn once). Results: `stopped`, `finished` (the task had already ended, and its real outcome is recorded), `no_open_turn`. A task that is not visible yet or still running after the cancel is `409` and nothing changes; a kagent error is `502`. An `uncertain` delivery counts as open while it is inside its hold; one past the hold is skipped, since it no longer blocks sends and the delivery loop fails it, so it cannot mask a newer running turn (the Python backend looked only at recorded, sending and delivered). The stop is not repeated blindly.
+- Cancel closes the session's open deliveries except task-owned `sending` and `uncertain` rows,
+  whose claims and unresolved outcomes are retained for reconciliation without replay. It then
+  sets the sticky `cancelled` status and an `unknown` agent outcome in one transaction (task
+  attempt before deliveries, then session, matching send admission and settlement lock order;
+  a session that already finished is left as it is), publishing one `session:message` event per
+  closed delivery. After commit it lists native tasks in the binding's current context and all
+  contexts recorded by deliveries, and cancels non-final tasks, including scheduled turns with no
+  Mainloop delivery. A stored binding Agent reference takes priority over workspace and provider
+  configuration for cancel, HITL observation and follow-up delivery. The response carries the new
+  `status` and `agent`: `stopped` (a matching cancel reply confirms a cancelled task), `not_running`
+  (nothing was sent or all observed tasks have finished), or `unknown` (a listing, cancel or
+  in-flight send could not be confirmed). The outcome is stored; a repeated cancel returns it
+  without another native cancel, including after an interruption. No database lock or transaction
+  spans native calls. The main thread cannot be cancelled (`409`). A cancelled or failed session
+  takes no more messages.
+- Adopted scheduled sessions remain `unknown` while a reserved or in-flight execution can still dispatch, even if native task lists are empty. A periodic sweep revisits those outcomes with durable backoff, cancels late tasks, and settles only after a fresh execution read shows finality or its own task is positively final, followed by another native listing. It never replays the scheduled send or treats elapsed time as finality; unresolved Mainloop sends also retain uncertainty. See [scheduled runs](scheduled-runs.md#native-session-control-implemented) for bounds and evidence.
+- Archive clears one finished session from the list. A live session must be cancelled first (`409`, also when the session stopped being finished before the write), and the main thread is never archived (`409`). For a workspace the archived Session is deleted by the workspace service.
+- `POST /sessions` creates a native session with its first prompt as a recorded delivery and answers with the session row; the first delivery creates the kagent Session.
+- MCP credentials (G6c): the main thread's binding has grant `coordination`, and its first delivery publishes the binding's MCP credential before the kagent Session is created, sending it as the create's one credential reference ([credentials](credentials.md)). Sessions created by `POST /sessions` keep grant `none` and carry none. If the binding's previous Secret is still being deleted, the delivery waits and retries; those waits do not count against the create budget. Failed creates are counted per delivery in `deliveries.create_failures` (five failures settle it as failed), separately from claims (`attempts`), which also count credential waits and lease recoveries. Cancel revokes the session's credentials in the same transaction as the status change, and archive in the same transaction as the archive. Outside a cluster (no Secret store) the main thread is created without a credential and logs a warning. Cancel and archive end the binding for good: any future un-cancel or un-archive must re-`Issue` the binding's credential (the revoked one is not restored), and its create replays must then carry the new reference.
+
 ## Session list
 
 At widths of 1024px and above, sessions appear in a sidebar beside the conversation.
@@ -10,11 +56,12 @@ session view. Task detail scrolls within the available pane; workspace controls 
 
 The list defaults to active/pending work and sessions with server-projected owner attention,
 including standalone sessions created on `/agents` and delegated child sessions. The native
-main thread and archived sessions are excluded. **Show finished (N)** reveals completed,
-cancelled, failed and superseded sessions on desktop and mobile; **Hide finished (N)** hides
-them again. **Show idle (N)** exposes available idle sessions. These filters retain history and
-do not archive sessions. The ambiguous bulk **clear** action is removed. With no current work,
-the list says **No active sessions** and points to **+ agent** or delegation.
+main thread and archived sessions are excluded. **Finished (N)** reveals completed,
+cancelled, failed and superseded sessions on desktop and mobile; the button shows as pressed
+while they are visible, and pressing it again hides them. **Idle (N)** exposes available idle
+sessions, with the same pressed state. These filters retain history and do not archive sessions.
+The ambiguous bulk **clear** action is removed. With no current work, the list says
+**No active sessions** and points to **+ agent** or delegation.
 
 Each session shows its title, native runtime kind, and status. The server derives owner
 attention from the same durable snapshot as the inbox. Task finality and attempt ownership
@@ -58,18 +105,18 @@ the conversation's old attention flag. An unavailable session disables message i
   validated `POST /workspaces` path enrolls a new owner workspace with a per-session MCP grant
   and stored project/repository/branch scope. Existing workspace bindings are not enrolled by
   migration; see [workspaces](workspaces.md) and [agent credentials](credentials.md).
-- If kagent has deleted that Session (its idle TTL, or out of band), the next message creates a new one under a fresh request id and sends the standing context again. The provider's earlier context is gone; Mainloop's conversation history is kept. Turns still open on the deleted Session become `uncertain`. A `failed` kagent Session is reported, not replaced.
+- If kagent has deleted that Session (its idle TTL, or out of band), the next message creates a new one under a fresh request id and carries the recent conversation again in its first message (see the chat spec). The provider's earlier context is gone; Mainloop's conversation history is kept. Turns still open on the deleted Session become `uncertain`. A `failed` kagent Session is reported, not replaced.
 - Each user message is recorded with a delivery state before it is sent. Delivery states include `queued`, `recorded`, `sending`, `delivered`, `completed`, `failed`, `cancelled`, and `uncertain`. kagent allows one non-quiescent task per Session, so Mainloop queues report messages itself. A task waiting for input (`input-required`) stays `delivered` and blocks further turns until it is answered or the turn is stopped; the shared HITL card can answer it when the server permits owner responses.
 - A message still `recorded` after a backend restart was never sent, so it is delivered then; this is its first send, not a replay. A `sending` message with no task after 60 seconds, including when the lookup itself keeps failing, becomes `uncertain`.
 - A failed or uncertain delivery stores a short reason with best-effort redaction (see [chat](chat.md)). The session chat shows it next to the message and the identity strip shows the last problem, and the same Retry rule applies: a new message with a new id, offered only for the newest failed user message with nothing in flight.
 - An uncertain delivery is never replayed automatically. A message is rejected with `409` while another turn is in flight. A message for a suspended workspace resumes it first; one that arrives while the workspace is being suspended waits for the suspend to finish, then resumes it.
-- Session conversations mirror the user's messages and each completed task's reply. The reply id is derived from the task id, so a repeated observation mirrors it once.
+- Session conversations mirror the user's messages and each completed task's reply. The reply id is derived from the task id, so a repeated observation mirrors it once. The transaction that ends a delivery also stores the health observations of the task it holds ([orchestration health](orchestration-health.md)); if that fails, the delivery still ends and the health sweep collects it later.
 
 ## Cancelling and clearing
 
 - Cancel ends the session and cancels its open A2A tasks. If Mainloop cannot confirm the stop, it reports that result and does not repeat the stop blindly.
 - A cancelled session no longer accepts messages.
-- Stop turn (`POST /sessions/{id}/stop-turn`, owner only) cancels the open A2A task with CancelTask and keeps the session and its kagent Session, so a parked (`input-required`, `auth-required`) or runaway turn can be cleared. It works for the main thread and for every other native session. The main thread has a `stop` button next to its working indicator; every session detail page offers **Stop turn** independently of Cancel session.
+- Stop turn (`POST /sessions/{id}/stop-turn`, owner only) cancels the open A2A task with CancelTask and keeps the session and its kagent Session, so a parked (`input-required`, `auth-required`) or runaway turn can be cleared. It works for the main thread and for every other native session. The main thread has a `stop` button next to its working indicator; every session detail page offers **Stop turn** independently of Cancel session, but only while the agent reports a turn in flight. Archived, failed and cancelled sessions hide it, and so does a native state the page cannot read.
   - The delivery ends as `cancelled`, the queue is held, and the conversation gets the partial reply followed by "This turn was stopped before it finished.", in one transaction. Streamed text is retained durably even if the cancellation response omits artifacts. The reply is visibly marked as stopped. Cancellation is recorded only after kagent confirms it (or before sending a still-recorded message).
   - Queued reports stay queued across refreshes and restarts. The owner's next explicit message releases the hold and starts a new task on the same Session, ahead of the held reports. The reports follow once that turn finishes. A report alone never releases the hold.
   - Stopping with no open turn changes nothing (`no_open_turn`). If the turn completed or failed first, that outcome is recorded and the response is `finished`.
@@ -86,22 +133,35 @@ Assistant message prompts and processing indicators use the native runtime kind 
 
 The session view shows the conversation, session status, and a native identity strip with the agent kind, model, kagent Agent and Session state, turn count, delivery states, and the reason for the last failed or unconfirmed delivery. Workspace health and lifecycle controls are shown separately.
 
-The owner-only `GET /sessions/{id}/native` also returns an optional
-`preparation_observation`, projected from its existing authenticated kagent GetSession
-response. It includes Session/context identity and whether the context was explicit,
-state/operation and prepared revision, the observed runtime generation/Actor UID, and
-allowlisted original preparation action/create/generation identity, setup profile/digest,
-classification, historical flag, challenge/sequence and effect/observation timestamps.
-Timestamps retain protobuf seconds/nanoseconds. Absent optional messages and empty identity
-fields stay unavailable; proto3 scalar defaults are retained without claiming field presence.
-`receipt_status` distinguishes `observed`, `missing` and `unavailable` (a receipt that
-cannot be safely projected, including a foreign identity). Runtime association and receipt
-are independently optional. The observation itself is absent when GetSession is unavailable
-or its runtime fields cannot be safely projected.
-The response excludes credentials, configuration documents, checkout content and arbitrary
-runtime data. This diagnostic API does not add a UI flow or a second RPC, refresh preparation,
-start work, or grant dispatch authority. Runtime `ready` alone does not prove preparation;
-saved receipt evidence does not identify an earlier runtime admission failure's cause.
+The owner-only `GET /sessions/{id}/native` (and the main thread's `native`) also returns an optional
+`preparation_observation`, projected from the kagent GetSession response it already reads for the
+Session state: one GetSession, no second RPC. It includes Session/context identity and whether the
+context was explicit, state/operation and prepared revision, the observed runtime generation/Actor UID,
+and allowlisted original preparation action/create/generation identity, setup profile/digest,
+classification, historical flag, challenge/sequence and effect/observation timestamps. Timestamps
+retain protobuf seconds/nanoseconds. Absent optional messages and empty identity fields stay
+unavailable; proto3 scalar defaults are retained without claiming field presence. `receipt_status`
+distinguishes `observed`, `missing` and `unavailable` (a receipt that cannot be safely projected,
+including a foreign identity or a value outside the contract's bounds). Runtime association and
+receipt are independently optional. The observation itself is absent, and with it `session_state`
+(the note says "kagent session unavailable"), when GetSession is unavailable or its reply is for
+another Session or context, repeats the workspace preparation or the runtime association on the wire,
+carries a receipt that names no original request, or has runtime fields that cannot be projected
+(an unknown state or operation, an identity outside its bounds). The duplicate check runs on the raw
+reply before protobuf merges the copies, in the kagent client's session codec, and also refuses a
+repeated singular field inside the receipt; the call then has an unknown outcome, as in the Python
+client. A reply that carries the Session or the receipt twice at its top level (for example a
+split `GetSessionResponse.session`) is refused the same way, while the repeated `sessions` of a list
+reply stay allowed. A Session that states no context id is shown with its own id as the context and
+`context_confirmed: false`, read through a display-only client call (`ObserveSession`); delivery,
+lifecycle and readiness keep requiring a confirmed context, and a context naming another Session is
+refused either way.
+The response excludes credentials, configuration documents, checkout content and arbitrary runtime
+data: only the fields in `NativePreparationObservation` of `api/openapi.yaml` are ever copied. This
+diagnostic API does not add a UI flow or a second RPC, refresh preparation, start work, or grant
+dispatch authority. Runtime `ready` alone does not prove preparation; saved receipt evidence does
+not identify an earlier runtime admission failure's cause. The `web/` client has the generated types
+only; no screen shows the observation yet.
 
 Opening a session follows its URL. Missing sessions show a not-found state. If the backend is unavailable, the page retries instead of treating the session as missing.
 An HTTP 5xx on session or workspace detail shows a server error with an instruction to reload,
@@ -143,3 +203,18 @@ attempts cannot take this immediate-delete clearing path.
 Fresh cutover deletes old sessions; there is no old-shape migration, legacy workspace enrollment,
 or transcript conversion. The task-session checks have fake runtime and PostgreSQL evidence only;
 there is no live native-agent, Kubernetes or retained-source handoff qualification in this slice.
+
+## React status
+
+Labels: **implemented** means built in `web/` and covered by component or route tests against a fake backend. Nothing here is live-proven.
+
+- **Implemented:** the session list, built from attention, with the finished and idle filters and their counts; session rows; the `/agents` form (Claude Code or Codex, Ctrl/Cmd+Enter submits, blocked while offline); and the session page. The page offers **Stop turn** only while the native state reports a turn in flight, and never on archived, failed or cancelled sessions, **Cancel session** through an in-app confirmation (never `window.confirm`), and **Clear** for completed, failed and cancelled sessions, which returns to the list. It also shows the task link, workspace badges, summary or error, the identity strip, and the not-found, server error and unreachable states.
+- **Implemented:** after any session action, the page re-reads the session, its native state and attention before it shows the result. A `409` therefore shows the current state.
+- **Implemented:** when a list refresh fails after the list has loaded, the list keeps its last rows and shows a **Retry loading sessions** line. Only a failed first load replaces the list with an error.
+- **Implemented:** while the list or the session page first loads, placeholder rows with a row's height sit under the loading text. The text is what a screen reader announces; the placeholders are hidden from it.
+- **Wording:** the identity strip's live word is the agent's own state, shown verbatim. It shows `live` when the agent is ready, otherwise whatever state string the agent reports (for example `busy` or `suspended`, and any other word it sends), or `unknown` when there is no state yet. A failed or unconfirmed last delivery takes priority and shows as `last message failed` or `last message unconfirmed`, so it never reads `live`. A cancelled session shows `cancelled` the same way, even when the agent still reports ready. When the backend cannot be reached the word is `unreachable`, which the page adds itself; an agent never reports it.
+- **Implemented:** the session chat in the page's chat slot (`SessionChatSlot`). It shows the session's own conversation, with the same timeline, delivery notices, retry and composer as the main thread. It reads `GET /sessions/{id}/native` and `GET /sessions/{id}/conversation`, and sends to `POST /sessions/{id}/message`. Its unsent draft is kept for that session only. While a turn is in flight the header shows the turn's state and a **stop** button. A cancelled session's header reads `cancelled`, never the agent's own `ready`, and the **stop** button is hidden when the native state is unknown or malformed. It does not show pending requests or the topic index.
+- **Implemented:** a closed session (archived, failed or cancelled) locks its chat composer and says why in the chat panel: "This session is archived, so it takes no new messages.", or the same for failed or cancelled. **Stop** is hidden there too. Completed standalone and adopted scheduled sessions stay open. In the Go server, a stopped task-owned session rejects sends under the permanent fence above even when its activity status is completed. The chat takes the rest of the page below its header and requests. Its message list scrolls inside it, and the composer stays at the bottom edge, visible without scrolling at phone width (390×844). The chat has no fixed share of the viewport, so a soft keyboard that shrinks the page shrinks the list, not the composer's position. The page follows its container, so the bottom tab bar and an offline banner that appears later stay clear of the composer; the visible viewport only caps it, for the keyboard. Pending request cards take at most 40% of the chat slot, and the chat panel keeps a floor for its composer.
+- **Unreachable:** the page recovers in two ways. When the connection comes back, the shared live-updates module (`web/src/shell/LiveUpdates.tsx`) refetches open queries without a click. The state also offers a manual **Try again** button.
+- **Not built here:** the notification toast.
+- **Not proven:** the native poll while a turn is in flight (not cheap to test with MSW), and any run against a live backend, the session chat included. The chat's fill and composer position are tested with the layout classes and a mocked visual viewport only; they have not been checked on an iOS device or in a phone-width browser.

@@ -1,96 +1,46 @@
 # Chat
 
-The home chat is the owner's native Claude Code or Codex main session, run by a matching kagent Agent. Claude is the default. The provider owns native session history and tools; Mainloop records logical messages and delivery state.
+The home chat is the user's native Claude Code main session, run by a kagent Agent. The provider owns native session history and tools; Mainloop records logical messages and delivery state.
+
+## Go server status (G6a, G6b)
+
+Status: **implemented** in `server/internal/sessions`, proven by tests against a scratch PostgreSQL and the fake kagent (`kagenttest`). **Not measured** against a live kagent. The sections below describe the frozen Python backend until the cutover; where they differ, this section is the Go behavior.
+
+- `POST /chat` records the user message and a delivery row in one transaction and answers `200` with `pending: true`, `message: null`, `spawned_session_id: null` and `delivery_message_id`. It makes no kagent call; a reconcile loop delivers the row. `conversation_id`, when sent, must be the main session's (`404` otherwise). An empty or over-long message is `422`. A second message is `409` while a turn is open (`recorded`, `sending` or `delivered`) or while an `uncertain` delivery is within its hold (30 minutes by default, `SESSION_UNCERTAIN_HOLD_SECONDS`). The open-turn rule is a partial unique index on `deliveries(session_id)`, not only a check.
+- `POST /chat` has no message id in the request, so the API gives each call a new id. The service call `Send(messageID, …)` is idempotent per id: repeating an id records nothing new.
+- The reply is the task's artifact text, else the last agent message of its history. It is mirrored into `session_messages` with an id derived from the task id, in the same transaction that settles the delivery as `completed`. A task that failed, was rejected or was stopped mirrors only the artifact text it had produced, if any; its reason is the delivery's detail.
+- Every transaction that settles a delivery (`completed`, `failed`, `cancelled`, including "not sent again" after the uncertain hold) publishes `session:message` last in that transaction, so the page re-reads the session whichever way the turn ended. `message_id` is the mirrored reply, or the user message when nothing was mirrored.
+- `GET /main-thread` lists the newest 20 deliveries, oldest first. `turn_in_flight` is true only while a delivery blocks a send, by the rule `POST /chat` applies: an open one, or an uncertain one inside the hold. Inside the hold the note says new messages wait; once the hold has passed and the loop has not yet settled the row, it says the message was not sent again.
+- `GET /main-thread` and `GET /conversations/{id}` only read. Before the reconciler has created the main session (it runs a sweep every `SESSION_ENSURE_SECONDS`), `GET /main-thread` answers with `session_id`, `conversation_id` and `native` null. The conversation has no summary (`summary` and `summarized_through_id` are null). `session_state` is read from kagent best effort; if kagent is down the note says so.
+- Stop turn (G6b) is implemented for the main thread and every other session: see [sessions](sessions.md). `queued` deliveries (the report queue) are not part of the Go server yet.
+- A delivery that stays `uncertain` while its hold passes and kagent lookups keep failing publishes `session:message` once when the hold passes, so the page shows the "not sent again" note without waiting for a lookup to succeed.
+- While a turn runs, the page shows it live (implemented; web tests run against MSW, not a live kagent). `session:progress` events (see [events](events.md#live-progress)) carry the partial reply, a status line (`Thinking…`, `Running Bash: go test ./...`, `Reading file.go`, `Waiting for you`) and compact tool lines. The page renders them as a dimmed bubble below the last message, with a timer counting from the turn's start. Stop is unchanged. The bubble is polite to screen readers: it announces the status line only, not the growing text. Live state is memory only: the mirrored reply is still written once, at settle, and `session:message` still triggers the re-read. The closing frame repeats the last text and tool lines. When it names the stored reply, the bubble keeps showing them until the page has read that message and then disappears, so there is no gap and no duplicate. A page opened or reconnected mid-turn is brought up to date by the snapshot the stream sends after `connected`. If kagent's stream drops, the last live state stays up, with its timer still counting, while the thread is busy; the delivery then settles as before and the reply replaces it. With nothing to show (a harness that sends no text yet) the bubble shows the status and elapsed time only.
 
 ## Selecting the main provider
 
-`MAIN_PROVIDER=claude|codex` selects the first-use default. Existing main bindings keep
-their persisted selection across restarts and configuration changes. The owner can read
-`GET /main-thread/provider` and explicitly select a provider with
-`PUT /main-thread/provider` and `{"provider":"codex"}` (or `"claude"`). These routes use
-the existing owner API boundary and cross-origin write guard; MCP agents cannot select
-the main provider. The main-thread header exposes an owner-only Main provider dropdown. There is no quota-driven fallback.
+Status: **implemented** in `server/internal/sessions` and covered by scratch-PostgreSQL tests against the fake kagent. **Not measured** against a live kagent. The owner's Main provider select is built in the main-thread header (below). Its React tests run against MSW, not a live kagent. The routes below are the contract it uses.
 
-The dropdown separates desired selection, confirmed effective provider and preparation status.
-It is disabled offline, during selection, loading, sending or stopping, while a turn or
-recorded/sending/delivered/uncertain delivery is open, and while selection is pending.
-Selecting the same ready provider does nothing. A failed selection offers explicit retry;
-a recoverable failure offers explicit restart with `restart_failed=true`. Neither runs automatically.
-A conflict is displayed and state refreshed. Network failures reconcile through GET without
-repeating PUT; an unsuccessful read keeps main input and selection locked until polling
-confirms state. Older poll results cannot overwrite selection results. Main input is disabled
-while provider preparation is pending/failed or unknown, while drafts and child input remain
-independent. A not-started binding can accept its first message.
+`MAIN_PROVIDER=claude|codex` selects the first-use default (`claude` when unset). An existing main binding keeps its persisted selection across restarts and configuration changes. The owner reads `GET /main-thread/provider` and selects with `PUT /main-thread/provider` and `{"provider":"codex"}` (or `"claude"`). These routes sit behind the owner API boundary and the cross-origin write guard (`403` for a foreign origin). There is no MCP tool, so agents cannot select the main provider, and there is no quota-driven fallback.
 
-The response exposes `desired_provider`, `effective_provider`, `status`, the current
-`kagent_session_id`, a bounded `error`, and retained native identity `history`.
-`recoverable` identifies a pending target confirmed absent or settled failed/deleted,
-including a frozen create receipt that confirms its Session was deleted before an ID was saved.
-`/main-thread` includes this provider state alongside its current native identity.
-`not_started` means the default binding has not created a native Session. `pending`
-means a switch contract is committed but preparation has not completed; `failed`
-means its latest preparation failed. Both have a null effective provider. A pending
-target may have a native Session ID before readiness is confirmed.
+The response exposes `desired_provider`, `effective_provider`, `status`, the current `kagent_session_id`, a bounded `error`, `recoverable`, and the retained native identity `history`. `/main-thread` includes the same state as `provider`. `not_started` means the binding has not created a native Session yet. `pending` means a switch contract is committed but preparation has not completed, and `failed` means its latest preparation failed; both have a null effective provider. A pending target may have a native Session id before readiness is confirmed. A switch whose preparation did not finish is still a `200` with `pending` or `failed`; the request is not the retry loop.
 
-A switch requires the main to be idle, with no recorded, queued, sending, delivered or
-uncertain deliveries, no active native task and no unsettled native lifecycle operation.
-Failure to establish native idleness returns `409` without changing the selection.
-The old native Session is suspended, preserved in the audit history and has its MCP
-authority revoked. The new provider receives a new native identity and credential;
-its create request and Agent reference are persisted before creation. The product
-session, conversation, messages, topics, child task identities, parent references and
-capacity remain unchanged. Provider-native history stays with its original provider;
-only stored standing context and recent completed conversation messages carry over.
-Failed and cancelled instructions are excluded from that carry-over.
+A switch needs an idle main: no recorded, sending, delivered or uncertain delivery, no unconfirmed stop, no open native task and no unsettled native lifecycle operation. Failing to establish idleness returns `409` and changes nothing. Before anything changes, the target Agent is read from kagent: a missing or unprepared Agent (no ready revision) returns `409` `agent_unavailable` and changes nothing, restart included. The old native Session is suspended, kept in the audit history, and has its MCP credential revoked. A main that never started has no old Session, so a switch of it writes no history entry. The new provider gets a new native identity and credential, with its own Secret named per identity, so revoking and cleaning up the old one never touches the new one and the create does not wait for it. Its create request, Agent reference and idempotency key are committed before any kagent call, and no transaction or lock is held across a kagent call. The product session, conversation, messages, topics, child task identities, parent references and capacity stay as they are. The new Session is not started blind: its first message carries a short, labelled preamble with the last `MAIN_CARRY_OVER_MESSAGES` (default 6, at most 100, `0` carries none) user and assistant messages of the conversation, oldest first with their roles, each cut to 600 characters. Only messages of completed deliveries are carried; failed, cancelled and uncertain ones, and any partial reply they left, are left out. The preamble does not render the main's standing context yet (see the delegation spec), so it holds only these messages. The rendered text is frozen on the delivery (`sent_text`) in the transaction that marks it sending, so a not-sent retry sends the same text under the same message id. If the message ends without kagent having seen it, the next message carries the preamble again. That covers `not sent`, a refusal, and an uncertain delivery that fails after the hold because no kagent task shows the message. An uncertain delivery keeps the preamble while it is still being looked up. The owner's conversation keeps only the text they wrote, never the preamble, and no earlier delivery is replayed.
 
-Bootstrap reuses a main only while its product binding has active coordination authority.
-An archived, revoked, deleted or terminal binding relinquishes current ownership in the
-same transaction that creates its replacement. Concurrent requests share one replacement,
-using the first-use provider default; existing native contracts and history remain on their
-original bindings, and no prior delivery is replayed. Unsent managed reports can route to the
-valid replacement; claimed or uncertain reports retain their original recipient receipts.
-Historical main membership persists independently of role or current authority. Migration
-retains that membership, releases inactive current-owner slots, backfills slots only for
-valid mains and refuses competing valid owners. Provider operations cannot restart a revoked
-retained contract, even after startup/schema replay: ordinary bootstrap must first establish
-a valid replacement before a new provider selection. An inactive historical main does not
-block selection or pinned recovery on that replacement. Provider selection on true first
-use remains supported; ordinary workers and children do not count as historical mains.
+A fresh main is created on the configured first-use provider's Agent and follows that setting. Its Agent is pinned on the binding when the first create is requested, so a later configuration change does not move a first-use main either. The pin is dropped again when kagent itself refuses that first create before reserving anything (for example the configured Agent name has a typo), so correcting the configuration takes effect on the next message; once a Session exists the pin stays. A switch pins the target's Agent on the binding, so a later change to the catalog or to `KAGENT_MAIN_CODEX_AGENT` does not move a pending or finished selection. Both main Agents must have the matching native harness and ModelConfig, MCP credential routing and `sessionIdleTTL: 0s`. Claude uses `KAGENT_MAIN_AGENT`, Codex uses `KAGENT_MAIN_CODEX_AGENT` (`mainloop-main-codex`), and one Agent cannot serve both providers. Explicit provider profiles may override the main Agent references. The Kind manifests install both.
 
-Repeating the current selection is idempotent. Repeating a pending selection recovers
-its same native create contract; it does not send a prompt. Chat returns `409` while
-preparation remains pending, and arriving child reports are queued until readiness is
-confirmed. After a failed request or restart, read status and repeat the same PUT to
-recover. Another provider cannot replace an unresolved selection. There is no automatic
-switch recovery loop; normal delivery reconciliation drains reports after preparation.
-Recovery and idempotent selection use the persisted Agent and create contract even if
-the current provider catalog disables, removes or changes its main entry. New selections
-and fresh recovery identities validate the current catalog.
+Repeating the current selection is idempotent. Repeating a pending selection recovers the same create contract and sends no prompt. After a failed request or restart, read the status and repeat the same PUT. Another provider cannot replace an unresolved selection (`409`). Nothing retries a switch in the background.
 
-If a repeat observes the pending target as absent or settled failed/deleted, the failure
-and `recoverable=true` are durable. The owner can then select another provider, or repeat
-the current provider with `{"provider":"codex","restart_failed":true}` to admit a fresh
-native and credential identity. The abandoned target remains in history. This operation
-rechecks absence or settled failure and refuses active tasks or uncertain lifecycle work;
-held child reports stay queued for the new target. A lost create reply or an unsettled
-failure keeps the original create contract, including when `restart_failed=true` is sent.
-No recovery operation replays a prompt.
-If a suspend response is lost before the switch commits, the original provider remains
-current and a repeated PUT first reconciles that same old native Session. No failed
-delivery or old prompt is replayed by a provider selection.
+If a repeat finds the pending target absent, or settled failed or deleted, in kagent, it records `recoverable=true` durably. The owner can then select the other provider, or repeat the same provider with `{"provider":"codex","restart_failed":true}` to admit a fresh native identity and credential; the abandoned target stays in the history. A lost create reply or an unsettled failure keeps the original contract even when `restart_failed=true` is sent. A create that kagent refuses before it reserves the request id (an Agent without a ready revision, or invalid inputs) holds nothing, so the target is `failed` with `recoverable=true`; a repeat of the same provider recovers the same contract once the Agent is back. A create that landed with its reply lost is bound by the repeat to the Session that exists.
 
-Ordinary main MCP writes revalidate current credential authority and commit under the
-same authority lock as retirement. An old request paused after authentication is refused
-if the provider switch retires its generation first. A terminal delivery, its mirrored
-reply and its turn accounting commit together before retirement can snapshot that generation.
+Every refused switch, and a chat message or a `POST /sessions/{id}/message` to the main refused because a switch is pending, is a `409` whose body has a `detail` message and a stable `code`: `busy` (open work, or the main changed while the request ran), `pending` (a switch is pending and must settle or become recoverable first), `unconfirmed` (kagent could not confirm the main idle, the old Session suspended or the pending target absent), `unresolved` (a native create for the main is unresolved) or `agent_unavailable`. Other conflicts carry no `code`. Only a status that kagent sent counts as a refusal before reservation; a reply Mainloop could not decode (cut short, wrong shape) leaves the create unconfirmed, because it may have committed, and a repeat binds the Session that landed.
 
-Both main Agents must be installed with matching native harnesses and ModelConfigs,
-MCP credential routing and `sessionIdleTTL: 0s`. Claude uses `KAGENT_MAIN_AGENT`;
-Codex uses `KAGENT_MAIN_CODEX_AGENT`. Explicit provider profiles may override their main
-Agent references. The repository's Kind main-Agent example includes both providers;
-production installations must supply reviewed images and their existing provider
-authentication through GitOps before selecting Codex. This behavior is covered by
-offline fixtures and scratch PostgreSQL tests; a live switch remains a deployment check.
+The owner's Main provider select sits in the main-thread header. It sends one explicit `PUT` per choice and shows the confirmed provider; choosing the ready provider again sends nothing. The select and Restart are held while the main is busy: offline, a send or stop in flight, the thread or conversation still loading, a switch pending, or a turn or delivery open. Retry is held by the same conditions except a pending switch, so a pending switch offers Retry; one click repeats the same `PUT` (the desired provider, `restart_failed: false`) and no other write. While a switch is pending, the page re-reads the provider state with `GET` only, on the poll interval, until it settles. Drafts and child session composers are not affected.
+
+The main composer is locked while the provider is selecting, its state is unconfirmed or unknown, or the provider is failed, preparing (pending), or ready but not yet the desired one; it says why. A `not_started` main takes the first message. "Working…" shows only while a turn is in flight. An open delivery that is not a turn holds the select and Retry but does not lock the composer. A refused switch, and a chat message refused for the same reasons (its notice starts "Message not sent"), shows one notice whose wording follows the `code`: `busy`, `pending`, `unconfirmed`, `unresolved`, or `agent_unavailable` (the other provider is not installed here, and nothing changed). An unknown or missing code shows the server's `detail` instead. A chat message refused with any other 4xx shows its `detail` the same way, followed by "Your message is back in the box."; a 5xx shows only the generic line. Every notice says the state is re-read and nothing is retried on its own. The API client keeps the `code` on these errors (`ApiError` for the select, `SendError` for a chat message), so the notices come from the live response. A `code` the contract does not name is dropped and the `detail` shows.
+
+While a switch is pending, `POST /chat` returns `409`. The orphan sweep refuses to run while a main create is pending and says so in its report, with the repeat that settles it. A child report to the main waits in the report queue and is delivered by the normal delivery reconciliation once the target is ready.
+
+Bootstrap reuses a main only while its binding has active coordination authority. Otherwise it creates the replacement and releases the old owner slot in one transaction; concurrent requests share one replacement, on the first-use provider, and the old binding's credential is revoked. The Go/React server is greenfield, so there is no backfill or migration of earlier main rows.
 
 ## Sending messages
 
@@ -99,15 +49,16 @@ offline fixtures and scratch PostgreSQL tests; a live switch remains a deploymen
 - A prompt is sent once. If kagent reports it did not accept the message, Mainloop retries the same message for up to 30 seconds, then marks the delivery failed (not sent); a failed delivery is not requeued. If the outcome is otherwise unknown, Mainloop looks for the task by message id; if none shows it, the delivery is marked uncertain and is never replayed.
 - The response is the completed A2A task's text, mirrored into the conversation once. While the page is open it polls for the mirrored reply.
 - A second message is rejected with `409` while a delivery is in flight.
+- Each user message carries its `source` (`GET /conversations/{id}` and the session conversation): `user` for the owner's own, `mainloop` for one Mainloop wrote on the owner's behalf, namely the delegated brief and the task reports sent to a supervisor or the main session. Assistant messages have none. The web shows a `mainloop` message as a collapsed "Assignment from Mainloop" (a report keeps its own label, the task's kind, short id and outcome, and is shown open so an `Owner action needed:` line is never hidden) and never as "You". It reads the source from the message, so it holds however far the thread has gone; the delivery ledger shows only the newest 20 deliveries and is not used for this.
 - A failed delivery keeps a short reason, stored with the delivery: the kagent/A2A error class and message (for example `not sent: SessionError: …`, `send rejected: A2AError (INVALID_PARAMS): …`, or `task failed: <kagent's message>`). Best-effort redaction covers credential assignments, authorization headers, bearer tokens, URL userinfo and long opaque tokens; arbitrary harness text is not guaranteed to be secret-free. Whitespace is collapsed, and the text is cut to 300 characters.
 - The reason is shown on the message it belongs to, in a `Failed`/`Unconfirmed` notice. The header and identity strip show `last message failed` (red) or `last message unconfirmed` (yellow) instead of `ready` or `working`; a delivery still in flight takes precedence and shows `working`. The notice survives a reload because it is read from the stored delivery.
-- A failed (not uncertain) user message offers **Retry** while it is the newest delivery and nothing is in flight. Retry checks fresh delivery state and always targets the owning conversation, even when a child session is selected. A local send guard stays held until submission and refresh finish, so polling cannot enable a second submission. Retry sends the same text as a new message with a new message id; the failed message and its id are never re-sent. An uncertain delivery is not retried, because the original may have been accepted.
+- A failed (not uncertain) owner (`user`) message offers **Retry** while it is the newest delivery and nothing is in flight. Retry checks fresh delivery state and always targets the owning conversation, even when a child session is selected. A local send guard stays held until submission and refresh finish, so polling cannot enable a second submission. Retry sends the same text as a new message with a new message id; the failed message and its id are never re-sent. An uncertain delivery is not retried, because the original may have been accepted. A failed brief or report offers no Retry: the task loop re-sends those itself.
 
 ## Conversation history
 
 - User and assistant messages persist across page reloads.
 - The native session remains authoritative for provider history and context management; Mainloop mirrors observed messages and delivery receipts.
-- The main session keeps one kagent Session until kagent deletes it (for example after its idle TTL); then the next message starts a new one, see Sessions. Context length is managed by the provider's native auto-compaction, which is configured per harness outside Mainloop; Mainloop does not rotate the session or ask it to write out state. Standing context is sent with the first message to each kagent Session.
+- The main session keeps one kagent Session until kagent deletes it (for example after its idle TTL); then the next message starts a new one, see Sessions. Context length is managed by the provider's native auto-compaction, which is configured per harness outside Mainloop; Mainloop does not rotate the session or ask it to write out state. The first message to each kagent Session, the first ever, one after a provider switch, or one after kagent deleted the Session, carries the recent completed conversation (see the provider section); later messages go as written.
 
 ## Delegating tasks
 
@@ -119,7 +70,7 @@ offline fixtures and scratch PostgreSQL tests; a live switch remains a deploymen
 
 ## Identity and policy
 
-The identity strip shows the native agent, the kagent Agent and Session with its runtime state, model, turn count, and delivery states. Tool identity comes from a per-binding credential reference injected by kagent's credential path; the native agent receives a placeholder, not the bearer. MCP discovery and calls use the binding role and persisted grant together. The main thread manages topics, pending intent and its durable task trees. Task supervisors and children can report their own current attempt and read scoped task history; children cannot delegate or inspect siblings. A newly created owner workspace can call `whoami` and `open_pull_request` within its stored project and branch scope. Merge tools remain behind the existing enablement gates. Ordinary owner workspace grants do not provide topic writes, reports or delegation. Delegated workspace grants additionally supply task tools within their persisted task scope; coordination grants never supply repository authority. Ordinary standalone and retained legacy workspace bindings stay ungranted. Inputs are validated and policy failures return tool errors. Terminal, archived and revoked bindings cannot authenticate.
+The identity strip shows the native agent, the kagent Agent and Session with its runtime state, model, turn count, and delivery states. Tool identity comes from a per-binding credential reference injected by kagent's credential path; the native agent receives a placeholder, not the bearer. MCP discovery and calls use the binding role and persisted grant together. The main thread manages topics, pending intent and its durable task trees. Task supervisors and children can report their own current attempt and read scoped task history; children cannot delegate or inspect siblings. A newly created owner workspace can call `whoami` and `open_pull_request` within its stored project and branch scope. Merge tools remain behind the existing enablement gates. Ordinary owner workspace grants do not provide topic writes, reports or delegation. Delegated workspace grants additionally supply task tools within their persisted task scope; coordination grants never supply repository authority. Ordinary standalone and retained legacy workspace bindings stay ungranted. Inputs are validated and policy failures return tool errors. Terminal, archived and revoked bindings cannot authenticate. An MCP tool write re-reads the caller's credential `FOR SHARE` inside its transaction and requires it to be published, so a revoke waits for an in-flight write and a write after the revoke is refused (`unauthorized`). Every write tool in the contract writes inside such a transaction (a test calls each one with a revoked credential and checks that no table changed, and fails for a tool that is not classified as a write or read-only). A tool's reads are not guarded, and a revoke that waits on a tool transaction holding other locks can deadlock with it, in which case Postgres aborts one side.
 The dedicated MCP origin exposes `/mcp` and the isolated `/mcp/merge-approval` tool surface; merge tools remain disabled pending the [merge enablement gates](pull-requests.md#enablement-remains-separate). REST remains unauthenticated and relies on the
 required NetworkPolicy isolation documented in the architecture guide. The channel is
 implemented with fake-backed tests; the joint gateway proof (native agent to MCP through the gateway,
@@ -171,3 +122,39 @@ Verified aliases link to the selected continuation card. Bound requests link to 
 conversation; observed standalone requests explicitly state when no Mainloop conversation
 exists. Agent-supplied request data is escaped text, and unknown fields remain inspectable.
 See [inbox](inbox.md) and [project policy](projects.md).
+
+## Go/React status
+
+Implemented in `web/src/features/chat` against the contract (`GET /main-thread`,
+`GET /conversations/{id}`, `POST /chat`). It has not run against the Go server yet; tests use
+MSW fixtures typed from `api/openapi.yaml`.
+
+- The main thread is the only chat surface. There is no session picker, no thread replies, no
+  zoom, and no fallback to an older conversation list.
+- A send shows the message at once. If the backend refuses it, the bubble goes away and the
+  text returns to the box; once it is recorded, a later failure to refresh does not undo it. The
+  bubble stays until the conversation lists the recorded message, matched on the response's
+  `delivery_message_id` (the native backend returns no message body), or its `message.id`.
+- A send that gets no reply (no response) is checked before its text goes back. The deliveries are
+  read again just before the send, so a delivery recorded earlier is not counted. After the lost
+  reply the thread is read again. Only a new user delivery counts: reports and other sources do not.
+  A new user delivery is this message only when the conversation holds a user message under that
+  delivery's id whose text matches the sent text (both trimmed). Then the notice says the message
+  was recorded, the box clears, and the message shows in the conversation. If no new user delivery
+  landed, one more read after a short delay checks for a delivery still being recorded; the send
+  stays locked and no message is resent. If that also finds none, the text returns to the box.
+  If a read fails, or a new user delivery's conversation cannot be read or holds no
+  matching message, the text also returns to the box, and the notice says Mainloop could not confirm
+  whether the message was recorded. The text match cannot tell this message from another client's
+  message with the same text sent in the same moment, so that case can read as recorded.
+- The box is locked until the thread has loaded, so early typing cannot land in the wrong draft.
+- Drafts are kept per conversation in `sessionStorage`. Only a recorded composer send clears
+  its draft; Retry leaves whatever is in the box alone.
+- **Implemented:** the project page's **New task** button opens the main chat with the composer prefilled with `Start a task in <project full name>: `. The text goes in the box once, unsent, with the caret at its end; if the box already holds a draft, the prefill goes before it. The prefill rides in the `prefill` search parameter and is removed from the URL once the composer has taken it, so a refresh does not prefill again. No task is created until the owner sends the message.
+- A conversation that fails to load shows a recovery message, even when it has no messages yet.
+- While a turn is in flight the thread is re-read every two seconds, for six minutes from when
+  the turn was first seen in flight, as a fallback to the `session:message` event. The
+  conversation is read once more when the turn ends. Reads pause while the tab is hidden.
+- Pending requests of the main session and `?hitl=<id>` render through the `features/hitl`
+  approval card, inside an error boundary so a failing card cannot take the thread down.
+- The native identity strip in the header details is supplied by the sessions slice.

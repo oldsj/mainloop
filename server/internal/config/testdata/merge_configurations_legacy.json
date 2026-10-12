@@ -1,0 +1,10 @@
+[
+  {
+    "owner_id": "owner",
+    "binding_id": "b1",
+    "runtime_session_id": "s1",
+    "prepared_revision": "r1",
+    "provider": "claude",
+    "mappings": []
+  }
+]

@@ -8,3 +8,5 @@ __pycache__/
 *.min.css
 pnpm-lock.yaml
 uv.lock
+# Written by the TanStack Router plugin; formatting it would be undone on the next vite run
+web/src/routeTree.gen.ts

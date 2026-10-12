@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/.git
+.tasknotes
+web/e2e
+web/playwright-report
+web/test-results
+backend
+models
+k8s
+docs

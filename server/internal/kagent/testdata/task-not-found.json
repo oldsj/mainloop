@@ -1,0 +1,15 @@
+{
+  "jsonrpc": "2.0",
+  "id": "req-fixture",
+  "error": {
+    "code": -32001,
+    "message": "task not found",
+    "data": [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "TASK_NOT_FOUND",
+        "domain": "a2a-protocol.org"
+      }
+    ]
+  }
+}

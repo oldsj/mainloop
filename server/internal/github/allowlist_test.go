@@ -1,0 +1,197 @@
+package github_test
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/oldsj/mainloop/server/internal/github"
+)
+
+type counting struct{ n atomic.Int32 }
+
+func (c *counting) RoundTrip(r *http.Request) (*http.Response, error) {
+	c.n.Add(1)
+	body := "{}"
+	if strings.HasSuffix(r.URL.Path, "/access_tokens") {
+		body = `{"token":"ghs_x","expires_at":"` + time.Now().Add(time.Hour).UTC().Format(time.RFC3339) + `"}`
+	}
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
+}
+
+func newAllowlist(t *testing.T, perms github.Permissions) (*github.Allowlist, *counting) {
+	t.Helper()
+	base, _ := url.Parse("https://api.github.com/")
+	next := &counting{}
+	a := &github.Allowlist{
+		Base:  base,
+		Scope: github.Scope{Repo: github.Repo{Owner: "oldsj", Name: "mainloop"}, Permissions: perms},
+		Next:  next,
+	}
+	a.BindInstallation(77)
+	return a, next
+}
+
+func do(t *testing.T, a *github.Allowlist, method, target, body string) error {
+	t.Helper()
+	var rd io.Reader
+	if body != "" {
+		rd = strings.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), method, target, rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := a.RoundTrip(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	return err
+}
+
+func TestAllowlistPassesTheKnownCalls(t *testing.T) {
+	a, next := newAllowlist(t, github.Permissions{"metadata": github.Read, "pull_requests": github.Read})
+	for _, c := range []struct{ method, url, body string }{
+		{"GET", "https://api.github.com/repos/oldsj/mainloop", ""},
+		{"GET", "https://api.github.com/repos/OldSJ/Mainloop", ""},
+		{"GET", "https://api.github.com/repos/oldsj/mainloop/pulls?state=open&per_page=1", ""},
+		{"GET", "https://api.github.com/repos/oldsj/mainloop/installation", ""},
+		{"POST", "https://api.github.com/app/installations/77/access_tokens",
+			`{"repositories":["mainloop"],"permissions":{"metadata":"read","pull_requests":"read"}}`},
+	} {
+		if err := do(t, a, c.method, c.url, c.body); err != nil {
+			t.Errorf("%s %s: %v", c.method, c.url, err)
+		}
+	}
+	if got := next.n.Load(); got != 5 {
+		t.Fatalf("forwarded %d, want 5", got)
+	}
+}
+
+// A refused request fails closed with a typed error and never reaches the next transport.
+func TestAllowlistRefusesEverythingElseWithoutSending(t *testing.T) {
+	a, next := newAllowlist(t, github.Permissions{"metadata": github.Read, "pull_requests": github.Read})
+	const mint = "https://api.github.com/app/installations/77/access_tokens"
+	const perms = `{"repositories":["mainloop"],"permissions":{"metadata":"read","pull_requests":"read"}}`
+	for name, c := range map[string]struct{ method, url, body string }{
+		"other host":              {"GET", "https://evil.example/repos/oldsj/mainloop", ""},
+		"other scheme":            {"GET", "http://api.github.com/repos/oldsj/mainloop", ""},
+		"userinfo":                {"GET", "https://x@api.github.com/repos/oldsj/mainloop", ""},
+		"host lookalike":          {"GET", "https://api.github.com.evil.example/repos/oldsj/mainloop", ""},
+		"other repo":              {"GET", "https://api.github.com/repos/oldsj/other", ""},
+		"other owner":             {"GET", "https://api.github.com/repos/evil/mainloop", ""},
+		"installation other":      {"GET", "https://api.github.com/repos/evil/mainloop/installation", ""},
+		"write verb":              {"DELETE", "https://api.github.com/repos/oldsj/mainloop", ""},
+		"patch repo":              {"PATCH", "https://api.github.com/repos/oldsj/mainloop", ""},
+		"post pulls":              {"POST", "https://api.github.com/repos/oldsj/mainloop/pulls", "{}"},
+		"merge":                   {"PUT", "https://api.github.com/repos/oldsj/mainloop/pulls/1/merge", ""},
+		"unlisted path":           {"GET", "https://api.github.com/user", ""},
+		"unlisted repo path":      {"GET", "https://api.github.com/repos/oldsj/mainloop/issues", ""},
+		"commits not granted":     {"GET", "https://api.github.com/repos/oldsj/mainloop/commits", ""},
+		"deeper path":             {"GET", "https://api.github.com/repos/oldsj/mainloop/pulls/1/comments", ""},
+		"pull merge not granted":  {"PUT", "https://api.github.com/repos/oldsj/mainloop/pulls/1/merge", "{}"},
+		"pull create not granted": {"POST", "https://api.github.com/repos/oldsj/mainloop/pulls", "{}"},
+		"protection not granted":  {"GET", "https://api.github.com/repos/oldsj/mainloop/branches/main/protection", ""},
+		"branch not granted":      {"GET", "https://api.github.com/repos/oldsj/mainloop/branches/feature/x", ""},
+		"merge via post":          {"POST", "https://api.github.com/repos/oldsj/mainloop/pulls/1/merge", "{}"},
+		"pull delete":             {"DELETE", "https://api.github.com/repos/oldsj/mainloop/pulls/1", ""},
+		"app listing":             {"GET", "https://api.github.com/app/installations", ""},
+		"app itself":              {"GET", "https://api.github.com/app", ""},
+		"graphql":                 {"POST", "https://api.github.com/graphql", "{}"},
+		"encoded segment":         {"GET", "https://api.github.com/repos/oldsj/mainloop%2Fx", ""},
+		"encoded dot":             {"GET", "https://api.github.com/repos/oldsj/%2e%2e/mainloop", ""},
+		"dot segment":             {"GET", "https://api.github.com/repos/oldsj/mainloop/pulls/../../other", ""},
+		"double slash":            {"GET", "https://api.github.com/repos//oldsj/mainloop", ""},
+		"trailing slash":          {"GET", "https://api.github.com/repos/oldsj/mainloop/", ""},
+		"backslash":               {"GET", "https://api.github.com/repos/oldsj/mainloop\\x", ""},
+		"mint no body":            {"POST", mint, ""},
+		"mint bad json":           {"POST", mint, "{"},
+		"mint all repos":          {"POST", mint, `{"permissions":{"metadata":"read","pull_requests":"read"}}`},
+		"mint other repo":         {"POST", mint, `{"repositories":["other"],"permissions":{"metadata":"read","pull_requests":"read"}}`},
+		"mint two repos":          {"POST", mint, `{"repositories":["mainloop","other"],"permissions":{"metadata":"read","pull_requests":"read"}}`},
+		"mint more perms":         {"POST", mint, `{"repositories":["mainloop"],"permissions":{"metadata":"read","pull_requests":"read","contents":"read"}}`},
+		"mint fewer perms":        {"POST", mint, `{"repositories":["mainloop"],"permissions":{"metadata":"read"}}`},
+		"mint write perm":         {"POST", mint, `{"repositories":["mainloop"],"permissions":{"metadata":"read","pull_requests":"write"}}`},
+		"mint no perms":           {"POST", mint, `{"repositories":["mainloop"]}`},
+		"mint extra field":        {"POST", mint, `{"repositories":["mainloop"],"repository_ids":[1],"permissions":{"metadata":"read","pull_requests":"read"}}`},
+		"mint get":                {"GET", mint, ""},
+		// Mint probes from the G3 review: the check must read the body the way the receiver does.
+		"mint trailing value":      {"POST", mint, perms + `{"repositories":["other"]}`},
+		"mint trailing garbage":    {"POST", mint, perms + ` x`},
+		"mint trailing array":      {"POST", mint, perms + `[]`},
+		"mint repeated repos":      {"POST", mint, `{"repositories":["other"],"repositories":["mainloop"],"permissions":{"metadata":"read","pull_requests":"read"}}`},
+		"mint repeated repos 2":    {"POST", mint, `{"repositories":["mainloop"],"repositories":["other"],"permissions":{"metadata":"read","pull_requests":"read"}}`},
+		"mint repeated perms":      {"POST", mint, `{"repositories":["mainloop"],"permissions":{"metadata":"read"},"permissions":{"metadata":"read","pull_requests":"read"}}`},
+		"mint repeated level":      {"POST", mint, `{"repositories":["mainloop"],"permissions":{"metadata":"write","metadata":"read","pull_requests":"read"}}`},
+		"mint key case":            {"POST", mint, `{"Repositories":["mainloop"],"permissions":{"metadata":"read","pull_requests":"read"}}`},
+		"mint array body":          {"POST", mint, `[]`},
+		"mint null perms":          {"POST", mint, `{"repositories":["mainloop"],"permissions":null}`},
+		"mint other installation":  {"POST", "https://api.github.com/app/installations/78/access_tokens", perms},
+		"mint zero installation":   {"POST", "https://api.github.com/app/installations/0/access_tokens", perms},
+		"mint sloppy installation": {"POST", "https://api.github.com/app/installations/077/access_tokens", perms},
+	} {
+		err := do(t, a, c.method, c.url, c.body)
+		if !github.IsNotAllowed(err) {
+			t.Errorf("%s: got %v, want a NotAllowedError", name, err)
+		}
+	}
+	if got := next.n.Load(); got != 0 {
+		t.Fatalf("%d refused requests reached the network", got)
+	}
+}
+
+func TestAllowlistClosesRefusedBody(t *testing.T) {
+	a, _ := newAllowlist(t, github.Permissions{"metadata": github.Read})
+	body := &closeSpy{Reader: strings.NewReader("{}")}
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", "https://api.github.com/graphql", body)
+	resp, err := a.RoundTrip(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if !github.IsNotAllowed(err) {
+		t.Fatal(err)
+	}
+	if !body.closed {
+		t.Fatal("body left open")
+	}
+}
+
+type closeSpy struct {
+	io.Reader
+	closed bool
+}
+
+func (c *closeSpy) Close() error { c.closed = true; return nil }
+
+func TestAllowlistWriteCoversRead(t *testing.T) {
+	a, next := newAllowlist(t, github.Permissions{"pull_requests": github.Write})
+	if err := do(t, a, "GET", "https://api.github.com/repos/oldsj/mainloop/pulls", ""); err != nil {
+		t.Fatal(err)
+	}
+	if next.n.Load() != 1 {
+		t.Fatal("not forwarded")
+	}
+}
+
+// Until the installation is resolved the allowlist has no id to bind, so no mint passes.
+func TestAllowlistRefusesMintsBeforeTheInstallationIsBound(t *testing.T) {
+	base, _ := url.Parse("https://api.github.com/")
+	next := &counting{}
+	a := &github.Allowlist{
+		Base:  base,
+		Scope: github.Scope{Repo: github.Repo{Owner: "oldsj", Name: "mainloop"}, Permissions: github.Permissions{"metadata": github.Read}},
+		Next:  next,
+	}
+	for _, id := range []string{"77", "0"} {
+		err := do(t, a, "POST", "https://api.github.com/app/installations/"+id+"/access_tokens",
+			`{"repositories":["mainloop"],"permissions":{"metadata":"read"}}`)
+		if !github.IsNotAllowed(err) || next.n.Load() != 0 {
+			t.Fatalf("installation %s: err %v, forwarded %d", id, err, next.n.Load())
+		}
+	}
+}

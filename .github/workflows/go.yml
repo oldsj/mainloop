@@ -1,0 +1,136 @@
+name: Go
+
+on:
+  pull_request:
+    branches: [main, go-react]
+    paths:
+      - server/**
+      - web/src/features/chat/testdata/**
+      - api/**
+      - backend/src/mainloop/mcp_app.py
+      - backend/src/mainloop/runtime/policy.py
+      - models/**
+      - scripts/export-mcp-tools.py
+      - .github/workflows/go.yml
+  push:
+    branches: [main, go-react]
+    paths:
+      - server/**
+      - web/src/features/chat/testdata/**
+      - api/**
+      - backend/src/mainloop/mcp_app.py
+      - backend/src/mainloop/runtime/policy.py
+      - models/**
+      - scripts/export-mcp-tools.py
+      - .github/workflows/go.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: server
+
+jobs:
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+          # v2.13.x cannot read Go 1.27.2 export data; v2.14.0 can (checked locally).
+          install-mode: goinstall
+          working-directory: server
+
+  test:
+    name: go test -race
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mainloop
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
+          POSTGRES_DB: postgres
+          POSTGRES_INITDB_ARGS: --no-sync
+        ports:
+          - 5432:5432
+        options: >-
+          --tmpfs /var/lib/postgresql/data:rw,size=2g
+          --health-cmd "pg_isready -U mainloop -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      MAINLOOP_TEST_DATABASE_URL: postgresql://mainloop:ci-${{ github.run_id }}-${{ github.run_attempt }}@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - run: go test -race ./...
+
+  generate:
+    name: Generated code is current
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - run: go generate ./...
+      - run: go mod tidy
+      - name: Fail if generation or go mod tidy changed anything
+        # status, not diff: new untracked files count too
+        run: test -z "$(git status --porcelain -- .)"
+
+  mcp-contract:
+    name: MCP tool contract is current
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      UV_HTTP_TIMEOUT: '30'
+      UV_HTTP_RETRIES: '1'
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Compare api/mcp-tools.json with the Python registry
+        run: uv run --frozen --project backend --python 3.13 python scripts/export-mcp-tools.py --check
+
+  image:
+    name: Build prod image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Build (no push)
+        run: docker build --target prod --tag mainloop-server:ci .

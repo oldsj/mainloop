@@ -8,7 +8,7 @@ export
 CAP := node "$(CURDIR)/scripts/with-timeout.mjs"
 UV_HTTP_TIMEOUT := 30
 UV_HTTP_RETRIES := 1
-.PHONY: install-backend install-models install-frontend check check-non-backend check-frontend test-frontend frontend-build test-timeouts test-timeout-integration _install _check _fmt _fmt-all _test-backend
+.PHONY: install-backend install-models install-frontend check check-mcp-tools check-non-backend check-frontend test-frontend frontend-build test-timeouts test-timeout-integration _install _check _fmt _fmt-all _test-backend
 
 # Configuration
 # Set GHCR_USER in .env file (see .env.example)
@@ -118,8 +118,11 @@ CHECK_SECONDS := $(if $(filter 1,$(MAINLOOP_DEV_POSTGRES_WORKER)),$(if $(MAINLOO
 check: ## All offline checks in one turn (565s or the enclosing deadline, + cleanup; installs dependencies)
 	@$(CAP) $(CHECK_SECONDS) 'make check' -- $(MAKE) --no-print-directory _check
 
-_check:
+_check: check-mcp-tools
 	@node scripts/check.mjs --make '$(MAKE)'
+
+check-mcp-tools: ## api/mcp-tools.json matches the Python tool registry (fast; installs backend dependencies)
+	@$(CAP) 120 'make check-mcp-tools' -- uv run --frozen --project backend --python 3.13 python scripts/export-mcp-tools.py --check
 
 check-non-backend: ## Measure the offline checks outside the backend suite (as make check)
 	@$(CAP) $(CHECK_SECONDS) 'make check-non-backend' -- node scripts/check.mjs --make '$(MAKE)' --non-backend

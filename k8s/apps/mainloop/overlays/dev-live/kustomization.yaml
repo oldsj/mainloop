@@ -3,8 +3,9 @@ kind: Kustomization
 
 # Shared live-sync instance (`make dev-live`). DevSpace deploys and owns this
 # namespace directly; it is not Argo-managed. Secrets are supplied separately
-# (see docs/dev-environment.md#live-dev-instance); every Secret reference here is
-# optional so the instance starts without them, with GitHub and kagent unavailable.
+# (see docs/dev-environment.md#live-dev-instance). The server needs
+# mainloop-secrets/agent-token-key and the control-auth Secrets to start; the GitHub
+# App keys are optional.
 
 namespace: mainloop-dev
 
@@ -18,14 +19,15 @@ patches:
   - path: backend-patch.yaml
   - path: frontend-patch.yaml
 
-# Enable once kagent-control-token and kagent-control-ca exist in mainloop-dev.
-# components:
-#   - control-auth
+# Needs kagent-control-token and kagent-control-ca in mainloop-dev.
+components:
+  - control-auth
 
+# The -dev images carry the Go toolchain (server) and Vite (web), built from go-react.
 images:
   - name: ghcr.io/oldsj/mainloop-backend
-    newName: ghcr.io/oldsj/mainloop-backend-dev
-    newTag: latest
+    newName: ghcr.io/oldsj/mainloop-server-dev
+    newTag: go-react
   - name: ghcr.io/oldsj/mainloop-frontend
-    newName: ghcr.io/oldsj/mainloop-frontend-dev
-    newTag: latest
+    newName: ghcr.io/oldsj/mainloop-web-dev
+    newTag: go-react

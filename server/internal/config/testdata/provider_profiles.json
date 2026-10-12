@@ -1,0 +1,35 @@
+[
+  {
+    "id": "claude",
+    "display_name": "Claude (workspace)",
+    "native_provider": "claude",
+    "configuration_revision": "native-v1",
+    "agents": {
+      "main": { "namespace": "kagent", "name": "mainloop-main" },
+      "supervisor": { "namespace": "kagent", "name": "claude-workspace" },
+      "child": { "namespace": "kagent", "name": "claude-subscription" },
+      "agent": { "namespace": "kagent", "name": "claude-workspace" }
+    },
+    "capabilities": [
+      {
+        "capability": "native_create",
+        "state": "proved",
+        "scope": "live",
+        "evidence_ref": "smoke-2026-09-30"
+      },
+      { "capability": "native_resume", "state": "unknown" }
+    ]
+  },
+  {
+    "id": "codex-review",
+    "display_name": "Codex review",
+    "native_provider": "codex",
+    "configuration_revision": "review-v1",
+    "agents": {
+      "supervisor": { "namespace": "kagent", "name": "codex-review" },
+      "child": { "namespace": "kagent", "name": "codex-child" }
+    },
+    "aliases": ["review"],
+    "enabled": false
+  }
+]

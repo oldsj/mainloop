@@ -3,6 +3,9 @@ kind: Kustomization
 
 namespace: mainloop
 
+components:
+  - ../../components/python-backend
+
 resources:
   - ../../base
   - postgres-statefulset.yaml

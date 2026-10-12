@@ -1,0 +1,212 @@
+version: '2'
+sql:
+  - engine: postgresql
+    schema: internal/db/migrations
+    queries: internal/db/queries
+    gen:
+      go:
+        package: dbq
+        out: internal/db/dbq
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        emit_empty_slices: true
+        overrides:
+          - column: sessions.status
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: SessionStatus }
+          - column: agent_bindings.role
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: BindingRole }
+          - column: agent_bindings.mcp_grant_kind
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: MCPGrantKind }
+          - column: credentials.kind
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: CredentialKind }
+          - column: credentials.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: CredentialState
+              }
+          - column: projects.merge_policy
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: MergePolicy }
+          - column: topic_records.kind
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: TopicRecordKind
+              }
+          - column: topic_records.status
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: TopicRecordStatus
+              }
+          - column: environment_versions.validation_status
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: ValidationStatus
+              }
+          - column: deliveries.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: DeliveryState }
+          - column: hitl_requests.kind
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: HITLKind }
+          - column: hitl_requests.availability
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: HITLAvailability
+              }
+          - column: hitl_responses.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: HITLResponseState
+              }
+          - column: pr_creations.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: PRCreationState
+              }
+          - column: merge_candidates.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: MergeState }
+          - column: merge_candidates.route
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: MergeRoute }
+          - column: merge_request_keys.tool
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: MergeTool }
+          - column: merge_results.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: MergeState }
+          - column: attention_items.kind
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: AttentionKind }
+          - column: attention_items.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: AttentionState }
+          - column: environment_versions.provenance_kind
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: ProvenanceKind }
+          - column: environment_versions.base_provenance
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: BaseProvenance }
+          - column: dev_environments.source_kind
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: EnvironmentSourceKind
+              }
+          - column: environment_grants.permission
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: GrantPermission
+              }
+          - column: workspace_ops.kind
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: WorkspaceOpKind
+              }
+          - column: workspace_ops.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: WorkspaceOpState
+              }
+          - column: tasks.mode
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: TaskMode }
+          - column: tasks.selection_source
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: TaskSelection }
+          - column: tasks.status
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: TaskStatus }
+          - column: tasks.reason
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: TaskReason,
+                pointer: true
+              }
+          - column: task_attempts.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: AttemptState }
+          - column: task_attempts.role
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: AttemptRole }
+          - column: task_attempts.native_provider
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: NativeProvider }
+          - column: task_operations.kind
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: TaskOpKind }
+          - column: task_operations.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: TaskOpState }
+          - column: task_operations.last_confirmed_step
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: TaskOpState }
+          - column: task_operations.reason
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: TaskReason,
+                pointer: true
+              }
+          - column: task_artifacts.kind
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: TaskArtifactKind
+              }
+          - column: task_reports.outcome
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: ReportOutcome }
+          - column: task_event_deliveries.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: TaskDeliveryState
+              }
+          - column: git_enrollments.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: GitEnrollmentState
+              }
+          - column: git_push_grants.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: GitGrantState }
+          - column: git_publications.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: GitPublicationState
+              }
+          - db_type: jsonb
+            go_type: { import: encoding/json, type: RawMessage }
+          - db_type: jsonb
+            nullable: true
+            go_type: { import: encoding/json, type: RawMessage }
+          - db_type: timestamptz
+            go_type: { import: time, type: Time }
+          - db_type: timestamptz
+            nullable: true
+            go_type: { import: time, type: Time, pointer: true }
+        rename:
+          avatar_url: AvatarURL
+          html_url: HTMLURL
+          repo_url: RepoURL
+          secret_uid: SecretUID
+          mcp_grant_kind: MCPGrantKind
+          open_pr_count: OpenPRCount

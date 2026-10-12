@@ -1,7 +1,12 @@
 # Like the production overlay, envFrom replaces the base list so the whole
-# mainloop-secrets Secret is not imported; env merges by name. Every key from
-# mainloop-secrets is optional until the dev Secret exists. The commands match
-# DevSpace's, so the pods also reload when started without `devspace dev`.
+# mainloop-secrets Secret is not imported; env merges by name. GitHub App keys stay
+# optional so the instance starts without them; AGENT_TOKEN_KEY is required by the
+# server (there is no fallback), so mainloop-secrets must hold agent-token-key.
+# Each server container runs watchexec over `go run` from /src, which DevSpace syncs
+# server/ into; the same commands run when the pods start without `devspace dev`.
+# Each container rebuilds into its own Go build cache, on top of the warm cache baked into
+# the image, so each gets its own ephemeral-storage budget; the base 3Gi pod total was
+# evicted after about ten hot reloads.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,23 +22,49 @@ spec:
         kubernetes.io/arch: arm64
       # The -dev images are public; drop the base ghcr-secret reference.
       imagePullSecrets: null
+      initContainers:
+        # The dev image keeps the source it was built from at /src, so migrate runs the
+        # image's own revision before the first sync.
+        - name: migrate
+          imagePullPolicy: Always
+          command: [go, run, ./cmd/mainloop, migrate, up]
+          workingDir: /src
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-pg-app
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-pg-app
+                  key: password
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: '2'
+              memory: 2Gi
+              ephemeral-storage: 8Gi
       containers:
         - name: backend
           imagePullPolicy: Always
-          command:
-            - uvicorn
-            - mainloop.api:app
-            - --host
-            - 0.0.0.0
-            - --port
-            - '8000'
-            - --reload
-            - --reload-dir
-            - /app/src
-            - --reload-dir
-            - /models
-            - --timeout-graceful-shutdown
-            - '3'
+          command: &watch
+            - watchexec
+            - --restart
+            - --exts
+            - go,sql
+            - --stop-timeout
+            - 5s
+            - --
+            - go
+            - run
+            - ./cmd/mainloop
+          args: [serve-api]
+          workingDir: /src
           envFrom: &envFrom
             - configMapRef:
                 name: mainloop-config
@@ -53,7 +84,6 @@ spec:
                 secretKeyRef:
                   name: mainloop-secrets
                   key: agent-token-key
-                  optional: true
             - name: GITHUB_APP_ID
               valueFrom:
                 secretKeyRef:
@@ -66,37 +96,55 @@ spec:
                   name: mainloop-secrets
                   key: github-app-private-key
                   optional: true
+          # `go run` compiles first, so the probes wait for a cold build.
+          livenessProbe: &liveness
+            initialDelaySeconds: 120
+            failureThreshold: 6
+          readinessProbe: &readiness
+            initialDelaySeconds: 20
+            failureThreshold: 60
           resources:
             requests:
               cpu: 100m
               memory: 512Mi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: '2'
+              memory: 2Gi
+              ephemeral-storage: 8Gi
         - name: mcp
           imagePullPolicy: Always
-          command:
-            - uvicorn
-            - mainloop.mcp_app:app
-            - --host
-            - 0.0.0.0
-            - --port
-            - '8002'
-            - --reload
-            - --reload-dir
-            - /app/src
-            - --reload-dir
-            - /models
-            - --timeout-graceful-shutdown
-            - '3'
+          command: *watch
+          args: [serve-mcp]
+          workingDir: /src
           envFrom: *envFrom
           env: *env
+          livenessProbe: *liveness
+          readinessProbe: *readiness
           resources:
             requests:
               cpu: 50m
               memory: 256Mi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: '2'
+              memory: 2Gi
+              ephemeral-storage: 8Gi
         - name: git
           imagePullPolicy: Always
+          command: *watch
+          args: [serve-git]
+          workingDir: /src
           envFrom: *envFrom
           env: *env
+          livenessProbe: *liveness
+          readinessProbe: *readiness
           resources:
             requests:
               cpu: 25m
               memory: 128Mi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: '2'
+              memory: 2Gi
+              ephemeral-storage: 8Gi

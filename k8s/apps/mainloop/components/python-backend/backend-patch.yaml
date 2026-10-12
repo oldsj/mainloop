@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-backend
+  namespace: mainloop
+spec:
+  template:
+    spec:
+      initContainers:
+        # The Python backend migrates itself at startup.
+        - $patch: delete
+          name: migrate
+      containers:
+        - name: backend
+          # The image's own CMD serves the API.
+          command: null
+          env:
+            # Python falls back to a key from the Secret's other values; the Kind overlay
+            # sets AGENT_TOKEN_KEY itself where it needs one.
+            - $patch: delete
+              name: AGENT_TOKEN_KEY
+          livenessProbe:
+            $patch: replace
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 90
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            $patch: replace
+            httpGet:
+              path: /health
+              port: 8000
+            # DBOS initialization takes ~25s during startup
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+        - name: mcp
+          command: [uvicorn, mainloop.mcp_app:app, --host, 0.0.0.0, --port, '8002']
+          env:
+            - $patch: delete
+              name: AGENT_TOKEN_KEY
+          readinessProbe:
+            $patch: replace
+            tcpSocket:
+              port: 8002
+            initialDelaySeconds: 30
+            periodSeconds: 5
+          livenessProbe:
+            $patch: replace
+            tcpSocket:
+              port: 8002
+            initialDelaySeconds: 90
+            periodSeconds: 10
+        - name: git
+          command: [python, -m, mainloop.git_app]
+          env:
+            - $patch: delete
+              name: AGENT_TOKEN_KEY
+          readinessProbe:
+            $patch: replace
+            exec:
+              command:
+                - python
+                - -c
+                - import socket; socket.create_connection(("127.0.0.1", 8003), 1).close(); socket.create_connection(("127.0.0.1", 8004), 1).close()
+            initialDelaySeconds: 30
+            periodSeconds: 5
+          livenessProbe:
+            $patch: replace
+            exec:
+              command:
+                - python
+                - -c
+                - import socket; socket.create_connection(("127.0.0.1", 8003), 1).close(); socket.create_connection(("127.0.0.1", 8004), 1).close()
+            initialDelaySeconds: 90
+            periodSeconds: 10
