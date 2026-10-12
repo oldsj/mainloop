@@ -766,7 +766,7 @@ func (s *Service) Create(ctx context.Context, n NewSession) (string, error) {
 		if _, err := q.SetSessionStatus(ctx, dbq.SetSessionStatusParams{ID: id, Status: dbstate.SessionActive}); err != nil {
 			return fmt.Errorf("start session: %w", err)
 		}
-		return s.record(ctx, tx, id, messageID, prompt)
+		return s.record(ctx, tx, SourceUser, id, messageID, prompt)
 	})
 	if err != nil {
 		return "", busyOrErr(err)

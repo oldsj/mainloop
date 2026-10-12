@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"context"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -27,3 +28,8 @@ func ParkedDelay(o Options, attempts int) time.Duration {
 
 // AssistantID is the id of the mirrored reply of a task.
 func AssistantID(sessionID, taskID string) string { return assistantID(sessionID, a2a.TaskID(taskID)) }
+
+// Handle runs the delivery handler for a claim of the delivery with the given id and state.
+func Handle(s *Service, ctx context.Context, id, state string) (reconcile.Outcome, error) {
+	return s.handle(ctx, reconcile.Claim{ID: id, State: state})
+}

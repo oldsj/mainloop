@@ -109,6 +109,9 @@ func TestBlockedReportAlsoReachesMain(t *testing.T) {
 	if !strings.Contains(got, "blocked; unverified claim") || !strings.HasSuffix(got, "Owner action needed: decide the schema") {
 		t.Fatalf("main message = %q", got)
 	}
+	if src := r.str(`SELECT d.source FROM deliveries d JOIN session_messages m ON m.id = d.id WHERE m.session_id = $1 AND m.content LIKE '[report from%'`, main); src != "mainloop" {
+		t.Fatalf("the report to main has source %q, want mainloop", src)
+	}
 }
 
 func TestBusyParentGetsTheReportLater(t *testing.T) {

@@ -1230,24 +1230,41 @@ func (q *Queries) ListSessionKagentContexts(ctx context.Context, sessionID strin
 }
 
 const listSessionMessages = `-- name: ListSessionMessages :many
-SELECT id, session_id, role, content, created_at FROM session_messages WHERE session_id = $1 ORDER BY created_at, id
+SELECT m.id, m.session_id, m.role, m.content, m.created_at,
+       coalesce(d.source, '')::text AS source
+FROM session_messages m
+LEFT JOIN deliveries d ON d.id = m.id
+WHERE m.session_id = $1
+ORDER BY m.created_at, m.id
 `
 
-func (q *Queries) ListSessionMessages(ctx context.Context, sessionID string) ([]SessionMessage, error) {
+type ListSessionMessagesRow struct {
+	ID        string
+	SessionID string
+	Role      string
+	Content   string
+	CreatedAt time.Time
+	Source    string
+}
+
+// A user message carries its delivery's source, so who wrote it covers the whole history, not just
+// the newest deliveries. Assistant messages have no delivery.
+func (q *Queries) ListSessionMessages(ctx context.Context, sessionID string) ([]ListSessionMessagesRow, error) {
 	rows, err := q.db.Query(ctx, listSessionMessages, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []SessionMessage{}
+	items := []ListSessionMessagesRow{}
 	for rows.Next() {
-		var i SessionMessage
+		var i ListSessionMessagesRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.SessionID,
 			&i.Role,
 			&i.Content,
 			&i.CreatedAt,
+			&i.Source,
 		); err != nil {
 			return nil, err
 		}

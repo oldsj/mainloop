@@ -242,7 +242,7 @@ type stopProbeEndBeforeBrief struct {
 	once sync.Once
 }
 
-func (s *stopProbeEndBeforeBrief) SendTo(ctx context.Context, sid, mid, text string) (sessions.Sent, error) {
+func (s *stopProbeEndBeforeBrief) SendToAs(ctx context.Context, source, sid, mid, text string) (sessions.Sent, error) {
 	var workspace bool
 	if err := s.r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=$1)`, sid).Scan(&workspace); err != nil {
 		return sessions.Sent{}, err
@@ -254,7 +254,7 @@ func (s *stopProbeEndBeforeBrief) SendTo(ctx context.Context, sid, mid, text str
 	if cancelErr != nil {
 		return sessions.Sent{}, cancelErr
 	}
-	return s.real.SendTo(ctx, sid, mid, text)
+	return s.real.SendToAs(ctx, source, sid, mid, text)
 }
 
 // A session that ended between activation and the first send can never take the brief: the create

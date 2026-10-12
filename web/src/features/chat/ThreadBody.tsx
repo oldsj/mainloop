@@ -61,7 +61,7 @@ export function ThreadBody({
       <MessageList
         messages={thread.messages}
         notices={thread.notices}
-        assignments={assignmentIds(thread.native?.deliveries)}
+        assignments={assignmentIds(thread.messages)}
         agentKind={thread.native?.kind as 'claude' | 'codex' | undefined}
         context={thread.context}
         loaded={thread.loaded}

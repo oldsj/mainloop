@@ -77,10 +77,7 @@ func (a *SessionsAPI) GetConversation(ctx context.Context, r api.GetConversation
 	}
 	msgs := make([]api.Message, 0, len(rows))
 	for _, m := range rows {
-		msgs = append(msgs, api.Message{
-			Id: m.ID, ConversationId: m.SessionID, Role: api.MessageRole(m.Role),
-			Content: m.Content, CreatedAt: m.CreatedAt,
-		})
+		msgs = append(msgs, toMessage(m))
 	}
 	title := c.Title
 	return api.GetConversation200JSONResponse(api.ConversationResponse{
@@ -397,10 +394,7 @@ func (a *SessionsAPI) GetSessionConversation(ctx context.Context, r api.GetSessi
 	}
 	msgs := make([]api.Message, 0, len(rows))
 	for _, m := range rows {
-		msgs = append(msgs, api.Message{
-			Id: m.ID, ConversationId: m.SessionID, Role: api.MessageRole(m.Role),
-			Content: m.Content, CreatedAt: m.CreatedAt,
-		})
+		msgs = append(msgs, toMessage(m))
 	}
 	return api.GetSessionConversation200JSONResponse(api.SessionConversationResponse{Messages: msgs, Session: toSession(row, needs)}), nil
 }
@@ -513,4 +507,17 @@ func conflictResponse(err error) *apierr.Error {
 		return apierr.ConflictCode(c.msg, c.code)
 	}
 	return apierr.Conflict(reason(err, ErrConflict))
+}
+
+// toMessage maps a stored message. Only a user message has a source, from its delivery.
+func toMessage(m dbq.ListSessionMessagesRow) api.Message {
+	msg := api.Message{
+		Id: m.ID, ConversationId: m.SessionID, Role: api.MessageRole(m.Role),
+		Content: m.Content, CreatedAt: m.CreatedAt,
+	}
+	if m.Source != "" {
+		src := api.MessageSource(m.Source)
+		msg.Source = &src
+	}
+	return msg
 }

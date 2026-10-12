@@ -57,6 +57,9 @@ the turn settles, and announced by `session:message`.
   it. It is never dropped for being quiet: kagent sends nothing while a tool runs, so a long build is
   not a reason to forget the turn. `seq` only grows for a message id. The kept state is bounded like
   the frame (the newest 16 KiB of text and 30 tool lines), so a long turn costs a fixed amount.
+  A delivery whose session has been deleted ends its turn with a closing frame, so the page does not
+  wait for a reply that cannot come. The memory of ended turns (1024 sessions) forgets the session
+  whose turn ended longest ago; a session that ends another turn counts as newest.
 - The turn ends with a frame with `active: false` that repeats the last text and tool lines, sent
   after the settle commits. `reply_id` names the conversation message that now holds the outcome (the mirrored reply),
   or is absent when the turn stored none. A client keeps the live bubble until it has read that

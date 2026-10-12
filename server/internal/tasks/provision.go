@@ -32,8 +32,8 @@ type WorkspaceRuntime interface {
 
 // SessionRuntime is the part of [sessions.Service] delivery and settlement use.
 type SessionRuntime interface {
-	SendTo(ctx context.Context, sessionID, messageID, text string) (sessions.Sent, error)
-	Send(ctx context.Context, messageID, conversationID, text string) (sessions.Sent, error)
+	SendToAs(ctx context.Context, source, sessionID, messageID, text string) (sessions.Sent, error)
+	SendAs(ctx context.Context, source, messageID, conversationID, text string) (sessions.Sent, error)
 	EnsureMain(ctx context.Context) (sessions.Main, error)
 	Cancel(ctx context.Context, sessionID string) (sessions.CancelResult, error)
 }
@@ -576,7 +576,7 @@ func (s *Service) sendBrief(ctx context.Context, c reconcile.Claim, op dbq.TaskO
 	}
 	mid := briefMessageID(a.ID)
 	if _, err := q.GetDelivery(ctx, mid); errors.Is(err, pgx.ErrNoRows) {
-		_, err := s.Sessions.SendTo(ctx, *a.SessionID, mid, DelegatedBrief(a.Role, t.Mode, t.Brief))
+		_, err := s.Sessions.SendToAs(ctx, sessions.SourceMainloop, *a.SessionID, mid, DelegatedBrief(a.Role, t.Mode, t.Brief))
 		switch {
 		case errors.Is(err, sessions.ErrNotFound):
 			return s.giveUpInitialBrief(ctx, c, op, a, mid)

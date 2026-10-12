@@ -79,3 +79,25 @@ func TestTheEndedMessageMemoryIsBounded(t *testing.T) {
 		t.Fatalf("the newest ended message was forgotten")
 	}
 }
+
+func TestASessionThatEndsAnotherTurnMovesToTheBack(t *testing.T) {
+	tr := New(sink{}, WithInterval(0))
+	end := func(sid, mid string) { tr.End(Ref{UserID: "u", SessionID: sid, MessageID: mid}, "") }
+	end("first", "m1")
+	for i := range maxDone - 1 {
+		end("s"+strconv.Itoa(i), "m")
+	}
+	end("first", "m2") // the oldest entry ends another turn, so it is now the newest
+	end("newcomer", "m")
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if tr.done["first"] != "m2" {
+		t.Fatalf("the session that just ended a turn was forgotten: %q", tr.done["first"])
+	}
+	if _, ok := tr.done["s0"]; ok {
+		t.Fatalf("the session idle longest was kept")
+	}
+	if len(tr.done) != maxDone || len(tr.order) != maxDone {
+		t.Fatalf("done has %d entries (order %d), want %d", len(tr.done), len(tr.order), maxDone)
+	}
+}

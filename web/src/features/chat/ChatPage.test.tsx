@@ -131,13 +131,16 @@ describe('assignments in the main thread', () => {
     setup({
       mainThread: mainThreadFixture({
         conversation_id: CONVERSATION_ID,
+        // 25 later deliveries: the brief is long past the ledger's newest ones.
         native: nativeFixture({
-          deliveries: [deliveryFixture({ message_id: 'm-brief', source: 'brief' })]
+          deliveries: Array.from({ length: 25 }, (_, i) =>
+            deliveryFixture({ message_id: `m-later-${i}` })
+          )
         })
       }),
       messages: [
-        messageFixture({ id: 'm-brief', content: 'Brief for the parser' }),
-        messageFixture({ id: 'm-own', content: 'my own words' })
+        messageFixture({ id: 'm-brief', content: 'Brief for the parser', source: 'mainloop' }),
+        messageFixture({ id: 'm-own', content: 'my own words', source: 'user' })
       ]
     });
     await screen.findByText('my own words');

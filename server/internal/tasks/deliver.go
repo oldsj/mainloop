@@ -173,9 +173,9 @@ func (s *Service) sendReport(ctx context.Context, c reconcile.Claim, d dbq.TaskE
 		}
 		text := reportText(r, t, a.Number)
 		if d.RecipientKey == "main" {
-			_, err = s.Sessions.Send(ctx, mid, "", text)
+			_, err = s.Sessions.SendAs(ctx, sessions.SourceMainloop, mid, "", text)
 		} else {
-			_, err = s.Sessions.SendTo(ctx, sessionID, mid, text)
+			_, err = s.Sessions.SendToAs(ctx, sessions.SourceMainloop, sessionID, mid, text)
 		}
 		switch {
 		case errors.Is(err, sessions.ErrBusy):

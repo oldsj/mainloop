@@ -1,14 +1,15 @@
-import type { NativeDelivery } from '@/lib/contract';
+import type { Message } from '@/lib/contract';
 
 /**
- * The messages Mainloop sent on the owner's behalf. A delivery's `source` says who wrote it; the
- * owner's own messages are `user`, the contract's default. Anything else is an assignment, such as
- * a delegated brief, and is shown as one rather than as a message from "You".
+ * The messages Mainloop sent on the owner's behalf. A message's `source` says who wrote it: the
+ * owner's own are `user`, and a message without one (an optimistic send, an assistant reply) is not
+ * an assignment. Anything else, such as a delegated brief, is shown as an assignment rather than as
+ * a message from "You". The source comes with the message, so it holds however long the thread is.
  */
-export function assignmentIds(deliveries: NativeDelivery[] | undefined): ReadonlySet<string> {
+export function assignmentIds(messages: Message[]): ReadonlySet<string> {
   return new Set(
-    (deliveries ?? [])
-      .filter((delivery) => (delivery.source ?? 'user') !== 'user')
-      .map((delivery) => delivery.message_id)
+    messages
+      .filter((message) => message.source !== undefined && message.source !== 'user')
+      .map((message) => message.id)
   );
 }

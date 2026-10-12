@@ -1514,6 +1514,12 @@ export interface components {
        */
       content: string;
       /**
+       * Source
+       * @description Who wrote a user message. `mainloop` marks one Mainloop sent on the owner's behalf (a delegated brief, a task report); `user` is the owner's own. Absent on assistant messages.
+       * @enum {string}
+       */
+      source?: 'user' | 'mainloop';
+      /**
        * Created At
        * Format: date-time
        * @description Creation timestamp

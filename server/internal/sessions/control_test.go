@@ -81,7 +81,7 @@ func (e *env) queueHeld(sessionID string) bool {
 	return held
 }
 
-func (e *env) sessionMessages(sessionID string) []dbq.SessionMessage {
+func (e *env) sessionMessages(sessionID string) []dbq.ListSessionMessagesRow {
 	e.t.Helper()
 	rows, err := dbq.New(e.pool).ListSessionMessages(context.Background(), sessionID)
 	if err != nil {

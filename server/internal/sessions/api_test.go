@@ -144,3 +144,97 @@ func TestSendMessageStatuses(t *testing.T) {
 		t.Fatalf("want 422, got %v", err)
 	}
 }
+
+// A message carries who wrote it, so a brief stays marked after the ledger (which shows only the
+// newest deliveries) has moved past it.
+func TestAMessageSaysWhoSentItForTheWholeHistory(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.run()
+	main, err := e.svc.EnsureMain(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief := uuid.NewString()
+	if _, err := e.svc.SendAs(ctx, sessions.SourceMainloop, brief, "", "the brief"); err != nil {
+		t.Fatal(err)
+	}
+	e.waitState(brief, dbstate.DeliveryCompleted)
+	var last string
+	for range 25 {
+		last = e.send("owner words")
+		e.waitState(last, dbstate.DeliveryCompleted)
+	}
+
+	resp, err := e.API().GetMainThread(ctx, api.GetMainThreadRequestObject{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range api.MainThreadInfo(resp.(api.GetMainThread200JSONResponse)).Native.Deliveries {
+		if d.MessageId == brief {
+			t.Fatalf("the brief is still in the newest deliveries; the test no longer proves anything")
+		}
+	}
+
+	cr, err := e.API().GetConversation(ctx, api.GetConversationRequestObject{ConversationId: main.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mainloop, user, assistant int
+	for _, m := range cr.(api.GetConversation200JSONResponse).Messages {
+		switch {
+		case m.Role == api.MessageRoleAssistant:
+			if m.Source != nil {
+				t.Fatalf("an assistant message has source %q", *m.Source)
+			}
+			assistant++
+		case m.Id == brief:
+			if m.Source == nil || *m.Source != api.MessageSourceMainloop {
+				t.Fatalf("the brief has source %v, want mainloop", m.Source)
+			}
+			mainloop++
+		default:
+			if m.Source == nil || *m.Source != api.MessageSourceUser {
+				t.Fatalf("an owner message has source %v, want user", m.Source)
+			}
+			user++
+		}
+	}
+	if mainloop != 1 || user != 25 || assistant != 26 {
+		t.Fatalf("%d brief, %d owner, %d assistant messages; want 1, 25, 26", mainloop, user, assistant)
+	}
+}
+
+// The same holds for a session's own conversation, and for the source the delegated brief and
+// task reports are sent with.
+func TestASessionConversationMarksMessagesMainloopSent(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.withProviders()
+	e.run()
+	sid := e.newSession("start")
+	e.waitState(e.firstDelivery(sid), dbstate.DeliveryCompleted)
+	brief, owned := uuid.NewString(), uuid.NewString()
+	if _, err := e.svc.SendToAs(ctx, sessions.SourceMainloop, sid, brief, "do the thing"); err != nil {
+		t.Fatal(err)
+	}
+	e.waitState(brief, dbstate.DeliveryCompleted)
+	if _, err := e.svc.SendTo(ctx, sid, owned, "also this"); err != nil {
+		t.Fatal(err)
+	}
+	e.waitState(owned, dbstate.DeliveryCompleted)
+
+	conv, err := e.API().GetSessionConversation(ctx, api.GetSessionConversationRequestObject{SessionId: sid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]api.MessageSource{}
+	for _, m := range conv.(api.GetSessionConversation200JSONResponse).Messages {
+		if m.Source != nil {
+			got[m.Id] = *m.Source
+		}
+	}
+	if len(got) != 3 || got[e.firstDelivery(sid)] != api.MessageSourceUser || got[brief] != api.MessageSourceMainloop || got[owned] != api.MessageSourceUser {
+		t.Fatalf("sources %v; want the prompt and %s user, %s mainloop", got, owned, brief)
+	}
+}

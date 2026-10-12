@@ -47,8 +47,15 @@ INSERT INTO session_messages (id, session_id, role, content)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (id) DO NOTHING;
 
+-- A user message carries its delivery's source, so who wrote it covers the whole history, not just
+-- the newest deliveries. Assistant messages have no delivery.
 -- name: ListSessionMessages :many
-SELECT * FROM session_messages WHERE session_id = $1 ORDER BY created_at, id;
+SELECT m.id, m.session_id, m.role, m.content, m.created_at,
+       coalesce(d.source, '')::text AS source
+FROM session_messages m
+LEFT JOIN deliveries d ON d.id = m.id
+WHERE m.session_id = $1
+ORDER BY m.created_at, m.id;
 
 -- name: GetConversationSummary :one
 SELECT s.id, s.user_id, s.title, s.created_at,

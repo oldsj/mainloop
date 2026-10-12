@@ -4029,6 +4029,15 @@ components:
           type: string
           title: Content
           description: Message content
+        source:
+          type: string
+          enum:
+            - user
+            - mainloop
+          title: Source
+          description: >-
+            Who wrote a user message. `mainloop` marks one Mainloop sent on the owner's behalf (a
+            delegated brief, a task report); `user` is the owner's own. Absent on assistant messages.
         created_at:
           type: string
           format: date-time

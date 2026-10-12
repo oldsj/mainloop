@@ -21,6 +21,7 @@ package progress
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -168,6 +169,26 @@ func (t *Tracker) End(ref Ref, replyID string) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.endLocked(ref, replyID)
+}
+
+// EndMessage ends the turn of a delivery message whose session is gone, so the caller knows the
+// message id but not the session. It does nothing when no turn of that message is tracked.
+func (t *Tracker) EndMessage(messageID string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, tr := range t.turns {
+		if tr.ref.MessageID == messageID {
+			t.endLocked(tr.ref, "")
+			return
+		}
+	}
+}
+
+func (t *Tracker) endLocked(ref Ref, replyID string) {
 	t.markDoneLocked(ref.SessionID, ref.MessageID)
 	tr, ok := t.turns[ref.SessionID]
 	if !ok || tr.ref.MessageID != ref.MessageID {
@@ -230,15 +251,19 @@ func (t *Tracker) turnLocked(ref Ref) *turn {
 	return tr
 }
 
-// markDoneLocked remembers that a message's turn ended, keeping at most maxDone sessions.
+// markDoneLocked remembers that a message's turn ended, keeping at most maxDone sessions. A session
+// that ends another turn moves to the back of the order, so the oldest to forget is the one that
+// has gone longest without a turn ending.
 func (t *Tracker) markDoneLocked(sid, mid string) {
-	if _, ok := t.done[sid]; !ok {
-		if len(t.order) >= maxDone {
-			delete(t.done, t.order[0])
-			t.order = t.order[1:]
+	if _, ok := t.done[sid]; ok {
+		if i := slices.Index(t.order, sid); i >= 0 {
+			t.order = slices.Delete(t.order, i, i+1)
 		}
-		t.order = append(t.order, sid)
+	} else if len(t.order) >= maxDone {
+		delete(t.done, t.order[0])
+		t.order = t.order[1:]
 	}
+	t.order = append(t.order, sid)
 	t.done[sid] = mid
 }
 

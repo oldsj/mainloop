@@ -93,7 +93,9 @@ type turn struct {
 func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outcome, error) {
 	d, err := dbq.New(s.Pool).GetDeliveryContext(ctx, c.ID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return reconcile.Recorded(), nil // the session was deleted; nothing is owed
+		// The session was deleted; nothing is owed. A turn still shown for it would never end otherwise.
+		s.Progress.EndMessage(c.ID)
+		return reconcile.Recorded(), nil
 	}
 	if err != nil {
 		return reconcile.Retry(), fmt.Errorf("load delivery: %w", err)

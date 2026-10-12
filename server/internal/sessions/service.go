@@ -365,10 +365,17 @@ func checkText(messageID, text string) (string, error) {
 	return text, nil
 }
 
-// record writes a user message and its delivery for a session, in tx. It is idempotent per message
+// Who wrote a message. The owner's own messages are SourceUser; SourceMainloop marks the ones Mainloop
+// writes on the owner's behalf: a delegated brief, or a task report sent to a supervisor.
+const (
+	SourceUser     = "user"
+	SourceMainloop = "mainloop"
+)
+
+// record writes a message from source and its delivery for a session, in tx. It is idempotent per message
 // id: an id that is already recorded for the session changes nothing. The caller has checked that
 // the session exists and may take a message.
-func (s *Service) record(ctx context.Context, tx pgx.Tx, sessionID, messageID, text string) error {
+func (s *Service) record(ctx context.Context, tx pgx.Tx, source, sessionID, messageID, text string) error {
 	q := dbq.New(tx)
 	// One send at a time per session, so the open-turn check below cannot race another send.
 	if err := db.XactLock(ctx, tx, "mainloop:send:"+sessionID); err != nil {
@@ -403,7 +410,7 @@ func (s *Service) record(ctx context.Context, tx pgx.Tx, sessionID, messageID, t
 		// No delivery has this id, so the row is some other message: ids are global.
 		return fmt.Errorf("%w: the message id is already used", ErrInvalid)
 	}
-	if _, err := q.InsertDelivery(ctx, dbq.InsertDeliveryParams{ID: messageID, SessionID: sessionID, Source: "user"}); err != nil {
+	if _, err := q.InsertDelivery(ctx, dbq.InsertDeliveryParams{ID: messageID, SessionID: sessionID, Source: source}); err != nil {
 		return fmt.Errorf("record delivery: %w", err)
 	}
 	// The owner's next message releases the hold a stop left on the queue.
@@ -433,6 +440,11 @@ func busyOrErr(err error) error {
 //
 // It touches only the database. The delivery loop makes the kagent calls.
 func (s *Service) Send(ctx context.Context, messageID, conversationID, text string) (Sent, error) {
+	return s.SendAs(ctx, SourceUser, messageID, conversationID, text)
+}
+
+// SendAs is Send for a message from source (SourceUser or SourceMainloop).
+func (s *Service) SendAs(ctx context.Context, source, messageID, conversationID, text string) (Sent, error) {
 	text, err := checkText(messageID, text)
 	if err != nil {
 		return Sent{}, err
@@ -447,7 +459,7 @@ func (s *Service) Send(ctx context.Context, messageID, conversationID, text stri
 			return ErrNotFound
 		}
 		out = Sent{ConversationID: main.SessionID, MessageID: messageID}
-		return s.record(ctx, tx, main.SessionID, messageID, text)
+		return s.record(ctx, tx, source, main.SessionID, messageID, text)
 	})
 	if err = busyOrErr(err); err != nil {
 		return Sent{}, err
@@ -464,6 +476,11 @@ func endedStatus(st dbstate.SessionStatus) bool {
 // The session must have a native binding, must not have ended or been archived, and must have no
 // open turn or stop request on its task attempt.
 func (s *Service) SendTo(ctx context.Context, sessionID, messageID, text string) (Sent, error) {
+	return s.SendToAs(ctx, SourceUser, sessionID, messageID, text)
+}
+
+// SendToAs is SendTo for a message from source (SourceUser or SourceMainloop).
+func (s *Service) SendToAs(ctx context.Context, source, sessionID, messageID, text string) (Sent, error) {
 	text, err := checkText(messageID, text)
 	if err != nil {
 		return Sent{}, err
@@ -496,7 +513,7 @@ func (s *Service) SendTo(ctx context.Context, sessionID, messageID, text string)
 		if b.WorkspaceAgentName != nil && b.KagentSessionID == nil {
 			return conflict("The workspace is not ready yet; try again when it is.")
 		}
-		return s.record(ctx, tx, sessionID, messageID, text)
+		return s.record(ctx, tx, source, sessionID, messageID, text)
 	})
 	if err = busyOrErr(err); err != nil {
 		return Sent{}, err

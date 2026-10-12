@@ -76,6 +76,9 @@ func TestDelegateProvisionsAndReports(t *testing.T) {
 	if !strings.Contains(cmsg, "open_pull_request") || !strings.Contains(cmsg, "## Workspace environment") {
 		t.Fatalf("child brief = %q", cmsg)
 	}
+	if src := r.str(`SELECT source FROM deliveries WHERE session_id = $1`, childBinding); src != "mainloop" {
+		t.Fatalf("the delegated brief has source %q, want mainloop", src)
+	}
 
 	// The child reports; the parent's session receives it once its own turn is over.
 	kid := r.agent(dbstate.RoleChild, childBinding)
@@ -89,6 +92,9 @@ func TestDelegateProvisionsAndReports(t *testing.T) {
 	got := r.str(`SELECT content FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, supSession)
 	if !strings.HasPrefix(got, "[report from child task "+child+" attempt 1; completed; unverified claim]\ndid a thing") {
 		t.Fatalf("report text = %q", got)
+	}
+	if src := r.str(`SELECT d.source FROM deliveries d JOIN session_messages m ON m.id = d.id WHERE m.session_id = $1 AND m.content LIKE '[report from%'`, supSession); src != "mainloop" {
+		t.Fatalf("the report has source %q, want mainloop", src)
 	}
 	r.finishTurns()
 	r.eventually("delivery done", func() bool {

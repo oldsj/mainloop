@@ -1,6 +1,7 @@
 package sessions_test
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"sync"
@@ -14,6 +15,8 @@ import (
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
 	"github.com/oldsj/mainloop/server/internal/progress"
+	"github.com/oldsj/mainloop/server/internal/reconcile"
+	"github.com/oldsj/mainloop/server/internal/sessions"
 )
 
 // liveLog records the live frames the tracker publishes.
@@ -252,5 +255,27 @@ func TestATurnThatFailsClosesTheLiveBubbleWithoutAReply(t *testing.T) {
 	}
 	if n := len(e.svc.Progress.Snapshot(owner)); n != 0 {
 		t.Fatalf("%d turns still live", n)
+	}
+}
+
+func TestADeliveryWhoseSessionIsGoneEndsItsLiveTurn(t *testing.T) {
+	e := newEnv(t)
+	live := e.withProgress(0)
+	ref := progress.Ref{UserID: owner, SessionID: "gone-session", MessageID: "gone-message"}
+	e.svc.Progress.Begin(ref)
+	live.waitFor(t, "the turn starting", func(f api.EventSessionProgress) bool {
+		return f.Active && f.MessageId == ref.MessageID
+	})
+
+	// The row is gone, as when the session was deleted after the delivery was claimed.
+	out, err := sessions.Handle(e.svc, context.Background(), ref.MessageID, string(dbstate.DeliveryDelivered))
+	if err != nil || out != reconcile.Recorded() {
+		t.Fatalf("handle = %+v, %v; want the delivery recorded as done", out, err)
+	}
+	live.waitFor(t, "the closing frame", func(f api.EventSessionProgress) bool {
+		return !f.Active && f.MessageId == ref.MessageID && f.ReplyId == nil
+	})
+	if snap := e.svc.Progress.Snapshot(owner); len(snap) != 0 {
+		t.Fatalf("snapshot still holds the turn: %+v", snap)
 	}
 }

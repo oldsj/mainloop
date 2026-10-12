@@ -126,7 +126,7 @@ func deref(s *string) string {
 	return *s
 }
 
-func (e *env) messages() []dbq.SessionMessage {
+func (e *env) messages() []dbq.ListSessionMessagesRow {
 	e.t.Helper()
 	m, err := e.svc.EnsureMain(context.Background())
 	if err != nil {
