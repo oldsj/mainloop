@@ -373,6 +373,8 @@ func totals(sums []api.HealthTurnSummary) api.HealthTotals {
 	t := api.HealthTotals{Turns: len(sums), Coverage: api.HealthTotalsCoverageUnknown}
 	var in, out, failures, groups int
 	var haveIn, haveOut bool
+	var re api.HealthReorientation
+	var haveRe bool
 	allComplete := true
 	for _, s := range sums {
 		if s.InputTokens != nil {
@@ -391,6 +393,22 @@ func totals(sums []api.HealthTurnSummary) api.HealthTotals {
 		}
 		failures += s.Failures
 		groups += s.RepeatedFailureGroups
+		if r := s.Reorientation; r != nil {
+			haveRe = true
+			re.Turns += r.Turns
+			re.EditedTurns += r.EditedTurns
+			re.Reads += r.Reads
+			re.RereadCalls += r.RereadCalls
+			re.RereadsFromEarlierTurns += r.RereadsFromEarlierTurns
+			re.Edits += r.Edits
+			if r.ReadsBeforeFirstEdit != nil {
+				n := *r.ReadsBeforeFirstEdit
+				if re.ReadsBeforeFirstEdit != nil {
+					n += *re.ReadsBeforeFirstEdit
+				}
+				re.ReadsBeforeFirstEdit = &n
+			}
+		}
 		t.UnresolvedCalls += s.UnresolvedCalls
 		if s.FrictionCoverage != api.HealthTurnSummaryFrictionCoverageComplete || s.UsageCoverage != api.HealthTurnSummaryUsageCoverageComplete {
 			allComplete = false
@@ -401,6 +419,9 @@ func totals(sums []api.HealthTurnSummary) api.HealthTotals {
 	}
 	if haveOut {
 		t.OutputTokens = &out
+	}
+	if haveRe {
+		t.Reorientation = &re
 	}
 	if len(sums) > 0 {
 		t.Failures, t.RepeatedFailureGroups = &failures, &groups

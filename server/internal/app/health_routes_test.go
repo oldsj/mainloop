@@ -133,7 +133,7 @@ func TestOrchestrationHealthRoute(t *testing.T) {
 	sameKeys(t, "row", row, "id", "task_id", "project_id", "title", "sessions", "turns", "totals", "reports", "approvals", "gaps", "expected_receipts")
 	totals := row.(map[string]any)["totals"]
 	sameKeys(t, "totals", totals, "turns", "usage_observed_turns", "usage_complete_turns", "input_tokens", "output_tokens",
-		"failures", "repeated_failure_groups", "unresolved_calls", "coverage")
+		"failures", "repeated_failure_groups", "unresolved_calls", "reorientation", "coverage")
 	if tm := totals.(map[string]any); tm["input_tokens"] != float64(7) || tm["output_tokens"] != float64(3) || tm["failures"] != float64(3) || tm["coverage"] != "complete" {
 		t.Errorf("totals = %v", tm)
 	}

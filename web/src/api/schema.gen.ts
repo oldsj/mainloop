@@ -4365,8 +4365,26 @@ export interface components {
       failures: number | null;
       repeated_failure_groups: number | null;
       unresolved_calls: number;
+      reorientation?: components['schemas']['HealthReorientation'];
       /** @enum {string} */
       coverage: 'complete' | 'partial' | 'unknown';
+    };
+    /** @description How much a turn re-read before it worked, counted from the Read and Edit tool calls the turn reported. Absent where the turn was summarised before this was collected (finished turns are not re-summarised, so those stay without it). On a total it is the sum over the turns that have it; `turns` says how many those are, which can be fewer than the total's `turns`. A read or edit that failed is not counted. Reads with no reported path (outside the workspace, or a sensitive name) are counted in `reads` but never as repeats. Compactions are not here: the harness does not report them yet. */
+    HealthReorientation: {
+      /** @description Turns counted here; 1 on a turn. */
+      turns: number;
+      /** @description Turns counted here that made at least one edit; 0 or 1 on a turn. */
+      edited_turns: number;
+      /** @description Read calls. */
+      reads: number;
+      /** @description Read calls of a path the same turn had already read. The harness reports no range, so reading one large file in pages counts as repeats. */
+      reread_calls: number;
+      /** @description Paths this turn read that an earlier turn in the same native context (the same kagent session) had read or edited. A Mainloop session that moves to a new kagent session starts a new context, and its earlier turns do not count. */
+      rereads_from_earlier_turns: number;
+      /** @description Edit and Write calls. */
+      edits: number;
+      /** @description Read calls before the first edit; null when the turn made no edit. On a total it is the sum over the edited turns, so divide by `edited_turns` for an average. */
+      reads_before_first_edit: number | null;
     };
     HealthTurnSummary: {
       failures: number;
@@ -4381,6 +4399,7 @@ export interface components {
       output_tokens: number | null;
       /** @enum {string} */
       usage_coverage: 'complete' | 'partial' | 'unknown';
+      reorientation?: components['schemas']['HealthReorientation'];
       /** @enum {string} */
       inclusion: 'tree_inclusive';
       /** @enum {string} */

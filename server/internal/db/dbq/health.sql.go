@@ -598,6 +598,55 @@ func (q *Queries) ListHealthApprovals(ctx context.Context, arg ListHealthApprova
 	return items, nil
 }
 
+const listHealthEarlierPaths = `-- name: ListHealthEarlierPaths :many
+SELECT DISTINCT (payload -> 'tool' ->> 'path')::text AS path
+FROM health_events
+WHERE owner_id = $1 AND gateway = $2 AND session_id = $3 AND runtime_session_id = $4
+  AND turn_key <> $5 AND occurred_at < $6
+  AND payload ->> 'kind' = 'tool' AND payload -> 'tool' ->> 'phase' = 'started'
+  AND payload -> 'tool' ->> 'action' IN ('read', 'edit') AND payload -> 'tool' ->> 'path' IS NOT NULL
+`
+
+type ListHealthEarlierPathsParams struct {
+	OwnerID          string
+	Gateway          string
+	SessionID        string
+	RuntimeSessionID string
+	TurnKey          string
+	OccurredAt       time.Time
+}
+
+// The paths other turns of one native context (one kagent session) read or edited before a given
+// time: what a later turn re-reads from an earlier one. A Mainloop session that moves to a new kagent
+// session starts a new context, so its earlier turns do not count. Failed calls are not told apart;
+// a path is only named once.
+func (q *Queries) ListHealthEarlierPaths(ctx context.Context, arg ListHealthEarlierPathsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listHealthEarlierPaths,
+		arg.OwnerID,
+		arg.Gateway,
+		arg.SessionID,
+		arg.RuntimeSessionID,
+		arg.TurnKey,
+		arg.OccurredAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		items = append(items, path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listHealthEventRows = `-- name: ListHealthEventRows :many
 SELECT event_id, task_id, attempt_id, received_at, payload
 FROM health_events
