@@ -88,7 +88,11 @@ func buildHarness(t *testing.T, mergeTools, realDepth bool, mod func(*mcpserver.
 	if mod != nil {
 		mod(srv, d.Pool)
 	}
-	return &harness{env: env, handler: srv.Handler(), auth: auth}
+	handler, err := srv.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &harness{env: env, handler: handler, auth: auth}
 }
 
 // rpc is the parts of a JSON-RPC reply the tests read.
