@@ -45,14 +45,21 @@ USER 65532:65532
 WORKDIR /opt/mainloop-go-deps
 COPY --chown=65532:65532 server/go.mod server/go.sum ./
 COPY scripts/with-timeout.mjs /usr/local/lib/mainloop/with-timeout.mjs
-RUN node /usr/local/lib/mainloop/with-timeout.mjs 240 "go mod download" -- go mod download
-RUN go build std && go build -race std
-# Dependency packages are best-effort: a module with a package that cannot build
-# standalone (an example, a platform-specific file, a //go:build tag) must not fail
-# the image build, it just misses that one cache entry.
-RUN deps=$(go list -m -f '{{if not .Main}}{{.Path}}/...{{end}}' all) \
-    && (go build ${deps} || true) \
-    && (go build -race ${deps} || true)
+RUN node /usr/local/lib/mainloop/with-timeout.mjs 600 "go mod download" -- go mod download
+RUN go build std
+# race-std and every dependency package are best-effort cache warmup, not a
+# correctness requirement: a single incidental failure (an OOM'd cgo helper, an
+# unsupported arch/os combination) must not fail the whole image build.
+RUN go build -race std || true
+# Each dependency module builds in its own `go build` invocation. `go list -m all`
+# includes modules kept only for version resolution, and bundling many patterns into
+# one `go build <pat1> <pat2> ...` means a single unresolvable one (a stale example
+# importing a path that moved, a Windows-only cmd, platform-specific asm) aborts
+# resolution before anything compiles, caching nothing. Per-module invocations let
+# every other module still warm its cache entry.
+RUN go list -m -f '{{if not .Main}}{{.Path}}/...{{end}}' all | grep -v '^$' > /tmp/go-deps.txt \
+    && xargs -P "$(nproc)" -I{} sh -c 'go build "{}" >/dev/null 2>&1 || true' < /tmp/go-deps.txt \
+    && xargs -P "$(nproc)" -I{} sh -c 'go build -race "{}" >/dev/null 2>&1 || true' < /tmp/go-deps.txt
 
 FROM base
 # Only lint configuration and package caches enter the public image, never application

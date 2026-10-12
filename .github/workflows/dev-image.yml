@@ -36,7 +36,9 @@ jobs:
     name: Validate ${{ matrix.arch }}
     if: github.event_name == 'pull_request'
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
+    # Prewarming std, race-std and every dependency package (server/go.mod) adds
+    # tens of minutes to this build; see .devcontainer/Dockerfile's go-deps stage.
+    timeout-minutes: 90
     permissions:
       contents: read
     strategy:
@@ -66,7 +68,7 @@ jobs:
     name: Publish amd64 digest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: write
@@ -97,7 +99,7 @@ jobs:
     name: Publish arm64 digest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 10
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: write
