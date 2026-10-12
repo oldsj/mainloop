@@ -347,3 +347,32 @@ func TestScratchWriterPreservesFreeReserveDuringCopy(t *testing.T) {
 		t.Fatalf("free-space reserve consumed: %d %v", n, err)
 	}
 }
+
+// The production spool volume is an emptyDir with fsGroup: its root is group- and
+// world-writable, so the gate must spool into a private directory it creates inside it.
+func TestSpoolInsideASharedVolumeRoot(t *testing.T) {
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mount, err := os.MkdirTemp(cache, "mainloop-spool-volume-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(mount) })
+	if err = os.Chmod(mount, 0o2777); err != nil {
+		t.Fatal(err)
+	}
+	limits := (Limits{BodyBytes: 1 << 20, DiskBytes: 1 << 20}).defaults()
+	if sp, err := newSpool(context.Background(), mount, bytes.NewReader([]byte("0000")), limits); sp != nil || !errors.Is(err, denial("private_spool_required")) {
+		t.Fatalf("shared volume root: err=%v", err)
+	}
+	sp, err := newSpool(context.Background(), filepath.Join(mount, filepath.Base(defaultSpoolRoot)), bytes.NewReader([]byte("0000")), limits)
+	if err != nil {
+		t.Fatalf("private directory inside the volume: %v", err)
+	}
+	sp.close()
+	if filepath.Dir(defaultSpoolRoot) != "/var/lib/mainloop/git" {
+		t.Fatalf("default spool root %q is not inside the spool volume", defaultSpoolRoot)
+	}
+}

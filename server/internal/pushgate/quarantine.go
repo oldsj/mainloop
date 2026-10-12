@@ -64,9 +64,14 @@ type spool struct {
 
 func (s *spool) close() { _ = s.body.Close(); _ = os.RemoveAll(s.root) }
 
+// defaultSpoolRoot is a directory the gate creates inside its spool volume. The volume's own
+// root (an emptyDir with fsGroup) is root-owned and group-writable, so it can never pass the
+// private-spool check itself.
+const defaultSpoolRoot = "/var/lib/mainloop/git/spool"
+
 func newSpool(ctx context.Context, root string, source io.Reader, l Limits) (*spool, error) {
 	if root == "" {
-		root = "/var/lib/mainloop/git"
+		root = defaultSpoolRoot
 	}
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, denial("disk_unavailable")
