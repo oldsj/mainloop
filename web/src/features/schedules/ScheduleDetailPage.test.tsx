@@ -334,6 +334,9 @@ describe('schedule page', () => {
     await user.click(screen.getByRole('button', { name: 'Resume' }));
     await waitFor(() => expect(store.writes).toHaveLength(1));
     expect(store.writes[0]).toMatchObject({ ifMatch: '"etag-1"', body: { paused: false } });
+    expect(await screen.findByText('Changed elsewhere')).toBeInTheDocument();
+    expect(store.view.config.paused).toBe(true);
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeDisabled();
   });
 
   it('does not overwrite another client’s save made while the user is editing', async () => {
