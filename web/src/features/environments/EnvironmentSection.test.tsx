@@ -224,6 +224,9 @@ describe('environment selection', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: 'acme/project-b' })).toBeInTheDocument();
     expect(screen.queryByText(/Saved: Python tools/)).not.toBeInTheDocument();
+    // Environment sits under the folded Settings section, so open it to reach the control.
+    const settings = screen.getByRole('button', { name: 'Settings' });
+    if (settings.getAttribute('aria-expanded') === 'false') await userEvent.setup().click(settings);
     expect(screen.getByRole('combobox', { name: 'Environment' })).toHaveValue('');
   });
 

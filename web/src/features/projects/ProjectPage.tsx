@@ -56,6 +56,8 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
   const create = useCreateWorkspace(id);
   const uncertain = create.uncertain;
   const navigate = useNavigate();
+  // Settings stays folded until the owner opens it, and keeps its state while the page is open.
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const data = detail.data;
   if (!data) {
@@ -165,9 +167,6 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
         </div>
       </header>
 
-      <MergePolicySection projectId={id} />
-      <EnvironmentSection projectId={id} />
-
       <section
         aria-labelledby="project-tasks-heading"
         className="gap-md flex flex-col"
@@ -189,6 +188,27 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
           <ul className="gap-sm flex flex-col">
             {pulls.map((pr) => (
               <PullRequestLine key={pr.number} pr={pr} />
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section aria-labelledby="project-sessions-heading" className="gap-md flex flex-col">
+        <h2 id="project-sessions-heading" className="text-lg font-medium">
+          Sessions
+        </h2>
+        {sessions.length === 0 ? (
+          <p className="text-muted-foreground text-sm">No sessions yet</p>
+        ) : (
+          <ul className="gap-sm flex flex-col">
+            {sessions.map((session) => (
+              <li key={session.id}>
+                <SessionRow
+                  session={session}
+                  workspace={workspaceFor(workspaceRows, session.id)}
+                  providers={providerRows}
+                />
+              </li>
             ))}
           </ul>
         )}
@@ -279,25 +299,31 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
         )}
       </section>
 
-      <section aria-labelledby="project-sessions-heading" className="gap-md flex flex-col">
-        <h2 id="project-sessions-heading" className="text-lg font-medium">
-          Sessions
+      <section
+        aria-labelledby="project-settings-heading"
+        className="gap-md flex flex-col"
+        data-testid="project-settings"
+      >
+        <h2 id="project-settings-heading" className="text-lg font-medium">
+          <button
+            type="button"
+            aria-expanded={settingsOpen}
+            aria-controls="project-settings-body"
+            onClick={() => setSettingsOpen((open) => !open)}
+            className="gap-sm text-foreground hover:bg-accent flex min-h-11 w-full items-center justify-between text-left"
+          >
+            Settings
+            <span aria-hidden="true" className="text-muted-foreground text-sm">
+              {settingsOpen ? '[-]' : '[+]'}
+            </span>
+          </button>
         </h2>
-        {sessions.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No sessions yet</p>
-        ) : (
-          <ul className="gap-sm flex flex-col">
-            {sessions.map((session) => (
-              <li key={session.id}>
-                <SessionRow
-                  session={session}
-                  workspace={workspaceFor(workspaceRows, session.id)}
-                  providers={providerRows}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
+        <div id="project-settings-body" hidden={!settingsOpen}>
+          <div className="gap-md flex flex-col">
+            <MergePolicySection projectId={id} />
+            <EnvironmentSection projectId={id} />
+          </div>
+        </div>
       </section>
     </article>
   );

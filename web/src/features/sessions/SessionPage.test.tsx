@@ -502,3 +502,50 @@ describe('task and workspace', () => {
     );
   });
 });
+
+describe('chat slot layout and state', () => {
+  /** A visual viewport of the given height, as iOS reports it. Removed by the caller. */
+  function stubVisualViewport(height: number) {
+    const viewport = Object.assign(new EventTarget(), { height, scale: 1 });
+    Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true });
+    return viewport;
+  }
+
+  afterEach(() => {
+    Reflect.deleteProperty(window, 'visualViewport');
+  });
+
+  it('a cancelled session reads cancelled in the chat, not the agent ready', async () => {
+    server.use(
+      ...serveSession(
+        session({ id: 's1', status: 'cancelled' }),
+        native({ session_id: 's1', session_state: 'ready' })
+      )
+    );
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    expect(await screen.findByTestId('session-chat-state')).toHaveTextContent(/^cancelled$/);
+  });
+
+  it('the chat takes the rest of the page instead of a share of the viewport', async () => {
+    stubVisualViewport(600);
+    server.use(...serveSession(session({ id: 's1' })));
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    const panel = await screen.findByTestId('session-chat-panel');
+    expect(panel).toHaveClass('flex-1', 'min-h-64');
+    expect(panel.style.height).toBe('');
+    expect(screen.getByTestId('session-chat-slot')).toHaveClass('flex-1', 'min-h-0');
+    // The page ends at the bottom of the visible viewport; the header is measured as 0 in jsdom.
+    expect(screen.getByRole('article').style.height).toBe('600px');
+  });
+
+  it('without a visual viewport the page fills its container', async () => {
+    server.use(...serveSession(session({ id: 's1' })));
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    const page = screen.getByRole('article');
+    expect(page).toHaveClass('h-full');
+    expect(page.style.height).toBe('');
+  });
+});

@@ -98,6 +98,63 @@ describe('project page', () => {
     expect(screen.getByTestId('project-environment')).toBeInTheDocument();
   });
 
+  it('opens with tasks, open pull requests and sessions, and puts settings last', async () => {
+    server.use(...serveProjectPage());
+    renderProjects(PAGE);
+    await heading('acme/widgets');
+
+    const sections = screen
+      .getAllByRole('heading', { level: 2 })
+      .map((item) => item.textContent?.replace(/\[[-+]\]$/, '').trim());
+    expect(sections).toEqual([
+      'Tasks',
+      'Open Pull Requests',
+      'Sessions',
+      'Branch workspaces',
+      'Recent Commits',
+      'Settings'
+    ]);
+  });
+
+  it('folds merge policy and environment under Settings, collapsed until opened', async () => {
+    server.use(...serveProjectPage());
+    const user = userEvent.setup();
+    renderProjects(PAGE);
+    await heading('acme/widgets');
+
+    const toggle = screen.getByRole('button', { name: 'Settings' });
+    const body = document.getElementById('project-settings-body');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveAttribute('aria-controls', 'project-settings-body');
+    expect(body).not.toBeVisible();
+    // Hidden content is out of the accessibility tree, so the sections are found by test id.
+    expect(screen.getByTestId('merge-policy')).not.toBeVisible();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(body).toBeVisible();
+    expect(screen.getByTestId('merge-policy')).toBeVisible();
+    expect(screen.getByTestId('project-environment')).toBeVisible();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(body).not.toBeVisible();
+  });
+
+  it('opens Settings from the keyboard and keeps focus on the toggle', async () => {
+    server.use(...serveProjectPage());
+    const user = userEvent.setup();
+    renderProjects(PAGE);
+    await heading('acme/widgets');
+
+    const toggle = screen.getByRole('button', { name: 'Settings' });
+    toggle.focus();
+    await user.keyboard('{Enter}');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveFocus();
+    expect(screen.getByTestId('merge-policy')).toBeVisible();
+  });
+
   it('drops a pull request or commit that breaks the contract and renders the rest', async () => {
     const brokenPr = { ...pullRequest({ title: 'Broken PR' }), number: 'not-a-number' };
     const brokenCommit = { ...commit({ message: 'Broken commit' }), sha: 123 };

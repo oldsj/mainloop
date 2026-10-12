@@ -1,6 +1,6 @@
 import { Link, useNavigate } from '@tanstack/react-router';
 import { ArrowLeft } from 'lucide-react';
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Skeleton } from '@/components/shared/skeleton';
@@ -42,6 +42,29 @@ const CANCELLABLE: SessionStatus[] = ['active', 'pending', 'idle', 'waiting_on_u
 const CLEARABLE: SessionStatus[] = ['completed', 'failed', 'cancelled'];
 
 /**
+ * The height from the top of the page to the bottom of the visible viewport, or null where the
+ * browser has no visual viewport (the page then fills its container). iOS keeps `dvh` when the soft
+ * keyboard opens, so the page follows the visible viewport, and the composer stays above the keyboard.
+ * It is measured again when the viewport resizes, not when the page scrolls.
+ */
+function useVisibleFill(ref: RefObject<HTMLElement | null>, ready: boolean): number | null {
+  const [height, setHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport || !ready) return;
+    const update = () => {
+      const top = ref.current?.getBoundingClientRect().top ?? 0;
+      // Pinch-zoom shrinks the visual viewport, so it is scaled back up, as the keyboard fix needs.
+      setHeight(Math.max(0, Math.round(viewport.height * viewport.scale - top)));
+    };
+    update();
+    viewport.addEventListener('resize', update);
+    return () => viewport.removeEventListener('resize', update);
+  }, [ref, ready]);
+  return height;
+}
+
+/**
  * One session: its status, identity, actions, workspace and the chat slot. The session comes from
  * attention when it is listed there, and from a direct read otherwise, so a session that is not
  * in the list still opens. Each action re-reads the session once it settles (see `useSessionActions`).
@@ -65,6 +88,8 @@ export function SessionPage({ id }: { id: string }) {
     !detail.isPending,
     detail.data ?? null
   );
+  const pageRef = useRef<HTMLElement>(null);
+  const visibleFill = useVisibleFill(pageRef, session !== null);
 
   if (!session) {
     if (detail.isPending) {
@@ -137,7 +162,11 @@ export function SessionPage({ id }: { id: string }) {
   }
 
   return (
-    <article className="flex min-h-0 flex-col">
+    <article
+      ref={pageRef}
+      className={`flex min-h-0 flex-col ${visibleFill === null ? 'h-full' : ''}`}
+      style={visibleFill === null ? undefined : { height: `${visibleFill}px` }}
+    >
       <header className="gap-sm border-border p-md flex flex-col border-b">
         <div className="gap-sm flex items-center">
           <BackLink taskId={task?.view.task.id ?? null} projectId={session.project_id} />
@@ -250,8 +279,12 @@ export function SessionPage({ id }: { id: string }) {
         </section>
       ) : null}
 
-      <div className="p-md">
-        <SessionChatSlot sessionId={session.id} closedReason={chatClosedReason(session)} />
+      <div className="p-md flex min-h-0 flex-1 flex-col">
+        <SessionChatSlot
+          sessionId={session.id}
+          closedReason={chatClosedReason(session)}
+          cancelled={session.status === 'cancelled'}
+        />
       </div>
 
       <footer className="px-md pb-md">

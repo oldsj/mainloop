@@ -113,9 +113,9 @@ export function EnvironmentSection({ projectId }: { projectId: string }) {
       data-testid="project-environment"
     >
       <div className="gap-sm flex flex-wrap items-center justify-between">
-        <h2 id="environment-heading" className="text-lg font-medium">
+        <h3 id="environment-heading" className="text-lg font-medium">
           Environment
-        </h2>
+        </h3>
         <Button
           type="button"
           variant="outline"

@@ -249,40 +249,22 @@ describe('session chat', () => {
     expect(within(slot).queryByTestId('session-chat-stop')).toBeNull();
   });
 
-  it('sizes the panel to the visible viewport, so it follows the soft keyboard', async () => {
+  it('fills the rest of the page instead of a share of the visible viewport', async () => {
+    // A soft keyboard shrinks the visual viewport; the chat takes the height its parent gives it.
     const viewport = Object.assign(new EventTarget(), { height: 400, scale: 1 });
     Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true });
     try {
       const slot = await openSession();
       const panel = within(slot).getByTestId('session-chat-panel');
-      expect(panel.style.height).toBe('280px');
+      expect(panel.style.height).toBe('');
+      expect(panel).toHaveClass('flex-1');
 
-      // The keyboard opens: the visible viewport shrinks, and the panel shrinks with it.
       act(() => {
         viewport.height = 200;
         viewport.dispatchEvent(new Event('resize'));
       });
-      expect(panel.style.height).toBe('140px');
-    } finally {
-      Reflect.deleteProperty(window, 'visualViewport');
-    }
-  });
-
-  it('keeps the panel size when the owner pinch-zooms in', async () => {
-    // Zoomed to 2x, the visual viewport is half as tall in CSS pixels; the layout is not.
-    const viewport = Object.assign(new EventTarget(), { height: 400, scale: 1 });
-    Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true });
-    try {
-      const slot = await openSession();
-      const panel = within(slot).getByTestId('session-chat-panel');
-      expect(panel.style.height).toBe('280px');
-
-      act(() => {
-        viewport.height = 200;
-        viewport.scale = 2;
-        viewport.dispatchEvent(new Event('resize'));
-      });
-      expect(panel.style.height).toBe('280px');
+      expect(panel.style.height).toBe('');
+      expect(panel).toHaveClass('flex-1');
     } finally {
       Reflect.deleteProperty(window, 'visualViewport');
     }

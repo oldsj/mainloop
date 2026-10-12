@@ -51,6 +51,12 @@ each workspace was last active. While the default branch is still empty, the wor
 the branch as pending and New workspace stays disabled until GitHub metadata arrives. A project
 with no default branch yet stays listed.
 
+The project page opens on the work: Tasks first, then Open Pull Requests, then Sessions, Branch
+workspaces and Recent Commits. Settings comes last. It holds the merge policy and the environment,
+and it is collapsed by default. The owner opens it with its heading button, which is keyboard
+operable and reports whether it is expanded. Its open or closed state is kept while the owner stays
+on the page.
+
 A create that gets no reply, or a 5xx, may still have made a workspace. The form then locks, the
 raw error is hidden, and the owner sees recent workspaces to check against. The check lists the
 typed repository's workspaces only, matched by `owner/name`, a GitHub URL or a `.git` URL, without

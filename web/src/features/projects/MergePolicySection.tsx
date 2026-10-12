@@ -52,9 +52,9 @@ export function MergePolicySection({ projectId }: { projectId: string }) {
       className="gap-md p-md border-border flex flex-col border"
       data-testid="merge-policy"
     >
-      <h2 id="merge-policy-heading" className="text-lg font-medium">
+      <h3 id="merge-policy-heading" className="text-lg font-medium">
         Merge policy
-      </h2>
+      </h3>
 
       {policy.isPending ? (
         <p role="status" className="text-muted-foreground text-sm">
