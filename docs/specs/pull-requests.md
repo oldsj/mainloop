@@ -21,7 +21,7 @@ authority and the loop is the only sender.
 
 The loop logs each creation that ends refused, uncertain or created (creation id and reason or PR
 number, never GitHub free text), and the MCP process logs each refused tool call with the tool name
-and the session binding. `Settle` is set by the service constructors the processes use; a bare
+and the session binding; the log line carries the refusal text, which can include branch names. `Settle` is set by the service constructors the processes use; a bare
 `Service` with a zero `Settle` returns at once.
 
 ### `open_pull_request`

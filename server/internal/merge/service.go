@@ -503,8 +503,12 @@ func Table() reconcile.Table {
 		string(dbstate.MergeEvaluating), string(dbstate.MergeMerging), string(dbstate.MergeUncertain))
 }
 
+// DefaultSettle is how long a tool call waits for the loop to settle a merge before it answers with
+// the state it has.
+const DefaultSettle = 20 * time.Second
+
 // NewService builds the service over the GitHub App. rt is the trusted kagent read that gives a
 // merge tool its authority; without it no consent counts.
 func NewService(cfg *config.Config, pool *pgxpool.Pool, gh GitHub, rt Runtime, log *slog.Logger) *Service {
-	return &Service{Pool: pool, GitHub: gh, Log: log, Configs: cfg.MergeConfigurations, Runtime: rt, Settle: 20 * time.Second}
+	return &Service{Pool: pool, GitHub: gh, Log: log, Configs: cfg.MergeConfigurations, Runtime: rt, Settle: DefaultSettle}
 }
