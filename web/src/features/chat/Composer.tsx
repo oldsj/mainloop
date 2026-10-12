@@ -102,7 +102,11 @@ export function Composer({
     appliedPrefill.current = prefill;
     const existing = loadDraft(draftKey);
     // A draft that already starts with this prefill (New task clicked twice) is left as it is.
-    const next = existing.startsWith(prefill) ? existing : existing.trim() ? prefill + existing : prefill;
+    const next = existing.startsWith(prefill)
+      ? existing
+      : existing.trim()
+        ? prefill + existing
+        : prefill;
     setText(next);
     saveDraft(draftKey, next);
     caretToEnd.current = true;
