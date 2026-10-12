@@ -93,6 +93,13 @@ export function useAnswered(): ReadonlyMap<string, AnsweredRequest> {
   return useSyncExternalStore(subscribeAnswered, () => answeredSnapshot);
 }
 
+/** Forgets every recorded answer. For tests: the store otherwise lasts for the module's lifetime. */
+export function forgetAnswered() {
+  answered.clear();
+  answeredSnapshot = new Map();
+  for (const listener of answeredListeners) listener();
+}
+
 /** The channel's current state for one request, read through a subscription that is closed at once. */
 function stateOf(requestId: string): HITLState {
   let state: HITLState | undefined;

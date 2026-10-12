@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { connection, keys } from '@/api';
 import { createSseApplier } from '@/api/invalidation';
 import { createFakeHITL } from '@/features/hitl/handlers';
+import { forgetAnswered } from '@/features/hitl/hitl-client';
 import { server } from '@/test/msw/server';
 import { hitlView } from '@/test/fixtures/hitl';
 import {
@@ -444,30 +445,87 @@ describe('Activity', () => {
 });
 
 describe('answered requests stay in Needs you (UI-C)', () => {
-  it('keeps the receipt after the server stops listing the request', async () => {
+  // The answered store is module-level, so one test's receipt would show up in the next.
+  afterEach(() => forgetAnswered());
+
+  it('keeps the receipt, its focus and the lead-in after the server stops listing the request', async () => {
     const user = userEvent.setup();
     const requestId = 'req-kept';
     const fake = createFakeHITL({ [requestId]: hitlView(requestId) });
     server.use(
       ...fake.handlers,
-      attentionRead(() => HttpResponse.json(attentionSnapshot([hitlAttentionItem(requestId)])))
+      attentionRead(() =>
+        HttpResponse.json(attentionSnapshot([hitlAttentionItem(requestId, 'Approve the deploy.')]))
+      )
     );
     const { queryClient } = renderInbox();
     await user.click(await screen.findByRole('button', { name: /^Approve tool\.a/ }));
     await user.click(screen.getByRole('button', { name: /^Reject tool\.b/ }));
     await user.click(screen.getByRole('button', { name: 'Send response' }));
-    expect(await screen.findByTestId('hitl-receipt')).toHaveTextContent(
-      /^Approved tool\.a, rejected tool\.b · \S/
-    );
+    const receipt = await screen.findByTestId('hitl-receipt');
+    expect(receipt).toHaveTextContent(/^Approved tool\.a, rejected tool\.b · \S/);
+    await waitFor(() => expect(receipt).toHaveFocus());
 
-    server.use(attentionRead(() => HttpResponse.json(attentionSnapshot([]))));
-    await queryClient.invalidateQueries({ queryKey: keys.attention() });
-    await waitFor(() =>
-      expect(queryClient.getQueryData(keys.attention())).toEqual(attentionSnapshot([]))
+    // The refetch drops the request and lists another, so the test can see the list re-render.
+    const later = queueItem({ id: 'q-later', title: 'Which branch?' });
+    server.use(attentionRead(() => HttpResponse.json(attentionSnapshot([attentionItem(later)]))));
+    await act(() => queryClient.invalidateQueries({ queryKey: keys.attention() }));
+    expect(await screen.findByText('Which branch?')).toBeInTheDocument();
+
+    // The same node is still mounted and still focused: a remount would drop focus to <body>.
+    expect(receipt).toBeInTheDocument();
+    expect(receipt).toHaveFocus();
+    expect(receipt).toHaveTextContent('Approved tool.a, rejected tool.b');
+    expect(screen.getByText('Approve the deploy.')).toBeInTheDocument();
+  });
+
+  it('keeps focus and the row order when the answered request is not the first row', async () => {
+    const user = userEvent.setup();
+    const fake = createFakeHITL({
+      'req-first': hitlView('req-first'),
+      'req-second': hitlView('req-second')
+    });
+    server.use(
+      ...fake.handlers,
+      attentionRead(() =>
+        HttpResponse.json(
+          attentionSnapshot([
+            hitlAttentionItem('req-first', 'First request.'),
+            hitlAttentionItem('req-second', 'Second request.')
+          ])
+        )
+      )
     );
-    expect(await screen.findByTestId('hitl-receipt')).toHaveTextContent(
-      'Approved tool.a, rejected tool.b'
+    const { queryClient } = renderInbox();
+    await screen.findByText('Second request.');
+    const row = document.getElementById('attention-req-second') as HTMLElement;
+    await user.click(await within(row).findByRole('button', { name: /^Approve tool\.a/ }));
+    await user.click(within(row).getByRole('button', { name: /^Reject tool\.b/ }));
+    await user.click(within(row).getByRole('button', { name: 'Send response' }));
+    const receipt = await within(row).findByTestId('hitl-receipt');
+    await waitFor(() => expect(receipt).toHaveFocus());
+
+    // The refetch drops the second request and lists a third, so the test can see the list re-render.
+    const third = queueItem({ id: 'q-third', title: 'Third question.' });
+    server.use(
+      attentionRead(() =>
+        HttpResponse.json(
+          attentionSnapshot([
+            hitlAttentionItem('req-first', 'First request.'),
+            attentionItem(third)
+          ])
+        )
+      )
     );
-    expect(screen.queryByText('Nothing needs you')).not.toBeInTheDocument();
+    await act(() => queryClient.invalidateQueries({ queryKey: keys.attention() }));
+    expect(await screen.findByText('Third question.')).toBeInTheDocument();
+
+    expect(receipt).toHaveFocus();
+    const list = screen.getByRole('list', { name: 'Needs you' });
+    expect(Array.from(list.children).map((item) => item.id)).toEqual([
+      'attention-req-first',
+      'attention-req-second',
+      'attention-q-third'
+    ]);
   });
 });
