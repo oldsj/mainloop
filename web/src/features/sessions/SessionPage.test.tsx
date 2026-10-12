@@ -551,12 +551,13 @@ describe('chat slot layout and state', () => {
     let notify: () => void = () => {};
     const observed: Element[] = [];
     class FakeResizeObserver {
-      // The chat's message list observes too, so every observer is notified.
-      constructor(callback: () => void) {
+      // The chat's message list observes too, so every observer is notified. A real observer always
+      // passes a list of entries; this one passes an empty list.
+      constructor(callback: (entries: ResizeObserverEntry[]) => void) {
         const before = notify;
         notify = () => {
           before();
-          callback();
+          callback([]);
         };
       }
       observe(target: Element) {

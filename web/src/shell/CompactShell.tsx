@@ -72,12 +72,14 @@ export function CompactShell({
           <ThemeSelector />
         </nav>
       </header>
-      {/* The home chat owns its scroll, so the pane around it does not scroll as well. */}
+      {/* The home chat owns its scroll, so the pane around it does not scroll as well. It is the
+          containing block too: an absolutely placed descendant (an sr-only label) would otherwise
+          stretch the document, and scrolling a row into view would scroll the whole page. */}
       <main
         id={MAIN_ID}
         tabIndex={-1}
         className={cn(
-          'min-h-0 flex-1 outline-none',
+          'relative min-h-0 flex-1 outline-none',
           onHome && tab === 'chat' ? 'overflow-hidden' : 'overflow-y-auto'
         )}
       >

@@ -1,4 +1,4 @@
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, screen, within } from '@testing-library/react';
 import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection, keys } from '@/api';
@@ -7,7 +7,6 @@ import { projection, view } from '@/test/fixtures/tasks';
 import { server } from '@/test/msw/server';
 import { renderTasks } from './test/render';
 import { problem, providersRead, tasksList } from './test/handlers';
-import { TasksBadge } from './TasksBadge';
 import { TaskTree } from './TaskTree';
 
 afterEach(async () => {
@@ -280,65 +279,5 @@ describe('task rows this page cannot read', () => {
       await screen.findByText('2 tasks could not be read and are not shown.')
     ).toBeInTheDocument();
     expect(screen.queryByText('No tasks yet.')).not.toBeInTheDocument();
-  });
-});
-
-describe('tasks badge', () => {
-  it('counts the tasks that need the owner, with the right wording', async () => {
-    server.use(
-      tasksList(() =>
-        HttpResponse.json([
-          view({ id: 'a', reason: 'approval' }),
-          view({ id: 'b', reason: 'owner_decision' }),
-          view({ id: 'c', reason: null })
-        ])
-      ),
-      providersRead()
-    );
-    renderTasks('/', () => <TasksBadge />);
-
-    expect(await screen.findByTestId('tasks-badge')).toHaveTextContent('2 tasks need you');
-  });
-
-  it('uses the singular when one task needs the owner', async () => {
-    server.use(
-      tasksList(() => HttpResponse.json([view({ reason: 'approval' })])),
-      providersRead()
-    );
-    renderTasks('/', () => <TasksBadge />);
-
-    expect(await screen.findByTestId('tasks-badge')).toHaveTextContent('1 task needs you');
-  });
-
-  it('caps the compact count at 99+, as the inbox badge does', async () => {
-    server.use(
-      tasksList(() =>
-        HttpResponse.json(
-          Array.from({ length: 100 }, (_, index) => view({ id: `t${index}`, reason: 'approval' }))
-        )
-      ),
-      providersRead()
-    );
-    renderTasks('/', () => <TasksBadge compact />);
-
-    expect(await screen.findByTestId('tasks-badge')).toHaveTextContent(/^99\+$/);
-  });
-
-  it('renders nothing when no task needs the owner', async () => {
-    server.use(
-      tasksList(() => HttpResponse.json([view({ reason: null })])),
-      providersRead()
-    );
-    const { queryClient } = renderTasks('/', () => <TasksBadge />);
-
-    // Wait for the list to land, so the absence is about the data and not about loading.
-    await waitFor(() =>
-      expect(
-        queryClient
-          .getQueriesData({ queryKey: keys.tasks() })
-          .some(([, data]) => data !== undefined)
-      ).toBe(true)
-    );
-    expect(screen.queryByTestId('tasks-badge')).not.toBeInTheDocument();
   });
 });

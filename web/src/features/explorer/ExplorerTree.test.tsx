@@ -338,4 +338,54 @@ describe('row menu', () => {
     await user.keyboard('{ArrowDown}{Enter}');
     expect(onOpen).toHaveBeenCalledWith({ to: 'task', id: 't1' });
   });
+
+  /** The tree in a scrolling explorer, beside a chat thread and its composer. */
+  function renderBeside() {
+    const view = render(
+      <div>
+        <div data-testid="chat" style={{ overflowY: 'auto' }}>
+          <textarea aria-label="Command" />
+        </div>
+        <div data-testid="explorer" style={{ overflowY: 'auto' }}>
+          <ExplorerTree
+            nodes={nodes}
+            isExpanded={(id) => id === 'needs'}
+            onToggle={vi.fn()}
+            onOpen={vi.fn()}
+            onAsk={vi.fn()}
+          />
+        </div>
+      </div>
+    );
+    return { ...view, user: userEvent.setup() };
+  }
+
+  it('stays open while the chat scrolls, and closes when the explorer scrolls', async () => {
+    const { user } = renderBeside();
+    await user.pointer({ keys: '[MouseRight]', target: row('Fix login') });
+    fireEvent.scroll(screen.getByTestId('chat'));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    fireEvent.scroll(screen.getByTestId('explorer'));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.getByRole('treeitem', { name: 'Fix login' })).toHaveFocus();
+  });
+
+  it('closes when another scroll moves its row', async () => {
+    const { user } = renderBeside();
+    const target = row('Fix login');
+    await user.pointer({ keys: '[MouseRight]', target });
+    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue({ top: 120, left: 0 } as DOMRect);
+    fireEvent.scroll(screen.getByTestId('chat'));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('leaves focus where the owner put it when a scroll closes the menu', async () => {
+    const { user } = renderBeside();
+    await user.pointer({ keys: '[MouseRight]', target: row('Fix login') });
+    const composer = screen.getByRole('textbox', { name: 'Command' });
+    act(() => composer.focus());
+    fireEvent.scroll(screen.getByTestId('explorer'));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(composer).toHaveFocus();
+  });
 });

@@ -158,8 +158,11 @@ MSW fixtures typed from `api/openapi.yaml`.
 - Pending requests of the main session and `?hitl=<id>` render through the `features/hitl`
   approval card, inside an error boundary so a failing card cannot take the thread down. They sit
   at the end of the conversation, after the newest message, and scroll with it: the message list
-  is the only scroll in the centre column, and the view stays pinned to the bottom while a card
-  fills in.
+  is the only scroll in the centre column. The cards sit after the conversation log, not in it, so a
+  screen reader does not announce their every change. While the owner is at the bottom, new messages
+  keep the view there, and a card that fills in is brought into view from its top. Once the owner
+  works inside a card (**Show all**, **Request data**), its growth moves nothing until the next
+  message.
 - An empty thread shows suggestion chips inside its empty state (**What needs me?**,
   **Start a task in <first project>**, **What's running?**, **Pause a schedule**). Each fills the
   composer, unsent. They go once the thread has a message.

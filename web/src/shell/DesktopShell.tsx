@@ -40,11 +40,12 @@ export function DesktopShell({
         </nav>
       </header>
       <div className="flex min-h-0 flex-1">
+        {/* Relative, so an absolutely placed descendant scrolls with it and never stretches the page. */}
         <main
           id={MAIN_ID}
           tabIndex={-1}
           className={cn(
-            'flex min-w-0 flex-1 flex-col outline-none',
+            'relative flex min-w-0 flex-1 flex-col outline-none',
             onHome ? 'overflow-hidden' : 'overflow-y-auto'
           )}
         >

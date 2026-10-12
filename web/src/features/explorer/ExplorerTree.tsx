@@ -50,17 +50,20 @@ export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: Exp
 
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const menuNode = menu ? rows.find((row) => row.node.id === menu.id)?.node : undefined;
+  const menuId = useRef<string | null>(null);
   const openMenu = (node: ExplorerNode, x: number, y: number) => {
     if (actionsFor(node, onOpen, onAsk).length === 0) return false;
     setFocusId(node.id);
+    menuId.current = node.id;
     setMenu({ id: node.id, x, y });
     return true;
   };
-  const closeMenu = useCallback(() => {
-    setMenu((open) => {
-      if (open) items.current.get(open.id)?.focus();
-      return null;
-    });
+  // Focus goes back to the row only when it was in the menu, never from wherever the owner moved it.
+  const closeMenu = useCallback((restoreFocus: boolean) => {
+    const id = menuId.current;
+    menuId.current = null;
+    setMenu(null);
+    if (restoreFocus && id) items.current.get(id)?.focus();
   }, []);
   const longPress = useLongPress((id, x, y) => {
     const node = rows.find((row) => row.node.id === id)?.node;
@@ -270,6 +273,7 @@ export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: Exp
           label={menuNode.label}
           x={menu.x}
           y={menu.y}
+          rowId={menu.id}
           actions={actionsFor(menuNode, onOpen, onAsk)}
           onClose={closeMenu}
         />
