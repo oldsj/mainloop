@@ -1,6 +1,6 @@
 # Development environment
 
-Local checks run from the repository root and from `server/` and `web/`. [CONTRIBUTING.md](../CONTRIBUTING.md#verification) lists the commands and [AGENTS.md](../AGENTS.md#verification) lists the matching CI jobs. This page covers the root Make targets, their foreground caps, and the shared live dev instance.
+Local checks run from the repository root and from `server/` and `web/`. [CONTRIBUTING.md](../CONTRIBUTING.md#verification) lists the commands and [AGENTS.md](../AGENTS.md#verification) lists the matching CI jobs. This page covers the root Make targets, their foreground caps, the local Kind stack, and the shared live dev instance.
 
 ## Make targets and caps
 
@@ -16,6 +16,49 @@ The root Make targets run under `scripts/with-timeout.mjs`. A cap is a maximum; 
 `make lint` and `make fmt` compare against `origin/main`, so fetch it first.
 
 Go and web checks have no Make wrapper. Run them directly, as listed in [CONTRIBUTING.md](../CONTRIBUTING.md#verification).
+
+## Kind
+
+Runs the Go server and the React app on a local [Kind](https://kind.sigs.k8s.io) cluster, with PostgreSQL in the same cluster. It needs no shared cluster, 1Password or GitHub App. Secrets are random values generated on your machine and stored only in that cluster.
+
+Prerequisites: Docker, `kind`, `kubectl`, [DevSpace](https://www.devspace.sh) and `openssl` (the secrets script uses it to generate random values). This was tested with kind v0.33.0, kubectl v1.37.0 and DevSpace v6.3.21. The first build pulls base images and needs several GB of free disk. If Docker runs out of space, `docker builder prune -f` clears its build cache.
+
+From the repository root:
+
+```bash
+make dev
+```
+
+The first run creates the cluster `mainloop-local`, builds both images, deploys them, and forwards the ports. It stays in the foreground and streams logs. When it is ready, it prints:
+
+```text
+dev:frontend ports Port forwarding started on: 5173 -> 3000
+dev:backend ports Port forwarding started on: 8000 -> 8000
+```
+
+Open <http://localhost:5173> for the web app. Check the API with:
+
+```bash
+curl http://localhost:8000/health
+# {"database":"ok","status":"healthy"}
+```
+
+On a first start, the backend pod can show `Init:Error` for about 20 seconds while PostgreSQL comes up. The migrate step retries and then succeeds.
+
+| Command            | What it does                                                                                                                                                                      |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `make dev`         | Creates the cluster if needed, builds and loads the images that changed, deploys, forwards the ports and streams logs. Ctrl-C stops the forwards and logs; the pods keep running. |
+| `make dev-reset`   | Deletes all Mainloop data in the cluster and restarts the backend. Then run `make dev` again, because the API forward is tied to the old pod.                                     |
+| `make dev-stop`    | Stops DevSpace and deletes the `mainloop` namespace, including the database. The cluster stays.                                                                                   |
+| `make kind-delete` | Deletes the whole cluster.                                                                                                                                                        |
+
+After you edit code, run `make dev` again. It rebuilds the images whose inputs changed and rolls their pods. Editing anything under `server/` also rebuilds the web image, because its build context is the whole repository.
+
+Without DevSpace, `make kind-up` creates the cluster, builds and loads the images, creates the secrets, and deploys. Then `make kind-forward` forwards the same two ports. Stop `make kind-forward` before `make dev`, because both use those ports.
+
+`KIND_CLUSTER_NAME=<name>` picks another cluster, with kubectl context `kind-<name>`. The commands pass their context explicitly. Creating a cluster does switch your kubectl current context to it.
+
+What works without kagent: the web app, the REST API (migrations run on start), and the MCP and Git listeners, which start with Git transport off. Not available: native Claude Code and Codex sessions, workspaces, and schedules. They need a kagent installation that this stack does not set up, so `/schedules` returns 502. GitHub is not configured, so there are no repository reads or pushes. The [Kind overlay README](../k8s/apps/mainloop/overlays/kind/README.md) lists what the overlay changes.
 
 ## Live dev instance
 

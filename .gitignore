@@ -3,18 +3,7 @@ node_modules/
 .pnpm-store/
 .pnpm-debug.log
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-.venv/
-venv/
-ENV/
-env/
-.python-version
-*.egg-info/
+# Build output
 dist/
 build/
 

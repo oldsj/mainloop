@@ -1,4 +1,4 @@
-.PHONY: help dev dev-stop dev-reset dev-clear-cache dev-logs dev-shell kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test-k8s test-loop test-reset dev-live dev-live-status dev-live-purge dev-agents dev-harness install check check-mcp-tools check-server check-web lint lint-all fmt fmt-all _fmt _fmt-all test-timeouts test-timeout-integration
+.PHONY: help dev dev-stop dev-reset kind-up kind-create kind-delete kind-load kind-secrets kind-deploy kind-forward kind-reset kind-logs kind-shell dev-live dev-live-status dev-live-purge dev-agents dev-harness install check check-mcp-tools check-server check-web lint lint-all fmt fmt-all _fmt _fmt-all test-timeouts test-timeout-integration
 
 # Load .env file if it exists
 -include .env
@@ -11,27 +11,19 @@ help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # =============================================================================
-# Development (DevSpace + Kind) - Hot reload via file sync
+# Local Kind stack (DevSpace profile in devspace.yaml; see docs/dev-environment.md#kind)
 # =============================================================================
+KIND_CLUSTER_NAME ?= mainloop-local
+KIND_CONTEXT = kind-$(KIND_CLUSTER_NAME)
 
-dev: ## Start dev environment with hot reload (DevSpace + Kind)
-	devspace dev --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop
+dev: ## Build, load and deploy the Kind stack, forward its ports and stream logs (DevSpace)
+	devspace dev --kube-context $(KIND_CONTEXT) -n mainloop
 
-dev-stop: ## Stop DevSpace and purge resources
-	devspace purge --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop
+dev-stop: ## Stop DevSpace and delete the mainloop namespace, its database included (the cluster stays)
+	devspace purge --kube-context $(KIND_CONTEXT) -n mainloop
 
-dev-reset: ## Reset local database and restart the backend
+dev-reset: ## Wipe the Kind database and restart the backend
 	@./scripts/kind/reset-data.sh
-
-dev-clear-cache: ## Clear Vite cache (fixes stale HMR issues)
-	kubectl --context kind-$(KIND_CLUSTER_NAME) -n mainloop exec deployment/mainloop-frontend-devspace -- rm -rf /app/node_modules/.vite 2>/dev/null || true
-	@echo "Vite cache cleared. Refresh browser."
-
-dev-logs: ## Tail backend logs
-	devspace logs -f --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop
-
-dev-shell: ## Open shell in backend pod
-	devspace enter --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop
 
 # =============================================================================
 # Shared live instance (DevSpace profile `live`, namespace mainloop-dev on internal-01)
@@ -52,57 +44,36 @@ dev-agents: ## Apply the *-dev kagent agents (shared kagent namespace)
 dev-harness: ## Build arm64 harness images from ~/dev/kagent and point the dev agents at them
 	./scripts/dev-live-harness.sh build
 
-# =============================================================================
-# Kind (local Kubernetes for trying Mainloop locally)
-# =============================================================================
-KIND_CLUSTER_NAME ?= mainloop-test
-TEST_API_URL := http://localhost:8081
-TEST_FRONTEND_URL := http://localhost:5173
+kind-up: kind-create kind-load kind-secrets kind-deploy ## Create the cluster, build and load images, deploy (no DevSpace)
 
-kind-create: ## Create Kind cluster for local testing
+kind-create: ## Create the Kind cluster (skipped if it exists)
 	@./scripts/kind/create-cluster.sh
 
-kind-delete: ## Delete Kind cluster
+kind-delete: ## Delete the Kind cluster and all its data
 	@kind delete cluster --name $(KIND_CLUSTER_NAME)
 
-kind-load: ## Build and load images into Kind
+kind-load: ## Build the server and web images and load them into Kind
 	@./scripts/kind/load-images.sh
 
-kind-secrets: ## Create K8s secrets from .env
+kind-secrets: ## Create mainloop-secrets with random local values (kept if present)
 	@./scripts/kind/create-secrets.sh
 
-kind-deploy: ## Deploy mainloop to Kind
+kind-deploy: ## Apply the Kind overlay and wait until it is ready
 	@./scripts/kind/deploy.sh
+
+kind-forward: ## Forward the app to http://localhost:5173 and the API to localhost:8000 (Ctrl-C stops both)
+	@trap 'kill 0' INT TERM; \
+	kubectl --context $(KIND_CONTEXT) -n mainloop port-forward svc/mainloop-frontend 5173:3000 & \
+	kubectl --context $(KIND_CONTEXT) -n mainloop port-forward svc/mainloop-backend 8000:8000 & \
+	wait
 
 kind-reset: dev-reset ## Alias for dev-reset
 
-kind-logs: ## Tail backend logs (Kind test cluster)
-	@kubectl --context=kind-$(KIND_CLUSTER_NAME) logs -n mainloop deployment/mainloop-backend -f
+kind-logs: ## Tail backend logs (Kind)
+	@kubectl --context $(KIND_CONTEXT) -n mainloop logs deployment/mainloop-backend -c backend -f
 
-kind-shell: ## Open shell in backend pod (Kind test cluster)
-	@kubectl --context=kind-$(KIND_CLUSTER_NAME) exec -it -n mainloop deployment/mainloop-backend -- bash
-
-test-k8s: kind-create kind-load kind-secrets kind-deploy ## Start local K8s test environment
-	@echo ""
-	@echo "=== Local K8s environment ready ==="
-	@echo "Frontend: $(TEST_FRONTEND_URL)"
-	@echo "Backend:  $(TEST_API_URL)"
-	@echo ""
-	@echo "Run 'make kind-logs' to tail backend logs"
-	@echo "Run 'make kind-reset' to reset data between tests"
-	@echo "Run 'make test-loop' for auto-redeploy on changes"
-
-test-loop: ## Watch for changes and auto-redeploy to Kind
-	@echo "Starting Kind deploy loop (Ctrl+C to stop)..."
-	@echo "Watching: backend/, frontend/src/"
-	@trap 'kill 0' INT; \
-	watchexec -w backend/src -w models -e py \
-		--on-busy-update restart -- bash -c 'make kind-load && make kind-deploy' & \
-	watchexec -w frontend/src -e ts,svelte,css \
-		--on-busy-update restart -- bash -c 'make kind-load && make kind-deploy' & \
-	wait
-
-test-reset: dev-reset ## Alias for dev-reset
+kind-shell: ## Open a shell in the Kind backend container
+	@kubectl --context $(KIND_CONTEXT) -n mainloop exec -it deployment/mainloop-backend -c backend -- sh
 
 # =============================================================================
 # Dependencies and checks

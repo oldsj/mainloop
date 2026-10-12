@@ -8,7 +8,6 @@ runtimes:
   enabled:
     - go@1.21.0
     - node@22.16.0
-    - python@3.10.8
 # This is the section where you manage your linters. (https://docs.trunk.io/check/configuration)
 lint:
   definitions:
@@ -24,13 +23,6 @@ lint:
     - linters: [checkov, trivy]
       paths:
         - k8s/**
-    # B104: Binding to 0.0.0.0 is intentional for containerized services
-    # B608: False positives - SQL uses parameterized queries, column names are from internal code
-    # B110: Intentional silent failure for optional API features
-    - linters: [bandit]
-      paths:
-        - backend/src/mainloop/config.py
-        - backend/src/mainloop/db/postgres.py
     # DL3008: Pinning apt versions causes build failures when versions are removed from repos
     # Terrascan Docker checks have platform differences (Linux vs macOS) and false positives
     # for multi-stage builds with --chown flags
@@ -42,17 +34,13 @@ lint:
       paths:
         - web/src/routeTree.gen.ts
   enabled:
-    - bandit@1.9.2
-    - black@25.12.0
     - checkov@3.2.497
     - git-diff-check
     - hadolint@2.14.0
-    - isort@7.0.0
     - markdownlint@0.47.0
     - osv-scanner@2.3.1
     - oxipng@10.0.0
     - prettier@3.7.4
-    - ruff@0.14.10
     - shellcheck@0.11.0
     - shfmt@3.6.0
     - taplo@0.10.0

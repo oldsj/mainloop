@@ -14,31 +14,31 @@ vars:
     command: scripts/dev-live-harness.sh
     args: [image, codex]
 
-# Images - build locally, load into Kind
+# Local Kind stack (`make dev`; see docs/dev-environment.md#kind). Builds the Go server and the React
+# app from this checkout, loads both into the Kind cluster and deploys overlays/kind. The live
+# profile below replaces this whole section on internal-01.
+
+# Images - built locally, then loaded into Kind by DevSpace. No constant tag: each build gets a new
+# generated tag, so a changed image rolls the pods. A fixed tag would leave them on the old image.
 images:
   backend:
     image: mainloop-backend
-    tags:
-      - dev
-    dockerfile: backend/Dockerfile
-    context: .
-    rebuildStrategy: ignoreContextChanges
+    dockerfile: server/Dockerfile
+    context: server
     docker:
       useBuildKit: true
       args:
-        - --target=dev
+        - --target=prod
 
   frontend:
     image: mainloop-frontend
-    tags:
-      - dev
-    dockerfile: frontend/Dockerfile
+    dockerfile: web/Dockerfile
     context: .
-    rebuildStrategy: ignoreContextChanges
     docker:
       useBuildKit: true
       args:
-        - --target=dev
+        # Baked into the bundle at build time; must match the API port forward below.
+        - --build-arg=VITE_API_URL=http://localhost:8000
 
 # Deployments using Kustomize
 deployments:
@@ -47,186 +47,33 @@ deployments:
     kubectl:
       kustomize: true
       manifests:
-        - k8s/apps/mainloop/overlays/dev
+        - k8s/apps/mainloop/overlays/kind
 
-# Development mode configuration
+# Port forwards: the web app on localhost:5173 and the API on localhost:8000. Ctrl-C stops them.
 dev:
-  backend:
-    container: backend
-    labelSelector:
-      app: mainloop-backend
-    namespace: mainloop
-    devImage: mainloop-backend:dev
-    # Sync source files for hot reload
-    sync:
-      - path: ./backend/src:/app/src
-        excludePaths:
-          - __pycache__/
-          - '*.pyc'
-          - .pytest_cache/
-          - .venv/
-        disableDownload: true
-      - path: ./models:/models
-        excludePaths:
-          - __pycache__/
-          - '*.pyc'
-          - .venv/
-        disableDownload: true
-      # Auto-install deps when pyproject.toml or uv.lock changes
-      - path: ./backend/pyproject.toml:/app/pyproject.toml
-        file: true
-        disableDownload: true
-        onUpload:
-          execRemote:
-            command: sh
-            args:
-              - -c
-              - cd /app && uv sync
-      - path: ./backend/uv.lock:/app/uv.lock
-        file: true
-        disableDownload: true
-        onUpload:
-          execRemote:
-            command: sh
-            args:
-              - -c
-              - cd /app && uv sync
-    # Override command for dev mode with hot reload
-    command:
-      - uvicorn
-      - mainloop.api:app
-      - --host
-      - 0.0.0.0
-      - --port
-      - '8000'
-      - --reload
-      - --reload-dir
-      - /app/src
-      - --reload-dir
-      - /models
-      - --timeout-graceful-shutdown
-      - '3'
-    logs: {}
-
-  mcp:
-    container: mcp
-    labelSelector:
-      app: mainloop-backend
-    namespace: mainloop
-    devImage: mainloop-backend:dev
-    # Sync source files for hot reload
-    sync:
-      - path: ./backend/src:/app/src
-        excludePaths:
-          - __pycache__/
-          - '*.pyc'
-          - .pytest_cache/
-          - .venv/
-        disableDownload: true
-      - path: ./models:/models
-        excludePaths:
-          - __pycache__/
-          - '*.pyc'
-          - .venv/
-        disableDownload: true
-      # Auto-install deps when pyproject.toml or uv.lock changes
-      - path: ./backend/pyproject.toml:/app/pyproject.toml
-        file: true
-        disableDownload: true
-        onUpload:
-          execRemote:
-            command: sh
-            args:
-              - -c
-              - cd /app && uv sync
-      - path: ./backend/uv.lock:/app/uv.lock
-        file: true
-        disableDownload: true
-        onUpload:
-          execRemote:
-            command: sh
-            args:
-              - -c
-              - cd /app && uv sync
-    # Override command for dev mode with hot reload
-    command:
-      - uvicorn
-      - mainloop.mcp_app:app
-      - --host
-      - 0.0.0.0
-      - --port
-      - '8002'
-      - --reload
-      - --reload-dir
-      - /app/src
-      - --reload-dir
-      - /models
-      - --timeout-graceful-shutdown
-      - '3'
-    logs: {}
-
   frontend:
     labelSelector:
       app: mainloop-frontend
     namespace: mainloop
     container: frontend
-    devImage: mainloop-frontend:dev
-    sync:
-      - path: ./frontend/src:/app/frontend/src
-        excludePaths:
-          - .svelte-kit/
-          - node_modules/
-        disableDownload: true
-      - path: ./frontend/vite.config.ts:/app/frontend/vite.config.ts
-        file: true
-        disableDownload: true
-      - path: ./packages:/app/packages
-        excludePaths:
-          - __pycache__/
-          - node_modules/
-        disableDownload: true
-      # Auto-install deps when package files change
-      - path: ./frontend/package.json:/app/frontend/package.json
-        file: true
-        disableDownload: true
-        onUpload:
-          execRemote:
-            command: sh
-            args:
-              - -c
-              - cd /app && pnpm install --frozen-lockfile || pnpm install
-      - path: ./pnpm-lock.yaml:/app/pnpm-lock.yaml
-        file: true
-        disableDownload: true
-        onUpload:
-          execRemote:
-            command: sh
-            args:
-              - -c
-              - cd /app && pnpm install --frozen-lockfile || pnpm install
-    command:
-      - pnpm
-      - dev
-      - --host
-      - 0.0.0.0
-      - --port
-      - '3000'
-    env:
-      - name: VITE_API_URL
-        value: http://localhost:8081
-    logs: {}
+    ports:
+      - port: 5173:3000
+  backend:
+    labelSelector:
+      app: mainloop-backend
+    namespace: mainloop
+    container: backend
+    ports:
+      - port: 8000:8000
 
-# Hooks for Kind cluster management
+# Cluster bootstrap and secrets. DevSpace loads each built image into a kind cluster itself, so
+# no image-load hook is needed.
 hooks:
   - name: ensure-kind-cluster
     events:
       - before:deploy
       - before:dev
-    command: |
-      if ! kind get clusters 2>/dev/null | grep -q "^mainloop-test$"; then
-        echo "Creating Kind cluster..."
-        ./scripts/kind/create-cluster.sh
-      fi
+    command: ./scripts/kind/create-cluster.sh
 
   - name: create-secrets
     events:
@@ -234,40 +81,14 @@ hooks:
       - before:dev
     command: ./scripts/kind/create-secrets.sh
 
-  - name: load-images
-    events:
-      - after:build
-    command: |
-      echo "Loading images into Kind..."
-      kind load docker-image mainloop-backend:dev --name mainloop-test
-      kind load docker-image mainloop-frontend:dev --name mainloop-test
-
-# Commands
+# Commands: `devspace run <name>`. The live profile removes this section.
 commands:
   reset:
     command: ./scripts/kind/reset-data.sh
-    description: Reset database and task namespaces
-
-  logs:
-    command: kubectl --context kind-mainloop-test logs -n mainloop deployment/mainloop-backend -f
-    description: Tail backend logs
-
-  shell:
-    command: kubectl --context kind-mainloop-test exec -it -n mainloop deployment/mainloop-backend -- bash
-    description: Open shell in backend pod
+    description: Wipe the Kind database and restart the backend
 
 # Profiles
 profiles:
-  # Test profile - deploy only, no sync (for CI and Playwright)
-  - name: test
-    patches:
-      - op: replace
-        path: deployments.mainloop.kubectl.manifests
-        value:
-          - k8s/apps/mainloop/overlays/test
-      - op: remove
-        path: dev
-
   # Shared live instance on internal-01 (`make dev-live`). No local builds: images
   # come from ghcr (CI publishes the --target=dev images on pushes to main).
   # DevSpace owns namespace mainloop-dev and the *-dev kagent agents directly.

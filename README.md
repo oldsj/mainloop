@@ -45,6 +45,11 @@ The stack is a Go server (`server/`) and a React app (`web/`). You need a Postgr
 server and an `AGENT_TOKEN_KEY` for the API. The full local setup is in
 [CONTRIBUTING.md](CONTRIBUTING.md#local-development).
 
+To run both in a local Kind cluster instead, with Docker, `kind`, `kubectl` and DevSpace
+installed, run `make dev` from the repository root. The web app is then at
+<http://localhost:5173> and the API at <http://localhost:8000>. See
+[Kind in the development environment](docs/dev-environment.md#kind).
+
 ```bash
 # API: owner API on http://localhost:8000
 cd server && go run ./cmd/mainloop serve-api
@@ -233,7 +238,6 @@ database and let `mainloop migrate up` create the schema. Main and child Session
 credential references; the main thread uses its dedicated main Agent. Native session history
 from earlier development builds is not carried over.
 
-For a reproducible kagent spike stack, see the [tracked Kind overlay](k8s/apps/mainloop/overlays/kind/README.md).
-It includes dedicated workspace Agents, credential references and explicit installation prerequisites.
-Its README and manifests still describe the retired frontend and backend images, so treat it as unverified
-for the Go/React stack until it is updated.
+The [Kind overlay](k8s/apps/mainloop/overlays/kind/README.md) runs the Go/React stack without kagent,
+so native sessions, workspaces and schedules are unavailable there. A tracked recipe for installing
+kagent into a local cluster does not exist yet.
