@@ -26,11 +26,15 @@ type Summary struct {
 // Reorientation counts how much a turn re-read before it worked. A read or edit that failed is not
 // counted. It carries no path: summaries outlive the observations they came from.
 type Reorientation struct {
-	Reads int `json:"reads"`
+	// Turns is 1 for a turn; EditedTurns is 1 when it made an edit. Totals sum them, so
+	// ReadsBeforeFirstEdit / EditedTurns is an average.
+	Turns       int `json:"turns"`
+	EditedTurns int `json:"edited_turns"`
+	Reads       int `json:"reads"`
 	// RereadCalls are the read calls of a path the same turn had already read.
 	RereadCalls int `json:"reread_calls"`
-	// RereadsFromEarlierTurns are the paths this turn read that an earlier turn of the session had
-	// read or edited.
+	// RereadsFromEarlierTurns are the paths this turn read that an earlier turn in the same native
+	// context (the same kagent session) had read or edited.
 	RereadsFromEarlierTurns int `json:"rereads_from_earlier_turns"`
 	Edits                   int `json:"edits"`
 	// ReadsBeforeFirstEdit is null when the turn made no edit.
@@ -49,8 +53,8 @@ type failureGroup struct {
 // always be rebuilt from them. The turn is complete only when the first event starts it, the last
 // ends it with complete coverage, every sequence number from 1 to the last is present, and every
 // tool call has exactly one start and one result that agree. Anything else is partial, and a
-// partial turn never claims complete usage. earlier holds the paths the session's earlier turns read
-// or edited (nil when there are none); it only feeds Reorientation.RereadsFromEarlierTurns.
+// partial turn never claims complete usage. earlier holds the paths the earlier turns of the same
+// native context read or edited (nil when there are none); it only feeds Reorientation.RereadsFromEarlierTurns.
 func Summarize(events []Event, earlier map[string]bool) Summary {
 	events = slices.Clone(events)
 	slices.SortFunc(events, func(a, b Event) int { return int(a.Sequence - b.Sequence) })
@@ -166,7 +170,7 @@ func Summarize(events []Event, earlier map[string]bool) Summary {
 
 	s := Summary{
 		Reorientation: reorientation(events, results, earlier),
-		Failures: failures, Categories: categories, RepeatedFailureGroups: repeated, UnresolvedCalls: unresolved,
+		Failures:      failures, Categories: categories, RepeatedFailureGroups: repeated, UnresolvedCalls: unresolved,
 		FrictionCoverage: "partial", UsageCoverage: "unknown", Inclusion: "tree_inclusive", ChildAttribution: "unavailable",
 	}
 	if complete {
@@ -186,7 +190,7 @@ func Summarize(events []Event, earlier map[string]bool) Summary {
 // call whose result is an error or a denial did not read or edit anything; a call with no result
 // yet counts, because the turn may still be running.
 func reorientation(events []Event, results map[string]*Tool, earlier map[string]bool) Reorientation {
-	var r Reorientation
+	r := Reorientation{Turns: 1}
 	read := map[string]bool{}
 	for i := range events {
 		t := events[i].Tool
@@ -199,6 +203,7 @@ func reorientation(events []Event, results map[string]*Tool, earlier map[string]
 		if t.Action == "edit" {
 			r.Edits++
 			if r.ReadsBeforeFirstEdit == nil {
+				r.EditedTurns = 1
 				n := r.Reads
 				r.ReadsBeforeFirstEdit = &n
 			}

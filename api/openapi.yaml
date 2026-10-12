@@ -9341,28 +9341,46 @@ components:
       type: object
       description: >-
         How much a turn re-read before it worked, counted from the Read and Edit tool calls the turn
-        reported. Absent where the turn was summarised before this was collected. On a total it is
-        the sum over the turns that have it. A read or edit that failed is not counted. Compactions
-        are not here: the harness does not report them yet.
+        reported. Absent where the turn was summarised before this was collected (finished turns are
+        not re-summarised, so those stay without it). On a total it is the sum over the turns that
+        have it; `turns` says how many those are, which can be fewer than the total's `turns`. A
+        read or edit that failed is not counted. Reads with no reported path (outside the workspace,
+        or a sensitive name) are counted in `reads` but never as repeats. Compactions are not here:
+        the harness does not report them yet.
       properties:
+        turns:
+          type: integer
+          description: Turns counted here; 1 on a turn.
+        edited_turns:
+          type: integer
+          description: Turns counted here that made at least one edit; 0 or 1 on a turn.
         reads:
           type: integer
           description: Read calls.
         reread_calls:
           type: integer
-          description: Read calls of a path the same turn had already read.
+          description: >-
+            Read calls of a path the same turn had already read. The harness reports no range, so
+            reading one large file in pages counts as repeats.
         rereads_from_earlier_turns:
           type: integer
-          description: Paths this turn read that an earlier turn of the same session had read or edited.
+          description: >-
+            Paths this turn read that an earlier turn in the same native context (the same kagent
+            session) had read or edited. A Mainloop session that moves to a new kagent session
+            starts a new context, and its earlier turns do not count.
         edits:
           type: integer
-          description: Edit calls.
+          description: Edit and Write calls.
         reads_before_first_edit:
           anyOf:
             - type: integer
             - type: 'null'
-          description: Read calls before the first edit; null when the turn made no edit.
+          description: >-
+            Read calls before the first edit; null when the turn made no edit. On a total it is the
+            sum over the edited turns, so divide by `edited_turns` for an average.
       required:
+        - turns
+        - edited_turns
         - reads
         - reread_calls
         - rereads_from_earlier_turns

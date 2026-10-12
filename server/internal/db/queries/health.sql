@@ -45,12 +45,15 @@ FROM health_events
 WHERE owner_id = $1 AND gateway = $2 AND session_id = $3 AND a2a_task_id = $4 AND turn_key = $5
 ORDER BY sequence;
 
--- The paths other turns of one session read or edited before a given time: what a later turn
--- re-reads from an earlier one. Failed calls are not told apart; a path is only named once.
+-- The paths other turns of one native context (one kagent session) read or edited before a given
+-- time: what a later turn re-reads from an earlier one. A Mainloop session that moves to a new kagent
+-- session starts a new context, so its earlier turns do not count. Failed calls are not told apart;
+-- a path is only named once.
 -- name: ListHealthEarlierPaths :many
 SELECT DISTINCT (payload -> 'tool' ->> 'path')::text AS path
 FROM health_events
-WHERE owner_id = $1 AND gateway = $2 AND session_id = $3 AND turn_key <> $4 AND occurred_at < $5
+WHERE owner_id = $1 AND gateway = $2 AND session_id = $3 AND runtime_session_id = $4
+  AND turn_key <> $5 AND occurred_at < $6
   AND payload ->> 'kind' = 'tool' AND payload -> 'tool' ->> 'phase' = 'started'
   AND payload -> 'tool' ->> 'action' IN ('read', 'edit') AND payload -> 'tool' ->> 'path' IS NOT NULL;
 

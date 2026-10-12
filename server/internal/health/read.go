@@ -395,6 +395,8 @@ func totals(sums []api.HealthTurnSummary) api.HealthTotals {
 		groups += s.RepeatedFailureGroups
 		if r := s.Reorientation; r != nil {
 			haveRe = true
+			re.Turns += r.Turns
+			re.EditedTurns += r.EditedTurns
 			re.Reads += r.Reads
 			re.RereadCalls += r.RereadCalls
 			re.RereadsFromEarlierTurns += r.RereadsFromEarlierTurns

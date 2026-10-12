@@ -297,7 +297,7 @@ func rebuildTurn(ctx context.Context, q *dbq.Queries, in Input, attr dbq.GetHeal
 	var earlier map[string]bool
 	if len(rows) > 0 {
 		paths, err := q.ListHealthEarlierPaths(ctx, dbq.ListHealthEarlierPathsParams{
-			OwnerID: in.OwnerID, Gateway: in.Gateway, SessionID: in.SessionID, TurnKey: turnKey, OccurredAt: first,
+			OwnerID: in.OwnerID, Gateway: in.Gateway, SessionID: in.SessionID, RuntimeSessionID: in.ContextID, TurnKey: turnKey, OccurredAt: first,
 		})
 		if err != nil {
 			return fmt.Errorf("health: earlier paths: %w", err)
