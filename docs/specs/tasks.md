@@ -52,6 +52,12 @@ not a plain git name (a leading `-`, `..`, `@`, a `.lock` ending, spaces or any 
 components, over 255 bytes) or starts with `refs/`, or when the depth is outside 0..1000. A brief over
 16,384 bytes is refused with 422 `brief_too_long`. REST and MCP share these checks.
 
+A code task also needs its project to resolve to a validated development environment (an explicit
+version, or the accepted default of a followed environment). Without one the create is refused with
+409 `project_environment_required` and nothing is recorded: the push gate attests only a workspace
+pinned to an environment, so such a task could commit but never push. The owner's action is to select
+an environment for the project (`PUT /projects/{id}/environment`) and delegate again.
+
 An omitted checkout `depth` is 0, which clones full history; a positive
 value requests that shallow depth. Existing tasks keep the depth stored in their snapshot.
 

@@ -214,3 +214,26 @@ func withDatabase(connURL, name string) (string, error) {
 	u.Path = "/" + name
 	return u.String(), nil
 }
+
+// SelectEnvironment gives each project a validated development environment selection, so a code
+// task for it is accepted. The environment is created once per owner and reused.
+func (d *DB) SelectEnvironment(t testing.TB, owner string, projects ...string) {
+	t.Helper()
+	ctx := context.Background()
+	id := "env-" + owner
+	for _, q := range []string{
+		`INSERT INTO dev_environments (id, owner_id, name, source_kind) VALUES ('` + id + `', '` + owner + `', 'dev', 'prebuilt_image') ON CONFLICT DO NOTHING`,
+		`INSERT INTO environment_versions (id, environment_id, registry, repository, platform_manifest_digest, config_digest, declared_user, architecture, validation_status, validator_version, provenance_kind)
+		 VALUES ('` + id + `-v', '` + id + `', 'ghcr.io', 'o/dev', 'sha256:` + strings.Repeat("a", 64) + `', 'sha256:` + strings.Repeat("b", 64) + `', '65532:65532', 'amd64', 'static_validated', 'oci-static-v2', 'user_pushed')
+		 ON CONFLICT DO NOTHING`,
+	} {
+		if _, err := d.Pool.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range projects {
+		if _, err := d.Pool.Exec(ctx, `INSERT INTO project_environment_selections (project_id, environment_id, version_id, follow_default, revision) VALUES ($1, $2, $3, false, 1)`, p, id, id+"-v"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

@@ -265,6 +265,16 @@ func load(ctx context.Context, q *dbq.Queries, c capability) (authority, error) 
 	return a, nil
 }
 
+// PinnedEnvironment decodes a workspace's recorded development environment. ok is false when the
+// workspace was created without one (its project had no selection) or the record is incomplete: such
+// a workspace can never be attested, so it can never hold push authority.
+func PinnedEnvironment(raw json.RawMessage) (e api.WorkspaceEnvironment, ok bool) {
+	if json.Unmarshal(raw, &e) != nil || e.Image == "" || e.Platform == "" || e.PolicyIdentity == "" {
+		return api.WorkspaceEnvironment{}, false
+	}
+	return e, true
+}
+
 func (s *Service) observe(ctx context.Context, w dbq.GetPushWorkspaceRow) (string, error) {
 	if s.Native == nil {
 		return "", denial("runtime_unattested")
@@ -276,8 +286,8 @@ func (s *Service) observe(ctx context.Context, w dbq.GetPushWorkspaceRow) (strin
 	ra := n.GetRuntimeAssociation()
 	nw := n.GetWorkspace()
 	env := n.GetDevelopmentEnvironment()
-	var expected api.WorkspaceEnvironment
-	if json.Unmarshal(w.Environment, &expected) != nil || expected.Image == "" || expected.Platform == "" || expected.PolicyIdentity == "" {
+	expected, ok := PinnedEnvironment(w.Environment)
+	if !ok {
 		return "", denial("runtime_unattested")
 	}
 	if n.GetId() != w.NativeSessionID || n.GetContextId() != w.NativeSessionID || n.GetState() != ka.RuntimeState_RUNTIME_STATE_READY || n.GetOperation() != ka.RuntimeOperation_RUNTIME_OPERATION_NONE || n.GetPreparedRevision() == "" || n.GetRuntimeComposition() == nil ||

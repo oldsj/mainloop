@@ -35,6 +35,7 @@ const (
 	ReasonParentNotActive      = "parent_not_active"
 	ReasonCodeNeedsProject     = "code_requires_project"
 	ReasonCodeNeedsCheckout    = "code_requires_checkout"
+	ReasonEnvironmentRequired  = "project_environment_required"
 	ReasonCoordinationCheckout = "coordination_forbids_checkout"
 	ReasonProviderUnknown      = "provider_unknown"
 	ReasonProviderRole         = "provider_role_unavailable"
