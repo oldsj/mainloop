@@ -191,7 +191,7 @@ func (s *Server) call(actor agentauth.Actor, t Tool) mcp.ToolHandler {
 }
 
 // Implemented lists the tools this server registers, sorted by name. The contract in
-// api/mcp-tools.json names more; the rest belong to slices that have not landed.
+// api/mcp-tools.json is generated from them.
 func (s *Server) Implemented() []Tool {
 	all := s.tools()
 	out := make([]Tool, 0, len(all))

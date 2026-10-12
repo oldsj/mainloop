@@ -7,9 +7,6 @@ on:
       - .devcontainer/**
       - .trunk/**
       - scripts/with-timeout.mjs
-      - backend/pyproject.toml
-      - backend/uv.lock
-      - models/pyproject.toml
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
@@ -21,9 +18,6 @@ on:
       - .devcontainer/**
       - .trunk/**
       - scripts/with-timeout.mjs
-      - backend/pyproject.toml
-      - backend/uv.lock
-      - models/pyproject.toml
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml

@@ -1,4 +1,4 @@
-FROM python:3.13.7-slim-bookworm@sha256:adafcc17694d715c905b4c7bebd96907a1fd5cf183395f0ebc4d3428bd22d92d AS base
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS base
 
 ARG TARGETARCH
 # The package caches live outside $HOME and /data: workspace runtimes move HOME and
@@ -8,13 +8,8 @@ ARG TARGETARCH
 ENV HOME=/home/nonroot \
     XDG_CACHE_HOME=/home/nonroot/.cache \
     TRUNK_CACHE=/home/nonroot/.cache/trunk \
-    UV_CACHE_DIR=/opt/mainloop-cache/uv \
     npm_config_store_dir=/opt/mainloop-cache/pnpm-store \
-    UV_LINK_MODE=copy \
     npm_config_package_import_method=copy \
-    UV_PYTHON_DOWNLOADS=never \
-    UV_HTTP_TIMEOUT=30 \
-    UV_HTTP_RETRIES=1 \
     PATH=/usr/lib/postgresql/16/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 
 COPY .devcontainer/install-tools /usr/local/lib/mainloop/install-tools
@@ -29,21 +24,14 @@ RUN groupadd --gid 65532 nonroot \
     && mkdir -p /data /workspace /home/nonroot/.cache /opt/mainloop-cache \
     && chown -R 65532:65532 /data /workspace /home/nonroot /opt/mainloop-cache
 
-# Prewarm the uv cache and pnpm store from the lockfiles only. Application source
-# stays out of the image: the local `models` package is a stub, and neither
-# project is installed. Only the populated caches are copied into the final image.
+# Prewarm the pnpm store from the lockfile only. Application source stays out of the
+# image; only the populated cache is copied into the final image.
 FROM base AS deps
 USER 65532:65532
 WORKDIR /opt/mainloop-deps
-COPY --chown=65532:65532 backend/pyproject.toml backend/uv.lock backend/
-COPY --chown=65532:65532 models/pyproject.toml models/
 COPY --chown=65532:65532 package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY scripts/with-timeout.mjs /usr/local/lib/mainloop/with-timeout.mjs
-RUN mkdir -p models/src/models \
-    && touch models/README.md models/src/models/__init__.py \
-    && node /usr/local/lib/mainloop/with-timeout.mjs 240 "uv prewarm" -- \
-       uv sync --directory backend --frozen --python 3.13 --no-install-project \
-    && node /usr/local/lib/mainloop/with-timeout.mjs 240 "pnpm prewarm" -- pnpm fetch --frozen-lockfile
+RUN node /usr/local/lib/mainloop/with-timeout.mjs 240 "pnpm prewarm" -- pnpm fetch --frozen-lockfile
 
 FROM base
 # Only lint configuration and package caches enter the public image, never application
@@ -62,5 +50,5 @@ COPY --from=deps --chown=65532:65532 /opt/mainloop-cache /opt/mainloop-cache
 
 WORKDIR /workspace
 USER 65532:65532
-HEALTHCHECK --interval=30s --timeout=3s CMD test -w /data && test -w "$HOME" && test -x /usr/local/bin/uv && test -x /usr/lib/postgresql/16/bin/pg_ctl
+HEALTHCHECK --interval=30s --timeout=3s CMD test -w /data && test -w "$HOME" && test -x /usr/lib/postgresql/16/bin/pg_ctl
 CMD ["bash"]

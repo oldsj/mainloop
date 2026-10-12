@@ -28,7 +28,7 @@ const (
 	ToolGetPullRequestMergeStatus = "get_pull_request_merge_status"
 )
 
-// AllTools lists every tool, in the order the contract file lists them.
+// AllTools lists every tool, in the order api/mcp-tools.json lists them.
 var AllTools = []string{
 	ToolWhoami, ToolTopics, ToolTopicOpen, ToolNote, ToolDecide, ToolPendingAdd, ToolPendingDone,
 	ToolOpenPullRequest,

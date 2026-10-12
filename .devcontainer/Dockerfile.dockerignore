@@ -7,11 +7,6 @@
 !.trunk/configs/**
 !scripts/
 !scripts/with-timeout.mjs
-!backend/
-!backend/pyproject.toml
-!backend/uv.lock
-!models/
-!models/pyproject.toml
 !package.json
 !pnpm-lock.yaml
 !pnpm-workspace.yaml

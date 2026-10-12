@@ -114,8 +114,8 @@ install: ## Install locked workspace dependencies (240s cap)
 check: ## All offline checks: MCP contract, Go build and vet, web (installs dependencies; 480s cap)
 	@$(CAP) 480 'make check' -- $(MAKE) --no-print-directory check-mcp-tools check-server check-web
 
-check-mcp-tools: ## api/mcp-tools.json matches the Python exporter and the Go tool registry (240s cap; installs backend dependencies)
-	@$(CAP) 240 'make check-mcp-tools' -- sh -c 'uv run --frozen --project backend --python 3.13 python scripts/export-mcp-tools.py --check && cd server && go test -count=1 -run "TestToolSetMatchesTheContract|TestVisibilityMatchesTheContract|TestInputSchemasMatchTheContract|TestSchemaComparisonSeesADifferentType" ./internal/mcpserver/'
+check-mcp-tools: ## api/mcp-tools.json matches the Go tool registry and policy table (240s cap)
+	@$(CAP) 240 'make check-mcp-tools' -- sh -c 'cd server && go run ./tools/mcpcontract -check ../api/mcp-tools.json'
 
 check-server: ## Go build and vet for server/ (240s cap)
 	@$(CAP) 240 'make check-server' -- sh -c 'cd server && go build ./... && go vet ./...'
