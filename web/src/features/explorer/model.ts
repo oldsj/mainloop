@@ -35,6 +35,10 @@ export interface ExplorerNode {
   label: string;
   /** Muted text after the label: a status line, a schedule or a workspace state. */
   detail?: string;
+  /** A second line under the row: a short snippet so a task reads apart from its siblings unopened. */
+  summary?: string;
+  /** A small badge naming the row's project, shown as metadata rather than the row's identity. */
+  tag?: string;
   tone?: Tone;
   /** The muted count on the right of a group row. */
   count?: number;
@@ -67,6 +71,15 @@ export const FINISHED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** The short form of an ID, as the rest of the app shows it. */
 export const shortId = (id: string) => id.slice(0, 8);
+
+/** A task with no stored title, which the schema has never allowed but a row still guards against. */
+const FALLBACK_TITLE = 'Untitled task';
+
+/** The brief's first `max` characters, flattened to one line, for the row's snippet or a title fallback. */
+export function briefSnippet(brief: string, max = 140): string {
+  const flat = brief.trim().replace(/\s+/g, ' ');
+  return flat.length > max ? `${flat.slice(0, max).trimEnd()}…` : flat;
+}
 
 const byUpdatedDesc = (a: TaskView, b: TaskView) =>
   Date.parse(b.task.updated_at) - Date.parse(a.task.updated_at);
@@ -106,13 +119,19 @@ export function taskNode(view: TaskView, source: ExplorerSource, parent: string)
   const id = `${parent}/task:${task.id}`;
   const needsYou = workGroup(view, null) === 'needs-you';
   const target: Target = { to: 'task', id: task.id };
+  const title = task.title.trim();
+  const label = title || briefSnippet(task.brief, 60) || FALLBACK_TITLE;
+  const project = source.projects.find((row) => row.id === task.project_id);
   return {
     id,
-    label: task.title,
+    label,
     detail: statusLine(view),
+    // A task with no title already shows its brief as the label, so the snippet would repeat it.
+    summary: title ? briefSnippet(task.brief) : undefined,
+    tag: project?.full_name,
     tone: needsYou ? 'attention' : statusTone(task.status),
     target,
-    ask: askPrefill({ label: task.title }, target),
+    ask: askPrefill({ label }, target),
     children: taskChildren(view, source, id)
   };
 }

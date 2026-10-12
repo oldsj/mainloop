@@ -261,6 +261,57 @@ describe('explorer tree focus state', () => {
   });
 });
 
+describe('task identity on a row', () => {
+  const identityNodes: ExplorerNode[] = [
+    {
+      id: 'working',
+      label: 'Working',
+      count: 1,
+      children: [
+        {
+          id: 'working/task:t3',
+          label: 'Add retry button',
+          detail: 'Running',
+          summary: 'Add a retry button to the task page so a failed send can be sent again.',
+          tag: 'acme/widgets',
+          target: { to: 'task', id: 't3' },
+          children: []
+        }
+      ]
+    }
+  ];
+
+  it('shows the brief snippet under the row and the project as a small tag', () => {
+    render(
+      <ExplorerTree
+        nodes={identityNodes}
+        isExpanded={() => true}
+        onToggle={vi.fn()}
+        onOpen={vi.fn()}
+        onAsk={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Add retry button')).toBeInTheDocument();
+    expect(
+      screen.getByText('Add a retry button to the task page so a failed send can be sent again.')
+    ).toBeInTheDocument();
+    expect(screen.getByText('acme/widgets')).toBeInTheDocument();
+  });
+
+  it('omits the snippet and the tag when the row has neither', () => {
+    render(
+      <ExplorerTree
+        nodes={nodes}
+        isExpanded={() => true}
+        onToggle={vi.fn()}
+        onOpen={vi.fn()}
+        onAsk={vi.fn()}
+      />
+    );
+    expect(screen.queryByTestId('explorer-summary')).not.toBeInTheDocument();
+  });
+});
+
 describe('row menu', () => {
   const row = (name: string) => screen.getByRole('treeitem', { name }).firstElementChild!;
 

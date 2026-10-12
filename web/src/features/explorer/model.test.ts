@@ -6,10 +6,12 @@ import { schedule } from '@/features/schedules/test/fixtures';
 import { view } from '@/test/fixtures/tasks';
 import {
   askPrefill,
+  briefSnippet,
   buildExplorer,
   FINISHED_WINDOW_MS,
   mainloopState,
   needsCount,
+  taskNode,
   visibleRows,
   type ExplorerSource
 } from './model';
@@ -228,6 +230,59 @@ describe('needs you and working', () => {
       'About question Which branch?: ',
       'About approval Approve a push (task task-123): '
     ]);
+  });
+});
+
+describe('brief snippet', () => {
+  it('flattens whitespace and passes a short brief through unchanged', () => {
+    expect(briefSnippet('Add a retry\nbutton   to the task page.')).toBe(
+      'Add a retry button to the task page.'
+    );
+  });
+
+  it('truncates a long brief to the given length with an ellipsis', () => {
+    const brief = 'x'.repeat(200);
+    const snippet = briefSnippet(brief, 140);
+    expect(snippet).toHaveLength(141);
+    expect(snippet.endsWith('…')).toBe(true);
+    expect(snippet.slice(0, 140)).toBe('x'.repeat(140));
+  });
+});
+
+describe('task row identity', () => {
+  it('shows the title as the label, a brief snippet as the summary, and the project as a tag', () => {
+    const projects = keepValid([project()], projectRowSchema);
+    const task = view({
+      id: 'task-1',
+      project_id: 'project-a',
+      title: 'Add retry button',
+      brief: 'Add a retry button to the task page so a failed send can be sent again.'
+    });
+    const node = taskNode(task, source({ projects, tasks: [task] }), 'working');
+    expect(node.label).toBe('Add retry button');
+    expect(node.summary).toBe(
+      'Add a retry button to the task page so a failed send can be sent again.'
+    );
+    expect(node.tag).toBe('acme/widgets');
+  });
+
+  it('falls back to a brief snippet, with no project tag, when the task has no title', () => {
+    const brief = 'A legacy task created before a title was required on every delegated brief.';
+    const task = view({ id: 'task-2', project_id: null, title: '', brief });
+    const node = taskNode(task, source({ tasks: [task] }), 'working');
+    expect(node.label).toBe(briefSnippet(brief, 60));
+    expect(node.summary).toBeUndefined();
+    expect(node.tag).toBeUndefined();
+  });
+
+  it('keeps a long title whole on the node, for CSS to truncate, and still shortens the summary', () => {
+    const title = 'A'.repeat(200);
+    const brief = `${'B'.repeat(200)} and some more detail after the cut.`;
+    const task = view({ id: 'task-3', project_id: null, title, brief });
+    const node = taskNode(task, source({ tasks: [task] }), 'working');
+    expect(node.label).toBe(title);
+    expect(node.summary).toHaveLength(141);
+    expect(node.summary?.endsWith('…')).toBe(true);
   });
 });
 
