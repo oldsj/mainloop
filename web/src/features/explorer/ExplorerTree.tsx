@@ -228,6 +228,11 @@ export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: Exp
                 </span>
               ) : null}
             </span>
+            {node.tag ? (
+              <span className="text-muted-foreground border-border shrink-0 border px-1 text-[10px]">
+                {node.tag}
+              </span>
+            ) : null}
             {node.count !== undefined ? (
               <span
                 className="text-muted-foreground pl-xs shrink-0 text-xs tabular-nums"
@@ -254,6 +259,15 @@ export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: Exp
               </button>
             ) : null}
           </div>
+          {node.summary ? (
+            <div
+              data-testid="explorer-summary"
+              className="text-muted-foreground truncate pb-1 text-xs"
+              style={{ paddingLeft: `${(depth - 1) * 12 + 24}px` }}
+            >
+              {node.summary}
+            </div>
+          ) : null}
           {open ? (
             <ul role="group" className="m-0 list-none p-0">
               {renderLevel(node.children, node.id, depth + 1)}
