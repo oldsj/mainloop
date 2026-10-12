@@ -466,10 +466,16 @@ func TestNoClusterScopedSecretAccess(t *testing.T) {
 
 func TestFeatureFlagsDefaultOff(t *testing.T) {
 	flags := []string{"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_MERGE_TOOLS_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED", "MAINLOOP_OWNER_POLICY_WRITES_ENABLED"}
+	// The live dev instance is a single-owner prototype, so the owner turned HITL answers on there.
+	// Every other overlay, prod included, keeps every flag off.
+	allowed := map[string]string{"overlays/dev-live": "MAINLOOP_OWNER_HITL_WRITES_ENABLED"}
 	for _, path := range overlays {
 		t.Run(path, func(t *testing.T) {
 			data := render(t, path).configMaps["mainloop-config"].Data
 			for _, flag := range flags {
+				if allowed[path] == flag {
+					continue
+				}
 				if v := strings.ToLower(data[flag]); v != "" && v != "false" {
 					t.Errorf("%s=%s", flag, data[flag])
 				}

@@ -28,7 +28,7 @@ data:
   GIT_TRANSPORT_ENABLED: 'false'
   PUSH_GATE_ENABLED: 'false'
   MAINLOOP_MERGE_TOOLS_ENABLED: 'false'
-  MAINLOOP_OWNER_HITL_WRITES_ENABLED: 'false'
+  MAINLOOP_OWNER_HITL_WRITES_ENABLED: 'true'
   # Dev-only kagent agents; production agents are never used from here.
   KAGENT_NAMESPACE: kagent
   KAGENT_ACTOR_ATESPACE: kagent
