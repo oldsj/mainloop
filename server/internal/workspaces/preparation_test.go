@@ -3,14 +3,20 @@ package workspaces
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
+
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/kagent"
+	"github.com/oldsj/mainloop/server/internal/reconcile"
+	"github.com/oldsj/mainloop/server/internal/sessions"
 	ka "github.com/oldsj/mainloop/server/third_party/kagentapi"
 )
 
@@ -96,17 +102,29 @@ func TestPreparationConfirmsOnceWithTheAgentProfile(t *testing.T) {
 }
 
 func TestPreparationUsesTheAttemptRole(t *testing.T) {
-	h := newHarness(t, nil)
-	r := preparedWorkspace(t, h)
-	h.exec(`INSERT INTO tasks (id,owner_id,project_id,root_task_id,title,brief,mode,assigned_profile_id,selection_source,status,checkout_branch,checkout_ref,checkout_depth)
-	    VALUES ('task',$1,$2,'task','test','test','code','claude','explicit','queued',$3,'main',0)`, owner, r.ProjectID, r.Branch)
-	h.exec(`INSERT INTO task_attempts (id,task_id,number,profile_id,native_provider,configuration_revision,agent_namespace,agent_name,role,depth,workspace_request_id,writer_generation)
-	    VALUES ('attempt','task',1,'claude','claude','rev',$1,$2,'supervisor',1,$3,1)`, r.AgentNamespace, r.AgentName, r.RequestID)
-	if got := prepareOnce(t, h, r.ID); got != dbstate.PreparationConfirmed {
-		t.Fatalf("state = %s", got)
-	}
-	if req := lastPrepare(t, h); req.GetSetupProfile() != "supervisor" || req.GetSetupDigest() != setupDigests["supervisor"] {
-		t.Fatalf("request = %v", req)
+	for _, role := range []string{"supervisor", "child"} {
+		t.Run(role, func(t *testing.T) {
+			h := newHarness(t, nil)
+			r := preparedWorkspace(t, h)
+			task := func(id string, parent *string) {
+				h.exec(`INSERT INTO tasks (id,owner_id,project_id,parent_task_id,root_task_id,title,brief,mode,assigned_profile_id,selection_source,status,checkout_branch,checkout_ref,checkout_depth)
+				    VALUES ($1,$2,$3,$4,'root','test','test','code','claude','explicit','queued',$5,'main',0)`, id, owner, r.ProjectID, parent, r.Branch)
+			}
+			taskID, depth := "root", 1
+			task("root", nil)
+			if role == "child" {
+				taskID, depth = "kid", 2
+				task("kid", ptr("root"))
+			}
+			h.exec(`INSERT INTO task_attempts (id,task_id,number,profile_id,native_provider,configuration_revision,agent_namespace,agent_name,role,depth,workspace_request_id,writer_generation)
+			    VALUES ('attempt',$1,1,'claude','claude','rev',$2,$3,$4,$5,$6,1)`, taskID, r.AgentNamespace, r.AgentName, role, depth, r.RequestID)
+			if got := prepareOnce(t, h, r.ID); got != dbstate.PreparationConfirmed {
+				t.Fatalf("state = %s", got)
+			}
+			if req := lastPrepare(t, h); req.GetSetupProfile() != role || req.GetSetupDigest() != setupDigests[role] {
+				t.Fatalf("request = %v", req)
+			}
+		})
 	}
 }
 
@@ -226,5 +244,210 @@ func TestCreateWithAnEnvironmentPinsTheCheckoutToACommit(t *testing.T) {
 	var inv *InvalidError
 	if !errors.As(err, &inv) || !strings.Contains(inv.Error(), "checkout_ref_unavailable") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPreparationRetriesAreSpacedAndAlreadyExistsIsFinal(t *testing.T) {
+	h := newHarness(t, nil)
+	r := preparedWorkspace(t, h)
+	h.fake.FailNext(kagent.ProcPrepareSessionWorkspace, grpcFault(connect.CodeUnavailable))
+	if got := prepareOnce(t, h, r.ID); got != dbstate.PreparationRequested {
+		t.Fatalf("after a transient error: %s", got)
+	}
+	h.fake.FailNext(kagent.ProcPrepareSessionWorkspace, grpcFault(connect.CodeAlreadyExists))
+	if got := prepareOnce(t, h, r.ID); got != dbstate.PreparationFailed {
+		t.Fatalf("after AlreadyExists: %s", got)
+	}
+}
+
+func TestPreparationFailsAtOnceOnAHistoricalReceipt(t *testing.T) {
+	h := newHarness(t, nil)
+	h.fake.PrepareClassification = "pending"
+	r := preparedWorkspace(t, h)
+	if got := prepareOnce(t, h, r.ID); got != dbstate.PreparationRequested {
+		t.Fatalf("state = %s", got)
+	}
+	base := h.fake.TamperSession
+	h.fake.TamperSession = func(proc string, s *ka.Session) {
+		base(proc, s)
+		if proc == kagent.ProcGetSession && s.GetWorkspacePreparation() != nil {
+			s.WorkspacePreparation.Historical = true
+		}
+	}
+	if got := prepareOnce(t, h, r.ID); got != dbstate.PreparationFailed {
+		t.Fatalf("state = %s", got)
+	}
+}
+
+func TestPreparationWindowIsCheckedAfterReadingTheReceipt(t *testing.T) {
+	// Confirmed by kagent after the window: still counts.
+	h := newHarness(t, nil)
+	h.fake.PrepareClassification = "pending"
+	r := preparedWorkspace(t, h)
+	if got := prepareOnce(t, h, r.ID); got != dbstate.PreparationRequested {
+		t.Fatalf("state = %s", got)
+	}
+	h.exec(`UPDATE workspace_preparations SET created_at = now() - interval '2 hours' WHERE id=$1`, r.ID)
+	base := h.fake.TamperSession
+	h.fake.TamperSession = func(proc string, s *ka.Session) {
+		base(proc, s)
+		if proc == kagent.ProcGetSession && s.GetWorkspacePreparation() != nil {
+			s.WorkspacePreparation.Classification = "confirmed"
+		}
+	}
+	if got := prepareOnce(t, h, r.ID); got != dbstate.PreparationConfirmed {
+		t.Fatalf("late confirmation: %s", got)
+	}
+
+	// Still pending after the window: failed.
+	h2 := newHarness(t, nil)
+	h2.fake.PrepareClassification = "pending"
+	r2 := preparedWorkspace(t, h2)
+	if got := prepareOnce(t, h2, r2.ID); got != dbstate.PreparationRequested {
+		t.Fatalf("state = %s", got)
+	}
+	h2.exec(`UPDATE workspace_preparations SET created_at = now() - interval '2 hours' WHERE id=$1`, r2.ID)
+	if got := prepareOnce(t, h2, r2.ID); got != dbstate.PreparationFailed {
+		t.Fatalf("expired: %s", got)
+	}
+}
+
+func TestCreateRetryReusesTheStoredCommitAndAnOutageIsRetryable(t *testing.T) {
+	h := newHarness(t, nil)
+	refs := &fakeRefs{sha: prepSHA}
+	h.svc.Refs = refs
+	if _, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("first")}); err != nil {
+		t.Fatal(err)
+	}
+	selectEnvironment(h)
+	id := newID()
+	w, err := h.svc.CreateWithRequestID(bg, id, api.CreateWorkspaceRequest{Repo: ptr("oldsj/mainloop"), Branch: ptr("second")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := len(refs.got)
+	// The remote ref has moved and GitHub is down, but a repeat of the same request finds the
+	// workspace without planning again.
+	refs.sha, refs.err = "", errors.New("github is down")
+	again, err := h.svc.CreateWithRequestID(bg, id, api.CreateWorkspaceRequest{Repo: ptr("oldsj/mainloop"), Branch: ptr("second")})
+	if err != nil || again.WorkspaceId != w.WorkspaceId || len(refs.got) != asked || h.row(w.WorkspaceId).Ref != prepSHA {
+		t.Fatalf("repeat: %v, workspace %s vs %s, asks %d vs %d", err, again.WorkspaceId, w.WorkspaceId, len(refs.got), asked)
+	}
+	// An outage on a new create is not a refusal of the ref.
+	_, err = h.create(api.CreateWorkspaceRequest{Branch: ptr("third")})
+	var inv *InvalidError
+	if err == nil || errors.As(err, &inv) {
+		t.Fatalf("outage err = %v", err)
+	}
+}
+
+func TestCreateWithAnEnvironmentRefusesAnUnpinnableRef(t *testing.T) {
+	h := newHarness(t, nil)
+	if _, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("first")}); err != nil {
+		t.Fatal(err)
+	}
+	selectEnvironment(h)
+	n := h.workspaceCount()
+	_, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("second")})
+	var inv *InvalidError
+	if !errors.As(err, &inv) || !strings.Contains(inv.Error(), "checkout_ref_unavailable") || h.workspaceCount() != n {
+		t.Fatalf("err = %v, workspaces %d -> %d", err, n, h.workspaceCount())
+	}
+	// An explicit commit needs no resolver.
+	if _, err = h.create(api.CreateWorkspaceRequest{Branch: ptr("third"), Ref: ptr(prepSHA)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSetupDigestsMatchTheKagentPin fails when the vendored kagent API moves to another commit
+// without the setup digests being re-read there.
+func TestSetupDigestsMatchTheKagentPin(t *testing.T) {
+	raw, err := os.ReadFile("../../third_party/kagentapi/SOURCE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var commit string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(line, "commit: "); ok {
+			commit = strings.TrimSpace(v)
+		}
+	}
+	if commit != setupDigestsSource {
+		t.Fatalf("third_party/kagentapi/SOURCE pins kagent %s but the setup digests in preparation.go were read at %s. "+
+			"Read the supervisor, child and agent digests in go/harness/runtime/workspace/preparation_test.go at the new commit, "+
+			"update setupDigests and setupDigestsSource, and keep the controller and harness image pins in step.", commit, setupDigestsSource)
+	}
+}
+
+// gatedWorkspace makes a workspace with a selected environment against a kagent that refuses every
+// send until its preparation is confirmed, with the real delivery ledger and both loops running.
+// The preparation loop is left to the caller.
+func gatedWorkspace(t *testing.T) (*harness, *sessions.Service, api.WorkspaceLifecycle) {
+	t.Helper()
+	h := newHarness(t, nil)
+	h.fake.Actors, h.fake.RequirePreparation = true, true
+	h.svc.Refs = &fakeRefs{sha: prepSHA}
+	if _, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("first")}); err != nil {
+		t.Fatal(err)
+	}
+	selectEnvironment(h)
+	w, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("second")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ss := h.ledger()
+	h.runBoth(ss)
+	eventually(t, "the Session exists", func() bool { return h.row(w.WorkspaceId).KagentSessionID != nil })
+	return h, ss, w
+}
+
+func (h *harness) runPreparation() {
+	h.t.Helper()
+	r := reconcile.NewRunner(h.svc.Pool, h.svc.Log, nil)
+	l := h.svc.preparationLoop()
+	l.Interval = 10 * time.Millisecond
+	r.Add(l)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = r.Run(ctx) }()
+	h.t.Cleanup(func() { cancel(); <-done })
+}
+
+func TestABriefWaitsForPreparationAndIsSentOnceItIsConfirmed(t *testing.T) {
+	h, ss, w := gatedWorkspace(t)
+	id := newID()
+	if _, err := ss.SendTo(bg, w.WorkspaceId, id, "brief"); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the delivery to wait", func() bool { return strings.Contains(h.logs.String(), "delivery is waiting for its workspace") })
+	if n := h.fake.Count("SendStreamingMessage"); n != 0 || h.deliveryState(id) == dbstate.DeliveryCompleted {
+		t.Fatalf("sent before preparation: %d sends, state %s", n, h.deliveryState(id))
+	}
+	h.runPreparation()
+	eventually(t, "the preparation to be confirmed", func() bool { return h.prepState(w.WorkspaceId) == dbstate.PreparationConfirmed })
+	eventually(t, "the delivery to complete", func() bool { return h.deliveryState(id) == dbstate.DeliveryCompleted })
+	if n := h.fake.Count("SendStreamingMessage"); n != 1 {
+		t.Fatalf("sends = %d, want 1", n)
+	}
+}
+
+func TestABriefForAWorkspaceWhosePreparationFailedSettlesWithTheDetail(t *testing.T) {
+	h, ss, w := gatedWorkspace(t)
+	id := newID()
+	if _, err := ss.SendTo(bg, w.WorkspaceId, id, "brief"); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the delivery to wait", func() bool { return strings.Contains(h.logs.String(), "delivery is waiting for its workspace") })
+	h.exec(`UPDATE workspace_preparations SET state='failed', detail='kagent refused the preparation: bad digest' WHERE id=$1`, w.WorkspaceId)
+	eventually(t, "the delivery to fail", func() bool { return h.deliveryState(id) == dbstate.DeliveryFailed })
+	d, err := dbq.New(h.svc.Pool).GetDelivery(bg, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Detail == nil || !strings.Contains(*d.Detail, "bad digest") || !strings.Contains(*d.Detail, "could not prepare the kagent session") {
+		t.Fatalf("detail = %v", d.Detail)
+	}
+	if n := h.fake.Count("SendStreamingMessage"); n != 0 {
+		t.Fatalf("sends = %d, want 0", n)
 	}
 }

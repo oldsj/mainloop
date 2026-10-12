@@ -707,7 +707,10 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 	}
 	// A workspace with an environment is prepared by kagent against one exact commit, so the base
 	// is fixed to a full SHA now and every retry of this create reuses it.
-	if env != nil && s.Refs != nil && !gitref.IsSHA(ref) {
+	if env != nil && !gitref.IsSHA(ref) {
+		if s.Refs == nil {
+			return plan{}, &InvalidError{"checkout_ref_unavailable: the checkout cannot be pinned to a commit without a GitHub App client"}
+		}
 		if ref, err = s.resolveRef(ctx, project, ref); err != nil {
 			return plan{}, err
 		}

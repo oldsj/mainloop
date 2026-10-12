@@ -486,8 +486,8 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 				return t.settle(ctx, dbstate.DeliveryFailed,
 					"not sent: the workspace was not ready after "+hold.String()+": "+err.Error(), nil, false)
 			}
-			t.s.log().WarnContext(ctx, "delivery is waiting for its workspace's kagent session",
-				"message_id", t.c.ID, "workspace", *t.d.WorkspaceID, "age", age.Round(time.Second))
+			t.s.log().WarnContext(ctx, "delivery is waiting for its workspace",
+				"message_id", t.c.ID, "workspace", *t.d.WorkspaceID, "age", age.Round(time.Second), "waiting_for", err.Error())
 			return reconcile.RetryAfter(t.s.opts().UncertainRecheck), nil
 		}
 		if errors.Is(err, agentauth.ErrCleanupPending) || errors.Is(err, agentauth.ErrRevoked) {

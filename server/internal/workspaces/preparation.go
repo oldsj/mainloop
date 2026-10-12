@@ -42,6 +42,13 @@ const (
 	profileAgent      = "agent"
 )
 
+// setupDigestsSource is the oldsj/kagent commit the digests below were read at
+// (go/harness/runtime/workspace/preparation_test.go). A digest hashes kagent's standing-context
+// text, and a mismatch makes the controller refuse every preparation. TestSetupDigestsMatchTheKagentPin
+// fails when third_party/kagentapi/SOURCE moves off this commit: re-read the digests at the new
+// commit, update both, and keep the harness image pins in step.
+const setupDigestsSource = "ce402bf76151bf9492e5dda53f310547794c3190"
+
 var setupDigests = map[string]string{
 	profileSupervisor: "c9b2c5bf815f6b0dd45ee11f02e343ab6a25d4ce39c93663e6feb25281cb87f6",
 	profileChild:      "7e8a64abb17aaa575ab317f07ad673defc495d97adb641283e5d1cc636b30258",
@@ -93,11 +100,13 @@ func receiptVerdict(r *ka.WorkspacePreparationReceipt, action string) (state, de
 	if r.GetOriginal().GetActionId() != action {
 		return prepFailed, "kagent holds a preparation for a different action"
 	}
+	// kagent keeps one preparation per Session, so a historical receipt of ours never becomes
+	// current again, whatever its classification says.
+	if r.GetHistorical() {
+		return prepFailed, "kagent reports the preparation as historical, not current"
+	}
 	switch r.GetClassification() {
 	case "confirmed":
-		if r.GetHistorical() {
-			return prepFailed, "kagent reports the preparation as historical, not current"
-		}
 		return prepConfirmed, ""
 	case "definite-failure":
 		return prepFailed, "kagent reports the preparation failed"
@@ -121,11 +130,20 @@ func (s *Service) prepare(ctx context.Context, c reconcile.Claim) (reconcile.Out
 	if err != nil {
 		return reconcile.Retry(), err
 	}
-	if s.now().Sub(prep.CreatedAt) > preparationWindow {
+	// The window is only checked where this pass would wait: a receipt kagent confirmed late still
+	// counts, so it is read first.
+	late := func() bool { return s.now().Sub(prep.CreatedAt) > preparationWindow }
+	timedOut := func() (reconcile.Outcome, error) {
 		return s.failPreparation(ctx, c.ID, "kagent did not confirm the preparation within "+preparationWindow.String())
 	}
-	if w.KagentSessionID == nil {
+	wait := func() (reconcile.Outcome, error) {
+		if late() {
+			return timedOut()
+		}
 		return reconcile.RetryAfter(preparationRecheck), nil
+	}
+	if w.KagentSessionID == nil {
+		return wait()
 	}
 	n, err := s.Kagent.GetSession(ctx, *w.KagentSessionID)
 	if notFoundErr(err) {
@@ -139,7 +157,7 @@ func (s *Service) prepare(ctx context.Context, c reconcile.Claim) (reconcile.Out
 		return s.failPreparation(ctx, c.ID, "the kagent session ended before it was prepared")
 	}
 	if n.GetState() != ka.RuntimeState_RUNTIME_STATE_READY || n.GetOperation() != ka.RuntimeOperation_RUNTIME_OPERATION_NONE {
-		return reconcile.RetryAfter(preparationRecheck), nil
+		return wait()
 	}
 	if r := n.GetWorkspacePreparation(); r != nil {
 		if st, detail := receiptVerdict(r, prep.ActionID); st == prepConfirmed {
@@ -149,20 +167,25 @@ func (s *Service) prepare(ctx context.Context, c reconcile.Claim) (reconcile.Out
 		}
 		// Pending or uncertain: kagent has the request; look again.
 		if prep.State == prepRequested && r.GetOriginal().GetActionId() == prep.ActionID {
-			return reconcile.RetryAfter(preparationRecheck), nil
+			return wait()
 		}
+	}
+	// Nothing to wake the Actor for: kagent's preparation needs the exact commit.
+	if !gitref.IsSHA(w.Ref) {
+		return s.failPreparation(ctx, c.ID, "the checkout ref is not a commit SHA")
 	}
 	// kagent prepares an Actor that is running. An idle Session has none, so wake it: resume joins
 	// an operation already under way and is safe to repeat.
 	ra := n.GetRuntimeAssociation()
 	if ra.GetGenerationId() == "" || ra.GetActorUid() == "" || !ra.GetCurrentActive() {
 		if _, err := s.Kagent.ResumeSession(ctx, *w.KagentSessionID); err != nil && !notFoundErr(err) {
-			s.Log.WarnContext(ctx, "could not wake the session to prepare its workspace", "workspace", c.ID, "error", err)
+			if late() {
+				return timedOut()
+			}
+			// The loop's backoff spaces the retries and logs the error.
+			return reconcile.Retry(), fmt.Errorf("wake the session to prepare its workspace: %w", err)
 		}
-		return reconcile.RetryAfter(preparationRecheck), nil
-	}
-	if !gitref.IsSHA(w.Ref) {
-		return s.failPreparation(ctx, c.ID, "the checkout ref is not a commit SHA")
+		return wait()
 	}
 
 	profile, digest := prep.SetupProfile, prep.SetupDigest
@@ -199,9 +222,13 @@ func (s *Service) prepare(ctx context.Context, c reconcile.Claim) (reconcile.Out
 		if errors.As(err, &se) && se.Wire && (se.Code == connect.CodeInvalidArgument || se.Code == connect.CodePermissionDenied) {
 			return s.failPreparation(ctx, c.ID, fmt.Sprintf("kagent refused the preparation: %s", se.Detail))
 		}
+		// kagent keeps one preparation per Session: other bytes for it are a conflict no retry fixes.
+		if errors.As(err, &se) && se.Wire && se.Code == connect.CodeAlreadyExists {
+			return s.failPreparation(ctx, c.ID, "kagent holds a different preparation for this session")
+		}
 		// The outcome is unknown or transient: the next pass reads the Session for a receipt before
-		// anything is sent again.
-		return reconcile.RetryAfter(preparationRecheck), err
+		// anything is sent again, and the loop's backoff spaces the retries.
+		return reconcile.Retry(), err
 	}
 	switch st, detail := receiptVerdict(receipt, prep.ActionID); st {
 	case prepConfirmed:
@@ -209,5 +236,5 @@ func (s *Service) prepare(ctx context.Context, c reconcile.Claim) (reconcile.Out
 	case prepFailed:
 		return s.failPreparation(ctx, c.ID, detail)
 	}
-	return reconcile.RetryAfter(preparationRecheck), nil
+	return wait()
 }
