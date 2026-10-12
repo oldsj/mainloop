@@ -4,12 +4,16 @@ Go backend for Mainloop. One binary, `cmd/mainloop`, with a subcommand per proce
 wire contract is [`../api/openapi.yaml`](../api/openapi.yaml); request validation and routing
 come from it. See [`../ROADMAP.md`](../ROADMAP.md) for direction.
 
-| Command                                             | Status                                                            |
-| --------------------------------------------------- | ----------------------------------------------------------------- |
-| `serve-api`                                         | Owner API on `:8000`. `/health` is real; other operations 501.    |
-| `serve-mcp`                                         | `:8002`. `/health` only; 501 elsewhere.                           |
-| `serve-git`                                         | `:8003` (read) and `:8004` (push). `/health` only; 501 elsewhere. |
-| `migrate`, `sweep-orphans`, `smoke`, `kagent-probe` | Print "not implemented yet", exit 2.                              |
+| Command             | Status                                                            |
+| ------------------- | ----------------------------------------------------------------- |
+| `serve-api`         | Owner API on `:8000`. `/health` is real; other operations 501.    |
+| `serve-mcp`         | `:8002`. `/health` only; 501 elsewhere.                           |
+| `serve-git`         | `:8003` (read) and `:8004` (push). `/health` only; 501 elsewhere. |
+| `migrate`           | `up`, `status` and `reset` the database schema.                   |
+| `sweep-orphans`     | Lists orphaned kagent Sessions; `--delete` removes them.          |
+| `smoke --read-only` | Probes a running instance; no writes, no quota.                   |
+| `smoke --live`      | Drives one task from chat to merge; spends quota.                 |
+| `kagent-probe`      | Read-only check that kagent answers.                              |
 
 ## Layout
 

@@ -37,8 +37,9 @@ func okCheck(name, detail string) Check {
 	return Check{Name: name, Status: OK, Detail: detail}
 }
 
+// failCheck keeps a failure on one line. A joined error spans lines, and the check line is the output contract.
 func failCheck(name string, err error) Check {
-	return Check{Name: name, Status: Fail, Detail: err.Error()}
+	return Check{Name: name, Status: Fail, Detail: strings.ReplaceAll(err.Error(), "\n", "; ")}
 }
 
 func skipCheck(name, reason string) Check {

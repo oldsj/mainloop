@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,6 +19,9 @@ type ReadOptions struct {
 	APIHost string
 	Timeout time.Duration
 	Kagent  func(ctx context.Context) (string, error)
+
+	// eventsWait bounds the wait for the connected frame. Zero means eventsDeadline; tests shorten it.
+	eventsWait time.Duration
 }
 
 // eventsDeadline bounds the wait for the SSE connected frame. The server sends it at once, so a longer
@@ -34,6 +38,10 @@ const probeRepo = "/smoke/probe"
 func ReadOnly(ctx context.Context, opts ReadOptions, emit func(Check)) {
 	c := newCaller(opts.APIHost, opts.Timeout)
 	base := opts.API
+	eventsWait := opts.eventsWait
+	if eventsWait == 0 {
+		eventsWait = eventsDeadline
+	}
 	for _, check := range []func() Check{
 		func() Check { return checkHealth(ctx, c, base) },
 		func() Check {
@@ -57,7 +65,7 @@ func ReadOnly(ctx context.Context, opts ReadOptions, emit func(Check)) {
 				return "mode=" + v.Mode
 			})
 		},
-		func() Check { return checkEvents(ctx, c, base) },
+		func() Check { return checkEvents(ctx, c, base, eventsWait) },
 		func() Check { return checkMCP(ctx, c, opts.MCP) },
 		func() Check { return checkGitRead(ctx, c, opts.GitRead) },
 		func() Check { return checkGitPush(ctx, c, opts.GitPush) },
@@ -89,11 +97,11 @@ func readCheck[T any](ctx context.Context, c caller, name, target string, descri
 	return okCheck(name, describe(v))
 }
 
-// checkEvents reads the SSE stream until the connected frame arrives. The stream never ends on its
-// own, so the request context is what stops it.
-func checkEvents(ctx context.Context, c caller, base string) Check {
+// checkEvents reads the SSE stream until the connected frame arrives, for at most wait. The stream never
+// ends on its own, so the request context is what stops it.
+func checkEvents(ctx context.Context, c caller, base string, wait time.Duration) Check {
 	const name = "events"
-	ctx, cancel := context.WithTimeout(ctx, eventsDeadline)
+	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/events", nil)
 	if err != nil {
@@ -118,7 +126,7 @@ func checkEvents(ctx context.Context, c caller, base string) Check {
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return failCheck(name, fmt.Errorf("no connected frame within %s", eventsDeadline))
+		return failCheck(name, fmt.Errorf("no connected frame within %s", wait))
 	}
 	if err := scan.Err(); err != nil {
 		return failCheck(name, err)
@@ -158,20 +166,37 @@ func checkGitRead(ctx context.Context, c caller, base string) Check {
 }
 
 // checkGitPush asks for receive-pack discovery with no capability. A disabled gate refuses with 403 and
-// a git_transport_disabled code; an enabled one must refuse the missing capability with 401 or 403.
+// git_transport_disabled. An enabled gate refuses the missing capability with 401 authentication_required.
+// Any other refusal means the request stopped before that check (a Host, path or route refusal), so the
+// check fails and names the code.
 func checkGitPush(ctx context.Context, c caller, base string) Check {
 	const name = "git-push"
 	status, body, err := c.probe(ctx, http.MethodGet, base+probeRepo+".git/info/refs?service=git-receive-pack", nil)
 	if err != nil {
 		return failCheck(name, err)
 	}
-	if status == http.StatusForbidden && strings.HasPrefix(body, "git_transport_disabled") {
+	code := refusalCode(body)
+	switch {
+	case status == http.StatusForbidden && code == "git_transport_disabled":
 		return skipCheck(name, "transport off")
+	case status == http.StatusUnauthorized && code == "authentication_required":
+		return okCheck(name, "401 authentication_required without a capability")
 	}
-	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		return okCheck(name, fmt.Sprintf("%d without a capability", status))
+	got := strings.TrimSpace(fmt.Sprintf("%d %s", status, code))
+	return failCheck(name, fmt.Errorf("status %s, want 401 authentication_required", got))
+}
+
+// refusalCodePattern matches the code the push gate writes first in a refusal body.
+var refusalCodePattern = regexp.MustCompile(`^[a-z_]{1,64}$`)
+
+// refusalCode returns the first word of a refusal body when it is a plain code. Anything else is not
+// echoed, so a stray body cannot put text into the check line.
+func refusalCode(body string) string {
+	word, _, _ := strings.Cut(strings.TrimSpace(body), " ")
+	if !refusalCodePattern.MatchString(word) {
+		return ""
 	}
-	return failCheck(name, fmt.Errorf("status %d without a capability, want 401 or 403", status))
+	return word
 }
 
 func checkKagent(ctx context.Context, probe func(context.Context) (string, error)) Check {

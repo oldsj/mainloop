@@ -91,6 +91,7 @@ func smokeListener(t *testing.T, projectsStatus int) string {
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
 	mux.HandleFunc("/smoke/probe.git/info/refs", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, "authentication_required req-1")
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -109,7 +110,7 @@ func TestSmokeReadOnlyPrintsOneLinePerCheck(t *testing.T) {
 	for _, want := range []string{
 		"ok health status=healthy database=ok",
 		"ok mcp 401 without a bearer",
-		"ok git-push 401 without a capability",
+		"ok git-push 401 authentication_required without a capability",
 		"skip kagent not requested",
 		"summary: 10 ok, 0 fail, 1 skip",
 	} {

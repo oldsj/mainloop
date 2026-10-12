@@ -27,13 +27,14 @@ var branchPattern = regexp.MustCompile(`checkout\.branch (\S+),`)
 // fakeLive plays the owner API and GitHub for one live run. Each read of /tasks advances the stage by one,
 // so the run's steps complete in order: task at stage 1, push at 2, pull request at 2, CI at 3, merge at 4.
 type fakeLive struct {
-	mu       sync.Mutex
-	branch   string
-	posts    int
-	reads    int  // reads of /tasks, which is the stage
-	ciFail   bool // CI fails from stage 3 on
-	busy     bool // deliveries_busy: preflight must refuse
-	chatCode int  // non-zero makes POST /chat answer with this status
+	mu        sync.Mutex
+	branch    string
+	posts     int
+	reads     int  // reads of /tasks, which is the stage
+	ciFail    bool // CI fails from stage 3 on
+	busy      bool // deliveries_busy: preflight must refuse
+	chatCode  int  // non-zero makes POST /chat answer with this status
+	neverPush bool // push_confirmed stays false, so the push step has to time out
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -66,7 +67,7 @@ func (f *fakeLive) observations(w http.ResponseWriter, _ *http.Request) {
 		"deliveries_busy":           f.busy,
 		"global_capacity_available": true,
 		"parent_capacity":           2,
-		"push_confirmed":            f.reads >= 2,
+		"push_confirmed":            f.reads >= 2 && !f.neverPush,
 		"pushes":                    []any{},
 	})
 }
@@ -169,11 +170,29 @@ func (g fakeGitHub) Get(_ context.Context, _, path string, out any) error {
 	return json.Unmarshal(raw, out)
 }
 
+// Ready answers as a logged-in gh would.
+func (fakeGitHub) Ready(context.Context) error { return nil }
+
+// blockingGitHub never answers: each read waits until its context ends, as a hung GitHub does.
+type blockingGitHub struct{}
+
+func (blockingGitHub) Get(ctx context.Context, _, _ string, _ any) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (blockingGitHub) Ready(context.Context) error { return nil }
+
+// readyFailGitHub is a reader whose gh is not logged in.
+type readyFailGitHub struct{ blockingGitHub }
+
+func (readyFailGitHub) Ready(context.Context) error { return errors.New("gh is not logged in") }
+
 // liveOptions returns options for one run against the fake, with the git transport on and merge tools on.
 func liveOptions(t *testing.T, f *fakeLive, budget int) LiveOptions {
 	t.Helper()
 	return LiveOptions{
-		Endpoints:    Endpoints{API: f.serve(t), GitPush: gitStub(t, "git-receive-pack", http.StatusUnauthorized, "")},
+		Endpoints:    Endpoints{API: f.serve(t), GitPush: gitStub(t, "git-receive-pack", http.StatusUnauthorized, "authentication_required req-1")},
 		ProjectID:    testProject,
 		Repo:         testRepo,
 		AppLogin:     testAppLogin,
@@ -423,3 +442,100 @@ func TestCompletedBindsTheMergeToOneHead(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// --budget is a ceiling, and a run's outcome ends it: a budget of three still posts once after a pass.
+func TestLiveBudgetOfThreeStillPostsOnce(t *testing.T) {
+	f := &fakeLive{}
+	checks := runLive(liveOptions(t, f, 3))
+	if !CompletionProven(checks) {
+		t.Errorf("completion not proven: %v", checks)
+	}
+	if f.posts != 1 {
+		t.Errorf("chat posts = %d, want 1: a completed run must not be repeated", f.posts)
+	}
+	for _, c := range checks {
+		if strings.HasPrefix(c.Name, "run2.") {
+			t.Errorf("a second run started after a completed run: %s", c)
+		}
+	}
+}
+
+func TestLiveStepDeadlineFailsAStepThatNeverProgresses(t *testing.T) {
+	f := &fakeLive{neverPush: true}
+	opts := liveOptions(t, f, 1)
+	opts.StepDeadline = 200 * time.Millisecond
+	start := time.Now()
+	got := statusesOf(runLive(opts))
+	if c := got["run1.push"]; c.Status != Fail || c.Detail != "step deadline" {
+		t.Errorf("run1.push = %v, want fail step deadline", c)
+	}
+	if c := got["run1.pull-request"]; c.Status != Skip || c.Detail != "not reached: push failed" {
+		t.Errorf("run1.pull-request = %v, want skip not reached", c)
+	}
+	if elapsed := time.Since(start); elapsed >= opts.Deadline {
+		t.Errorf("run took %s, the whole run deadline: the step deadline did not end the step", elapsed)
+	}
+}
+
+func TestLiveRunDeadlineEndsAStalledRun(t *testing.T) {
+	f := &fakeLive{neverPush: true}
+	opts := liveOptions(t, f, 1)
+	opts.Deadline = 150 * time.Millisecond
+	opts.StepDeadline = 10 * time.Second
+	got := statusesOf(runLive(opts))
+	if c := got["run1.push"]; c.Status != Fail || c.Detail != "overall deadline" {
+		t.Errorf("run1.push = %v, want fail overall deadline", c)
+	}
+}
+
+// A GitHub read that never answers fails its step at the step deadline, and the reconciliation after it
+// stops at the request timeout. Without either bound the run would wait out its whole deadline.
+func TestLiveGitHubReadStopsAtTheStepDeadline(t *testing.T) {
+	f := &fakeLive{}
+	opts := liveOptions(t, f, 1)
+	opts.GitHub = blockingGitHub{}
+	opts.StepDeadline = 200 * time.Millisecond
+	opts.Timeout = 300 * time.Millisecond
+	start := time.Now()
+	got := statusesOf(runLive(opts))
+	if c := got["run1.push"]; c.Status != Fail || c.Detail != "step deadline" {
+		t.Errorf("run1.push = %v, want fail step deadline", c)
+	}
+	if elapsed := time.Since(start); elapsed >= opts.Deadline {
+		t.Errorf("run took %s, the whole run deadline: a hung GitHub read held the run", elapsed)
+	}
+}
+
+// readGitHub gives up at the request timeout even when the caller has no deadline of its own.
+func TestReadGitHubIsBoundedByTheRequestTimeout(t *testing.T) {
+	r := &liveRun{opts: LiveOptions{Repo: testRepo, Timeout: 50 * time.Millisecond, GitHub: blockingGitHub{}}}
+	var p pull
+	if err := r.readGitHub(context.Background(), "pulls/7", &p); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("readGitHub() = %v, want the request timeout", err)
+	}
+}
+
+// A reader whose gh is not logged in refuses the run before its first request.
+func TestLiveStopsBeforeAnyRunWhenGitHubIsNotReady(t *testing.T) {
+	f := &fakeLive{}
+	opts := liveOptions(t, f, 1)
+	opts.GitHub = readyFailGitHub{}
+	checks := runLive(opts)
+	if len(checks) != 1 || checks[0].Name != "github" || checks[0].Status != Fail {
+		t.Fatalf("checks = %v, want one failed github check", checks)
+	}
+	if !strings.Contains(checks[0].Detail, "not logged in") {
+		t.Errorf("github detail = %q, want the login message", checks[0].Detail)
+	}
+	if f.posts != 0 {
+		t.Errorf("chat posts = %d, want 0", f.posts)
+	}
+}
+
+// With no gh on PATH the reader names the install problem.
+func TestGHCLIReadyNamesAMissingGH(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	if err := (GHCLI{}).Ready(context.Background()); err == nil || !strings.Contains(err.Error(), "not installed") {
+		t.Errorf("Ready() = %v, want a not-installed error", err)
+	}
+}

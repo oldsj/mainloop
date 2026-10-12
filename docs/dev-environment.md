@@ -452,10 +452,32 @@ kubectl --context admin@internal-01 -n mainloop-dev exec deploy/mainloop-backend
 ```
 
 Git transport is off here, so `git-read` and `git-push` report `skip` and no run can reach
-merge on this instance. `smoke --live --budget N` (N from 1 to 3) drives one task from chat to
-merge. It has no defaults: name every target with `--base-url`, `--git-push-url`, `--project-id`,
-`--repo`, `--app-login`, `--provider` and `--merge-tools on|off`. A run that fails or skips a step
-ends the budget, and only a run that reaches merge proves the full path.
+merge on this instance. The live run (`smoke --live`) therefore needs an instance with git
+transport on. It drives one task from chat to merge and spends quota. Run it from an operator
+machine, not the pod: the pod has no `gh` login, and the live path reads GitHub through the
+operator's `gh auth status`. It checks `gh` before anything else and refuses, spending no budget,
+when `gh` is missing or not logged in. Open two port-forwards first, each in its own terminal:
+
+```bash
+kubectl --context admin@internal-01 -n mainloop-dev port-forward svc/mainloop-backend 8000:8000
+kubectl --context admin@internal-01 -n mainloop-dev port-forward svc/mainloop-git-push 8004:80
+```
+
+Then, from `server/`:
+
+```bash
+go run ./cmd/mainloop smoke --live --budget 1 \
+  --base-url http://127.0.0.1:8000 --git-push-url http://127.0.0.1:8004 \
+  --project-id <project-id> --repo <owner/name> --app-login <app-login> \
+  --provider claude --merge-tools <on|off>
+```
+
+Every target is named on the command line; nothing defaults. `--budget` is a ceiling from 1 to 3,
+but every run's outcome ends it, so one run starts. Set `--merge-tools` to match the instance:
+with `off`, a run stops after CI and proves no merge. Pass `--api-host` only when the target is not
+in dev mode. The git push listener checks the Host header, and the CLI cannot set it, so outside
+dev mode the git-push probe fails with `host_denied`. Only a run that reaches completion proves the
+full path.
 
 Teardown: `make dev-live-purge` deletes everything DevSpace deployed, including
 the namespace, the database and the dev agents.

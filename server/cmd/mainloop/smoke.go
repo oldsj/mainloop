@@ -35,7 +35,7 @@ func runSmoke(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	fs.SetOutput(stderr)
 	readOnly := fs.Bool("read-only", false, "run the read-only checks: no chat turns, no writes, no quota")
 	live := fs.Bool("live", false, "run a full task from chat to merge; sends chat turns and spends quota (needs --budget)")
-	budget := fs.Int("budget", 0, "full live runs to start, from 1 to 3; required with --live")
+	budget := fs.Int("budget", 0, "ceiling on full live runs, 1 to 3; a run's outcome ends the budget, so one run starts; required with --live")
 	namespace := fs.String("namespace", defaultNamespace(), "read-only: namespace for the in-cluster default URLs")
 	baseURL := fs.String("base-url", "", "owner API base URL (read-only default: in-cluster mainloop-backend)")
 	gitPushURL := fs.String("git-push-url", "", "git push listener base URL (read-only default: in-cluster mainloop-git-push)")

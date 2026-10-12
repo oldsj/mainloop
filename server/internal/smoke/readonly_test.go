@@ -26,6 +26,28 @@ func statusHandler(status int, body string) http.HandlerFunc {
 	}
 }
 
+// silentEvents opens the stream and never sends a frame, so the events check runs out of its wait.
+func silentEvents(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	w.(http.Flusher).Flush()
+	<-r.Context().Done()
+}
+
+// guardMethods fails the test on any method but the two the read-only checks use: GET, and the POST to
+// /mcp that the MCP check makes. A write from a read-only run shows up here.
+func guardMethods(t *testing.T, next http.Handler) http.Handler {
+	t.Helper()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || (r.Method == http.MethodPost && r.URL.Path == "/mcp") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		t.Errorf("read-only check sent %s %s", r.Method, r.URL.Path)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	})
+}
+
 // stubAPI serves the owner API with every read healthy. overrides replace single routes, so a case
 // changes one answer and keeps the rest.
 func stubAPI(t *testing.T, overrides map[string]http.HandlerFunc) string {
@@ -51,7 +73,7 @@ func stubAPI(t *testing.T, overrides map[string]http.HandlerFunc) string {
 	for path, h := range routes {
 		mux.HandleFunc(path, h)
 	}
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(guardMethods(t, mux))
 	t.Cleanup(srv.Close)
 	return srv.URL
 }
@@ -59,7 +81,7 @@ func stubAPI(t *testing.T, overrides map[string]http.HandlerFunc) string {
 // statusServer answers every request with one status, for the listeners whose answer is the status alone.
 func statusServer(t *testing.T, status int, body string) string {
 	t.Helper()
-	srv := httptest.NewServer(statusHandler(status, body))
+	srv := httptest.NewServer(guardMethods(t, statusHandler(status, body)))
 	t.Cleanup(srv.Close)
 	return srv.URL
 }
@@ -69,13 +91,13 @@ func statusServer(t *testing.T, status int, body string) string {
 func gitStub(t *testing.T, service string, status int, body string) string {
 	t.Helper()
 	answer := statusHandler(status, body)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(guardMethods(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("service") != service {
 			statusHandler(http.StatusBadRequest, "wrong service")(w, r)
 			return
 		}
 		answer(w, r)
-	}))
+	})))
 	t.Cleanup(srv.Close)
 	return srv.URL
 }
@@ -89,7 +111,7 @@ func healthyOptions(t *testing.T) ReadOptions {
 			API:     stubAPI(t, nil),
 			MCP:     statusServer(t, http.StatusUnauthorized, ""),
 			GitRead: gitStub(t, "git-upload-pack", http.StatusUnauthorized, ""),
-			GitPush: gitStub(t, "git-receive-pack", http.StatusUnauthorized, ""),
+			GitPush: gitStub(t, "git-receive-pack", http.StatusUnauthorized, "authentication_required req-1"),
 		},
 		Timeout: 5 * time.Second,
 	}
@@ -161,6 +183,10 @@ func TestReadOnlyChecks(t *testing.T) {
 		{"events answers 503", "events", func(t *testing.T, o *ReadOptions) {
 			o.API = stubAPI(t, map[string]http.HandlerFunc{"/events": statusHandler(503, "")})
 		}, Fail, "status 503"},
+		{"events wait runs out with no connected frame", "events", func(t *testing.T, o *ReadOptions) {
+			o.API = stubAPI(t, map[string]http.HandlerFunc{"/events": silentEvents})
+			o.eventsWait = 100 * time.Millisecond
+		}, Fail, "no connected frame within 100ms"},
 		{"mcp accepts a request with no bearer", "mcp", func(t *testing.T, o *ReadOptions) {
 			o.MCP = statusServer(t, http.StatusOK, "")
 		}, Fail, "status 200 without a bearer"},
@@ -176,9 +202,24 @@ func TestReadOnlyChecks(t *testing.T) {
 		{"git push is off", "git-push", func(t *testing.T, o *ReadOptions) {
 			o.GitPush = gitStub(t, "git-receive-pack", http.StatusForbidden, "git_transport_disabled req-1")
 		}, Skip, "transport off"},
-		{"git push refuses a missing capability", "git-push", func(t *testing.T, o *ReadOptions) {
+		{"git push refuses a missing capability with 401", "git-push", func(t *testing.T, o *ReadOptions) {
+			o.GitPush = gitStub(t, "git-receive-pack", http.StatusUnauthorized, "authentication_required req-1")
+		}, OK, "401 authentication_required"},
+		{"git push refuses with a bare 403", "git-push", func(t *testing.T, o *ReadOptions) {
 			o.GitPush = gitStub(t, "git-receive-pack", http.StatusForbidden, "forbidden")
-		}, OK, "403 without a capability"},
+		}, Fail, "status 403"},
+		{"git push refused by the host check", "git-push", func(t *testing.T, o *ReadOptions) {
+			o.GitPush = gitStub(t, "git-receive-pack", http.StatusForbidden, "host_denied req-1")
+		}, Fail, "host_denied"},
+		{"git push refused by the path check", "git-push", func(t *testing.T, o *ReadOptions) {
+			o.GitPush = gitStub(t, "git-receive-pack", http.StatusForbidden, "path_invalid req-1")
+		}, Fail, "path_invalid"},
+		{"git push refused by the route check", "git-push", func(t *testing.T, o *ReadOptions) {
+			o.GitPush = gitStub(t, "git-receive-pack", http.StatusForbidden, "route_denied req-1")
+		}, Fail, "route_denied"},
+		{"git push fails authentication instead of refusing it", "git-push", func(t *testing.T, o *ReadOptions) {
+			o.GitPush = gitStub(t, "git-receive-pack", http.StatusUnauthorized, "authentication_failed req-1")
+		}, Fail, "authentication_failed"},
 		{"git push answers 500", "git-push", func(t *testing.T, o *ReadOptions) {
 			o.GitPush = gitStub(t, "git-receive-pack", http.StatusInternalServerError, "")
 		}, Fail, "status 500"},
@@ -241,5 +282,33 @@ func TestDecodeIsStrictAboutStatus(t *testing.T) {
 	err := newCaller("", 5*time.Second).getJSON(context.Background(), api+"/attention", &out)
 	if err == nil || out.Count != 0 {
 		t.Fatalf("getJSON on 404 = %v, count %d; want an error and no decode", err, out.Count)
+	}
+}
+
+// A kagent error can span lines, and the check line must still be one line that keeps every part of it.
+func TestFailedCheckStaysOnOneLine(t *testing.T) {
+	err := errors.Join(errors.New("agent UNAVAILABLE"), errors.New("no ready pod"))
+	got := failCheck("kagent", err).String()
+	if strings.Contains(got, "\n") {
+		t.Errorf("check line spans lines: %q", got)
+	}
+	if !strings.HasSuffix(got, "agent UNAVAILABLE; no ready pod") {
+		t.Errorf("check line = %q, want both error lines after the name", got)
+	}
+}
+
+// Only a plain code word is echoed from a refusal body; anything else stays out of the check line.
+func TestRefusalCodeIsOnlyAPlainWord(t *testing.T) {
+	tests := map[string]string{
+		"host_denied req-1\n":           "host_denied",
+		"authentication_required req-1": "authentication_required",
+		"":                              "",
+		"<b>hi</b> req-1":               "",
+		"Host: evil.example":            "",
+	}
+	for body, want := range tests {
+		if got := refusalCode(body); got != want {
+			t.Errorf("refusalCode(%q) = %q, want %q", body, got, want)
+		}
 	}
 }

@@ -40,7 +40,7 @@ type LiveOptions struct {
 	AppLogin     string // the GitHub App login that must perform the merge
 	Provider     string // claude or codex
 	MergeTools   bool   // false skips the merge and completion steps
-	Budget       int    // full runs to start, from 1 to MaxBudget
+	Budget       int    // ceiling on full runs, from 1 to MaxBudget; every run ends the budget
 	Deadline     time.Duration
 	StepDeadline time.Duration
 	PollInterval time.Duration
@@ -71,13 +71,21 @@ func (o LiveOptions) Validate() error {
 	return nil
 }
 
-// Live runs up to Budget full runs, one after another. A run that fails or cannot finish its steps ends
-// the budget: a run that skipped a step proves nothing a second run would, and it would spend quota
-// to find the same gap. Each check reaches emit as it completes.
+// Live runs one full run. --budget is a ceiling on full runs, but every outcome ends the budget: a run
+// that completed has its proof, and a run that failed or skipped a step would spend quota to repeat the
+// same gap. Each check reaches emit as it completes.
 func Live(ctx context.Context, opts LiveOptions, emit func(Check)) {
 	// The command validates first; this keeps a direct caller from sending anything with bad options.
 	if err := opts.Validate(); err != nil {
 		emit(failCheck("options", err))
+		return
+	}
+	// gh is checked before any request, so a run without a GitHub login spends no quota.
+	ready, cancel := context.WithTimeout(ctx, opts.Timeout)
+	err := opts.GitHub.Ready(ready)
+	cancel()
+	if err != nil {
+		emit(failCheck("github", err))
 		return
 	}
 	c := newCaller(opts.APIHost, opts.Timeout)
@@ -94,12 +102,8 @@ func Live(ctx context.Context, opts LiveOptions, emit func(Check)) {
 	if mergeBlock == "" && !opts.MergeTools {
 		mergeBlock = "merge tools off"
 	}
-	for n := 1; n <= opts.Budget; n++ {
-		run := &liveRun{opts: opts, c: c, emit: emit, n: n, gitBlock: gitBlock, mergeBlock: mergeBlock}
-		if run.execute(ctx) {
-			return
-		}
-	}
+	run := &liveRun{opts: opts, c: c, emit: emit, n: 1, gitBlock: gitBlock, mergeBlock: mergeBlock}
+	run.execute(ctx)
 }
 
 // liveRun is one full run: a chat submission, then the steps it must reach, in order.
@@ -112,16 +116,10 @@ type liveRun struct {
 	mergeBlock string // non-empty when the merge step cannot run
 	requestID  string
 	branch     string
-	incomplete bool // set when any step was skipped, so the run proved less than a full path
 }
 
-// report passes one check on and notes whether it was a skip.
-func (r *liveRun) report(c Check) {
-	if c.Status == Skip {
-		r.incomplete = true
-	}
-	r.emit(c)
-}
+// report passes one check on to the caller.
+func (r *liveRun) report(c Check) { r.emit(c) }
 
 // runState is what the poll loop has read on its last pass.
 type runState struct {
@@ -139,9 +137,8 @@ type step struct {
 	detail func(*runState) string
 }
 
-// execute runs one full run and reports whether the budget should stop: the run failed, or it skipped
-// a step.
-func (r *liveRun) execute(ctx context.Context) (stop bool) {
+// execute runs one full run. Its outcome always ends the budget; see Live.
+func (r *liveRun) execute(ctx context.Context) {
 	runCtx, cancel := context.WithTimeout(ctx, r.opts.Deadline)
 	defer cancel()
 	steps := r.steps()
@@ -151,7 +148,7 @@ func (r *liveRun) execute(ctx context.Context) (stop bool) {
 		r.report(failCheck(r.name("preflight"), err))
 		r.report(skipCheck(r.name("main-turn"), "not submitted: preflight failed"))
 		r.skipRest(steps, 0, "not submitted: preflight failed")
-		return true
+		return
 	}
 	r.report(okCheck(r.name("preflight"), detail))
 
@@ -165,15 +162,13 @@ func (r *liveRun) execute(ctx context.Context) (stop bool) {
 		r.report(failCheck(r.name("main-turn"), fmt.Errorf("%s: not retried: %w", r.identity(), err)))
 		r.skipRest(steps, 0, "not reached: main turn failed")
 		r.reconcile(ctx)
-		return true
+		return
 	}
 	r.report(okCheck(r.name("main-turn"), fmt.Sprintf("%s delivery_message_id=%s", r.identity(), deref(receipt.DeliveryMessageId))))
 
 	if r.poll(runCtx, steps, &runState{}) {
 		r.reconcile(ctx)
-		return true
 	}
-	return r.incomplete
 }
 
 // steps lists what a run must reach after its submission. The order is the order of the work.
@@ -230,8 +225,12 @@ func (r *liveRun) poll(ctx context.Context, steps []step, st *runState) bool {
 			idx, since = idx+1, time.Now()
 			continue
 		}
-		if err := r.refresh(ctx, st); err != nil {
-			return r.fail(ctx, steps, idx, err)
+		// The step's deadline bounds its reads too, so a GitHub read that never answers fails this step on time.
+		stepCtx, cancel := context.WithDeadline(ctx, since.Add(r.opts.StepDeadline))
+		err := r.refresh(stepCtx, st)
+		cancel()
+		if err != nil {
+			return r.fail(ctx, steps, idx, readFailure(ctx, stepCtx, err))
 		}
 		// A step that is already done passes even if a later fact went bad, so a CI failure is charged to
 		// the ci step, not to whichever step happened to be waiting when it appeared.
@@ -300,7 +299,7 @@ func (r *liveRun) refresh(ctx context.Context, st *runState) error {
 	st.facts = facts
 	if n := st.prNumber(); n != 0 {
 		var p pull
-		if err := r.opts.GitHub.Get(ctx, r.opts.Repo, fmt.Sprintf("pulls/%d", n), &p); err != nil {
+		if err := r.readGitHub(ctx, fmt.Sprintf("pulls/%d", n), &p); err != nil {
 			return err
 		}
 		st.pr = p
@@ -343,7 +342,7 @@ func (r *liveRun) reconcile(ctx context.Context) {
 
 	var pulls []pull
 	owner, _, _ := strings.Cut(r.opts.Repo, "/")
-	if err := r.opts.GitHub.Get(ctx, r.opts.Repo, "pulls?state=all&head="+url.QueryEscape(owner+":"+r.branch), &pulls); err != nil {
+	if err := r.readGitHub(ctx, "pulls?state=all&head="+url.QueryEscape(owner+":"+r.branch), &pulls); err != nil {
 		r.report(failCheck(r.name("reconcile.pulls"), err))
 	} else {
 		rows := []pullRow{}
@@ -362,7 +361,7 @@ func (r *liveRun) reconcile(ctx context.Context) {
 // reconcilePull reads one pull request and the check runs on its head commit.
 func (r *liveRun) reconcilePull(ctx context.Context, n int) {
 	var p pull
-	if err := r.opts.GitHub.Get(ctx, r.opts.Repo, fmt.Sprintf("pulls/%d", n), &p); err != nil {
+	if err := r.readGitHub(ctx, fmt.Sprintf("pulls/%d", n), &p); err != nil {
 		r.report(failCheck(r.name(fmt.Sprintf("reconcile.pr-%d", n)), err))
 		return
 	}
@@ -377,7 +376,7 @@ func (r *liveRun) reconcilePull(ctx context.Context, n int) {
 		return
 	}
 	var runs checkRuns
-	if err := r.opts.GitHub.Get(ctx, r.opts.Repo, "commits/"+p.Head.SHA+"/check-runs", &runs); err != nil {
+	if err := r.readGitHub(ctx, "commits/"+p.Head.SHA+"/check-runs", &runs); err != nil {
 		r.report(failCheck(r.name(fmt.Sprintf("reconcile.ci-%d", n)), err))
 		return
 	}
@@ -386,6 +385,26 @@ func (r *liveRun) reconcilePull(ctx context.Context, n int) {
 		rows = append(rows, checkRow{Name: cr.Name, Status: cr.Status, Conclusion: cr.Conclusion})
 	}
 	r.report(okCheck(r.name(fmt.Sprintf("reconcile.ci-%d", n)), jsonDetail(rows)))
+}
+
+// readGitHub reads one GitHub endpoint under the request timeout, so a read that never answers cannot hold
+// up the step or the reconciliation that asked for it.
+func (r *liveRun) readGitHub(ctx context.Context, path string, out any) error {
+	ctx, cancel := context.WithTimeout(ctx, r.opts.Timeout)
+	defer cancel()
+	return r.opts.GitHub.Get(ctx, r.opts.Repo, path, out)
+}
+
+// readFailure names why a read stopped short: the run's deadline or the step's, when either has passed.
+// Otherwise it is the read's own error.
+func readFailure(runCtx, stepCtx context.Context, err error) error {
+	switch {
+	case runCtx.Err() != nil:
+		return errors.New("overall deadline")
+	case stepCtx.Err() != nil:
+		return errors.New("step deadline")
+	}
+	return err
 }
 
 // preflight refuses a run the project cannot take: a different repository, deliveries still in flight,
@@ -502,6 +521,8 @@ func (s *runState) terminal() error {
 // GitHub reads the test repository. Paths are relative to repos/{repo}/.
 type GitHub interface {
 	Get(ctx context.Context, repo, path string, out any) error
+	// Ready reports whether the reader can answer at all, so a live run refuses before it spends quota.
+	Ready(ctx context.Context) error
 }
 
 // GHCLI reads GitHub with the operator's gh login. It runs gh with argv only, never through a shell, and
@@ -516,6 +537,21 @@ func (GHCLI) Get(ctx context.Context, repo, path string, out any) error {
 		return errors.New("GitHub read failed")
 	}
 	return json.Unmarshal(raw, out)
+}
+
+// Ready checks that gh is installed and has a login. Its output is discarded, as it is for Get.
+func (GHCLI) Ready(ctx context.Context) error {
+	if _, err := exec.LookPath("gh"); err != nil {
+		return errors.New("gh is not installed: --live reads GitHub through the operator's gh login")
+	}
+	err := exec.CommandContext(ctx, "gh", "auth", "status").Run()
+	if ctx.Err() != nil {
+		return errors.New("gh auth status did not answer in time")
+	}
+	if err != nil {
+		return errors.New("gh is not logged in: run gh auth login, then retry")
+	}
+	return nil
 }
 
 // pull is the subset of a GitHub pull request the run reads.
