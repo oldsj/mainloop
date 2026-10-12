@@ -95,7 +95,8 @@ var rules = []rule{
 	// Pull requests and merges (pulls.go). The merge call is the only write that changes a branch.
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/pulls/*", kindRepo, Permissions{"pull_requests": Read}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/pulls/*/files", kindRepo, Permissions{"pull_requests": Read}),
-	newRule(http.MethodPost, "/repos/{owner}/{repo}/pulls", kindRepo, Permissions{"pull_requests": Write}),
+	// Creation also needs Contents read: GitHub checks the head branch with the same token.
+	newRule(http.MethodPost, "/repos/{owner}/{repo}/pulls", kindRepo, Permissions{"pull_requests": Write, "contents": Read}),
 	newRule(http.MethodPut, "/repos/{owner}/{repo}/pulls/*/merge", kindRepo,
 		Permissions{"contents": Write, "pull_requests": Write}),
 	// Protection must precede the general branch rule so it asks for administration.

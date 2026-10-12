@@ -114,6 +114,27 @@ func TestPullRequestsForHeadFiltersAndCreateReturnsThePR(t *testing.T) {
 	}
 }
 
+// A private repository answers a creation made without Contents read with 422 "head invalid",
+// which looks like a bad request and is refused for good. The token must carry both permissions.
+func TestCreatePullRequestMintsContentsReadWithPullRequestsWrite(t *testing.T) {
+	app, fake := pullApp(t, func(r *githubtest.Repository) {
+		r.Branches["feature2"] = "2222222222222222222222222222222222222222"
+	})
+	made, err := app.CreatePullRequest(context.Background(), repoON, "feature2", "main", "New", "body")
+	if err != nil || made == nil || made.Number <= 0 {
+		t.Fatalf("create = %+v, %v", made, err)
+	}
+	var perms map[string]string
+	for _, m := range fake.Mints() {
+		if m.Permissions["pull_requests"] == "write" {
+			perms = m.Permissions
+		}
+	}
+	if perms["contents"] != "read" || len(perms) != 2 {
+		t.Errorf("creation token permissions = %v, want pull_requests write and contents read", perms)
+	}
+}
+
 func TestPullFilesPage(t *testing.T) {
 	var files []githubtest.File
 	for i := range 5 {

@@ -506,5 +506,5 @@ func Table() reconcile.Table {
 // NewService builds the service over the GitHub App. rt is the trusted kagent read that gives a
 // merge tool its authority; without it no consent counts.
 func NewService(cfg *config.Config, pool *pgxpool.Pool, gh GitHub, rt Runtime, log *slog.Logger) *Service {
-	return &Service{Pool: pool, GitHub: gh, Log: log, Configs: cfg.MergeConfigurations, Runtime: rt}
+	return &Service{Pool: pool, GitHub: gh, Log: log, Configs: cfg.MergeConfigurations, Runtime: rt, Settle: 20 * time.Second}
 }

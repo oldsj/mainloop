@@ -416,7 +416,10 @@ func (a *App) PullRequestsForHead(ctx context.Context, repo Repo, head, base str
 func (a *App) CreatePullRequest(ctx context.Context, repo Repo, head, base, title, body string) (*PullRequestInfo, error) {
 	in := map[string]any{"head": head, "base": base, "title": title, "body": body}
 	var out pullJSON
-	if err := a.call(ctx, repo, Permissions{"pull_requests": Write}, http.MethodPost, repoPath(repo, "pulls"), in, &out); err != nil {
+	// GitHub validates the head branch with the same token, so Contents read is needed too: without
+	// it a private repository answers 422 "head invalid", not 403.
+	perms := Permissions{"pull_requests": Write, "contents": Read}
+	if err := a.call(ctx, repo, perms, http.MethodPost, repoPath(repo, "pulls"), in, &out); err != nil {
 		return nil, err
 	}
 	info := out.info()

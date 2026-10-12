@@ -461,6 +461,7 @@ func (s *Service) uncertain(ctx context.Context, c reconcile.Claim, why string) 
 	if err != nil {
 		return reconcile.Retry(), err
 	}
+	s.log().Warn("pull request creation uncertain", "creation", c.ID, "detail", why)
 	return reconcile.RetryAfter(s.recheckDelay(int(m.Rechecks))), nil
 }
 
@@ -475,6 +476,7 @@ func (s *Service) created(ctx context.Context, c reconcile.Claim, pr github.Pull
 	if n == 0 {
 		return reconcile.Recorded(), reconcile.ErrLeaseLost
 	}
+	s.log().Info("pull request created", "creation", c.ID, "number", pr.Number)
 	return reconcile.Recorded(), nil
 }
 
@@ -492,6 +494,7 @@ func (s *Service) refuse(ctx context.Context, c reconcile.Claim, why string) (re
 	if n == 0 {
 		return reconcile.Recorded(), reconcile.ErrLeaseLost
 	}
+	s.log().Warn("pull request creation refused", "creation", c.ID, "reason", why)
 	return reconcile.Recorded(), nil
 }
 
@@ -500,7 +503,12 @@ func attemptsOf(c reconcile.Claim) int32 {
 	return int32(c.Attempts) //nolint:gosec // a small counter
 }
 
-// NewService builds the service over the GitHub App.
+// DefaultSettle is how long a tool call waits for the loop to settle a creation before it answers
+// with the state it has.
+const DefaultSettle = 20 * time.Second
+
+// NewService builds the service the processes run. The zero-valued Settle of a bare Service means
+// "return at once", so the default is set here.
 func NewService(pool *pgxpool.Pool, gh GitHub, log *slog.Logger) *Service {
-	return &Service{Pool: pool, GitHub: gh, Log: log}
+	return &Service{Pool: pool, GitHub: gh, Log: log, Settle: DefaultSettle}
 }

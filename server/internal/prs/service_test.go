@@ -413,3 +413,11 @@ func TestPreDispatchReadFailureIsRetriedNotRefused(t *testing.T) {
 		t.Fatalf("got = %+v, %v, posts %d", got, err, e.posts())
 	}
 }
+
+// A bare Service returns at once, so the constructor the processes use must set the wait the spec
+// promises; without it open_pull_request answers "pending" before the loop has run.
+func TestNewServiceWaitsForTheLoopToSettle(t *testing.T) {
+	if got := prs.NewService(nil, nil, nil).Settle; got != prs.DefaultSettle || got < 10*time.Second {
+		t.Fatalf("Settle = %v, want %v", got, prs.DefaultSettle)
+	}
+}
