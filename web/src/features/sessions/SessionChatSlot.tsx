@@ -66,7 +66,7 @@ export function SessionChatSlot({
         ) : null}
       </div>
       <SessionRequests sessionId={sessionId} />
-      <div className="flex min-h-64 flex-1 flex-col" data-testid="session-chat-panel">
+      <div className="flex min-h-40 flex-1 flex-col" data-testid="session-chat-panel">
         <ThreadBody
           thread={thread}
           offline={offline}

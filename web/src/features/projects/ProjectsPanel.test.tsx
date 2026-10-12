@@ -70,8 +70,23 @@ describe('projects list', () => {
     renderProjects('/');
 
     const list = await screen.findByTestId('projects-list');
-    expect(list).toHaveClass('grid');
+    expect(list).toHaveClass('grid', 'grid-cols-1');
     expect(list).not.toHaveClass('md:grid-cols-2');
+    // Each row may shrink below its content, so a long name cannot widen the track past the aside.
+    for (const row of within(list).getAllByRole('listitem')) {
+      expect(row).toHaveClass('min-w-0');
+    }
+  });
+
+  it('keeps a long project name in its one-column row instead of widening the grid', async () => {
+    const longName = 'acme/a-very-long-repository-name-that-overflows-the-side-panel';
+    server.use(projectsRead([project({ full_name: longName })]));
+    renderProjects('/');
+
+    const list = await screen.findByTestId('projects-list');
+    expect(list).toHaveClass('grid-cols-1');
+    expect(within(list).getByRole('link', { name: new RegExp(longName) })).toBeInTheDocument();
+    expect(within(list).getByRole('listitem')).toHaveClass('min-w-0');
   });
 
   it('shows the empty state when there are no projects', async () => {

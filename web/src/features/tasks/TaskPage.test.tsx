@@ -393,6 +393,27 @@ describe('owner actions', () => {
     expect(screen.getByTestId('task-action-cancel')).toBeEnabled();
   });
 
+  it('names only the hidden action in the handoff note when just one is unavailable', async () => {
+    const page = view(
+      {},
+      {
+        actions: {
+          ...view().actions,
+          retry: { available: false, reason: 'handoff_unavailable' }
+        }
+      }
+    );
+    server.use(...serveTaskPage(taskScreen(page)));
+    renderTasks('/tasks/task-1');
+
+    expect(await screen.findByTestId('task-handoff-unavailable')).toHaveTextContent(
+      /^Retry needs the provider handoff, which is not installed yet\.$/
+    );
+    expect(screen.queryByTestId('task-action-retry')).not.toBeInTheDocument();
+    // Reassign is still offered, so the note does not claim it is hidden.
+    expect(screen.getByTestId('task-action-reassign')).toBeInTheDocument();
+  });
+
   it('keeps a disabled action with its server reason when the reason is not the handoff', async () => {
     const page = view(
       {},

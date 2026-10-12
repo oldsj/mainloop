@@ -42,26 +42,35 @@ const CANCELLABLE: SessionStatus[] = ['active', 'pending', 'idle', 'waiting_on_u
 const CLEARABLE: SessionStatus[] = ['completed', 'failed', 'cancelled'];
 
 /**
- * The height from the top of the page to the bottom of the visible viewport, or null where the
- * browser has no visual viewport (the page then fills its container). iOS keeps `dvh` when the soft
- * keyboard opens, so the page follows the visible viewport, and the composer stays above the keyboard.
- * It is measured again when the viewport resizes, not when the page scrolls.
+ * The most the page may be tall: from its top edge to the bottom of the visible viewport, so a soft
+ * keyboard that covers the bottom pushes the composer up. The page's height otherwise comes from its
+ * container (`h-full`), so the bottom tab bar and an offline banner that appears later are already
+ * accounted for. Null where the browser has no visual viewport. It is measured again when the viewport
+ * resizes and when the container does, not when the page scrolls.
  */
-function useVisibleFill(ref: RefObject<HTMLElement | null>, ready: boolean): number | null {
-  const [height, setHeight] = useState<number | null>(null);
+function useVisibleMaxHeight(ref: RefObject<HTMLElement | null>, ready: boolean): number | null {
+  const [maxHeight, setMaxHeight] = useState<number | null>(null);
   useLayoutEffect(() => {
     const viewport = window.visualViewport;
-    if (!viewport || !ready) return;
+    const element = ref.current;
+    if (!viewport || !element || !ready) return;
     const update = () => {
-      const top = ref.current?.getBoundingClientRect().top ?? 0;
+      const top = element.getBoundingClientRect().top;
       // Pinch-zoom shrinks the visual viewport, so it is scaled back up, as the keyboard fix needs.
-      setHeight(Math.max(0, Math.round(viewport.height * viewport.scale - top)));
+      setMaxHeight(Math.max(0, Math.round(viewport.height * viewport.scale - top)));
     };
     update();
     viewport.addEventListener('resize', update);
-    return () => viewport.removeEventListener('resize', update);
+    const container = element.parentElement;
+    const observer =
+      container && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null;
+    if (container) observer?.observe(container);
+    return () => {
+      viewport.removeEventListener('resize', update);
+      observer?.disconnect();
+    };
   }, [ref, ready]);
-  return height;
+  return maxHeight;
 }
 
 /**
@@ -89,7 +98,7 @@ export function SessionPage({ id }: { id: string }) {
     detail.data ?? null
   );
   const pageRef = useRef<HTMLElement>(null);
-  const visibleFill = useVisibleFill(pageRef, session !== null);
+  const visibleMaxHeight = useVisibleMaxHeight(pageRef, session !== null);
 
   if (!session) {
     if (detail.isPending) {
@@ -164,8 +173,8 @@ export function SessionPage({ id }: { id: string }) {
   return (
     <article
       ref={pageRef}
-      className={`flex min-h-0 flex-col ${visibleFill === null ? 'h-full' : ''}`}
-      style={visibleFill === null ? undefined : { height: `${visibleFill}px` }}
+      className="flex h-full min-h-0 flex-col"
+      style={visibleMaxHeight === null ? undefined : { maxHeight: `${visibleMaxHeight}px` }}
     >
       <header className="gap-sm border-border p-md flex flex-col border-b">
         <div className="gap-sm flex items-center">

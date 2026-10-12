@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -533,11 +533,63 @@ describe('chat slot layout and state', () => {
     renderSessions('/sessions/s1');
     await heading('Fix login redirect');
     const panel = await screen.findByTestId('session-chat-panel');
-    expect(panel).toHaveClass('flex-1', 'min-h-64');
+    expect(panel).toHaveClass('flex-1', 'min-h-40');
     expect(panel.style.height).toBe('');
     expect(screen.getByTestId('session-chat-slot')).toHaveClass('flex-1', 'min-h-0');
-    // The page ends at the bottom of the visible viewport; the header is measured as 0 in jsdom.
-    expect(screen.getByRole('article').style.height).toBe('600px');
+    // The page is its container's height, capped at the bottom of the visible viewport. The header is
+    // measured as 0 in jsdom.
+    const page = screen.getByRole('article');
+    expect(page).toHaveClass('h-full');
+    expect(page.style.height).toBe('');
+    expect(page.style.maxHeight).toBe('600px');
+  });
+
+  it('re-measures when its container changes, so a banner that appears later is accounted for', async () => {
+    stubVisualViewport(600);
+    // The page is re-measured when its container changes, not only when the viewport does.
+    let notify: () => void = () => {};
+    const observed: Element[] = [];
+    class FakeResizeObserver {
+      constructor(callback: () => void) {
+        notify = callback;
+      }
+      observe(target: Element) {
+        observed.push(target);
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    try {
+      server.use(...serveSession(session({ id: 's1' })));
+      renderSessions('/sessions/s1');
+      await heading('Fix login redirect');
+      const page = screen.getByRole('article');
+      expect(observed).toContain(page.parentElement);
+      expect(page.style.maxHeight).toBe('600px');
+
+      // An offline banner appears above the page and pushes its top edge down by 56 px.
+      let top = 0;
+      vi.spyOn(page, 'getBoundingClientRect').mockImplementation(
+        () =>
+          ({
+            top,
+            bottom: 0,
+            left: 0,
+            right: 0,
+            width: 0,
+            height: 0,
+            x: 0,
+            y: top,
+            toJSON: () => ({})
+          }) as DOMRect
+      );
+      top = 56;
+      act(() => notify());
+      expect(page.style.maxHeight).toBe('544px');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('without a visual viewport the page fills its container', async () => {

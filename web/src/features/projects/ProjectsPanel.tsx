@@ -107,7 +107,7 @@ export function ProjectsPanel() {
       ) : null}
 
       {rows.length > 0 ? (
-        <ul data-testid="projects-list" className="gap-sm grid">
+        <ul data-testid="projects-list" className="gap-sm grid grid-cols-1">
           {rows.map((project) => (
             <ProjectListRow key={project.id} project={project} />
           ))}
@@ -120,7 +120,7 @@ export function ProjectsPanel() {
 function ProjectListRow({ project }: { project: ProjectRow }) {
   const avatar = httpsUrl(project.avatar_url);
   return (
-    <li>
+    <li className="min-w-0">
       <Link
         to="/projects/$id"
         params={{ id: project.id }}

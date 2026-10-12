@@ -10,13 +10,16 @@ export interface SessionRequestsProps {
 /**
  * The session's pending requests, each as a card, so the owner can answer without leaving the thread.
  * An answered card stays here with its receipt until the page reloads (see `useSessionRequests`).
+ * The list takes at most 40% of its slot and shrinks further when needed, so the chat panel keeps its
+ * floor and the composer stays inside the slot.
  */
 export function SessionRequests({ sessionId, skip }: SessionRequestsProps) {
   const { shown, isError } = useSessionRequests(sessionId, skip);
   if (!shown.length && !isError) return null;
   return (
     <div
-      className="border-border max-h-[50%] shrink-0 overflow-y-auto border-b"
+      data-testid="session-requests-list"
+      className="border-border max-h-[40%] min-h-0 shrink overflow-y-auto border-b"
       aria-label="Session requests"
     >
       {isError ? (

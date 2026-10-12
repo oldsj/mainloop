@@ -132,6 +132,13 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
   const retryHidden = view.actions.retry?.reason === 'handoff_unavailable';
   const reassignHidden = view.actions.reassign?.reason === 'handoff_unavailable';
   const handoffHidden = retryHidden || reassignHidden;
+  // The note names only the actions it hides: "Retry and reassign need", or one of them alone.
+  const handoffNote =
+    retryHidden && reassignHidden
+      ? 'Retry and reassign need the provider handoff, which is not installed yet.'
+      : retryHidden
+        ? 'Retry needs the provider handoff, which is not installed yet.'
+        : 'Reassign needs the provider handoff, which is not installed yet.';
   // The dialog closes, sending nothing, once the task has moved on from what the owner confirmed:
   // a new version or attempt, or cancel no longer offered. The owner then re-opens it on the new task.
   const cancelMoved =
@@ -231,7 +238,7 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
       <div className="gap-md flex flex-col">
         {handoffHidden ? (
           <p data-testid="task-handoff-unavailable" className="text-muted-foreground text-xs">
-            Retry and reassign need the provider handoff, which is not installed yet.
+            {handoffNote}
           </p>
         ) : null}
 
