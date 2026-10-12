@@ -75,10 +75,18 @@ export function useUpdateSchedule(scheduleId: string) {
   });
 }
 
+/**
+ * Deletes the schedule. Its detail is dropped rather than re-read: a re-read would 404 on the page
+ * that is still open, and that page would show "no longer exists" before it leaves.
+ */
 export function useDeleteSchedule(scheduleId: string) {
+  const queryClient = useQueryClient();
   const refresh = useRefreshSchedules();
   return $api.useMutation('delete', '/schedules/{schedule_id}', {
-    onSettled: () => refresh(scheduleId)
+    onSuccess: () => {
+      queryClient.removeQueries({ queryKey: keys.schedule(scheduleId) });
+    },
+    onSettled: () => refresh()
   });
 }
 

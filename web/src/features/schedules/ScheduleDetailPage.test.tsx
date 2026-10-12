@@ -2,6 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
+import { keys } from '@/api';
 import { createSseApplier } from '@/api/invalidation';
 import { server } from '@/test/msw/server';
 import { execution, schedule } from './test/fixtures';
@@ -53,6 +54,32 @@ function serve(
       }
       store.view = schedule({
         etag: `etag-${store.writes.length + 1}`,
+        config: { ...store.view.config, ...body }
+      });
+      return HttpResponse.json(store.view);
+    })
+  );
+  return store;
+}
+
+/**
+ * Serves one schedule the way the server does: a write must name the current etag or it gets a 412.
+ * A test changes `store.view` to play another client's save.
+ */
+function serveEnforced(initial: ScheduleView = schedule()) {
+  const store = { view: initial, writes: [] as Write[] };
+  server.use(
+    scheduleReadWith(() => HttpResponse.json(store.view)),
+    executionsRead([execution()]),
+    scheduleUpdate(async ({ request }) => {
+      const body = (await request.json()) as ScheduleConfigInput;
+      const ifMatch = request.headers.get('If-Match');
+      store.writes.push({ ifMatch, body });
+      if (ifMatch !== `"${store.view.etag}"`) {
+        return HttpResponse.json({ detail: 'Schedule changed' }, { status: 412 });
+      }
+      store.view = schedule({
+        etag: `etag-w${store.writes.length}`,
         config: { ...store.view.config, ...body }
       });
       return HttpResponse.json(store.view);
@@ -266,5 +293,80 @@ describe('schedule page', () => {
       await screen.findByRole('heading', { level: 2, name: 'Renamed elsewhere' })
     ).toBeInTheDocument();
     expect(await screen.findByText('Agent timed out')).toBeInTheDocument();
+  });
+
+  it('keeps a pause when the user then saves an edit', async () => {
+    const store = serveEnforced();
+    const user = userEvent.setup();
+    renderSchedules('/schedules/sch-1');
+    await user.click(await screen.findByRole('button', { name: 'Pause' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Paused. No runs will start.');
+
+    await user.type(screen.getByLabelText('Name'), ' (edited)');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(store.writes).toHaveLength(2));
+    expect(store.writes[1]).toMatchObject({
+      ifMatch: '"etag-w1"',
+      body: { name: 'Nightly triage (edited)', paused: true }
+    });
+    expect(store.view.config.paused).toBe(true);
+  });
+
+  it('does not overwrite another client’s save made while the user is editing', async () => {
+    const store = serveEnforced();
+    const user = userEvent.setup();
+    const { queryClient } = renderSchedules('/schedules/sch-1');
+    await user.type(await screen.findByLabelText('Name'), ' (edited)');
+
+    // Another client changes the prompt. The schedule:updated event re-reads the open page.
+    store.view = schedule({
+      etag: 'etag-other',
+      config: { ...store.view.config, prompt: 'Changed prompt' }
+    });
+    createSseApplier(queryClient)({
+      event: 'schedule:updated',
+      data: JSON.stringify({ schedule_id: 'sch-1' })
+    });
+    await waitFor(() =>
+      expect(queryClient.getQueryData(keys.schedule('sch-1'))).toMatchObject({ etag: 'etag-other' })
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    const notice = await screen.findByRole('alert');
+    expect(within(notice).getByText('Changed elsewhere')).toBeInTheDocument();
+    expect(within(notice).getByText('Changed prompt')).toBeInTheDocument();
+    expect(store.writes).toHaveLength(1);
+    expect(store.writes[0]?.ifMatch).toBe('"etag-1"');
+    expect(store.view.config.prompt).toBe('Changed prompt');
+    expect(screen.getByLabelText('Name')).toHaveValue('Nightly triage (edited)');
+  });
+
+  it('leaves the page after a delete without re-reading the deleted schedule', async () => {
+    const store = serve();
+    let deleted = false;
+    let readsAfterDelete = 0;
+    server.use(
+      scheduleDelete(() => {
+        deleted = true;
+        return new HttpResponse(null, { status: 204 });
+      }),
+      scheduleReadWith(() => {
+        if (!deleted) return HttpResponse.json(store.view);
+        readsAfterDelete += 1;
+        return HttpResponse.json({ detail: 'Schedule not found' }, { status: 404 });
+      }),
+      schedulesRead([{ items: [] }])
+    );
+    const user = userEvent.setup();
+    renderSchedules('/schedules/sch-1');
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+    const dialog = await screen.findByRole('alertdialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByText('No schedules yet.')).toBeInTheDocument();
+    // A re-read would 404 on the page that is still open, and flash "no longer exists" before it leaves.
+    expect(readsAfterDelete).toBe(0);
   });
 });

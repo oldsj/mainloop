@@ -120,14 +120,16 @@ the whole deployment: the contract gives schedules no project scope.
   change later. "Start paused" is available here. Resending an unchanged form reuses its request id,
   so a dropped reply cannot make a second schedule; a changed form gets a new id.
 - **Edit** (`/schedules/$id`): name, five-field schedule, time zone, prompt and execution timeout.
-  Every write sends the etag it was read at, so a save never overwrites a newer version silently.
+  Every write sends the etag of the version the form was opened at, so a save never overwrites a newer
+  version silently. A refetch does not change that etag, so a change made elsewhere shows as a
+  conflict on the next save.
   - **412 (changed elsewhere):** the user's edits stay in the form, and the newer saved values show
     beside them. The user saves again to replace them, or discards their edits to take the saved
     version.
   - **409 or 404 (deleted elsewhere):** the form locks.
-- **Pause and resume** send the saved configuration with only the paused flag changed, so unsaved
-  edits are not written. Per the contract, a change applies only to executions reserved after the
-  update.
+- **Pause and resume** send the version the page holds with only the paused flag changed, so unsaved
+  edits are not written. They are off while a conflict notice shows. Per the contract, a change
+  applies only to executions reserved after the update.
 - **Run now** sends a request id and confirms "Run requested". The run then appears under Executions.
 - **Delete** asks for confirmation. Future runs stop. Past executions and their sessions remain.
 - **Cron line:** five fields, read the way robfig/cron v3 reads them: minute, hour, day of month,

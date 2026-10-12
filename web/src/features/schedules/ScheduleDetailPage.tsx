@@ -23,26 +23,24 @@ import {
   useUpdateSchedule
 } from './queries';
 
+type Config = ScheduleView['config'];
+
+/** A saved version of the schedule: the etag a write names, and the configuration it holds. */
+interface Version {
+  etag: string;
+  config: Config;
+}
+
+const versionOf = (view: ScheduleView): Version => ({ etag: view.etag, config: view.config });
+
 /**
  * One schedule: its summary, the quick actions (pause, run now, delete), the edit form and its
- * executions. Every write sends the etag it was read at. A 412 means someone else saved first: the
- * form keeps the user's edits and shows the newer saved values beside them.
+ * executions. Writes go against the version the page holds, not the newest read, so a refetch never
+ * lets an old draft overwrite a newer save. A 412 means someone else saved first: the form keeps the
+ * user's edits and shows the newer saved values beside them.
  */
 export function ScheduleDetailPage({ id }: { id: string }) {
-  const navigate = useNavigate();
   const schedule = useSchedule(id);
-  const update = useUpdateSchedule(id);
-  const trigger = useTriggerSchedule(id);
-  const remove = useDeleteSchedule(id);
-  const [triggerIds] = useState(() => createRequestIds());
-  const [formKey, setFormKey] = useState(0);
-  const [conflict, setConflict] = useState<'changed' | 'deleted' | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-
-  const saved = schedule.data;
 
   if (schedule.isPending) return <p className="p-md text-sm">Loading schedule…</p>;
 
@@ -60,7 +58,7 @@ export function ScheduleDetailPage({ id }: { id: string }) {
     );
   }
 
-  if (!saved) {
+  if (!schedule.data) {
     return (
       <div className="p-md">
         <ErrorRecovery
@@ -73,11 +71,39 @@ export function ScheduleDetailPage({ id }: { id: string }) {
     );
   }
 
-  const locked = conflict === 'deleted';
-  const busy = update.isPending;
-  const paused = saved.config.paused;
+  return <ScheduleEditor id={id} latest={schedule.data} />;
+}
 
-  // Pause and resume send the saved configuration with one field flipped, so unsaved form edits are not written.
+/**
+ * The loaded page. It mounts once the schedule has loaded, so its first version is the one the form
+ * opens at. `latest` is the newest read and moves with every refetch; `base` does not.
+ */
+function ScheduleEditor({ id, latest }: { id: string; latest: ScheduleView }) {
+  const navigate = useNavigate();
+  const update = useUpdateSchedule(id);
+  const trigger = useTriggerSchedule(id);
+  const remove = useDeleteSchedule(id);
+  const [triggerIds] = useState(() => createRequestIds());
+  const [base, setBase] = useState<Version>(() => versionOf(latest));
+  const [formKey, setFormKey] = useState(0);
+  const [conflict, setConflict] = useState<'changed' | 'deleted' | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const locked = conflict === 'deleted';
+  // Pause and resume wait while a conflict shows. They would accept the newer version under edits made to the old one.
+  const holding = conflict === 'changed';
+  const busy = update.isPending;
+  const paused = base.config.paused;
+
+  // A write that succeeded is the version the page holds from now on.
+  function accept(view: ScheduleView) {
+    setBase(versionOf(view));
+    setConflict(null);
+  }
+
   function writeFailed(error: unknown, show: (text: string) => void) {
     const status = statusOf(error);
     if (status === 412) {
@@ -91,24 +117,29 @@ export function ScheduleDetailPage({ id }: { id: string }) {
     show(`Not saved. ${messageOf(error)}`);
   }
 
+  // Pause and resume write the held version with only the paused flag flipped, so unsaved edits are not written.
   const togglePause = () => {
     setActionError(null);
     setMessage(null);
-    update.mutate(updateArgs(id, saved.etag, { ...configOf(saved), paused: !paused }), {
-      onSuccess: () => {
-        setConflict(null);
-        setMessage(paused ? 'Resumed. The next run is scheduled.' : 'Paused. No runs will start.');
+    update.mutate(updateArgs(id, base.etag, { ...configOf(base.config), paused: !paused }), {
+      onSuccess: (view) => {
+        accept(view);
+        setMessage(
+          view.config.paused ? 'Paused. No runs will start.' : 'Resumed. The next run is scheduled.'
+        );
       },
       onError: (error) => writeFailed(error, setActionError)
     });
   };
 
   const save = (config: ScheduleConfigInput) => {
+    // After a conflict, saving replaces the newer version that the notice showed, so it names that version.
+    const target = conflict === 'changed' ? versionOf(latest) : base;
     setSaveError(null);
     setMessage(null);
-    update.mutate(updateArgs(id, saved.etag, config), {
-      onSuccess: () => {
-        setConflict(null);
+    update.mutate(updateArgs(id, target.etag, { ...config, paused: target.config.paused }), {
+      onSuccess: (view) => {
+        accept(view);
         setMessage('Saved.');
       },
       onError: (error) => writeFailed(error, setSaveError)
@@ -148,6 +179,7 @@ export function ScheduleDetailPage({ id }: { id: string }) {
   }
 
   function discardEdits() {
+    setBase(versionOf(latest));
     setConflict(null);
     setSaveError(null);
     setFormKey((key) => key + 1);
@@ -159,9 +191,9 @@ export function ScheduleDetailPage({ id }: { id: string }) {
         <p className="text-destructive font-medium">Changed elsewhere</p>
         <p className="text-muted-foreground break-words">
           Someone saved this schedule after you opened it. Your edits are still in the form. Saving
-          now replaces the newer version.
+          now replaces the newer version, and pause and resume wait until you save or discard.
         </p>
-        <SavedValues config={saved.config} />
+        <SavedValues config={latest.config} />
         <div>
           <Button type="button" variant="outline" onClick={discardEdits}>
             Discard my edits and use the saved version
@@ -196,17 +228,22 @@ export function ScheduleDetailPage({ id }: { id: string }) {
 
       <div className="border-border p-md min-w-0 border">
         <ScheduleCard
-          name={saved.config.name}
-          schedule={saved.config.schedule}
-          timeZone={saved.config.time_zone}
-          agent={agentText(saved.agent)}
-          paused={paused}
-          nextRun={saved.next_execution_time ?? null}
+          name={latest.config.name}
+          schedule={latest.config.schedule}
+          timeZone={latest.config.time_zone}
+          agent={agentText(latest.agent)}
+          paused={latest.config.paused}
+          nextRun={latest.next_execution_time ?? null}
         />
       </div>
 
       <div className="gap-sm flex flex-wrap">
-        <Button type="button" variant="outline" disabled={busy || locked} onClick={togglePause}>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={busy || locked || holding}
+          onClick={togglePause}
+        >
           {paused ? 'Resume' : 'Pause'}
         </Button>
         <Button type="button" disabled={busy || locked || trigger.isPending} onClick={runNow}>
@@ -240,8 +277,8 @@ export function ScheduleDetailPage({ id }: { id: string }) {
         <ScheduleForm
           key={formKey}
           mode="edit"
-          initial={draftFromConfig(saved.config)}
-          agentLabel={agentText(saved.agent)}
+          initial={draftFromConfig(base.config)}
+          agentLabel={agentText(latest.agent)}
           busy={busy}
           locked={locked}
           notice={conflictNotice}
@@ -267,13 +304,13 @@ export function ScheduleDetailPage({ id }: { id: string }) {
 }
 
 /** The saved values, shown beside a conflict so the user can compare them with their edits. */
-function SavedValues({ config }: { config: ScheduleView['config'] }) {
+function SavedValues({ config }: { config: Config }) {
   return (
     <div className="gap-xs flex min-w-0 flex-col text-sm">
       <p className="font-medium">Latest saved values</p>
       <dl className="gap-x-md gap-y-xs grid grid-cols-[auto_1fr] text-xs">
         <dt className="text-muted-foreground">Name</dt>
-        <dd className="break-words">{config.name || '—'}</dd>
+        <dd className="min-w-0 [overflow-wrap:anywhere]">{config.name || '—'}</dd>
         <dt className="text-muted-foreground">Schedule</dt>
         <dd className="font-mono break-all">{config.schedule}</dd>
         <dt className="text-muted-foreground">Time zone</dt>
@@ -293,8 +330,8 @@ function SavedValues({ config }: { config: ScheduleView['config'] }) {
   );
 }
 
-/** The saved configuration with every field kept, for a write that changes only one of them. */
-function configOf(view: ScheduleView): ScheduleConfigInput {
-  const { name, schedule, time_zone, prompt, paused, execution_timeout_seconds } = view.config;
+/** The configuration with every field kept, for a write that changes only one of them. */
+function configOf(config: Config): ScheduleConfigInput {
+  const { name, schedule, time_zone, prompt, paused, execution_timeout_seconds } = config;
   return { name, schedule, time_zone, prompt, paused, execution_timeout_seconds };
 }

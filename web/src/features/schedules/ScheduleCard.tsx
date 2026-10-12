@@ -29,7 +29,7 @@ export function ScheduleCard({
   return (
     <div className="gap-sm flex min-w-0 flex-col">
       <div className="gap-sm flex flex-wrap items-center justify-between">
-        <h2 className="text-foreground text-sm font-medium break-words">
+        <h2 className="text-foreground min-w-0 text-sm font-medium [overflow-wrap:anywhere]">
           {name || 'Untitled schedule'}
         </h2>
         <StatusBadge label={paused ? 'Paused' : 'Active'} tone={paused ? 'muted' : 'ok'} />
