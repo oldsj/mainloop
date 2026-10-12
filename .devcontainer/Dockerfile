@@ -9,6 +9,9 @@ ENV HOME=/home/nonroot \
     XDG_CACHE_HOME=/home/nonroot/.cache \
     TRUNK_CACHE=/home/nonroot/.cache/trunk \
     GOTOOLCHAIN=local \
+    GOMODCACHE=/opt/mainloop-cache/go-mod \
+    GOCACHE=/opt/mainloop-cache/go-build \
+    GOLANGCI_LINT_CACHE=/opt/mainloop-cache/golangci-lint \
     npm_config_store_dir=/opt/mainloop-cache/pnpm-store \
     npm_config_package_import_method=copy \
     PATH=/usr/local/go/bin:/usr/lib/postgresql/16/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -34,6 +37,23 @@ COPY --chown=65532:65532 package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc 
 COPY scripts/with-timeout.mjs /usr/local/lib/mainloop/with-timeout.mjs
 RUN node /usr/local/lib/mainloop/with-timeout.mjs 240 "pnpm prewarm" -- pnpm fetch --frozen-lockfile
 
+# Prewarm the Go module and build caches from go.mod/go.sum only. Application source
+# stays out of the image; std and every dependency package are compiled in both normal
+# and race mode so a workspace's first `go build`/`go test -race` is a cache hit.
+FROM base AS go-deps
+USER 65532:65532
+WORKDIR /opt/mainloop-go-deps
+COPY --chown=65532:65532 server/go.mod server/go.sum ./
+COPY scripts/with-timeout.mjs /usr/local/lib/mainloop/with-timeout.mjs
+RUN node /usr/local/lib/mainloop/with-timeout.mjs 240 "go mod download" -- go mod download
+RUN go build std && go build -race std
+# Dependency packages are best-effort: a module with a package that cannot build
+# standalone (an example, a platform-specific file, a //go:build tag) must not fail
+# the image build, it just misses that one cache entry.
+RUN deps=$(go list -m -f '{{if not .Main}}{{.Path}}/...{{end}}' all) \
+    && (go build ${deps} || true) \
+    && (go build -race ${deps} || true)
+
 FROM base
 # Only lint configuration and package caches enter the public image, never application
 # source or secrets.
@@ -48,6 +68,7 @@ RUN git init \
     && chown -R 65532:65532 /home/nonroot /opt/mainloop-lint
 
 COPY --from=deps --chown=65532:65532 /opt/mainloop-cache /opt/mainloop-cache
+COPY --from=go-deps --chown=65532:65532 /opt/mainloop-cache /opt/mainloop-cache
 
 WORKDIR /workspace
 USER 65532:65532
