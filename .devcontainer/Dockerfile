@@ -8,9 +8,10 @@ ARG TARGETARCH
 ENV HOME=/home/nonroot \
     XDG_CACHE_HOME=/home/nonroot/.cache \
     TRUNK_CACHE=/home/nonroot/.cache/trunk \
+    GOTOOLCHAIN=local \
     npm_config_store_dir=/opt/mainloop-cache/pnpm-store \
     npm_config_package_import_method=copy \
-    PATH=/usr/lib/postgresql/16/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/usr/local/go/bin:/usr/lib/postgresql/16/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 
 COPY .devcontainer/install-tools /usr/local/lib/mainloop/install-tools
 RUN apt-get update \
