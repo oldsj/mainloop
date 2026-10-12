@@ -41,26 +41,27 @@ You (phone/laptop)
 
 ## Quick Start
 
+The stack is a Go server (`server/`) and a React app (`web/`). You need a PostgreSQL 16
+server and an `AGENT_TOKEN_KEY` for the API. The full local setup is in
+[CONTRIBUTING.md](CONTRIBUTING.md#local-development).
+
 ```bash
-# Copy example environment file and configure
-cp .env.example .env
-# Set the kagent gateway address and, for previews, the Substrate router address.
+# API: owner API on http://localhost:8000
+cd server && go run ./cmd/mainloop serve-api
 
-# Start all services
-make dev
-
-# Frontend: http://localhost:3000
-# Backend:  http://localhost:8000/docs
+# UI, in another terminal: http://127.0.0.1:5173 (forwards /api to the API)
+pnpm install --frozen-lockfile --filter web...
+pnpm --dir web dev
 ```
 
 ## GitHub API authentication
 
 Install a private GitHub App on the repositories Mainloop should manage. Set
 `GITHUB_APP_ID` to its numeric App ID and `GITHUB_APP_PRIVATE_KEY` to single-line
-base64 of its unencrypted RSA PEM (at least 2048 bits), through backend secret
-configuration. Leading and trailing ASCII whitespace is ignored for both values;
+base64 of its unencrypted RSA PEM (at least 2048 bits), in the server's environment
+(in the cluster, the `mainloop-secrets` Secret). Leading and trailing ASCII whitespace is ignored for both values;
 interior whitespace is rejected. Mainloop discovers installations and mints short-lived tokens for
-one repository and the requested operation's permissions. There is no backend PAT
+one repository and the requested operation's permissions. There is no PAT
 or anonymous fallback. App permissions, cache behavior and the issue-helper
 limitation are in [Pull requests](docs/specs/pull-requests.md).
 
@@ -71,9 +72,9 @@ The Kubernetes manifests under `k8s/apps/mainloop/` provide reusable bases and e
 The [Publish images workflow](.github/workflows/images.yml) builds and pushes
 `linux/arm64` production images on every push to `main`, using native
 `ubuntu-24.04-arm` runners. It can also be started with `workflow_dispatch` for a
-selected ref. It uses the repository-root build context with `backend/Dockerfile`
-and `frontend/Dockerfile`; the frontend receives
-`VITE_API_URL=https://mainloop-api.olds.network` at build time.
+selected ref. The `backend` image is the Go server (`server/Dockerfile`, target `prod`,
+context `server/`). The `frontend` image is the React app (`web/Dockerfile`, repository-root
+context); it receives `VITE_API_URL=https://mainloop-api.olds.network` at build time.
 
 Images are published to `ghcr.io/oldsj/mainloop-backend` and
 `ghcr.io/oldsj/mainloop-frontend`, tagged with the first seven characters of the
@@ -93,14 +94,12 @@ image, so use a fully successful run for a pin update.
 
 ```text
 mainloop/
-├── api/           # OpenAPI contract shared by server/ and web/
-├── server/        # Go backend (in progress, replaces backend/)
-├── web/           # React frontend (in progress, replaces frontend/)
-├── backend/       # Frozen Python FastAPI backend
-├── frontend/      # Frozen SvelteKit frontend
-├── models/        # Frozen shared Pydantic models
-├── packages/ui/   # Frozen design tokens + theme.css
-└── k8s/           # Kubernetes manifests
+├── api/           # OpenAPI contract shared by server/ and web/, and the MCP tool manifest
+├── server/        # Go server: API, MCP, Git transport and migrations (one binary)
+├── web/           # React app and design system
+├── k8s/           # Kubernetes bases, overlays and kagent integration
+├── docs/          # Specs, architecture and operations notes
+└── scripts/       # Development and CI helpers
 ```
 
 ## UI
@@ -153,8 +152,10 @@ You stay in main thread, checking in on agents and spawning new ones as needed.
 
 **Guides**:
 
-- [Performance](docs/performance.md) - Measured development timings, workspace limits, gVisor qualification attempts, and proposed tuning
 - [Architecture](docs/architecture.md) - Workspaces, delivery, previews, and agent tools
+- [Development environment](docs/dev-environment.md) - Make targets and the shared live dev instance
+- [Production rollout](docs/production-rollout.md) - Production overlay, site contract and GitOps boundary
+- [Performance](docs/performance.md) - Open performance items for the current stack
 - [Contributing](CONTRIBUTING.md) - Local setup, development commands, and contribution guidance
 
 ## License
@@ -219,19 +220,20 @@ namespace-scoped publisher Role does not grant the provider that access. Keep th
 pinned and repeat the gateway regression proof on every Substrate/agentgateway upgrade: HTTP injection is not a portable guarantee of
 other dataplanes. The proposed atenet cleartext allowlist patch is parked and is not required.
 
-The companion's hash-only live gateway proof established HTTP/HTTPS injection and placeholder
+The hash-only live gateway proof established HTTP/HTTPS injection and placeholder
 isolation on that pinned stock dataplane. The joint proof (a native agent calling the Mainloop MCP
 server through the gateway, and blocked connections) passed on a Cilium cluster; the Kind
 overlay's default CNI does not enforce NetworkPolicy, so the blocked-connection check needs a
 policy-enforcing CNI. The Secret holds the complete `Bearer ml_…` header value; NetworkPolicy
 remains required.
 
-Slice a2 requires a **fresh database**. There is no supported upgrade from earlier slices or
-credential-less kagent bindings. Reset dev/spike data before using this channel. Main and child
-Sessions start with credential references; the main thread uses its dedicated main Agent.
-Earlier native session history is not carried into a2. Mainloop does not migrate or reuse
-pre-a2 sessions.
+Mainloop is greenfield. It has no upgrade path from earlier development schemas, from
+credential-less kagent bindings or from the retired Python backend, so start from an empty
+database and let `mainloop migrate up` create the schema. Main and child Sessions start with
+credential references; the main thread uses its dedicated main Agent. Native session history
+from earlier development builds is not carried over.
 
 For a reproducible kagent spike stack, see the [tracked Kind overlay](k8s/apps/mainloop/overlays/kind/README.md).
-It includes dedicated workspace Agents and fixed frontend/backend NodePorts, with credential
-references and explicit installation prerequisites.
+It includes dedicated workspace Agents, credential references and explicit installation prerequisites.
+Its README and manifests still describe the retired frontend and backend images, so treat it as unverified
+for the Go/React stack until it is updated.

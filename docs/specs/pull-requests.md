@@ -8,7 +8,7 @@ tool discovery does not enroll a binding.
 ## Go server (migration slice G10)
 
 This section describes the Go server in `server/internal/{prs,merge}`. The sections after it
-describe the frozen Python backend and stay as the reference for behaviour not repeated here
+describe the retired Python backend (history before `e776537`) and stay as the reference for behaviour not repeated here
 (evidence inventory, summary text, web rendering). Where they differ, this section is current.
 
 ### Both tools are durable intents

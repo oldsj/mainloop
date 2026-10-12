@@ -4,7 +4,7 @@ The home chat is the user's native Claude Code main session, run by a kagent Age
 
 ## Go server status (G6a, G6b)
 
-Status: **implemented** in `server/internal/sessions`, proven by tests against a scratch PostgreSQL and the fake kagent (`kagenttest`). **Not measured** against a live kagent. The sections below describe the frozen Python backend until the cutover; where they differ, this section is the Go behavior.
+Status: **implemented** in `server/internal/sessions`, proven by tests against a scratch PostgreSQL and the fake kagent (`kagenttest`). **Not measured** against a live kagent. The sections below are the pre-cutover reference, written for the retired Python backend (history before `e776537`). Where they differ, this section is the Go behavior.
 
 - `POST /chat` records the user message and a delivery row in one transaction and answers `200` with `pending: true`, `message: null`, `spawned_session_id: null` and `delivery_message_id`. It makes no kagent call; a reconcile loop delivers the row. `conversation_id`, when sent, must be the main session's (`404` otherwise). An empty or over-long message is `422`. A second message is `409` while a turn is open (`recorded`, `sending` or `delivered`) or while an `uncertain` delivery is within its hold (30 minutes by default, `SESSION_UNCERTAIN_HOLD_SECONDS`). The open-turn rule is a partial unique index on `deliveries(session_id)`, not only a check.
 - `POST /chat` has no message id in the request, so the API gives each call a new id. The service call `Send(messageID, …)` is idempotent per id: repeating an id records nothing new.

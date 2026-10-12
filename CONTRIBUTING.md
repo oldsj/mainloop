@@ -8,12 +8,12 @@ Thank you for your interest in contributing to mainloop! This document provides 
 2. **Set up your environment**:
 
    ```bash
-   cp .env.example .env
-   # Edit .env with your configuration
-   make dev                 # Start local development environment
+   cp .env.example .env     # fill in the values you need
    ```
 
-   Authenticate the current Claude integration with `make setup-claude-creds` only when exercising live-agent paths.
+   The API needs a PostgreSQL 16 server and `AGENT_TOKEN_KEY`. See [Local development](#local-development).
+
+   Native agent paths need a kagent installation and live credentials. Skip them unless your change touches those paths.
 
 ## Development Workflow
 
@@ -27,11 +27,7 @@ Thank you for your interest in contributing to mainloop! This document provides 
 
 2. Make your changes following the project conventions (see [Code Style](#code-style) below)
 
-3. Test your changes locally:
-
-   ```bash
-   make dev  # Ensure everything works
-   ```
+3. Run the checks for the area you changed (see [Verification](#verification))
 
 4. Commit your changes with clear, descriptive commit messages
 
@@ -39,116 +35,99 @@ Thank you for your interest in contributing to mainloop! This document provides 
 
 ### Code Style
 
-New backend code goes in `server/` (Go), and new frontend code goes in `web/` (React). `backend/`, `models/`, `frontend/`, and `packages/ui/` are frozen: they take bug fixes and the contract conformance test only, until they are deleted. The API contract will be `api/openapi.yaml`. See [AGENTS.md](AGENTS.md) for the migration rules.
+New server code goes in `server/` (Go). New frontend code goes in `web/` (React and TypeScript). The API contract is `api/openapi.yaml`: change it first, then run `go generate ./...` in `server/` so the Go types and routing follow it. See [AGENTS.md](AGENTS.md) for the architecture rules.
 
-#### Python (Backend)
+#### Go (server)
 
-- Use **Python 3.13+** features and type hints
-- Use `uv` for dependency management (`uv add <package>`)
-- Never manually edit `pyproject.toml` dependencies
-- Follow existing patterns in the codebase
-- Use Pydantic models for all data validation
-- Import shared models from the `models/` package
+- Read the environment only in `internal/config`.
+- Do not edit `*.gen.go` files. Regenerate them.
+- Add dependencies with `go get`, then run `go mod tidy`.
+- Keep each process's wiring in `cmd/mainloop`: one binary, one subcommand per process.
+- Follow the existing patterns in the package you change.
 
-#### TypeScript/Svelte (Frontend)
+#### TypeScript/React (web)
 
-- Use **Svelte 5 runes**: `$state`, `$derived`, `$effect`, `$props`
-- Follow mobile-first responsive design patterns
-- Use the shared theme from `@mainloop/ui/theme.css`
-- Use `$lib/api.ts` for API calls - never hardcode endpoints
-- Type everything with TypeScript
+- Type everything with TypeScript.
+- Use `web/src/api` for API calls. Never hardcode endpoints.
+- Use the design tokens in `web/design/` for colour and spacing.
+- Use `type="button"` on buttons that do not submit a form.
+- Design for mobile first, then enhance for desktop.
 
 #### General
 
 - **Mobile-first**: Design for mobile, enhance for desktop
 - **Delete old code**: Don't keep unused code for backward compatibility
 - **Avoid over-engineering**: Keep solutions simple and focused
-- **Use Makefile targets**: Always run `make` commands from repo root
+- **Use Make targets from the repo root**: `make lint`, `make fmt` and the `dev-live` targets
 
 ## Project Structure
 
 ```text
 mainloop/
-├── api/           # OpenAPI contract (in progress)
-├── server/        # Go backend for new work (in progress)
-├── web/           # React frontend for new work (in progress)
-├── backend/       # Frozen Python FastAPI backend
-├── frontend/      # Frozen SvelteKit + Tailwind v4
-├── models/        # Frozen shared Pydantic models
-├── packages/ui/   # Frozen design tokens + theme
-└── k8s/           # Kubernetes manifests
+├── api/           # OpenAPI contract (openapi.yaml) and MCP tool manifest
+├── server/        # Go server: one binary, one subcommand per process
+├── web/           # React app, Vite build, design system
+├── k8s/           # Kubernetes bases, overlays and kagent integration
+├── docs/          # Specs, architecture and operations notes
+└── scripts/       # Development and CI helpers
 ```
 
-## Development Commands
+## Local development
+
+Run the API against a disposable PostgreSQL 16 server:
 
 ```bash
-# Start all services with hot reload
-make dev
-
-# Backend development
-cd backend
-uv run mainloop          # Run server
-uv add <package>         # Add dependency
-
-# Frontend development
-cd frontend
-pnpm dev                 # Dev server
-pnpm check               # Type check
-
+cd server
+export AGENT_TOKEN_KEY=dev-only-key
+export DEV_MODE=true                 # accept localhost Hosts and Origins
+export DB_HOST=localhost DB_PORT=5432 DB_NAME=postgres DB_USER=mainloop DB_PASSWORD=...
+go run ./cmd/mainloop serve-api      # owner API on :8000
+curl localhost:8000/health
 ```
 
-## Key Patterns
-
-### Backend (Python, frozen)
-
-- Use **Pydantic models** from `models/` package for data validation
-- Import shared models: `from models import Conversation, Message`
-
-### Frontend (SvelteKit, frozen)
-
-- Import theme: `@import '@mainloop/ui/theme.css'` in app.css
-- Use stores in `$lib/stores/` for state management
-- API calls go through `$lib/api.ts`
-
-## Running the CI checks in a workspace
-
-Use these commands for the project's CI checks. The capped backend command has
-passed on a Linux amd64 development host; gVisor/arm64 workspace qualification of
-`make test-backend` is pending.
+Run the UI with hot reload in a second terminal. It listens on `http://127.0.0.1:5173` and forwards `/api` to `MAINLOOP_API_PROXY` (default `http://127.0.0.1:8000`):
 
 ```bash
-# Backend dependency sync (bounded, locked)
-make install-backend
+pnpm install --frozen-lockfile --filter web...
+pnpm --dir web dev
+```
 
-# Offline backend and disposable PostgreSQL (60 seconds/test, 9 minutes/suite)
-dev-postgres run make test-backend
+See [`server/README.md`](server/README.md) for the other subcommands (`serve-mcp`, `serve-git`, `migrate`) and the full environment list.
 
-# Frontend dependency install
-pnpm --version
-make install-frontend
+## Verification
 
-# Frontend type/diagnostic check
-pnpm check
+Run the checks for the area you changed. They match the CI jobs in `.github/workflows/`.
 
-# Frontend unit tests (lib)
-make test-frontend
-
-# Lint
+```bash
+# Repository lint and format (trunk; changed files against origin/main)
 make lint
+make fmt
+
+# Server (from server/). Set MAINLOOP_TEST_DATABASE_URL to a disposable PostgreSQL 16 server.
+go test -race ./...
+golangci-lint run ./...
+go generate ./... && git status --short   # generated code must not change
+
+# API contract (from the repository root)
+pnpm --package=@redocly/cli@2.54.3 dlx redocly lint api/openapi.yaml
+
+# Web (from the repository root, then web/)
+pnpm install --frozen-lockfile --filter web...
+cd web
+node_modules/.bin/tsc -b
+node_modules/.bin/eslint .
+node_modules/.bin/vitest run
+node_modules/.bin/vite build
 ```
 
-After dependency setup, `dev-postgres run make check` runs the complete offline
-check set inside `dev-postgres`'s command budget (515 seconds with an image that
-predates deadline export), plus up to 30 seconds for cleanup. See the
-[foreground deadline table](docs/dev-environment.md#foreground-deadlines) for
-per-command caps, network retry limits and timeout diagnostics.
+Database tests skip when `MAINLOOP_TEST_DATABASE_URL` is unset. CI always sets it, using a PostgreSQL 16 service.
 
 ## Pull Request Guidelines
 
 1. **Keep PRs focused**: One feature or fix per PR
 2. **Write clear descriptions**: Explain what and why
 3. **Update documentation**: If you change behavior, update docs
-4. **Test thoroughly**: Ensure local dev environment works
+4. **Test thoroughly**: Run the checks above for the area you changed
 5. **Follow existing patterns**: Match the style of surrounding code
 
 ## Questions?

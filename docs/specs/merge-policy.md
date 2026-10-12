@@ -14,7 +14,7 @@ The normal production manifests keep merge tools disabled.
 
 > **Go server.** The merge states, consent rule, nested-agent rule and GitHub 403 handling of the
 > Go server are in [Pull requests](pull-requests.md#go-server-migration-slice-g10). The 403 rule
-> below (an _exact_ plan-unavailable message) is the Python rule; Go decides by status code.
+> below (an _exact_ plan-unavailable message) was the Python rule; Go decides by status code.
 
 ## Owner policy
 
@@ -307,7 +307,7 @@ rotates candidates across passes and restarts, and spaces attempts by at least t
 Expired evaluations are immediately eligible. Earlier evaluations whose receipt references
 were not stored before intent claim are discovered from immutable invocation/receipt
 records and revalidated through the same exact consent gate. There is no separate worker, new ledger,
-or DBOS workflow. Each pass has its own bounded scheduling share (25 seconds including
+or workflow engine. Each pass has its own bounded scheduling share (25 seconds including
 selection), with no connection or publication/candidate lock held between passes.
 
 Every evaluation validates the same owner, leaf binding/runtime, proposal, invocation
@@ -346,7 +346,7 @@ the credential. After release, agents cannot authenticate to read status. Owner/
 the stored merged outcome, PR URL and publication projection independently of the native binding.
 
 Tests feed real observer/owner-API results from isolated PostgreSQL and a fake gateway into the
-shared Svelte renderer and response builder. Seeded states supplement this for provider labels,
+shared renderer and response builder (SvelteKit at the time of the test). Seeded states supplement this for provider labels,
 escaping, malformed payloads and merge slots. This is not deployed or browser/live-agent proof.
 
 ### Web request card and submit state

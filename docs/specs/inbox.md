@@ -116,15 +116,15 @@ poll tests against MSW fakes. Nothing here is live-proven.
 - **Implemented:** the session page (`features/sessions/SessionChatSlot`) shows the session's pending requests as cards at the end of the conversation, in the same scroll as the messages. Its state reads **needs you** while a request is pending, in place of working, ready or idle. Failed and unconfirmed delivery still show as such.
 - **Not built:** answered requests in **Activity**. The server's `/activity` query reads queue items only (`source_kind = 'queue'`), so an answered HITL request is not returned. The receipt lasts only for this page visit; the server must return answered HITL items before Activity can show them.
 - **Not built:** the notification toast. The plan drops it (production never creates notification rows, and the inbox covers attention), but F4's result assigned it to F5. The supervisor needs to settle this.
-- **Not built:** the frozen app's `?inbox=<id>` parameter. The deep link is `/inbox?item=<id>`.
+- **Not built:** the retired SvelteKit app's `?inbox=<id>` parameter. The deep link is `/inbox?item=<id>`.
 - **Not built:** skeleton loading, and the **Last checked** and offline timestamps. Loading shows a status line. A failed refresh keeps the rows already shown.
 - **Not proven:** the 390 px layout of the request card and merge SHAs, which the vitest tests do not measure. The Playwright journeys for inbox (the answer view, Needs you, Activity, dismiss at phone width), deferred to F9 (`web/e2e/**`). Also not proven: live SSE delivery, poll timing in a real browser, and any run against the Go server.
 
 ## Go HITL observer and response dispatch
 
 Status: implemented in the Go server (G9a, `server/internal/hitl`, migration `00070_hitl`), with
-tests against an in-memory kagent. Nothing here has run against a live kagent. The Python
-observer above is frozen reference; the Go slice covers a subset of it.
+tests against an in-memory kagent. Nothing here has run against a live kagent. The Go slice
+covers a subset of the retired Python observer.
 
 Built:
 
@@ -209,8 +209,7 @@ Not built:
 ## Go attention, activity and queue (G9b)
 
 Status: implemented in the Go server (`server/internal/attention`), with tests against scratch
-PostgreSQL. Nothing here has run against a live cluster. The Python `attention.py` is frozen
-reference.
+PostgreSQL. Nothing here has run against a live cluster.
 
 - **Items.** One `attention_items` row per thing that needs the owner. Sources: `hitl_request`
   (from the HITL observer; item id `hitl:<request id>`), `task_decision` (from `tasks.decision_*`;

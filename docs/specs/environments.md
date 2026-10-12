@@ -206,7 +206,7 @@ above holds for these routes, with these details:
   status (422).
 - Registry reads happen before any transaction opens. A refresh then locks the environment row and
   inserts the version in a second transaction. A failed registration or refresh stores nothing.
-  Refresh always appends a version, as it does in the Python backend.
+  Refresh always appends a version, as the retired Python backend did.
 - Selection locks the project row, then the environment row. Grant and revoke lock the environment
   row first and then check the project. A concurrent grant, revoke and selection cannot deadlock;
   two concurrent selections at the same revision give one 200 and one 409.
@@ -216,5 +216,5 @@ above holds for these routes, with these details:
   unit tests with short budgets, not against a live registry.
 
 Not yet in the Go server: workspace environment resolution, the package build-input compiler and
-the project UI. The sections for those describe the frozen Python backend and `frontend/`. No live
+the project UI. The sections for those describe the retired Python backend and SvelteKit frontend (history before `e776537`). No live
 GHCR run has been made, so the CDN hop is proven against the fake transport only.

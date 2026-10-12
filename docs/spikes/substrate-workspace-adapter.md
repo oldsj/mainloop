@@ -4,6 +4,7 @@
 > live scripts described below have been removed. Current behavior is in
 > [Workspaces](../specs/workspaces.md) and [architecture](../architecture.md). Historical
 > projected-token and cluster privilege descriptions below are not deployment instructions.
+> Stack names and paths below (the retired Python backend, `backend/`, `uv` scripts) are pre-cutover history (before `e776537`).
 
 > Cutover note (2026-09-24): Herdr was removed; Substrate is now the only workspace runtime.
 

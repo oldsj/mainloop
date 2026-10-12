@@ -74,5 +74,5 @@ missing or other owner's project returns 404 `project_not_found`. A profile must
 have a `supervisor` Agent, otherwise the write returns 422.
 
 Not yet in the Go server (proposed, later slices): task selection precedence, attempt pinning,
-qualification and `TASK_DEFAULT_PROVIDER_PROFILE_ID`. The rest of this page describes the frozen
-Python backend until those slices land.
+qualification and `TASK_DEFAULT_PROVIDER_PROFILE_ID`. The rest of this page is the pre-cutover
+reference, written for the retired Python backend (history before `e776537`).

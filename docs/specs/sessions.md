@@ -4,7 +4,7 @@ Sessions are native Claude Code or Codex work started from the home thread or th
 
 ## Go server status (G6a, G6b)
 
-Status: **implemented** for the main session (G6a) and the session routes (G6b) in `server/internal/sessions`; tests use a scratch PostgreSQL and the fake kagent. **Not measured** against a live kagent. The rest of this page describes the frozen Python backend until each slice lands.
+Status: **implemented** for the main session (G6a) and the session routes (G6b) in `server/internal/sessions`; tests use a scratch PostgreSQL and the fake kagent. **Not measured** against a live kagent. The rest of this page is the pre-cutover reference, written for the retired Python backend (history before `e776537`). Where it differs, this status is current.
 
 - The main session is created by the reconciler (a periodic sweep) and by the first `POST /chat`, never by a GET. Concurrent first calls share one session.
 - Delivery states in the Go ledger: `recorded`, `sending`, `delivered`, `completed`, `failed`, `cancelled`, `uncertain`. `queued` arrives with the report queue. Only `recorded` is ever sent: the claimer commits `sending` before the kagent call, holds no database lock or transaction across it, and fences every outcome write on its lease and attempt count, so a claimer that lost its lease changes nothing.
@@ -146,7 +146,7 @@ another Session or context, repeats the workspace preparation or the runtime ass
 carries a receipt that names no original request, or has runtime fields that cannot be projected
 (an unknown state or operation, an identity outside its bounds). The duplicate check runs on the raw
 reply before protobuf merges the copies, in the kagent client's session codec, and also refuses a
-repeated singular field inside the receipt; the call then has an unknown outcome, as in the Python
+repeated singular field inside the receipt; the call then has an unknown outcome, as the retired Python
 client. A reply that carries the Session or the receipt twice at its top level (for example a
 split `GetSessionResponse.session`) is refused the same way, while the repeated `sessions` of a list
 reply stay allowed. A Session that states no context id is shown with its own id as the context and
@@ -166,7 +166,7 @@ separately from a failed connection or a 404.
 
 ## Evidence boundary
 
-Measured on the kagent spike cluster (live, 2026-10-04): re-sending a `messageId` whose task had completed started a second task, so Mainloop relies on never re-sending, not on kagent deduplication. The kagent client and delivery handling are tested against a fake A2A and SessionService gateway with sanitized fixtures (`backend/tests/runtime/fixtures/kagent`). These are fixture tests, not live proof. The Kind session-resume proof in `docs/spikes/k8s-herdr-agents.md` is historical and does not prove the kagent path.
+Measured on the kagent spike cluster (live, 2026-10-04): re-sending a `messageId` whose task had completed started a second task, so Mainloop relies on never re-sending, not on kagent deduplication. The kagent client and delivery handling are tested against a fake A2A and SessionService gateway with sanitized fixtures (`server/internal/kagent/testdata`). These are fixture tests, not live proof. The Kind session-resume proof in `docs/spikes/k8s-herdr-agents.md` is historical and does not prove the kagent path.
 
 ## Observed sessions needing input
 

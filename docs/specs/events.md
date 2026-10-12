@@ -5,8 +5,8 @@ changed; clients re-read state through the normal endpoints, so a missed or dupl
 never a correctness problem.
 
 Status: **implemented** in the Go server (`server/internal/events`, `server/internal/reconcile`),
-proven by tests against a scratch PostgreSQL. The frozen Python backend keeps its own in-process
-bus until cutover. Nothing here is **measured** under load yet. The Go server publishes no
+proven by tests against a scratch PostgreSQL. The retired Python backend had its own in-process
+bus, now retired. Nothing here is **measured** under load yet. The Go server publishes no
 domain events until the slices that own them call `events.Publish`.
 
 ## Frames

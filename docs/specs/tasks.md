@@ -402,7 +402,7 @@ Task events are reserved in the mutation transaction. A separate connection publ
 committed rows to the existing owner SSE bus, with SSE event name `task:updated` and the same
 stable event ID. Delivery is at least once: duplicates and missed/disconnected events reconcile
 through GET, never replay agent prompts. The dispatcher also routes persisted pending operations
-to installed ports; blocked/unavailable operations never dispatch. No DBOS workflow sequence
+to installed ports; blocked/unavailable operations never dispatch. No workflow sequence
 changed in S0.
 
 Retention settings reserve archive at 21 days and delete after two calendar months from
@@ -491,7 +491,7 @@ Labels: **implemented** means built in `server/` and covered by tests on a scrat
 - **Implemented:** the preview lookup refuses a workspace owned by a task attempt unless that attempt is `active` and the task's current one.
 - **Implemented (G8b):** `delegate` and `POST /tasks` record the task and a `create` operation, and the reconcile loops below provision it. Cancel of a task with no attempt completes at once and ends the task's `requested` create operation (`blocked`, no reason), so a cancelled task is never provisioned. Cancel of a task with an attempt moves the operation to `draining`; the attempt is stopped, fenced and ended.
 - **Blocked by contract:** retry and reassign return a `blocked` operation with reason `handoff_unavailable`, and the task view reports both actions as unavailable. The F6 page shows what the server reports, so Reassign stays disabled.
-- **Not built:** the publication projection beyond the GitHub observation (G8b), and the Python behaviors listed under G8b as not built.
+- **Not built:** the publication projection beyond the GitHub observation (G8b), and the retired Python behaviors listed under G8b as not built.
 
 ## Go status (G8b)
 
@@ -511,6 +511,6 @@ Labels: **implemented** means built in `server/` and covered by tests on a scrat
 - **Implemented (PRLINK):** a task links the pull request its current attempt opened through Mainloop. The sweep reads the newest `created` `pr_creations` row whose session id is the attempt's binding id (the binding is unique to the attempt) and whose owner, project and head branch are the task's, and passes its PR number to the observer as the expected PR. The observer then reads only that PR and reports it open, closed or merged; if it is missing, or is not a PR for the task's branch and repository, it reports no PR and does not pick another from the branch, so a second PR on the branch, or one someone else opened, never replaces it. A new attempt has a new binding, so it does not inherit the previous attempt's PR, as on main. With no such row (the agent opened the PR outside Mainloop, or has not opened one) the branch pick above applies.
 - **Implemented (G10b):** observations are read afresh on every sweep, with a five-minute collection bound. The observer captures `observed_at` when collection finishes, before database work, and persistence preserves it in `projected_at` for both changed and unchanged facts. A database delay never refreshes old evidence. Task reads use only the database and mask CI to `unknown` when `projected_at` is absent, in the future or older than five minutes, or the CI head does not equal the PR head. Job completion time is independent of observation freshness. Rate limits (including rate-limit 403s) and 5xx/transport failures are classified for a later sweep; other 4xx refusals fail closed. A 404 means absent: no PR when its read is missing, or a known PR with `unknown` CI when a CI source is missing. The observer makes no repository writes and requests read permissions only.
 - **Implemented:** retry and reassign return the `blocked` operation (`handoff_unavailable`, source attempt set) on every path after the target provider is validated; a task that is already final refuses with 409 `task_terminal`.
-- **Implemented:** agent views. An agent sees the reports of its task's current attempt only, no artifacts, no checkpoint or manifest refs, and no `pending_approval_ids`. Python also showed continuation reports and the continuation artifact pair for a linked continuation; no continuation exists until handoff is built.
+- **Implemented:** agent views. An agent sees the reports of its task's current attempt only, no artifacts, no checkpoint or manifest refs, and no `pending_approval_ids`. The retired Python code also showed continuation reports and the continuation artifact pair for a linked continuation; no continuation exists until handoff is built.
 - **Not built:** handoff (retry and reassign) and the publication projection that decides a task's merge state. Without a configured GitHub App, the observation sweep does nothing.
 - **Not proven:** any run against kagent, a real workspace, GitHub or a cluster.

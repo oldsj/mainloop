@@ -1,7 +1,7 @@
 # Git read transport (Go server)
 
-Status: implemented in `server/`, not proven live. `docs/specs/push-gate.md` still describes the
-frozen Python sidecar; this file covers the Go replacement for the read side only. Push
+Status: implemented in `server/`, not proven live. The push policy in `docs/specs/push-gate.md` describes the
+retired Python sidecar; this file covers the Go read side only. Push
 (`git-receive-pack`) is a later slice and is refused today.
 
 ## What it does
@@ -74,8 +74,8 @@ The 60-second idle watchdog starts before upload and resets on response reads; u
 wait for the first response byte share that initial bound. There is no per-capability or listener
 concurrency cap; admission limits need a separate capacity policy.
 
-Difference from the Python sidecar: gzip request bodies are accepted and inflated under the same
-size cap; Python refused all compression.
+Gzip request bodies are accepted and inflated under the same size cap. The retired Python sidecar
+refused all compression.
 
 ## Configuration
 

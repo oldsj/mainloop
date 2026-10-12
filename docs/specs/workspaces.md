@@ -13,7 +13,7 @@ read from kagent.
 
 ## Go server (migration slice G5)
 
-The sections below describe the frozen Python backend, which still serves production. This
+The sections below are the pre-cutover reference for the retired Python backend (history before `e776537`). This
 section is the Go server's lifecycle in `server/internal/workspaces`. Labels: **implemented** is
 in the code and covered by fake-backed tests against a scratch PostgreSQL; **proposed** is not
 built; nothing here has been measured against a live kagent.
@@ -170,7 +170,7 @@ Not proven:
 - Live event refresh of the workspace page. The SSE applier is tested with the page mounted, not a
   real event stream.
 
-Differences from the frozen page: a suspended workspace uses the muted tone, not purple. The token
+Differences from the retired SvelteKit page: a suspended workspace uses the muted tone, not purple. The token
 set has no purple tone.
 
 ## Lifecycle
@@ -307,8 +307,8 @@ fails the preview is `502` (WebSocket close `1013`) and the router is not contac
 timeout then suspends the workspace again.
 
 Mainloop has one owner, set by `MAINLOOP_OWNER_ID` (default `local-dev-user`, which Kind and
-local development use). Every REST handler and the preview proxy take the user from one function,
-`current_user()` (`backend/src/mainloop/identity.py`), which returns the owner. It **ignores
+local development use). Every REST handler and the preview proxy take the user from the configured owner.
+It **ignores
 `X-User-ID`**: nothing authenticates that header, so honoring it would let any caller choose an
 identity. Routes that fetch a row by id (threads, conversations, queue items, projects, sessions,
 notifications) also check that the row belongs to that user and answer `404` otherwise. A later
@@ -363,8 +363,8 @@ Held reports after a stopped turn do not prevent parking.
 
 ## Go preview proxy
 
-Status: implemented in the Go server (G12, tests against fakes). The Python proxy
-(`backend/src/mainloop/runtime/preview_proxy.py`) is frozen reference.
+Status: implemented in the Go server (G12, tests against fakes). The retired Python proxy
+(`backend/src/mainloop/runtime/preview_proxy.py`, before `e776537`) is history.
 
 The Go server routes a request whose `Host` parses as a preview host to the proxy, ahead of the
 API middleware (so the Host guard, API Origin guard, CORS and body validation never see it); the
@@ -420,14 +420,13 @@ Mainloop's side: for example a create whose reply was lost and whose row was the
 The operator sweep lists them and deletes only when asked:
 
 ```bash
-# In the production image (it has no uv; the command is on PATH):
-mainloop-sweep-kagent-sessions            # list only
-mainloop-sweep-kagent-sessions --delete   # delete what it listed
+# In the production backend container (the image entrypoint is the mainloop binary):
+mainloop sweep-orphans            # list only
+mainloop sweep-orphans --delete   # delete what it listed
 
-# Local development, from the repository:
-cd backend
-uv run mainloop-sweep-kagent-sessions
-uv run mainloop-sweep-kagent-sessions --delete
+# Local development, from server/:
+go run ./cmd/mainloop sweep-orphans
+go run ./cmd/mainloop sweep-orphans --delete
 ```
 
 It uses the backend's environment (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `KAGENT_GATEWAY_URL`, `KAGENT_USER_ID`) and pages
@@ -560,7 +559,7 @@ installed configuration and runtime admission failures.
 
 The [push gate contract](push-gate.md) defines feature-branch publication scope and
 protected branches. Source supports frozen native enrollment, deferred read/push publication
-and PostgreSQL authority for injectable ASGI listeners. Both enablement flags default off;
+and PostgreSQL authority for injectable listeners. Both enablement flags default off;
 no production listener or containment is installed. Workspace responses include `publication_mode` and
 `publication_reason`, independently of runtime state. The badge and detail page show
 read-only reasons (default/protected branch, missing metadata, no grant, or disabled). Current
