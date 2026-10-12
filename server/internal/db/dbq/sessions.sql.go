@@ -1200,6 +1200,47 @@ func (q *Queries) ListSessionDeliveries(ctx context.Context, arg ListSessionDeli
 	return items, nil
 }
 
+const listSessionDeliveriesForProvider = `-- name: ListSessionDeliveriesForProvider :many
+SELECT id, task_id, state, kagent_session_id FROM deliveries
+WHERE session_id = $1 AND kagent_session_id IS NOT NULL
+`
+
+type ListSessionDeliveriesForProviderRow struct {
+	ID              string
+	TaskID          *string
+	State           dbstate.DeliveryState
+	KagentSessionID *string
+}
+
+// The deliveries that can attribute a mirrored reply to a provider: deliver.go sets
+// kagent_session_id when it sends the message, naming the Session the turn ran on, and derives the
+// reply's own id from this row (its task id, or its own id for a cancelled turn's stop note) rather
+// than storing it. The caller recomputes that id to match it to a stored message.
+func (q *Queries) ListSessionDeliveriesForProvider(ctx context.Context, sessionID string) ([]ListSessionDeliveriesForProviderRow, error) {
+	rows, err := q.db.Query(ctx, listSessionDeliveriesForProvider, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSessionDeliveriesForProviderRow{}
+	for rows.Next() {
+		var i ListSessionDeliveriesForProviderRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.State,
+			&i.KagentSessionID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSessionKagentContexts = `-- name: ListSessionKagentContexts :many
 SELECT kagent_session_id::text FROM agent_bindings
 WHERE agent_bindings.session_id = $1 AND kagent_session_id IS NOT NULL AND kagent_session_id <> ''

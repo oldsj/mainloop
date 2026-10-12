@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
@@ -75,9 +76,13 @@ func (a *SessionsAPI) GetConversation(ctx context.Context, r api.GetConversation
 	if err != nil {
 		return nil, err
 	}
+	providers, err := a.messageProviders(ctx, q, c.ID)
+	if err != nil {
+		return nil, err
+	}
 	msgs := make([]api.Message, 0, len(rows))
 	for _, m := range rows {
-		msgs = append(msgs, toMessage(m))
+		msgs = append(msgs, toMessage(m, providers[m.ID]))
 	}
 	title := c.Title
 	return api.GetConversation200JSONResponse(api.ConversationResponse{
@@ -388,13 +393,17 @@ func (a *SessionsAPI) GetSessionConversation(ctx context.Context, r api.GetSessi
 	if err != nil {
 		return nil, err
 	}
+	providers, err := a.messageProviders(ctx, q, row.ID)
+	if err != nil {
+		return nil, err
+	}
 	needs, err := a.needsOwner(ctx, q, row.ID)
 	if err != nil {
 		return nil, err
 	}
 	msgs := make([]api.Message, 0, len(rows))
 	for _, m := range rows {
-		msgs = append(msgs, toMessage(m))
+		msgs = append(msgs, toMessage(m, providers[m.ID]))
 	}
 	return api.GetSessionConversation200JSONResponse(api.SessionConversationResponse{Messages: msgs, Session: toSession(row, needs)}), nil
 }
@@ -509,8 +518,9 @@ func conflictResponse(err error) *apierr.Error {
 	return apierr.Conflict(reason(err, ErrConflict))
 }
 
-// toMessage maps a stored message. Only a user message has a source, from its delivery.
-func toMessage(m dbq.ListSessionMessagesRow) api.Message {
+// toMessage maps a stored message. Only a user message has a source, from its delivery; only an
+// assistant message has a provider, looked up by the caller from messageProviders.
+func toMessage(m dbq.ListSessionMessagesRow, provider string) api.Message {
 	msg := api.Message{
 		Id: m.ID, ConversationId: m.SessionID, Role: api.MessageRole(m.Role),
 		Content: m.Content, CreatedAt: m.CreatedAt,
@@ -519,5 +529,67 @@ func toMessage(m dbq.ListSessionMessagesRow) api.Message {
 		src := api.MessageSource(m.Source)
 		msg.Source = &src
 	}
+	if provider != "" {
+		p := api.MessageProvider(provider)
+		msg.Provider = &p
+	}
 	return msg
+}
+
+// messageProviders maps a mirrored reply's message id to the provider whose native Session wrote
+// it. It walks the deliveries that carry a kagent_session_id (deliver.go sets it when it sends the
+// message, naming the Session the turn ran on) and recomputes each reply's id the same way
+// deliver.go derived it when mirroring: a cancelled turn's stop note from the delivery's own id,
+// otherwise from its task id. The Session id is then attributed to a provider from the binding's
+// current identity and, for a main thread that has switched, its retired identities in
+// main_provider_history. A delivery whose Session cannot be attributed to claude or codex, or whose
+// reply was never mirrored, is simply absent from the result.
+func (a *SessionsAPI) messageProviders(ctx context.Context, q *dbq.Queries, sessionID string) (map[string]string, error) {
+	deliveries, err := q.ListSessionDeliveriesForProvider(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if len(deliveries) == 0 {
+		return nil, nil
+	}
+	providerOf := map[string]string{}
+	b, err := q.GetAgentBinding(ctx, sessionID)
+	switch {
+	case err == nil:
+		if b.KagentSessionID != nil && validProvider(b.Kind) {
+			providerOf[*b.KagentSessionID] = b.Kind
+		}
+	case !errors.Is(err, pgx.ErrNoRows):
+		return nil, err
+	}
+	history, err := q.ListMainProviderHistory(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range history {
+		if h.KagentSessionID != nil && validProvider(h.Provider) {
+			providerOf[*h.KagentSessionID] = h.Provider
+		}
+	}
+	out := make(map[string]string, len(deliveries))
+	for _, d := range deliveries {
+		provider, ok := providerOf[*d.KagentSessionID]
+		if !ok {
+			continue
+		}
+		var mid string
+		switch d.State {
+		case dbstate.DeliveryCancelled:
+			mid = stopNoteID(d.ID)
+		case dbstate.DeliveryCompleted, dbstate.DeliveryFailed:
+			if d.TaskID == nil {
+				continue
+			}
+			mid = assistantID(sessionID, a2a.TaskID(*d.TaskID))
+		default:
+			continue
+		}
+		out[mid] = provider
+	}
+	return out, nil
 }

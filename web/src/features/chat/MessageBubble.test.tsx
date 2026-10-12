@@ -47,6 +47,17 @@ describe('MessageBubble', () => {
     expect(screen.queryByTestId('assignment-block')).toBeNull();
   });
 
+  it('labels a reply by the provider that wrote it, not the session it is bound to now', () => {
+    render(
+      <MessageBubble
+        message={messageFixture({ role: 'assistant', content: 'done', provider: 'claude' })}
+        agentKind="codex"
+      />
+    );
+    expect(screen.getByText('claude@main$')).toBeInTheDocument();
+    expect(screen.queryByText('codex@main$')).toBeNull();
+  });
+
   it('labels the prompt with the thread it was written in', () => {
     render(
       <MessageBubble
