@@ -11,6 +11,8 @@ amd64)
 	node_sha=2598641d188b41793930917f1a99a81c9615856b4205d408a44ab676c1acbb3d
 	trunk_sha=3845ff76a70cebb10e61a267ff719ffdccfa3ef6d877d51870a2c62b79603ab9
 	kubectl_sha=7721f265e18709862655affba5343e85e1980639395d5754473dafaadcaa69e3
+	go_sha=ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
+	golangci_sha=ab90aeb7b066f92a33415b638a50fe5344bbb75a0d32ad30cc248d88f81032ab
 	;;
 arm64)
 	node_arch=arm64
@@ -18,6 +20,8 @@ arm64)
 	node_sha=323e6bc34bfe82a21f42d9eb94d9a2b6c8082d8c03cb510cf2f95dd1dcaa1531
 	trunk_sha=cc210d2185cf95bedbec06384be6ef342bdb7dcf3ff72dd08fe0e69859516887
 	kubectl_sha=420e6110e3ba7ee5a3927b5af868d18df17aae36b720529ffa4e9e945aa95450
+	go_sha=94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8
+	golangci_sha=ee7ec5f3453d15ddf106fae5a4d6c71737712348a979d1fe9cd52ec7ea299bae
 	;;
 *)
 	echo "Unsupported architecture: ${arch}" >&2
@@ -37,6 +41,12 @@ tar -xzf "${scratch}/trunk.tar.gz" -C "${scratch}"
 install "${scratch}/trunk" /usr/local/bin/trunk
 fetch "https://dl.k8s.io/release/v1.34.1/bin/linux/${arch}/kubectl" "${kubectl_sha}" kubectl
 install "${scratch}/kubectl" /usr/local/bin/kubectl
+# Go matches server/go.mod; golangci-lint matches the version CI runs.
+fetch "https://go.dev/dl/go1.27.2.linux-${arch}.tar.gz" "${go_sha}" go.tar.gz
+tar -xzf "${scratch}/go.tar.gz" -C /usr/local
+fetch "https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-linux-${arch}.tar.gz" "${golangci_sha}" golangci.tar.gz
+tar -xzf "${scratch}/golangci.tar.gz" -C "${scratch}"
+install "${scratch}/golangci-lint-2.14.0-linux-${arch}/golangci-lint" /usr/local/bin/golangci-lint
 fetch https://registry.npmjs.org/pnpm/-/pnpm-9.15.9.tgz cf86a7ad764406395d4286a6d09d730711720acc6d93e9dce9ac7ac4dc4a28a7 pnpm.tgz
 mkdir -p /opt/pnpm
 tar -xzf "${scratch}/pnpm.tgz" -C /opt/pnpm --strip-components=1
