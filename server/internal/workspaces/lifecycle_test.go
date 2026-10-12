@@ -339,6 +339,9 @@ func TestDeleteBeforeAnyCreateAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Create returned with no runner, so its operation is still queued and due. Park it so the
+	// runner started below cannot claim and send it before Delete cancels it.
+	h.exec(`UPDATE workspace_ops SET next_attempt_at = now() + interval '1 hour' WHERE kind = 'create'`)
 	h.run()
 	if err := h.svc.Delete(bg, w.WorkspaceId); err != nil {
 		t.Fatal(err)
