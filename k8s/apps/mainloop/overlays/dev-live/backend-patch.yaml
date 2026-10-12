@@ -4,6 +4,9 @@
 # server (there is no fallback), so mainloop-secrets must hold agent-token-key.
 # Each server container runs watchexec over `go run` from /src, which DevSpace syncs
 # server/ into; the same commands run when the pods start without `devspace dev`.
+# Each container rebuilds into its own Go build cache, on top of the warm cache baked into
+# the image, so each gets its own ephemeral-storage budget; the base 3Gi pod total was
+# evicted after about ten hot reloads.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -41,9 +44,11 @@ spec:
             requests:
               cpu: 100m
               memory: 256Mi
+              ephemeral-storage: 1Gi
             limits:
               cpu: '2'
               memory: 2Gi
+              ephemeral-storage: 8Gi
       containers:
         - name: backend
           imagePullPolicy: Always
@@ -102,9 +107,11 @@ spec:
             requests:
               cpu: 100m
               memory: 512Mi
+              ephemeral-storage: 1Gi
             limits:
               cpu: '2'
               memory: 2Gi
+              ephemeral-storage: 8Gi
         - name: mcp
           imagePullPolicy: Always
           command: *watch
@@ -134,6 +141,8 @@ spec:
             requests:
               cpu: 25m
               memory: 128Mi
+              ephemeral-storage: 1Gi
             limits:
               cpu: '2'
               memory: 2Gi
+              ephemeral-storage: 8Gi
