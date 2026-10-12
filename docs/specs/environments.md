@@ -136,7 +136,8 @@ follow an accepted environment default. Accepting a selected version as the defa
 is an explicit action affecting all projects following that environment. Registration
 shows the returned static-validation status; it does not establish runtime readiness.
 Pending-build and obsolete-policy versions cannot be saved. With no selection, new
-sessions use the configured native agent image. Changes apply to newly started
+sessions use the configured native agent image, but delegated code tasks are refused with
+`project_environment_required` (see [tasks](tasks.md)). Changes apply to newly started
 sessions and do not migrate running sessions. Reads never select or accept defaults
 automatically. Saving uses the observed selection revision; conflicts refresh saved
 state while preserving the draft for review. An unconfirmed registration reply blocks

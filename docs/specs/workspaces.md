@@ -538,7 +538,8 @@ selection as `development_environment`. Replacement and uncertain-create recover
 that stored selection. Recovery retries the persisted request id; a replacement uses a fresh
 request id. Default changes and CLI/runtime updates never change the recorded environment. kagent's reported development environment and runtime composition
 are stored separately when present. The workspace view displays the short resolved digest.
-Projects without a selection retain the legacy CreateSession request without that field.
+Projects without a selection retain the legacy CreateSession request without that field;
+delegated code tasks for them are refused (see [tasks](tasks.md)).
 
 Selection requires kagent's runtime composition feature and service-token authentication
 to be enabled. Static validation is metadata evidence, not a live composition proof.
