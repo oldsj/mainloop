@@ -42,6 +42,15 @@ the loading message. Retrying requests the details for the current project.
 - A route change moves keyboard focus to the main landmark, so focus does not fall back to the
   page body.
 
+## Home
+
+- **Work list**: tasks grouped as **Needs you**, **Working**, **Blocked or failed**, and **Finished since you last looked**. A task appears once, in the first group that fits. Each row shows the title, project, a one-line status with its reason, the relative last update time, and links to the task. Running and queued tasks are current work, so **Working** always shows; with nothing running it reads **Nothing running. Start work from the main chat.**
+- **Since you were here**: a strip above the list with counts of tasks waiting on you, failed, and merged since the last visit, each linking to the most recent one. It is hidden when nothing changed, and on a first visit, which has no baseline.
+- **Last visit**: kept per browser in local storage. If storage is blocked, the strip and the finished group simply have no baseline.
+- **Updates**: the list refreshes from the same task invalidation as the task pages. The relative times refresh each minute on the page.
+- **Placement (this slice)**: the list sits above the main chat, on desktop and on the phone chat tab. Its place in the desktop aside and the phone tab bar needs a shell change that this slice does not make.
+- **Not proven**: layout at phone width in a browser.
+
 ## Tasks
 
 Durable tasks are read from the owner task API (see [tasks.md](tasks.md)). The page shows what the
