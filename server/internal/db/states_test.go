@@ -151,6 +151,7 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(api.TaskProjectionCiStatePending), string(api.TaskProjectionCiStateSuccess),
 			string(api.TaskProjectionCiStateFailure), string(api.TaskProjectionCiStateUnknown))},
 		{"session_messages", "role", strs(string(api.MessageRoleUser), string(api.MessageRoleAssistant))},
+		{"deliveries", "source", strs(string(api.MessageSourceUser), string(api.MessageSourceMainloop))},
 		{"sessions", "agent_cancel_outcome", strs(
 			string(api.SessionCancelResponseAgentStopped), string(api.SessionCancelResponseAgentNotRunning),
 			string(api.SessionCancelResponseAgentUnknown))},

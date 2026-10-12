@@ -32,8 +32,8 @@ type WorkspaceRuntime interface {
 
 // SessionRuntime is the part of [sessions.Service] delivery and settlement use.
 type SessionRuntime interface {
-	SendToAs(ctx context.Context, source, sessionID, messageID, text string) (sessions.Sent, error)
-	SendAs(ctx context.Context, source, messageID, conversationID, text string) (sessions.Sent, error)
+	SendToAs(ctx context.Context, source sessions.Source, sessionID, messageID, text string) (sessions.Sent, error)
+	SendAs(ctx context.Context, source sessions.Source, messageID, conversationID, text string) (sessions.Sent, error)
 	EnsureMain(ctx context.Context) (sessions.Main, error)
 	Cancel(ctx context.Context, sessionID string) (sessions.CancelResult, error)
 }

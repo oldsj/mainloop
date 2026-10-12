@@ -26,13 +26,15 @@ export default function MessageBubblePreview() {
       <MessageBubble
         message={messageFixture({
           id: 'c',
-          content: "[report from child 0a1b2c3d 'Fix the build']\nAll checks pass."
+          content:
+            '[report from child task 0a1b2c3d-1111-4222-8333-444455556666 attempt 1; completed; unverified claim]\nAll checks pass.'
         })}
       />
       <MessageBubble
         message={messageFixture({
           id: 'd',
-          content: "[report from child 0a1b2c3d 'Fix the build' fallback]\nThe child ended."
+          content:
+            '[report from child task 9f8e7d6c-1111-4222-8333-444455556666 attempt 2; blocked; unverified claim]\nThe schema is ambiguous.\nOwner action needed: decide the schema'
         })}
       />
       <MessageBubble

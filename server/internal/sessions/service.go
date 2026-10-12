@@ -365,17 +365,20 @@ func checkText(messageID, text string) (string, error) {
 	return text, nil
 }
 
-// Who wrote a message. The owner's own messages are SourceUser; SourceMainloop marks the ones Mainloop
-// writes on the owner's behalf: a delegated brief, or a task report sent to a supervisor.
+// Source is who wrote a message. The owner's own messages are SourceUser; SourceMainloop marks the ones
+// Mainloop writes on the owner's behalf: a delegated brief, or a task report sent to a supervisor. The
+// values are the contract's Message.source and what deliveries.source allows.
+type Source string
+
 const (
-	SourceUser     = "user"
-	SourceMainloop = "mainloop"
+	SourceUser     Source = "user"
+	SourceMainloop Source = "mainloop"
 )
 
 // record writes a message from source and its delivery for a session, in tx. It is idempotent per message
 // id: an id that is already recorded for the session changes nothing. The caller has checked that
 // the session exists and may take a message.
-func (s *Service) record(ctx context.Context, tx pgx.Tx, source, sessionID, messageID, text string) error {
+func (s *Service) record(ctx context.Context, tx pgx.Tx, source Source, sessionID, messageID, text string) error {
 	q := dbq.New(tx)
 	// One send at a time per session, so the open-turn check below cannot race another send.
 	if err := db.XactLock(ctx, tx, "mainloop:send:"+sessionID); err != nil {
@@ -410,7 +413,7 @@ func (s *Service) record(ctx context.Context, tx pgx.Tx, source, sessionID, mess
 		// No delivery has this id, so the row is some other message: ids are global.
 		return fmt.Errorf("%w: the message id is already used", ErrInvalid)
 	}
-	if _, err := q.InsertDelivery(ctx, dbq.InsertDeliveryParams{ID: messageID, SessionID: sessionID, Source: source}); err != nil {
+	if _, err := q.InsertDelivery(ctx, dbq.InsertDeliveryParams{ID: messageID, SessionID: sessionID, Source: string(source)}); err != nil {
 		return fmt.Errorf("record delivery: %w", err)
 	}
 	// The owner's next message releases the hold a stop left on the queue.
@@ -444,7 +447,7 @@ func (s *Service) Send(ctx context.Context, messageID, conversationID, text stri
 }
 
 // SendAs is Send for a message from source (SourceUser or SourceMainloop).
-func (s *Service) SendAs(ctx context.Context, source, messageID, conversationID, text string) (Sent, error) {
+func (s *Service) SendAs(ctx context.Context, source Source, messageID, conversationID, text string) (Sent, error) {
 	text, err := checkText(messageID, text)
 	if err != nil {
 		return Sent{}, err
@@ -480,7 +483,7 @@ func (s *Service) SendTo(ctx context.Context, sessionID, messageID, text string)
 }
 
 // SendToAs is SendTo for a message from source (SourceUser or SourceMainloop).
-func (s *Service) SendToAs(ctx context.Context, source, sessionID, messageID, text string) (Sent, error) {
+func (s *Service) SendToAs(ctx context.Context, source Source, sessionID, messageID, text string) (Sent, error) {
 	text, err := checkText(messageID, text)
 	if err != nil {
 		return Sent{}, err

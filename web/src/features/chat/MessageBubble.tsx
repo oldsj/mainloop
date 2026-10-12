@@ -84,8 +84,7 @@ export function MessageBubble({
         >
           {report ? (
             <>
-              child · {report.title}
-              {report.fallback ? ' (ended without a report)' : ''}
+              {report.title} · {report.outcome}
             </>
           ) : (
             <>

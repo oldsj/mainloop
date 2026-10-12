@@ -150,6 +150,24 @@ describe('assignments in the main thread', () => {
     expect(screen.getByRole('article', { name: /^Assignment from Mainloop/ })).toBeInTheDocument();
     expect(screen.getByRole('article', { name: /^You/ })).toHaveTextContent('my own words');
   });
+
+  it('keeps a Mainloop-sent report as a labelled report, never an assignment', async () => {
+    setup({
+      mainThread: mainThreadFixture({ conversation_id: CONVERSATION_ID }),
+      messages: [
+        messageFixture({
+          id: 'm-report',
+          content:
+            '[report from child task 9f8e7d6c-1111-4222-8333-444455556666 attempt 2; blocked; unverified claim]\nThe schema is ambiguous.\nOwner action needed: decide the schema',
+          source: 'mainloop'
+        })
+      ]
+    });
+    const report = await screen.findByTestId('child-report');
+    expect(report).toHaveTextContent('child task 9f8e7d6c · blocked');
+    expect(report).toHaveTextContent('Owner action needed: decide the schema');
+    expect(screen.queryByTestId('assignment-block')).toBeNull();
+  });
 });
 
 describe('sending', () => {

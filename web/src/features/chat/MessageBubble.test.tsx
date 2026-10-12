@@ -79,30 +79,37 @@ describe('MessageBubble', () => {
     expect(screen.queryByTestId('turn-stopped-note')).toBeNull();
   });
 
-  it('labels a child report as the child, not the owner', () => {
+  it('labels a child report as the task, not the owner', () => {
     render(
       <MessageBubble
         message={messageFixture({
-          content: "[report from child 0a1b2c3d 'Fix the build']\nAll tests pass."
+          content:
+            '[report from child task 0a1b2c3d-1111-4222-8333-444455556666 attempt 1; completed; unverified claim]\nAll tests pass.'
         })}
       />
     );
     const report = screen.getByTestId('child-report');
-    expect(report).toHaveTextContent('child · Fix the build');
+    expect(report).toHaveTextContent('child task 0a1b2c3d · completed');
     expect(report).toHaveTextContent('All tests pass.');
     expect(report).not.toHaveTextContent('report from child');
     expect(report).not.toHaveTextContent('user@main$');
   });
 
-  it('says when a child ended without a report', () => {
+  it('shows a blocked report with its owner action, expanded and never as an assignment', () => {
     render(
       <MessageBubble
-        message={messageFixture({ content: "[report from child 0a1b2c3d 'Fix' fallback]\nended" })}
+        assignment
+        message={messageFixture({
+          content:
+            '[report from child task 9f8e7d6c-1111-4222-8333-444455556666 attempt 2; blocked; unverified claim]\nThe schema is ambiguous.\nOwner action needed: decide the schema'
+        })}
       />
     );
-    expect(screen.getByTestId('child-report')).toHaveTextContent(
-      'child · Fix (ended without a report)'
-    );
+    const report = screen.getByTestId('child-report');
+    expect(report).toHaveTextContent('child task 9f8e7d6c · blocked');
+    expect(report).toHaveTextContent('Owner action needed: decide the schema');
+    expect(screen.queryByTestId('assignment-block')).toBeNull();
+    expect(screen.queryByRole('group')).toBeNull();
   });
 
   it('does not make an assistant message a child report', () => {
@@ -110,7 +117,8 @@ describe('MessageBubble', () => {
       <MessageBubble
         message={messageFixture({
           role: 'assistant',
-          content: "[report from child 0a1b2c3d 'x']\nbody"
+          content:
+            '[report from child task 0a1b2c3d-1111-4222-8333-444455556666 attempt 1; completed; unverified claim]\nbody'
         })}
       />
     );

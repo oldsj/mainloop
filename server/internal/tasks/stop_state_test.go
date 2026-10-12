@@ -242,7 +242,7 @@ type stopProbeEndBeforeBrief struct {
 	once sync.Once
 }
 
-func (s *stopProbeEndBeforeBrief) SendToAs(ctx context.Context, source, sid, mid, text string) (sessions.Sent, error) {
+func (s *stopProbeEndBeforeBrief) SendToAs(ctx context.Context, source sessions.Source, sid, mid, text string) (sessions.Sent, error) {
 	var workspace bool
 	if err := s.r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=$1)`, sid).Scan(&workspace); err != nil {
 		return sessions.Sent{}, err

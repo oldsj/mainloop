@@ -7,3 +7,6 @@ var (
 	MessageID          = messageID
 	WorkspaceRequestID = workspaceRequestID
 )
+
+// ReportText is the text a report is delivered as.
+var ReportText = reportText

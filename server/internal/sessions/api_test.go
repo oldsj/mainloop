@@ -238,3 +238,16 @@ func TestASessionConversationMarksMessagesMainloopSent(t *testing.T) {
 		t.Fatalf("sources %v; want the prompt and %s user, %s mainloop", got, owned, brief)
 	}
 }
+
+// The contract's Message.source has two values; the column refuses any other.
+func TestADeliveryRefusesASourceTheContractDoesNotName(t *testing.T) {
+	e := newEnv(t)
+	e.withProviders()
+	id := e.newSession("first")
+	_, err := e.pool.Exec(context.Background(),
+		`INSERT INTO deliveries (id, idempotency_key, session_id, source) VALUES ($1, $1, $2, 'report')`,
+		uuid.NewString(), id)
+	if err == nil {
+		t.Fatal("a delivery with source 'report' was accepted")
+	}
+}
