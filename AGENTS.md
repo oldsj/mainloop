@@ -10,6 +10,7 @@ Mainloop manages attention, project continuity, and native AI coding-agent sessi
 - `docs/specs/` describes current user-visible behavior.
 - `docs/architecture.md` and `README.md` describe the existing implementation and may lag the roadmap until the relevant slice updates them.
 - `CONTRIBUTING.md` contains public contribution and code-style guidance.
+- `CLAUDE.md` only imports this file; edit `AGENTS.md` instead.
 
 When documents differ, do not silently blend future design with current behavior. Use `ROADMAP.md` for intended direction, the task request for current scope, and the specs and code for behavior that exists today. Update affected documentation when a change makes it inaccurate.
 
