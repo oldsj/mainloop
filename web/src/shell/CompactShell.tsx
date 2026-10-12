@@ -1,34 +1,24 @@
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
-import { Activity, FolderGit2, Inbox, ListTree, MessageSquare, Plus } from 'lucide-react';
+import { Activity, Compass, MessageSquare } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
+import { ChatStarters, ExplorerPane, useNeedsCount } from '@/features/explorer';
 import { HomeStrip } from '@/features/home';
-import { InboxBadge, unresolvedCount, useAttention } from '@/features/inbox';
-import { ownerTaskText, TasksBadge, tasksNeedingOwner, useTaskList } from '@/features/tasks';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
-import { InboxPanel, ProjectsPanel, SessionsPanel, WorkPanel } from './slots';
 import { ThemeSelector } from './ThemeSelector';
 import type { Tab } from './view';
 
 const TAB_ITEMS = [
   { tab: 'chat', label: 'Chat', Icon: MessageSquare },
-  { tab: 'sessions', label: 'Sessions', Icon: ListTree },
-  { tab: 'inbox', label: 'Inbox', Icon: Inbox },
-  { tab: 'projects', label: 'Projects', Icon: FolderGit2 }
+  { tab: 'explorer', label: 'Explorer', Icon: Compass }
 ] as const satisfies readonly { tab: Tab; label: string; Icon: unknown }[];
 
-/**
- * The tab's name. The Inbox tab carries its owner counts, so a screen reader announces them with
- * the tab, as the badges show them.
- */
-function tabName(id: Tab, label: string, needs: number, tasks: number): string {
-  if (id !== 'inbox') return label;
-  const parts = [label];
-  if (needs > 0) parts.push(`${needs} need you`);
-  if (tasks > 0) parts.push(ownerTaskText(tasks));
-  return parts.join(', ');
+/** The tab's name. The Explorer tab carries the Needs-you count, so a screen reader announces it. */
+function tabName(id: Tab, label: string, needs: number): string {
+  if (id !== 'explorer' || needs === 0) return label;
+  return `${label}, ${needs} need you`;
 }
 
 /** Hides a tab's content without unmounting it, so its state survives switching away. */
@@ -41,11 +31,10 @@ function TabPane({ active, children }: { active: boolean; children: ReactNode })
 }
 
 /**
- * <1024 px: one pane at a time, switched by a bottom tab bar. The tab lives in the URL. A tab is
- * built the first time it opens and stays mounted after that, so a draft or a loaded list survives
- * a switch. The Inbox tab always mounts its badges, so attention keeps polling while another tab is
- * open. The Chat tab opens with the "Since you were here" line above the thread; the Projects tab
- * opens with the Work list above the project list.
+ * <1024 px: two panes, Chat and Explorer, switched by a bottom tab bar. The tab lives in the URL.
+ * A pane is built the first time it opens and stays mounted after that, so a draft survives a
+ * switch. The Explorer tab always shows the Needs-you count, so attention keeps polling while the
+ * chat is open. The Chat tab opens with the "Since you were here" line above the thread.
  */
 export function CompactShell({
   tab,
@@ -58,8 +47,7 @@ export function CompactShell({
 }) {
   const navigate = useNavigate();
   const onHome = useRouterState({ select: (state) => state.location.pathname === '/' });
-  const needs = unresolvedCount(useAttention().data);
-  const tasks = tasksNeedingOwner(useTaskList().data ?? []).length;
+  const needs = useNeedsCount();
   const [opened, setOpened] = useState<ReadonlySet<Tab>>(() => new Set([tab]));
   // Adjusts state during render, the React way to derive it from a prop: the first visit adds the tab.
   if (!opened.has(tab)) setOpened(new Set([...opened, tab]));
@@ -82,14 +70,6 @@ export function CompactShell({
           >
             <Activity aria-hidden="true" />
           </Link>
-          <Link
-            to="/agents"
-            data-testid="header-new-agent"
-            aria-label="New agent session"
-            className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }))}
-          >
-            <Plus aria-hidden="true" />
-          </Link>
           <ThemeSelector />
         </nav>
       </header>
@@ -103,33 +83,15 @@ export function CompactShell({
                   <HomeStrip lastVisit={lastVisit} compact />
                 </PanelBoundary>
               )}
+              {onHome && <ChatStarters />}
               <div className="min-h-0 flex-1">{children}</div>
             </div>
           </TabPane>
         )}
-        {opened.has('sessions') && (
-          <TabPane active={tab === 'sessions'}>
-            <PanelBoundary name="Sessions">
-              <SessionsPanel />
-            </PanelBoundary>
-          </TabPane>
-        )}
-        {opened.has('inbox') && (
-          <TabPane active={tab === 'inbox'}>
-            <PanelBoundary name="Inbox">
-              <InboxPanel />
-            </PanelBoundary>
-          </TabPane>
-        )}
-        {opened.has('projects') && (
-          <TabPane active={tab === 'projects'}>
-            <div className="border-border border-b">
-              <PanelBoundary name="Work">
-                <WorkPanel lastVisit={lastVisit} />
-              </PanelBoundary>
-            </div>
-            <PanelBoundary name="Projects">
-              <ProjectsPanel />
+        {opened.has('explorer') && (
+          <TabPane active={tab === 'explorer'}>
+            <PanelBoundary name="Explorer">
+              <ExplorerPane />
             </PanelBoundary>
           </TabPane>
         )}
@@ -144,7 +106,7 @@ export function CompactShell({
             key={id}
             type="button"
             data-testid={`tab-${id}`}
-            aria-label={tabName(id, label, needs, tasks)}
+            aria-label={tabName(id, label, needs)}
             aria-pressed={tab === id}
             onClick={() =>
               void navigate({
@@ -160,13 +122,16 @@ export function CompactShell({
               tab === id ? 'bg-accent text-accent-foreground font-bold' : 'text-muted-foreground'
             )}
           >
-            {/* The icon takes the middle column, so the badges beside it do not pull it off centre. */}
+            {/* The icon takes the middle column, so the badge beside it does not pull it off centre. */}
             <span className="gap-xs grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center">
               <Icon className="col-start-2 size-4" aria-hidden="true" />
-              {id === 'inbox' && (
-                <span className="col-start-3 flex items-center gap-0.5 justify-self-start">
-                  <InboxBadge />
-                  <TasksBadge compact />
+              {id === 'explorer' && needs > 0 && (
+                <span
+                  data-testid="explorer-needs-badge"
+                  aria-hidden="true"
+                  className="border-term-yellow text-term-yellow col-start-3 justify-self-start border px-1 text-xs tabular-nums"
+                >
+                  {needs}
                 </span>
               )}
             </span>

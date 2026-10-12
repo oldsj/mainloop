@@ -48,7 +48,9 @@ export const baseHandlers = [
   http.get(url('/activity'), () => HttpResponse.json(activity)),
   http.get(url('/projects'), () => HttpResponse.json(projects)),
   http.get(url('/workspaces'), () => HttpResponse.json(workspaces)),
-  http.get(url('/tasks'), () => HttpResponse.json(tasks))
+  http.get(url('/tasks'), () => HttpResponse.json(tasks)),
+  // The explorer reads schedules on every shell, so an empty page is the default.
+  http.get(url('/schedules'), () => HttpResponse.json({ items: [], next_page_token: null }))
 ];
 
 /**

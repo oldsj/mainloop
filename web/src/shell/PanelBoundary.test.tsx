@@ -1,3 +1,4 @@
+import type * as Explorer from '@/features/explorer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -7,15 +8,20 @@ import { createAppRouter } from '@/router';
 
 const failing = vi.hoisted(() => ({ on: true }));
 
-vi.mock('./slots', () => ({
-  SessionsPanel: () => {
-    if (failing.on) throw new Error('sessions exploded');
-    return <section data-testid="sessions-panel">Sessions</section>;
-  },
-  InboxPanel: () => <section data-testid="inbox-panel">Inbox</section>,
-  ProjectsPanel: () => <section data-testid="projects-panel">Projects</section>,
-  WorkPanel: () => <section data-testid="work-panel">Work</section>
-}));
+vi.mock('@/features/explorer', async (importOriginal) => {
+  const actual = await importOriginal<typeof Explorer>();
+  return {
+    ...actual,
+    ExplorerAside: () => {
+      if (failing.on) throw new Error('explorer exploded');
+      return <section data-testid="explorer-aside">Explorer</section>;
+    },
+    ExplorerPane: () => {
+      if (failing.on) throw new Error('explorer exploded');
+      return <section data-testid="explorer-pane">Explorer</section>;
+    }
+  };
+});
 
 function setViewport(wide: boolean) {
   window.matchMedia = ((query: string) =>
@@ -37,7 +43,7 @@ async function renderAt(url: string) {
   );
   await waitFor(() =>
     expect(
-      screen.queryByTestId('inbox-panel') ?? screen.queryByTestId('compact-shell')
+      screen.queryByTestId('desktop-shell') ?? screen.queryByTestId('compact-shell')
     ).not.toBeNull()
   );
 }
@@ -50,25 +56,23 @@ describe('panel error boundaries', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('keeps the other desktop panels when one panel throws, and retries on request', async () => {
+  it('keeps the chat when the explorer throws, and retries on request', async () => {
     setViewport(true);
     await renderAt('/');
-    expect(await screen.findByTestId('panel-error-sessions')).toHaveTextContent(
-      'sessions exploded'
+    expect(await screen.findByTestId('panel-error-explorer')).toHaveTextContent(
+      'explorer exploded'
     );
-    expect(screen.getByTestId('inbox-panel')).toBeInTheDocument();
-    expect(screen.getByTestId('projects-panel')).toBeInTheDocument();
     expect(screen.getByTestId('main-thread')).toBeInTheDocument();
 
     failing.on = false;
     await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
-    expect(await screen.findByTestId('sessions-panel')).toBeInTheDocument();
+    expect(await screen.findByTestId('explorer-aside')).toBeInTheDocument();
   });
 
-  it('contains a failing panel in the compact shell too', async () => {
+  it('contains a failing explorer in the compact shell too', async () => {
     setViewport(false);
-    await renderAt('/?tab=sessions');
-    expect(await screen.findByTestId('panel-error-sessions')).toBeInTheDocument();
+    await renderAt('/?tab=explorer');
+    expect(await screen.findByTestId('panel-error-explorer')).toBeInTheDocument();
     expect(screen.getByTestId('mobile-tab-bar')).toBeInTheDocument();
   });
 });

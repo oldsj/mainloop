@@ -8,31 +8,26 @@ the loading message. Retrying requests the details for the current project.
 
 ## Desktop
 
-- Chat takes main area
-- Sessions sidebar always visible on the right; the inbox and projects below it size to their content. The projects section also holds the **New workspace** control (repository, optional branch).
-- Sessions default to current work. **Show finished (N)** reveals history without clearing it;
-  available idle sessions have their own **Show idle (N)** filter.
-- The inbox defaults to **Needs you** with a badge for unresolved owner actions. Its **Activity**
-  tab holds quieter FYIs and unverified provider reports. Empty attention says **Nothing needs you**.
-- The header has a **health** link to orchestration health, beside **new agent session**.
-- No tab bar
+- Chat takes the main area. The **since you were here** strip sits above the thread on the home route (`/`).
+- Explorer panel on the right, styled like an IDE sidebar. It is resizable (240–480 px, default 384) and collapses to a thin rail with the Needs-you count. Width, collapsed state and each node’s expanded state are kept per browser in local storage.
+- Explorer tree, top to bottom: **Mainloop** (idle, working or waiting on you; its children are the live sessions; clicking it opens the main chat), **Needs you** (expanded by default, with a count), **Working**, **Projects** (each project holds its tasks, and each task its sessions and workspaces), **Schedules**, **Finished recently** (collapsed by default, capped at ten), and **Health** (one row whose dot shows the backend connection).
+- Each tree row has an **Ask Mainloop** button, visible on hover or focus. It opens the main chat with the composer filled, not sent, for example `About task <title> (<short id>): `. The **a** key does the same from a focused row. A context menu and long-press are not built.
+- The tree is keyboard driven: up and down move, right expands, left collapses, Enter opens, and the focused row has a visible ring.
+- The explorer header carries the hint **Ask Mainloop to start, stop or change anything.**
+- There is no create button for tasks, agents or workspaces in the header or the explorer. Work starts from the main chat. The **New workspace** control stays on the project page (repository, optional branch).
+- The header has a **health** link to orchestration health and the theme selector.
+- Empty main chat shows suggestion chips: **What needs me?**, **Start a task in <first project>:**, **What’s running?** and **Pause a schedule:**. Each fills the composer without sending.
 
 ## Mobile
 
-- The header has an icon link to orchestration health, labelled "Orchestration health", beside the new-session icon.
-- Bottom tab bar with Chat, Sessions, Inbox and Projects tabs (the Sessions tab includes the "+ agent" link). It has at most five tabs, each labelled in one short word. The four tabs are, in order: Chat, Sessions, Inbox, Projects.
+- The header has an icon link to orchestration health, labelled "Orchestration health", and the theme selector.
+- Bottom tab bar with two tabs, **Chat** and **Explorer**. The Explorer tab shows the Needs-you count, and its accessible name includes it. The explorer shows the same tree full width.
 - Chat tab active by default on load
 - Tab bar hidden on desktop viewports
 - Touch targets sized appropriately for mobile interaction
-- Tabs switch between the Chat, Sessions, Inbox and Projects views
-- A session bound to a task is listed under the task's title, with the repository as secondary text. Other sessions keep their own title.
-- Sessions use the same current/history filters as desktop. Inbox contains **Needs you** and
-  **Activity**; the Inbox badge excludes Activity. Filter and inbox-view controls are at least
-  44px tall and wrap within the available width.
-- Switching tabs keeps what each tab holds, such as a draft or a loaded list. A tab is built the
-  first time it opens.
-- The header and tab bar stay clear of the device's safe areas (notch, rounded corners and the
-  home indicator).
+- Old `?tab=` values (`sessions`, `inbox`, `projects`) open the Explorer tab.
+- Switching tabs keeps what each tab holds, such as a draft or an open tree. A tab is built the first time it opens.
+- The header and tab bar stay clear of the device’s safe areas (notch, rounded corners and the home indicator).
 
 ## Shell
 
@@ -44,11 +39,11 @@ the loading message. Retrying requests the details for the current project.
 
 ## Home
 
-- **Work list**: tasks grouped as **Needs you**, **Working**, **Blocked or failed**, and **Finished since you last looked**. A task appears once, in the first group that fits. Each row shows the title, project, a one-line status with its reason (a task waiting on approval reads **Waiting for your approval**), the relative last update time, and links to the task. Running and queued tasks are current work, so **Working** always shows; with nothing running it reads **Nothing running. Start work from the main chat.** Each group shows five rows, then a **Show all (N)** toggle that becomes **Show fewer**, so a long list does not push Sessions and Inbox out of reach.
+- **Not mounted (superseded by the explorer)**: the work list component is kept but no route renders it. Its grouping, for reference: tasks grouped as **Needs you**, **Working**, **Blocked or failed**, and **Finished since you last looked**. A task appears once, in the first group that fits. Each row shows the title, project, a one-line status with its reason (a task waiting on approval reads **Waiting for your approval**), the relative last update time, and links to the task. Running and queued tasks are current work, so **Working** always shows; with nothing running it reads **Nothing running. Start work from the main chat.** Each group shows five rows, then a **Show all (N)** toggle that becomes **Show fewer**, so a long list does not push Sessions and Inbox out of reach.
 - **Since you were here**: counts of tasks waiting on you, failed, and merged since the last visit, each linking to the most recent one. It is hidden when nothing changed, and on a first visit, which has no baseline. On the phone it is one line that scrolls sideways rather than wrapping, and it shows only on the main chat (`/`), not above agent or task pages.
-- **Last visit**: kept per browser in local storage. The app shell reads it once when it opens and records the current time, so the desktop aside and the phone tabs share one baseline. Because the desktop aside shows on every route, the visit is the app's last open, not only the last time home was shown. This is deliberate: the baseline is the last app open, not the last home view. If storage is blocked, the strip and the finished group simply have no baseline.
+- **Last visit**: kept per browser in local storage. The app shell reads it once when it opens and records the current time, so the desktop explorer and the phone tabs share one baseline. Because the desktop explorer shows on every route, the visit is the app's last open, not only the last time home was shown. This is deliberate: the baseline is the last app open, not the last home view. If storage is blocked, the strip and the finished group simply have no baseline.
 - **Updates**: the list refreshes from the same task invalidation as the task pages. The relative times refresh each minute on the page.
-- **Placement**: on desktop the work list and the strip sit at the top of the right-hand aside, above sessions, inbox and projects; the centre column is the chat alone. On the phone the strip sits above the main chat on the Chat tab, and the work list sits first in the Projects tab, above the project list. The tab count stays at four.
+- **Placement**: the strip sits above the main chat, on desktop and on the phone Chat tab, and only on the home route.
 - **Not proven**: the strip with content in a browser. Phone (390×844) and desktop (1440×900) layouts were checked in a browser against fixtures with no tasks, so only the empty states were seen; the strip and list rows are covered by unit tests.
 
 ## Tasks

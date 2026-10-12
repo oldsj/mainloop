@@ -1,10 +1,8 @@
-import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { ApiError } from '@/api';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Skeleton } from '@/components/shared/skeleton';
-import { Button, buttonVariants } from '@/components/ui/button';
-import { cn } from '@/components/ui/cn';
+import { Button } from '@/components/ui/button';
 import { useTaskList } from '@/features/tasks';
 import { taskForSession } from '@/lib/taskState';
 import { SessionRow } from './SessionRow';
@@ -54,14 +52,6 @@ export function SessionsPanel() {
           >
             Refresh
           </Button>
-          <Link
-            to="/agents"
-            search={(prev) => ({ ...prev, tab: undefined })}
-            data-testid="new-agent-link"
-            className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
-          >
-            + agent
-          </Link>
         </div>
       </div>
 
@@ -126,9 +116,7 @@ export function SessionsPanel() {
       ) : rows.length === 0 ? (
         <div className="text-sm">
           <p className="font-medium">No active sessions</p>
-          <p className="text-muted-foreground">
-            Start one with “+ agent”, or delegate work to create one.
-          </p>
+          <p className="text-muted-foreground">Mainloop starts one when you ask it in chat.</p>
         </div>
       ) : (
         <ul aria-label="Session list" className="gap-xs flex flex-col">

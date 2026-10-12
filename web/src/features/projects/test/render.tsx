@@ -10,7 +10,6 @@ import {
 } from '@tanstack/react-router';
 import { render } from '@testing-library/react';
 import { ProjectPage } from '../ProjectPage';
-import { ProjectsPanel } from '../ProjectsPanel';
 
 function ProjectRoute() {
   const { id } = useParams({ strict: false });
@@ -33,7 +32,11 @@ export function renderProjects(initialPath: string) {
   const root = createRootRoute({ component: Outlet });
   const router = createRouter({
     routeTree: root.addChildren([
-      createRoute({ getParentRoute: () => root, path: '/', component: ProjectsPanel }),
+      createRoute({
+        getParentRoute: () => root,
+        path: '/',
+        component: () => <Stub label="Chat" />
+      }),
       createRoute({ getParentRoute: () => root, path: '/projects/$id', component: ProjectRoute }),
       createRoute({
         getParentRoute: () => root,

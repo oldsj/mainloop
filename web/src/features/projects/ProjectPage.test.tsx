@@ -636,18 +636,11 @@ describe('project page', () => {
   });
 });
 
-describe('project page new task', () => {
-  it('opens the main chat with the composer prefilled, and does not send', async () => {
+describe('project page creates nothing', () => {
+  it('has no new-task button: tasks start from the main chat', async () => {
     server.use(...serveProjectPage());
-    const user = userEvent.setup();
-    const { router } = renderProjects(PAGE);
+    renderProjects(PAGE);
     await heading('acme/widgets');
-
-    await user.click(screen.getByRole('button', { name: 'New task' }));
-
-    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    expect(router.state.location.search).toEqual({
-      prefill: 'Start a task in acme/widgets: '
-    });
+    expect(screen.queryByRole('button', { name: 'New task' })).not.toBeInTheDocument();
   });
 });

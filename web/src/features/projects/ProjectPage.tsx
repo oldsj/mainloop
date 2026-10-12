@@ -100,11 +100,6 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
     (workspace) => workspace.manifest.repo_url === project.html_url
   );
 
-  // There is no task-create endpoint yet, so a new task starts in the main chat: the composer is
-  // prefilled with the project name and left unsent for the owner to finish.
-  const startTask = () =>
-    void navigate({ to: '/', search: { prefill: `Start a task in ${project.full_name}: ` } });
-
   const startWorkspace = (target: { branch: string; agentKind: AgentKind }) => {
     if (create.pending || uncertain) return;
     create.mutate(
@@ -181,9 +176,6 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
           <h2 id="project-tasks-heading" className="text-lg font-medium">
             Tasks
           </h2>
-          <Button type="button" variant="outline" size="sm" onClick={startTask}>
-            New task
-          </Button>
         </div>
         {tasks ?? <p className="text-muted-foreground text-sm">No tasks for this project yet.</p>}
       </section>

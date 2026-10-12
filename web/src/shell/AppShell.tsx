@@ -3,10 +3,10 @@ import { useLastVisit } from '@/features/home';
 import { ConnectionBanner } from './ConnectionBanner';
 import { CompactShell } from './CompactShell';
 import { DesktopShell } from './DesktopShell';
-import { resolveView, useIsWide, type Tab, type View } from './view';
+import { resolveTab, resolveView, useIsWide, type ShellSearch, type View } from './view';
 
 /** Picks the desktop or compact layout from `?view=` or the viewport. */
-export function AppShell({ view, tab }: { view?: View; tab?: Tab }) {
+export function AppShell({ view, tab }: { view?: View; tab?: ShellSearch['tab'] }) {
   const isWide = useIsWide();
   const resolved = resolveView(view, isWide);
   // One baseline for the whole shell: both layouts compare against the same previous visit.
@@ -22,7 +22,7 @@ export function AppShell({ view, tab }: { view?: View; tab?: Tab }) {
           <Outlet />
         </DesktopShell>
       ) : (
-        <CompactShell tab={tab ?? 'chat'} lastVisit={lastVisit}>
+        <CompactShell tab={resolveTab(tab)} lastVisit={lastVisit}>
           <Outlet />
         </CompactShell>
       )}

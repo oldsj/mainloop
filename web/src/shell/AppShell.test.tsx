@@ -5,9 +5,10 @@ import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { attentionRead } from '@/features/inbox/test/handlers';
-import { attentionSnapshot } from '@/features/inbox/test/fixtures';
+import { attentionSnapshot, hitlAttentionItem } from '@/features/inbox/test/fixtures';
 import { writeLastVisit } from '@/features/home/lastVisit';
-import { serveProjectPage } from '@/features/projects/test/handlers';
+import { projectsRead, serveProjectPage } from '@/features/projects/test/handlers';
+import { project } from '@/features/projects/test/fixtures';
 import { tasksList } from '@/features/tasks/test/handlers';
 import type * as ConnectionModule from '@/api/connection';
 import { connection } from '@/api/connection';
@@ -68,21 +69,12 @@ describe('shell switch', () => {
     expect(screen.queryByTestId('mobile-tab-bar')).not.toBeInTheDocument();
   });
 
-  it('renders each real panel inside its desktop slot', async () => {
+  it('renders the explorer as the desktop aside, with the tree', async () => {
     setViewport(true);
     await renderAt('/');
-    const sessions = screen.getByTestId('sessions-panel');
-    const inbox = screen.getByTestId('inbox-panel');
-    expect(await within(sessions).findByRole('heading', { name: 'Sessions' })).toBeInTheDocument();
-    expect(await within(inbox).findByRole('heading', { name: 'Inbox' })).toBeInTheDocument();
-  });
-
-  it('renders the projects panel in the desktop aside', async () => {
-    setViewport(true);
-    await renderAt('/');
-    const aside = screen.getByRole('complementary', { name: 'Work, sessions, inbox and projects' });
-    const projects = within(aside).getByTestId('projects-panel');
-    expect(await within(projects).findByRole('heading', { name: 'Projects' })).toBeInTheDocument();
+    const aside = screen.getByRole('complementary', { name: 'Explorer' });
+    expect(await within(aside).findByRole('tree')).toBeInTheDocument();
+    expect(screen.getByRole('main')).not.toContainElement(aside);
   });
 
   it('renders the compact shell on a narrow viewport', async () => {
@@ -98,20 +90,33 @@ describe('shell switch', () => {
     expect(screen.getByTestId('compact-shell')).toBeInTheDocument();
   });
 
-  it('shows the sessions panel when the sessions tab is selected', async () => {
+  it('shows the explorer tree when the explorer tab is selected', async () => {
     setViewport(false);
-    await renderAt('/?tab=sessions');
-    expect(screen.getByTestId('sessions-panel')).toBeInTheDocument();
-    expect(screen.getByTestId('tab-sessions')).toHaveAttribute('aria-pressed', 'true');
+    await renderAt('/?tab=explorer');
+    expect(await screen.findByRole('tree')).toBeVisible();
+    expect(screen.getByTestId('tab-explorer')).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('switches tabs from the tab bar', async () => {
     setViewport(false);
     const user = userEvent.setup();
     await renderAt('/');
-    await user.click(screen.getByTestId('tab-inbox'));
-    expect(await screen.findByTestId('inbox-panel')).toBeInTheDocument();
+    await user.click(screen.getByTestId('tab-explorer'));
+    expect(await screen.findByRole('tree')).toBeVisible();
+    await user.click(screen.getByTestId('tab-chat'));
+    expect(screen.getByTestId('tab-chat')).toHaveAttribute('aria-pressed', 'true');
   });
+
+  it.each(['sessions', 'inbox', 'projects'])(
+    'maps the old ?tab=%s value to the explorer tab',
+    async (legacy) => {
+      setViewport(false);
+      await renderAt(`/?tab=${legacy}`);
+      expect(await screen.findByRole('tree')).toBeVisible();
+      expect(screen.getByTestId('tab-explorer')).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByTestId('tab-chat')).toHaveAttribute('aria-pressed', 'false');
+    }
+  );
 });
 
 describe('?view= override', () => {
@@ -119,8 +124,8 @@ describe('?view= override', () => {
     setViewport(true);
     const user = userEvent.setup();
     const router = await renderAt('/?view=compact');
-    await user.click(screen.getByTestId('header-new-agent'));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/agents'));
+    await user.click(screen.getByTestId('header-health'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/health'));
     expect(router.state.location.search).toMatchObject({ view: 'compact' });
     expect(screen.getByTestId('compact-shell')).toBeInTheDocument();
   });
@@ -183,31 +188,36 @@ describe('theme selector', () => {
 });
 
 describe('compact tab badges', () => {
-  it('shows the Needs-you count on the Inbox tab, read from GET /attention', async () => {
+  it('shows the Needs-you count on the Explorer tab, read from GET /attention', async () => {
     setViewport(false);
-    server.use(attentionRead(() => HttpResponse.json(attentionSnapshot([], 3))));
+    server.use(
+      attentionRead(() =>
+        HttpResponse.json(
+          attentionSnapshot(['a', 'b', 'c'].map((id) => hitlAttentionItem(`req-${id}`)))
+        )
+      )
+    );
     await renderAt('/');
-    expect(await screen.findByTestId('inbox-badge')).toHaveTextContent('3');
-    expect(screen.getByTestId('tab-inbox')).toHaveAccessibleName('Inbox, 3 need you');
+    expect(await screen.findByTestId('explorer-needs-badge')).toHaveTextContent('3');
+    expect(screen.getByTestId('tab-explorer')).toHaveAccessibleName('Explorer, 3 need you');
   });
 
   it('shows no count when nothing needs the owner', async () => {
     setViewport(false);
     await renderAt('/');
-    expect(screen.queryByTestId('inbox-badge')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('tasks-badge')).not.toBeInTheDocument();
-    expect(screen.getByTestId('tab-inbox')).toHaveAccessibleName('Inbox');
+    expect(screen.queryByTestId('explorer-needs-badge')).not.toBeInTheDocument();
+    expect(screen.getByTestId('tab-explorer')).toHaveAccessibleName('Explorer');
   });
 
-  it('shows the owner-task count on the Inbox tab, read from GET /tasks', async () => {
+  it('counts a task that needs an owner decision, read from GET /tasks', async () => {
     setViewport(false);
     server.use(tasksList(() => HttpResponse.json([view({ reason: 'owner_decision' })])));
     await renderAt('/');
-    expect(await screen.findByTestId('tasks-badge')).toHaveTextContent('1');
-    expect(screen.getByTestId('tab-inbox')).toHaveAccessibleName('Inbox, 1 task needs you');
+    expect(await screen.findByTestId('explorer-needs-badge')).toHaveTextContent('1');
+    expect(screen.getByTestId('tab-explorer')).toHaveAccessibleName('Explorer, 1 need you');
   });
 
-  it('keeps polling attention while another tab is open', async () => {
+  it('keeps polling attention while the chat tab is open', async () => {
     setViewport(false);
     let reads = 0;
     server.use(
@@ -217,12 +227,11 @@ describe('compact tab badges', () => {
       })
     );
     await renderAt('/?tab=chat');
-    expect(screen.queryByTestId('inbox-panel')).not.toBeInTheDocument();
     // The shared poll starts at once and repeats about every four seconds, so this waits past one.
     await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2), { timeout: 6000 });
   });
 
-  it('updates the task count without a live event while another tab is open', async () => {
+  it('updates the count without a live event while the chat tab is open', async () => {
     setViewport(false);
     let needsOwner = true;
     let reads = 0;
@@ -233,14 +242,14 @@ describe('compact tab badges', () => {
       })
     );
     await renderAt('/?tab=chat');
-    expect(await screen.findByTestId('tasks-badge')).toHaveTextContent('1');
-    expect(screen.queryByTestId('inbox-panel')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('explorer-needs-badge')).toHaveTextContent('1');
     needsOwner = false;
-    await waitFor(() => expect(screen.queryByTestId('tasks-badge')).not.toBeInTheDocument(), {
-      timeout: 6000
-    });
+    await waitFor(
+      () => expect(screen.queryByTestId('explorer-needs-badge')).not.toBeInTheDocument(),
+      { timeout: 6000 }
+    );
     expect(reads).toBeGreaterThanOrEqual(2);
-    expect(screen.getByTestId('tab-inbox')).toHaveAccessibleName('Inbox');
+    expect(screen.getByTestId('tab-explorer')).toHaveAccessibleName('Explorer');
   });
 });
 
@@ -273,40 +282,30 @@ describe('page titles and focus', () => {
   });
 });
 
-describe('compact projects tab', () => {
-  it('has four short tabs, with Projects among them', async () => {
+describe('compact explorer tab', () => {
+  it('has two tabs, Chat and Explorer', async () => {
     setViewport(false);
     await renderAt('/');
     const bar = screen.getByTestId('mobile-tab-bar');
     const tabs = within(bar).getAllByRole('button');
-    expect(tabs.length).toBeLessThanOrEqual(5);
     expect(tabs.map((tab) => tab.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
       '[CHAT]',
-      '[SESSIONS]',
-      '[INBOX]',
-      '[PROJECTS]'
+      '[EXPLORER]'
     ]);
-    expect(screen.getByTestId('tab-projects')).toHaveAttribute('aria-label', 'Projects');
   });
 
-  it('opens the projects panel from its tab, and keeps it mounted after switching away', async () => {
+  it('opens the explorer from its tab, and keeps it mounted after switching away', async () => {
     setViewport(false);
     const user = userEvent.setup();
     await renderAt('/');
-    await user.click(screen.getByTestId('tab-projects'));
-    const projects = await screen.findByTestId('projects-panel');
-    expect(screen.getByTestId('tab-projects')).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByTestId('tab-explorer'));
+    const tree = await screen.findByRole('tree');
+    expect(screen.getByTestId('tab-explorer')).toHaveAttribute('aria-pressed', 'true');
     await user.click(screen.getByTestId('tab-chat'));
-    expect(projects).not.toBeVisible();
-    await user.click(screen.getByTestId('tab-projects'));
-    expect(screen.getByTestId('projects-panel')).toBe(projects);
-    expect(projects).toBeVisible();
-  });
-
-  it('opens from the URL with ?tab=projects', async () => {
-    setViewport(false);
-    await renderAt('/?tab=projects');
-    expect(await screen.findByTestId('projects-panel')).toBeVisible();
+    expect(tree).not.toBeVisible();
+    await user.click(screen.getByTestId('tab-explorer'));
+    expect(screen.getByRole('tree')).toBe(tree);
+    expect(tree).toBeVisible();
   });
 });
 
@@ -314,13 +313,13 @@ describe('compact tab state', () => {
   it('keeps an opened tab mounted when switching away and back', async () => {
     setViewport(false);
     const user = userEvent.setup();
-    await renderAt('/?tab=sessions');
-    const sessions = await screen.findByTestId('sessions-panel');
-    await user.click(screen.getByTestId('tab-inbox'));
-    expect(sessions).not.toBeVisible();
-    await user.click(screen.getByTestId('tab-sessions'));
-    expect(screen.getByTestId('sessions-panel')).toBe(sessions);
-    expect(sessions).toBeVisible();
+    await renderAt('/?tab=explorer');
+    const tree = await screen.findByRole('tree');
+    await user.click(screen.getByTestId('tab-chat'));
+    expect(tree).not.toBeVisible();
+    await user.click(screen.getByTestId('tab-explorer'));
+    expect(screen.getByRole('tree')).toBe(tree);
+    expect(tree).toBeVisible();
   });
 });
 
@@ -349,26 +348,15 @@ describe('home work placement', () => {
     );
   }
 
-  it('puts the work list and the strip at the top of the desktop aside, above sessions', async () => {
+  it('puts the strip above the thread in the desktop main column, not in the explorer', async () => {
     setViewport(true);
     serveFailedSinceVisit();
     await renderAt('/');
-    const aside = screen.getByRole('complementary', { name: 'Work, sessions, inbox and projects' });
-    const work = within(aside).getByTestId('work-panel');
-    expect(await within(work).findByTestId('since-strip')).toBeInTheDocument();
-    expect(within(work).getByTestId('work-list')).toBeInTheDocument();
-    const sessions = within(aside).getByTestId('sessions-panel');
-    expect(work.compareDocumentPosition(sessions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
-  it('keeps the work list and the strip out of the desktop centre column', async () => {
-    setViewport(true);
-    serveFailedSinceVisit();
-    await renderAt('/');
-    await screen.findByTestId('since-strip');
     const main = screen.getByRole('main');
-    expect(within(main).queryByTestId('work-list')).toBeNull();
-    expect(within(main).queryByTestId('since-strip')).toBeNull();
+    expect(await within(main).findByTestId('since-strip')).toBeInTheDocument();
+    const aside = screen.getByRole('complementary', { name: 'Explorer' });
+    expect(within(aside).queryByTestId('since-strip')).toBeNull();
+    expect(screen.queryByTestId('work-list')).toBeNull();
   });
 
   it('shows the strip as one line above the thread on the phone chat tab', async () => {
@@ -389,19 +377,6 @@ describe('home work placement', () => {
     await screen.findByTestId('compact-shell');
     expect(screen.queryByTestId('since-strip')).toBeNull();
     expect(screen.getByTestId('tab-chat')).toHaveAttribute('aria-pressed', 'true');
-  });
-
-  it('puts Work above the project list in the Projects tab', async () => {
-    setViewport(false);
-    const user = userEvent.setup();
-    serveFailedSinceVisit();
-    await renderAt('/');
-    await user.click(screen.getByTestId('tab-projects'));
-    const work = await screen.findByTestId('work-list');
-    const projects = await screen.findByTestId('projects-panel');
-    expect(work.compareDocumentPosition(projects) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(work).getByRole('heading', { name: 'Work' })).toBeInTheDocument();
-    expect(within(projects).queryByTestId('since-strip')).toBeNull();
   });
 
   it('records this visit when the shell opens, so the next one compares against it', async () => {
@@ -439,5 +414,63 @@ describe('offline banner', () => {
     expect(column).toContainElement(main);
     expect(banner.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     if (!wide) expect(column).toContainElement(screen.getByTestId('mobile-tab-bar'));
+  });
+});
+
+describe('explorer panel', () => {
+  it('folds the explorer to a rail, and opens it again from the rail', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    await renderAt('/');
+    await user.click(screen.getByRole('button', { name: 'Collapse explorer' }));
+    expect(screen.getByTestId('explorer-rail')).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem('mainloop.explorer.v1') ?? '{}')).toMatchObject({
+      collapsed: true
+    });
+    await user.click(screen.getByRole('button', { name: 'Show explorer' }));
+    expect(await screen.findByTestId('explorer-aside')).toBeInTheDocument();
+  });
+
+  it('resizes from the keyboard, clamps the width and remembers it', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    await renderAt('/');
+    const handle = screen.getByRole('separator', { name: 'Resize explorer' });
+    expect(handle).toHaveAttribute('aria-valuenow', '384');
+    handle.focus();
+    await user.keyboard('{ArrowLeft}{ArrowLeft}');
+    expect(handle).toHaveAttribute('aria-valuenow', '416');
+    await user.keyboard('{ArrowLeft}'.repeat(10));
+    expect(handle).toHaveAttribute('aria-valuenow', '480');
+    expect(JSON.parse(localStorage.getItem('mainloop.explorer.v1') ?? '{}')).toMatchObject({
+      width: 480
+    });
+  });
+});
+
+describe('chat starters', () => {
+  it('suggests starters on an empty chat, and fills the composer from one without sending', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    await renderAt('/');
+    const group = await screen.findByRole('group', { name: 'Suggestions' });
+    expect(within(group).getByRole('button', { name: 'What needs me?' })).toBeInTheDocument();
+    expect(within(group).getByRole('button', { name: "What's running?" })).toBeInTheDocument();
+    expect(within(group).getByRole('button', { name: 'Pause a schedule' })).toBeInTheDocument();
+    expect(within(group).queryByRole('button', { name: /^Start a task in/ })).toBeNull();
+
+    await user.click(within(group).getByRole('button', { name: "What's running?" }));
+    // The composer takes the text once and the route clears it, so the box is what to check.
+    expect(await screen.findByRole('textbox', { name: 'Message' })).toHaveValue("What's running?");
+  });
+
+  it('offers to start a task in the first project', async () => {
+    server.use(projectsRead([project()]));
+    setViewport(false);
+    await renderAt('/');
+    const group = await screen.findByRole('group', { name: 'Suggestions' });
+    expect(
+      await within(group).findByRole('button', { name: 'Start a task in acme/widgets' })
+    ).toBeInTheDocument();
   });
 });

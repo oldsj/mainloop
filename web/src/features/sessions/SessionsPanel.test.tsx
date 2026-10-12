@@ -138,12 +138,11 @@ describe('sessions list', () => {
     expect(router.state.location.pathname).toBe('/sessions/s1');
   });
 
-  it('opens the new-agent form from the "+ agent" link', async () => {
+  it('has no new-agent link: agents are started by asking Mainloop in chat', async () => {
     server.use(...serveList([]));
-    const user = userEvent.setup();
     renderSessions('/');
-    await user.click(await screen.findByTestId('new-agent-link'));
-    expect(await screen.findByRole('heading', { name: 'New agent session' })).toBeInTheDocument();
+    await screen.findByText('No active sessions');
+    expect(screen.queryByTestId('new-agent-link')).not.toBeInTheDocument();
   });
 
   it('shows placeholder rows under the loading text until the first read settles', async () => {

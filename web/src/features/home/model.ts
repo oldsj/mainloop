@@ -56,7 +56,7 @@ export function workGroup(view: TaskView, lastVisit: number | null): WorkGroup |
   return null;
 }
 
-function statusLine(view: TaskView): string {
+export function statusLine(view: TaskView): string {
   // An approval gate says what the owner must do, whatever the task's own status is.
   if (view.task.reason === 'approval' || (view.projection.pending_approval_ids ?? []).length > 0) {
     return 'Waiting for your approval';
