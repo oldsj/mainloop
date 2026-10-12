@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { SessionPage } from '@/features/sessions';
 
 export const Route = createFileRoute('/sessions/$id')({
+  head: () => ({ meta: [{ title: 'Session · Mainloop' }] }),
   component: Session
 });
 

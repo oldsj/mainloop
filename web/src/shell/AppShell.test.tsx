@@ -232,3 +232,56 @@ describe('compact tab badges', () => {
     expect(screen.getByTestId('tab-inbox')).toHaveAccessibleName('Inbox');
   });
 });
+
+describe('page titles and focus', () => {
+  it('titles the page for its route', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    const router = await renderAt('/');
+    await waitFor(() => expect(document.title).toBe('Chat · Mainloop'));
+    await user.click(screen.getByTestId('header-health'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/health'));
+    await waitFor(() => expect(document.title).toBe('Health · Mainloop'));
+  });
+
+  it('moves focus to the main landmark after a route change', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    const router = await renderAt('/');
+    await user.click(screen.getByTestId('header-health'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/health'));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(document.getElementById('main-content'))
+    );
+  });
+
+  it('leaves focus alone on the page the app opens on', async () => {
+    setViewport(true);
+    await renderAt('/health');
+    expect(document.activeElement).not.toBe(document.getElementById('main-content'));
+  });
+});
+
+describe('compact tab state', () => {
+  it('keeps an opened tab mounted when switching away and back', async () => {
+    setViewport(false);
+    const user = userEvent.setup();
+    await renderAt('/?tab=sessions');
+    const sessions = await screen.findByTestId('sessions-panel');
+    await user.click(screen.getByTestId('tab-inbox'));
+    expect(sessions).not.toBeVisible();
+    await user.click(screen.getByTestId('tab-sessions'));
+    expect(screen.getByTestId('sessions-panel')).toBe(sessions);
+    expect(sessions).toBeVisible();
+  });
+});
+
+describe('project page title', () => {
+  it('keeps the project page title as the only title element', async () => {
+    setViewport(true);
+    server.use(...serveProjectPage());
+    await renderAt('/projects/project-a');
+    await waitFor(() => expect(document.title).toBe('acme/widgets - mainloop'));
+    expect(document.querySelectorAll('title')).toHaveLength(1);
+  });
+});

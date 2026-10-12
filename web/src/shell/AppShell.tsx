@@ -8,8 +8,11 @@ import { resolveView, useIsWide, type Tab, type View } from './view';
 export function AppShell({ view, tab }: { view?: View; tab?: Tab }) {
   const isWide = useIsWide();
   const resolved = resolveView(view, isWide);
+  // The banner is the first row of the screen-high column, so it takes height from the shell
+  // instead of pushing the composer and tab bar off screen. The top and side insets keep the header
+  // clear of a notch or a rounded corner; the bottom inset belongs to the tab bar.
   return (
-    <>
+    <div className="flex h-dvh flex-col pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)]">
       <ConnectionBanner />
       {resolved === 'desktop' ? (
         <DesktopShell>
@@ -20,6 +23,6 @@ export function AppShell({ view, tab }: { view?: View; tab?: Tab }) {
           <Outlet />
         </CompactShell>
       )}
-    </>
+    </div>
   );
 }

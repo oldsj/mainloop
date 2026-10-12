@@ -1,7 +1,12 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { createRootRouteWithContext, retainSearchParams } from '@tanstack/react-router';
+import {
+  createRootRouteWithContext,
+  HeadContent,
+  retainSearchParams
+} from '@tanstack/react-router';
 import { AppShell } from '@/shell/AppShell';
 import { LiveUpdates } from '@/shell/LiveUpdates';
+import { RouteFocus } from '@/shell/RouteFocus';
 import { shellSearchSchema } from '@/shell/view';
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
@@ -15,7 +20,9 @@ function RootLayout() {
   const { view, tab } = Route.useSearch();
   return (
     <>
+      <HeadContent />
       <LiveUpdates />
+      <RouteFocus />
       <AppShell view={view} tab={tab} />
     </>
   );

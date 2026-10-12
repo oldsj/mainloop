@@ -6,6 +6,7 @@ export const Route = createFileRoute('/')({
   // `hitl` puts that approval card at the top of the thread.
   validateSearch: (search) =>
     z.object({ hitl: z.string().optional().catch(undefined) }).parse(search),
+  head: () => ({ meta: [{ title: 'Chat · Mainloop' }] }),
   component: MainThread
 });
 

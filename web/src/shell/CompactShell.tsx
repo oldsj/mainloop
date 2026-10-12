@@ -1,10 +1,11 @@
 import { Link, useNavigate } from '@tanstack/react-router';
 import { Activity, Inbox, ListTree, MessageSquare, Plus } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import { InboxBadge, unresolvedCount, useAttention } from '@/features/inbox';
 import { ownerTaskText, TasksBadge, tasksNeedingOwner, useTaskList } from '@/features/tasks';
+import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
 import { InboxPanel, SessionsPanel } from './slots';
 import { ThemeSelector } from './ThemeSelector';
@@ -28,16 +29,30 @@ function tabName(id: Tab, label: string, needs: number, tasks: number): string {
   return parts.join(', ');
 }
 
+/** Hides a tab's content without unmounting it, so its state survives switching away. */
+function TabPane({ active, children }: { active: boolean; children: ReactNode }) {
+  return (
+    <div hidden={!active} className="h-full">
+      {children}
+    </div>
+  );
+}
+
 /**
- * <1024 px: one pane at a time, switched by a bottom tab bar. The tab lives in the URL. The Inbox
- * tab always mounts its badges, so attention keeps polling while another tab is open.
+ * <1024 px: one pane at a time, switched by a bottom tab bar. The tab lives in the URL. A tab is
+ * built the first time it opens and stays mounted after that, so a draft or a loaded list survives
+ * a switch. The Inbox tab always mounts its badges, so attention keeps polling while another tab is
+ * open.
  */
 export function CompactShell({ tab, children }: { tab: Tab; children: ReactNode }) {
   const navigate = useNavigate();
   const needs = unresolvedCount(useAttention().data);
   const tasks = tasksNeedingOwner(useTaskList().data ?? []).length;
+  const [opened, setOpened] = useState<ReadonlySet<Tab>>(() => new Set([tab]));
+  // Adjusts state during render, the React way to derive it from a prop: the first visit adds the tab.
+  if (!opened.has(tab)) setOpened(new Set([...opened, tab]));
   return (
-    <div data-testid="compact-shell" className="flex h-dvh flex-col">
+    <div data-testid="compact-shell" className="flex min-h-0 flex-1 flex-col">
       <header className="gap-sm border-border px-md flex items-center border-b">
         <Link
           to="/"
@@ -66,17 +81,21 @@ export function CompactShell({ tab, children }: { tab: Tab; children: ReactNode 
           <ThemeSelector />
         </nav>
       </header>
-      <main className="min-h-0 flex-1 overflow-y-auto">
-        {tab === 'chat' && children}
-        {tab === 'sessions' && (
-          <PanelBoundary name="Sessions">
-            <SessionsPanel />
-          </PanelBoundary>
+      <main id={MAIN_ID} tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto outline-none">
+        {opened.has('chat') && <TabPane active={tab === 'chat'}>{children}</TabPane>}
+        {opened.has('sessions') && (
+          <TabPane active={tab === 'sessions'}>
+            <PanelBoundary name="Sessions">
+              <SessionsPanel />
+            </PanelBoundary>
+          </TabPane>
         )}
-        {tab === 'inbox' && (
-          <PanelBoundary name="Inbox">
-            <InboxPanel />
-          </PanelBoundary>
+        {opened.has('inbox') && (
+          <TabPane active={tab === 'inbox'}>
+            <PanelBoundary name="Inbox">
+              <InboxPanel />
+            </PanelBoundary>
+          </TabPane>
         )}
       </main>
       <nav

@@ -28,6 +28,18 @@ the loading message. Retrying requests the details for the current project.
 - Sessions use the same current/history filters as desktop. Inbox contains **Needs you** and
   **Activity**; the Inbox badge excludes Activity. Filter and inbox-view controls are at least
   44px tall and wrap within the available width.
+- Switching tabs keeps what each tab holds, such as a draft or a loaded list. A tab is built the
+  first time it opens.
+- The header and tab bar stay clear of the device's safe areas (notch, rounded corners and the
+  home indicator).
+
+## Shell
+
+- The offline banner is one line at the top of the screen. It takes its height from the page, so
+  the composer and the tab bar stay on screen at 390 × 844. Long text is cut off with an ellipsis.
+- Each page sets the document title, for example **Health · Mainloop**.
+- A route change moves keyboard focus to the main landmark, so focus does not fall back to the
+  page body.
 
 ## Tasks
 

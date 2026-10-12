@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { ScheduleDetailPage } from '@/features/schedules';
 
 export const Route = createFileRoute('/schedules/$id')({
+  head: () => ({ meta: [{ title: 'Schedule · Mainloop' }] }),
   component: Schedule
 });
 

@@ -105,7 +105,7 @@ mainloop/
 
 ## UI
 
-- **Mobile**: Bottom tab bar (Chat / Sessions)
+- **Mobile**: Bottom tab bar (Chat / Sessions / Inbox)
 - **Desktop**: Chat with always-visible Sessions sidebar
 
 **Chat** — your main thread with inline sessions:
