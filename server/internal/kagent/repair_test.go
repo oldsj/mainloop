@@ -499,11 +499,13 @@ func TestEmptyIdentifiersAreRefusedWithoutARequest(t *testing.T) {
 func TestPrepareNeedsExactlyOneReadAndOnePushReference(t *testing.T) {
 	read, push := gitProxyCredentials()[0], gitProxyCredentials()[1]
 	cases := map[string][]*api.SessionCredential{
-		"none":      nil,
-		"read only": {read},
-		"push only": {push},
-		"two reads": {read, read},
-		"wrong key": {read, {Origin: push.Origin, Header: "authorization", SecretRef: &api.SecretKeyReference{Name: "x", Key: "Authorization"}}},
+		"none":                nil,
+		"read only":           {read},
+		"push only":           {push},
+		"two reads":           {read, read},
+		"wrong key":           {read, {Origin: push.Origin, Header: "authorization", SecretRef: &api.SecretKeyReference{Name: "x", Key: "Authorization"}}},
+		"origin with a port":  {read, {Origin: "http://mainloop-git-push.mainloop.svc.cluster.local:80", Header: "authorization", SecretRef: push.SecretRef}},
+		"origin with a slash": {read, {Origin: push.Origin + "/", Header: "authorization", SecretRef: push.SecretRef}},
 	}
 	for name, creds := range cases {
 		t.Run(name, func(t *testing.T) {

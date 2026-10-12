@@ -7,6 +7,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/pushgate"
 	ka "github.com/oldsj/mainloop/server/third_party/kagentapi"
 )
 
@@ -51,15 +52,19 @@ func TestAnEnvironmentWorkspaceWithoutAWritableAttemptIsPreparedWithAnInertPushR
 // A development environment needs both Git transports; a server without them refuses the create
 // instead of making a workspace kagent can never prepare.
 func TestAnEnvironmentWorkspaceIsRefusedWhenTheGitTransportsAreNotConfigured(t *testing.T) {
-	for _, kind := range []string{"neither", "read only"} {
+	for _, kind := range []string{"neither", "read only", "gate without upstream"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newHarness(t, nil)
 			h.svc.Refs = &fakeRefs{sha: prepSHA}
 			if _, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("first")}); err != nil {
 				t.Fatal(err)
 			}
-			if kind == "read only" {
+			if kind != "neither" {
 				h.withGitRead()
+			}
+			if kind == "gate without upstream" {
+				// The policy-only gate of a process whose push gate is off cannot enroll.
+				h.svc.GitPush = &GitPush{Gate: pushgate.NewService(h.svc.Pool, h.svc.Kagent, nil, h.svc.Credentials), Origin: h.cfg.Git.PushOrigin}
 			}
 			selectEnvironment(h)
 			n, calls := h.workspaceCount(), len(h.fake.CreateRequests())

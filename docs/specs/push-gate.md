@@ -20,8 +20,8 @@ development environment (owner workspaces, default-branch and policy-denied task
 reference with no reservation: kagent prepares a Session only if it holds exactly one read and one
 push reference, so it needs the reference to exist, and nothing else. The reference carries no
 bearer; no Secret or grant is published for it, and `Service.Enroll` is reachable only through a
-reservation, so it grants no authority and the retrofit rule is unchanged. A workspace without an
-environment freezes no push reference. The durable `workspace_push_reservations` intent uses the
+reservation, so it grants no authority and the retrofit rule is unchanged. Any other workspace without an
+environment freezes none. The durable `workspace_push_reservations` intent uses the
 attempt as its idempotency key and the attempt's native creation request ID as its identity.
 Retries and deletion replays carry the saved reference, even after release or configuration changes.
 The native idempotent create checks the original request before returning or creating its Session.

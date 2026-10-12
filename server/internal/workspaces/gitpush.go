@@ -33,7 +33,7 @@ func (g *GitPush) enabled() bool { return g != nil && g.Gate != nil && g.Gate.Up
 
 // gitUnavailable is why a workspace with a development environment cannot be created: kagent
 // prepares such a Session only if it holds both Git proxy references.
-const gitUnavailable = "git_transport_required: a development environment needs the git read transport and the push gate, which this server does not have configured for the repository"
+const gitUnavailable = "git_transport_required: a development environment needs the git read transport and the push gate, which this server does not have configured for the repository; enable the git read transport and the push gate, or clear the project's development environment selection"
 
 // gitReferencesAvailable says whether a workspace on repoURL can carry the read and push references
 // kagent's preparation requires.
