@@ -92,8 +92,8 @@ jobs:
       - run: go generate ./...
       - run: go mod tidy
       - name: Fail if generation or go mod tidy changed anything
-        # status, not diff: new untracked files count too
-        run: test -z "$(git status --porcelain -- .)"
+        # status, not diff: new untracked files count too; ../api holds the generated MCP contract
+        run: test -z "$(git status --porcelain -- . ../api)"
 
   mcp-contract:
     name: MCP tool contract is current

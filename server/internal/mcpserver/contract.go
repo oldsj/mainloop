@@ -53,24 +53,14 @@ type ContractRow struct {
 // BuildContract derives the contract from the registered tools and the policy table. It fails if
 // the policy names a tool the server does not implement.
 func BuildContract() (Contract, error) {
-	implemented := map[string]Tool{}
-	for _, t := range (&Server{}).Implemented() {
-		implemented[t.Name] = t
+	tools, err := contractTools((&Server{}).Implemented(), agentauth.AllTools)
+	if err != nil {
+		return Contract{}, err
 	}
 	c := Contract{
 		Version:  1,
 		Surfaces: ContractSurfaces{Ordinary: PathOrdinary, Approval: PathApproval},
-	}
-	for _, name := range agentauth.AllTools {
-		t, ok := implemented[name]
-		if !ok {
-			return Contract{}, fmt.Errorf("the policy table names tool %q, which the server does not implement", name)
-		}
-		delete(implemented, name)
-		c.Tools = append(c.Tools, ContractTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
-	}
-	for name := range implemented {
-		return Contract{}, fmt.Errorf("tool %q is implemented but missing from the policy table", name)
+		Tools:    tools,
 	}
 
 	row := func(p agentauth.Policy, a agentauth.Actor) (ordinary, approval []string) {
@@ -108,6 +98,28 @@ func BuildContract() (Contract, error) {
 		}
 	}
 	return c, nil
+}
+
+// contractTools lists the implemented tools in the policy table's order. It fails if the table names
+// a tool that is not implemented, or an implemented tool is missing from the table.
+func contractTools(implemented []Tool, names []string) ([]ContractTool, error) {
+	byName := map[string]Tool{}
+	for _, t := range implemented {
+		byName[t.Name] = t
+	}
+	var out []ContractTool
+	for _, name := range names {
+		t, ok := byName[name]
+		if !ok {
+			return nil, fmt.Errorf("the policy table names tool %q, which the server does not implement", name)
+		}
+		delete(byName, name)
+		out = append(out, ContractTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+	}
+	for name := range byName {
+		return nil, fmt.Errorf("tool %q is implemented but missing from the policy table", name)
+	}
+	return out, nil
 }
 
 // scalarList matches a multi-line array of scalars in indented JSON.

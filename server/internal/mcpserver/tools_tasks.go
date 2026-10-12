@@ -85,7 +85,7 @@ func (s *Server) taskTools() []Tool {
 			InputSchema: objectSchema(map[string]any{
 				"request_id":          id,
 				"expected_version":    map[string]any{"type": "integer", "minimum": 1},
-				"expected_attempt_id": optional(stringSchema(1, 100)),
+				"expected_attempt_id": nullable(stringSchema(1, 100)),
 				"task_id":             id,
 			}, "request_id", "expected_version", "expected_attempt_id", "task_id"),
 			Handle: s.taskCancel,

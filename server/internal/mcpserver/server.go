@@ -141,8 +141,8 @@ func unauthorized(w http.ResponseWriter) {
 	httpx.WriteError(w, http.StatusUnauthorized, "Unauthorized")
 }
 
-// buildServer registers the tools the actor may use on the surface: the policy table's names,
-// limited to what is implemented.
+// buildServer registers the tools the actor may use on the surface: the policy table's names. The
+// contract generator, run by a test, fails unless every one of them is implemented.
 func (s *Server) buildServer(st *requestState, tools map[string]Tool) *mcp.Server {
 	name := "mainloop"
 	if st.surface == agentauth.SurfaceApproval {
@@ -150,10 +150,7 @@ func (s *Server) buildServer(st *requestState, tools map[string]Tool) *mcp.Serve
 	}
 	srv := mcp.NewServer(&mcp.Implementation{Name: name, Version: "1"}, nil)
 	for _, tn := range s.Policy.Tools(st.actor, st.surface) {
-		t, ok := tools[tn]
-		if !ok {
-			continue // owned by a slice that has not landed
-		}
+		t := tools[tn] // the policy table and the registry are checked equal by the contract generator
 		srv.AddTool(&mcp.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema},
 			s.call(st.actor, t))
 	}

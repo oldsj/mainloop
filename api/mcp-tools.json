@@ -380,8 +380,7 @@
               {
                 "type": "null"
               }
-            ],
-            "default": null
+            ]
           },
           "expected_version": {
             "minimum": 1,
