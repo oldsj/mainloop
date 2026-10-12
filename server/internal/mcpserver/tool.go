@@ -97,6 +97,11 @@ func stringSchema(minLen, maxLen int) map[string]any {
 	return s
 }
 
+// nullable allows null without a default, for a required argument that may be null.
+func nullable(schema map[string]any) map[string]any {
+	return map[string]any{"anyOf": []any{schema, map[string]any{"type": "null"}}}
+}
+
 func optional(schema map[string]any) map[string]any {
 	return map[string]any{"anyOf": []any{schema, map[string]any{"type": "null"}}, "default": nil}
 }

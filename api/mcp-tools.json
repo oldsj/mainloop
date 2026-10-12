@@ -6,174 +6,12 @@
   },
   "tools": [
     {
-      "name": "prepare_pull_request_merge",
-      "description": "Prepare immutable PR merge facts and required route; creates no approval card.",
-      "input_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "project_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Project Id",
-            "type": "string"
-          },
-          "pr_number": {
-            "exclusiveMinimum": 0,
-            "title": "Pr Number",
-            "type": "integer"
-          },
-          "expected_sha": {
-            "pattern": "^[0-9a-f]{40}$",
-            "title": "Expected Sha",
-            "type": "string"
-          },
-          "request_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Request Id",
-            "type": "string"
-          }
-        },
-        "required": ["project_id", "pr_number", "expected_sha", "request_id"],
-        "title": "PreparePullRequestMerge",
-        "type": "object"
-      }
-    },
-    {
-      "name": "merge_pull_request",
-      "description": "Merge an auto-policy unprotected PR or return an approval proposal. Reuse request_id to reconcile.",
-      "input_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "project_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Project Id",
-            "type": "string"
-          },
-          "pr_number": {
-            "exclusiveMinimum": 0,
-            "title": "Pr Number",
-            "type": "integer"
-          },
-          "expected_sha": {
-            "pattern": "^[0-9a-f]{40}$",
-            "title": "Expected Sha",
-            "type": "string"
-          },
-          "request_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Request Id",
-            "type": "string"
-          }
-        },
-        "required": ["project_id", "pr_number", "expected_sha", "request_id"],
-        "title": "PreparePullRequestMerge",
-        "type": "object"
-      }
-    },
-    {
-      "name": "merge_pull_request_with_approval",
-      "description": "Evaluate an exact approved merge once; Mainloop continues pending CI under that consent. Do not call again while evaluating; read get_pull_request_merge_status instead.",
-      "input_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "proposal_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Proposal Id",
-            "type": "string"
-          },
-          "request_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Request Id",
-            "type": "string"
-          }
-        },
-        "required": ["proposal_id", "request_id"],
-        "title": "MergePullRequestWithApproval",
-        "type": "object"
-      }
-    },
-    {
-      "name": "get_pull_request_merge_status",
-      "description": "Read stored merge state using the original proposal_id and request_id, without approval or execution.",
-      "input_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "proposal_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Proposal Id",
-            "type": "string"
-          },
-          "request_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Request Id",
-            "type": "string"
-          }
-        },
-        "required": ["proposal_id", "request_id"],
-        "title": "MergePullRequestWithApproval",
-        "type": "object"
-      }
-    },
-    {
-      "name": "open_pull_request",
-      "description": "Open a same-repository feature-branch PR against the current default branch. Supply a stable request_id for retries; uncertain outcomes are reconciled without resending.",
-      "input_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "project_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Project Id",
-            "type": "string"
-          },
-          "branch": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Branch",
-            "type": "string"
-          },
-          "expected_sha": {
-            "pattern": "^[0-9a-f]{40}$",
-            "title": "Expected Sha",
-            "type": "string"
-          },
-          "title": {
-            "maxLength": 256,
-            "minLength": 1,
-            "title": "Title",
-            "type": "string"
-          },
-          "body": {
-            "maxLength": 60000,
-            "title": "Body",
-            "type": "string"
-          },
-          "request_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Request Id",
-            "type": "string"
-          }
-        },
-        "required": ["project_id", "branch", "expected_sha", "title", "body", "request_id"],
-        "title": "OpenPullRequest",
-        "type": "object"
-      }
-    },
-    {
       "name": "whoami",
       "description": "Show your non-secret binding identity, grant status and resolved workspace scope.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {},
-        "title": "ToolInput",
+        "required": [],
         "type": "object"
       }
     },
@@ -183,7 +21,7 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {},
-        "title": "ToolInput",
+        "required": [],
         "type": "object"
       }
     },
@@ -196,7 +34,6 @@
           "name": {
             "maxLength": 80,
             "minLength": 1,
-            "title": "Name",
             "type": "string"
           },
           "status": {
@@ -209,12 +46,10 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "title": "Status"
+            "default": null
           }
         },
         "required": ["name"],
-        "title": "TopicOpen",
         "type": "object"
       }
     },
@@ -227,7 +62,6 @@
           "text": {
             "maxLength": 2000,
             "minLength": 1,
-            "title": "Text",
             "type": "string"
           },
           "topic": {
@@ -241,12 +75,10 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "title": "Topic"
+            "default": null
           }
         },
         "required": ["text"],
-        "title": "Record",
         "type": "object"
       }
     },
@@ -259,7 +91,6 @@
           "text": {
             "maxLength": 2000,
             "minLength": 1,
-            "title": "Text",
             "type": "string"
           },
           "topic": {
@@ -273,12 +104,10 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "title": "Topic"
+            "default": null
           }
         },
         "required": ["text"],
-        "title": "Record",
         "type": "object"
       }
     },
@@ -291,7 +120,6 @@
           "text": {
             "maxLength": 2000,
             "minLength": 1,
-            "title": "Text",
             "type": "string"
           },
           "topic": {
@@ -305,12 +133,10 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "title": "Topic"
+            "default": null
           }
         },
         "required": ["text"],
-        "title": "Record",
         "type": "object"
       }
     },
@@ -322,12 +148,118 @@
         "properties": {
           "id": {
             "minLength": 8,
-            "title": "Id",
             "type": "string"
           }
         },
         "required": ["id"],
-        "title": "PendingDone",
+        "type": "object"
+      }
+    },
+    {
+      "name": "open_pull_request",
+      "description": "Open a same-repository feature-branch PR against the current default branch. Supply a stable request_id for retries; uncertain outcomes are reconciled without resending.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 60000,
+            "type": "string"
+          },
+          "branch": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "expected_sha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["project_id", "branch", "expected_sha", "title", "body", "request_id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_get",
+      "description": "Read a scoped task and its stored projections without a native turn.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["task_id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_list",
+      "description": "List tasks visible within your persisted authority.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "parent_task_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_history",
+      "description": "Read stored attempts, operations and reports.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["task_id"],
         "type": "object"
       }
     },
@@ -335,58 +267,46 @@
       "name": "delegate",
       "description": "Create a durable task and scoped attempt. Reuse request_id for lost or uncertain responses. After a confirmed terminal blocked create, use a NEW request_id for a new create; reusing the old id returns the blocked operation. Role and tool guidance prefixes the brief.",
       "input_schema": {
-        "$defs": {
-          "TaskCheckout": {
-            "additionalProperties": false,
-            "properties": {
-              "branch": {
-                "maxLength": 255,
-                "minLength": 1,
-                "title": "Branch",
-                "type": "string"
-              },
-              "ref": {
-                "default": "",
-                "maxLength": 255,
-                "title": "Ref",
-                "type": "string"
-              },
-              "depth": {
-                "default": 0,
-                "maximum": 1000,
-                "minimum": 0,
-                "title": "Depth",
-                "type": "integer"
-              }
-            },
-            "required": ["branch"],
-            "title": "TaskCheckout",
-            "type": "object"
-          }
-        },
         "additionalProperties": false,
         "properties": {
-          "request_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Request Id",
-            "type": "string"
-          },
-          "title": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Title",
-            "type": "string"
-          },
           "brief": {
             "maxLength": 16384,
             "minLength": 1,
-            "title": "Brief",
             "type": "string"
+          },
+          "checkout": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "depth": {
+                    "default": 0,
+                    "maximum": 1000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "ref": {
+                    "default": "",
+                    "maxLength": 255,
+                    "type": "string"
+                  }
+                },
+                "required": ["branch"],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "mode": {
             "enum": ["code", "coordination"],
-            "title": "Mode",
             "type": "string"
           },
           "project_id": {
@@ -400,22 +320,7 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "title": "Project Id"
-          },
-          "topic_id": {
-            "anyOf": [
-              {
-                "maxLength": 100,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Topic Id"
+            "default": null
           },
           "provider_profile_id": {
             "anyOf": [
@@ -429,13 +334,24 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "title": "Provider Profile Id"
+            "default": null
           },
-          "checkout": {
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "topic_id": {
             "anyOf": [
               {
-                "$ref": "#/$defs/TaskCheckout"
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
               },
               {
                 "type": "null"
@@ -445,7 +361,43 @@
           }
         },
         "required": ["request_id", "title", "brief", "mode"],
-        "title": "TaskDelegate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_cancel",
+      "description": "Request cancellation of a managed task using its current version/attempt.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_attempt_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "task_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["request_id", "expected_version", "expected_attempt_id", "task_id"],
         "type": "object"
       }
     },
@@ -455,33 +407,23 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
-          "task_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Task Id",
-            "type": "string"
-          },
           "attempt_id": {
             "maxLength": 100,
             "minLength": 1,
-            "title": "Attempt Id",
             "type": "string"
           },
-          "request_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Request Id",
-            "type": "string"
-          },
-          "summary": {
-            "maxLength": 4000,
-            "minLength": 1,
-            "title": "Summary",
-            "type": "string"
+          "evidence_refs": {
+            "default": [],
+            "items": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array"
           },
           "outcome": {
             "enum": ["progress", "completed", "failed", "blocked"],
-            "title": "Outcome",
             "type": "string"
           },
           "owner_action": {
@@ -495,140 +437,125 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "title": "Owner Action"
+            "default": null
           },
-          "evidence_refs": {
-            "default": [],
-            "items": {
-              "maxLength": 2048,
-              "minLength": 1,
-              "type": "string"
-            },
-            "maxItems": 64,
-            "title": "Evidence Refs",
-            "type": "array"
-          }
-        },
-        "required": ["task_id", "attempt_id", "request_id", "summary", "outcome"],
-        "title": "TaskReportInput",
-        "type": "object"
-      }
-    },
-    {
-      "name": "task_get",
-      "description": "Read a scoped task and its stored projections without a native turn.",
-      "input_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "task_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Task Id",
-            "type": "string"
-          }
-        },
-        "required": ["task_id"],
-        "title": "TaskGet",
-        "type": "object"
-      }
-    },
-    {
-      "name": "task_list",
-      "description": "List tasks visible within your persisted authority.",
-      "input_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "project_id": {
-            "anyOf": [
-              {
-                "maxLength": 100,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Project Id"
-          },
-          "parent_task_id": {
-            "anyOf": [
-              {
-                "maxLength": 100,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Parent Task Id"
-          }
-        },
-        "title": "TaskList",
-        "type": "object"
-      }
-    },
-    {
-      "name": "task_history",
-      "description": "Read stored attempts, operations and reports.",
-      "input_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "task_id": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Task Id",
-            "type": "string"
-          }
-        },
-        "required": ["task_id"],
-        "title": "TaskHistory",
-        "type": "object"
-      }
-    },
-    {
-      "name": "task_cancel",
-      "description": "Request cancellation of a managed task using its current version/attempt.",
-      "input_schema": {
-        "additionalProperties": false,
-        "properties": {
           "request_id": {
             "maxLength": 100,
             "minLength": 1,
-            "title": "Request Id",
             "type": "string"
           },
-          "expected_version": {
-            "minimum": 1,
-            "title": "Expected Version",
-            "type": "integer"
-          },
-          "expected_attempt_id": {
-            "anyOf": [
-              {
-                "maxLength": 100,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Expected Attempt Id"
+          "summary": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
           },
           "task_id": {
             "maxLength": 100,
             "minLength": 1,
-            "title": "Task Id",
             "type": "string"
           }
         },
-        "required": ["request_id", "expected_version", "expected_attempt_id", "task_id"],
-        "title": "TaskCancel",
+        "required": ["task_id", "attempt_id", "request_id", "summary", "outcome"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "prepare_pull_request_merge",
+      "description": "Prepare immutable PR merge facts and required route; creates no approval card.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_sha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "pr_number": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["project_id", "pr_number", "expected_sha", "request_id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "merge_pull_request",
+      "description": "Merge an auto-policy unprotected PR or return an approval proposal. Reuse request_id to reconcile.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_sha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "pr_number": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["project_id", "pr_number", "expected_sha", "request_id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "merge_pull_request_with_approval",
+      "description": "Evaluate an exact approved merge once; Mainloop continues pending CI under that consent. Do not call again while evaluating; read get_pull_request_merge_status instead.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "proposal_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["proposal_id", "request_id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_pull_request_merge_status",
+      "description": "Read stored merge state using the original proposal_id and request_id, without approval or execution.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "proposal_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["proposal_id", "request_id"],
         "type": "object"
       }
     }
