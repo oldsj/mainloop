@@ -23,10 +23,12 @@ jobs:
       matrix:
         include:
           - image: backend
+            context: server
             file: server/Dockerfile
             target: prod
             build-args: ''
           - image: frontend
+            context: .
             file: web/Dockerfile
             target: ''
             build-args: VITE_API_URL=https://mainloop-api.olds.network
@@ -55,7 +57,7 @@ jobs:
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: .
+          context: ${{ matrix.context }}
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}
           platforms: linux/arm64
