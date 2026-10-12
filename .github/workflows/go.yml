@@ -5,6 +5,7 @@ on:
     branches: [main, go-react]
     paths:
       - server/**
+      - web/src/features/chat/testdata/**
       - api/**
       - backend/src/mainloop/mcp_app.py
       - backend/src/mainloop/runtime/policy.py
@@ -15,6 +16,7 @@ on:
     branches: [main, go-react]
     paths:
       - server/**
+      - web/src/features/chat/testdata/**
       - api/**
       - backend/src/mainloop/mcp_app.py
       - backend/src/mainloop/runtime/policy.py

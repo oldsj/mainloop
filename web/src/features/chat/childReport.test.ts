@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 // The exact texts the Go server delivers; a Go test checks `reportText` against the same file.
-import fixture from '../../../../server/internal/tasks/testdata/report_texts.json';
+import fixture from './testdata/report_texts.json';
 import { parseChildReport } from './childReport';
 
 interface ReportText {

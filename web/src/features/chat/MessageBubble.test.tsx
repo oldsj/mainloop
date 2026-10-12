@@ -112,6 +112,22 @@ describe('MessageBubble', () => {
     expect(screen.queryByRole('group')).toBeNull();
   });
 
+  it.each([
+    [
+      'a child task',
+      '[report from child task 0a1b2c3d-1111-4222-8333-444455556666 attempt 1; completed; unverified claim]\nok',
+      /^child task 0a1b2c3d · completed, /
+    ],
+    [
+      'a top-level task',
+      '[report from task 5e4d3c2b-1111-4222-8333-444455556666 attempt 1; failed; unverified claim]\nno',
+      /^task 5e4d3c2b · failed, /
+    ]
+  ])('names the article of a report from %s by its title and outcome', (_name, content, name) => {
+    render(<MessageBubble message={messageFixture({ content })} />);
+    expect(screen.getByRole('article', { name })).toBe(screen.getByTestId('child-report'));
+  });
+
   it('does not make an assistant message a child report', () => {
     render(
       <MessageBubble

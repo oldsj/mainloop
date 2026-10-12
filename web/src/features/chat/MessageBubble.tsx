@@ -67,7 +67,7 @@ export function MessageBubble({
 
   return (
     <article
-      aria-label={`${report ? `child ${report.title}` : isUser ? 'You' : agentLabel(agentKind)}, ${messageTime(message.created_at)}`}
+      aria-label={`${report ? `${report.title} · ${report.outcome}` : isUser ? 'You' : agentLabel(agentKind)}, ${messageTime(message.created_at)}`}
       data-testid={report ? 'child-report' : undefined}
       className={cn(
         'px-md py-sm w-full border-l-2',

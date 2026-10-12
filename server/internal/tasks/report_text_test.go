@@ -11,10 +11,11 @@ import (
 )
 
 // The web parses the report header to label the message (web/src/features/chat/childReport.ts). Both
-// sides read testdata/report_texts.json, so changing the header here fails the web's parser test
-// until the fixture and the parser follow.
+// sides read web/src/features/chat/testdata/report_texts.json (under web/, so a change to either side
+// runs both CI workflows), so changing the header here fails the web's parser test until the fixture
+// and the parser follow.
 func TestReportTextMatchesTheFixtureTheWebParses(t *testing.T) {
-	raw, err := os.ReadFile("testdata/report_texts.json")
+	raw, err := os.ReadFile("../../../web/src/features/chat/testdata/report_texts.json")
 	if err != nil {
 		t.Fatal(err)
 	}
