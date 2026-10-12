@@ -2,7 +2,7 @@ name: Web
 
 on:
   pull_request:
-    branches: [main, go-react]
+    branches: [main]
     paths:
       - web/**
       - api/**
@@ -11,7 +11,7 @@ on:
       - pnpm-workspace.yaml
       - .github/workflows/web.yml
   push:
-    branches: [main, go-react]
+    branches: [main]
     paths:
       - web/**
       - api/**

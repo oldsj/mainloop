@@ -1,8 +1,7 @@
-// Explicit offline regressions through the real Make runner and dev-image PG16.
+// Explicit regression for dev-postgres cleanup through dev-image PG16.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { constants, tmpdir } from 'node:os';
+import { copyFile, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
@@ -29,14 +28,6 @@ async function assertStopped(pid) {
     assert.equal(state, 'Z', `process ${pid} remains runnable (${state})`);
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
-  }
-}
-
-function killGroup(pid) {
-  try {
-    process.kill(-pid, 'SIGKILL');
-  } catch (error) {
-    if (error.code !== 'ESRCH') throw error;
   }
 }
 
@@ -160,76 +151,6 @@ exec /usr/lib/postgresql/16/bin/pg_ctl.real "$@"
 if (process.argv[2] === '--postgres-worker') {
   await postgresWorker();
 } else {
-  for (const mode of ['deadline', 'short budget', 'SIGTERM', 'SIGINT', 'SIGQUIT']) {
-    test(
-      `real make test-backend cleans TERM-resistant worker after ${mode}`,
-      { timeout: 45000 },
-      async () => {
-        const scratch = await mkdtemp(join(tmpdir(), 'mainloop-runner-cleanup-'));
-        const pidFile = join(scratch, 'worker');
-        let worker;
-        let descendant;
-        const fixture = `import os, signal, subprocess, sys, time, unittest
-from pathlib import Path
-class StubbornWorker(unittest.TestCase):
- def test_wait(self):
-  for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGQUIT): signal.signal(signum, signal.SIG_IGN)
-  child = subprocess.Popen([sys.executable, '-c', "import os, signal, time; from pathlib import Path; [signal.signal(s, signal.SIG_IGN) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGQUIT)]; Path(os.environ['TIMEOUT_REGRESSION_PID']+'.child').write_text(str(os.getpid())); time.sleep(60)"])
-  Path(os.environ['TIMEOUT_REGRESSION_PID']).write_text(str(os.getpid()))
-  time.sleep(60)
-`;
-        await writeFile(join(scratch, 'timeout_regression.py'), fixture);
-        const expires = mode === 'deadline' || mode === 'short budget';
-        const { child, done } = start(
-          process.execPath,
-          [
-            helper,
-            '--grace',
-            mode === 'short budget' ? '3' : '30',
-            // Leave startup time after the Make wrapper and runner reserve their deadlines.
-            expires ? '6' : '30',
-            'enclosing backend cap',
-            '--',
-            'make',
-            'test-backend',
-            'TEST_ARGS=timeout_regression'
-          ],
-          {
-            cwd: root,
-            env: {
-              ...process.env,
-              PYTHONPATH: scratch,
-              TIMEOUT_REGRESSION_PID: pidFile,
-              MAINLOOP_TEST_DATABASE_URL: 'postgresql://fixture-unused/postgres'
-            }
-          }
-        );
-        try {
-          worker = Number(await ready(pidFile));
-          descendant = Number(await ready(pidFile + '.child'));
-          if (!expires) child.kill(mode);
-          const result = await done;
-          if (expires) {
-            // A nested timeout can finish before this cap: Make then returns 2 for recipe 124.
-            assert.ok([2, 124].includes(result.code), result.stderr);
-            assert.match(result.stderr, /Backend status: timed_out/);
-            assert.match(result.stderr, /\[done [^\n]*exit 124\] make test-backend/);
-            if (result.code === 2) assert.match(result.stderr, /Error 124/);
-          } else {
-            assert.equal(result.code, 128 + constants.signals[mode], result.stderr);
-          }
-          await assertStopped(worker);
-          await assertStopped(descendant);
-        } finally {
-          child.kill('SIGTERM');
-          await done;
-          if (worker) killGroup(worker);
-          await rm(scratch, { recursive: true, force: true });
-        }
-      }
-    );
-  }
-
   test(
     'dev-postgres completes a slow owned stop before cancellation or enclosing expiry returns',
     { timeout: 100000 },

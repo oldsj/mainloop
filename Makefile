@@ -1,4 +1,4 @@
-.PHONY: help dev dev-stop dev-reset dev-logs dev-shell dev-legacy dev-live dev-live-status dev-live-purge dev-harness dev-agents install clean lint lint-all fmt fmt-all build-backend build-frontend build-all push-backend push-frontend push-all build-all-parallel push-all-parallel kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test test-backend test-run test-reset test-ci debug-tasks debug-task debug-retry debug-logs debug-db
+.PHONY: help dev dev-stop dev-reset dev-clear-cache dev-logs dev-shell kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test-k8s test-loop test-reset dev-live dev-live-status dev-live-purge dev-agents dev-harness install check check-mcp-tools check-server check-web lint lint-all fmt fmt-all _fmt _fmt-all test-timeouts test-timeout-integration
 
 # Load .env file if it exists
 -include .env
@@ -6,17 +6,6 @@ export
 
 # Shared foreground caps; setup and checks never fetch a timeout runtime.
 CAP := node "$(CURDIR)/scripts/with-timeout.mjs"
-UV_HTTP_TIMEOUT := 30
-UV_HTTP_RETRIES := 1
-.PHONY: install-backend install-models install-frontend check check-mcp-tools check-non-backend check-frontend test-frontend frontend-build test-timeouts test-timeout-integration _install _check _fmt _fmt-all _test-backend
-
-# Configuration
-# Set GHCR_USER in .env file (see .env.example)
-GHCR_REGISTRY := ghcr.io
-GHCR_USER ?= yourusername
-IMAGE_TAG ?= latest
-BACKEND_IMAGE := $(GHCR_REGISTRY)/$(GHCR_USER)/mainloop-backend:$(IMAGE_TAG)
-FRONTEND_IMAGE := $(GHCR_REGISTRY)/$(GHCR_USER)/mainloop-frontend:$(IMAGE_TAG)
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -44,14 +33,11 @@ dev-logs: ## Tail backend logs
 dev-shell: ## Open shell in backend pod
 	devspace enter --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop
 
-dev-legacy: ## Start with docker compose (no hot reload)
-	docker compose up --build --watch
-
 # =============================================================================
 # Shared live instance (DevSpace profile `live`, namespace mainloop-dev on internal-01)
 # =============================================================================
 
-dev-live: ## Deploy mainloop-dev and live-sync backend, models and frontend into it
+dev-live: ## Deploy mainloop-dev and live-sync the Go server and web app into it
 	./scripts/dev-live.sh dev
 
 dev-live-status: ## Show mainloop-dev pods and the dev kagent agents
@@ -67,125 +53,11 @@ dev-harness: ## Build arm64 harness images from ~/dev/kagent and point the dev a
 	./scripts/dev-live-harness.sh build
 
 # =============================================================================
-# Dependencies
+# Kind (local Kubernetes for trying Mainloop locally)
 # =============================================================================
-
-install: ## Install all dependencies
-	@$(CAP) 240 'make install' -- $(MAKE) --no-print-directory _install
-
-_install: install-frontend install-backend install-models
-
-install-frontend: ## Install locked frontend dependencies (120s cap)
-	@$(CAP) 120 'pnpm install' -- pnpm install --frozen-lockfile
-
-install-backend: ## Sync locked backend dependencies (120s cap)
-	@cd backend && $(CAP) 120 'uv sync backend' -- uv sync --frozen --python 3.13
-
-install-models: ## Sync shared model dependencies (120s cap)
-	@cd models && $(CAP) 120 'uv sync models' -- uv sync --python 3.13
-
-clean: ## Clean build artifacts
-	rm -rf frontend/.svelte-kit frontend/build
-	rm -rf backend/.venv models/.venv
-	find . -type d -name "__pycache__" -exec rm -rf {} +
-
-lint: ## Lint files changed since main
-	@$(CAP) 120 'make lint' -- trunk check --upstream origin/main
-
-lint-all: ## Lint all files
-	@$(CAP) 240 'make lint-all' -- trunk check -a
-
-fmt: ## Format and fix files changed since main
-	@$(CAP) 180 'make fmt' -- $(MAKE) --no-print-directory _fmt
-
-_fmt:
-	trunk fmt --upstream origin/main
-	trunk check --upstream origin/main -y
-
-fmt-all: ## Format and fix all files
-	@$(CAP) 300 'make fmt-all' -- $(MAKE) --no-print-directory _fmt-all
-
-_fmt-all:
-	trunk fmt -a
-	trunk check -a -y
-
-# Under a dev-postgres whose image predates deadline export, the command's cap is
-# invisible here, so stay inside its budget (540 s minus setup) statically.
-# Otherwise a deadline-exporting parent clamps 565 s, and standalone 565 s plus
-# 30 s of cleanup still ends inside a ten-minute foreground turn.
-CHECK_SECONDS := $(if $(filter 1,$(MAINLOOP_DEV_POSTGRES_WORKER)),$(if $(MAINLOOP_TIMEOUT_DEADLINE_MS),565,515),565)
-
-check: ## All offline checks in one turn (565s or the enclosing deadline, + cleanup; installs dependencies)
-	@$(CAP) $(CHECK_SECONDS) 'make check' -- $(MAKE) --no-print-directory _check
-
-_check: check-mcp-tools
-	@node scripts/check.mjs --make '$(MAKE)'
-
-check-mcp-tools: ## api/mcp-tools.json matches the Python tool registry (fast; installs backend dependencies)
-	@$(CAP) 120 'make check-mcp-tools' -- uv run --frozen --project backend --python 3.13 python scripts/export-mcp-tools.py --check
-
-check-non-backend: ## Measure the offline checks outside the backend suite (as make check)
-	@$(CAP) $(CHECK_SECONDS) 'make check-non-backend' -- node scripts/check.mjs --make '$(MAKE)' --non-backend
-
-check-frontend: install-frontend ## Frontend diagnostics (120s cap)
-	@$(CAP) 120 'make check-frontend' -- pnpm check
-
-test-frontend: install-frontend ## Frontend unit tests (60s cap)
-	@$(CAP) 60 'make test-frontend' -- pnpm --dir frontend test:unit
-
-frontend-build: install-frontend ## Build the frontend application (240s cap)
-	@$(CAP) 240 'make frontend-build' -- pnpm --dir frontend build
-
-test-timeouts: ## Timeout helper regression tests (90s cap)
-	@$(CAP) 90 'make test-timeouts' -- node --test scripts/with-timeout.test.mjs scripts/check.test.mjs
-
-test-timeout-integration: ## Opt-in real runner + dev-image PG16 cleanup regressions
-	@$(CAP) 180 'make test-timeout-integration' -- node --test scripts/with-timeout.integration.test.mjs
-
-# Backend commands
-backend-dev: install-backend ## Run backend in development mode
-	cd backend && uv run uvicorn mainloop.api:app --reload --host 0.0.0.0 --port 8000
-
-# Frontend commands
-frontend-dev: install-frontend ## Run frontend in development mode
-	cd frontend && pnpm dev
-
-# Docker image commands
-build-backend: ## Build backend Docker image
-	@$(CAP) 480 'make build-backend' -- docker build -f backend/Dockerfile -t $(BACKEND_IMAGE) .
-
-build-frontend: ## Build frontend Docker image
-	@$(CAP) 480 'make build-frontend' -- docker build -f frontend/Dockerfile -t $(FRONTEND_IMAGE) .
-
-build-all: ## Build all Docker images (550s total cap)
-	@$(CAP) 550 'make build-all' -- $(MAKE) --no-print-directory build-backend build-frontend
-
-push-backend: build-backend ## Push backend to GHCR
-	docker push $(BACKEND_IMAGE)
-
-push-frontend: build-frontend ## Push frontend to GHCR
-	docker push $(FRONTEND_IMAGE)
-
-push-all: push-backend push-frontend ## Push all images to GHCR
-
-# Parallel build + push (much faster)
-build-all-parallel: ## Build all Docker images in parallel
-	@$(CAP) 480 'make build-all-parallel' -- $(MAKE) --no-print-directory -j2 build-backend build-frontend
-
-push-all-parallel: build-all-parallel ## Build and push all images in parallel
-	@echo "Pushing all images in parallel..."
-	@docker push $(BACKEND_IMAGE) & \
-	docker push $(FRONTEND_IMAGE) & \
-	wait
-	@echo "All pushes complete"
-
-# Production is GitOps-only: Argo CD applies the prod overlay from Git and the images
-# are pinned by digest in the deployment repository. There are no targets that apply to
-# or restart anything in a production cluster. Build and push images with the
-# build-*/push-* targets above, then record the digests in the deployment repository.
-
-# Kind (local Kubernetes testing)
 KIND_CLUSTER_NAME ?= mainloop-test
+TEST_API_URL := http://localhost:8081
+TEST_FRONTEND_URL := http://localhost:5173
 
 kind-create: ## Create Kind cluster for local testing
 	@./scripts/kind/create-cluster.sh
@@ -230,71 +102,52 @@ test-loop: ## Watch for changes and auto-redeploy to Kind
 		--on-busy-update restart -- bash -c 'make kind-load && make kind-deploy' & \
 	wait
 
-# =============================================================================
-# Testing (DevSpace + Playwright)
-#
-# The Playwright and live-agent e2e suites are disabled by default and no
-# longer run in CI. Set ENABLE_E2E=1 to run them explicitly.
-# =============================================================================
-TEST_API_URL := http://localhost:8081
-TEST_FRONTEND_URL := http://localhost:5173
-
-test-backend: ## Install dependencies and run offline backend tests (550s total cap)
-	@$(CAP) 550 'make test-backend' -- $(MAKE) --no-print-directory _test-backend
-
-_test-backend: install-backend
-	@cd backend && uv run --no-sync python scripts/test_backend.py $(TEST_ARGS)
-
-test: ## Deploy to Kind + open Playwright UI (disabled; ENABLE_E2E=1 to opt in)
-	@./scripts/e2e-guard.sh
-	@./scripts/test-guard.sh
-	devspace deploy --profile test --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop
-	@echo "Waiting for backend..."
-	@until curl -sf $(TEST_API_URL)/health > /dev/null 2>&1; do sleep 2; done
-	@cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test --ui
-
-test-run: ## Run tests headless (disabled; ENABLE_E2E=1 to opt in)
-	@./scripts/e2e-guard.sh
-	@./scripts/wait-for-ready.sh
-	@cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test $(TEST_ARGS)
-
 test-reset: dev-reset ## Alias for dev-reset
 
-test-ci: ## Run tests with legacy kind scripts (disabled; ENABLE_E2E=1 to opt in)
-	@./scripts/e2e-guard.sh
-	@if ! kind get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
-		$(MAKE) kind-create; \
-	fi
-	@$(MAKE) kind-load
-	@$(MAKE) kind-secrets
-	@$(MAKE) kind-deploy
-	@until curl -sf $(TEST_API_URL)/health > /dev/null 2>&1; do sleep 2; done
-	@cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test
+# =============================================================================
+# Dependencies and checks
+# =============================================================================
 
-# Debugging commands
-# Set API_URL in .env file or override: make debug-tasks API_URL=https://your-api.example.com
-API_URL ?= https://mainloop-api.example.com
+install: ## Install locked workspace dependencies (240s cap)
+	@$(CAP) 240 'make install' -- pnpm install --frozen-lockfile
 
-debug-tasks: ## Show all tasks with workflow status
-	@curl -s $(API_URL)/debug/tasks | jq '.[] | {id: .task.id, status: .task.status, workflow: .workflow_status, error: .workflow_error, namespace: .namespace_exists, pr: .task.pr_url}'
+check: ## All offline checks: MCP contract, Go build and vet, web (installs dependencies; 480s cap)
+	@$(CAP) 480 'make check' -- $(MAKE) --no-print-directory check-mcp-tools check-server check-web
 
-debug-task: ## Show detailed info for a specific task (usage: make debug-task TASK_ID=xxx)
-	@curl -s $(API_URL)/debug/tasks | jq '.[] | select(.task.id | startswith("$(TASK_ID)"))'
+check-mcp-tools: ## api/mcp-tools.json matches the Python exporter and the Go tool registry (240s cap; installs backend dependencies)
+	@$(CAP) 240 'make check-mcp-tools' -- sh -c 'uv run --frozen --project backend --python 3.13 python scripts/export-mcp-tools.py --check && cd server && go test -count=1 -run "TestToolSetMatchesTheContract|TestVisibilityMatchesTheContract|TestInputSchemasMatchTheContract|TestSchemaComparisonSeesADifferentType" ./internal/mcpserver/'
 
-debug-retry: ## Retry a failed task (usage: make debug-retry TASK_ID=xxx)
-	@curl -s -X POST $(API_URL)/debug/tasks/$(TASK_ID)/retry | jq
+check-server: ## Go build and vet for server/ (240s cap)
+	@$(CAP) 240 'make check-server' -- sh -c 'cd server && go build ./... && go vet ./...'
 
-debug-logs: ## Show backend logs
-	kubectl logs -n mainloop deployment/mainloop-backend --tail=100 -f
+check-web: install ## Web type check, lint and unit tests (240s cap)
+	@$(CAP) 240 'make check-web' -- sh -c 'cd web && node_modules/.bin/tsc -b && node_modules/.bin/eslint . && node_modules/.bin/vitest run'
 
-debug-db: ## Query tasks directly from database
-	@kubectl exec -n mainloop deployment/mainloop-backend -- python3 -c "\
-import asyncio; \
-from mainloop.db import db; \
-async def q(): \
-    await db.connect(); \
-    async with db.connection() as c: \
-        rows = await c.fetch('SELECT id, status, pr_url, error FROM worker_tasks ORDER BY created_at DESC LIMIT 5'); \
-        for r in rows: print(dict(r)); \
-    await db.disconnect(); \
-asyncio.run(q())"
+lint: ## Lint files changed since main
+	@$(CAP) 120 'make lint' -- trunk check --upstream origin/main
+
+lint-all: ## Lint all files
+	@$(CAP) 240 'make lint-all' -- trunk check -a
+
+fmt: ## Format and fix files changed since main
+	@$(CAP) 180 'make fmt' -- $(MAKE) --no-print-directory _fmt
+
+_fmt:
+	trunk fmt --upstream origin/main
+	trunk check --upstream origin/main -y
+
+fmt-all: ## Format and fix all files
+	@$(CAP) 300 'make fmt-all' -- $(MAKE) --no-print-directory _fmt-all
+
+_fmt-all:
+	trunk fmt -a
+	trunk check -a -y
+
+test-timeouts: ## Command deadline helper regression tests (90s cap)
+	@$(CAP) 90 'make test-timeouts' -- node --test scripts/with-timeout.test.mjs
+
+test-timeout-integration: ## Opt-in dev-image PG16 cleanup regression (needs MAINLOOP_TIMEOUT_TEST_IMAGE; 180s cap)
+	@$(CAP) 180 'make test-timeout-integration' -- node --test scripts/with-timeout.integration.test.mjs
+
+# Production is GitOps-only: Argo CD applies the prod overlay from Git, and no target here
+# applies to or restarts a production cluster. CI builds and publishes the images.

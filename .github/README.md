@@ -9,15 +9,21 @@ Changes under `.github/**` remain owner-protected.
 [CI](workflows/ci.yml) runs on every pull request targeting `main` and every push
 to `main`, without path filters. Jobs check the exact PR head or push commit:
 
-- `backend-tests`: offline unit and scratch PostgreSQL tests via `make test-backend`
-  (PostgreSQL 16 service; 10-minute job limit).
-- `frontend-unit`: command deadline/cleanup tests and frontend diagnostics/unit
-  tests via `make test-timeouts` and `make check-frontend test-frontend` (5 minutes).
+- `command-deadlines`: command deadline and process-cleanup tests via
+  `make test-timeouts` (5 minutes).
 - `lint`: Trunk checks with explicit base/head SHAs and check annotations (5 minutes).
-- `build`: independent backend/frontend Docker builds (8 minutes each), tagged
-  `mainloop-backend:test` and `mainloop-frontend:test`. The frontend uses a local
-  API build argument. No push or platform override is configured; these are
-  runner-native validation builds, not published images.
+
+Stack-specific checks run in their own workflows, filtered by path:
+
+- [Go](workflows/go.yml): golangci-lint, `go test -race`, generated-code drift, the
+  MCP tool contract (`make check-mcp-tools`), and the prod image build from
+  `server/Dockerfile`. The MCP contract still runs the Python exporter
+  (`scripts/export-mcp-tools.py`), so its import closure stays under `backend/`
+  (`src/mainloop/` modules, `pyproject.toml`, `uv.lock`, `README.md`) and `models/`
+  until a Go exporter replaces it. Nothing else under `backend/` is kept.
+- [Web](workflows/web.yml): `tsc`, ESLint, Vitest, the Vite build, design checks, API
+  and theme drift, the static server test, and the `web/Dockerfile` build.
+- [Contract](workflows/contract.yml): Redocly lint of `api/openapi.yaml`.
 
 CI uses `ubuntu-latest`, read-only contents/actions permissions by default, and
 check-write permission for lint. It publishes no images or job outputs.
@@ -28,8 +34,9 @@ check-write permission for lint. It publishes no images or job outputs.
 pushes to `main` only when one of these paths changes (no manual trigger):
 
 - `.devcontainer/**`, `.trunk/**`, `scripts/with-timeout.mjs`
-- `backend/pyproject.toml`, `backend/uv.lock`, `models/pyproject.toml`
 - `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.npmrc`
+- `backend/pyproject.toml`, `backend/uv.lock`, `models/pyproject.toml` (the Python
+  exporter's environment, see below)
 - `.github/workflows/dev-image.yml`
 
 PR-only `validate` builds `.devcontainer/Dockerfile` without pushing, separately
@@ -47,11 +54,12 @@ distinct from the application images below.
 ## Production application images
 
 [Publish images](workflows/images.yml) runs on all pushes to `main` and manual
-`workflow_dispatch`, without path filters. Its `publish` matrix builds backend
-and frontend Dockerfiles on `ubuntu-24.04-arm`, publishing only `linux/arm64`
-images (8 minutes each):
+`workflow_dispatch`, without path filters. Its `publish` matrix builds the Go server
+(`server/Dockerfile`, `prod` target) and the React app (`web/Dockerfile`) on
+`ubuntu-24.04-arm`, publishing only `linux/arm64` images (15 minutes each):
 
-- `ghcr.io/oldsj/mainloop-backend:<first seven commit SHA characters>`
+- `ghcr.io/oldsj/mainloop-backend:<first seven commit SHA characters>` (the Go server;
+  the image keeps its historical name because the production manifests pin it)
 - `ghcr.io/oldsj/mainloop-frontend:<first seven commit SHA characters>`
 
 The frontend uses the workflow's production API build argument. There is no
@@ -62,26 +70,28 @@ updates require a separate manually reviewed infrastructure PR, not this build.
 
 ## Shared live-development application images
 
-[Publish live dev images](workflows/live-dev-images.yml) runs on all pushes to
-`main` and manual `workflow_dispatch`, without path filters. Its `publish` matrix
-is explicitly restricted to `refs/heads/main`, including manual runs. It builds
-backend/frontend Dockerfiles with `target: dev` on `ubuntu-24.04-arm`, publishing
-only `linux/arm64` images (10 minutes each):
+[Publish live dev images](workflows/live-dev-images.yml) runs on pushes to `main`
+and manual `workflow_dispatch`, without path filters. Its `publish` matrix is
+explicitly restricted to `refs/heads/main`, including manual runs. It builds the
+`dev` target of the Go server and the React app on `ubuntu-24.04-arm`, publishing
+only `linux/arm64` images (15 minutes each):
 
-- `ghcr.io/oldsj/mainloop-backend-dev`
-- `ghcr.io/oldsj/mainloop-frontend-dev`
+- `ghcr.io/oldsj/mainloop-server-dev`
+- `ghcr.io/oldsj/mainloop-web-dev`
 
-Both receive `<first seven commit SHA characters>` and `latest` tags for the
-shared live-development instance. Step outputs provide the short SHA and digest;
-summaries record source, tags and digest, with no job-level output. These are
-application dev targets, not the multiarchitecture workspace image. Publishing
-them does not start or update the shared instance.
+Both receive `<first seven commit SHA characters>` and `main` tags; `main` is the
+mutable one. The shared `mainloop-dev` overlay still pins `go-react`, the tag of the
+retired migration branch, so both images also keep a `go-react` alias until that
+overlay and its render test move to `main` together. Step outputs
+provide the short SHA and digest; summaries record source, tags and digest, with no
+job-level output. These are application dev targets, not the multiarchitecture
+workspace image. Publishing them does not start or update the shared instance.
 
 ## Concurrency and publication boundaries
 
-All four workflows cancel in-progress runs in the same workflow/ref concurrency
-group (`dev-image` uses `dev-image-${{ github.ref }}`). Matrix jobs disable
-fail-fast so independent builds can finish. Publication jobs have package-write
-and contents-read permissions; workspace PR validation has contents-read only.
-Builds use GitHub Actions caches separated by image or architecture. The job
-timeouts above are limits, not measured runtimes or qualification claims.
+Each workflow cancels in-progress runs in its own workflow/ref concurrency group
+(`dev-image` uses `dev-image-${{ github.ref }}`). Matrix jobs disable fail-fast so
+independent builds can finish. Publication jobs have package-write and contents-read
+permissions; workspace PR validation has contents-read only. Builds use GitHub
+Actions caches separated by image or architecture. The job timeouts above are
+limits, not measured runtimes or qualification claims.
