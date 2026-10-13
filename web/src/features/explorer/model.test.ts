@@ -286,6 +286,168 @@ describe('task row identity', () => {
   });
 });
 
+describe('parent task progress', () => {
+  it('nests a child task under its parent, not also as a flat sibling in its project', () => {
+    const projects = keepValid([project()], projectRowSchema);
+    const parent = view({ id: 'parent-1', project_id: 'project-a', title: 'Ship feature' });
+    const child = view({
+      id: 'child-1',
+      project_id: 'project-a',
+      parent_task_id: 'parent-1',
+      root_task_id: 'parent-1',
+      title: 'Write tests'
+    });
+    const nodes = buildExplorer(source({ projects, tasks: [parent, child] }));
+    const projectNode = nodes.find((node) => node.id === 'projects')?.children[0];
+    expect(projectNode?.children.map((node) => node.label)).toEqual(['Ship feature']);
+    expect(projectNode?.children[0]?.children.map((node) => node.label)).toEqual(['Write tests']);
+  });
+
+  it('removes a child from the flat Working list once it nests under its loaded parent', () => {
+    const parent = view({ id: 'p', status: 'running', title: 'Parent' });
+    const child = view({ id: 'c', status: 'running', parent_task_id: 'p', title: 'Child' });
+    const nodes = buildExplorer(source({ tasks: [parent, child] }));
+    const working = nodes.find((node) => node.id === 'working');
+    expect(working?.children.map((node) => node.label)).toEqual(['Parent']);
+    expect(working?.count).toBe(1);
+  });
+
+  it('counts all direct children done', () => {
+    const parent = view({ id: 'p', title: 'Parent' });
+    const children = [
+      view({ id: 'c1', parent_task_id: 'p', root_task_id: 'p', status: 'completed' }),
+      view({ id: 'c2', parent_task_id: 'p', root_task_id: 'p', status: 'cancelled' })
+    ];
+    const node = taskNode(parent, source({ tasks: [parent, ...children] }), 'working');
+    expect(node.detail).toBe('2/2 done');
+  });
+
+  it('counts a mix of done, running and blocked children', () => {
+    const parent = view({ id: 'p', title: 'Parent' });
+    const children = [
+      view({ id: 'c1', parent_task_id: 'p', root_task_id: 'p', status: 'completed' }),
+      view({ id: 'c2', parent_task_id: 'p', root_task_id: 'p', status: 'completed' }),
+      view({ id: 'c3', parent_task_id: 'p', root_task_id: 'p', status: 'completed' }),
+      view({ id: 'c4', parent_task_id: 'p', root_task_id: 'p', status: 'running' }),
+      view({ id: 'c5', parent_task_id: 'p', root_task_id: 'p', status: 'blocked' })
+    ];
+    const node = taskNode(parent, source({ tasks: [parent, ...children] }), 'working');
+    expect(node.detail).toBe('3/5 done · 1 running · 1 blocked');
+  });
+
+  it('counts a blocked child without a running part', () => {
+    const parent = view({ id: 'p', title: 'Parent' });
+    const children = [
+      view({ id: 'c1', parent_task_id: 'p', root_task_id: 'p', status: 'completed' }),
+      view({ id: 'c2', parent_task_id: 'p', root_task_id: 'p', status: 'failed' })
+    ];
+    const node = taskNode(parent, source({ tasks: [parent, ...children] }), 'working');
+    expect(node.detail).toBe('1/2 done · 1 blocked');
+  });
+
+  it('counts a child needing the owner as waiting on you, per the attention items', () => {
+    const parent = view({ id: 'p', title: 'Parent' });
+    const needsOwner = view({ id: 'c1', parent_task_id: 'p', root_task_id: 'p', status: 'running' });
+    const done = view({ id: 'c2', parent_task_id: 'p', root_task_id: 'p', status: 'completed' });
+    const attention = [attentionItem(queueItem({ task_id: 'c1' }))];
+    const node = taskNode(
+      parent,
+      source({ tasks: [parent, needsOwner, done], attention }),
+      'working'
+    );
+    expect(node.detail).toBe('1/2 done · 1 waiting on you');
+  });
+
+  it('keeps a task with no children on its current status detail', () => {
+    const parent = view({ id: 'p', title: 'Parent', status: 'running' });
+    const node = taskNode(parent, source({ tasks: [parent] }), 'working');
+    expect(node.detail).toBe('Running');
+  });
+
+  it("follows the progress with the parent's latest report, or else its newest child's", () => {
+    const withOwnReport = view(
+      { id: 'p1', title: 'Parent with its own report' },
+      {
+        reports: [
+          {
+            task_id: 'p1',
+            attempt_id: 'a1',
+            request_id: 'r1',
+            summary: 'Older',
+            outcome: 'progress',
+            owner_action: null,
+            evidence_refs: []
+          },
+          {
+            task_id: 'p1',
+            attempt_id: 'a1',
+            request_id: 'r2',
+            summary: 'Latest from the parent',
+            outcome: 'progress',
+            owner_action: null,
+            evidence_refs: []
+          }
+        ]
+      }
+    );
+    const child = view({ id: 'c1', parent_task_id: 'p1', root_task_id: 'p1', status: 'completed' });
+    const node = taskNode(withOwnReport, source({ tasks: [withOwnReport, child] }), 'working');
+    expect(node.detail).toBe('1/1 done · Latest from the parent');
+
+    const parentNoReport = view({ id: 'p2', title: 'Parent' });
+    const olderChild = view(
+      {
+        id: 'c2',
+        parent_task_id: 'p2',
+        root_task_id: 'p2',
+        status: 'completed',
+        updated_at: '2026-01-01T10:00:00Z'
+      },
+      {
+        reports: [
+          {
+            task_id: 'c2',
+            attempt_id: 'a2',
+            request_id: 'r3',
+            summary: 'Older child report',
+            outcome: 'progress',
+            owner_action: null,
+            evidence_refs: []
+          }
+        ]
+      }
+    );
+    const newerChild = view(
+      {
+        id: 'c3',
+        parent_task_id: 'p2',
+        root_task_id: 'p2',
+        status: 'completed',
+        updated_at: '2026-01-01T12:00:00Z'
+      },
+      {
+        reports: [
+          {
+            task_id: 'c3',
+            attempt_id: 'a3',
+            request_id: 'r4',
+            summary: 'Newest child report',
+            outcome: 'progress',
+            owner_action: null,
+            evidence_refs: []
+          }
+        ]
+      }
+    );
+    const node2 = taskNode(
+      parentNoReport,
+      source({ tasks: [parentNoReport, olderChild, newerChild] }),
+      'working'
+    );
+    expect(node2.detail).toBe('2/2 done · Newest child report');
+  });
+});
+
 describe('since you were here', () => {
   const lastVisit = Date.parse('2026-01-01T11:00:00Z');
 
