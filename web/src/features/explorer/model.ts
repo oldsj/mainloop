@@ -15,7 +15,7 @@ import type { ProjectRow } from '@/features/projects/model';
 import type { ScheduleView } from '@/features/schedules/model';
 import { sessionTone, workspaceTone, type WorkspaceBadgeFields } from '@/features/sessions/model';
 import type { Session, TaskView } from '@/lib/contract';
-import { currentAttempt, statusTone, type Tone } from '@/lib/taskState';
+import { childrenOf, currentAttempt, statusTone, type Tone } from '@/lib/taskState';
 import { isCurrent } from '@/lib/sessionStatus';
 
 /** Where a row leads. The shell turns it into a route; the tree never builds URLs itself. */
@@ -102,16 +102,65 @@ export function askPrefill(node: Pick<ExplorerNode, 'label'>, target: Target): s
   }
 }
 
-/** The task's own sessions and workspace, read from its current attempt only. */
-function taskChildren(view: TaskView, source: ExplorerSource, path: string): ExplorerNode[] {
+/** The task's own child tasks, then its session and workspace, read from its current attempt only. */
+function taskChildren(
+  view: TaskView,
+  source: ExplorerSource,
+  path: string,
+  childTasks: TaskView[]
+): ExplorerNode[] {
+  const children: ExplorerNode[] = childTasks.map((child) => taskNode(child, source, path));
   const attempt = currentAttempt(view);
-  if (!attempt) return [];
-  const children: ExplorerNode[] = [];
+  if (!attempt) return children;
   const session = source.sessions.find((row) => row.id === attempt.session_id);
   if (session) children.push(sessionNode(session, `${path}/`));
   const workspace = source.workspaces.find((row) => row.workspace_id === attempt.workspace_id);
   if (workspace) children.push(workspaceNode(workspace, `${path}/`));
   return children;
+}
+
+/** Whether a direct child needs the owner, is still moving, is blocked, or is done. */
+function childBucket(
+  child: TaskView,
+  attentionTaskIds: ReadonlySet<string>
+): 'waiting' | 'blocked' | 'done' | 'running' {
+  if (attentionTaskIds.has(child.task.id)) return 'waiting';
+  const { status } = child.task;
+  if (status === 'completed' || status === 'cancelled') return 'done';
+  if (status === 'blocked' || status === 'failed') return 'blocked';
+  return 'running';
+}
+
+/** "3/5 done · 1 running · 1 blocked · 1 waiting on you", each part left out when it is zero. */
+function childProgressText(childTasks: TaskView[], attention: AttentionItem[]): string {
+  const attentionTaskIds = new Set(
+    attention.flatMap((item) => (item.task_id ? [item.task_id] : []))
+  );
+  const counts = { done: 0, running: 0, blocked: 0, waiting: 0 };
+  for (const child of childTasks) counts[childBucket(child, attentionTaskIds)]++;
+  const parts = [`${counts.done}/${childTasks.length} done`];
+  if (counts.running > 0) parts.push(`${counts.running} running`);
+  if (counts.blocked > 0) parts.push(`${counts.blocked} blocked`);
+  if (counts.waiting > 0) parts.push(`${counts.waiting} waiting on you`);
+  return parts.join(' · ');
+}
+
+/** The task's own latest report, or else its most recently updated child's latest report. */
+function latestReportLine(view: TaskView, childTasks: TaskView[]): string | undefined {
+  const ownReport = view.reports.at(-1);
+  if (ownReport) return briefSnippet(ownReport.summary);
+  for (const child of [...childTasks].sort(byUpdatedDesc)) {
+    const report = child.reports.at(-1);
+    if (report) return briefSnippet(report.summary);
+  }
+  return undefined;
+}
+
+/** A parent's detail: its children's progress, then the latest report line when there is one. */
+function parentDetail(view: TaskView, childTasks: TaskView[], source: ExplorerSource): string {
+  const progress = childProgressText(childTasks, source.attention);
+  const report = latestReportLine(view, childTasks);
+  return report ? `${progress} · ${report}` : progress;
 }
 
 export function taskNode(view: TaskView, source: ExplorerSource, parent: string): ExplorerNode {
@@ -122,18 +171,25 @@ export function taskNode(view: TaskView, source: ExplorerSource, parent: string)
   const title = task.title.trim();
   const label = title || briefSnippet(task.brief, 60) || FALLBACK_TITLE;
   const project = source.projects.find((row) => row.id === task.project_id);
+  const childTasks = childrenOf(source.tasks, task.id);
   return {
     id,
     label,
-    detail: statusLine(view),
+    detail: childTasks.length > 0 ? parentDetail(view, childTasks, source) : statusLine(view),
     // A task with no title already shows its brief as the label, so the snippet would repeat it.
     summary: title ? briefSnippet(task.brief) : undefined,
     tag: project?.full_name,
     tone: needsYou ? 'attention' : statusTone(task.status),
     target,
     ask: askPrefill({ label }, target),
-    children: taskChildren(view, source, id)
+    children: taskChildren(view, source, id, childTasks)
   };
+}
+
+/** A task nested under a loaded parent is shown there, not again as a flat sibling. */
+function hasLoadedParent(view: TaskView, source: ExplorerSource): boolean {
+  const parentId = view.task.parent_task_id;
+  return parentId != null && source.tasks.some((candidate) => candidate.task.id === parentId);
 }
 
 export function sessionNode(session: Session, parent: string): ExplorerNode {
@@ -267,12 +323,15 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
   for (const view of [...source.tasks].sort(byUpdatedDesc)) {
     const group = workGroup(view, null);
     const named = attentionTasks.has(view.task.id);
-    if (group === 'working' && !named) groups.working.push(view);
+    const nested = hasLoadedParent(view, source);
+    // A task nested under its parent elsewhere in the tree is not also a flat Working or
+    // Finished row; Needs you stays flat regardless, so an owner action is never hidden a level down.
+    if (group === 'working' && !named && !nested) groups.working.push(view);
     if ((group === 'needs-you' || group === 'blocked') && !named) {
       needs.push(taskNode(view, source, 'needs'));
     }
     const finished = view.task.status === 'completed' || view.task.status === 'cancelled';
-    if (finished && Date.parse(view.task.updated_at) >= finishedSince) {
+    if (finished && Date.parse(view.task.updated_at) >= finishedSince && !nested) {
       groups.finished.push(view);
     }
   }
@@ -284,7 +343,7 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
   const projects = source.projects.map((project) => {
     const path = `projects/${project.id}`;
     const tasks = source.tasks
-      .filter((view) => view.task.project_id === project.id)
+      .filter((view) => view.task.project_id === project.id && !hasLoadedParent(view, source))
       .sort(byUpdatedDesc);
     const target: Target = { to: 'project', id: project.id };
     return {

@@ -1,9 +1,10 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { view } from '@/test/fixtures/tasks';
 import { ExplorerTree } from './ExplorerTree';
+import { buildExplorer, type ExplorerNode, type ExplorerSource } from './model';
 import { LONG_PRESS_MS } from './RowMenu';
-import type { ExplorerNode } from './model';
 
 const nodes: ExplorerNode[] = [
   {
@@ -309,6 +310,47 @@ describe('task identity on a row', () => {
       />
     );
     expect(screen.queryByTestId('explorer-summary')).not.toBeInTheDocument();
+  });
+});
+
+describe('parent task progress on a row', () => {
+  function sourceWithChildren(): ExplorerSource {
+    const parent = view({ id: 'p', status: 'running', title: 'Ship feature' });
+    const done = view({ id: 'c1', parent_task_id: 'p', root_task_id: 'p', status: 'completed' });
+    const running = view({ id: 'c2', parent_task_id: 'p', root_task_id: 'p', status: 'running' });
+    return {
+      tasks: [parent, done, running],
+      attention: [],
+      sessions: [],
+      workspaces: [],
+      projects: [],
+      schedules: [],
+      online: true
+    };
+  }
+
+  function renderParentRow() {
+    const nodes = buildExplorer(sourceWithChildren());
+    const parentNode = nodes.find((node) => node.id === 'working')?.children[0] as ExplorerNode;
+    render(
+      <ExplorerTree
+        nodes={[parentNode]}
+        isExpanded={() => true}
+        onToggle={vi.fn()}
+        onOpen={vi.fn()}
+        onAsk={vi.fn()}
+      />
+    );
+  }
+
+  it("shows the parent's progress detail alongside its title, and lists its children beneath it", () => {
+    renderParentRow();
+    expect(screen.getByText('Ship feature')).toBeInTheDocument();
+    expect(screen.getByText('1/2 done · 1 running')).toBeInTheDocument();
+    const parentRow = screen.getByRole('treeitem', { name: 'Ship feature, 1/2 done · 1 running' });
+    expect(parentRow).toHaveAttribute('aria-expanded', 'true');
+    const childRows = within(parentRow).getAllByRole('treeitem');
+    expect(childRows).toHaveLength(2);
   });
 });
 
