@@ -38,8 +38,8 @@ COPY scripts/with-timeout.mjs /usr/local/lib/mainloop/with-timeout.mjs
 RUN node /usr/local/lib/mainloop/with-timeout.mjs 240 "pnpm prewarm" -- pnpm fetch --frozen-lockfile
 
 # Prewarm the Go module and build caches from go.mod/go.sum only. Application source
-# stays out of the image; std and every dependency package are compiled in both normal
-# and race mode so a workspace's first `go build`/`go test -race` is a cache hit.
+# stays out of the image; std is compiled so a workspace's first `go build` is a cache
+# hit for the standard library, which every build needs regardless of what it imports.
 FROM base AS go-deps
 USER 65532:65532
 WORKDIR /opt/mainloop-go-deps
@@ -47,19 +47,6 @@ COPY --chown=65532:65532 server/go.mod server/go.sum ./
 COPY scripts/with-timeout.mjs /usr/local/lib/mainloop/with-timeout.mjs
 RUN node /usr/local/lib/mainloop/with-timeout.mjs 600 "go mod download" -- go mod download
 RUN go build std
-# race-std and every dependency package are best-effort cache warmup, not a
-# correctness requirement: a single incidental failure (an OOM'd cgo helper, an
-# unsupported arch/os combination) must not fail the whole image build.
-RUN go build -race std || true
-# Each dependency module builds in its own `go build` invocation. `go list -m all`
-# includes modules kept only for version resolution, and bundling many patterns into
-# one `go build <pat1> <pat2> ...` means a single unresolvable one (a stale example
-# importing a path that moved, a Windows-only cmd, platform-specific asm) aborts
-# resolution before anything compiles, caching nothing. Per-module invocations let
-# every other module still warm its cache entry.
-RUN go list -m -f '{{if not .Main}}{{.Path}}/...{{end}}' all | grep -v '^$' > /tmp/go-deps.txt \
-    && xargs -P "$(nproc)" -I{} sh -c 'go build "{}" >/dev/null 2>&1 || true' < /tmp/go-deps.txt \
-    && xargs -P "$(nproc)" -I{} sh -c 'go build -race "{}" >/dev/null 2>&1 || true' < /tmp/go-deps.txt
 
 FROM base
 # Only lint configuration and package caches enter the public image, never application
