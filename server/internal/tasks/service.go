@@ -62,6 +62,10 @@ type Limits struct {
 	// that still holds capacity, or a task not yet given an attempt.
 	MaxChildrenPerParent int
 	MaxChildrenGlobal    int
+	// MaxActiveGlobal caps every task that holds a slot for the owner, root tasks included. A task
+	// created over this cap is queued (reason capacity_queued) instead of refused; see
+	// [Service.checkActiveCapacity] and [Service.admitQueued].
+	MaxActiveGlobal int
 	// ProvisionWindow is how long a new attempt may wait before it is aborted.
 	ProvisionWindow time.Duration
 	// Interval is the poll of the operation and delivery loops.
@@ -363,6 +367,12 @@ func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, i
 			return dbq.Task{}, err
 		}
 	}
+	// TASK_MAX_ACTIVE_GLOBAL applies to every task, root tasks included, unlike the child-only caps
+	// above. It never refuses: a task over the cap is still inserted, then requeued below.
+	queued, err := s.checkActiveCapacity(ctx, q, p.OwnerID)
+	if err != nil {
+		return dbq.Task{}, err
+	}
 	project, topic := ptr(in.ProjectID), ptr(in.TopicID)
 	if parent != nil {
 		if project != nil && (parent.ProjectID == nil || *project != *parent.ProjectID) {
@@ -425,7 +435,15 @@ func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, i
 		depth := int32(c.Depth) //nolint:gosec // validate bounds it to 0..1000
 		args.CheckoutBranch, args.CheckoutRef, args.CheckoutDepth = &c.Branch, &c.Ref, &depth
 	}
-	return q.InsertTask(ctx, args)
+	t, err := q.InsertTask(ctx, args)
+	if err != nil {
+		return dbq.Task{}, err
+	}
+	if queued {
+		reason := dbstate.ReasonCapacityQueued
+		return q.UpdateTaskState(ctx, dbq.UpdateTaskStateParams{ID: t.ID, Version: t.Version, Status: dbstate.TaskQueued, Reason: &reason})
+	}
+	return t, nil
 }
 
 // checkCapacity refuses a new child when its parent or the owner already has as many children as
@@ -454,6 +472,25 @@ func (s *Service) checkCapacity(ctx context.Context, q *dbq.Queries, owner, pare
 		}
 	}
 	return nil
+}
+
+// checkActiveCapacity reports whether a new task must be queued for TASK_MAX_ACTIVE_GLOBAL rather
+// than given an attempt right away. It never refuses: the owner-wide lock it takes serializes the
+// count against checkCapacity, concurrent creates and [Service.admitQueued], so the count taken
+// here and the task recorded right after it are consistent with every other admission decision.
+func (s *Service) checkActiveCapacity(ctx context.Context, q *dbq.Queries, owner string) (bool, error) {
+	if err := q.LockTaskRequest(ctx, "capacity\x1f"+owner); err != nil {
+		return false, err
+	}
+	lim := s.Limits.MaxActiveGlobal
+	if lim <= 0 {
+		return false, nil
+	}
+	n, err := q.CountActiveCapacity(ctx, owner)
+	if err != nil {
+		return false, err
+	}
+	return n >= int64(lim), nil
 }
 
 func notFoundOr(err error, reason string) error {
@@ -914,7 +951,22 @@ func (s *Service) load(ctx context.Context, q *dbq.Queries, tasks []dbq.Task) ([
 	if err != nil {
 		return nil, err
 	}
-	return buildViews(tasks, attempts, ops, arts, reports)
+	views, err := buildViews(tasks, attempts, ops, arts, reports)
+	if err != nil {
+		return nil, err
+	}
+	for i, t := range tasks {
+		if t.Reason == nil || *t.Reason != dbstate.ReasonCapacityQueued {
+			continue
+		}
+		ahead, err := q.CountQueuedAhead(ctx, dbq.CountQueuedAheadParams{OwnerID: t.OwnerID, CreatedAt: t.CreatedAt, TaskID: t.ID})
+		if err != nil {
+			return nil, err
+		}
+		n := int(ahead)
+		views[i].Task.QueuePosition = &n
+	}
+	return views, nil
 }
 
 // Operation returns an operation the principal may see: one on a task it can read, or one it
@@ -973,6 +1025,7 @@ func NewService(cfg *config.Config, pool *pgxpool.Pool, reg Resolver, log *slog.
 		MergeTools: bool(cfg.MergeToolsEnabled),
 		Limits: Limits{
 			MaxChildrenPerParent: cfg.Tasks.MaxChildrenPerParent, MaxChildrenGlobal: cfg.Tasks.MaxChildrenGlobal,
+			MaxActiveGlobal: cfg.Tasks.MaxActiveGlobal,
 			ProvisionWindow: cfg.Tasks.ProvisionWindow.Duration(), Interval: cfg.Tasks.ReconcileInterval.Duration(),
 			ProjectionEvery: cfg.Tasks.ProjectionEvery.Duration(),
 		},

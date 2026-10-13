@@ -39,7 +39,7 @@ func (s TaskState) String() string {
 // taskReasons lists the reasons each status accepts. A nil entry means the status takes none, and
 // the empty reason is listed where it is also allowed.
 var taskReasons = map[dbstate.TaskStatus][]dbstate.TaskReason{
-	dbstate.TaskQueued:    {"", dbstate.ReasonProvisioningUnavailable},
+	dbstate.TaskQueued:    {"", dbstate.ReasonProvisioningUnavailable, dbstate.ReasonCapacityQueued},
 	dbstate.TaskRunning:   {""},
 	dbstate.TaskWaiting:   {dbstate.ReasonAwaitingChild, dbstate.ReasonApproval, dbstate.ReasonCI, dbstate.ReasonPublication, dbstate.ReasonHandoff, dbstate.ReasonReconciliation},
 	dbstate.TaskBlocked:   {dbstate.ReasonOwnerDecision, dbstate.ReasonReconciliation},

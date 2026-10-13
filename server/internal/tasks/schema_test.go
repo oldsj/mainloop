@@ -26,7 +26,7 @@ func TestStatusReasonTableMatchesTheDatabase(t *testing.T) {
 		dbstate.TaskCompleted, dbstate.TaskFailed, dbstate.TaskCancelled}
 	reasons := []dbstate.TaskReason{"", dbstate.ReasonOwnerDecision, dbstate.ReasonAwaitingChild, dbstate.ReasonApproval, dbstate.ReasonCI,
 		dbstate.ReasonPublication, dbstate.ReasonHandoff, dbstate.ReasonReconciliation, dbstate.ReasonProvisioningUnavailable,
-		dbstate.ReasonHandoffUnavailable, dbstate.ReasonCancelUnavailable}
+		dbstate.ReasonCapacityQueued, dbstate.ReasonHandoffUnavailable, dbstate.ReasonCancelUnavailable}
 	id := e.mustCreate(e.own, tasks.CreateInput{})
 	for _, s := range statuses {
 		for _, r := range reasons {

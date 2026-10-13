@@ -15,7 +15,8 @@ var (
 	allReasons = []dbstate.TaskReason{
 		"", dbstate.ReasonOwnerDecision, dbstate.ReasonAwaitingChild, dbstate.ReasonApproval, dbstate.ReasonCI,
 		dbstate.ReasonPublication, dbstate.ReasonHandoff, dbstate.ReasonReconciliation,
-		dbstate.ReasonProvisioningUnavailable, dbstate.ReasonHandoffUnavailable, dbstate.ReasonCancelUnavailable,
+		dbstate.ReasonProvisioningUnavailable, dbstate.ReasonCapacityQueued, dbstate.ReasonHandoffUnavailable,
+		dbstate.ReasonCancelUnavailable,
 	}
 	allAttemptStates = []dbstate.AttemptState{
 		dbstate.AttemptCreating, dbstate.AttemptActive, dbstate.AttemptDraining, dbstate.AttemptFenced,
@@ -33,6 +34,7 @@ func TestValidTaskStateTable(t *testing.T) {
 	valid := map[TaskState]bool{
 		{dbstate.TaskQueued, ""}:                                    true,
 		{dbstate.TaskQueued, dbstate.ReasonProvisioningUnavailable}: true,
+		{dbstate.TaskQueued, dbstate.ReasonCapacityQueued}:          true,
 		{dbstate.TaskRunning, ""}:                                   true,
 		{dbstate.TaskWaiting, dbstate.ReasonAwaitingChild}:          true,
 		{dbstate.TaskWaiting, dbstate.ReasonApproval}:               true,
@@ -102,6 +104,7 @@ func TestTransitionTaskReasonChangesWithinAStatus(t *testing.T) {
 	for _, tc := range []struct{ from, to TaskState }{
 		{TaskState{dbstate.TaskQueued, ""}, TaskState{dbstate.TaskQueued, dbstate.ReasonProvisioningUnavailable}},
 		{TaskState{dbstate.TaskQueued, dbstate.ReasonProvisioningUnavailable}, TaskState{dbstate.TaskQueued, ""}},
+		{TaskState{dbstate.TaskQueued, dbstate.ReasonCapacityQueued}, TaskState{dbstate.TaskQueued, dbstate.ReasonProvisioningUnavailable}},
 		{TaskState{dbstate.TaskWaiting, dbstate.ReasonCI}, TaskState{dbstate.TaskWaiting, dbstate.ReasonPublication}},
 		{TaskState{dbstate.TaskBlocked, dbstate.ReasonOwnerDecision}, TaskState{dbstate.TaskBlocked, dbstate.ReasonReconciliation}},
 		{TaskState{dbstate.TaskBlocked, dbstate.ReasonOwnerDecision}, TaskState{dbstate.TaskRunning, ""}},
