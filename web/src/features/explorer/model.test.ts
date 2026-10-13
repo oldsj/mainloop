@@ -347,7 +347,12 @@ describe('parent task progress', () => {
 
   it('counts a child needing the owner as waiting on you, per the attention items', () => {
     const parent = view({ id: 'p', title: 'Parent' });
-    const needsOwner = view({ id: 'c1', parent_task_id: 'p', root_task_id: 'p', status: 'running' });
+    const needsOwner = view({
+      id: 'c1',
+      parent_task_id: 'p',
+      root_task_id: 'p',
+      status: 'running'
+    });
     const done = view({ id: 'c2', parent_task_id: 'p', root_task_id: 'p', status: 'completed' });
     const attention = [attentionItem(queueItem({ task_id: 'c1' }))];
     const node = taskNode(
