@@ -186,8 +186,15 @@ func bindingRole(shape attemptShape) dbstate.BindingRole {
 // in one transaction. Nothing outside the database has been touched, so a crash leaves either
 // nothing or all of it.
 func (s *Service) beginCreate(ctx context.Context, c reconcile.Claim, op dbq.TaskOperation) (reconcile.Outcome, error) {
+	ready, err := s.admitQueued(ctx, *op.TaskID)
+	if err != nil {
+		return reconcile.Outcome{}, err
+	}
+	if !ready {
+		return reconcile.RetryAfter(s.Limits.Interval), nil
+	}
 	var held bool
-	err := s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
+	err = s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
 		t, err := q.GetTaskByIDForUpdate(ctx, *op.TaskID)
 		if err != nil {
 			return nil, err
@@ -280,6 +287,53 @@ func (s *Service) beginCreate(ctx context.Context, c reconcile.Claim, op dbq.Tas
 		return reconcile.Outcome{}, err
 	}
 	return reconcile.Recorded(), nil
+}
+
+// admitQueued promotes a task waiting on TASK_MAX_ACTIVE_GLOBAL when a slot is free and no other
+// queued task of the owner comes before it, moving it from reason capacity_queued to
+// provisioning_unavailable in the same transaction as the count; it reports whether the task may
+// now be given an attempt. A task that was never queued for capacity is always ready. The lock is
+// the one [Service.checkActiveCapacity] takes, so a concurrent create's admission count and a
+// concurrent promotion here can never both see the same free slot.
+func (s *Service) admitQueued(ctx context.Context, taskID string) (bool, error) {
+	ready := false
+	err := s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
+		t, err := q.GetTaskByIDForUpdate(ctx, taskID)
+		if err != nil {
+			return nil, err
+		}
+		if TaskFinal(t.Status) || t.Reason == nil || *t.Reason != dbstate.ReasonCapacityQueued {
+			ready = true
+			return nil, nil
+		}
+		if err := q.LockTaskRequest(ctx, "capacity\x1f"+t.OwnerID); err != nil {
+			return nil, err
+		}
+		ahead, err := q.CountQueuedAhead(ctx, dbq.CountQueuedAheadParams{OwnerID: t.OwnerID, CreatedAt: t.CreatedAt, TaskID: t.ID})
+		if err != nil {
+			return nil, err
+		}
+		if ahead > 0 {
+			return nil, nil
+		}
+		if lim := s.Limits.MaxActiveGlobal; lim > 0 {
+			n, err := q.CountActiveCapacity(ctx, t.OwnerID)
+			if err != nil {
+				return nil, err
+			}
+			if n >= int64(lim) {
+				return nil, nil
+			}
+		}
+		reason := dbstate.ReasonProvisioningUnavailable
+		after, err := q.UpdateTaskState(ctx, dbq.UpdateTaskStateParams{ID: t.ID, Version: t.Version, Status: dbstate.TaskQueued, Reason: &reason})
+		if err != nil {
+			return nil, err
+		}
+		ready = true
+		return []events.Draft{s.updated(after)}, nil
+	})
+	return ready, err
 }
 
 // waitForBranch is a create whose branch has a writer already. It tries again until the

@@ -48,6 +48,7 @@ const (
 	ReasonHandoff                 TaskReason = "handoff"
 	ReasonReconciliation          TaskReason = "reconciliation"
 	ReasonProvisioningUnavailable TaskReason = "provisioning_unavailable"
+	ReasonCapacityQueued          TaskReason = "capacity_queued"
 	ReasonHandoffUnavailable      TaskReason = "handoff_unavailable"
 	ReasonCancelUnavailable       TaskReason = "cancel_unavailable"
 )

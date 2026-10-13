@@ -277,7 +277,7 @@ func newRig(t *testing.T) *rig {
 	r.stops = &fakeStops{}
 	e.svc.Workspaces, e.svc.Sessions, e.svc.Observer = r.ws, r.ses, r.obs
 	e.svc.Limits = tasks.Limits{
-		MaxChildrenPerParent: 3, MaxChildrenGlobal: 6, ProvisionWindow: 30 * time.Second,
+		MaxChildrenPerParent: 3, MaxChildrenGlobal: 6, MaxActiveGlobal: 100, ProvisionWindow: 30 * time.Second,
 		Interval: 10 * time.Millisecond, ProjectionEvery: time.Second, SettleIdle: time.Nanosecond,
 		ResolveBackoff: reconcile.Backoff{Base: 20 * time.Millisecond, Max: 20 * time.Millisecond},
 	}

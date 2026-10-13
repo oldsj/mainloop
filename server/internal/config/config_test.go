@@ -116,6 +116,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Tasks.ReconcileInterval.Duration() != 5*time.Second || cfg.WorkspaceDevelopmentPlatform != "linux/arm64" {
 		t.Errorf("tasks/platform defaults: %+v", cfg.Tasks)
 	}
+	if cfg.Tasks.MaxActiveGlobal != 4 {
+		t.Errorf("task active cap default: %+v", cfg.Tasks)
+	}
 	if cfg.Events.RetentionHours != 24 || cfg.Events.SubscriberBuffer != 64 || cfg.Events.PollInterval.Duration() != 5*time.Second {
 		t.Errorf("events defaults: %+v", cfg.Events)
 	}
@@ -191,6 +194,7 @@ func TestInvalidValues(t *testing.T) {
 		{"bad port", base("PORT", "70000"), "PORT"},
 		{"non-numeric port", base("DB_PORT", "abc"), "DB_PORT"},
 		{"zero children", base("TASK_MAX_CHILDREN_PER_PARENT", "0"), "TASK_MAX_CHILDREN"},
+		{"zero active cap", base("TASK_MAX_ACTIVE_GLOBAL", "0"), "TASK_MAX_ACTIVE_GLOBAL"},
 		{"bad seconds", base("TASK_RECONCILE_SECONDS", "0"), "TASK_RECONCILE_SECONDS"},
 		{"zero provision window", base("TASK_PROVISION_WINDOW_SECONDS", "0"), "TASK_PROVISION_WINDOW_SECONDS"},
 		{"negative projection period", base("TASK_PROJECTION_SECONDS", "-5"), "TASK_PROJECTION_SECONDS"},

@@ -249,6 +249,23 @@ WHERE t.owner_id = $1 AND t.parent_task_id IS NOT NULL
   AND (EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id AND a.capacity_held)
        OR (t.status NOT IN ('completed', 'failed', 'cancelled') AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id)));
 
+-- TASK_MAX_ACTIVE_GLOBAL: every task that holds a slot for the owner, root tasks included. A task
+-- queued for this cap (reason capacity_queued) never holds a slot, so it is excluded here even
+-- though it has no attempt yet; it is counted by CountQueuedAhead instead.
+-- name: CountActiveCapacity :one
+SELECT count(*) FROM tasks t
+WHERE t.owner_id = $1
+  AND (EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id AND a.capacity_held)
+       OR (t.status NOT IN ('completed', 'failed', 'cancelled') AND t.reason IS DISTINCT FROM 'capacity_queued'
+           AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id)));
+
+-- The FIFO position of a task waiting on TASK_MAX_ACTIVE_GLOBAL: the other queued tasks of the
+-- owner recorded before it. Zero means it is next.
+-- name: CountQueuedAhead :one
+SELECT count(*) FROM tasks t
+WHERE t.owner_id = $1 AND t.reason = 'capacity_queued'
+  AND (t.created_at, t.id) < (sqlc.arg(created_at)::timestamptz, sqlc.arg(task_id)::text);
+
 -- Writer claims. A task claim is keyed by its attempt and leaves binding_id empty.
 
 -- name: ClaimTaskWriter :one

@@ -109,7 +109,10 @@ type Tasks struct {
 	DefaultProviderProfileID string  `env:"TASK_DEFAULT_PROVIDER_PROFILE_ID" envDefault:"claude"`
 	MaxChildrenPerParent     int     `env:"TASK_MAX_CHILDREN_PER_PARENT" envDefault:"3"`
 	MaxChildrenGlobal        int     `env:"TASK_MAX_CHILDREN_GLOBAL" envDefault:"6"`
-	ReconcileInterval        Seconds `env:"TASK_RECONCILE_SECONDS" envDefault:"5"`
+	// MaxActiveGlobal caps every task that holds capacity for the owner, root tasks included. A
+	// task created over the cap is queued rather than refused; see internal/tasks.
+	MaxActiveGlobal   int     `env:"TASK_MAX_ACTIVE_GLOBAL" envDefault:"4"`
+	ReconcileInterval Seconds `env:"TASK_RECONCILE_SECONDS" envDefault:"5"`
 	// ProvisionWindow is how long a new attempt may wait for its workspace before it is aborted.
 	ProvisionWindow Seconds `env:"TASK_PROVISION_WINDOW_SECONDS" envDefault:"900"`
 	// ProjectionEvery is how often the GitHub observation of code tasks runs.
@@ -294,6 +297,9 @@ func (c *Config) validate() error {
 	}
 	if c.Tasks.MaxChildrenPerParent < 1 || c.Tasks.MaxChildrenGlobal < 1 {
 		fail("TASK_MAX_CHILDREN_PER_PARENT and TASK_MAX_CHILDREN_GLOBAL must be at least 1")
+	}
+	if c.Tasks.MaxActiveGlobal < 1 {
+		fail("TASK_MAX_ACTIVE_GLOBAL must be at least 1")
 	}
 	if !validProviderID(c.Tasks.DefaultProviderProfileID) {
 		fail("TASK_DEFAULT_PROVIDER_PROFILE_ID must match ^[a-z][a-z0-9_-]*$")

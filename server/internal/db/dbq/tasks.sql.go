@@ -355,6 +355,24 @@ func (q *Queries) ConfirmAttemptWorkspaceCleanup(ctx context.Context, id string)
 	return err
 }
 
+const countActiveCapacity = `-- name: CountActiveCapacity :one
+SELECT count(*) FROM tasks t
+WHERE t.owner_id = $1
+  AND (EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id AND a.capacity_held)
+       OR (t.status NOT IN ('completed', 'failed', 'cancelled') AND t.reason IS DISTINCT FROM 'capacity_queued'
+           AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id)))
+`
+
+// TASK_MAX_ACTIVE_GLOBAL: every task that holds a slot for the owner, root tasks included. A task
+// queued for this cap (reason capacity_queued) never holds a slot, so it is excluded here even
+// though it has no attempt yet; it is counted by CountQueuedAhead instead.
+func (q *Queries) CountActiveCapacity(ctx context.Context, ownerID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveCapacity, ownerID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countGlobalCapacity = `-- name: CountGlobalCapacity :one
 SELECT count(*) FROM tasks t
 WHERE t.owner_id = $1 AND t.parent_task_id IS NOT NULL
@@ -397,6 +415,27 @@ type CountParentCapacityParams struct {
 // Capacity: attempts that still hold a slot, plus tasks not yet given an attempt.
 func (q *Queries) CountParentCapacity(ctx context.Context, arg CountParentCapacityParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countParentCapacity, arg.OwnerID, arg.ParentTaskID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countQueuedAhead = `-- name: CountQueuedAhead :one
+SELECT count(*) FROM tasks t
+WHERE t.owner_id = $1 AND t.reason = 'capacity_queued'
+  AND (t.created_at, t.id) < ($2::timestamptz, $3::text)
+`
+
+type CountQueuedAheadParams struct {
+	OwnerID   string
+	CreatedAt time.Time
+	TaskID    string
+}
+
+// The FIFO position of a task waiting on TASK_MAX_ACTIVE_GLOBAL: the other queued tasks of the
+// owner recorded before it. Zero means it is next.
+func (q *Queries) CountQueuedAhead(ctx context.Context, arg CountQueuedAheadParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countQueuedAhead, arg.OwnerID, arg.CreatedAt, arg.TaskID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err

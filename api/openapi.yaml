@@ -6709,6 +6709,7 @@ components:
                 - handoff
                 - reconciliation
                 - provisioning_unavailable
+                - capacity_queued
                 - handoff_unavailable
                 - cancel_unavailable
               type: string
@@ -6746,6 +6747,13 @@ components:
           format: date-time
           title: Updated At
           type: string
+        queue_position:
+          anyOf:
+            - minimum: 0
+              type: integer
+            - type: 'null'
+          default: null
+          title: Queue Position
       required:
         - id
         - owner_id
@@ -6769,6 +6777,7 @@ components:
         - current_attempt_id
         - version
         - checkout
+        - queue_position
       title: Task
       type: object
     TaskArtifact:
