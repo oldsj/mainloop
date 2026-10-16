@@ -182,6 +182,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	taskOpts := []tasks.Option{
 		tasks.WithRuntimes(wsSvc, svc),
 		tasks.WithStopObserver(&tasks.KagentStops{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc}),
+		tasks.WithLivenessObserver(kc),
 	}
 	if gh != nil {
 		taskOpts = append(taskOpts, tasks.WithObserver(tasks.GitHubObserver(&github.TaskObserver{App: gh})))

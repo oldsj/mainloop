@@ -216,6 +216,16 @@ WHERE (a.state IN ('draining', 'fenced')
 ORDER BY a.updated_at, a.id
 LIMIT $1;
 
+-- name: ListActiveAttemptsForLiveness :many
+-- The current attempt of every task that still thinks it is running: the liveness sweep checks
+-- each one's kagent session and bounds how long it may go without activity or in total. A task
+-- already blocked, however that happened, drops out on its own; this sweep never reopens one.
+SELECT a.* FROM task_attempts a
+JOIN tasks t ON t.id = a.task_id
+WHERE a.state = 'active' AND t.status = 'running' AND t.current_attempt_id = a.id
+ORDER BY a.updated_at, a.id
+LIMIT $1;
+
 -- name: ListAttemptWorkspaceCleanups :many
 -- Final attempts use a separate bounded batch, so cleanup cannot starve runtime stop resolution.
 -- Unchecked cleanup comes first; unresolved looks move behind other due work durably.

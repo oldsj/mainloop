@@ -1408,6 +1408,77 @@ func (q *Queries) InsertTaskReport(ctx context.Context, arg InsertTaskReportPara
 	return i, err
 }
 
+const listActiveAttemptsForLiveness = `-- name: ListActiveAttemptsForLiveness :many
+SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at FROM task_attempts a
+JOIN tasks t ON t.id = a.task_id
+WHERE a.state = 'active' AND t.status = 'running' AND t.current_attempt_id = a.id
+ORDER BY a.updated_at, a.id
+LIMIT $1
+`
+
+// The current attempt of every task that still thinks it is running: the liveness sweep checks
+// each one's kagent session and bounds how long it may go without activity or in total. A task
+// already blocked, however that happened, drops out on its own; this sweep never reopens one.
+func (q *Queries) ListActiveAttemptsForLiveness(ctx context.Context, limit int32) ([]TaskAttempt, error) {
+	rows, err := q.db.Query(ctx, listActiveAttemptsForLiveness, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TaskAttempt{}
+	for rows.Next() {
+		var i TaskAttempt
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.Number,
+			&i.ProfileID,
+			&i.NativeProvider,
+			&i.ConfigurationRevision,
+			&i.AgentNamespace,
+			&i.AgentName,
+			&i.Role,
+			&i.Depth,
+			&i.State,
+			&i.CapacityHeld,
+			&i.SessionID,
+			&i.BindingID,
+			&i.WorkspaceID,
+			&i.WorkspaceRequestID,
+			&i.WorkspaceCreatesInflight,
+			&i.WorkspaceCleanupConfirmed,
+			&i.WorkspaceCleanupAttempts,
+			&i.WorkspaceCleanupAfter,
+			&i.WriterGeneration,
+			&i.BriefDeliveryID,
+			&i.PredecessorID,
+			&i.SuccessorID,
+			&i.EvidenceRefs,
+			&i.ResultRef,
+			&i.Environment,
+			&i.InitialRef,
+			&i.CheckpointRef,
+			&i.ManifestRef,
+			&i.SupersededAt,
+			&i.ArchivedAt,
+			&i.NativeDeletedAt,
+			&i.RetentionHold,
+			&i.StopState,
+			&i.ResolveAttempts,
+			&i.ResolveAfter,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAttemptWorkspaceCleanups = `-- name: ListAttemptWorkspaceCleanups :many
 SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at FROM task_attempts
 WHERE state IN ('superseded', 'failed', 'cancelled', 'completed')

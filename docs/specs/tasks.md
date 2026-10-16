@@ -78,9 +78,24 @@ branch used for the writer claim and push target, independently of `ref`.
 
 Public status is `queued`, `running`, `waiting`, `blocked`, `completed`, `failed` or
 `cancelled`. Reasons distinguish awaiting child, approval, CI, publication, handoff and
-reconciliation. Agent activity, delivery, workspace health, attention and publication remain
+reconciliation. A `running` task can also be blocked by the liveness sweep, with reason
+`session_lost`, `stalled` or `runtime_limit` (see "Liveness bounds" below). Agent activity,
+delivery, workspace health, attention and publication remain
 separate observations. A provider report or finished turn cannot prove coding-task completion.
 Verified merged publication is the later completion gate.
+
+**Liveness bounds.** Every `running` task is bounded, not just watched: a periodic liveness
+sweep reads the kagent session behind the task's current (`active`) attempt and blocks the task,
+once, the first time one of three things is true. `session_lost` means kagent reports no such
+session, or one whose runtime can no longer run again (failed, or on the way out). `stalled`
+means the session has shown no activity, by kagent's own record of it, for `TASK_STALL_TIMEOUT`
+(default 45 minutes); any fresh activity resets the clock, since the sweep always reads kagent's
+own timestamp rather than caching one. `runtime_limit` is the last-resort safety net: the attempt
+has run longer than `TASK_MAX_RUNTIME` (default 6 hours) regardless of activity. None of these
+cancels the native session; they only move the task to `blocked` with the matching reason and
+raise the owner's attention, the same way a `blocked` / `reconciliation` task does. There is no
+automatic retry: the owner decides whether to let the agent keep working, inspect it, or start
+over. A task already blocked, for this or any other reason, is left alone until the owner acts.
 
 A verified observation of the task's own linked PR projects both `pr_state: merged`
 and `merge_state: merged`, including a merge by the parent or another actor. It outranks
@@ -528,5 +543,6 @@ Labels: **implemented** means built in `server/` and covered by tests on a scrat
 - **Implemented:** retry and reassign return the `blocked` operation (`handoff_unavailable`, source attempt set) on every path after the target provider is validated; a task that is already final refuses with 409 `task_terminal`.
 - **Implemented:** agent views. An agent sees the reports of its task's current attempt only, no artifacts, no checkpoint or manifest refs, and no `pending_approval_ids`.
 - **Implemented:** merged completion (`task-complete` sweep) and `projection.merge_state` / `merge_proposal_id`: `merge_state` is `merged` while the task's own PR is observed merged, and `merge_proposal_id` is set when the sweep completes the task from the merge service's merged candidate. `publication_state` stays null.
+- **Implemented:** the liveness sweep (`task-liveness`). It lists the current attempt of every task whose status is still `running` and whose attempt is `active`, so a task it has already blocked drops out on its own and the sweep never repeats work on it. For each it asks `kagent.Client.ObserveLiveness`, which wraps `ObserveSession`: a missing session (`connect.CodeNotFound`) answers "does not exist" rather than an error, and a session in a failed or deleting/deleted runtime state answers terminal. Either blocks the task `blocked` / `session_lost`. Otherwise the sweep compares its own clock against the session's `updated_at` (`stalled` past `TASK_STALL_TIMEOUT_SECONDS`, default 2700) and against the attempt's `created_at` (`runtime_limit` past `TASK_MAX_RUNTIME_SECONDS`, default 21600), in that order, so a session that looks fine but has run too long is still caught. A read error from kagent is logged and leaves the task alone for the next pass; the task row is locked, and the move is skipped if the task has ended, is no longer pointed at the checked attempt, or is already in the exact target state.
 - **Not built:** handoff (retry and reassign) and the rest of the publication projection (`publication_state`; merge states other than `merged`). Without a configured GitHub App, the observation sweep does nothing.
 - **Not proven:** any run against kagent, a real workspace, GitHub or a cluster.

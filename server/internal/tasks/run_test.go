@@ -15,6 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/tasks"
@@ -205,6 +206,44 @@ func (f *fakeStops) lookCount() int {
 	return f.calls
 }
 
+// fakeLiveness answers the liveness sweep's view of a session: present and fresh until told
+// otherwise. set installs the answer for one session id; sessions it was never told about report
+// present and fresh, so a test only states what it means to change.
+type fakeLiveness struct {
+	mu    sync.Mutex
+	byID  map[string]kagent.SessionLiveness
+	calls int
+}
+
+func (f *fakeLiveness) ObserveLiveness(_ context.Context, sessionID string) (kagent.SessionLiveness, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.byID == nil {
+		return kagent.SessionLiveness{Exists: true, LastActivity: time.Now()}, nil
+	}
+	live, ok := f.byID[sessionID]
+	if !ok {
+		return kagent.SessionLiveness{Exists: true, LastActivity: time.Now()}, nil
+	}
+	return live, nil
+}
+
+func (f *fakeLiveness) set(sessionID string, live kagent.SessionLiveness) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.byID == nil {
+		f.byID = map[string]kagent.SessionLiveness{}
+	}
+	f.byID[sessionID] = live
+}
+
+func (f *fakeLiveness) lookCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 // fakeObserver answers the projection sweep.
 type fakeObserver struct {
 	mu    sync.Mutex
@@ -271,6 +310,8 @@ type rig struct {
 	obs *fakeObserver
 	// stops is installed as the StopObserver by the tests that resolve unconfirmed stops.
 	stops *fakeStops
+	// live is installed as the LivenessObserver by the tests of the liveness sweep.
+	live *fakeLiveness
 }
 
 func newRig(t *testing.T) *rig {
@@ -282,11 +323,13 @@ func newRig(t *testing.T) *rig {
 	r.ses.OwnerID = owner
 	r.obs = &fakeObserver{}
 	r.stops = &fakeStops{}
-	e.svc.Workspaces, e.svc.Sessions, e.svc.Observer = r.ws, r.ses, r.obs
+	r.live = &fakeLiveness{}
+	e.svc.Workspaces, e.svc.Sessions, e.svc.Observer, e.svc.Liveness = r.ws, r.ses, r.obs, r.live
 	e.svc.Limits = tasks.Limits{
 		MaxChildrenPerParent: 3, MaxChildrenGlobal: 6, ProvisionWindow: 30 * time.Second,
 		Interval: 10 * time.Millisecond, ProjectionEvery: time.Second, SettleIdle: time.Nanosecond,
 		ResolveBackoff: reconcile.Backoff{Base: 20 * time.Millisecond, Max: 20 * time.Millisecond},
+		StallTimeout:   45 * time.Minute, MaxRuntime: 6 * time.Hour,
 	}
 	e.svc.Log = slog.Default()
 	return r
@@ -350,6 +393,10 @@ func (r *rig) str(sql string, args ...any) string {
 
 func (r *rig) taskStatus(id string) string {
 	return r.str(`SELECT status FROM tasks WHERE id = $1`, id)
+}
+
+func (r *rig) taskReason(id string) string {
+	return r.str(`SELECT reason FROM tasks WHERE id = $1`, id)
 }
 
 func (r *rig) attemptState(id string) string {

@@ -46,7 +46,10 @@ const REASON_LABELS: Record<TaskReason, string> = {
   reconciliation: 'reconciling uncertain state',
   provisioning_unavailable: 'workspace provisioning is not available yet',
   handoff_unavailable: 'handoff is not available yet',
-  cancel_unavailable: 'cancellation is not available yet'
+  cancel_unavailable: 'cancellation is not available yet',
+  session_lost: 'its native session is gone or terminal',
+  stalled: 'its session has shown no activity for a while',
+  runtime_limit: 'it has run longer than its runtime bound'
 };
 
 export type Tone = 'active' | 'attention' | 'ok' | 'bad' | 'muted';

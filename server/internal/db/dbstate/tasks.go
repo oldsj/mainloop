@@ -50,6 +50,12 @@ const (
 	ReasonProvisioningUnavailable TaskReason = "provisioning_unavailable"
 	ReasonHandoffUnavailable      TaskReason = "handoff_unavailable"
 	ReasonCancelUnavailable       TaskReason = "cancel_unavailable"
+	// ReasonSessionLost, ReasonStalled and ReasonRuntimeLimit are the liveness sweep's bounds on a
+	// running task: its attempt's kagent session is gone or terminal, it has shown no activity for
+	// TASK_STALL_TIMEOUT, or it has run longer than TASK_MAX_RUNTIME. See internal/tasks/liveness.go.
+	ReasonSessionLost  TaskReason = "session_lost"
+	ReasonStalled      TaskReason = "stalled"
+	ReasonRuntimeLimit TaskReason = "runtime_limit"
 )
 
 // AttemptState is task_attempts.state.

@@ -376,3 +376,41 @@ Findings stay in ordinary reports/evidence references: reviewed SHAs, paths, dup
 suggested helper, severity/confidence and explicit gaps. No raw diff or prompt is copied to the
 health ledger. Empty findings with complete coverage differ from an incomplete review. Findings
 can suggest follow-up tasks but do not authorize changes, post comments or resolve threads.
+
+## Task liveness
+
+Status: **implemented**, 2026-10-16. This is a separate concern from the friction/token
+collection above: it answers whether a `running` task's native session is still there at all,
+not how it is spending tokens or tools. See `docs/specs/tasks.md` ("Liveness bounds") for the
+task-status contract; this section covers the mechanism.
+
+A task attempt is agent activity Mainloop does not itself run; nothing before this slice bounded
+how long one could claim to be `running` after its kagent session stopped existing or making
+progress. The `task-liveness` sweep (`server/internal/tasks/liveness.go`) closes that gap without
+adding a second session owner or scheduler: it only reads kagent's own session record and writes
+the task's existing `status`/`reason` columns, the same durable fields every other task
+transition uses.
+
+Each pass lists the current, `active` attempt of every task still `status = 'running'` (a task
+the sweep already blocked drops out of that list on its own, so a repeat pass costs one empty
+query and nothing else) and asks `LivenessObserver.ObserveLiveness` for each attempt's session.
+The production observer is `*kagent.Client`, through `ObserveSession`: a `connect.CodeNotFound`
+reports the session does not exist; a `RuntimeState` of failed, deleting or deleted reports it
+terminal; otherwise the session's own `updated_at` is the one activity signal used, read fresh
+on every pass and never cached, so genuine agent activity always resets the stall clock on the
+next look; there is no separate Mainloop-side "last seen" column to fall out of sync with it. A
+read error leaves the task alone for the next pass rather than guessing.
+
+The sweep blocks a task at most once per cause, in this order: `session_lost` (the session is
+gone or terminal — there is no point timing anything out once the runtime itself is gone),
+`stalled` (no activity for `TASK_STALL_TIMEOUT_SECONDS`, default 2700/45m), then `runtime_limit`
+(the attempt has run longer than `TASK_MAX_RUNTIME_SECONDS`, default 21600/6h, regardless of
+activity — the safety net of last resort). None of these cancels the native session or retries
+anything; the only effect is the existing `blocked` status transition and the existing
+reconciliation-attention path (`task_reconciliation_needs`), so the owner sees it the same way a
+`blocked` / `reconciliation` task already surfaces, with a reason that says which of the three it
+was.
+
+Not built: using this signal to automatically retry, reassign or cancel the stuck attempt; that
+is an owner decision this slice deliberately leaves alone. Not proven: behavior against a live
+kagent restart, only against a fake `LivenessObserver` in `server/internal/tasks/liveness_test.go`.

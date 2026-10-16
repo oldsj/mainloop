@@ -2,6 +2,8 @@ package kagent
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
@@ -127,6 +129,43 @@ func (c *Client) ObserveSession(ctx context.Context, id string) (*api.Session, e
 		return nil, &OutcomeUnknown{Op: op, Detail: "reply is for a different session"}
 	}
 	return s, nil
+}
+
+// SessionLiveness is what a liveness sweep needs from a kagent Session: whether kagent still has a
+// record of it, whether its runtime can no longer run again, and when kagent last recorded it
+// changing. The zero value is a session kagent has no record of.
+type SessionLiveness struct {
+	Exists       bool
+	Terminal     bool
+	LastActivity time.Time
+}
+
+// terminalRuntimeStates are the Session states nothing can resume: failed outright, or on the way
+// out and gone. Suspended is not terminal; resuming it is normal.
+func terminalRuntimeStates(s api.RuntimeState) bool {
+	switch s {
+	case api.RuntimeState_RUNTIME_STATE_FAILED, api.RuntimeState_RUNTIME_STATE_DELETING, api.RuntimeState_RUNTIME_STATE_DELETED:
+		return true
+	}
+	return false
+}
+
+// ObserveLiveness reads a Session for liveness only, the same way ObserveSession reads one for
+// display: a session kagent has no record of at all is not an error, it is simply not Exists.
+// LastActivity is kagent's own updated_at, the only record it keeps of the session changing; a
+// caller judging a stall compares it with its own clock, never caching it across calls.
+func (c *Client) ObserveLiveness(ctx context.Context, id string) (SessionLiveness, error) {
+	s, err := c.ObserveSession(ctx, id)
+	if err != nil {
+		var se *SessionError
+		if errors.As(err, &se) && se.Code == connect.CodeNotFound {
+			return SessionLiveness{}, nil
+		}
+		return SessionLiveness{}, err
+	}
+	return SessionLiveness{
+		Exists: true, Terminal: terminalRuntimeStates(s.GetState()), LastActivity: s.GetUpdatedAt().AsTime(),
+	}, nil
 }
 
 // SuspendSession suspends a Session's runtime.

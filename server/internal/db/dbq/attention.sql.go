@@ -451,8 +451,12 @@ const openTaskReconciliationAttention = `-- name: OpenTaskReconciliationAttentio
 INSERT INTO attention_items AS a (id, owner_id, kind, source_kind, source_id, task_id, title, needed, href, reason_code)
 SELECT 'attn_reconciliation_' || n.task_id, n.owner_id, 'owner_decision', 'task_reconciliation', n.task_id,
        n.task_id, n.title,
-       CASE n.reason_code WHEN 'runtime_stop_unresolved' THEN 'Runtime stop remains unconfirmed; reconcile the held claim and capacity.'
-       ELSE 'Task needs reconciliation; inspect its attempt evidence.' END,
+       CASE n.reason_code
+           WHEN 'runtime_stop_unresolved' THEN 'Runtime stop remains unconfirmed; reconcile the held claim and capacity.'
+           WHEN 'session_lost' THEN 'The task''s native session is gone or terminal; it never reported back.'
+           WHEN 'stalled' THEN 'The task''s session has shown no activity for a while; it may be stuck.'
+           WHEN 'runtime_limit' THEN 'The task has run longer than its runtime bound; check whether it is still working.'
+           ELSE 'Task needs reconciliation; inspect its attempt evidence.' END,
        '/tasks/' || n.task_id, n.reason_code
 FROM task_reconciliation_needs n WHERE n.owner_id = $1
 ON CONFLICT (source_kind, source_id) DO UPDATE
