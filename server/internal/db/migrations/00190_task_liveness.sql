@@ -12,6 +12,16 @@ ALTER TABLE tasks ADD CONSTRAINT tasks_reason_check CHECK (
         'session_lost', 'stalled', 'runtime_limit'
     )
 );
+-- task_operations.reason shares the same value set as tasks.reason in the original migration;
+-- keep them in lockstep even though no operation uses the three new values yet.
+ALTER TABLE task_operations DROP CONSTRAINT task_operations_reason_check;
+ALTER TABLE task_operations ADD CONSTRAINT task_operations_reason_check CHECK (
+    reason IN (
+        'owner_decision', 'awaiting_child', 'approval', 'ci', 'publication', 'handoff',
+        'reconciliation', 'provisioning_unavailable', 'handoff_unavailable', 'cancel_unavailable',
+        'session_lost', 'stalled', 'runtime_limit'
+    )
+);
 ALTER TABLE tasks DROP CONSTRAINT tasks_status_reason;
 ALTER TABLE tasks ADD CONSTRAINT tasks_status_reason CHECK (
     CASE status
@@ -83,6 +93,13 @@ ALTER TABLE tasks ADD CONSTRAINT tasks_status_reason CHECK (
 );
 ALTER TABLE tasks DROP CONSTRAINT tasks_reason_check;
 ALTER TABLE tasks ADD CONSTRAINT tasks_reason_check CHECK (
+    reason IN (
+        'owner_decision', 'awaiting_child', 'approval', 'ci', 'publication', 'handoff',
+        'reconciliation', 'provisioning_unavailable', 'handoff_unavailable', 'cancel_unavailable'
+    )
+);
+ALTER TABLE task_operations DROP CONSTRAINT task_operations_reason_check;
+ALTER TABLE task_operations ADD CONSTRAINT task_operations_reason_check CHECK (
     reason IN (
         'owner_decision', 'awaiting_child', 'approval', 'ci', 'publication', 'handoff',
         'reconciliation', 'provisioning_unavailable', 'handoff_unavailable', 'cancel_unavailable'

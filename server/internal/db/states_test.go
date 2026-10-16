@@ -24,7 +24,8 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		string(dbstate.ReasonOwnerDecision), string(dbstate.ReasonAwaitingChild), string(dbstate.ReasonApproval),
 		string(dbstate.ReasonCI), string(dbstate.ReasonPublication), string(dbstate.ReasonHandoff),
 		string(dbstate.ReasonReconciliation), string(dbstate.ReasonProvisioningUnavailable),
-		string(dbstate.ReasonHandoffUnavailable), string(dbstate.ReasonCancelUnavailable))
+		string(dbstate.ReasonHandoffUnavailable), string(dbstate.ReasonCancelUnavailable),
+		string(dbstate.ReasonSessionLost), string(dbstate.ReasonStalled), string(dbstate.ReasonRuntimeLimit))
 	taskOpStates := strs(
 		string(dbstate.TaskOpRequested), string(dbstate.TaskOpDraining), string(dbstate.TaskOpCheckpointRequired),
 		string(dbstate.TaskOpCheckpointVerified), string(dbstate.TaskOpSourceFencing), string(dbstate.TaskOpSourceFenced),
@@ -143,7 +144,8 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		// No state machine, so no dbstate type: the contract enum is the constant the CHECK must match.
 		{"attention_items", "reason_code", strs(
 			string(api.AttentionItemReasonCodeReconciliation), string(api.AttentionItemReasonCodeRuntimeStopUnresolved),
-			string(api.AttentionItemReasonCodeMergeApproval))},
+			string(api.AttentionItemReasonCodeMergeApproval), string(api.AttentionItemReasonCodeSessionLost),
+			string(api.AttentionItemReasonCodeStalled), string(api.AttentionItemReasonCodeRuntimeLimit))},
 		{"environment_versions", "architecture", strs(
 			string(api.EnvironmentVersionArchitectureAmd64), string(api.EnvironmentVersionArchitectureArm64))},
 		{"tasks", "pr_state", strs(
