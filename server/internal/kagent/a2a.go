@@ -211,13 +211,14 @@ func (c *Client) ListTasks(ctx context.Context, agent AgentRef, contextID string
 	})
 }
 
-// ListTasksSummaryPage reads one page of a conversation's tasks with no history: like
-// ListWaitingTasksPage, only a task's status is needed to judge activity or confirm a stop, and
-// omitting history keeps the read small however long the conversation is.
-func (c *Client) ListTasksSummaryPage(
+// ListTasksLatestPage reads one page of a conversation's tasks, each with at most its newest history
+// message: the status says what a task is doing and the newest message says whether it is still
+// doing it, which a liveness sweep needs because a turn whose process wedged keeps a working status
+// indefinitely. It stays small however long the conversation is.
+func (c *Client) ListTasksLatestPage(
 	ctx context.Context, agent AgentRef, contextID, token string, limit int,
 ) (tasks []*a2a.Task, next string, err error) {
-	history := 0
+	history := 1
 	raw, err := c.call(ctx, agent, methodListTasks, a2a.ListTasksRequest{
 		ContextID:     contextID,
 		HistoryLength: &history,
@@ -234,10 +235,10 @@ func (c *Client) ListTasksSummaryPage(
 	return resp.Tasks, resp.NextPageToken, nil
 }
 
-// ListTasksSummary reads every task in a conversation with no history.
-func (c *Client) ListTasksSummary(ctx context.Context, agent AgentRef, contextID string) ([]*a2a.Task, error) {
+// ListTasksLatest reads every task in a conversation with at most its newest history message.
+func (c *Client) ListTasksLatest(ctx context.Context, agent AgentRef, contextID string) ([]*a2a.Task, error) {
 	return paginate("A2A "+methodListTasks, func(token string) ([]*a2a.Task, string, error) {
-		return c.ListTasksSummaryPage(ctx, agent, contextID, token, maxPageSize)
+		return c.ListTasksLatestPage(ctx, agent, contextID, token, maxPageSize)
 	})
 }
 

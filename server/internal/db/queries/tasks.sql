@@ -231,6 +231,11 @@ LIMIT $1;
 -- behind others in ListActiveAttemptsForLiveness's order, instead of it being picked every pass.
 UPDATE task_attempts SET updated_at = now() WHERE id = $1;
 
+-- name: RecordAttemptProgress :exec
+-- Stores the fingerprint of the attempt's kagent task the liveness sweep just saw change, and when.
+-- It writes nothing else, so it never contends with a settle or a report on the attempt's state.
+UPDATE task_attempts SET progress_marker = $2, progress_at = $3 WHERE id = $1;
+
 -- name: ListAttemptWorkspaceCleanups :many
 -- Final attempts use a separate bounded batch, so cleanup cannot starve runtime stop resolution.
 -- Unchecked cleanup comes first; unresolved looks move behind other due work durably.

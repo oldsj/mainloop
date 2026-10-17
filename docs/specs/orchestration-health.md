@@ -406,16 +406,20 @@ answers whether it exists at all (`connect.CodeNotFound` reports it does not) an
 `Session.updated_at`: that field only moves on a lifecycle operation (create, rename, resume,
 suspend, delete), never a turn, so a long working turn would otherwise read as idle. Instead
 `KagentLiveness` lists the A2A tasks of every native context the session has used (the same
-contexts the stop observer lists); a submitted or working task counts as activity right now,
-however old its last recorded status change, and otherwise the later of the newest task status
-timestamp and the sessions delivery ledger's own last-activity record stands in. A read error
+contexts the stop observer lists); a task waiting on the owner counts as activity right
+now, and otherwise the later of the newest task status timestamp, the sessions delivery ledger's
+own last-activity record, and the time the sweep first saw the current fingerprint of the
+session's submitted or working tasks (task id, state, status time and newest history message,
+stored on the attempt as `progress_marker` / `progress_at`) stands in. A working status alone is
+not activity: kagent keeps a turn working until it ends, and a turn whose native process has
+wedged never ends. A read error
 leaves the task alone for the next pass rather than guessing.
 
 The sweep blocks a task at most once per cause, in this order: `session_lost` (the session is
 gone or terminal — there is no point timing anything out once the runtime itself is gone),
 `stalled` (no activity for `TASK_STALL_TIMEOUT_SECONDS`, default 2700/45m), then `runtime_limit`
 (the attempt has run longer than `TASK_MAX_RUNTIME_SECONDS`, default 21600/6h, regardless of
-activity, including a task the agent is actively working — the safety net of last resort). None
+activity, including a task that keeps recording progress — the safety net of last resort). None
 of these cancels the native session or retries anything; the only effect is the existing `blocked`
 status transition and the existing reconciliation-attention path
 (`task_reconciliation_needs`), so the owner sees it the same way a `blocked` / `reconciliation`

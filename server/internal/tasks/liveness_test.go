@@ -110,19 +110,97 @@ func TestLivenessBlocksAStalledTask(t *testing.T) {
 	}
 }
 
-// Review P1: kagent's own Session.updated_at does not move on a turn, so activity comes from the
-// A2A tasks of the session's contexts instead. A working task counts as activity right now,
-// however old its own last-reported status change, so a 50-minute turn does not read as stalled.
-func TestLivenessActivityResetsTheStallClock(t *testing.T) {
+// kagent keeps a turn "working" until it ends, and a turn whose native process wedged never ends,
+// so a working task is not proof of life. Prod incident: a Claude turn hung inside a tool call at
+// 14:58, kagent reported the task working with a 14:48 status time for five hours, and the sweep
+// read that as activity every minute. What counts is kagent recording something new for the turn.
+//
+// The sweep has no clock of its own beyond Service.Now, so these tests move it: the first look at a
+// working turn starts its stall clock, and later looks find it changed or not.
+func stuckTurn(old time.Time, newest string) []*a2a.Task {
+	return []*a2a.Task{{
+		ID:      "t-1",
+		Status:  a2a.TaskStatus{State: a2a.TaskStateWorking, Timestamp: &old},
+		History: []*a2a.Message{{ID: newest}},
+	}}
+}
+
+func TestLivenessBlocksAWorkingTurnThatRecordsNothingNew(t *testing.T) {
 	r := newRig(t)
-	id, bindingID := r.liveTask("ks-1")
+	id, _ := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
-	r.activity.set(bindingID, time.Now().Add(-46*time.Minute)) // would stall on its own
-	old := time.Now().Add(-50 * time.Minute)
-	r.live.setTasks("ks-1", []*a2a.Task{{ID: "t-1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking, Timestamp: &old}}})
+	start := time.Now()
+	old := start.Add(-6 * time.Hour)
+	r.live.setTasks("ks-1", stuckTurn(old, "m-1"))
+
+	r.setClock(start)
 	r.sweep(r.svc.LivenessSweep())
 	if got := r.taskStatus(id); got != "running" {
-		t.Fatalf("status = %s, want running (a working task is activity now)", got)
+		t.Fatalf("status = %s, want running (the first look only starts the clock)", got)
+	}
+
+	r.setClock(start.Add(40 * time.Minute))
+	r.sweep(r.svc.LivenessSweep())
+	if got := r.taskStatus(id); got != "running" {
+		t.Fatalf("status = %s, want running (40 minutes is inside the stall timeout)", got)
+	}
+
+	r.setClock(start.Add(46 * time.Minute))
+	r.sweep(r.svc.LivenessSweep())
+	if got := r.taskStatus(id); got != "blocked" {
+		t.Fatalf("status = %s, want blocked (a turn kagent calls working but that recorded nothing for 46 minutes)", got)
+	}
+	if got := r.taskReason(id); got != "stalled" {
+		t.Fatalf("reason = %s, want stalled", got)
+	}
+}
+
+func TestLivenessKeepsAWorkingTurnThatKeepsRecordingProgress(t *testing.T) {
+	r := newRig(t)
+	id, _ := r.liveTask("ks-1")
+	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
+	start := time.Now()
+	old := start.Add(-6 * time.Hour)
+
+	// Every half hour a new message lands: three hours of a busy turn.
+	for i := range 7 {
+		r.live.setTasks("ks-1", stuckTurn(old, "m-"+string(rune('a'+i))))
+		r.setClock(start.Add(time.Duration(i) * 30 * time.Minute))
+		r.sweep(r.svc.LivenessSweep())
+		if got := r.taskStatus(id); got != "running" {
+			t.Fatalf("step %d: status = %s, want running (the turn is still recording progress)", i, got)
+		}
+	}
+}
+
+func TestLivenessRecordsTheProgressItSaw(t *testing.T) {
+	r := newRig(t)
+	id, _ := r.liveTask("ks-1")
+	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
+	start := time.Now().Truncate(time.Microsecond)
+	r.live.setTasks("ks-1", stuckTurn(start.Add(-time.Hour), "m-1"))
+	r.setClock(start)
+	r.sweep(r.svc.LivenessSweep())
+
+	var marker *string
+	var at *time.Time
+	if err := r.pool.QueryRow(context.Background(),
+		`SELECT progress_marker, progress_at FROM task_attempts WHERE task_id = $1`, id).Scan(&marker, &at); err != nil {
+		t.Fatal(err)
+	}
+	if marker == nil || *marker == "" || at == nil || !at.Equal(start) {
+		t.Fatalf("progress = %v at %v, want a marker recorded at %v", marker, at, start)
+	}
+
+	// Seeing the same thing again must not move the time it was first seen.
+	r.setClock(start.Add(10 * time.Minute))
+	r.sweep(r.svc.LivenessSweep())
+	if err := r.pool.QueryRow(context.Background(),
+		`SELECT progress_marker, progress_at FROM task_attempts WHERE task_id = $1`, id).Scan(&marker, &at); err != nil {
+		t.Fatal(err)
+	}
+	if at == nil || !at.Equal(start) {
+		t.Fatalf("progress_at = %v, want it left at %v", at, start)
 	}
 }
 
@@ -192,4 +270,12 @@ func TestLivenessSweepLeavesABlockedTaskAlone(t *testing.T) {
 	if r.live.lookCount() != n {
 		t.Fatal("the sweep looked at an already-blocked task's session again")
 	}
+}
+
+// setClock moves the sweep's clock and the clock KagentLiveness stamps "now" with together, as one
+// process clock does in production.
+func (r *rig) setClock(at time.Time) {
+	now := func() time.Time { return at }
+	r.svc.Now = now
+	r.svc.Liveness.(*tasks.KagentLiveness).Now = now
 }

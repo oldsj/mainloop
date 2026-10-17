@@ -208,7 +208,7 @@ func (f *fakeStops) lookCount() int {
 }
 
 // fakeKagentLiveness is the kagent client for the real KagentLiveness adapter under test:
-// ObserveLiveness and ListTasksSummary, both keyed by the kagent session/context id KagentLiveness
+// ObserveLiveness and ListTasksLatest, both keyed by the kagent session/context id KagentLiveness
 // resolves from a binding, never Mainloop's own session id. A context not set answers present and
 // not terminal with no tasks, so a test only states what it means to change.
 type fakeKagentLiveness struct {
@@ -237,7 +237,7 @@ func (k *fakeKagentLiveness) ObserveLiveness(_ context.Context, id string) (kage
 	return kagent.SessionLiveness{Exists: true}, nil
 }
 
-func (k *fakeKagentLiveness) ListTasksSummary(_ context.Context, _ kagent.AgentRef, contextID string) ([]*a2a.Task, error) {
+func (k *fakeKagentLiveness) ListTasksLatest(_ context.Context, _ kagent.AgentRef, contextID string) ([]*a2a.Task, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.tasks[contextID], nil

@@ -144,6 +144,10 @@ type SessionLiveness struct {
 	// [tasks.KagentStops.Stopped]) must not treat Deleting the same as the rest of Terminal.
 	Deleting     bool
 	LastActivity time.Time
+	// Progress is a fingerprint of the session's running turn, set only by internal/tasks.KagentLiveness
+	// (never by [Client.ObserveLiveness]): it changes whenever kagent records anything new for a
+	// submitted or working task, and is empty when none is running.
+	Progress string
 }
 
 // terminalRuntimeStates are the Session states nothing can resume: failed outright, or on the way
