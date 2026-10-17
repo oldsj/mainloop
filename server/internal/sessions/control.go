@@ -118,6 +118,11 @@ func (s *Service) endDelivery(ctx context.Context, d dbq.Delivery, from []dbstat
 	moved := false
 	var stored string
 	err := events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+		// Sends take this lock before they decide to queue, so a send that is still deciding cannot
+		// commit a queued row after this ending has already looked for one to promote.
+		if err := db.XactLock(ctx, tx, "mainloop:send:"+d.SessionID); err != nil {
+			return nil, err
+		}
 		q := dbq.New(tx)
 		prev, err := q.EndDelivery(ctx, dbq.EndDeliveryParams{
 			ID: d.ID, FromStates: states, State: e.final, Detail: det, TaskID: tid, EvidenceRef: ref,
@@ -131,7 +136,7 @@ func (s *Service) endDelivery(ctx context.Context, d dbq.Delivery, from []dbstat
 		previous, moved = dbstate.DeliveryState(prev), true
 		// The turn just ended, so the one-open-turn index has nothing of this session's left in it:
 		// admit the oldest message still queued.
-		promoted, err := promoteNextQueued(ctx, q, d.SessionID)
+		promoted, err := promoteNextQueued(ctx, q, d.SessionID, s.opts().UncertainHold.Seconds())
 		if err != nil {
 			return nil, err
 		}

@@ -880,6 +880,20 @@ func (q *Queries) GetTopicName(ctx context.Context, id string) (string, error) {
 	return name, err
 }
 
+const hasQueuedDelivery = `-- name: HasQueuedDelivery :one
+SELECT EXISTS (SELECT 1 FROM deliveries WHERE session_id = $1 AND state = 'queued')
+`
+
+// Whether a message is already waiting behind the open turn. Admission queues a new send behind
+// any existing queued row, not just an open one, so the backlog stays in order even once the turn
+// that first blocked it has gone past its uncertainty hold.
+func (q *Queries) HasQueuedDelivery(ctx context.Context, sessionID string) (bool, error) {
+	row := q.db.QueryRow(ctx, hasQueuedDelivery, sessionID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const insertDelivery = `-- name: InsertDelivery :one
 INSERT INTO deliveries (id, idempotency_key, session_id, source)
 VALUES ($1, $1, $2, $3)
@@ -1532,6 +1546,48 @@ func (q *Queries) ListSessionRows(ctx context.Context, arg ListSessionRowsParams
 	return items, nil
 }
 
+const listStrandedQueuedSessions = `-- name: ListStrandedQueuedSessions :many
+SELECT DISTINCT q.session_id FROM deliveries q
+WHERE q.state = 'queued'
+  AND NOT EXISTS (
+      SELECT 1 FROM deliveries o
+      WHERE o.session_id = q.session_id
+        AND (o.state IN ('recorded', 'sending', 'delivered')
+             OR (o.state = 'uncertain' AND o.updated_at > now() - make_interval(secs => $1::float8)))
+  )
+LIMIT $2
+`
+
+type ListStrandedQueuedSessionsParams struct {
+	HoldSeconds float64
+	LimitCount  int32
+}
+
+// Sessions with a queued delivery that nothing is blocking any more: the turn that queued it has
+// ended or gone past its uncertainty hold, but the backlog was never released (a crash between the
+// admission decision and the promotion, or a settle that ran before the queued row was visible).
+// The recovery sweep promotes these; a normal send or settle releases its own session's backlog as
+// it goes, so this is a safety net, not the common path.
+func (q *Queries) ListStrandedQueuedSessions(ctx context.Context, arg ListStrandedQueuedSessionsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listStrandedQueuedSessions, arg.HoldSeconds, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var session_id string
+		if err := rows.Scan(&session_id); err != nil {
+			return nil, err
+		}
+		items = append(items, session_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTopicLines = `-- name: ListTopicLines :many
 SELECT t.name, t.status_line,
        (SELECT count(*) FROM topic_records r
@@ -1881,7 +1937,9 @@ WITH next AS (
     WHERE q.session_id = $1 AND q.state = 'queued'
       AND NOT EXISTS (
           SELECT 1 FROM deliveries o
-          WHERE o.session_id = q.session_id AND o.state IN ('recorded', 'sending', 'delivered')
+          WHERE o.session_id = q.session_id
+            AND (o.state IN ('recorded', 'sending', 'delivered')
+                 OR (o.state = 'uncertain' AND o.updated_at > now() - make_interval(secs => $2::float8)))
       )
     ORDER BY q.created_at, q.id
     LIMIT 1
@@ -1894,14 +1952,20 @@ WHERE d.id = next.id
 RETURNING d.id
 `
 
+type PromoteNextQueuedDeliveryParams struct {
+	SessionID   string
+	HoldSeconds float64
+}
+
 // Admits the oldest queued message, but only once the session truly has no open turn left: the
 // delivery that just ended may not have been the session's only open one (an uncertain delivery
-// past its hold no longer blocks a send, so a newer one can be open while an older one is still
-// being settled). Promoting while another delivery holds the one-open-turn slot would violate
-// deliveries_one_open and roll back the settle that called this. Zero rows when nothing is queued
-// or the slot is still held.
-func (q *Queries) PromoteNextQueuedDelivery(ctx context.Context, sessionID string) (string, error) {
-	row := q.db.QueryRow(ctx, promoteNextQueuedDelivery, sessionID)
+// still inside its hold may be a newer turn that is still running behind the one that just ended).
+// The blocking predicate matches GetBlockingDelivery, so promotion never races ahead of a turn that
+// sends still queue behind. Promoting while another delivery holds the one-open-turn slot would
+// violate deliveries_one_open and roll back the caller's transaction. Zero rows when nothing is
+// queued or the slot is still held. The caller holds mainloop:send:<session_id> for the duration.
+func (q *Queries) PromoteNextQueuedDelivery(ctx context.Context, arg PromoteNextQueuedDeliveryParams) (string, error) {
+	row := q.db.QueryRow(ctx, promoteNextQueuedDelivery, arg.SessionID, arg.HoldSeconds)
 	var id string
 	err := row.Scan(&id)
 	return id, err
