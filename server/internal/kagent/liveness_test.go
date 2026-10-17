@@ -55,3 +55,21 @@ func TestObserveLivenessReportsTerminalRuntimeStates(t *testing.T) {
 		t.Fatalf("suspended: live = %+v, err = %v, want Exists and not Terminal", live, err)
 	}
 }
+
+// Deleting is set only for RUNTIME_STATE_DELETING, never for the other terminal states: a caller
+// deciding whether anything in the session could still be running must be able to tell a session
+// still on its way out from one that has already settled failed or deleted.
+func TestObserveLivenessSetsDeletingOnlyForTheDeletingState(t *testing.T) {
+	session := marshal(t, &api.Session{Id: "s-1", ContextId: "s-1", State: api.RuntimeState_RUNTIME_STATE_DELETING})
+	live, err := rawSessionServer(t, session).ObserveLiveness(ctx, "s-1")
+	if err != nil || !live.Terminal || !live.Deleting {
+		t.Fatalf("deleting: live = %+v, err = %v, want Terminal and Deleting", live, err)
+	}
+	for _, state := range []api.RuntimeState{api.RuntimeState_RUNTIME_STATE_FAILED, api.RuntimeState_RUNTIME_STATE_DELETED} {
+		session := marshal(t, &api.Session{Id: "s-1", ContextId: "s-1", State: state})
+		live, err := rawSessionServer(t, session).ObserveLiveness(ctx, "s-1")
+		if err != nil || !live.Terminal || live.Deleting {
+			t.Fatalf("%v: live = %+v, err = %v, want Terminal and not Deleting", state, live, err)
+		}
+	}
+}
