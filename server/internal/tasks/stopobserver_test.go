@@ -328,6 +328,31 @@ func (t *terminalLiveness) ObserveLiveness(context.Context, string) (kagent.Sess
 	return kagent.SessionLiveness{Exists: true, Terminal: true}, nil
 }
 
+// deletingLiveness answers ObserveLiveness as Exists, Terminal and Deleting: the session is on its
+// way out but not yet gone, unlike terminalLiveness's settled failed/deleted state.
+type deletingLiveness struct{ *fakeKagent }
+
+func (d *deletingLiveness) ObserveLiveness(context.Context, string) (kagent.SessionLiveness, error) {
+	return kagent.SessionLiveness{Exists: true, Terminal: true, Deleting: true}, nil
+}
+
+// A session that is still deleting is not shortcut the way a settled terminal state (failed,
+// deleted) is: it may still carry a task kagent can list, so the observer goes through the normal
+// path and cancels it, exactly as it would with no Liveness check at all.
+func TestStoppedTreatsADeletingRuntimeStateLikeTheNormalPath(t *testing.T) {
+	r := newRig(t)
+	k := &fakeKagent{}
+	obs, _, _, attempt, session := r.kagentStops(k)
+	r.briefRow(attempt, `state = 'cancelled', kagent_session_id = 'ks-' || session_id, updated_at = now()`)
+	k.land(a2a.TaskStateWorking)
+	obs.Liveness = &deletingLiveness{fakeKagent: k}
+	mustStopped(t, obs, session, false, "deleting session with a task still running")
+	if _, cancels := k.snapshot(); cancels != 1 {
+		t.Fatalf("cancels = %d, want 1", cancels)
+	}
+	mustStopped(t, obs, session, true, "deleting session's task now cancelled")
+}
+
 // The reviewer's probe, now asserting the fix: the owner cancels while the brief's send is in flight.
 // The observer cannot see a task, so the stop stays unconfirmed, the attempt keeps its branch claim
 // and capacity slot, and only when the message lands and is stopped are they released.

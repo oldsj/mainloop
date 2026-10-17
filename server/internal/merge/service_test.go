@@ -290,6 +290,59 @@ func TestProtectedPathRoutesToApproval(t *testing.T) {
 	}
 }
 
+func TestProtectedAutoMergesAProtectedPathOnGreenWithoutACard(t *testing.T) {
+	e := newEnv(t)
+	e.run()
+	e.svc.ProtectedAuto = true
+	e.fake.Update("o", "n", func(r *githubtest.Repository) {
+		r.PullRequests[0].Files = append(r.PullRequests[0].Files, githubtest.File{Filename: "k8s/app.yaml", Additions: 1})
+	})
+	v, err := e.svc.Merge(context.Background(), e.input("r1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Route != dbstate.RouteAuto || v.Status != "merged" || v.State != dbstate.MergeMerged || e.puts() != 1 {
+		t.Fatalf("view = %+v, puts %d", v, e.puts())
+	}
+	// The protected match is still recorded in the frozen facts and presentation, for audit, even
+	// though it did not force the approval route.
+	if len(v.Summary.ProtectedMatches) == 0 || len(v.Summary.ApprovalReasons) == 0 {
+		t.Fatalf("protected match not recorded for audit: %+v", v.Summary)
+	}
+}
+
+func TestProtectedAutoStillHonoursTheProjectsApprovalPolicy(t *testing.T) {
+	e := newEnv(t)
+	e.run()
+	e.svc.ProtectedAuto = true
+	e.policy("approval")
+	e.fake.Update("o", "n", func(r *githubtest.Repository) {
+		r.PullRequests[0].Files = append(r.PullRequests[0].Files, githubtest.File{Filename: "k8s/app.yaml", Additions: 1})
+	})
+	v, err := e.svc.Merge(context.Background(), e.input("r1"))
+	if err != nil || v.Route != dbstate.RouteApproval || v.Status != "approval_required" || e.puts() != 0 {
+		t.Fatalf("view = %+v, %v, puts %d", v, err, e.puts())
+	}
+}
+
+func TestProtectedAutoRefusesUnavailableEvidenceInsteadOfACard(t *testing.T) {
+	e := newEnv(t)
+	e.run()
+	e.svc.ProtectedAuto = true
+	e.fake.Update("o", "n", func(r *githubtest.Repository) { r.PullRequests[0].Draft = true })
+	// Prepare alone still freezes the facts, on the automatic route, and raises no card.
+	v, err := e.svc.Prepare(context.Background(), e.input("r1"))
+	if err != nil || v.Route != dbstate.RouteAuto || v.Status != string(dbstate.MergePrepared) || len(v.Summary.UnavailableReasons) == 0 {
+		t.Fatalf("prepare view = %+v, %v", v, err)
+	}
+	// Merge refuses it outright instead of waiting behind an approval card nobody can safely approve.
+	got, err := e.svc.Merge(context.Background(), e.input("r2"))
+	var ref *merge.Refusal
+	if !errors.As(err, &ref) || ref.Code != "evidence_unavailable" || e.puts() != 0 {
+		t.Fatalf("merge = %+v, %v, puts %d", got, err, e.puts())
+	}
+}
+
 func TestApprovalPolicyNeverAutoMerges(t *testing.T) {
 	e := newEnv(t)
 	e.run()
