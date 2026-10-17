@@ -37,7 +37,16 @@ const (
 
 // defaultResolveBound is how many unsuccessful looks at kagent the resolver makes before it raises
 // evidence and blocks the task for reconciliation. It keeps looking afterwards, at the slowest pace.
-const defaultResolveBound = 6
+const defaultResolveBound = 8
+
+// defaultForceSuspendAfter is how long after a stop request the resolver has the observer suspend the
+// runtime, and defaultForceDeleteAfter how long before it deletes the native session. A cancel that
+// has not settled a stop within two minutes is not coming; suspending parks the runtime and keeps the
+// workspace and its unpushed work. Only a runtime that still has not stopped after five is deleted.
+const (
+	defaultForceSuspendAfter = 2 * time.Minute
+	defaultForceDeleteAfter  = 5 * time.Minute
+)
 
 // defaultSettleIdle is how long the settle sweep leaves an attempt alone after its last change, so
 // it never races the handler that is still working on it.

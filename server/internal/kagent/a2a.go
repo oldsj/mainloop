@@ -211,19 +211,47 @@ func (c *Client) ListTasks(ctx context.Context, agent AgentRef, contextID string
 	})
 }
 
-// ListTasksSummaryPage reads one page of a conversation's tasks with no history: like
-// ListWaitingTasksPage, only a task's status is needed to judge activity or confirm a stop, and
-// omitting history keeps the read small however long the conversation is.
-func (c *Client) ListTasksSummaryPage(
+// ListTasksLatestPage reads one page of a conversation's tasks, each with at most its newest history
+// message and without its artifacts. The status and that message say what a task is and whether it
+// has finished, and they stay small however long the conversation is: the artifacts of a long
+// conversation (every streamed text delta, every tool result in full) can run to megabytes, so they
+// are read only for the tasks that can still change, with [Client.ListTasksInStateLatest].
+func (c *Client) ListTasksLatestPage(
 	ctx context.Context, agent AgentRef, contextID, token string, limit int,
 ) (tasks []*a2a.Task, next string, err error) {
-	history := 0
-	raw, err := c.call(ctx, agent, methodListTasks, a2a.ListTasksRequest{
-		ContextID:     contextID,
-		HistoryLength: &history,
-		PageSize:      min(max(limit, 1), maxPageSize),
-		PageToken:     token,
+	return c.listTasksLatest(ctx, agent, a2a.ListTasksRequest{ContextID: contextID, PageToken: token}, limit)
+}
+
+// ListTasksLatest reads every task in a conversation with at most its newest history message and
+// without its artifacts.
+func (c *Client) ListTasksLatest(ctx context.Context, agent AgentRef, contextID string) ([]*a2a.Task, error) {
+	return paginate("A2A "+methodListTasks, func(token string) ([]*a2a.Task, string, error) {
+		return c.ListTasksLatestPage(ctx, agent, contextID, token, maxPageSize)
 	})
+}
+
+// ListTasksInStateLatest reads every task of a conversation that is in state, each with at most its
+// newest history message and with its artifacts. A harness turn records its text and tool calls as
+// artifact events, which add no history and do not move the status time, so the artifacts are the
+// only record of a turn that is busy; a liveness sweep reads them for the working and submitted
+// tasks only.
+func (c *Client) ListTasksInStateLatest(
+	ctx context.Context, agent AgentRef, contextID string, state a2a.TaskState,
+) ([]*a2a.Task, error) {
+	return paginate("A2A "+methodListTasks, func(token string) ([]*a2a.Task, string, error) {
+		return c.listTasksLatest(ctx, agent, a2a.ListTasksRequest{
+			ContextID: contextID, Status: state, IncludeArtifacts: true, PageToken: token,
+		}, maxPageSize)
+	})
+}
+
+func (c *Client) listTasksLatest(
+	ctx context.Context, agent AgentRef, req a2a.ListTasksRequest, limit int,
+) (tasks []*a2a.Task, next string, err error) {
+	history := 1
+	req.HistoryLength = &history
+	req.PageSize = min(max(limit, 1), maxPageSize)
+	raw, err := c.call(ctx, agent, methodListTasks, req)
 	if err != nil {
 		return nil, "", err
 	}
@@ -232,13 +260,6 @@ func (c *Client) ListTasksSummaryPage(
 		return nil, "", &OutcomeUnknown{Op: "A2A " + methodListTasks, Detail: "bad task list", Err: err}
 	}
 	return resp.Tasks, resp.NextPageToken, nil
-}
-
-// ListTasksSummary reads every task in a conversation with no history.
-func (c *Client) ListTasksSummary(ctx context.Context, agent AgentRef, contextID string) ([]*a2a.Task, error) {
-	return paginate("A2A "+methodListTasks, func(token string) ([]*a2a.Task, string, error) {
-		return c.ListTasksSummaryPage(ctx, agent, contextID, token, maxPageSize)
-	})
 }
 
 // FindTaskForMessage resolves an uncertain send: it returns the task whose history holds the

@@ -198,6 +198,7 @@ UPDATE task_attempts
 SET state = sqlc.arg(to_state), capacity_held = sqlc.arg(capacity_held), updated_at = now(),
     -- Entering draining requests the stop in this statement, before anything is asked of kagent.
     stop_state = CASE WHEN sqlc.arg(to_state) = 'draining' THEN 'requested' ELSE stop_state END,
+    stop_requested_at = CASE WHEN sqlc.arg(to_state) = 'draining' THEN coalesce(stop_requested_at, now()) ELSE stop_requested_at END,
     evidence_refs = CASE WHEN sqlc.narg(evidence_ref)::text IS NULL THEN evidence_refs
                          ELSE array_append(evidence_refs, sqlc.narg(evidence_ref)::text) END
 WHERE id = sqlc.arg(id) AND state = sqlc.arg(from_state)
@@ -230,6 +231,31 @@ LIMIT $1;
 -- Bumps updated_at alone, so a liveness look that finds nothing to do still rotates the attempt
 -- behind others in ListActiveAttemptsForLiveness's order, instead of it being picked every pass.
 UPDATE task_attempts SET updated_at = now() WHERE id = $1;
+
+-- name: MarkAttemptLivenessReadFailed :exec
+-- A liveness read of the attempt's kagent session failed: remember since when reads have been failing
+-- (the first failure of a run), and rotate the attempt behind the others like a look that found nothing.
+UPDATE task_attempts SET liveness_failing_since = COALESCE(liveness_failing_since, $2), updated_at = now() WHERE id = $1;
+
+-- name: ClearAttemptLivenessFailure :exec
+-- A liveness read succeeded, so reads are no longer failing.
+UPDATE task_attempts SET liveness_failing_since = NULL WHERE id = $1 AND liveness_failing_since IS NOT NULL;
+
+-- name: RecordAttemptProgress :exec
+-- Stores the fingerprint of the attempt's kagent task the liveness sweep just saw change, and when.
+-- It writes nothing else, so it never contends with a settle or a report on the attempt's state.
+UPDATE task_attempts SET progress_marker = $2, progress_at = $3 WHERE id = $1;
+
+-- name: RestartAttemptStallClock :exec
+-- A progress report is proof of life: the stall clock counts from it, against the fingerprint the sweep
+-- already holds, and so does the window of failed liveness reads. Without this, a report that recovers a
+-- stalled task is overridden by the next sweep, which still finds the old fingerprint, or the first
+-- failed read, older than the stall timeout. The stall clock is left alone for an attempt the sweep has
+-- not fingerprinted yet (its clock has not started), and the failed-read window for one whose reads work.
+UPDATE task_attempts
+SET progress_at = CASE WHEN progress_marker IS NOT NULL THEN $2 ELSE progress_at END,
+    liveness_failing_since = CASE WHEN liveness_failing_since IS NOT NULL THEN $2 END
+WHERE id = $1;
 
 -- name: ListAttemptWorkspaceCleanups :many
 -- Final attempts use a separate bounded batch, so cleanup cannot starve runtime stop resolution.
@@ -506,6 +532,29 @@ SET resolve_attempts = resolve_attempts + 1, resolve_after = now() + make_interv
     updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING resolve_attempts;
+
+-- name: GetAttemptStopAge :one
+-- How long the attempt's stop has been requested, by the database clock. An attempt that entered
+-- draining before stop_requested_at existed counts from its last update.
+SELECT extract(epoch FROM now() - coalesce(stop_requested_at, updated_at))::float8 AS age_seconds
+FROM task_attempts WHERE id = $1;
+
+-- name: MarkAttemptNativeDeleted :exec
+-- The resolver had kagent delete the attempt's native session to end its stop.
+UPDATE task_attempts SET native_deleted_at = coalesce(native_deleted_at, now()), updated_at = now()
+WHERE session_id = $1;
+
+-- name: ListUnresolvedStops :many
+-- Attempts whose requested stop is still unconfirmed after the resolver gave up looking: the
+-- runtime may still be running and the attempt still holds its capacity. Final tasks included, as
+-- they get no owner card; the orchestration health page shows these.
+SELECT a.id AS attempt_id, a.task_id, a.session_id, a.state, a.resolve_attempts, a.native_deleted_at,
+       coalesce(a.stop_requested_at, a.updated_at)::timestamptz AS stop_requested_at,
+       t.status AS task_status
+FROM task_attempts a
+JOIN tasks t ON t.id = a.task_id
+WHERE a.state = 'draining' AND a.stop_state = 'unresolved' AND t.owner_id = $1
+ORDER BY coalesce(a.stop_requested_at, a.updated_at), a.id;
 
 -- name: ListFailedBriefAttempts :many
 -- Active attempts whose latest brief the sessions ledger ended failed (a cancelled one is the owner

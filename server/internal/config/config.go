@@ -128,6 +128,11 @@ type Tasks struct {
 	// attempt's start (reason runtime_limit).
 	StallTimeout Seconds `env:"TASK_STALL_TIMEOUT_SECONDS" envDefault:"2700"`
 	MaxRuntime   Seconds `env:"TASK_MAX_RUNTIME_SECONDS" envDefault:"21600"`
+	// ForceSuspendAfter and ForceDeleteAfter are how long a requested stop may stay unconfirmed before
+	// the resolver suspends the runtime, and then deletes the native session. Both count from the stop
+	// request. A turn still working cannot be suspended, so it is deleted at ForceDeleteAfter.
+	ForceSuspendAfter Seconds `env:"TASK_FORCE_SUSPEND_AFTER_SECONDS" envDefault:"120"`
+	ForceDeleteAfter  Seconds `env:"TASK_FORCE_DELETE_AFTER_SECONDS" envDefault:"300"`
 }
 
 // Workspaces tunes workspace lifecycle loops.
@@ -317,6 +322,12 @@ func (c *Config) validate() error {
 	}
 	if c.Tasks.MaxRuntime < c.Tasks.StallTimeout {
 		fail("TASK_MAX_RUNTIME_SECONDS must be at least TASK_STALL_TIMEOUT_SECONDS")
+	}
+	if c.Tasks.ForceSuspendAfter <= 0 || c.Tasks.ForceDeleteAfter <= 0 {
+		fail("TASK_FORCE_SUSPEND_AFTER_SECONDS and TASK_FORCE_DELETE_AFTER_SECONDS must be positive")
+	}
+	if c.Tasks.ForceDeleteAfter < c.Tasks.ForceSuspendAfter {
+		fail("TASK_FORCE_DELETE_AFTER_SECONDS must be at least TASK_FORCE_SUSPEND_AFTER_SECONDS")
 	}
 	if c.Main.Provider != NativeClaude && c.Main.Provider != NativeCodex {
 		fail("MAIN_PROVIDER must be claude or codex")

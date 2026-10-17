@@ -24,6 +24,26 @@ func (s *Service) resolveBackoff() reconcile.Backoff {
 	return s.Limits.ResolveBackoff
 }
 
+// forceLevel is how hard the observer may press a stop that has waited this long: not at all,
+// suspend, or delete. Delete never comes before suspend.
+func (s *Service) forceLevel(waited time.Duration) ForceLevel {
+	suspend, del := s.Limits.ForceSuspendAfter, s.Limits.ForceDeleteAfter
+	if suspend <= 0 {
+		suspend = defaultForceSuspendAfter
+	}
+	if del <= 0 {
+		del = defaultForceDeleteAfter
+	}
+	del = max(del, suspend)
+	switch {
+	case waited >= del:
+		return ForceDelete
+	case waited >= suspend:
+		return ForceSuspend
+	}
+	return ForceNone
+}
+
 func (s *Service) resolveBound() int {
 	if s.Limits.ResolveBound > 0 {
 		return s.Limits.ResolveBound
@@ -79,6 +99,23 @@ func (s *Service) resolveStop(ctx context.Context, a dbq.TaskAttempt) (wait time
 			s.log().WarnContext(ctx, "observe requested stop", "attempt", a.ID, "error", oerr)
 			stopped = false
 		}
+		// A runtime that does not answer a cancel never will: once the stop has waited long enough the
+		// observer suspends it, and later deletes it, so the stop settles without the owner. The wait
+		// is time since the request, read from the database clock, not the number of looks. See
+		// [StopForcer].
+		if f, ok := s.StopObserver.(StopForcer); ok && !stopped {
+			age, aerr := q.GetAttemptStopAge(ctx, a.ID)
+			if aerr != nil {
+				return 0, aerr
+			}
+			if level := s.forceLevel(time.Duration(age * float64(time.Second))); level != ForceNone {
+				var ferr error
+				if stopped, ferr = f.ForceStop(ctx, *a.SessionID, level); ferr != nil {
+					s.log().WarnContext(ctx, "force requested stop", "attempt", a.ID, "level", level, "error", ferr)
+					stopped = false
+				}
+			}
+		}
 	}
 	if stopped {
 		if _, err := q.ConfirmAttemptStop(ctx, dbq.ConfirmAttemptStopParams{ID: a.ID, OutcomeVersion: version}); err == nil {
@@ -106,6 +143,8 @@ func (s *Service) resolveStop(ctx context.Context, a dbq.TaskAttempt) (wait time
 		if err := s.raiseUnresolved(ctx, a.ID); err != nil {
 			return 0, err
 		}
+		// A final task gets no owner card for this, so the log is where an operator sees it.
+		s.log().ErrorContext(ctx, "requested stop still unresolved", "attempt", a.ID, "looks", n)
 	}
 	return wait, nil
 }

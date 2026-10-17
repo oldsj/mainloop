@@ -21,7 +21,10 @@ import {
   PARTIAL_NOTICE,
   reportText,
   retentionText,
-  unreadableClaimsText
+  STOPS_NOTE,
+  stopText,
+  unreadableClaimsText,
+  unreadableStopsText
 } from './model';
 import { events, healthRow, healthView, session, toolEvent, totals } from './test/fixtures';
 import { eventsRead, healthRead, projectsRead } from './test/handlers';
@@ -295,6 +298,48 @@ describe('health page: rows', () => {
     expect(await screen.findByText(droppedRowsText(1))).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Add retry button/ })).toBeInTheDocument();
     expect(screen.queryByText(EMPTY_NOTICE)).not.toBeInTheDocument();
+  });
+
+  const stop = (overrides: Record<string, unknown> = {}) => ({
+    attempt_id: 'attempt-9',
+    task_id: 'task-9',
+    task_status: 'cancelled',
+    requested_at: '2026-10-10T09:00:00Z',
+    looks: 8,
+    native_deleted: true,
+    ...overrides
+  });
+
+  it('lists a stop Mainloop could not confirm, even when its task has ended', async () => {
+    respond = () => HttpResponse.json(healthView([healthRow({ id: 'good' })], { stops: [stop()] }));
+    renderHealth('/health');
+
+    const section = await screen.findByRole('region', { name: 'Unconfirmed stops' });
+    expect(within(section).getByText(STOPS_NOTE)).toBeInTheDocument();
+    expect(within(section).getByText(stopText(stop() as never))).toBeInTheDocument();
+    expect(stopText(stop() as never)).toMatch(/attempt-9.*task-9 \(cancelled\).*8 looks.*deleted/);
+  });
+
+  it('shows no stops section when every stop is confirmed', async () => {
+    respond = () => HttpResponse.json(healthView([healthRow({ id: 'good' })]));
+    renderHealth('/health');
+
+    await screen.findByRole('button', { name: /^Add retry button/ });
+    expect(screen.queryByRole('region', { name: 'Unconfirmed stops' })).not.toBeInTheDocument();
+  });
+
+  it('drops a malformed stop, says so, and still lists the rest', async () => {
+    respond = () =>
+      HttpResponse.json(
+        healthView([healthRow({ id: 'good' })], {
+          stops: [stop(), stop({ attempt_id: 'attempt-bad', looks: 'many' })]
+        })
+      );
+    renderHealth('/health');
+
+    expect(await screen.findByText(unreadableStopsText(1))).toBeInTheDocument();
+    expect(screen.getByText(/attempt-9/)).toBeInTheDocument();
+    expect(screen.queryByText(/attempt-bad/)).not.toBeInTheDocument();
   });
 
   it('shows a repeated row id once and says the repeat was dropped', async () => {

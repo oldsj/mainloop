@@ -119,7 +119,7 @@ func TestOrchestrationHealthRoute(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.body), &view); err != nil {
 		t.Fatal(err)
 	}
-	sameKeys(t, "view", view, "rows", "hours", "partial", "unsupported", "retention")
+	sameKeys(t, "view", view, "rows", "stops", "hours", "partial", "unsupported", "retention")
 	sameKeys(t, "retention", view["retention"], "events_days", "summaries_days")
 	if !reflect.DeepEqual(view["unsupported"], []any{"cache", "exact_approval_wait", "codex_usage", "native_child_attribution"}) ||
 		view["hours"] != float64(24) || view["partial"] != false {

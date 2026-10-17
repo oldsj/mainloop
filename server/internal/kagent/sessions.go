@@ -142,8 +142,15 @@ type SessionLiveness struct {
 	// way out but not yet gone, unlike RUNTIME_STATE_FAILED or RUNTIME_STATE_DELETED, which are
 	// settled. A caller deciding whether anything in the session could still be running (
 	// [tasks.KagentStops.Stopped]) must not treat Deleting the same as the rest of Terminal.
-	Deleting     bool
+	Deleting bool
+	// Suspended is set for RUNTIME_STATE_SUSPENDED: the runtime is parked, so nothing in it runs
+	// until something resumes it. It is not Terminal, since resuming it is normal.
+	Suspended    bool
 	LastActivity time.Time
+	// Progress is a fingerprint of the session's running turn, set only by internal/tasks.KagentLiveness
+	// (never by [Client.ObserveLiveness]): it changes whenever kagent records anything new for a
+	// submitted or working task, and is empty when none is running.
+	Progress string
 }
 
 // terminalRuntimeStates are the Session states nothing can resume: failed outright, or on the way
@@ -179,7 +186,8 @@ func (c *Client) ObserveLiveness(ctx context.Context, id string) (SessionLivenes
 	state := s.GetState()
 	return SessionLiveness{
 		Exists: true, Terminal: terminalRuntimeStates(state),
-		Deleting: state == api.RuntimeState_RUNTIME_STATE_DELETING, LastActivity: updated,
+		Deleting:  state == api.RuntimeState_RUNTIME_STATE_DELETING,
+		Suspended: state == api.RuntimeState_RUNTIME_STATE_SUSPENDED, LastActivity: updated,
 	}, nil
 }
 

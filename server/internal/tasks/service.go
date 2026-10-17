@@ -78,6 +78,11 @@ type Limits struct {
 	// unsuccessful looks come before the task is blocked for reconciliation. Zero values take defaults.
 	ResolveBackoff reconcile.Backoff
 	ResolveBound   int
+	// ForceSuspendAfter is how long a requested stop may stay unconfirmed before the observer suspends
+	// the runtime itself, and ForceDeleteAfter how long before it deletes the native session. Both
+	// count from the stop request, not from looks; zero values take the defaults.
+	ForceSuspendAfter time.Duration
+	ForceDeleteAfter  time.Duration
 	// LivenessEvery is the period of the liveness sweep; StallTimeout and MaxRuntime are its no-progress
 	// and overall bounds. Zero values take the defaults in internal/tasks/liveness.go.
 	LivenessEvery time.Duration
@@ -799,6 +804,13 @@ func (s *Service) applyReport(ctx context.Context, q *dbq.Queries, t dbq.Task, i
 	if err != nil {
 		return t, report, err
 	}
+	if in.Outcome == dbstate.OutcomeProgress {
+		// The agent just spoke, so it is not stalled: the liveness clock counts from this report.
+		at := s.now()
+		if err := q.RestartAttemptStallClock(ctx, dbq.RestartAttemptStallClockParams{ID: in.AttemptID, ProgressAt: &at}); err != nil {
+			return t, report, err
+		}
+	}
 	if in.Outcome != dbstate.OutcomeProgress && !alreadyDone {
 		ref := "report:" + reportID
 		if err := q.SetAttemptResult(ctx, dbq.SetAttemptResultParams{ID: in.AttemptID, ResultRef: &ref}); err != nil {
@@ -995,6 +1007,7 @@ func NewService(cfg *config.Config, pool *pgxpool.Pool, reg Resolver, log *slog.
 			ProvisionWindow: cfg.Tasks.ProvisionWindow.Duration(), Interval: cfg.Tasks.ReconcileInterval.Duration(),
 			ProjectionEvery: cfg.Tasks.ProjectionEvery.Duration(),
 			StallTimeout:    cfg.Tasks.StallTimeout.Duration(), MaxRuntime: cfg.Tasks.MaxRuntime.Duration(),
+			ForceSuspendAfter: cfg.Tasks.ForceSuspendAfter.Duration(), ForceDeleteAfter: cfg.Tasks.ForceDeleteAfter.Duration(),
 		},
 	}
 	for _, o := range opts {

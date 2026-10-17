@@ -183,7 +183,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	taskOpts := []tasks.Option{
 		tasks.WithRuntimes(wsSvc, svc),
-		tasks.WithStopObserver(&tasks.KagentStops{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc, Liveness: kc}),
+		tasks.WithStopObserver(&tasks.KagentStops{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc, Liveness: kc, Workspaces: wsSvc, Deleter: kc}),
 		tasks.WithLivenessObserver(&tasks.KagentLiveness{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc, Activity: ledger}),
 	}
 	if gh != nil {

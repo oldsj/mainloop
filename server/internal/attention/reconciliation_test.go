@@ -55,15 +55,14 @@ func TestReconciliationAttentionTransitionsAndIdempotency(t *testing.T) {
 	e.exec(t, `UPDATE task_attempts SET state = 'draining', stop_state = 'unresolved', evidence_refs = ARRAY['runtime-stop-unresolved'] WHERE task_id = 't1'`)
 	sweep(1, "runtime_stop_unresolved")
 	unchanged(1, "runtime_stop_unresolved")
-	// The task ends while its stop is still unresolved: the card stays. cancelOpenChildren can mark a
-	// task cancelled before its attempt settles, and that attempt still holds a writer claim and
-	// capacity until the stop observer confirms the stop or proves the runtime absent; the task being
-	// final is not that confirmation. See TestUnresolvedStopSurvivesEndedSessionAndReplacement for the
-	// live-task case of the same rule.
+	// The task ends while its stop is still unresolved: the card goes. The attempt keeps its claim
+	// and capacity until the stop resolver confirms the stop, but that is internal cleanup, not a
+	// decision for the owner. See TestUnresolvedStopSurvivesEndedSessionAndReplacement for the
+	// live-task case, where the task is still open and the card stays.
 	e.exec(t, `UPDATE tasks SET status = 'cancelled', reason = NULL WHERE id = 't1'`)
-	sweep(1, "runtime_stop_unresolved")
-	unchanged(1, "runtime_stop_unresolved")
-	// Only once the stop is confirmed does a final task's card drop.
+	sweep(0, "")
+	unchanged(0, "")
+	// Confirming the stop afterwards changes nothing for the owner.
 	e.exec(t, `UPDATE task_attempts SET stop_state = 'confirmed' WHERE task_id = 't1'`)
 	sweep(0, "")
 	unchanged(0, "")
@@ -124,33 +123,43 @@ func TestReconciliationNeverOpensForAnAlreadyFinalTaskWithoutAnUnresolvedStop(t 
 	}
 }
 
-// A task that is already cancelled (or completed, or failed) still gets a card when its attempt
-// carries unconfirmed runtime-stop evidence: cancelOpenChildren can mark a task final before its
-// attempt settles, and that attempt still holds a writer claim and capacity until the stop observer
-// confirms the stop or proves the runtime absent. Finality alone is not that confirmation, so the
-// sweep must open (and keep open) the card until stop_state reaches 'confirmed'.
-func TestReconciliationOpensForAFinalTaskWithAnUnresolvedStop(t *testing.T) {
+// A task that is already cancelled (or completed, or failed) gets no card while its attempt carries
+// unconfirmed runtime-stop evidence, and a card opened earlier resolves. The attempt still holds a
+// writer claim and capacity until the stop resolver confirms the stop, but the owner cannot act on
+// that: the resolver ends the native session itself, so the stop needs no decision.
+func TestReconciliationDoesNotReachTheOwnerForAFinalTaskWithAnUnresolvedStop(t *testing.T) {
 	for _, status := range []string{"cancelled", "completed", "failed"} {
 		t.Run(status, func(t *testing.T) {
 			e := newEnv(t)
 			ctx := context.Background()
+			count := func() int {
+				t.Helper()
+				if err := e.svc.SyncTasks(ctx); err != nil {
+					t.Fatal(err)
+				}
+				snap, err := e.svc.Snapshot(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return snap.Count
+			}
 			e.blockedTask(t, "t1", "", "r1")
-			e.exec(t, `UPDATE tasks SET status = $1, reason = NULL WHERE id = 't1'`, status)
+			e.exec(t, `UPDATE tasks SET reason = 'reconciliation' WHERE id = 't1'`)
 			e.exec(t, `UPDATE task_attempts SET state = 'draining', stop_state = 'unresolved', evidence_refs = ARRAY['runtime-stop-unresolved'] WHERE task_id = 't1'`)
-			if err := e.svc.SyncTasks(ctx); err != nil {
-				t.Fatal(err)
+			if n := count(); n != 1 {
+				t.Fatalf("an open task blocked on an unresolved stop must reach the owner, count = %d", n)
 			}
-			snap, err := e.svc.Snapshot(ctx)
-			if err != nil || snap.Count != 1 || snap.Items[0].Id != "reconciliation:t1" {
-				t.Fatalf("a %s task's unresolved stop must still reach the owner: %+v %v", status, snap, err)
+			// The owner cancels it (or it ends otherwise) while the stop is still unresolved: the card
+			// that was open resolves, and stays resolved for as long as the stop does.
+			e.exec(t, `UPDATE tasks SET status = $1, reason = NULL WHERE id = 't1'`, status)
+			for range 3 {
+				if n := count(); n != 0 {
+					t.Fatalf("a %s task's unresolved stop must not reach the owner, count = %d", status, n)
+				}
 			}
-			e.exec(t, `UPDATE task_attempts SET stop_state = 'confirmed', evidence_refs = array_append(evidence_refs, 'runtime-stop-confirmed') WHERE task_id = 't1'`)
-			if err := e.svc.SyncTasks(ctx); err != nil {
-				t.Fatal(err)
-			}
-			snap, err = e.svc.Snapshot(ctx)
-			if err != nil || snap.Count != 0 {
-				t.Fatalf("a confirmed stop on a final task must drop the card: %+v %v", snap, err)
+			var open int
+			if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM attention_items WHERE source_kind = 'task_reconciliation' AND state = 'open'`).Scan(&open); err != nil || open != 0 {
+				t.Fatalf("open task_reconciliation rows = %d: %v", open, err)
 			}
 		})
 	}

@@ -143,6 +143,14 @@ func (k *fakeKagent) listCount() int {
 	return k.lists
 }
 
+// working reports whether the task kagent holds is working, the state in which kagent refuses to
+// suspend the session.
+func (k *fakeKagent) working() bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.landed && k.state == a2a.TaskStateWorking
+}
+
 func (k *fakeKagent) land(st a2a.TaskState) {
 	k.mu.Lock()
 	defer k.mu.Unlock()

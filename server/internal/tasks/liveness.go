@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -40,12 +41,15 @@ type LivenessObserver interface {
 }
 
 // KagentLivenessClient is the part of the kagent client [KagentLiveness] uses: whether a resolved
-// kagent session still exists and is live, and the A2A tasks of one of its contexts, each with no
-// history — only status is judged here, the same as ListWaitingTasksPage's own watch. *kagent.Client
-// satisfies it.
+// kagent session still exists and is live, and the A2A tasks of one of its contexts: all of them
+// with at most their newest history message and no artifacts, and then the ones in one state with
+// their artifacts too. Status, that message and the artifacts of the tasks still running are all
+// that is judged here; the artifacts of a finished task can run to megabytes and say nothing about
+// liveness. *kagent.Client satisfies it.
 type KagentLivenessClient interface {
 	ObserveLiveness(ctx context.Context, kagentSessionID string) (kagent.SessionLiveness, error)
-	ListTasksSummary(ctx context.Context, agent kagent.AgentRef, contextID string) ([]*a2a.Task, error)
+	ListTasksLatest(ctx context.Context, agent kagent.AgentRef, contextID string) ([]*a2a.Task, error)
+	ListTasksInStateLatest(ctx context.Context, agent kagent.AgentRef, contextID string, state a2a.TaskState) ([]*a2a.Task, error)
 }
 
 // ActivityReader is the part of the sessions delivery ledger [KagentLiveness] uses for the fallback
@@ -61,11 +65,13 @@ type ActivityReader interface {
 // Session.updated_at only moves on a lifecycle operation (create, rename, resume, suspend, delete),
 // never on a turn, so a long working turn would otherwise look idle. Activity instead comes from
 // the A2A tasks of every native context the session has used (the same contexts
-// [KagentStops.Stopped] lists): a submitted or working task means activity right now, however old
-// its last recorded status change, and so does one waiting on the owner (input-required or
-// auth-required) — the agent is not stalled while it waits for a reply, though the runtime bound
-// still applies; otherwise the later of the newest task status timestamp and the delivery ledger's
-// own last-activity record stands in.
+// [KagentStops.Stopped] lists): one waiting on the owner (input-required or auth-required) means
+// activity right now — the agent is not stalled while it waits for a reply, though the runtime bound
+// still applies. A submitted or working task does not: kagent reports a turn as working until it
+// ends, and a turn whose native process wedged never ends, so working is not proof of life. It is
+// fingerprinted instead ([taskProgress]) and the sweep counts activity from when it last saw the
+// fingerprint change. Otherwise the later of the newest task status timestamp and the delivery
+// ledger's own last-activity record stands in.
 type KagentLiveness struct {
 	Pool    *pgxpool.Pool
 	OwnerID string
@@ -107,62 +113,126 @@ func (k *KagentLiveness) ObserveLiveness(ctx context.Context, sessionID string) 
 	if !live.Exists || live.Terminal {
 		return live, true, nil // gone or done: no point reading its activity
 	}
-	activity, err := k.activity(ctx, q, sessionID, b, ksid)
+	activity, progress, err := k.activity(ctx, q, sessionID, b, ksid)
 	if err != nil {
 		return kagent.SessionLiveness{}, true, err
 	}
-	live.LastActivity = activity
+	live.LastActivity, live.Progress = activity, progress
 	return live, true, nil
 }
 
-// activity is the later of: now, if any native context lists a task that is submitted, working, or
-// waiting on the owner (input-required or auth-required — the agent is blocked on a reply, not
-// idle); the newest status timestamp of any task any context listed; or the delivery ledger's own
-// record.
+// activity reads what kagent shows of the session's turns: LastActivity is the later of now, if
+// any native context lists a task waiting on the owner (input-required or auth-required — the
+// agent is blocked on a reply, not idle), and otherwise the newest status timestamp of any task
+// any context listed or the delivery ledger's own record. Progress is a fingerprint of every
+// submitted or working task: kagent keeps such a task "working" for as long as its turn has not
+// ended, including a turn whose native process wedged, so working itself is no evidence of
+// activity — only a change in the fingerprint is, and [Service.checkLiveness] times that.
 func (k *KagentLiveness) activity(
 	ctx context.Context, q *dbq.Queries, sessionID string, b dbq.GetOwnedSessionBindingRow, ksid string,
-) (time.Time, error) {
+) (last time.Time, progress string, err error) {
 	contexts, err := q.ListSessionNativeContexts(ctx, sessionID)
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, "", err
 	}
 	contexts = append(contexts, ksid)
 	slices.Sort(contexts)
 	contexts = slices.Compact(contexts)
 	agent, err := k.Sessions.ResolveAgent(&b.ResolvedAgentNamespace, &b.ResolvedAgentName, &b.Kind, b.Role)
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, "", err
 	}
 	var latest time.Time
+	var running []string
 	for _, c := range contexts {
-		listed, err := k.Kagent.ListTasksSummary(ctx, agent, c)
+		listed, err := k.Kagent.ListTasksLatest(ctx, agent, c)
 		if err != nil {
-			return time.Time{}, fmt.Errorf("list tasks: %w", err)
+			return time.Time{}, "", fmt.Errorf("list tasks: %w", err)
 		}
+		var unfinished []a2a.TaskState
 		for _, t := range listed {
 			if t == nil {
 				continue
 			}
 			switch t.Status.State {
-			case a2a.TaskStateSubmitted, a2a.TaskStateWorking, a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired:
-				return k.now(), nil
+			case a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired:
+				return k.now(), "", nil
+			case a2a.TaskStateSubmitted, a2a.TaskStateWorking:
+				if !slices.Contains(unfinished, t.Status.State) {
+					unfinished = append(unfinished, t.Status.State)
+				}
 			}
 			if ts := t.Status.Timestamp; ts != nil && ts.After(latest) {
 				latest = *ts
 			}
 		}
+		// Only a task that can still change needs its artifacts, and only these are read with them.
+		for _, state := range unfinished {
+			busy, err := k.Kagent.ListTasksInStateLatest(ctx, agent, c, state)
+			if err != nil {
+				return time.Time{}, "", fmt.Errorf("list %s tasks: %w", state, err)
+			}
+			for _, t := range busy {
+				if t != nil {
+					running = append(running, taskProgress(t))
+				}
+			}
+		}
 	}
+	slices.Sort(running)
+	progress = strings.Join(running, ";")
 	if k.Activity == nil {
-		return latest, nil
+		return latest, progress, nil
 	}
 	fromLedger, err := k.Activity.LastActivity(ctx, sessionID)
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, "", err
 	}
-	if fromLedger.After(latest) {
-		return fromLedger, nil
+	return laterOf(latest, fromLedger), progress, nil
+}
+
+// taskProgress fingerprints a running task by what kagent has recorded for it: its id, state and
+// status time, the id of its newest history message, and its artifacts (how many, how many parts
+// they hold in all, and the id of the last). A harness turn records almost nothing but artifacts:
+// text deltas, tool calls and tool results are artifact events, which add no history message and
+// leave the status time at the turn's start. Appended text grows a part list, a new tool call adds
+// an artifact, so a turn that is doing anything changes this and one that is not leaves it as it
+// was. The task must come from a read that asks for artifacts ([kagent.Client.ListTasksInStateLatest]).
+func taskProgress(t *a2a.Task) string {
+	newest := ""
+	if n := len(t.History); n > 0 && t.History[n-1] != nil {
+		newest = t.History[n-1].ID
 	}
-	return latest, nil
+	stamp := ""
+	if t.Status.Timestamp != nil {
+		stamp = t.Status.Timestamp.UTC().Format(time.RFC3339Nano)
+	}
+	parts, lastArtifact := 0, ""
+	for _, art := range t.Artifacts {
+		if art == nil {
+			continue
+		}
+		parts += len(art.Parts)
+		lastArtifact = string(art.ID)
+	}
+	return fmt.Sprintf("%s|%s|%s|%s|%d|%d|%s", t.ID, t.Status.State, stamp, newest, len(t.Artifacts), parts, lastArtifact)
+}
+
+// lastActivity is when the attempt last showed activity: the later of what the observation itself
+// reports and, for a running turn, when the sweep first saw its current fingerprint. changed says
+// that fingerprint is not the one stored for the attempt, so the caller records it. A turn with
+// no fingerprint (nothing is running) has nothing to time.
+func lastActivity(live kagent.SessionLiveness, a dbq.TaskAttempt, now time.Time) (at time.Time, changed bool) {
+	if live.Progress == "" {
+		return live.LastActivity, false
+	}
+	seen := now
+	if a.ProgressMarker != nil && *a.ProgressMarker == live.Progress && a.ProgressAt != nil {
+		seen = *a.ProgressAt
+	} else {
+		changed = true
+	}
+	return laterOf(live.LastActivity, seen), changed
 }
 
 func (s *Service) stallTimeout() time.Duration { return cmp.Or(s.Limits.StallTimeout, defaultStallTimeout) }
@@ -172,8 +242,9 @@ func (s *Service) livenessEvery() time.Duration { return cmp.Or(s.Limits.Livenes
 // LivenessSweep bounds every task whose current attempt is active: it is blocked, once, when
 // kagent reports the attempt's session lost or terminal (session_lost), when it has shown no
 // activity for the stall timeout (stalled), or when the attempt has run longer than the runtime
-// bound (runtime_limit; WORKING counts as activity for the stall clock but never exempts an
-// attempt from this bound). It cancels nothing native and retries nothing; it only raises the
+// bound (runtime_limit; a turn kagent keeps recording progress for counts as activity for the
+// stall clock but never exempts an attempt from this bound; a turn kagent still calls working but
+// records nothing new for does not). It cancels nothing native and retries nothing; it only raises the
 // owner's attention, through the task's reason, so a session kagent has forgotten about does not
 // leave a task reading "running" forever. A progress report from the task's current attempt
 // recovers session_lost and stalled back to running — the sweep can be wrong, and a report is
@@ -212,24 +283,70 @@ func (s *Service) checkLiveness(ctx context.Context, a dbq.TaskAttempt) error {
 	if a.BindingID == nil {
 		return nil
 	}
+	now := s.now()
 	live, known, err := s.Liveness.ObserveLiveness(ctx, *a.BindingID)
 	if err != nil {
 		s.log().WarnContext(ctx, "tasks: observe attempt liveness", "attempt", a.ID, "error", err)
-		return s.touchLiveness(ctx, a.ID)
+		return s.checkUnreadLiveness(ctx, a, now)
 	}
 	if !known {
-		return s.touchLiveness(ctx, a.ID) // no kagent session yet; nothing to judge
+		return s.checkUnobservedLiveness(ctx, a, now) // no kagent session yet; nothing else to judge
 	}
-	now := s.now()
+	if a.LivenessFailingSince != nil {
+		if err := dbq.New(s.Pool).ClearAttemptLivenessFailure(ctx, a.ID); err != nil {
+			return err
+		}
+	}
+	active, changed := lastActivity(live, a, now)
+	if changed && live.Exists && !live.Terminal {
+		if err := dbq.New(s.Pool).RecordAttemptProgress(ctx, dbq.RecordAttemptProgressParams{
+			ID: a.ID, ProgressMarker: &live.Progress, ProgressAt: &now,
+		}); err != nil {
+			return err
+		}
+	}
 	switch {
 	case !live.Exists || live.Terminal:
 		return s.blockAttempt(ctx, a, dbstate.ReasonSessionLost)
-	case !live.LastActivity.IsZero() && now.Sub(live.LastActivity) > s.stallTimeout():
+	case !active.IsZero() && now.Sub(active) > s.stallTimeout():
 		return s.blockAttempt(ctx, a, dbstate.ReasonStalled)
-	case now.Sub(a.CreatedAt) > s.maxRuntime():
+	case s.overRuntime(a, now):
 		return s.blockAttempt(ctx, a, dbstate.ReasonRuntimeLimit)
 	}
 	return s.touchLiveness(ctx, a.ID)
+}
+
+// overRuntime reports whether the attempt has run past the runtime bound. It needs nothing from
+// kagent, so it is judged on every path of [Service.checkLiveness], including the ones that could
+// not read the session.
+func (s *Service) overRuntime(a dbq.TaskAttempt, now time.Time) bool {
+	return now.Sub(a.CreatedAt) > s.maxRuntime()
+}
+
+// checkUnobservedLiveness judges an attempt with no kagent session yet: there is nothing to read,
+// but the runtime bound still holds.
+func (s *Service) checkUnobservedLiveness(ctx context.Context, a dbq.TaskAttempt, now time.Time) error {
+	if s.overRuntime(a, now) {
+		return s.blockAttempt(ctx, a, dbstate.ReasonRuntimeLimit)
+	}
+	return s.touchLiveness(ctx, a.ID)
+}
+
+// checkUnreadLiveness judges an attempt whose kagent session could not be read this time. One failed
+// read says nothing about the attempt, but it must not hide the bounds that need no read: the
+// runtime bound is judged as always. And a read that keeps failing for the stall timeout leaves the
+// attempt as unjudged as a session that shows no activity for that long, so it is blocked as
+// stalled: an owner is told, and a progress report recovers it should the sweep be wrong.
+func (s *Service) checkUnreadLiveness(ctx context.Context, a dbq.TaskAttempt, now time.Time) error {
+	if s.overRuntime(a, now) {
+		return s.blockAttempt(ctx, a, dbstate.ReasonRuntimeLimit)
+	}
+	if a.LivenessFailingSince != nil && now.Sub(*a.LivenessFailingSince) > s.stallTimeout() {
+		return s.blockAttempt(ctx, a, dbstate.ReasonStalled)
+	}
+	return dbq.New(s.Pool).MarkAttemptLivenessReadFailed(ctx, dbq.MarkAttemptLivenessReadFailedParams{
+		ID: a.ID, LivenessFailingSince: &now,
+	})
 }
 
 // touchLiveness bumps the attempt's updated_at alone; see [Service.checkLiveness].
@@ -270,4 +387,11 @@ func (s *Service) blockAttempt(ctx context.Context, a dbq.TaskAttempt, reason db
 		}
 		return []events.Draft{s.updated(after)}, nil
 	})
+}
+
+func laterOf(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }

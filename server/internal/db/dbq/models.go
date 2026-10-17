@@ -665,6 +665,10 @@ type TaskAttempt struct {
 	ResolveAfter              *time.Time
 	CreatedAt                 time.Time
 	UpdatedAt                 time.Time
+	ProgressMarker            *string
+	ProgressAt                *time.Time
+	StopRequestedAt           *time.Time
+	LivenessFailingSince      *time.Time
 }
 
 type TaskEventDelivery struct {
