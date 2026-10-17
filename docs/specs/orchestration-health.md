@@ -399,8 +399,8 @@ rotates through instead of the same oldest rows being read forever) and asks
 kagent id, which Mainloop's id is not. The production observer, `KagentLiveness`
 (`server/internal/tasks/liveness.go`), resolves `agent_bindings.kagent_session_id` fresh from the
 database on every call, outside any transaction; a binding with none yet (a coordination attempt
-before its brief is delivered) answers unknown, and the sweep leaves it alone rather than judging
-it lost. With a kagent session resolved, `kagent.Client.ObserveLiveness`, through `ObserveSession`,
+before its brief is delivered) answers unknown, and the sweep applies only the runtime bound to it
+rather than judging it lost. With a kagent session resolved, `kagent.Client.ObserveLiveness`, through `ObserveSession`,
 answers whether it exists at all (`connect.CodeNotFound` reports it does not) and whether its
 `RuntimeState` is terminal (failed, deleting or deleted). Activity is not kagent's own
 `Session.updated_at`: that field only moves on a lifecycle operation (create, rename, resume,
@@ -414,7 +414,9 @@ its artifacts: a harness turn records its text and tool calls as artifact events
 history message; stored on the attempt as `progress_marker` / `progress_at`) stands in. A working status alone is
 not activity: kagent keeps a turn working until it ends, and a turn whose native process has
 wedged never ends. A read error
-leaves the task alone for the next pass rather than guessing.
+does not skip the runtime bound, which needs no read, and a read that keeps failing for
+`TASK_STALL_TIMEOUT_SECONDS` blocks the task as `stalled`; a single failure leaves the task alone for
+the next pass rather than guessing.
 
 The sweep blocks a task at most once per cause, in this order: `session_lost` (the session is
 gone or terminal — there is no point timing anything out once the runtime itself is gone),
@@ -450,8 +452,9 @@ kagent restart, only against fakes in `server/internal/tasks/liveness_test.go` a
 Status: **implemented**. See `docs/specs/tasks.md` (capacity and the runtime stop) for the stop
 itself; this section is the signal that a stop did not settle.
 
-Asking a task's runtime to stop is confirmed by the stop observer, which also suspends and then
-deletes a runtime that never answers. When 8 looks pass with no confirmation the attempt's
+Asking a task's runtime to stop is confirmed by the stop observer, which also forces a runtime that
+never answers: it suspends one with no open turn, and deletes the native session of one whose turn is
+still working (kagent will not suspend a working turn), with its workspace and unpushed work. When 8 looks pass with no confirmation the attempt's
 `stop_state` becomes `unresolved`. A task that is still open is blocked for reconciliation and the
 owner sees it as a normal attention card. A task that has already ended (cancelled by the owner
 or with its parent) deliberately gets no owner card: it is internal cleanup, and the owner decided

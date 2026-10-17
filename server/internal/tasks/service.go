@@ -1007,6 +1007,7 @@ func NewService(cfg *config.Config, pool *pgxpool.Pool, reg Resolver, log *slog.
 			ProvisionWindow: cfg.Tasks.ProvisionWindow.Duration(), Interval: cfg.Tasks.ReconcileInterval.Duration(),
 			ProjectionEvery: cfg.Tasks.ProjectionEvery.Duration(),
 			StallTimeout:    cfg.Tasks.StallTimeout.Duration(), MaxRuntime: cfg.Tasks.MaxRuntime.Duration(),
+			ForceSuspendAfter: cfg.Tasks.ForceSuspendAfter.Duration(), ForceDeleteAfter: cfg.Tasks.ForceDeleteAfter.Duration(),
 		},
 	}
 	for _, o := range opts {
