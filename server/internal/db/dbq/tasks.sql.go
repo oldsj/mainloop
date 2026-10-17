@@ -3230,6 +3230,17 @@ func (q *Queries) SetTaskProjection(ctx context.Context, arg SetTaskProjectionPa
 	return i, err
 }
 
+const touchAttemptLiveness = `-- name: TouchAttemptLiveness :exec
+UPDATE task_attempts SET updated_at = now() WHERE id = $1
+`
+
+// Bumps updated_at alone, so a liveness look that finds nothing to do still rotates the attempt
+// behind others in ListActiveAttemptsForLiveness's order, instead of it being picked every pass.
+func (q *Queries) TouchAttemptLiveness(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, touchAttemptLiveness, id)
+	return err
+}
+
 const touchTask = `-- name: TouchTask :one
 UPDATE tasks SET version = version + 1, updated_at = now() WHERE id = $1 AND version = $2 RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id
 `

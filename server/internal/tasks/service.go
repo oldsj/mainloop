@@ -845,8 +845,15 @@ func reportedState(t dbq.Task, in ReportInput) TaskState {
 	case dbstate.OutcomeFailed:
 		return TaskState{Status: dbstate.TaskBlocked, Reason: dbstate.ReasonReconciliation}
 	}
-	if cur.Status == dbstate.TaskBlocked && cur.Reason == dbstate.ReasonOwnerDecision {
-		return TaskState{Status: dbstate.TaskRunning}
+	// A progress report proves the attempt is still working, which recovers owner_decision (the
+	// owner answered) and the liveness sweep's own session_lost/stalled (it was wrong). It does not
+	// recover runtime_limit: that bound fires regardless of activity, so a report alone must not
+	// clear it; only the owner's own action on the blocked task does.
+	if cur.Status == dbstate.TaskBlocked {
+		switch cur.Reason {
+		case dbstate.ReasonOwnerDecision, dbstate.ReasonSessionLost, dbstate.ReasonStalled:
+			return TaskState{Status: dbstate.TaskRunning}
+		}
 	}
 	return cur
 }

@@ -392,25 +392,50 @@ the task's existing `status`/`reason` columns, the same durable fields every oth
 transition uses.
 
 Each pass lists the current, `active` attempt of every task still `status = 'running'` (a task
-the sweep already blocked drops out of that list on its own, so a repeat pass costs one empty
-query and nothing else) and asks `LivenessObserver.ObserveLiveness` for each attempt's session.
-The production observer is `*kagent.Client`, through `ObserveSession`: a `connect.CodeNotFound`
-reports the session does not exist; a `RuntimeState` of failed, deleting or deleted reports it
-terminal; otherwise the session's own `updated_at` is the one activity signal used, read fresh
-on every pass and never cached, so genuine agent activity always resets the stall clock on the
-next look; there is no separate Mainloop-side "last seen" column to fall out of sync with it. A
-read error leaves the task alone for the next pass rather than guessing.
+the sweep already blocked drops out of that list on its own; a look that finds nothing to do
+still bumps the attempt's `updated_at` alone, so a backlog larger than one pass's 100-row cap
+rotates through instead of the same oldest rows being read forever) and asks
+`LivenessObserver.ObserveLiveness` for each attempt's own Mainloop session/binding id — never a
+kagent id, which Mainloop's id is not. The production observer, `KagentLiveness`
+(`server/internal/tasks/liveness.go`), resolves `agent_bindings.kagent_session_id` fresh from the
+database on every call, outside any transaction; a binding with none yet (a coordination attempt
+before its brief is delivered) answers unknown, and the sweep leaves it alone rather than judging
+it lost. With a kagent session resolved, `kagent.Client.ObserveLiveness`, through `ObserveSession`,
+answers whether it exists at all (`connect.CodeNotFound` reports it does not) and whether its
+`RuntimeState` is terminal (failed, deleting or deleted). Activity is not kagent's own
+`Session.updated_at`: that field only moves on a lifecycle operation (create, rename, resume,
+suspend, delete), never a turn, so a long working turn would otherwise read as idle. Instead
+`KagentLiveness` lists the A2A tasks of every native context the session has used (the same
+contexts the stop observer lists); a submitted or working task counts as activity right now,
+however old its last recorded status change, and otherwise the later of the newest task status
+timestamp and the sessions delivery ledger's own last-activity record stands in. A read error
+leaves the task alone for the next pass rather than guessing.
 
 The sweep blocks a task at most once per cause, in this order: `session_lost` (the session is
 gone or terminal — there is no point timing anything out once the runtime itself is gone),
 `stalled` (no activity for `TASK_STALL_TIMEOUT_SECONDS`, default 2700/45m), then `runtime_limit`
 (the attempt has run longer than `TASK_MAX_RUNTIME_SECONDS`, default 21600/6h, regardless of
-activity — the safety net of last resort). None of these cancels the native session or retries
-anything; the only effect is the existing `blocked` status transition and the existing
-reconciliation-attention path (`task_reconciliation_needs`), so the owner sees it the same way a
-`blocked` / `reconciliation` task already surfaces, with a reason that says which of the three it
-was.
+activity, including a task the agent is actively working — the safety net of last resort). None
+of these cancels the native session or retries anything; the only effect is the existing `blocked`
+status transition and the existing reconciliation-attention path
+(`task_reconciliation_needs`), so the owner sees it the same way a `blocked` / `reconciliation`
+task already surfaces, with a reason that says which of the three it was. Before writing, the
+sweep re-reads the attempt and the task under the task's lock and requires the attempt to still be
+`active` and the task to still be exactly `running` with no reason: a report that reached the task
+first while the (uncached, network) observation was in flight owns it instead, and the stale
+liveness signal is dropped. A later progress report from the task's current attempt recovers
+`session_lost` and `stalled` back to `running` (the sweep can be wrong, and a report is proof it
+was) but not `runtime_limit`, which stays blocked until the owner acts, since it fires regardless
+of activity and a report alone would defeat the bound.
+
+The same existence/terminal test fixes a related stuck state: cancelling a task whose kagent
+session kagent has entirely forgotten (for instance across a kagent restart with no persistence)
+used to never settle, because the runtime-stop resolver kept retrying `ListTasks`/
+`FindTaskForMessage` against a session that would never reappear. `KagentStops.Stopped`, given a
+`Liveness` observer, now checks it first and answers stopped at once when the session is gone or
+terminal, before listing anything.
 
 Not built: using this signal to automatically retry, reassign or cancel the stuck attempt; that
 is an owner decision this slice deliberately leaves alone. Not proven: behavior against a live
-kagent restart, only against a fake `LivenessObserver` in `server/internal/tasks/liveness_test.go`.
+kagent restart, only against fakes in `server/internal/tasks/liveness_test.go` and
+`server/internal/kagent/liveness_test.go`.

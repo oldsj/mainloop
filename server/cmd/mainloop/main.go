@@ -169,7 +169,8 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		// A workspace kagent prepares starts from one exact commit, so its base ref is resolved here.
 		wsOpts = append(wsOpts, workspaces.WithRefs(gh))
 	}
-	wsSvc := workspaces.New(cfg, pool, kc, reg, creds, sessions.NewLedger(cfg, pool), projectSvc, log, wsOpts...)
+	ledger := sessions.NewLedger(cfg, pool)
+	wsSvc := workspaces.New(cfg, pool, kc, reg, creds, ledger, projectSvc, log, wsOpts...)
 	healthSvc := health.NewService(cfg, pool, kc, log)
 	live := progress.New(hub)
 	svc := sessions.NewService(cfg, pool, kc, reg, creds, healthSvc, wsSvc, live, log)
@@ -181,8 +182,8 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	taskOpts := []tasks.Option{
 		tasks.WithRuntimes(wsSvc, svc),
-		tasks.WithStopObserver(&tasks.KagentStops{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc}),
-		tasks.WithLivenessObserver(kc),
+		tasks.WithStopObserver(&tasks.KagentStops{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc, Liveness: kc}),
+		tasks.WithLivenessObserver(&tasks.KagentLiveness{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc, Activity: ledger}),
 	}
 	if gh != nil {
 		taskOpts = append(taskOpts, tasks.WithObserver(tasks.GitHubObserver(&github.TaskObserver{App: gh})))

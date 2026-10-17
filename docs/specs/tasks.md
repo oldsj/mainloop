@@ -85,17 +85,33 @@ separate observations. A provider report or finished turn cannot prove coding-ta
 Verified merged publication is the later completion gate.
 
 **Liveness bounds.** Every `running` task is bounded, not just watched: a periodic liveness
-sweep reads the kagent session behind the task's current (`active`) attempt and blocks the task,
-once, the first time one of three things is true. `session_lost` means kagent reports no such
-session, or one whose runtime can no longer run again (failed, or on the way out). `stalled`
-means the session has shown no activity, by kagent's own record of it, for `TASK_STALL_TIMEOUT`
-(default 45 minutes); any fresh activity resets the clock, since the sweep always reads kagent's
-own timestamp rather than caching one. `runtime_limit` is the last-resort safety net: the attempt
-has run longer than `TASK_MAX_RUNTIME` (default 6 hours) regardless of activity. None of these
-cancels the native session; they only move the task to `blocked` with the matching reason and
-raise the owner's attention, the same way a `blocked` / `reconciliation` task does. There is no
-automatic retry: the owner decides whether to let the agent keep working, inspect it, or start
-over. A task already blocked, for this or any other reason, is left alone until the owner acts.
+sweep reads the kagent session behind the task's current (`active`) attempt, resolved fresh from
+its binding's `kagent_session_id` on every look (never Mainloop's own session id, which kagent
+does not know), and blocks the task, once, the first time one of three things is true. A
+coordination attempt with no kagent session yet (before its brief is delivered) is left alone,
+not treated as lost. `session_lost` means kagent reports no such session, or one whose runtime can
+no longer run again (failed, or on the way out). `stalled` means the session has shown no
+activity for `TASK_STALL_TIMEOUT` (default 45 minutes), where activity is a submitted or working
+A2A task in any native context the session has used, or else the later of the newest task status
+timestamp and the delivery ledger's own record — not kagent's Session.updated_at, which only moves
+on a lifecycle operation (create, resume, suspend, delete), never a turn. A working task counts as
+activity for as long as it keeps being reported working, however long that is. `runtime_limit` is
+the last-resort safety net: the attempt has run longer than `TASK_MAX_RUNTIME` (default 6 hours)
+regardless of activity, including a task the agent is actively working. None of these cancels the
+native session; they only move the task to `blocked` with the matching reason and raise the
+owner's attention, the same way a `blocked` / `reconciliation` task does. There is no automatic
+retry: the owner decides whether to let the agent keep working, inspect it, or cancel it
+(`task_cancel`). A progress report from the task's current attempt recovers `session_lost` and
+`stalled` back to `running` — the sweep can be wrong, and a report is proof it was — but not
+`runtime_limit`, which stays blocked until the owner acts, since it fires regardless of activity.
+A task already blocked, for this or any other reason, is left alone until the owner or a report
+moves it.
+
+Cancelling a task whose kagent session kagent has entirely forgotten (for instance across a
+kagent restart with no persistence) still settles: the stop resolver's own liveness check treats a
+session kagent has no record of, or that can never run again, as stopped at once, the same test
+the liveness sweep uses, rather than retrying `ListTasks`/`FindTaskForMessage` against a session
+that will never reappear.
 
 A verified observation of the task's own linked PR projects both `pr_state: merged`
 and `merge_state: merged`, including a merge by the parent or another actor. It outranks
@@ -543,6 +559,7 @@ Labels: **implemented** means built in `server/` and covered by tests on a scrat
 - **Implemented:** retry and reassign return the `blocked` operation (`handoff_unavailable`, source attempt set) on every path after the target provider is validated; a task that is already final refuses with 409 `task_terminal`.
 - **Implemented:** agent views. An agent sees the reports of its task's current attempt only, no artifacts, no checkpoint or manifest refs, and no `pending_approval_ids`.
 - **Implemented:** merged completion (`task-complete` sweep) and `projection.merge_state` / `merge_proposal_id`: `merge_state` is `merged` while the task's own PR is observed merged, and `merge_proposal_id` is set when the sweep completes the task from the merge service's merged candidate. `publication_state` stays null.
-- **Implemented:** the liveness sweep (`task-liveness`). It lists the current attempt of every task whose status is still `running` and whose attempt is `active`, so a task it has already blocked drops out on its own and the sweep never repeats work on it. For each it asks `kagent.Client.ObserveLiveness`, which wraps `ObserveSession`: a missing session (`connect.CodeNotFound`) answers "does not exist" rather than an error, and a session in a failed or deleting/deleted runtime state answers terminal. Either blocks the task `blocked` / `session_lost`. Otherwise the sweep compares its own clock against the session's `updated_at` (`stalled` past `TASK_STALL_TIMEOUT_SECONDS`, default 2700) and against the attempt's `created_at` (`runtime_limit` past `TASK_MAX_RUNTIME_SECONDS`, default 21600), in that order, so a session that looks fine but has run too long is still caught. A read error from kagent is logged and leaves the task alone for the next pass; the task row is locked, and the move is skipped if the task has ended, is no longer pointed at the checked attempt, or is already in the exact target state.
+- **Implemented:** the liveness sweep (`task-liveness`). It lists the current attempt of every task whose status is still `running` and whose attempt is `active`, so a task it has already blocked drops out on its own and the sweep never repeats work on it; a look that finds nothing to do still touches the attempt's `updated_at` alone, so the batch (capped at 100, ordered by `updated_at`) rotates through a backlog larger than one pass instead of reading the same oldest rows forever. For each it asks `KagentLiveness.ObserveLiveness` with the attempt's own Mainloop session/binding id, never a kagent id: it resolves `agent_bindings.kagent_session_id` fresh from the database first, and a binding with none yet (a coordination attempt before its brief is delivered) is left alone, not judged. With a kagent session resolved, `kagent.Client.ObserveLiveness` (which wraps `ObserveSession`) answers whether it exists at all (`connect.CodeNotFound` answers "does not exist" rather than an error) and whether its runtime state is terminal (failed or deleting/deleted); either blocks the task `blocked` / `session_lost`. Otherwise activity comes from the A2A tasks of every native context the session has used (the same contexts the stop observer lists): a submitted or working task counts as activity now, however old its last recorded status change, and otherwise the later of the newest task status timestamp and the delivery ledger's own last-activity record stands in — kagent's own `Session.updated_at` is not used for this, since it only moves on a lifecycle operation, never a turn. The sweep compares that activity against its own clock (`stalled` past `TASK_STALL_TIMEOUT_SECONDS`, default 2700) and the attempt's `created_at` against the runtime bound (`runtime_limit` past `TASK_MAX_RUNTIME_SECONDS`, default 21600), in that order, so a session that looks fine but has run too long is still caught. A read error from kagent is logged and leaves the task alone for the next pass. The task row and the attempt are locked and re-read before any write: the move is skipped if the attempt is no longer active, the task has ended, is no longer pointed at the checked attempt, or is no longer exactly `running` with no reason — a report that reached the task first (completed, blocked on an owner question, or anything else) owns it, and the liveness signal that raced it is stale. A later progress report from the task's current attempt recovers `session_lost` and `stalled` back to `running` (`reportedState`); `runtime_limit` does not recover this way, since it fires regardless of activity.
+- **Implemented:** a cancel of an attempt whose kagent session kagent has entirely forgotten settles instead of waiting forever. `KagentStops.Stopped`, given a `Liveness` observer, checks the same existence/terminal test the liveness sweep uses before listing anything, and answers stopped at once when kagent has no record of the session or reports it terminal: no native context can still carry a live task for a session kagent has forgotten, so there is nothing for `ListTasks`/`FindTaskForMessage` to usefully retry against.
 - **Not built:** handoff (retry and reassign) and the rest of the publication projection (`publication_state`; merge states other than `merged`). Without a configured GitHub App, the observation sweep does nothing.
 - **Not proven:** any run against kagent, a real workspace, GitHub or a cluster.

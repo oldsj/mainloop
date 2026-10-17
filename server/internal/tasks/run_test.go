@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -206,42 +207,86 @@ func (f *fakeStops) lookCount() int {
 	return f.calls
 }
 
-// fakeLiveness answers the liveness sweep's view of a session: present and fresh until told
-// otherwise. set installs the answer for one session id; sessions it was never told about report
-// present and fresh, so a test only states what it means to change.
-type fakeLiveness struct {
+// fakeKagentLiveness is the kagent client for the real KagentLiveness adapter under test:
+// ObserveLiveness and ListTasks, both keyed by the kagent session/context id KagentLiveness
+// resolves from a binding, never Mainloop's own session id. A context not set answers present and
+// not terminal with no tasks, so a test only states what it means to change.
+type fakeKagentLiveness struct {
 	mu    sync.Mutex
-	byID  map[string]kagent.SessionLiveness
+	live  map[string]kagent.SessionLiveness
+	tasks map[string][]*a2a.Task
 	calls int
+	// onObserve runs inside ObserveLiveness, before it answers, so a test can race a concurrent
+	// write against the write the sweep makes afterward.
+	onObserve func()
 }
 
-func (f *fakeLiveness) ObserveLiveness(_ context.Context, sessionID string) (kagent.SessionLiveness, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls++
-	if f.byID == nil {
-		return kagent.SessionLiveness{Exists: true, LastActivity: time.Now()}, nil
+func (k *fakeKagentLiveness) ObserveLiveness(_ context.Context, id string) (kagent.SessionLiveness, error) {
+	k.mu.Lock()
+	hook := k.onObserve
+	k.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
-	live, ok := f.byID[sessionID]
-	if !ok {
-		return kagent.SessionLiveness{Exists: true, LastActivity: time.Now()}, nil
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.calls++
+	if live, ok := k.live[id]; ok {
+		return live, nil
 	}
-	return live, nil
+	return kagent.SessionLiveness{Exists: true}, nil
 }
 
-func (f *fakeLiveness) set(sessionID string, live kagent.SessionLiveness) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.byID == nil {
-		f.byID = map[string]kagent.SessionLiveness{}
-	}
-	f.byID[sessionID] = live
+func (k *fakeKagentLiveness) ListTasks(_ context.Context, _ kagent.AgentRef, contextID string) ([]*a2a.Task, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.tasks[contextID], nil
 }
 
-func (f *fakeLiveness) lookCount() int {
+func (k *fakeKagentLiveness) set(kagentSessionID string, live kagent.SessionLiveness) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.live == nil {
+		k.live = map[string]kagent.SessionLiveness{}
+	}
+	k.live[kagentSessionID] = live
+}
+
+func (k *fakeKagentLiveness) setTasks(contextID string, listed []*a2a.Task) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.tasks == nil {
+		k.tasks = map[string][]*a2a.Task{}
+	}
+	k.tasks[contextID] = listed
+}
+
+func (k *fakeKagentLiveness) lookCount() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.calls
+}
+
+// fakeActivity is the sessions delivery ledger KagentLiveness falls back to when kagent shows no
+// A2A task at all. A session not set answers the zero time.
+type fakeActivity struct {
+	mu sync.Mutex
+	at map[string]time.Time
+}
+
+func (f *fakeActivity) LastActivity(_ context.Context, sessionID string) (time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.calls
+	return f.at[sessionID], nil
+}
+
+func (f *fakeActivity) set(sessionID string, at time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.at == nil {
+		f.at = map[string]time.Time{}
+	}
+	f.at[sessionID] = at
 }
 
 // fakeObserver answers the projection sweep.
@@ -310,8 +355,10 @@ type rig struct {
 	obs *fakeObserver
 	// stops is installed as the StopObserver by the tests that resolve unconfirmed stops.
 	stops *fakeStops
-	// live is installed as the LivenessObserver by the tests of the liveness sweep.
-	live *fakeLiveness
+	// live is the fake kagent client of the KagentLiveness adapter installed as svc.Liveness.
+	live *fakeKagentLiveness
+	// activity is the fake delivery ledger that adapter falls back to.
+	activity *fakeActivity
 }
 
 func newRig(t *testing.T) *rig {
@@ -323,8 +370,10 @@ func newRig(t *testing.T) *rig {
 	r.ses.OwnerID = owner
 	r.obs = &fakeObserver{}
 	r.stops = &fakeStops{}
-	r.live = &fakeLiveness{}
-	e.svc.Workspaces, e.svc.Sessions, e.svc.Observer, e.svc.Liveness = r.ws, r.ses, r.obs, r.live
+	r.live = &fakeKagentLiveness{}
+	r.activity = &fakeActivity{}
+	e.svc.Workspaces, e.svc.Sessions, e.svc.Observer = r.ws, r.ses, r.obs
+	e.svc.Liveness = &tasks.KagentLiveness{Pool: e.pool, OwnerID: owner, Sessions: r.ses.Service, Kagent: r.live, Activity: r.activity}
 	e.svc.Limits = tasks.Limits{
 		MaxChildrenPerParent: 3, MaxChildrenGlobal: 6, ProvisionWindow: 30 * time.Second,
 		Interval: 10 * time.Millisecond, ProjectionEvery: time.Second, SettleIdle: time.Nanosecond,

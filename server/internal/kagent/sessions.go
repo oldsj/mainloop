@@ -152,8 +152,11 @@ func terminalRuntimeStates(s api.RuntimeState) bool {
 
 // ObserveLiveness reads a Session for liveness only, the same way ObserveSession reads one for
 // display: a session kagent has no record of at all is not an error, it is simply not Exists.
-// LastActivity is kagent's own updated_at, the only record it keeps of the session changing; a
-// caller judging a stall compares it with its own clock, never caching it across calls.
+// LastActivity is kagent's own updated_at, which only moves on a lifecycle operation (create,
+// rename, resume, suspend, delete), never on a turn: it is not evidence that a long working turn
+// is stalled, and a caller that needs turn-level activity (internal/tasks.KagentLiveness) computes
+// its own and ignores this field. The zero Go time, not the 1970 epoch a nil proto timestamp's
+// AsTime() would give, means kagent sent no updated_at at all.
 func (c *Client) ObserveLiveness(ctx context.Context, id string) (SessionLiveness, error) {
 	s, err := c.ObserveSession(ctx, id)
 	if err != nil {
@@ -163,8 +166,12 @@ func (c *Client) ObserveLiveness(ctx context.Context, id string) (SessionLivenes
 		}
 		return SessionLiveness{}, err
 	}
+	var updated time.Time
+	if ts := s.GetUpdatedAt(); ts != nil {
+		updated = ts.AsTime()
+	}
 	return SessionLiveness{
-		Exists: true, Terminal: terminalRuntimeStates(s.GetState()), LastActivity: s.GetUpdatedAt().AsTime(),
+		Exists: true, Terminal: terminalRuntimeStates(s.GetState()), LastActivity: updated,
 	}, nil
 }
 

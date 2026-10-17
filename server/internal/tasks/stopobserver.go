@@ -32,6 +32,12 @@ type KagentTasks interface {
 	CancelTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)
 }
 
+// KagentSessionLiveness is the part of the kagent client that tells whether a resolved kagent
+// session still exists at all. *kagent.Client satisfies it through ObserveLiveness.
+type KagentSessionLiveness interface {
+	ObserveLiveness(ctx context.Context, kagentSessionID string) (kagent.SessionLiveness, error)
+}
+
 // KagentStops observes a session in kagent. It proves the session, not its deliveries: every native
 // context the session has used is listed, and any task in it that is not final is cancelled.
 type KagentStops struct {
@@ -40,6 +46,11 @@ type KagentStops struct {
 	// Sessions resolves the Agent that runs a session.
 	Sessions *sessions.Service
 	Kagent   KagentTasks
+	// Liveness, when set, is checked before anything else: a session kagent has entirely forgotten
+	// (for instance across a kagent restart with no persistence) or that can never run again answers
+	// stopped at once, so a cancel of an attempt whose session is gone settles instead of retrying
+	// ListTasks/FindTaskForMessage forever against a session that will never reappear. Nil skips it.
+	Liveness KagentSessionLiveness
 	// UncertainHold is how long a message that was sent, and that no task carries yet, may still
 	// land. It is the sessions ledger's hold; zero takes that service's setting, then 30 minutes.
 	UncertainHold time.Duration
@@ -58,7 +69,9 @@ func (k *KagentStops) hold() time.Duration {
 	return defaultUncertainHold
 }
 
-// Stopped implements [StopObserver]. The session is stopped when
+// Stopped implements [StopObserver]. With Liveness set, it is stopped at once when kagent has no
+// record of the session at all or reports it in a terminal runtime state: no native context can
+// still carry a live task for a session kagent has forgotten. Otherwise it is stopped when
 //
 //   - every native context it has used (the binding's kagent session, and the one each delivery was
 //     sent to, all of them) lists only final tasks, however they were started and whether or not a
@@ -76,6 +89,15 @@ func (k *KagentStops) Stopped(ctx context.Context, sessionID string) (bool, erro
 	}
 	if err != nil {
 		return false, err
+	}
+	if k.Liveness != nil && b.KagentSessionID != nil && *b.KagentSessionID != "" {
+		live, err := k.Liveness.ObserveLiveness(ctx, *b.KagentSessionID)
+		if err != nil {
+			return false, err
+		}
+		if !live.Exists || live.Terminal {
+			return true, nil // the session is gone or can never run again: nothing in it is still running
+		}
 	}
 	contexts, err := q.ListSessionNativeContexts(ctx, sessionID)
 	if err != nil {

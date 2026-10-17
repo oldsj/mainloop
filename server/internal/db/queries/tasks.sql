@@ -226,6 +226,11 @@ WHERE a.state = 'active' AND t.status = 'running' AND t.current_attempt_id = a.i
 ORDER BY a.updated_at, a.id
 LIMIT $1;
 
+-- name: TouchAttemptLiveness :exec
+-- Bumps updated_at alone, so a liveness look that finds nothing to do still rotates the attempt
+-- behind others in ListActiveAttemptsForLiveness's order, instead of it being picked every pass.
+UPDATE task_attempts SET updated_at = now() WHERE id = $1;
+
 -- name: ListAttemptWorkspaceCleanups :many
 -- Final attempts use a separate bounded batch, so cleanup cannot starve runtime stop resolution.
 -- Unchecked cleanup comes first; unresolved looks move behind other due work durably.
