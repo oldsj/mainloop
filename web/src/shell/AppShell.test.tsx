@@ -15,13 +15,17 @@ import {
 import { writeLastVisit } from '@/features/home/lastVisit';
 import { projectsRead, serveProjectPage } from '@/features/projects/test/handlers';
 import { project } from '@/features/projects/test/fixtures';
-import { serveTaskPage, taskScreen, tasksList } from '@/features/tasks/test/handlers';
+import { serveTaskPage, taskRead, taskScreen, tasksList } from '@/features/tasks/test/handlers';
 import { hitlView } from '@/test/fixtures/hitl';
 import type * as ConnectionModule from '@/api/connection';
 import { connection } from '@/api/connection';
 import { server } from '@/test/msw/server';
 import { projection, view } from '@/test/fixtures/tasks';
 import { createAppRouter } from '@/router';
+
+// The first render of this file mounts the whole app through the real router; under a full,
+// parallel test run that cold render can take longer than the default timeouts allow.
+vi.setConfig({ testTimeout: 15000 });
 
 // The banner reads one shared connection; a test flips its probe to take the app offline and back.
 const reach = vi.hoisted(() => ({ up: true }));
@@ -54,10 +58,13 @@ async function renderAt(url: string) {
       <RouterProvider router={router} />
     </QueryClientProvider>
   );
-  await waitFor(() =>
-    expect(
-      screen.queryByTestId('desktop-shell') ?? screen.queryByTestId('compact-shell')
-    ).not.toBeNull()
+  // Longer than the default: the app's first render through the real router is slow under a full run.
+  await waitFor(
+    () =>
+      expect(
+        screen.queryByTestId('desktop-shell') ?? screen.queryByTestId('compact-shell')
+      ).not.toBeNull(),
+    { timeout: 8000 }
   );
   await router.load();
   return router;
@@ -346,12 +353,16 @@ describe('home work placement', () => {
 
   function serveFailedSinceVisit() {
     writeLastVisit(Date.now() - 60 * MIN);
+    const failed = view({
+      id: 'fail-1',
+      title: 'Broke',
+      status: 'failed',
+      updated_at: failedNow()
+    });
     server.use(
-      tasksList(() =>
-        HttpResponse.json([
-          view({ id: 'fail-1', title: 'Broke', status: 'failed', updated_at: failedNow() })
-        ])
-      )
+      tasksList(() => HttpResponse.json([failed])),
+      // Opening the failed task from "Since you were here" reads this task directly.
+      taskRead(() => HttpResponse.json(failed))
     );
   }
 

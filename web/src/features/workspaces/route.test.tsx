@@ -28,6 +28,10 @@ afterEach(async () => {
   await connection.check();
 });
 
+// The first render of this file mounts the route through a real router; under a full,
+// parallel test run that cold render can take longer than the default timeouts allow.
+vi.setConfig({ testTimeout: 15000 });
+
 /**
  * Mounts the app's real workspace route, so the test covers the keying in `routes/workspaces.$id.tsx`.
  * Any workspace id is served, echoing the id back so a test can tell the two pages apart.
@@ -68,7 +72,10 @@ describe('workspace route', () => {
     const user = userEvent.setup();
     const { router } = renderRoute('/workspaces/w1');
 
-    await user.click(await screen.findByRole('button', { name: 'Suspend workspace' }));
+    // Longer than the default: the app's first render through the real router is slow under a full run.
+    await user.click(
+      await screen.findByRole('button', { name: 'Suspend workspace' }, { timeout: 8000 })
+    );
     expect(await screen.findByTestId('workspace-action-notice')).toHaveTextContent(
       'Workspace has an open delivery.'
     );

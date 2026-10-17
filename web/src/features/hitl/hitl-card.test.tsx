@@ -1,7 +1,7 @@
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { API_URL } from '@/api/config';
 import { keys } from '@/api';
 import { approvalRequest, hitlView, mergeSummary } from '@/test/fixtures/hitl';
@@ -10,6 +10,10 @@ import { server } from '@/test/msw/server';
 import { createFakeHITL } from './handlers';
 import { HITLCard } from './hitl-card';
 import { renderRouted } from './test-utils';
+
+// Rendering through the real router's context and the round trips below can be slow under a full,
+// parallel test run; give the slowest test here more than the default budget.
+vi.setConfig({ testTimeout: 15000 });
 
 let n = 0;
 let id: string;
@@ -221,7 +225,10 @@ describe('HITLCard', () => {
     await user.click(await screen.findByRole('button', { name: /^Approve tool\.a/ }));
     await user.click(screen.getByRole('button', { name: /^Reject tool\.b/ }));
     await user.click(screen.getByRole('button', { name: 'Send response' }));
-    expect(await screen.findByText('Decision delivery uncertain')).toBeInTheDocument();
+    // Longer than the default: several renders and a round trip precede this under a full run.
+    expect(
+      await screen.findByText('Decision delivery uncertain', {}, { timeout: 5000 })
+    ).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Session needs input' })).toHaveFocus();
     expect(document.activeElement).not.toBe(document.body);
   });

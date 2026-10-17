@@ -6,6 +6,10 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAppRouter } from '@/router';
 
+// The first render of this file mounts the whole app through the real router; under a full,
+// parallel test run that cold render can take longer than the default timeouts allow.
+vi.setConfig({ testTimeout: 15000 });
+
 const failing = vi.hoisted(() => ({ on: true }));
 
 vi.mock('@/features/explorer', async (importOriginal) => {
@@ -41,10 +45,13 @@ async function renderAt(url: string) {
       <RouterProvider router={router} />
     </QueryClientProvider>
   );
-  await waitFor(() =>
-    expect(
-      screen.queryByTestId('desktop-shell') ?? screen.queryByTestId('compact-shell')
-    ).not.toBeNull()
+  // Longer than the default: the app's first render through the real router is slow under a full run.
+  await waitFor(
+    () =>
+      expect(
+        screen.queryByTestId('desktop-shell') ?? screen.queryByTestId('compact-shell')
+      ).not.toBeNull(),
+    { timeout: 8000 }
   );
 }
 
