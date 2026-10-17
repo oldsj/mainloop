@@ -18,6 +18,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/attention"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
+	"github.com/oldsj/mainloop/server/internal/environments"
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/gittransport"
@@ -233,6 +234,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner.AddSweep(healthSvc.RecoverSweep(svc))
 	runner.AddSweep(healthSvc.RetainSweep())
 	runner.AddSweep(schedSvc.Sweep())
+	runner.AddSweep(environments.NewAPI(cfg, pool, nil).Service.FollowSweep(cfg.Identity.OwnerID))
 	previews.Register(runner)
 	taskSvc.Register(runner)
 	if prSvc != nil {

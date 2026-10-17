@@ -110,7 +110,11 @@ export interface paths {
     delete?: never;
     options?: never;
     head?: never;
-    patch?: never;
+    /**
+     * Update Environment
+     * @description Turns following the watched tag on or off. Turning it on needs a prebuilt image and a watched tag.
+     */
+    patch: operations['updateEnvironment'];
     trace?: never;
   };
   '/environments/{environment_id}/default': {
@@ -2044,6 +2048,14 @@ export interface components {
       /** Version Id */
       version_id: string;
     };
+    /** UpdateEnvironment */
+    UpdateEnvironment: {
+      /**
+       * Follow Watched Tag
+       * @description Accept each new image the watched tag resolves to as the default. Needs a watched tag.
+       */
+      follow_watched_tag: boolean;
+    };
     /** RegisterEnvironment */
     RegisterEnvironment: {
       /** Name */
@@ -2064,6 +2076,12 @@ export interface components {
       architecture: 'amd64' | 'arm64';
       /** Watched Tag */
       watched_tag?: string | null;
+      /**
+       * Follow Watched Tag
+       * @description Accept each new image the watched tag resolves to as the default. Needs a watched tag.
+       * @default false
+       */
+      follow_watched_tag: boolean;
       definition?: components['schemas']['DefinitionReference'] | null;
     };
     /** ScheduledRunAgentRef */
@@ -2825,6 +2843,8 @@ export interface components {
        * @default null
        */
       watched_tag: string | null;
+      /** Follow Watched Tag */
+      follow_watched_tag: boolean;
       /**
        * Accepted Default Version Id
        * @default null
@@ -4942,6 +4962,70 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  updateEnvironment: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        environment_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateEnvironment'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DevEnvironment'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Request Entity Too Large */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
         };
       };
     };

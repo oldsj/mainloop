@@ -1,0 +1,9 @@
+**
+!.git
+!server/go.mod
+!server/go.sum
+!web/package.json
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!.npmrc

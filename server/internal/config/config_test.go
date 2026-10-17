@@ -113,7 +113,7 @@ func TestDefaults(t *testing.T) {
 	if cfg.Tasks.ProvisionWindow.Duration() != 900*time.Second || cfg.Tasks.ProjectionEvery.Duration() != 60*time.Second {
 		t.Errorf("task provisioning defaults: %+v", cfg.Tasks)
 	}
-	if cfg.Tasks.ReconcileInterval.Duration() != 5*time.Second || cfg.WorkspaceDevelopmentPlatform != "linux/arm64" {
+	if cfg.Tasks.ReconcileInterval.Duration() != 5*time.Second || cfg.WorkspaceDevelopmentPlatform != "linux/arm64" || cfg.EnvironmentFollowInterval.Duration() != time.Hour {
 		t.Errorf("tasks/platform defaults: %+v", cfg.Tasks)
 	}
 	if cfg.Events.RetentionHours != 24 || cfg.Events.SubscriberBuffer != 64 || cfg.Events.PollInterval.Duration() != 5*time.Second {
@@ -202,6 +202,8 @@ func TestInvalidValues(t *testing.T) {
 		{"inf seconds", base("TASK_RECONCILE_SECONDS", "Inf"), "TASK_RECONCILE_SECONDS"},
 		{"retention order", map[string]string{"AGENT_TOKEN_KEY": "k", "HEALTH_EVENT_RETENTION_DAYS": "200", "HEALTH_SUMMARY_RETENTION_DAYS": "100"}, "retention"},
 		{"event retention range", base("HEALTH_EVENT_RETENTION_DAYS", "0"), "HEALTH_EVENT_RETENTION_DAYS"},
+		{"follow interval too short", base("ENVIRONMENT_FOLLOW_MIN_INTERVAL_SECONDS", "59"), "ENVIRONMENT_FOLLOW_MIN_INTERVAL_SECONDS"},
+		{"follow interval too long", base("ENVIRONMENT_FOLLOW_MIN_INTERVAL_SECONDS", "604801"), "ENVIRONMENT_FOLLOW_MIN_INTERVAL_SECONDS"},
 		{"platform", base("WORKSPACE_DEVELOPMENT_PLATFORM", "windows/amd64"), "WORKSPACE_DEVELOPMENT_PLATFORM"},
 		{"task profile id", base("TASK_DEFAULT_PROVIDER_PROFILE_ID", "Bad ID"), "TASK_DEFAULT_PROVIDER_PROFILE_ID"},
 		{"missing control token file", base("KAGENT_CONTROL_TOKEN_FILE", "/nonexistent/token"), "readable token file"},
