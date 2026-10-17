@@ -1488,16 +1488,17 @@ export interface components {
        * @default [
        *       "k8s/**",
        *       ".github/**",
-       *       "**\/migrations/**"
+       *       "**\/migrations/**",
+       *       "**\/Dockerfile*"
        *     ]
        */
       protected_globs: string[];
       /**
        * Protected Globs Version
-       * @default 1
+       * @default 2
        * @constant
        */
-      protected_globs_version: 1;
+      protected_globs_version: 2;
     };
     /**
      * Message

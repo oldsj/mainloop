@@ -10,14 +10,11 @@ import (
 	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/merge"
 )
 
 // defaultListLimit is the list endpoint's page size when the client sends none.
 const defaultListLimit = 20
-
-// protectedGlobs are the paths whose changes always need the owner, whatever the policy. The
-// list is fixed by the server and versioned.
-var protectedGlobs = []string{"k8s/**", ".github/**", "**/migrations/**"}
 
 // ProjectsAPI serves the project operations of the strict server interface.
 type ProjectsAPI struct {
@@ -38,7 +35,7 @@ func toProject(p dbq.Project) api.Project {
 func (a *ProjectsAPI) view(m MergePolicy) api.MergePolicyView {
 	return api.MergePolicyView{
 		MergePolicy: api.MergePolicy(m.Policy), MergePolicyVersion: int(m.Version),
-		ProtectedGlobs: protectedGlobs, ProtectedGlobsVersion: api.MergePolicyViewProtectedGlobsVersionN1,
+		ProtectedGlobs: merge.ProtectedGlobs, ProtectedGlobsVersion: api.MergePolicyViewProtectedGlobsVersionN2,
 		WritesEnabled: a.Svc.PolicyWrites,
 	}
 }

@@ -397,6 +397,14 @@ func (s *Service) recheck(ctx context.Context, q *dbq.Queries, work dbq.GetMerge
 	case int(project.MergePolicyVersion) != want.PolicyVer:
 		return "policy_changed", dbstate.MergeBlocked, nil
 	}
+	// The auto route for a protected-path candidate was only ever a reading of the operator's flag
+	// at prepare time. Turning the flag off must stop a candidate already queued on that route, not
+	// just gate new preparations, so the current value is read again here, in the same transaction
+	// that commits the intent. A candidate blocked this way must be prepared again, which picks up
+	// the approval route.
+	if work.Route == dbstate.RouteAuto && len(want.Protected) > 0 && !s.ProtectedAuto {
+		return "protected_auto_disabled", dbstate.MergeBlocked, nil
+	}
 	if work.Route == dbstate.RouteApproval {
 		state, err := q.LockResponseForMerge(ctx, pin.ResponseID)
 		switch {

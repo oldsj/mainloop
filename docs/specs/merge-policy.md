@@ -40,13 +40,17 @@ returns 404. Actual changes increment the version and append an immutable audit 
 the same value at the current version is a no-op. Updates lock the project row; future merge
 claims must take that same lock before reading current policy.
 
-Protected globs are server constants, version 1: `k8s/**`, `.github/**`, and
-`**/migrations/**`. Matching is case-sensitive and repository-relative POSIX; `**` includes
+Protected globs are server constants, version 2: `k8s/**`, `.github/**`, `**/migrations/**`,
+and `**/Dockerfile*`. Matching is case-sensitive and repository-relative POSIX; `**` includes
 zero directories. Deleted paths and both sides of a rename count. Missing rename sources,
 invalid or incomplete paths, and more than 3,000 files fail closed. An approval policy or a
 protected match requires approval; callers cannot edit the globs or select an execution mode.
 This helper establishes path policy only; the merge service must prove GitHub path
-completeness and all other merge gates.
+completeness and all other merge gates. `**/Dockerfile*` is protected because an image build
+input that sets a runtime environment variable (for example `MAINLOOP_MERGE_PROTECTED_AUTO`)
+could otherwise bake a self-enabled escalation into an image without owner approval; the
+checked-in k8s base config also pins `MAINLOOP_MERGE_PROTECTED_AUTO: 'false'` explicitly, so a
+value baked into an image can never win over the deployed config.
 
 An operator may set `MAINLOOP_MERGE_PROTECTED_AUTO=true` (same exact-value rule as the other
 gates) to let a protected-path match merge on green without an owner card. The match is still
@@ -59,6 +63,21 @@ no longer forces the approval route either; `merge_pull_request` refuses it with
 `evidence_unavailable` instead of waiting behind a card nobody can safely approve, since
 unavailable evidence can never actually merge. With the gate off (the default), a protected
 match or unavailable evidence always takes the approval route, as above.
+
+Turning the gate off re-gates a candidate that was already committed to the auto route on a
+protected-path match: the current value of the gate is read again in the same transaction that
+commits the merge intent (the PUT), not just at `prepare_pull_request_merge` time. A candidate
+this blocks (`protected_auto_disabled`) must be prepared again, which then takes the approval
+route. A merge intent that already committed, or whose outcome is uncertain, is unaffected and
+continues on its existing observe-only recovery path.
+
+**Known limitation.** Changes to the merge-enforcing server code itself (for example
+`server/internal/merge/`, `server/internal/config/`) are not on the protected-path globs above,
+so they merge under ordinary project policy like any other server change. For a project that
+merges its own pull requests, this means the code that defines and enforces the approval
+boundary is not itself held to that boundary. Closing this gap needs a different mechanism
+(for example an external required reviewer or branch protection rule that the merge service
+cannot itself bypass) and is out of scope here.
 
 The owner API uses the existing configured-owner/network-isolation boundary. It does not
 add request authentication. **Production enablement requires proof that actors cannot reach
