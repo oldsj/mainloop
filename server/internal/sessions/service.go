@@ -407,14 +407,36 @@ func (s *Service) record(ctx context.Context, tx pgx.Tx, source Source, sessionI
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return false, fmt.Errorf("get delivery: %w", err)
 	}
+	hold := s.opts().UncertainHold.Seconds()
 	busy := false
 	if _, err := q.GetBlockingDelivery(ctx, dbq.GetBlockingDeliveryParams{
-		SessionID: sessionID, HoldSeconds: s.opts().UncertainHold.Seconds(),
+		SessionID: sessionID, HoldSeconds: hold,
 	}); err == nil {
 		busy = true
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return false, fmt.Errorf("check open turn: %w", err)
 	}
+	hasQueued, err := q.HasQueuedDelivery(ctx, sessionID)
+	if err != nil {
+		return false, fmt.Errorf("check queued backlog: %w", err)
+	}
+	if !busy && hasQueued {
+		// The turn that blocked the backlog has ended or gone past its hold, but nothing released
+		// it yet: release the oldest queued message now, under the same lock, before this one takes
+		// a place behind it.
+		promoted, err := promoteNextQueued(ctx, q, sessionID, hold)
+		if err != nil {
+			return false, fmt.Errorf("promote queued delivery: %w", err)
+		}
+		if promoted != "" {
+			if err := q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: DeliveryChannel, Payload: promoted}); err != nil {
+				return false, fmt.Errorf("notify promoted delivery: %w", err)
+			}
+		}
+	}
+	// A message behind an existing backlog queues FIFO, even once the turn that first blocked it is
+	// no longer open: whatever was promoted above now holds the slot ahead of this one.
+	busy = busy || hasQueued
 	if n, err := q.InsertSessionMessage(ctx, dbq.InsertSessionMessageParams{
 		ID: messageID, SessionID: sessionID, Role: string(userRole), Content: text,
 	}); err != nil {
@@ -451,11 +473,16 @@ func (s *Service) record(ctx context.Context, tx pgx.Tx, source Source, sessionI
 	return false, q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: DeliveryChannel, Payload: messageID})
 }
 
-// promoteNextQueued admits the oldest message still queued for the session, if any, once its open
-// turn has just ended in this same transaction. It returns the promoted delivery's id, or "" when
-// nothing was queued; the caller notifies DeliveryChannel so the reconcile loop picks it up at once.
-func promoteNextQueued(ctx context.Context, q *dbq.Queries, sessionID string) (string, error) {
-	id, err := q.PromoteNextQueuedDelivery(ctx, sessionID)
+// promoteNextQueued admits the oldest message still queued for the session, if any, once nothing
+// blocks it any more: no open turn, and no uncertain one still inside holdSeconds. It returns the
+// promoted delivery's id, or "" when nothing was queued or the slot is still held; the caller
+// notifies DeliveryChannel so the reconcile loop picks it up at once. The caller holds
+// mainloop:send:<session> for the duration, serializing this with every other admission and
+// promotion of the session.
+func promoteNextQueued(ctx context.Context, q *dbq.Queries, sessionID string, holdSeconds float64) (string, error) {
+	id, err := q.PromoteNextQueuedDelivery(ctx, dbq.PromoteNextQueuedDeliveryParams{
+		SessionID: sessionID, HoldSeconds: holdSeconds,
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}

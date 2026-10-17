@@ -74,6 +74,59 @@ func (s *Service) EnsureSweep() reconcile.Sweep {
 	}
 }
 
+// strandedQueueBatch bounds how many sessions one pass of [Service.PromoteStrandedQueuedSweep]
+// looks at.
+const strandedQueueBatch = 50
+
+// PromoteStrandedQueuedSweep promotes a queued delivery that nothing blocks any more. The normal
+// path releases a session's own backlog as it goes, under mainloop:send:<session>, whenever a send
+// is admitted or a turn ends or goes past its uncertainty hold; this sweep is the recovery path for
+// the rare case that left a queued row behind with nothing left to release it (a crash between the
+// admission decision and the promotion, or an old write from before this coordination existed).
+func (s *Service) PromoteStrandedQueuedSweep() reconcile.Sweep {
+	return reconcile.Sweep{Name: "promote-stranded-queued", Every: 30 * time.Second, Run: s.PromoteStrandedQueued}
+}
+
+// PromoteStrandedQueued runs one pass of [Service.PromoteStrandedQueuedSweep].
+func (s *Service) PromoteStrandedQueued(ctx context.Context) error {
+	hold := s.opts().UncertainHold.Seconds()
+	ids, err := dbq.New(s.Pool).ListStrandedQueuedSessions(ctx, dbq.ListStrandedQueuedSessionsParams{
+		HoldSeconds: hold, LimitCount: strandedQueueBatch,
+	})
+	if err != nil {
+		return fmt.Errorf("list stranded queued sessions: %w", err)
+	}
+	var errs []error
+	for _, id := range ids {
+		if err := s.promoteStrandedQueued(ctx, id, hold); err != nil {
+			s.log().WarnContext(ctx, "could not promote a stranded queued delivery", "session_id", id, "error", err)
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// promoteStrandedQueued releases the oldest queued delivery of sessionID, under the same lock and
+// the same blocking predicate as a send or a settle, so it never races either.
+func (s *Service) promoteStrandedQueued(ctx context.Context, sessionID string, hold float64) error {
+	return events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+		if err := db.XactLock(ctx, tx, "mainloop:send:"+sessionID); err != nil {
+			return nil, err
+		}
+		q := dbq.New(tx)
+		promoted, err := promoteNextQueued(ctx, q, sessionID, hold)
+		if err != nil {
+			return nil, err
+		}
+		if promoted != "" {
+			if err := q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: DeliveryChannel, Payload: promoted}); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	})
+}
+
 // turn is one claimed delivery.
 type turn struct {
 	s   *Service
@@ -972,6 +1025,11 @@ func (t *turn) settle(
 	det, ref, tid := finishFields(detail, task, nativeFailure)
 	var stored string
 	err := events.InTxPublish(ctx, t.s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+		// Sends take this lock before they decide to queue, so a send that is still deciding cannot
+		// commit a queued row after this settle has already looked for one to promote.
+		if err := db.XactLock(ctx, tx, "mainloop:send:"+t.d.SessionID); err != nil {
+			return nil, err
+		}
 		q := dbq.New(tx)
 		id, owner, attempts := t.fence()
 		if err := lost(q.FinishDelivery(ctx, dbq.FinishDeliveryParams{
@@ -981,7 +1039,7 @@ func (t *turn) settle(
 		}
 		// The turn just ended, so the one-open-turn index has nothing of this session's left in it:
 		// admit the oldest message still queued, before refreshing the session's status below sees it.
-		promoted, err := promoteNextQueued(ctx, q, t.d.SessionID)
+		promoted, err := promoteNextQueued(ctx, q, t.d.SessionID, t.s.opts().UncertainHold.Seconds())
 		if err != nil {
 			return nil, err
 		}
