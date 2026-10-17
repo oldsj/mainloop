@@ -596,6 +596,31 @@ func TestReportMovesTheTask(t *testing.T) {
 	}
 }
 
+// A progress report proves the liveness sweep's own session_lost/stalled block was wrong, so it
+// recovers the task to running the same way answering an owner_decision does. runtime_limit does
+// not recover this way: it fires regardless of activity, and a report alone must not clear it.
+func TestProgressReportRecoversLivenessBlocksButNotRuntimeLimit(t *testing.T) {
+	e := newEnv(t)
+	for i, reason := range []string{"session_lost", "stalled", "runtime_limit"} {
+		binding := fmt.Sprintf("sup-liveness-%d", i)
+		id := e.codeTask()
+		e.attempt(id, dbstate.AttemptSupervisor, dbstate.AttemptActive, binding)
+		e.setStatus(id, "blocked", reason)
+		sup := e.agent(dbstate.RoleSupervisor, binding)
+		r, err := e.svc.Report(context.Background(), sup, report(sup, "r1", dbstate.OutcomeProgress))
+		if err != nil {
+			t.Fatalf("%s: %v", reason, err)
+		}
+		want := "running"
+		if reason == "runtime_limit" {
+			want = "blocked"
+		}
+		if r.Status != api.TaskStatus(want) {
+			t.Fatalf("%s: status = %s, want %s", reason, r.Status, want)
+		}
+	}
+}
+
 func TestReportIsIdempotent(t *testing.T) {
 	e := newEnv(t)
 	id := e.codeTask()

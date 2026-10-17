@@ -1148,7 +1148,13 @@ export interface components {
        * @description Closed reason for reconciliation or merge approval attention; absent for other sources.
        * @enum {string}
        */
-      reason_code?: 'reconciliation' | 'runtime_stop_unresolved' | 'merge_approval';
+      reason_code?:
+        | 'reconciliation'
+        | 'runtime_stop_unresolved'
+        | 'merge_approval'
+        | 'session_lost'
+        | 'stalled'
+        | 'runtime_limit';
       /** Id */
       id: string;
       /**
@@ -3074,6 +3080,9 @@ export interface components {
             | 'provisioning_unavailable'
             | 'handoff_unavailable'
             | 'cancel_unavailable'
+            | 'session_lost'
+            | 'stalled'
+            | 'runtime_limit'
           )
         | null;
       /** @default null */

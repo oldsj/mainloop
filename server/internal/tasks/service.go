@@ -51,6 +51,9 @@ type Service struct {
 	// StopObserver resolves a stop kagent did not confirm. Without one the service has no kagent
 	// client, and an unconfirmed stop is taken as stopped.
 	StopObserver StopObserver
+	// Liveness reads whether an active attempt's kagent session is still alive. Without one the
+	// liveness sweep does nothing.
+	Liveness LivenessObserver
 	// Limits are the capacity and timing settings of the loops.
 	Limits Limits
 	Log    *slog.Logger
@@ -75,6 +78,11 @@ type Limits struct {
 	// unsuccessful looks come before the task is blocked for reconciliation. Zero values take defaults.
 	ResolveBackoff reconcile.Backoff
 	ResolveBound   int
+	// LivenessEvery is the period of the liveness sweep; StallTimeout and MaxRuntime are its no-progress
+	// and overall bounds. Zero values take the defaults in internal/tasks/liveness.go.
+	LivenessEvery time.Duration
+	StallTimeout  time.Duration
+	MaxRuntime    time.Duration
 }
 
 func (s *Service) log() *slog.Logger {
@@ -837,8 +845,15 @@ func reportedState(t dbq.Task, in ReportInput) TaskState {
 	case dbstate.OutcomeFailed:
 		return TaskState{Status: dbstate.TaskBlocked, Reason: dbstate.ReasonReconciliation}
 	}
-	if cur.Status == dbstate.TaskBlocked && cur.Reason == dbstate.ReasonOwnerDecision {
-		return TaskState{Status: dbstate.TaskRunning}
+	// A progress report proves the attempt is still working, which recovers owner_decision (the
+	// owner answered) and the liveness sweep's own session_lost/stalled (it was wrong). It does not
+	// recover runtime_limit: that bound fires regardless of activity, so a report alone must not
+	// clear it; only the owner's own action on the blocked task does.
+	if cur.Status == dbstate.TaskBlocked {
+		switch cur.Reason {
+		case dbstate.ReasonOwnerDecision, dbstate.ReasonSessionLost, dbstate.ReasonStalled:
+			return TaskState{Status: dbstate.TaskRunning}
+		}
 	}
 	return cur
 }
@@ -964,6 +979,10 @@ func WithObserver(o Observer) Option { return func(s *Service) { s.Observer = o 
 // no kagent client, and an unconfirmed stop is taken as stopped.
 func WithStopObserver(o StopObserver) Option { return func(s *Service) { s.StopObserver = o } }
 
+// WithLivenessObserver sets the reader of an active attempt's kagent session. Without one the
+// liveness sweep does nothing.
+func WithLivenessObserver(o LivenessObserver) Option { return func(s *Service) { s.Liveness = o } }
+
 // NewService builds the task service from configuration. reg resolves provider profiles; build it
 // once with [providers.NewRegistry] so a malformed profile fails at startup. The options carry what
 // only some processes have.
@@ -975,6 +994,7 @@ func NewService(cfg *config.Config, pool *pgxpool.Pool, reg Resolver, log *slog.
 			MaxChildrenPerParent: cfg.Tasks.MaxChildrenPerParent, MaxChildrenGlobal: cfg.Tasks.MaxChildrenGlobal,
 			ProvisionWindow: cfg.Tasks.ProvisionWindow.Duration(), Interval: cfg.Tasks.ReconcileInterval.Duration(),
 			ProjectionEvery: cfg.Tasks.ProjectionEvery.Duration(),
+			StallTimeout:    cfg.Tasks.StallTimeout.Duration(), MaxRuntime: cfg.Tasks.MaxRuntime.Duration(),
 		},
 	}
 	for _, o := range opts {

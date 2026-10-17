@@ -3436,6 +3436,9 @@ components:
             - reconciliation
             - runtime_stop_unresolved
             - merge_approval
+            - session_lost
+            - stalled
+            - runtime_limit
         id:
           type: string
           title: Id
@@ -6711,6 +6714,9 @@ components:
                 - provisioning_unavailable
                 - handoff_unavailable
                 - cancel_unavailable
+                - session_lost
+                - stalled
+                - runtime_limit
               type: string
             - type: 'null'
           default: null

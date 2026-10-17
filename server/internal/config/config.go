@@ -114,6 +114,11 @@ type Tasks struct {
 	ProvisionWindow Seconds `env:"TASK_PROVISION_WINDOW_SECONDS" envDefault:"900"`
 	// ProjectionEvery is how often the GitHub observation of code tasks runs.
 	ProjectionEvery Seconds `env:"TASK_PROJECTION_SECONDS" envDefault:"60"`
+	// StallTimeout is how long a running task's attempt may show no activity before the liveness
+	// sweep blocks it (reason stalled). MaxRuntime is the same sweep's overall safety net, from the
+	// attempt's start (reason runtime_limit).
+	StallTimeout Seconds `env:"TASK_STALL_TIMEOUT_SECONDS" envDefault:"2700"`
+	MaxRuntime   Seconds `env:"TASK_MAX_RUNTIME_SECONDS" envDefault:"21600"`
 }
 
 // Workspaces tunes workspace lifecycle loops.
@@ -297,6 +302,12 @@ func (c *Config) validate() error {
 	}
 	if !validProviderID(c.Tasks.DefaultProviderProfileID) {
 		fail("TASK_DEFAULT_PROVIDER_PROFILE_ID must match ^[a-z][a-z0-9_-]*$")
+	}
+	if c.Tasks.StallTimeout <= 0 || c.Tasks.MaxRuntime <= 0 {
+		fail("TASK_STALL_TIMEOUT_SECONDS and TASK_MAX_RUNTIME_SECONDS must be positive")
+	}
+	if c.Tasks.MaxRuntime < c.Tasks.StallTimeout {
+		fail("TASK_MAX_RUNTIME_SECONDS must be at least TASK_STALL_TIMEOUT_SECONDS")
 	}
 	if c.Main.Provider != NativeClaude && c.Main.Provider != NativeCodex {
 		fail("MAIN_PROVIDER must be claude or codex")

@@ -70,8 +70,12 @@ type fakeKagent struct {
 	finds, gets, cancels, lists int
 	// gone makes the task disappear: it is no longer listed or found.
 	gone bool
+	// forgotten makes ObserveLiveness report that kagent has no record of the session at all, as a
+	// restart with no persistence would.
+	forgotten bool
 	// contexts are the contexts ListTasks was asked about.
-	contexts []string
+	contexts        []string
+	observeLiveness int
 }
 
 const fakeNativeTask = "native-1"
@@ -117,10 +121,26 @@ func (k *fakeKagent) CancelTask(_ context.Context, _ kagent.AgentRef, id string)
 	return &a2a.Task{ID: a2a.TaskID(id), Status: a2a.TaskStatus{State: a2a.TaskStateCanceled}}, nil
 }
 
+func (k *fakeKagent) ObserveLiveness(_ context.Context, _ string) (kagent.SessionLiveness, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.observeLiveness++
+	if k.forgotten {
+		return kagent.SessionLiveness{}, nil
+	}
+	return kagent.SessionLiveness{Exists: true}, nil
+}
+
 func (k *fakeKagent) snapshot() (finds, cancels int) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.finds, k.cancels
+}
+
+func (k *fakeKagent) listCount() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.lists
 }
 
 func (k *fakeKagent) land(st a2a.TaskState) {
@@ -266,6 +286,46 @@ func TestKagentStopsPastTheHoldIsStopped(t *testing.T) {
 	// The hold is the observer's setting when it has one.
 	obs.UncertainHold = time.Hour
 	mustStopped(t, obs, session, false, "sent, no task, inside a longer hold")
+}
+
+// A kagent restart with no persistence forgets the session entirely. Without the Liveness check,
+// a cancel of such an attempt would retry ListTasks/FindTaskForMessage against a session that will
+// never reappear and never settle; with it, Stopped answers at once and asks kagent nothing else.
+func TestStoppedTreatsAForgottenSessionAsStoppedWithoutAskingForItsTasks(t *testing.T) {
+	r := newRig(t)
+	k := &fakeKagent{}
+	obs, _, _, attempt, session := r.kagentStops(k)
+	r.briefRow(attempt, `state = 'cancelled', kagent_session_id = 'ks-' || session_id, updated_at = now()`)
+	k.land(a2a.TaskStateWorking) // looks like it is still running, if anything asked
+	obs.Liveness = k
+	k.forgotten = true
+	mustStopped(t, obs, session, true, "session kagent has entirely forgotten")
+	if finds, cancels := k.snapshot(); finds != 0 || cancels != 0 {
+		t.Fatalf("asked a forgotten session about its tasks: finds=%d cancels=%d", finds, cancels)
+	}
+	if n := k.listCount(); n != 0 {
+		t.Fatalf("listed tasks of a forgotten session: lists=%d", n)
+	}
+}
+
+// A terminal runtime state (failed, or on the way out) is also stopped at once: nothing in a
+// session that can never run again is still running, whatever it last reported.
+func TestStoppedTreatsATerminalRuntimeStateAsStopped(t *testing.T) {
+	r := newRig(t)
+	k := &fakeKagent{}
+	obs, _, _, attempt, session := r.kagentStops(k)
+	r.briefRow(attempt, `state = 'cancelled', kagent_session_id = 'ks-' || session_id, updated_at = now()`)
+	k.land(a2a.TaskStateWorking)
+	obs.Liveness = &terminalLiveness{fakeKagent: k}
+	mustStopped(t, obs, session, true, "session reports a terminal runtime state")
+}
+
+// terminalLiveness answers ObserveLiveness as Exists but Terminal, otherwise delegating to the
+// embedded fakeKagent for ListTasks/FindTaskForMessage/CancelTask.
+type terminalLiveness struct{ *fakeKagent }
+
+func (t *terminalLiveness) ObserveLiveness(context.Context, string) (kagent.SessionLiveness, error) {
+	return kagent.SessionLiveness{Exists: true, Terminal: true}, nil
 }
 
 // The reviewer's probe, now asserting the fix: the owner cancels while the brief's send is in flight.

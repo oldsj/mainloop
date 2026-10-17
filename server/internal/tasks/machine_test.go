@@ -16,6 +16,7 @@ var (
 		"", dbstate.ReasonOwnerDecision, dbstate.ReasonAwaitingChild, dbstate.ReasonApproval, dbstate.ReasonCI,
 		dbstate.ReasonPublication, dbstate.ReasonHandoff, dbstate.ReasonReconciliation,
 		dbstate.ReasonProvisioningUnavailable, dbstate.ReasonHandoffUnavailable, dbstate.ReasonCancelUnavailable,
+		dbstate.ReasonSessionLost, dbstate.ReasonStalled, dbstate.ReasonRuntimeLimit,
 	}
 	allAttemptStates = []dbstate.AttemptState{
 		dbstate.AttemptCreating, dbstate.AttemptActive, dbstate.AttemptDraining, dbstate.AttemptFenced,
@@ -42,6 +43,9 @@ func TestValidTaskStateTable(t *testing.T) {
 		{dbstate.TaskWaiting, dbstate.ReasonReconciliation}:         true,
 		{dbstate.TaskBlocked, dbstate.ReasonOwnerDecision}:          true,
 		{dbstate.TaskBlocked, dbstate.ReasonReconciliation}:         true,
+		{dbstate.TaskBlocked, dbstate.ReasonSessionLost}:            true,
+		{dbstate.TaskBlocked, dbstate.ReasonStalled}:                true,
+		{dbstate.TaskBlocked, dbstate.ReasonRuntimeLimit}:           true,
 		{dbstate.TaskCompleted, ""}:                                 true,
 		{dbstate.TaskFailed, ""}:                                    true,
 		{dbstate.TaskCancelled, ""}:                                 true,
