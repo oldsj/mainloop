@@ -12,8 +12,12 @@
 # directory (no -trimpath) and, for main packages, by VCS stamp (revision, time, modified), so the
 # commit is built from a real git clone at /data/workspace, the path and shape of a session
 # checkout. Only /opt/cache reaches the final image, never source.
+# BASE is always passed by the build. Its fallback is a tag that does not exist, so a build
+# without it fails at the pull instead of silently using a mutable base.
 ARG BASE
-FROM ${BASE} AS prep
+FROM ${BASE:-ghcr.io/oldsj/mainloop-dev:pass-BASE-build-arg} AS base
+
+FROM base AS prep
 USER root
 RUN mkdir -p /opt/cache /data/workspace && chown -R 65532:65532 /opt/cache /data/workspace
 USER 65532:65532
@@ -57,10 +61,11 @@ RUN --mount=type=bind,target=/src \
     && test -z "$(git status --porcelain)"
 # Compile every package and every test binary; -exec /bin/true skips running tests (some need a
 # database). The tree must still be clean afterwards, or the stamp would differ from a session's.
-RUN cd server && go build ./... && go test -exec /bin/true -run XXX_none ./... >/dev/null \
+WORKDIR /data/workspace/server
+RUN go build ./... && go test -exec /bin/true -run XXX_none ./... >/dev/null \
     && test -z "$(git status --porcelain)"
 
-FROM ${BASE} AS cache
+FROM base AS cache
 ARG SOURCE_SHA
 LABEL org.opencontainers.image.revision=${SOURCE_SHA}
 USER root
@@ -75,3 +80,5 @@ ENV GOMODCACHE=/opt/cache/go-mod \
     GOCACHE=/opt/cache/go-build \
     npm_config_store_dir=/opt/cache/pnpm-store \
     npm_config_virtual_store_dir=/opt/cache/pnpm-virtual
+# Replaces the base image's check with one for what this image adds.
+HEALTHCHECK --interval=30s --timeout=3s CMD test -r /opt/cache/go-build && test -r /opt/cache/go-mod
