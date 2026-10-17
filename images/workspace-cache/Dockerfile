@@ -46,10 +46,12 @@ COPY --from=deps --chown=65532:65532 /opt/cache/go-mod /opt/cache/go-mod
 COPY --from=deps --chown=65532:65532 /opt/cache/pnpm-store /opt/cache/pnpm-store
 COPY --from=deps --chown=65532:65532 /opt/cache/pnpm-virtual /opt/cache/pnpm-virtual
 # A real clone at the commit, as a session makes. safe.directory is needed because the mounted
-# context is owned by another user; the shallow clone is enough for Go's VCS stamp.
+# context is owned by another user. It is set through the environment, because the helper process
+# the clone starts ignores a -c flag. The shallow clone is enough for Go's VCS stamp.
 RUN --mount=type=bind,target=/src \
-    test -n "${SOURCE_SHA}" \
-    && git -c safe.directory='*' clone --quiet --no-hardlinks --depth 1 file:///src . \
+    export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*' \
+    && test -n "${SOURCE_SHA}" \
+    && git clone --quiet --no-hardlinks --depth 1 file:///src . \
     && test "$(git rev-parse HEAD)" = "${SOURCE_SHA}" \
     && test -z "$(git status --porcelain)"
 # Compile every package and every test binary; -exec /bin/true skips running tests (some need a
