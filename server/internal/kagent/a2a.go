@@ -211,6 +211,36 @@ func (c *Client) ListTasks(ctx context.Context, agent AgentRef, contextID string
 	})
 }
 
+// ListTasksSummaryPage reads one page of a conversation's tasks with no history: like
+// ListWaitingTasksPage, only a task's status is needed to judge activity or confirm a stop, and
+// omitting history keeps the read small however long the conversation is.
+func (c *Client) ListTasksSummaryPage(
+	ctx context.Context, agent AgentRef, contextID, token string, limit int,
+) (tasks []*a2a.Task, next string, err error) {
+	history := 0
+	raw, err := c.call(ctx, agent, methodListTasks, a2a.ListTasksRequest{
+		ContextID:     contextID,
+		HistoryLength: &history,
+		PageSize:      min(max(limit, 1), maxPageSize),
+		PageToken:     token,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	var resp a2a.ListTasksResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, "", &OutcomeUnknown{Op: "A2A " + methodListTasks, Detail: "bad task list", Err: err}
+	}
+	return resp.Tasks, resp.NextPageToken, nil
+}
+
+// ListTasksSummary reads every task in a conversation with no history.
+func (c *Client) ListTasksSummary(ctx context.Context, agent AgentRef, contextID string) ([]*a2a.Task, error) {
+	return paginate("A2A "+methodListTasks, func(token string) ([]*a2a.Task, string, error) {
+		return c.ListTasksSummaryPage(ctx, agent, contextID, token, maxPageSize)
+	})
+}
+
 // FindTaskForMessage resolves an uncertain send: it returns the task whose history holds the
 // message id, read again with GetTask so the artifacts are included, or found=false when no
 // task has it. If the message is found but the re-read fails, it returns found=true with the

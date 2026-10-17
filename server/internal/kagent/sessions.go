@@ -132,11 +132,17 @@ func (c *Client) ObserveSession(ctx context.Context, id string) (*api.Session, e
 }
 
 // SessionLiveness is what a liveness sweep needs from a kagent Session: whether kagent still has a
-// record of it, whether its runtime can no longer run again, and when kagent last recorded it
-// changing. The zero value is a session kagent has no record of.
+// record of it, whether its runtime can no longer run again, whether that terminal state is still
+// on its way out rather than settled, and when kagent last recorded it changing. The zero value is
+// a session kagent has no record of.
 type SessionLiveness struct {
-	Exists       bool
-	Terminal     bool
+	Exists   bool
+	Terminal bool
+	// Deleting is set only when Terminal is set for RUNTIME_STATE_DELETING: the session is on its
+	// way out but not yet gone, unlike RUNTIME_STATE_FAILED or RUNTIME_STATE_DELETED, which are
+	// settled. A caller deciding whether anything in the session could still be running (
+	// [tasks.KagentStops.Stopped]) must not treat Deleting the same as the rest of Terminal.
+	Deleting     bool
 	LastActivity time.Time
 }
 
@@ -170,8 +176,10 @@ func (c *Client) ObserveLiveness(ctx context.Context, id string) (SessionLivenes
 	if ts := s.GetUpdatedAt(); ts != nil {
 		updated = ts.AsTime()
 	}
+	state := s.GetState()
 	return SessionLiveness{
-		Exists: true, Terminal: terminalRuntimeStates(s.GetState()), LastActivity: updated,
+		Exists: true, Terminal: terminalRuntimeStates(state),
+		Deleting: state == api.RuntimeState_RUNTIME_STATE_DELETING, LastActivity: updated,
 	}, nil
 }
 
