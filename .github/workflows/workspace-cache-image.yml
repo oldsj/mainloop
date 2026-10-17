@@ -106,7 +106,8 @@ jobs:
           docker run --rm --platform linux/arm64 --user 65532:65532 \
             -v "$PWD/.git:/src/.git:ro" -e SOURCE_SHA="$GITHUB_SHA" \
             "$IMAGE@$DIGEST" bash -euo pipefail -c '
-              export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="*"
+              export GIT_CONFIG_GLOBAL="$(mktemp)"
+              git config --global --add safe.directory "*"
               git clone --quiet --depth 1 file:///src /data/workspace
               cd /data/workspace
               test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
