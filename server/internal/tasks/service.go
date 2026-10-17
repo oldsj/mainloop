@@ -78,9 +78,11 @@ type Limits struct {
 	// unsuccessful looks come before the task is blocked for reconciliation. Zero values take defaults.
 	ResolveBackoff reconcile.Backoff
 	ResolveBound   int
-	// ForceStopAfter is how many unsuccessful looks come before the observer ends the native session
-	// itself; zero takes the default.
-	ForceStopAfter int
+	// ForceSuspendAfter is how long a requested stop may stay unconfirmed before the observer suspends
+	// the runtime itself, and ForceDeleteAfter how long before it deletes the native session. Both
+	// count from the stop request, not from looks; zero values take the defaults.
+	ForceSuspendAfter time.Duration
+	ForceDeleteAfter  time.Duration
 	// LivenessEvery is the period of the liveness sweep; StallTimeout and MaxRuntime are its no-progress
 	// and overall bounds. Zero values take the defaults in internal/tasks/liveness.go.
 	LivenessEvery time.Duration

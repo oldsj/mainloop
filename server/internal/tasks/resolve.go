@@ -24,11 +24,24 @@ func (s *Service) resolveBackoff() reconcile.Backoff {
 	return s.Limits.ResolveBackoff
 }
 
-func (s *Service) forceStopAfter() int {
-	if s.Limits.ForceStopAfter > 0 {
-		return s.Limits.ForceStopAfter
+// forceLevel is how hard the observer may press a stop that has waited this long: not at all,
+// suspend, or delete. Delete never comes before suspend.
+func (s *Service) forceLevel(waited time.Duration) ForceLevel {
+	suspend, del := s.Limits.ForceSuspendAfter, s.Limits.ForceDeleteAfter
+	if suspend <= 0 {
+		suspend = defaultForceSuspendAfter
 	}
-	return defaultForceStopAfter
+	if del <= 0 {
+		del = defaultForceDeleteAfter
+	}
+	del = max(del, suspend)
+	switch {
+	case waited >= del:
+		return ForceDelete
+	case waited >= suspend:
+		return ForceSuspend
+	}
+	return ForceNone
 }
 
 func (s *Service) resolveBound() int {
@@ -86,13 +99,21 @@ func (s *Service) resolveStop(ctx context.Context, a dbq.TaskAttempt) (wait time
 			s.log().WarnContext(ctx, "observe requested stop", "attempt", a.ID, "error", oerr)
 			stopped = false
 		}
-		// A runtime that does not answer a cancel never will: after a few looks the observer ends the
-		// native session itself, so the stop settles without the owner. See [StopForcer].
-		if f, ok := s.StopObserver.(StopForcer); ok && !stopped && int(a.ResolveAttempts) >= s.forceStopAfter() {
-			var ferr error
-			if stopped, ferr = f.ForceStop(ctx, *a.SessionID); ferr != nil {
-				s.log().WarnContext(ctx, "force requested stop", "attempt", a.ID, "error", ferr)
-				stopped = false
+		// A runtime that does not answer a cancel never will: once the stop has waited long enough the
+		// observer suspends it, and later deletes it, so the stop settles without the owner. The wait
+		// is time since the request, read from the database clock, not the number of looks. See
+		// [StopForcer].
+		if f, ok := s.StopObserver.(StopForcer); ok && !stopped {
+			age, aerr := q.GetAttemptStopAge(ctx, a.ID)
+			if aerr != nil {
+				return 0, aerr
+			}
+			if level := s.forceLevel(time.Duration(age * float64(time.Second))); level != ForceNone {
+				var ferr error
+				if stopped, ferr = f.ForceStop(ctx, *a.SessionID, level); ferr != nil {
+					s.log().WarnContext(ctx, "force requested stop", "attempt", a.ID, "level", level, "error", ferr)
+					stopped = false
+				}
 			}
 		}
 	}

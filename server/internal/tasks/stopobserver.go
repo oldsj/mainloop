@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/sessions"
@@ -57,9 +58,11 @@ type KagentStops struct {
 	// list, and that listing is what cancels it, so it goes through the normal path below. Nil skips
 	// the check entirely.
 	Liveness KagentSessionLiveness
-	// Deleter, when set with Liveness, lets [KagentStops.ForceStop] end a runtime that does not answer
-	// a cancel. Nil leaves a stop to the ordinary observation.
-	Deleter KagentSessionDeleter
+	// Workspaces and Deleter, when set with Liveness, let [KagentStops.ForceStop] end a runtime that
+	// does not answer a cancel: Workspaces suspends it, Deleter deletes it. Nil leaves that step to
+	// the ordinary observation.
+	Workspaces WorkspaceSuspender
+	Deleter    KagentSessionDeleter
 	// UncertainHold is how long a message that was sent, and that no task carries yet, may still
 	// land. It is the sessions ledger's hold; zero takes that service's setting, then 30 minutes.
 	UncertainHold time.Duration
@@ -79,9 +82,9 @@ func (k *KagentStops) hold() time.Duration {
 }
 
 // Stopped implements [StopObserver]. With Liveness set, it is stopped at once when kagent has no
-// record of the session at all or reports it settled into a terminal runtime state (failed or
-// deleted): no native context can still carry a live task for a session kagent has forgotten or
-// finished tearing down. A session still deleting is not shortcut: it goes through the normal path
+// record of the session at all, reports it settled into a terminal runtime state (failed or
+// deleted), or reports it suspended: no native context can still carry a live task for a session
+// kagent has forgotten, finished tearing down or parked. A session still deleting is not shortcut: it goes through the normal path
 // below, since it may still list a task that needs cancelling. Otherwise it is stopped when
 //
 //   - every native context it has used (the binding's kagent session, and the one each delivery was
@@ -106,8 +109,8 @@ func (k *KagentStops) Stopped(ctx context.Context, sessionID string) (bool, erro
 		if err != nil {
 			return false, err
 		}
-		if !live.Exists || (live.Terminal && !live.Deleting) {
-			return true, nil // the session is gone or has settled terminal: nothing in it is still running
+		if runtimeStopped(live) {
+			return true, nil // gone, settled terminal or suspended: nothing in it is still running
 		}
 	}
 	contexts, err := q.ListSessionNativeContexts(ctx, sessionID)
@@ -186,15 +189,38 @@ func (k *KagentStops) Stopped(ctx context.Context, sessionID string) (bool, erro
 	return stopped, nil
 }
 
+// ForceLevel is how hard a stop that cancelling did not settle may be pressed.
+type ForceLevel int
+
+const (
+	// ForceNone leaves the stop to the ordinary observation.
+	ForceNone ForceLevel = iota
+	// ForceSuspend parks the runtime through the workspace service. The workspace and any unpushed
+	// work in it survive, and the turn cannot continue.
+	ForceSuspend
+	// ForceDelete has kagent delete the native session. The runtime and its workspace are gone, but
+	// Mainloop's rows are kept as audit history.
+	ForceDelete
+)
+
+func (l ForceLevel) String() string {
+	switch l {
+	case ForceSuspend:
+		return "suspend"
+	case ForceDelete:
+		return "delete"
+	}
+	return "none"
+}
+
 // StopForcer is implemented by an observer that can also end a session's runtime itself. The resolver
-// asks it once cancelling has failed to settle a stop for several looks: a runtime that is crashed,
-// suspended or wedged never answers a cancel, and waiting on it forever would hold the attempt's
-// claim and capacity for good.
+// asks it once cancelling has failed to settle a stop for long enough: a runtime that is crashed,
+// wedged or never answers a cancel would otherwise hold the attempt's claim and capacity for good.
 type StopForcer interface {
-	// ForceStop reports whether the session's runtime is gone. When it is not, it asks kagent to
-	// delete the session and reports false; the next call reads the result. An error means the
-	// session could not be observed or deleted, which is not a stop.
-	ForceStop(ctx context.Context, sessionID string) (bool, error)
+	// ForceStop reports whether the session's runtime has stopped. When it has not, it presses the
+	// stop as hard as level allows and reports whether that settled it. An error means the session
+	// could not be observed or pressed, which is not a stop.
+	ForceStop(ctx context.Context, sessionID string, level ForceLevel) (bool, error)
 }
 
 // KagentSessionDeleter is the part of the kagent client that deletes a session. *kagent.Client
@@ -203,19 +229,31 @@ type KagentSessionDeleter interface {
 	DeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
 }
 
-// ForceStop implements [StopForcer]. Deleting the native session is what makes a stop certain when
-// the runtime does not answer: whatever state it is in (crashed, suspended, still working a turn
-// kagent can no longer reach), once kagent has no record of the session or reports it deleted,
-// nothing in it can run, and a suspended session cannot be resumed into the old turn. It checks
-// before it acts, so a repeat never deletes twice: a session already gone or settled terminal is
-// stopped; one still on its way out (deleting) is waited for; any other is deleted, which is
-// idempotent in kagent, and confirmed by the next look. Without a Liveness or Deleter it does
-// nothing and reports false.
-func (k *KagentStops) ForceStop(ctx context.Context, sessionID string) (bool, error) {
-	if k.Liveness == nil || k.Deleter == nil {
+// WorkspaceSuspender is the part of [workspaces.Service] a forced stop uses: its suspend is a durable
+// operation that refuses while a turn is open and waits for kagent to confirm.
+type WorkspaceSuspender interface {
+	Suspend(ctx context.Context, id string) (api.WorkspaceLifecycle, error)
+}
+
+// ForceStop implements [StopForcer]. It checks before it acts, so a repeat never presses twice: a
+// session already gone, settled terminal or suspended is stopped (nothing in it runs until something
+// resumes it, and a stopped attempt takes no more sends); one still on its way out (deleting) is
+// waited for.
+//
+// ForceSuspend suspends through the workspace service, which keeps the workspace and its unpushed
+// work. It refuses while the ledger still holds a turn open, and then the stop waits for
+// ForceDelete. ForceDelete asks kagent to delete the native session directly rather than through the
+// workspace service, whose delete purges the session, binding, deliveries and approvals rows: an
+// attempt is audit history. The attempt's native_deleted_at and the binding's kagent_deleted_at record
+// the delete as soon as kagent accepts it, so nothing resumes or reuses the session. kagent refuses a
+// delete with Aborted while another lifecycle operation runs; that is an error and the next look
+// repeats it. Without a Liveness it does nothing and reports false.
+func (k *KagentStops) ForceStop(ctx context.Context, sessionID string, level ForceLevel) (bool, error) {
+	if k.Liveness == nil || level == ForceNone {
 		return false, nil
 	}
-	b, err := dbq.New(k.Pool).GetOwnedSessionBinding(ctx, dbq.GetOwnedSessionBindingParams{ID: sessionID, UserID: k.OwnerID})
+	q := dbq.New(k.Pool)
+	b, err := q.GetOwnedSessionBinding(ctx, dbq.GetOwnedSessionBindingParams{ID: sessionID, UserID: k.OwnerID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return true, nil // no binding, no agent
 	}
@@ -230,17 +268,43 @@ func (k *KagentStops) ForceStop(ctx context.Context, sessionID string) (bool, er
 		return false, err
 	}
 	switch {
-	case !live.Exists || (live.Terminal && !live.Deleting):
+	case runtimeStopped(live):
 		return true, nil
 	case live.Deleting:
 		return false, nil // already on its way out; read the result on the next look
 	}
+	if level == ForceSuspend {
+		if k.Workspaces == nil {
+			return false, nil
+		}
+		if _, err := k.Workspaces.Suspend(ctx, sessionID); err != nil {
+			return false, fmt.Errorf("suspend workspace: %w", err)
+		}
+		live, err = k.Liveness.ObserveLiveness(ctx, *b.KagentSessionID)
+		return err == nil && runtimeStopped(live), err
+	}
+	if k.Deleter == nil {
+		return false, nil
+	}
 	if _, err := k.Deleter.DeleteSession(ctx, *b.KagentSessionID); err != nil {
 		var se *kagent.SessionError
-		if errors.As(err, &se) && se.Wire && se.Code == connect.CodeNotFound {
-			return true, nil
+		if !errors.As(err, &se) || !se.Wire || se.Code != connect.CodeNotFound {
+			return false, fmt.Errorf("delete session: %w", err)
 		}
-		return false, fmt.Errorf("delete session: %w", err)
 	}
-	return false, nil
+	if err := q.MarkAttemptNativeDeleted(ctx, &sessionID); err != nil {
+		return false, err
+	}
+	if err := q.MarkBindingKagentDeleted(ctx, sessionID); err != nil {
+		return false, err
+	}
+	live, err = k.Liveness.ObserveLiveness(ctx, *b.KagentSessionID)
+	return err == nil && runtimeStopped(live), err
+}
+
+// runtimeStopped reports whether nothing can run in a session of this liveness: kagent has no record
+// of it, it settled failed or deleted, or it is suspended. A session still deleting is not stopped
+// yet; it may list a task that needs cancelling.
+func runtimeStopped(live kagent.SessionLiveness) bool {
+	return !live.Exists || (live.Terminal && !live.Deleting) || live.Suspended
 }

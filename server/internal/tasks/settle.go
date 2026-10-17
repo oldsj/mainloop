@@ -39,10 +39,14 @@ const (
 // evidence and blocks the task for reconciliation. It keeps looking afterwards, at the slowest pace.
 const defaultResolveBound = 8
 
-// defaultForceStopAfter is how many unsuccessful looks come before the resolver has the observer end
-// the native session: enough for a cancel to settle a runtime that is merely slow, few enough that a
-// dead one does not hold its claim and capacity for minutes.
-const defaultForceStopAfter = 2
+// defaultForceSuspendAfter is how long after a stop request the resolver has the observer suspend the
+// runtime, and defaultForceDeleteAfter how long before it deletes the native session. A cancel that
+// has not settled a stop within two minutes is not coming; suspending parks the runtime and keeps the
+// workspace and its unpushed work. Only a runtime that still has not stopped after five is deleted.
+const (
+	defaultForceSuspendAfter = 2 * time.Minute
+	defaultForceDeleteAfter  = 5 * time.Minute
+)
 
 // defaultSettleIdle is how long the settle sweep leaves an attempt alone after its last change, so
 // it never races the handler that is still working on it.

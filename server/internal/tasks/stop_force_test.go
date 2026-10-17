@@ -1,18 +1,23 @@
 // A runtime that never answers a cancel (crashed, suspended, or wedged inside a turn) must not hold its
-// attempt's claim and capacity, or the owner's attention, for good. After a few looks the resolver has
-// the observer delete the native session; once kagent reports it gone, the stop is confirmed.
+// attempt's claim and capacity, or the owner's attention, for good. Once a requested stop has waited
+// long enough the resolver has the observer suspend the runtime, and when that does not settle it
+// delete the native session. How long it has waited is time since the request, not a number of looks.
 
 package tasks_test
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
+	"connectrpc.com/connect"
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
 
+	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
@@ -51,31 +56,75 @@ func (f *fakeNativeSession) set(live kagent.SessionLiveness) {
 	f.live = live
 }
 
+func (f *fakeNativeSession) setDeleteErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleteErr = err
+}
+
 func (f *fakeNativeSession) deleteCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.deletes
 }
 
+// fakeSuspender is the workspace service's suspend. It parks the native session, or refuses the way
+// the service does while a turn is open.
+type fakeSuspender struct {
+	mu      sync.Mutex
+	native  *fakeNativeSession
+	refuse  error
+	suspend int
+}
+
+func (f *fakeSuspender) Suspend(context.Context, string) (api.WorkspaceLifecycle, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.suspend++
+	if f.refuse != nil {
+		return api.WorkspaceLifecycle{}, f.refuse
+	}
+	f.native.set(kagent.SessionLiveness{Exists: true, Suspended: true})
+	return api.WorkspaceLifecycle{}, nil
+}
+
+func (f *fakeSuspender) suspends() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.suspend
+}
+
+type stuck struct {
+	r       *rig
+	native  *fakeNativeSession
+	suspend *fakeSuspender
+	client  *stopProbeClient
+	child   string
+	attempt string
+	session string
+}
+
 // stuckStop provisions a cancelled child whose native runtime never answers: every cancel is an
-// uncertain timeout, as in prod, and the session reads present and not terminal until deleted.
-func stuckStop(t *testing.T, forceAfter int) (r *rig, native *fakeNativeSession, child, attempt string) {
+// uncertain timeout, as in prod, and the session reads present and not terminal until suspended or
+// deleted. The workspace service's suspend refuses, as it does while a turn is open, unless a test
+// clears refuse.
+func stuckStop(t *testing.T) *stuck {
 	t.Helper()
 	r, _, _, child, attempt, session := stopProbeProvision(t)
 	k := &fakeKagent{}
 	k.land(a2a.TaskStateWorking)
 	c := &stopProbeClient{k: k}
 	c.setCancelError(true)
-	native = &fakeNativeSession{live: kagent.SessionLiveness{Exists: true}}
+	native := &fakeNativeSession{live: kagent.SessionLiveness{Exists: true}}
+	susp := &fakeSuspender{native: native, refuse: errors.New("a turn is open")}
 	r.ses.Kagent = c
 	r.svc.Sessions = r.ses.Service
 	r.svc.StopObserver = &tasks.KagentStops{
-		Pool: r.pool, OwnerID: owner, Sessions: r.ses.Service, Kagent: c, Liveness: native, Deleter: native,
+		Pool: r.pool, OwnerID: owner, Sessions: r.ses.Service, Kagent: c, Liveness: native, Workspaces: susp, Deleter: native,
 	}
-	r.svc.Limits.ForceStopAfter = forceAfter
 	r.exec(`UPDATE agent_bindings SET kagent_session_id = 'ks-native' WHERE session_id = $1`, session)
 	r.briefRow(attempt, `state='delivered', task_id='task-1', kagent_session_id='ks-native'`)
-	return r, native, child, attempt
+	return &stuck{r: r, native: native, suspend: susp, client: c, child: child, attempt: attempt, session: session}
 }
 
 func cancelChild(t *testing.T, r *rig, child string) {
@@ -86,74 +135,211 @@ func cancelChild(t *testing.T, r *rig, child string) {
 	}
 }
 
-// Regression for five cancelled prod tasks that stayed "draining" for days: every CancelTask timed
-// out, so the stop was never confirmed and the owner was asked to reconcile it by hand.
-func TestStopOfAnUnresponsiveRuntimeDeletesTheNativeSessionAndSettles(t *testing.T) {
-	r, native, child, attempt := stuckStop(t, 1)
-	native.afterDelete = kagent.SessionLiveness{Exists: true, Terminal: true, Deleting: true}
-	cancelChild(t, r, child)
-	r.run()
+// cancelAndWait cancels the child, starts the loops and returns once the attempt is draining, the
+// moment its stop is requested.
+func (s *stuck) cancelAndWait(t *testing.T) {
+	t.Helper()
+	cancelChild(t, s.r, s.child)
+	s.r.run()
+	s.r.eventually("attempt draining", func() bool {
+		return s.r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND stop_requested_at IS NOT NULL`, s.attempt) == 1
+	})
+}
 
-	r.eventually("native session deleted", func() bool { return native.deleteCount() == 1 })
-	// While kagent is still deleting it, nothing is released and nothing is deleted twice.
-	if slot, claim := r.held(attempt); slot != 1 || claim != 1 {
-		t.Fatalf("held slot=%d claim=%d while the session is still being deleted, want both", slot, claim)
+// waited moves the stop request into the past, as if the stop had waited this long.
+func (s *stuck) waited(seconds int) {
+	s.r.exec(`UPDATE task_attempts SET stop_requested_at = now() - make_interval(secs => $2::float8) WHERE id = $1`, s.attempt, float64(seconds))
+}
+
+// looked waits until the resolver has looked at the stop this many times, so a test can say nothing
+// was forced although it had every chance.
+func (s *stuck) looked(n int) {
+	s.r.eventually(fmt.Sprintf("%d looks at the stop", n), func() bool {
+		return s.r.count(`SELECT resolve_attempts FROM task_attempts WHERE id = $1`, s.attempt) >= n
+	})
+}
+
+func (s *stuck) held(t *testing.T, what string) {
+	t.Helper()
+	if slot, claim := s.r.held(s.attempt); slot != 1 || claim != 1 {
+		t.Fatalf("held slot=%d claim=%d %s, want both", slot, claim, what)
 	}
-	native.set(kagent.SessionLiveness{}) // kagent has no record of it any more
-	r.eventually("stop confirmed", func() bool { return r.attemptState(child) == "cancelled" })
-	if slot, claim := r.held(attempt); slot != 0 || claim != 0 {
+}
+
+func (s *stuck) released(t *testing.T) {
+	t.Helper()
+	if slot, claim := s.r.held(s.attempt); slot != 0 || claim != 0 {
 		t.Fatalf("held slot=%d claim=%d after the stop settled", slot, claim)
 	}
-	if got := native.deleteCount(); got != 1 {
-		t.Fatalf("native session deleted %d times, want exactly once", got)
-	}
-	if n := r.count(`SELECT count(*) FROM attention_items WHERE source_kind = 'task_reconciliation' AND state = 'open'`); n != 0 {
+	if n := s.r.count(`SELECT count(*) FROM attention_items WHERE source_kind = 'task_reconciliation' AND state = 'open'`); n != 0 {
 		t.Fatalf("%d owner cards open for a stop the system settled itself", n)
 	}
 }
 
-// Nothing is deleted while a cancel could still work: before the configured number of looks the
-// observer only cancels.
-func TestStopDoesNotDeleteTheNativeSessionBeforeItsLooks(t *testing.T) {
-	r, native, child, attempt := stuckStop(t, 1000)
-	cancelChild(t, r, child)
-	r.run()
-	r.eventually("stop looked at", func() bool {
-		return r.count(`SELECT resolve_attempts FROM task_attempts WHERE id=$1`, attempt) >= 3
+func (s *stuck) nativeDeleted() (attempt, binding bool) {
+	attempt = s.r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND native_deleted_at IS NOT NULL`, s.attempt) == 1
+	binding = s.r.count(`SELECT count(*) FROM agent_bindings WHERE session_id = $1 AND kagent_deleted_at IS NOT NULL`, s.session) == 1
+	return attempt, binding
+}
+
+// Regression for five cancelled prod tasks that stayed "draining" for days: every CancelTask timed
+// out, so the stop was never confirmed and the owner was asked to reconcile it by hand. Within the
+// default grace nothing is forced however often the resolver looks; after it, the runtime is
+// suspended, which keeps the workspace, and the suspended session counts as stopped.
+func TestStopOfAnUnresponsiveRuntimeIsSuspendedAfterTheDefaultGrace(t *testing.T) {
+	s := stuckStop(t)
+	s.suspend.refuse = nil
+	s.cancelAndWait(t)
+
+	s.looked(4)
+	s.waited(110) // just inside the two-minute default
+	s.looked(8)
+	if n, d := s.suspend.suspends(), s.native.deleteCount(); n != 0 || d != 0 {
+		t.Fatalf("suspended %d and deleted %d times inside the grace", n, d)
+	}
+	s.held(t, "inside the grace")
+
+	s.waited(130)
+	s.r.eventually("stop confirmed", func() bool { return s.r.attemptState(s.child) == "cancelled" })
+	s.released(t)
+	if n := s.suspend.suspends(); n != 1 {
+		t.Fatalf("suspended %d times, want exactly once", n)
+	}
+	if d := s.native.deleteCount(); d != 0 {
+		t.Fatalf("deleted the session %d times although suspending settled the stop", d)
+	}
+	if a, b := s.nativeDeleted(); a || b {
+		t.Fatalf("a suspend was recorded as a delete: attempt=%v binding=%v", a, b)
+	}
+}
+
+// Delete is for a runtime that suspending did not stop, and only after its own, longer grace.
+func TestStopDeletesTheNativeSessionWhenSuspendDoesNotSettleIt(t *testing.T) {
+	s := stuckStop(t) // suspend refuses
+	s.native.afterDelete = kagent.SessionLiveness{Exists: true, Terminal: true, Deleting: true}
+	s.cancelAndWait(t)
+
+	s.waited(200) // past suspend, short of delete
+	s.r.eventually("suspend tried", func() bool { return s.suspend.suspends() >= 1 })
+	s.looked(8)
+	if d := s.native.deleteCount(); d != 0 {
+		t.Fatalf("deleted %d times before the delete grace", d)
+	}
+
+	s.waited(400)
+	s.r.eventually("native session deleted", func() bool { return s.native.deleteCount() == 1 })
+	// While kagent is still deleting it, nothing is released and nothing is deleted twice.
+	s.held(t, "while the session is still being deleted")
+	// The fake counts the delete when it is called; the markers follow once it returns.
+	s.r.eventually("delete recorded on the attempt and the binding", func() bool {
+		a, b := s.nativeDeleted()
+		return a && b
 	})
-	if got := native.deleteCount(); got != 0 {
-		t.Fatalf("native session deleted %d times before the force threshold", got)
+	s.native.set(kagent.SessionLiveness{}) // kagent has no record of it any more
+	s.r.eventually("stop confirmed", func() bool { return s.r.attemptState(s.child) == "cancelled" })
+	s.released(t)
+	if got := s.native.deleteCount(); got != 1 {
+		t.Fatalf("native session deleted %d times, want exactly once", got)
 	}
 }
 
-// A failed delete is not a stop: the claim and capacity stay held, and a later look deletes again.
+// A cancel that lands just before the grace ends settles the stop; the runtime is neither suspended
+// nor deleted.
+func TestStopSettledByCancelJustBeforeTheGraceIsNotForced(t *testing.T) {
+	s := stuckStop(t)
+	s.suspend.refuse = nil
+	s.cancelAndWait(t)
+
+	s.waited(115)
+	s.looked(5)
+	s.client.setCancelError(false)
+	s.r.eventually("stop confirmed", func() bool { return s.r.attemptState(s.child) == "cancelled" })
+	s.released(t)
+	if n, d := s.suspend.suspends(), s.native.deleteCount(); n != 0 || d != 0 {
+		t.Fatalf("suspended %d and deleted %d times for a stop the cancel settled", n, d)
+	}
+}
+
+// A runtime that is already suspended is stopped: nothing is cancelled, suspended or deleted.
+func TestStopOfAnAlreadySuspendedRuntimeForcesNothing(t *testing.T) {
+	s := stuckStop(t)
+	s.native.set(kagent.SessionLiveness{Exists: true, Suspended: true})
+	s.cancelAndWait(t)
+	s.r.eventually("stop confirmed", func() bool { return s.r.attemptState(s.child) == "cancelled" })
+	s.released(t)
+	if n, d := s.suspend.suspends(), s.native.deleteCount(); n != 0 || d != 0 {
+		t.Fatalf("suspended %d and deleted %d times a runtime that was already suspended", n, d)
+	}
+}
+
+// A failed delete is not a stop: the claim and capacity stay held, no delete is recorded, and a
+// later look deletes again.
 func TestStopKeepsTheClaimWhenTheNativeDeleteFails(t *testing.T) {
-	r, native, child, attempt := stuckStop(t, 1)
-	native.deleteErr = errors.New("injected delete failure")
-	cancelChild(t, r, child)
-	r.run()
-	r.eventually("delete tried again", func() bool { return native.deleteCount() >= 2 })
-	if slot, claim := r.held(attempt); slot != 1 || claim != 1 {
-		t.Fatalf("held slot=%d claim=%d after failed deletes, want both", slot, claim)
+	s := stuckStop(t)
+	s.native.setDeleteErr(errors.New("injected delete failure"))
+	s.cancelAndWait(t)
+	s.waited(600)
+	s.r.eventually("delete tried again", func() bool { return s.native.deleteCount() >= 2 })
+	s.held(t, "after failed deletes")
+	if a, b := s.nativeDeleted(); a || b {
+		t.Fatalf("a failed delete was recorded: attempt=%v binding=%v", a, b)
 	}
-	native.mu.Lock()
-	native.deleteErr = nil
-	native.afterDelete = kagent.SessionLiveness{}
-	native.mu.Unlock()
-	r.eventually("stop confirmed", func() bool { return r.attemptState(child) == "cancelled" })
+	s.native.mu.Lock()
+	s.native.deleteErr = nil
+	s.native.afterDelete = kagent.SessionLiveness{}
+	s.native.mu.Unlock()
+	s.r.eventually("stop confirmed", func() bool { return s.r.attemptState(s.child) == "cancelled" })
 }
 
-// A session kagent already lost is stopped without deleting anything.
-func TestStopOfAnAlreadyGoneRuntimeDeletesNothing(t *testing.T) {
-	r, native, child, attempt := stuckStop(t, 1)
-	native.set(kagent.SessionLiveness{})
-	cancelChild(t, r, child)
-	r.run()
-	r.eventually("stop confirmed", func() bool { return r.attemptState(child) == "cancelled" })
-	if got := native.deleteCount(); got != 0 {
-		t.Fatalf("deleted a session kagent had already lost: %d", got)
+// kagent refuses a delete with Aborted while another lifecycle operation holds the session. That
+// is not a stop and records nothing; once the resolver has looked the bound number of times the
+// stop is listed as unresolved, which is what the orchestration health page shows, and a later
+// delete still settles it.
+func TestStopWhoseDeleteIsRefusedIsListedUnresolved(t *testing.T) {
+	s := stuckStop(t)
+	s.r.svc.Limits.ResolveBound = 3
+	s.native.setDeleteErr(&kagent.SessionError{Op: "SessionService DeleteSession", Code: connect.CodeAborted, Wire: true})
+	s.cancelAndWait(t)
+	s.waited(600)
+
+	s.r.eventually("stop unresolved", func() bool {
+		return s.r.str(`SELECT stop_state FROM task_attempts WHERE id = $1`, s.attempt) == "unresolved"
+	})
+	s.held(t, "while the delete is refused")
+	if a, b := s.nativeDeleted(); a || b {
+		t.Fatalf("a refused delete was recorded: attempt=%v binding=%v", a, b)
 	}
-	if slot, claim := r.held(attempt); slot != 0 || claim != 0 {
-		t.Fatalf("held slot=%d claim=%d", slot, claim)
+	// The stop is visible on the health surface whatever state its task is in.
+	if n := s.r.count(`SELECT count(*) FROM attention_items WHERE source_kind = 'task_reconciliation' AND state = 'open'`); n != 0 {
+		t.Fatalf("%d owner cards open for a stop the system is resolving", n)
 	}
+	rows, err := dbq.New(s.r.pool).ListUnresolvedStops(context.Background(), owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].AttemptID != s.attempt {
+		t.Fatalf("unresolved stops = %+v, want attempt %s", rows, s.attempt)
+	}
+
+	s.native.mu.Lock()
+	s.native.deleteErr = nil
+	s.native.afterDelete = kagent.SessionLiveness{}
+	s.native.mu.Unlock()
+	s.r.eventually("stop confirmed", func() bool { return s.r.attemptState(s.child) == "cancelled" })
+	s.released(t)
+	if rows, err := dbq.New(s.r.pool).ListUnresolvedStops(context.Background(), owner); err != nil || len(rows) != 0 {
+		t.Fatalf("a settled stop is still listed unresolved: %v %v", rows, err)
+	}
+}
+
+// A session kagent already lost is stopped without suspending or deleting anything.
+func TestStopOfAnAlreadyGoneRuntimeForcesNothing(t *testing.T) {
+	s := stuckStop(t)
+	s.native.set(kagent.SessionLiveness{})
+	s.cancelAndWait(t)
+	s.r.eventually("stop confirmed", func() bool { return s.r.attemptState(s.child) == "cancelled" })
+	if n, d := s.suspend.suspends(), s.native.deleteCount(); n != 0 || d != 0 {
+		t.Fatalf("suspended %d and deleted %d times a session kagent had already lost", n, d)
+	}
+	s.released(t)
 }

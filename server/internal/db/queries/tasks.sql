@@ -198,6 +198,7 @@ UPDATE task_attempts
 SET state = sqlc.arg(to_state), capacity_held = sqlc.arg(capacity_held), updated_at = now(),
     -- Entering draining requests the stop in this statement, before anything is asked of kagent.
     stop_state = CASE WHEN sqlc.arg(to_state) = 'draining' THEN 'requested' ELSE stop_state END,
+    stop_requested_at = CASE WHEN sqlc.arg(to_state) = 'draining' THEN coalesce(stop_requested_at, now()) ELSE stop_requested_at END,
     evidence_refs = CASE WHEN sqlc.narg(evidence_ref)::text IS NULL THEN evidence_refs
                          ELSE array_append(evidence_refs, sqlc.narg(evidence_ref)::text) END
 WHERE id = sqlc.arg(id) AND state = sqlc.arg(from_state)
@@ -518,6 +519,29 @@ SET resolve_attempts = resolve_attempts + 1, resolve_after = now() + make_interv
     updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING resolve_attempts;
+
+-- name: GetAttemptStopAge :one
+-- How long the attempt's stop has been requested, by the database clock. An attempt that entered
+-- draining before stop_requested_at existed counts from its last update.
+SELECT extract(epoch FROM now() - coalesce(stop_requested_at, updated_at))::float8 AS age_seconds
+FROM task_attempts WHERE id = $1;
+
+-- name: MarkAttemptNativeDeleted :exec
+-- The resolver had kagent delete the attempt's native session to end its stop.
+UPDATE task_attempts SET native_deleted_at = coalesce(native_deleted_at, now()), updated_at = now()
+WHERE session_id = $1;
+
+-- name: ListUnresolvedStops :many
+-- Attempts whose requested stop is still unconfirmed after the resolver gave up looking: the
+-- runtime may still be running and the attempt still holds its capacity. Final tasks included, as
+-- they get no owner card; the orchestration health page shows these.
+SELECT a.id AS attempt_id, a.task_id, a.session_id, a.state, a.resolve_attempts, a.native_deleted_at,
+       coalesce(a.stop_requested_at, a.updated_at)::timestamptz AS stop_requested_at,
+       t.status AS task_status
+FROM task_attempts a
+JOIN tasks t ON t.id = a.task_id
+WHERE a.state = 'draining' AND a.stop_state = 'unresolved' AND t.owner_id = $1
+ORDER BY coalesce(a.stop_requested_at, a.updated_at), a.id;
 
 -- name: ListFailedBriefAttempts :many
 -- Active attempts whose latest brief the sessions ledger ended failed (a cancelled one is the owner
