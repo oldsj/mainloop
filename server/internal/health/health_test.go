@@ -684,3 +684,49 @@ func TestSmokePushes(t *testing.T) {
 		t.Fatalf("bound: %d truncated=%v", len(out.Pushes), out.PushesTruncated)
 	}
 }
+
+// A stop Mainloop gave up confirming is listed even when its task has ended, since an ended task
+// gets no owner card for it. A stop still being resolved, a confirmed one and another owner's are not.
+func TestViewListsUnresolvedStops(t *testing.T) {
+	e := newEnv(t)
+	task := func(id, ownerID, status string) {
+		project := "project-1"
+		if ownerID != owner {
+			project = "project-x"
+		}
+		e.exec(t, `INSERT INTO tasks (id, owner_id, project_id, root_task_id, title, brief, mode, assigned_profile_id, selection_source, status)
+			VALUES ($1, $2, $4, $1, 'T', 'b', 'coordination', 'p', 'explicit', $3)`, id, ownerID, status, project)
+	}
+	e.exec(t, `INSERT INTO projects (id, user_id, owner, name, full_name, html_url) VALUES ('project-x', 'someone-else', 'o', 'x', 'o/x', 'https://x.example/o/x')`)
+	attempt := func(id, taskID, stopState string, native bool) {
+		deleted := "NULL"
+		if native {
+			deleted = "now()"
+		}
+		e.exec(t, `INSERT INTO task_attempts (id, task_id, number, profile_id, native_provider, configuration_revision,
+			agent_namespace, agent_name, role, depth, state, stop_state, stop_requested_at, resolve_attempts, native_deleted_at, session_id)
+			VALUES ($1, $2, 1, 'p', 'claude', 'r', 'ns', 'ag', 'supervisor', 1, 'draining', $3, now() - interval '1 hour', 8, `+deleted+`, 's-'||$1)`, id, taskID, stopState)
+	}
+	task("t-cancelled", owner, "cancelled")
+	attempt("a-unresolved", "t-cancelled", "unresolved", true)
+	task("t-requested", owner, "cancelled")
+	attempt("a-requested", "t-requested", "requested", false)
+	task("t-other", "someone-else", "cancelled")
+	attempt("a-other", "t-other", "unresolved", false)
+
+	v := e.view(t, health.Filter{})
+	if len(v.Stops) != 1 {
+		t.Fatalf("stops = %+v, want only the unresolved stop of this owner", v.Stops)
+	}
+	s := v.Stops[0]
+	if s.AttemptId != "a-unresolved" || s.TaskId != "t-cancelled" || s.TaskStatus != "cancelled" || s.Looks != 8 || !s.NativeDeleted ||
+		time.Since(s.RequestedAt) < 50*time.Minute {
+		t.Fatalf("stop = %+v", s)
+	}
+	if got := e.view(t, health.Filter{TaskID: ptr("t-requested")}); len(got.Stops) != 0 {
+		t.Fatalf("a filter on another task listed %+v", got.Stops)
+	}
+	if got := e.view(t, health.Filter{AttemptID: ptr("a-requested")}); len(got.Stops) != 0 {
+		t.Fatalf("a filter on another attempt listed %+v", got.Stops)
+	}
+}

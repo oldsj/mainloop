@@ -113,8 +113,18 @@ const RowShape = RowFields.extend({
   approvals: z.array(z.unknown())
 });
 
+const StopShape = z.looseObject({
+  attempt_id: z.string(),
+  task_id: z.string(),
+  task_status: z.string(),
+  requested_at: z.string(),
+  looks: z.number(),
+  native_deleted: z.boolean()
+}) satisfies z.ZodType<Schemas['HealthStop']>;
+
 const ViewShape = z.looseObject({
   rows: z.array(z.unknown()),
+  stops: z.array(z.unknown()),
   hours: z.number(),
   partial: z.boolean(),
   retention: z.looseObject({ events_days: z.number(), summaries_days: z.number() })
@@ -124,6 +134,7 @@ export type HealthTotals = z.infer<typeof Totals>;
 export type HealthSession = z.infer<typeof SessionShape>;
 export type HealthReport = z.infer<typeof ReportShape>;
 export type HealthApproval = z.infer<typeof ApprovalShape>;
+export type HealthStop = z.infer<typeof StopShape>;
 export type HealthRow = z.infer<typeof RowFields> & {
   reports: HealthReport[];
   approvals: HealthApproval[];
@@ -137,6 +148,10 @@ export interface HealthView {
   dropped: number;
   /** Rows whose id repeats an earlier row. The first is listed; these are not, and the page says so. */
   repeated: number;
+  /** Stops Mainloop could not confirm, oldest first. Each is read on its own. */
+  stops: HealthStop[];
+  /** Stops that could not be read. They are not listed, and the page says so. */
+  unreadableStops: number;
   partial: boolean;
   retention: Schemas['HealthView']['retention'];
 }
@@ -191,8 +206,11 @@ export function readView(value: unknown): HealthView | null {
   const parsed = ViewShape.safeParse(value);
   if (!parsed.success) return null;
   const { rows, dropped, repeated } = parseRows(parsed.data.rows);
+  const stops = readClaims(parsed.data.stops, StopShape);
   return {
     rows,
+    stops: stops.items,
+    unreadableStops: stops.unreadable,
     dropped,
     repeated,
     partial: parsed.data.partial,
@@ -234,6 +252,20 @@ export function reportText(report: HealthReport): string {
 
 export function approvalText(approval: HealthApproval): string {
   return `Approval ${approval.state ?? 'unknown'}; exact wait unavailable.`;
+}
+
+export function stopText(stop: HealthStop): string {
+  const deleted = stop.native_deleted ? ' Its session was deleted in kagent.' : '';
+  return `Stop not confirmed · attempt ${stop.attempt_id} · task ${stop.task_id} (${stop.task_status}) · requested ${stop.requested_at} · ${stop.looks} looks.${deleted}`;
+}
+
+export const STOPS_NOTE =
+  'Mainloop asked these runtimes to stop, then tried to suspend and delete them, and still cannot confirm they stopped. Each keeps its capacity and writer claim until it does.';
+
+export function unreadableStopsText(count: number): string {
+  return count === 1
+    ? 'One unconfirmed stop could not be read and is not listed.'
+    : `${count} unconfirmed stops could not be read and are not listed.`;
 }
 
 export function providerLabel(provider: string): string {

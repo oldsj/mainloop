@@ -409,8 +409,9 @@ suspend, delete), never a turn, so a long working turn would otherwise read as i
 contexts the stop observer lists); a task waiting on the owner counts as activity right
 now, and otherwise the later of the newest task status timestamp, the sessions delivery ledger's
 own last-activity record, and the time the sweep first saw the current fingerprint of the
-session's submitted or working tasks (task id, state, status time and newest history message,
-stored on the attempt as `progress_marker` / `progress_at`) stands in. A working status alone is
+session's submitted or working tasks (task id, state, status time, newest history message, and
+its artifacts: a harness turn records its text and tool calls as artifact events, which add no
+history message; stored on the attempt as `progress_marker` / `progress_at`) stands in. A working status alone is
 not activity: kagent keeps a turn working until it ends, and a turn whose native process has
 wedged never ends. A read error
 leaves the task alone for the next pass rather than guessing.
@@ -428,7 +429,7 @@ sweep re-reads the attempt and the task under the task's lock and requires the a
 `active` and the task to still be exactly `running` with no reason: a report that reached the task
 first while the (uncached, network) observation was in flight owns it instead, and the stale
 liveness signal is dropped. A later progress report from the task's current attempt recovers
-`session_lost` and `stalled` back to `running` (the sweep can be wrong, and a report is proof it
+`session_lost` and `stalled` back to `running` and restarts the stall clock (the sweep can be wrong, and a report is proof it
 was) but not `runtime_limit`, which stays blocked until the owner acts, since it fires regardless
 of activity and a report alone would defeat the bound.
 
@@ -443,3 +444,29 @@ Not built: using this signal to automatically retry, reassign or cancel the stuc
 is an owner decision this slice deliberately leaves alone. Not proven: behavior against a live
 kagent restart, only against fakes in `server/internal/tasks/liveness_test.go` and
 `server/internal/kagent/liveness_test.go`.
+
+## Unconfirmed stops
+
+Status: **implemented**. See `docs/specs/tasks.md` (capacity and the runtime stop) for the stop
+itself; this section is the signal that a stop did not settle.
+
+Asking a task's runtime to stop is confirmed by the stop observer, which also suspends and then
+deletes a runtime that never answers. When 8 looks pass with no confirmation the attempt's
+`stop_state` becomes `unresolved`. A task that is still open is blocked for reconciliation and the
+owner sees it as a normal attention card. A task that has already ended (cancelled by the owner
+or with its parent) deliberately gets no owner card: it is internal cleanup, and the owner decided
+it was over. Left alone it would be invisible, so the health view carries it instead.
+
+`HealthView.stops` lists every attempt of the owner that is `draining` with `stop_state =
+unresolved`, oldest request first (at most 200), whatever its task's status. Each entry has the
+attempt and task ids, the task's status, `requested_at`, `looks`, and `native_deleted` (kagent was
+already asked to delete the session, so the runtime's capacity is probably held by something
+else). It is always present, empty when nothing is stuck. The `task`, `attempt` and `session`
+filters narrow it; the time window does not, since a stop stays listed until it is confirmed. A
+later confirmation removes it. The Health page shows an "Unconfirmed stops" section above the
+rows only when the list is not empty; a stop entry the page cannot read is counted and named in
+the section rather than hidden.
+
+Not built: a push notification for an unresolved stop. Not proven: the signal against a live
+runtime that refuses to die, only against the fake in `server/internal/tasks/stop_force_test.go`
+and the database-backed `TestViewListsUnresolvedStops`.

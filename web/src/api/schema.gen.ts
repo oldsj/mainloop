@@ -4505,8 +4505,22 @@ export interface components {
       gaps: string[];
       expected_receipts: number;
     };
+    /** @description A requested stop of a task attempt's runtime that Mainloop could not confirm. The attempt still holds its capacity and writer claim. Mainloop already tried to cancel the runtime, suspend it and delete it, so it needs a person to look at the runtime. */
+    HealthStop: {
+      attempt_id: string;
+      task_id: string;
+      task_status: string;
+      /** Format: date-time */
+      requested_at: string;
+      /** @description How many times Mainloop has looked at the runtime since the stop was requested. */
+      looks: number;
+      /** @description Whether Mainloop has already asked kagent to delete the runtime's session. */
+      native_deleted: boolean;
+    };
     HealthView: {
       rows: components['schemas']['HealthRow'][];
+      /** @description Requested stops that stayed unconfirmed past the resolver's bound, oldest first. */
+      stops: components['schemas']['HealthStop'][];
       hours: number;
       partial: boolean;
       unsupported: ('cache' | 'exact_approval_wait' | 'codex_usage' | 'native_child_attribution')[];

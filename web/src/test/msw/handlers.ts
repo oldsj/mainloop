@@ -21,6 +21,7 @@ const workspaces: Schemas['WorkspaceLifecycle'][] = [];
 const tasks: Schemas['TaskView'][] = [];
 const orchestrationHealth: Schemas['HealthView'] = {
   rows: [],
+  stops: [],
   hours: 24,
   partial: false,
   unsupported: [],

@@ -103,7 +103,7 @@ func nonEmpty(p *string) *string {
 func (s *Service) View(ctx context.Context, f Filter) (api.HealthView, error) {
 	now := s.now()
 	since := now.Add(-time.Duration(f.Hours) * time.Hour)
-	view := api.HealthView{Hours: f.Hours, Rows: []api.HealthRow{}, Unsupported: []api.HealthViewUnsupported{
+	view := api.HealthView{Hours: f.Hours, Rows: []api.HealthRow{}, Stops: []api.HealthStop{}, Unsupported: []api.HealthViewUnsupported{
 		api.Cache, api.ExactApprovalWait, api.CodexUsage, api.NativeChildAttribution,
 	}}
 	view.Retention.EventsDays = int(s.EventRetention / (24 * time.Hour))
@@ -153,6 +153,12 @@ func (s *Service) View(ctx context.Context, f Filter) (api.HealthView, error) {
 			}
 		}
 
+		stops, err := s.unresolvedStops(ctx, q, f)
+		if err != nil {
+			return err
+		}
+		view.Stops = stops
+
 		groups, order := s.groups(sessions, unassigned, turns)
 		if err := s.decorate(ctx, q, f, since, groups, order); err != nil {
 			return err
@@ -167,6 +173,40 @@ func (s *Service) View(ctx context.Context, f Filter) (api.HealthView, error) {
 		return api.HealthView{}, err
 	}
 	return view, nil
+}
+
+// maxStops bounds the unresolved stops one read returns.
+const maxStops = 200
+
+// unresolvedStops lists the attempts whose requested stop Mainloop gave up confirming, whatever
+// state their task is in: a task that has ended gets no owner card for this, so this is where it
+// shows. The window does not apply (a stop stays listed until it is confirmed); the task, session
+// and attempt filters do.
+func (s *Service) unresolvedStops(ctx context.Context, q *dbq.Queries, f Filter) ([]api.HealthStop, error) {
+	rows, err := q.ListUnresolvedStops(ctx, s.OwnerID)
+	if err != nil {
+		return nil, err
+	}
+	stops := []api.HealthStop{}
+	for _, r := range rows {
+		if t := nonEmpty(f.TaskID); t != nil && r.TaskID != *t {
+			continue
+		}
+		if a := nonEmpty(f.AttemptID); a != nil && r.AttemptID != *a {
+			continue
+		}
+		if sid := nonEmpty(f.SessionID); sid != nil && (r.SessionID == nil || *r.SessionID != *sid) {
+			continue
+		}
+		stops = append(stops, api.HealthStop{
+			AttemptId: r.AttemptID, TaskId: r.TaskID, TaskStatus: string(r.TaskStatus), RequestedAt: r.StopRequestedAt,
+			Looks: int(r.ResolveAttempts), NativeDeleted: r.NativeDeletedAt != nil,
+		})
+		if len(stops) == maxStops {
+			break
+		}
+	}
+	return stops, nil
 }
 
 // groups seeds one group per task, or per session that has none, in the order the page lists them:

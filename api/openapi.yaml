@@ -9748,6 +9748,36 @@ components:
         - gaps
         - expected_receipts
       additionalProperties: false
+    HealthStop:
+      description: >-
+        A requested stop of a task attempt's runtime that Mainloop could not confirm. The attempt
+        still holds its capacity and writer claim. Mainloop already tried to cancel the runtime,
+        suspend it and delete it, so it needs a person to look at the runtime.
+      type: object
+      properties:
+        attempt_id:
+          type: string
+        task_id:
+          type: string
+        task_status:
+          type: string
+        requested_at:
+          type: string
+          format: date-time
+        looks:
+          description: How many times Mainloop has looked at the runtime since the stop was requested.
+          type: integer
+        native_deleted:
+          description: Whether Mainloop has already asked kagent to delete the runtime's session.
+          type: boolean
+      required:
+        - attempt_id
+        - task_id
+        - task_status
+        - requested_at
+        - looks
+        - native_deleted
+      additionalProperties: false
     HealthView:
       type: object
       properties:
@@ -9756,6 +9786,12 @@ components:
           items:
             $ref: '#/components/schemas/HealthRow'
           maxItems: 3000
+        stops:
+          description: Requested stops that stayed unconfirmed past the resolver's bound, oldest first.
+          type: array
+          items:
+            $ref: '#/components/schemas/HealthStop'
+          maxItems: 200
         hours:
           type: integer
           minimum: 1
@@ -9785,6 +9821,7 @@ components:
           additionalProperties: false
       required:
         - rows
+        - stops
         - hours
         - partial
         - unsupported

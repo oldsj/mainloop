@@ -51,6 +51,7 @@ export function healthRow(overrides: Record<string, unknown> = {}) {
 export function healthView(rows: unknown[], overrides: Record<string, unknown> = {}) {
   return {
     rows,
+    stops: [],
     hours: 24,
     partial: false,
     unsupported: ['cache', 'exact_approval_wait', 'codex_usage', 'native_child_attribution'],

@@ -21,7 +21,10 @@ import {
   retentionText,
   sessionChoices,
   sortByFailures,
+  STOPS_NOTE,
+  stopText,
   taskChoices,
+  unreadableStopsText,
   WIDE_MIN_PX,
   windowSummary,
   withSelected
@@ -171,6 +174,22 @@ export function HealthPage({ search }: { search: HealthSearch }) {
             <p role="status" className="text-term-yellow">
               {repeatedRowsText(view.repeated)}
             </p>
+          ) : null}
+          {view.stops.length > 0 || view.unreadableStops > 0 ? (
+            <section aria-label="Unconfirmed stops" className="gap-sm grid">
+              <h2 className="text-term-yellow font-medium">Unconfirmed stops</h2>
+              <p className="text-muted-foreground max-w-prose text-sm">{STOPS_NOTE}</p>
+              <ul className="gap-xs grid font-mono text-xs break-words">
+                {view.stops.map((stop) => (
+                  <li key={stop.attempt_id}>{stopText(stop)}</li>
+                ))}
+              </ul>
+              {view.unreadableStops > 0 ? (
+                <p role="status" className="text-term-yellow">
+                  {unreadableStopsText(view.unreadableStops)}
+                </p>
+              ) : null}
+            </section>
           ) : null}
           {view.rows.length === 0 && view.dropped === 0 ? (
             <p className="text-muted-foreground py-xl">{EMPTY_NOTICE}</p>
