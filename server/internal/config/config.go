@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 )
@@ -31,6 +32,9 @@ type Config struct {
 
 	// EnvironmentRegistryAllowlist limits OCI registries for development environments.
 	EnvironmentRegistryAllowlist RegistryAllowlist `env:"ENVIRONMENT_REGISTRY_ALLOWLIST" envDefault:"[\"ghcr.io\"]"`
+	// EnvironmentFollowInterval is the least time between two images a following environment
+	// accepts from its watched tag. The first image is always accepted.
+	EnvironmentFollowInterval Seconds `env:"ENVIRONMENT_FOLLOW_MIN_INTERVAL_SECONDS" envDefault:"3600"`
 	// WorkspaceDevelopmentPlatform is the deployment's workspace image platform.
 	WorkspaceDevelopmentPlatform string `env:"WORKSPACE_DEVELOPMENT_PLATFORM" envDefault:"linux/arm64"`
 
@@ -343,6 +347,9 @@ func (c *Config) validate() error {
 	}
 	if c.Sessions.DeliveryConcurrency < 1 || c.Sessions.DeliveryConcurrency > 256 {
 		fail("SESSION_DELIVERY_CONCURRENCY must be between 1 and 256")
+	}
+	if i := c.EnvironmentFollowInterval.Duration(); i < time.Minute || i > 7*24*time.Hour {
+		fail("ENVIRONMENT_FOLLOW_MIN_INTERVAL_SECONDS must be between 60 and 604800")
 	}
 	if c.WorkspaceDevelopmentPlatform != "linux/arm64" && c.WorkspaceDevelopmentPlatform != "linux/amd64" {
 		fail("WORKSPACE_DEVELOPMENT_PLATFORM must be linux/arm64 or linux/amd64")

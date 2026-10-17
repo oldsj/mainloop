@@ -43,6 +43,15 @@ func (a *EnvironmentsAPI) GetEnvironment(ctx context.Context, req api.GetEnviron
 	return api.GetEnvironment200JSONResponse(out), nil
 }
 
+// UpdateEnvironment implements the contract operation.
+func (a *EnvironmentsAPI) UpdateEnvironment(ctx context.Context, req api.UpdateEnvironmentRequestObject) (api.UpdateEnvironmentResponseObject, error) {
+	out, err := a.Service.SetFollow(ctx, a.OwnerID, req.EnvironmentId, req.Body.FollowWatchedTag)
+	if err != nil {
+		return nil, err
+	}
+	return api.UpdateEnvironment200JSONResponse(out), nil
+}
+
 // ListEnvironmentVersions implements the contract operation.
 func (a *EnvironmentsAPI) ListEnvironmentVersions(ctx context.Context, req api.ListEnvironmentVersionsRequestObject) (api.ListEnvironmentVersionsResponseObject, error) {
 	out, err := a.Service.Versions(ctx, a.OwnerID, req.EnvironmentId)
@@ -125,8 +134,9 @@ func NewAPI(cfg *config.Config, pool *pgxpool.Pool, client RegistryClient) *Envi
 	}
 	return &EnvironmentsAPI{
 		Service: &Service{
-			Pool:      pool,
-			Validator: &Validator{Client: client, Allowlist: cfg.EnvironmentRegistryAllowlist, Budgets: DefaultBudgets()},
+			Pool:           pool,
+			Validator:      &Validator{Client: client, Allowlist: cfg.EnvironmentRegistryAllowlist, Budgets: DefaultBudgets()},
+			FollowInterval: cfg.EnvironmentFollowInterval.Duration(),
 		},
 		OwnerID: cfg.Identity.OwnerID,
 	}

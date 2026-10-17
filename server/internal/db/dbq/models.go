@@ -119,6 +119,7 @@ type DevEnvironment struct {
 	DefaultVersionID *string
 	CreatedAt        time.Time
 	FollowWatchedTag bool
+	LastFollowedAt   *time.Time
 }
 
 type EnvironmentGrant struct {

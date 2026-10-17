@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,6 +30,18 @@ type Service struct {
 	Validator *Validator
 	// NewID returns a fresh identifier. Nil means 128 random bits, hex encoded.
 	NewID func() string
+	// FollowInterval is the least time between two images a following environment accepts from its
+	// watched tag. Zero accepts every change.
+	FollowInterval time.Duration
+	// Now returns the current time. Nil means time.Now.
+	Now func() time.Time
+}
+
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 func (s *Service) id() string {
@@ -248,6 +261,43 @@ func (s *Service) Refresh(ctx context.Context, owner, id, previousID string) (ap
 	return out, err
 }
 
+// defaultEligible says whether a version may become an environment's accepted default: it has to
+// be statically validated under the current validator policy. SetDefault and the follow sweep
+// share this check.
+func defaultEligible(v dbq.EnvironmentVersion) error {
+	if v.ValidationStatus != dbstate.ValidationStaticValidated {
+		return unprocessable("Version is not statically validated")
+	}
+	if v.ValidatorVersion != ValidatorVersion {
+		return unprocessable("Version was validated by an older validator")
+	}
+	return nil
+}
+
+// SetFollow turns following the environment's watched tag on or off. Turning it on needs a
+// prebuilt image and a watched tag, as at registration. Turning it off leaves the default and the
+// versions as they are.
+func (s *Service) SetFollow(ctx context.Context, owner, id string, follow bool) (api.DevEnvironment, error) {
+	var out api.DevEnvironment
+	err := db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+		q := dbq.New(tx)
+		env, err := ownedEnvironment(ctx, q, owner, id, true)
+		if err != nil {
+			return err
+		}
+		if follow && (env.WatchedTag == nil || env.SourceKind != dbstate.SourcePrebuiltImage) {
+			return unprocessable("follow_watched_tag needs a prebuilt image and a watched tag")
+		}
+		row, err := q.SetDevEnvironmentFollow(ctx, dbq.SetDevEnvironmentFollowParams{ID: id, FollowWatchedTag: follow})
+		if err != nil {
+			return err
+		}
+		out, err = environmentToAPI(row)
+		return err
+	})
+	return out, err
+}
+
 // SetDefault makes a statically validated version the environment's accepted default.
 func (s *Service) SetDefault(ctx context.Context, owner, id, versionID string) (api.DevEnvironment, error) {
 	var out api.DevEnvironment
@@ -260,8 +310,8 @@ func (s *Service) SetDefault(ctx context.Context, owner, id, versionID string) (
 		if err != nil {
 			return err
 		}
-		if v.ValidationStatus != dbstate.ValidationStaticValidated {
-			return unprocessable("Version is not statically validated")
+		if err := defaultEligible(v); err != nil {
+			return err
 		}
 		row, err := q.SetDevEnvironmentDefault(ctx, dbq.SetDevEnvironmentDefaultParams{ID: id, DefaultVersionID: &versionID})
 		if err != nil {

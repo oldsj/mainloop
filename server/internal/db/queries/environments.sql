@@ -29,6 +29,13 @@ SELECT * FROM environment_versions WHERE environment_id = $1 ORDER BY seq DESC L
 -- name: SetDevEnvironmentDefault :one
 UPDATE dev_environments SET default_version_id = $2 WHERE id = $1 RETURNING *;
 
+-- name: SetDevEnvironmentFollow :one
+UPDATE dev_environments SET follow_watched_tag = $2 WHERE id = $1 RETURNING *;
+
+-- name: SetDevEnvironmentFollowed :one
+-- Accepts a followed image: it becomes the default and starts the rate-limit interval.
+UPDATE dev_environments SET default_version_id = $2, last_followed_at = $3 WHERE id = $1 RETURNING *;
+
 -- name: InsertEnvironmentVersion :one
 INSERT INTO environment_versions (
     id, environment_id, registry, repository, index_digest, platform_manifest_digest,

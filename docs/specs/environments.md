@@ -70,6 +70,7 @@ bodies. The storage layer checks ownership and grants independently.
 | `GET /environments/{id}/versions`               | List its versions                                                        |
 | `GET /environments/{id}/versions/{version_id}`  | Get immutable evidence                                                   |
 | `POST /environments/{id}/refresh`               | Supply `version_id` identifying the image repository/platform to refresh |
+| `PATCH /environments/{id}`                      | Supply `follow_watched_tag` to turn following on or off                  |
 | `PUT /environments/{id}/default`                | Supply `version_id` to accept a statically validated default             |
 | `PUT /environments/{id}/grants/{project_id}`    | Supply `permission: use` or `derive`                                     |
 | `DELETE /environments/{id}/grants/{project_id}` | Revoke the project grant                                                 |
@@ -90,8 +91,22 @@ An environment registered with `follow_watched_tag: true` follows its tag
 automatically. About once a minute the server resolves the tag the way Refresh does.
 If the platform manifest differs from the newest version's, it appends a validated
 version. Either way the newest version becomes the accepted default if it is not
-already. A failed resolution or validation changes nothing, is logged, and is
-retried on the next pass. An unchanged tag appends nothing.
+already, but only if it could be accepted by hand: statically validated under the
+current validator policy. A newest version that is not (a stale validator, say) is
+not promoted; the pass appends a fresh version from the tag instead. A failed
+resolution or validation changes nothing, is logged, and is retried on the next
+pass. An unchanged tag appends nothing.
+
+An environment accepts a new image at most once per interval, so a tag that moves on
+every merge does not create a version (and a runtime template) each time. The first
+image is always accepted. The interval is `ENVIRONMENT_FOLLOW_MIN_INTERVAL_SECONDS`,
+3600 by default, between 60 and 604800. A change that arrives inside the interval is
+picked up by the first pass after it, as the newest image at that point; images the
+tag passed through in between are never recorded.
+
+`PATCH /environments/{id}` with `follow_watched_tag` turns following off or on. Turning
+it off keeps the versions and the current default and stops all automatic changes.
+Turning it on needs a prebuilt image and a watched tag, otherwise 422.
 
 Projects that follow the default pick up the new image for workspaces created
 afterwards; existing workspaces stay pinned. Projects that selected an explicit
@@ -106,7 +121,11 @@ The image carries the Go build cache, Go modules and pnpm store for that commit 
 The first workspace on a new digest waits for the runtime to prepare that image, and
 creation can fail briefly and succeed on retry. A session whose repository state
 differs from the image's commit still works and only rebuilds what changed.
-Snapshots that keep only workspace data (data scope) drop `/opt/cache`.
+A snapshot that keeps only workspace data (data scope) still resumes on the image's
+baked `/opt/cache`; only what a session wrote into `/opt/cache` is lost.
+
+Follow-up: every accepted digest leaves a runtime template and golden snapshot in the
+runtime until its own retention exists; the interval above bounds how fast they grow.
 
 ## Project selection and sharing
 
@@ -206,8 +225,9 @@ above holds for these routes, with these details:
 - The follow pass (`environment-follow` sweep) runs as a lease-based reconciler sweep in the API process,
   about once a minute, over the configured owner's environments with
   `follow_watched_tag`. It reads the registry outside any transaction, then locks the environment
-  row, re-checks the flag and the newest version, inserts at most one version and sets the default.
-  Proven by offline tests against the fake registry only.
+  row, re-checks the flag, the interval and the newest version, inserts at most one version and
+  sets the default. `last_followed_at` records the last accepted image; setting the first default
+  does not start the interval. Proven by offline tests against the fake registry only.
 - Registry and validation limits (4 MiB, 30 s read, 90 s validation and refresh) are measured by
   unit tests with short budgets, not against a live registry.
 

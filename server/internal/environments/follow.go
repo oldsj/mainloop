@@ -42,9 +42,13 @@ func (s *Service) Follow(ctx context.Context, owner string) error {
 }
 
 // follow resolves the environment's tag against its newest version. A changed image is appended as
-// a new version; either way the newest version becomes the accepted default if it is not already.
+// a new version and accepted as the default, at most once per FollowInterval; the first image is
+// always accepted. A version the sweep would not be allowed to promote by hand is never promoted.
 // A rollback is the project selecting an explicit older version, which follow never touches.
 func (s *Service) follow(ctx context.Context, env dbq.DevEnvironment) error {
+	if s.followWaiting(env) {
+		return nil
+	}
 	latest, err := dbq.New(s.Pool).LatestEnvironmentVersion(ctx, env.ID)
 	if err != nil {
 		return err
@@ -60,22 +64,38 @@ func (s *Service) follow(ctx context.Context, env dbq.DevEnvironment) error {
 		if err != nil {
 			return err
 		}
-		if !cur.FollowWatchedTag {
+		if !cur.FollowWatchedTag || s.followWaiting(cur) {
 			return nil
 		}
 		target, err := q.LatestEnvironmentVersion(ctx, env.ID)
 		if err != nil {
 			return err
 		}
-		if target.PlatformManifestDigest == nil || *target.PlatformManifestDigest != *next.PlatformManifestDigest {
+		accepted := false
+		if target.PlatformManifestDigest == nil || *target.PlatformManifestDigest != *next.PlatformManifestDigest || defaultEligible(target) != nil {
 			if target, err = q.InsertEnvironmentVersion(ctx, next); err != nil {
 				return err
 			}
+			accepted = true
+		}
+		if err := defaultEligible(target); err != nil {
+			return err
 		}
 		if cur.DefaultVersionID != nil && *cur.DefaultVersionID == target.ID {
 			return nil
 		}
-		_, err = q.SetDevEnvironmentDefault(ctx, dbq.SetDevEnvironmentDefaultParams{ID: env.ID, DefaultVersionID: &target.ID})
+		// Only a changed image starts the interval; setting the first default does not.
+		params := dbq.SetDevEnvironmentFollowedParams{ID: env.ID, DefaultVersionID: &target.ID, LastFollowedAt: cur.LastFollowedAt}
+		if accepted {
+			now := s.now()
+			params.LastFollowedAt = &now
+		}
+		_, err = q.SetDevEnvironmentFollowed(ctx, params)
 		return err
 	})
+}
+
+// followWaiting says whether the environment accepted an image less than FollowInterval ago.
+func (s *Service) followWaiting(env dbq.DevEnvironment) bool {
+	return env.LastFollowedAt != nil && s.now().Before(env.LastFollowedAt.Add(s.FollowInterval))
 }

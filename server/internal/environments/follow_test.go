@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/oldsj/mainloop/server/internal/environments/fakeregistry"
 )
@@ -144,4 +145,126 @@ func TestFollowStopsWhenOptedOut(t *testing.T) {
 	if n := len(f.versions(envID)); n != 1 || f.defaultVersion(envID) != nil {
 		t.Errorf("opted-out environment was followed: %d versions, default %v", n, f.defaultVersion(envID))
 	}
+}
+
+// clock is a settable time source for the follow interval.
+type clock struct{ now time.Time }
+
+func (c *clock) Now() time.Time { return c.now }
+
+func TestFollowAcceptsAtMostOneImagePerInterval(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	c := &clock{now: time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)}
+	f.service.Now = c.Now
+	f.service.FollowInterval = time.Hour
+	envID, v1 := f.register("dev", fakeregistry.Options{Arch: "arm64"}, map[string]any{
+		"watched_tag": "cache-main", "follow_watched_tag": true, "architecture": "arm64",
+	})
+	img := f.registry.Get("ghcr.io", "oldsj/dev", "manifests", f.versions(envID)[0]["platform_manifest_digest"].(string))
+	f.registry.Put("ghcr.io", "oldsj/dev", "manifests", "cache-main", img)
+	pass := func() {
+		t.Helper()
+		if err := f.service.Follow(ctx, owner); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pass()
+	if got := f.defaultVersion(envID); got != v1 {
+		t.Fatalf("first default = %v, want %v", got, v1)
+	}
+
+	// The first new image is accepted at once, however recently the environment was registered.
+	f.moveTag("oldsj/dev", "cache-main")
+	pass()
+	versions := f.versions(envID)
+	if len(versions) != 2 || f.defaultVersion(envID) != versions[1]["id"] {
+		t.Fatalf("first change not accepted: %d versions, default %v", len(versions), f.defaultVersion(envID))
+	}
+
+	// Further moves inside the interval are left for later, and cost no registry request.
+	f.moveTag("oldsj/dev", "cache-main")
+	c.now = c.now.Add(59 * time.Minute)
+	pass()
+	if n := len(f.versions(envID)); n != 2 || f.defaultVersion(envID) != versions[1]["id"] {
+		t.Fatalf("change inside the interval accepted: %d versions", n)
+	}
+
+	// Once the interval has passed the newest image is accepted; the one skipped is never minted.
+	c.now = c.now.Add(2 * time.Minute)
+	pass()
+	after := f.versions(envID)
+	if len(after) != 3 || f.defaultVersion(envID) != after[2]["id"] {
+		t.Fatalf("change after the interval not accepted: %d versions", len(after))
+	}
+	pass()
+	if n := len(f.versions(envID)); n != 3 {
+		t.Errorf("repeat pass appended a version: %d versions", n)
+	}
+}
+
+func TestFollowNeverPromotesAnIneligibleVersion(t *testing.T) {
+	f := newFixture(t)
+	f.service.FollowInterval = 0
+	ctx := context.Background()
+	envID, v1 := f.register("dev", fakeregistry.Options{Arch: "arm64"}, map[string]any{
+		"watched_tag": "cache-main", "follow_watched_tag": true, "architecture": "arm64",
+	})
+	img := f.registry.Get("ghcr.io", "oldsj/dev", "manifests", f.versions(envID)[0]["platform_manifest_digest"].(string))
+	f.registry.Put("ghcr.io", "oldsj/dev", "manifests", "cache-main", img)
+
+	// The newest version names the tag's image but was validated by an older policy. SetDefault
+	// refuses it, so the sweep must too: it appends a fresh version instead.
+	if _, err := f.db.Pool.Exec(ctx, `INSERT INTO environment_versions (id, environment_id, registry, repository, platform_manifest_digest, config_digest, declared_user, architecture, validation_status, validator_version, provenance_kind)
+		SELECT 'stale', environment_id, registry, repository, platform_manifest_digest, config_digest, declared_user, architecture, validation_status, 'oci-static-v1', provenance_kind
+		FROM environment_versions WHERE id = $1`, v1); err != nil {
+		t.Fatal(err)
+	}
+	f.want(f.do("PUT", "/environments/"+envID+"/default", map[string]any{"version_id": "stale"}), 422)
+	if err := f.service.Follow(ctx, owner); err != nil {
+		t.Fatal(err)
+	}
+	versions := f.versions(envID)
+	last := versions[len(versions)-1]
+	if len(versions) != 3 || last["id"] == "stale" || last["validator_version"] != "oci-static-v2" || f.defaultVersion(envID) != last["id"] {
+		t.Fatalf("stale version promoted: default %v, versions %v", f.defaultVersion(envID), versions)
+	}
+}
+
+func TestUpdateEnvironmentTurnsFollowingOffAndOn(t *testing.T) {
+	f := newFixture(t)
+	f.service.FollowInterval = 0
+	ctx := context.Background()
+	envID, _ := f.register("dev", fakeregistry.Options{Arch: "arm64"}, map[string]any{
+		"watched_tag": "cache-main", "follow_watched_tag": true, "architecture": "arm64",
+	})
+	plainID, _ := f.register("plain", fakeregistry.Options{Arch: "arm64"}, map[string]any{"architecture": "arm64"})
+	patch := func(id string, follow bool) response {
+		return f.do("PATCH", "/environments/"+id, map[string]any{"follow_watched_tag": follow})
+	}
+
+	if got := f.want(patch(envID, false), 200).json(); got["follow_watched_tag"] != false || got["watched_tag"] != "cache-main" {
+		t.Fatalf("environment = %v", got)
+	}
+	f.moveTag("oldsj/dev", "cache-main")
+	if err := f.service.Follow(ctx, owner); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.versions(envID)); n != 1 || f.defaultVersion(envID) != nil {
+		t.Errorf("environment kept following: %d versions, default %v", n, f.defaultVersion(envID))
+	}
+	if got := f.want(patch(envID, true), 200).json(); got["follow_watched_tag"] != true {
+		t.Fatalf("environment = %v", got)
+	}
+	if err := f.service.Follow(ctx, owner); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.versions(envID)); n != 2 {
+		t.Errorf("environment did not resume following: %d versions", n)
+	}
+
+	f.want(patch(plainID, true), 422)
+	f.want(patch(plainID, false), 200)
+	f.want(patch("missing", false), 404)
+	f.want(f.do("PATCH", "/environments/"+envID, map[string]any{}), 422)
 }

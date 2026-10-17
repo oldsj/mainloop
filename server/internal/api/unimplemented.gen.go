@@ -349,6 +349,11 @@ func (Unimplemented) TriggerSchedule(context.Context, TriggerScheduleRequestObje
 	return nil, apierr.NotImplemented
 }
 
+// UpdateEnvironment is not implemented yet.
+func (Unimplemented) UpdateEnvironment(context.Context, UpdateEnvironmentRequestObject) (UpdateEnvironmentResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // UpdateMergePolicy is not implemented yet.
 func (Unimplemented) UpdateMergePolicy(context.Context, UpdateMergePolicyRequestObject) (UpdateMergePolicyResponseObject, error) {
 	return nil, apierr.NotImplemented

@@ -267,6 +267,58 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+        - environments
+      summary: Update Environment
+      description: Turns following the watched tag on or off. Turning it on needs a prebuilt image and a watched tag.
+      operationId: updateEnvironment
+      parameters:
+        - name: environment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Environment Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEnvironment'
+      responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DevEnvironment'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
   /environments/{environment_id}/default:
     put:
       tags:
@@ -4881,6 +4933,17 @@ components:
       required:
         - version_id
       title: RefreshRequest
+    UpdateEnvironment:
+      properties:
+        follow_watched_tag:
+          type: boolean
+          title: Follow Watched Tag
+          description: Accept each new image the watched tag resolves to as the default. Needs a watched tag.
+      additionalProperties: false
+      type: object
+      required:
+        - follow_watched_tag
+      title: UpdateEnvironment
     RegisterEnvironment:
       properties:
         name:

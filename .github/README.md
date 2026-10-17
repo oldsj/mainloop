@@ -55,13 +55,14 @@ trigger and uses only `GITHUB_TOKEN` with `packages: write`.
 
 One job (45 minutes) on `ubuntu-24.04-arm` builds `images/workspace-cache/Dockerfile`
 natively for `linux/arm64`. The base is the `ghcr.io/oldsj/mainloop-dev` index
-digest: `latest`, or this commit's own tag when the commit changes the dev image
-paths (the job waits up to 15 minutes for [Mainloop dev image](workflows/dev-image.yml)
-to publish it). The build clones `main` at the merge commit into `/data/workspace` so
+digest of the newest commit that changed the dev image paths (the same paths as
+[Mainloop dev image](workflows/dev-image.yml)), never `latest`. The job waits up to 15
+minutes for that commit's tag and fails if it does not appear. The build clones `main` at the merge commit into `/data/workspace` so
 Go's VCS stamping matches a session clone, then warms the Go build cache. Layer 1
 (Go modules, pnpm store) depends only on the lockfiles and has normalized file times.
-With the Actions build cache warm, the unchanged step is not re-run and the layers
-are identical across merges. Rebuilt from scratch, the Go module layer is still
+Only the dependency stage is exported to the Actions build cache (its own scope), so the
+per-commit layers do not use up the repository's cache budget. With that cache warm,
+the unchanged step is not re-run and the layers are identical across merges. Rebuilt from scratch, the Go module layer is still
 identical but the two pnpm layers differ (pnpm writes its own timestamps), so nodes
 pull them once after a cache eviction or a lockfile change. Layer 2 (Go build cache) changes per commit
 and keeps current file times, because Go trims cache entries older than about five
@@ -70,8 +71,10 @@ days.
 The job pushes `ghcr.io/oldsj/mainloop-dev:cache-<full SHA>` labelled with the source
 SHA and base digest. A smoke step runs the image by digest: a fresh clone at the SHA
 must build with zero compiles (`go build` and test binaries) and install the pnpm
-workspace offline. Only then does `cache-main` move, and only if the commit is still
-the head of `main`. Runs for the same ref cancel each other.
+workspace offline, and each of `GOMODCACHE`, `GOCACHE`, `npm_config_store_dir` and
+`npm_config_virtual_store_dir` must point under `/opt/cache`. Only then does `cache-main` move, and only if the commit is still
+the head of `main`. Runs for the same ref queue instead of cancelling, so a burst of
+merges cannot starve `cache-main`; a run for an older commit leaves the tag alone.
 
 The tags are not pruned yet. Follow-up: a scheduled job that keeps the newest N
 `cache-<sha>` versions and any version a tag or a registered environment still

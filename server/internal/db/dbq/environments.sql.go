@@ -8,6 +8,7 @@ package dbq
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
@@ -27,7 +28,7 @@ func (q *Queries) DeleteEnvironmentGrant(ctx context.Context, arg DeleteEnvironm
 }
 
 const getDevEnvironment = `-- name: GetDevEnvironment :one
-SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag FROM dev_environments WHERE id = $1
+SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag, last_followed_at FROM dev_environments WHERE id = $1
 `
 
 func (q *Queries) GetDevEnvironment(ctx context.Context, id string) (DevEnvironment, error) {
@@ -43,6 +44,7 @@ func (q *Queries) GetDevEnvironment(ctx context.Context, id string) (DevEnvironm
 		&i.DefaultVersionID,
 		&i.CreatedAt,
 		&i.FollowWatchedTag,
+		&i.LastFollowedAt,
 	)
 	return i, err
 }
@@ -132,7 +134,7 @@ func (q *Queries) GetProjectOwner(ctx context.Context, id string) (string, error
 const insertDevEnvironment = `-- name: InsertDevEnvironment :one
 INSERT INTO dev_environments (id, owner_id, name, source_kind, watched_tag, follow_watched_tag, definition)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag
+RETURNING id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag, last_followed_at
 `
 
 type InsertDevEnvironmentParams struct {
@@ -166,6 +168,7 @@ func (q *Queries) InsertDevEnvironment(ctx context.Context, arg InsertDevEnviron
 		&i.DefaultVersionID,
 		&i.CreatedAt,
 		&i.FollowWatchedTag,
+		&i.LastFollowedAt,
 	)
 	return i, err
 }
@@ -287,7 +290,7 @@ func (q *Queries) LatestEnvironmentVersion(ctx context.Context, environmentID st
 }
 
 const listDevEnvironments = `-- name: ListDevEnvironments :many
-SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag FROM dev_environments WHERE owner_id = $1 ORDER BY created_at, id
+SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag, last_followed_at FROM dev_environments WHERE owner_id = $1 ORDER BY created_at, id
 `
 
 func (q *Queries) ListDevEnvironments(ctx context.Context, ownerID string) ([]DevEnvironment, error) {
@@ -309,6 +312,7 @@ func (q *Queries) ListDevEnvironments(ctx context.Context, ownerID string) ([]De
 			&i.DefaultVersionID,
 			&i.CreatedAt,
 			&i.FollowWatchedTag,
+			&i.LastFollowedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -367,7 +371,7 @@ func (q *Queries) ListEnvironmentVersions(ctx context.Context, environmentID str
 }
 
 const listFollowingDevEnvironments = `-- name: ListFollowingDevEnvironments :many
-SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag FROM dev_environments WHERE owner_id = $1 AND follow_watched_tag ORDER BY created_at, id
+SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag, last_followed_at FROM dev_environments WHERE owner_id = $1 AND follow_watched_tag ORDER BY created_at, id
 `
 
 func (q *Queries) ListFollowingDevEnvironments(ctx context.Context, ownerID string) ([]DevEnvironment, error) {
@@ -389,6 +393,7 @@ func (q *Queries) ListFollowingDevEnvironments(ctx context.Context, ownerID stri
 			&i.DefaultVersionID,
 			&i.CreatedAt,
 			&i.FollowWatchedTag,
+			&i.LastFollowedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -401,7 +406,7 @@ func (q *Queries) ListFollowingDevEnvironments(ctx context.Context, ownerID stri
 }
 
 const lockDevEnvironment = `-- name: LockDevEnvironment :one
-SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag FROM dev_environments WHERE id = $1 FOR UPDATE
+SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag, last_followed_at FROM dev_environments WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockDevEnvironment(ctx context.Context, id string) (DevEnvironment, error) {
@@ -417,6 +422,7 @@ func (q *Queries) LockDevEnvironment(ctx context.Context, id string) (DevEnviron
 		&i.DefaultVersionID,
 		&i.CreatedAt,
 		&i.FollowWatchedTag,
+		&i.LastFollowedAt,
 	)
 	return i, err
 }
@@ -435,7 +441,7 @@ func (q *Queries) LockProjectForSelection(ctx context.Context, id string) (strin
 }
 
 const setDevEnvironmentDefault = `-- name: SetDevEnvironmentDefault :one
-UPDATE dev_environments SET default_version_id = $2 WHERE id = $1 RETURNING id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag
+UPDATE dev_environments SET default_version_id = $2 WHERE id = $1 RETURNING id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag, last_followed_at
 `
 
 type SetDevEnvironmentDefaultParams struct {
@@ -456,6 +462,63 @@ func (q *Queries) SetDevEnvironmentDefault(ctx context.Context, arg SetDevEnviro
 		&i.DefaultVersionID,
 		&i.CreatedAt,
 		&i.FollowWatchedTag,
+		&i.LastFollowedAt,
+	)
+	return i, err
+}
+
+const setDevEnvironmentFollow = `-- name: SetDevEnvironmentFollow :one
+UPDATE dev_environments SET follow_watched_tag = $2 WHERE id = $1 RETURNING id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag, last_followed_at
+`
+
+type SetDevEnvironmentFollowParams struct {
+	ID               string
+	FollowWatchedTag bool
+}
+
+func (q *Queries) SetDevEnvironmentFollow(ctx context.Context, arg SetDevEnvironmentFollowParams) (DevEnvironment, error) {
+	row := q.db.QueryRow(ctx, setDevEnvironmentFollow, arg.ID, arg.FollowWatchedTag)
+	var i DevEnvironment
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Name,
+		&i.SourceKind,
+		&i.WatchedTag,
+		&i.Definition,
+		&i.DefaultVersionID,
+		&i.CreatedAt,
+		&i.FollowWatchedTag,
+		&i.LastFollowedAt,
+	)
+	return i, err
+}
+
+const setDevEnvironmentFollowed = `-- name: SetDevEnvironmentFollowed :one
+UPDATE dev_environments SET default_version_id = $2, last_followed_at = $3 WHERE id = $1 RETURNING id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag, last_followed_at
+`
+
+type SetDevEnvironmentFollowedParams struct {
+	ID               string
+	DefaultVersionID *string
+	LastFollowedAt   *time.Time
+}
+
+// Accepts a followed image: it becomes the default and starts the rate-limit interval.
+func (q *Queries) SetDevEnvironmentFollowed(ctx context.Context, arg SetDevEnvironmentFollowedParams) (DevEnvironment, error) {
+	row := q.db.QueryRow(ctx, setDevEnvironmentFollowed, arg.ID, arg.DefaultVersionID, arg.LastFollowedAt)
+	var i DevEnvironment
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Name,
+		&i.SourceKind,
+		&i.WatchedTag,
+		&i.Definition,
+		&i.DefaultVersionID,
+		&i.CreatedAt,
+		&i.FollowWatchedTag,
+		&i.LastFollowedAt,
 	)
 	return i, err
 }
