@@ -20,9 +20,12 @@ permissions:
   contents: read
   packages: write
 
+# Runs queue instead of cancelling each other: one runs, and the newest merge waits behind it, so a
+# burst of merges still ends with `cache-main` moving. An older run that finishes after main has
+# moved on leaves the tag alone (see "Move cache-main").
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -36,8 +39,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          # Two commits: the previous one shows whether this merge changes the base image.
-          fetch-depth: 2
+          # Full history: the base image comes from the newest commit that touched its paths.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Log in to GHCR
@@ -50,26 +53,53 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # The base is the development image the workspaces run today. When this merge changes it
-      # (same paths as dev-image.yml), wait for that workflow to publish this commit's image.
+      # The base is the development image that the newest commit touching its paths published
+      # (same paths as dev-image.yml), never `latest`: `latest` can still be the image from before
+      # an earlier merge whose dev-image run has not finished. Wait for that commit's tag.
       - name: Resolve base image
         id: base
         shell: bash
         run: |
           set -euo pipefail
-          ref=latest
-          if git diff --name-only HEAD~1 HEAD | grep -Eq '^(\.devcontainer/|\.trunk/|scripts/with-timeout\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.npmrc$|\.github/workflows/dev-image\.yml$)'; then
-            ref="$GITHUB_SHA"
-            echo "This commit changes the dev image; waiting for $IMAGE:$ref"
-            for _ in $(seq 1 60); do
-              docker buildx imagetools inspect "$IMAGE:$ref" > /dev/null 2>&1 && break
-              sleep 15
-            done
+          paths=(.devcontainer .trunk scripts/with-timeout.mjs package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc .github/workflows/dev-image.yml)
+          ref=$(git log -1 --format=%H "$GITHUB_SHA" -- "${paths[@]}")
+          [[ "$ref" =~ ^[a-f0-9]{40}$ ]]
+          echo "The dev image comes from $ref; waiting for $IMAGE:$ref"
+          found=false
+          for _ in $(seq 1 60); do
+            if docker buildx imagetools inspect "$IMAGE:$ref" > /dev/null 2>&1; then
+              found=true
+              break
+            fi
+            sleep 15
+          done
+          if [[ "$found" != true ]]; then
+            echo "::error::$IMAGE:$ref was not published within 15 minutes; check the Mainloop dev image run for that commit"
+            exit 1
           fi
           digest=$(docker buildx imagetools inspect "$IMAGE:$ref" --format '{{json .Manifest}}' | jq -er '.digest')
           [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # Only the dependency stage is worth caching: it depends on the lock files and the base, so
+      # most merges reuse it. The build stage changes with every commit and is never reused, so
+      # exporting it would only churn the repository's Actions cache. The second build below finds
+      # these layers in this builder's own cache.
+      - name: Build the dependency layers
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: images/workspace-cache/Dockerfile
+          target: deps
+          platforms: linux/arm64
+          push: false
+          provenance: false
+          sbom: false
+          build-args: |
+            BASE=${{ env.IMAGE }}@${{ steps.base.outputs.digest }}
+          cache-from: type=gha,scope=workspace-cache-deps-arm64
+          cache-to: type=gha,mode=min,scope=workspace-cache-deps-arm64
 
       - name: Build and push cache-${{ github.sha }}
         id: build
@@ -92,8 +122,7 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.base.name=${{ env.IMAGE }}:${{ steps.base.outputs.ref }}
             org.opencontainers.image.base.digest=${{ steps.base.outputs.digest }}
-          cache-from: type=gha,scope=workspace-cache-arm64
-          cache-to: type=gha,mode=max,scope=workspace-cache-arm64
+          cache-from: type=gha,scope=workspace-cache-deps-arm64
 
       # A fresh clone of this commit, at the path sessions use, must compile nothing.
       - name: Smoke check a fresh clone compiles nothing
@@ -111,7 +140,9 @@ jobs:
               git clone --quiet --depth 1 file:///src /data/workspace
               cd /data/workspace
               test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-              env | grep -E "^(GOMODCACHE|GOCACHE|npm_config_(store|virtual_store)_dir)=/opt/cache/"
+              for var in GOMODCACHE GOCACHE npm_config_store_dir npm_config_virtual_store_dir; do
+                [[ "${!var}" == /opt/cache/* ]] || { echo "$var is ${!var:-unset}, not under /opt/cache"; exit 1; }
+              done
               cd server
               go build -x ./... 2> /tmp/build.log
               go test -x -exec /bin/true -run XXX_none ./... > /tmp/test.log 2>&1
