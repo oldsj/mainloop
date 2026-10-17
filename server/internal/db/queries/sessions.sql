@@ -195,7 +195,7 @@ WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attemp
 -- id. Fenced on the delivery's claim and on the Session being replaced.
 -- name: ReplaceDeliveryKagentSession :execrows
 UPDATE agent_bindings b
-SET kagent_session_id = NULL, kagent_request_id = sqlc.arg(new_request_id), standing_hash = NULL,
+SET kagent_session_id = NULL, kagent_request_id = sqlc.arg(new_request_id), standing_hash = NULL, guidance_version = NULL, guidance_delivery_id = NULL,
     kagent_create_request_id = NULL, kagent_create_agent_namespace = NULL, kagent_create_agent_name = NULL,
     updated_at = now()
 FROM deliveries d
@@ -506,7 +506,7 @@ SET kind = sqlc.arg(kind),
     credential_identity = sqlc.arg(request_id),
     kagent_create_request_id = sqlc.arg(request_id),
     kagent_create_agent_namespace = sqlc.arg(agent_namespace), kagent_create_agent_name = sqlc.arg(agent_name),
-    standing_hash = NULL, model = NULL, turns = 0, queue_held = false,
+    standing_hash = NULL, guidance_version = NULL, guidance_delivery_id = NULL, model = NULL, turns = 0, queue_held = false,
     main_pending = true, main_error = NULL, main_recoverable = false, updated_at = now()
 WHERE session_id = sqlc.arg(session_id) AND role = 'main' AND main_released_at IS NULL;
 
@@ -554,11 +554,21 @@ LIMIT $2;
 -- name: ListSessionMessagesByID :many
 SELECT * FROM session_messages WHERE session_id = sqlc.arg(session_id) AND id = ANY(sqlc.arg(ids)::text[]) ORDER BY created_at, id;
 
--- Marks the main binding's Session as having been given its standing context, in the transaction
--- that freezes the delivery's text. Zero rows when the binding already has one.
+-- Marks the main binding's Session as having been given its standing context and the current
+-- guidance version, in the transaction that freezes the delivery's text. Zero rows when the binding
+-- already has one.
 -- name: SetBindingStandingHash :execrows
-UPDATE agent_bindings SET standing_hash = sqlc.arg(standing_hash), updated_at = now()
+UPDATE agent_bindings SET standing_hash = sqlc.arg(standing_hash), guidance_version = sqlc.arg(guidance_version)::integer,
+    guidance_delivery_id = sqlc.arg(delivery_id)::text, updated_at = now()
 WHERE session_id = sqlc.arg(session_id) AND standing_hash IS NULL;
+
+-- Marks the Session as having been given the current guidance version alone, for a Session that
+-- already has its standing context. Zero rows when it has none or already has this version.
+-- name: SetBindingGuidanceVersion :execrows
+UPDATE agent_bindings SET guidance_version = sqlc.arg(guidance_version)::integer, guidance_delivery_id = sqlc.arg(delivery_id)::text,
+    updated_at = now()
+WHERE session_id = sqlc.arg(session_id) AND standing_hash IS NOT NULL
+  AND guidance_version IS DISTINCT FROM sqlc.arg(guidance_version)::integer;
 
 -- A delivery that ends without kagent having seen its message gives back the standing context it
 -- froze, so the next message to the Session carries it again. Only the hash of this delivery's own
@@ -568,3 +578,10 @@ UPDATE agent_bindings b SET standing_hash = NULL, updated_at = now()
 FROM deliveries d
 WHERE d.id = $1 AND b.session_id = d.session_id AND d.sent_text IS NOT NULL
   AND b.standing_hash = encode(sha256(convert_to(d.id || E'\n' || d.sent_text, 'UTF8')), 'hex');
+
+-- A delivery that ends without kagent having seen its message gives back the guidance version it
+-- delivered, so the next message to the Session carries the context block again. Only the version
+-- this delivery recorded is cleared.
+-- name: ClearBindingGuidanceVersion :exec
+UPDATE agent_bindings b SET guidance_version = NULL, guidance_delivery_id = NULL, updated_at = now()
+WHERE b.guidance_delivery_id = $1;

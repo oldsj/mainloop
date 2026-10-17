@@ -247,6 +247,8 @@ func TestAFirstMessageWithNothingToCarryOnlyGetsTheContextLine(t *testing.T) {
 	if e.standingHash() == nil {
 		t.Fatal("the Session is not recorded as started")
 	}
+	// The owner's conversation holds only what they wrote, not the context block.
+	e.wantNoPreambleInConversation()
 }
 
 func TestZeroCarriedMessagesSendsNone(t *testing.T) {
@@ -572,4 +574,126 @@ func TestTheSendDecisionLocksTheDeliveryBeforeTheBinding(t *testing.T) {
 	}
 	e.waitState(id, dbstate.DeliveryCompleted)
 	wantCarried(t, log.last(t).Text, "two", "user: one", "assistant: ok")
+}
+
+// forgetGuidance makes the binding look like one given an older guidance version, or none, which
+// is how every main that predates the guidance looks after a deploy.
+func (e *env) forgetGuidance(version *int32) {
+	e.t.Helper()
+	id := ""
+	if version != nil {
+		id = "older-delivery"
+	}
+	if _, err := e.pool.Exec(context.Background(),
+		`UPDATE agent_bindings SET guidance_version = $2, guidance_delivery_id = NULLIF($3, '') WHERE session_id = $1`,
+		e.mainID(), version, id); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+func (e *env) guidanceVersion() *int32 { return e.bindingRow().GuidanceVersion }
+
+func (e *env) wantNoPreambleInConversation() {
+	e.t.Helper()
+	for _, m := range e.messages() {
+		if strings.Contains(m.Content, contextMarker) || strings.Contains(m.Content, agentcontext.Guidance) {
+			e.t.Fatalf("the context block reached the mirrored conversation: %+v", m)
+		}
+	}
+}
+
+func TestAnExistingMainGetsTheGuidanceOnceOnItsNextMessage(t *testing.T) {
+	var log sentLog
+	e := newEnv(t, carryOpt(t, 6, &log))
+	e.seed(dbstate.DeliveryCompleted, "earlier q", "earlier a", time.Hour)
+	e.run()
+	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
+	if v := e.guidanceVersion(); v == nil || *v != agentcontext.Version {
+		t.Fatalf("a new Session is recorded with guidance version %v", v)
+	}
+
+	// A main from before the guidance: it has its standing context and no guidance version.
+	e.forgetGuidance(nil)
+	standing := e.standingHash()
+	d := e.waitState(e.send("two"), dbstate.DeliveryCompleted)
+	// The block alone: nothing is carried, the Session already has the conversation.
+	wantContextOnly(t, log.last(t).Text, "two")
+	if d.SentText == nil || *d.SentText != log.last(t).Text {
+		t.Fatalf("the row froze %v, kagent got %q", d.SentText, log.last(t).Text)
+	}
+	if v := e.guidanceVersion(); v == nil || *v != agentcontext.Version {
+		t.Fatalf("guidance version %v after delivery", v)
+	}
+	if got := e.standingHash(); got == nil || standing == nil || *got != *standing {
+		t.Fatalf("the standing hash changed from %v to %v", standing, got)
+	}
+
+	// Once: later messages go as written.
+	e.waitState(e.send("three"), dbstate.DeliveryCompleted)
+	if got := log.last(t).Text; got != "three" {
+		t.Fatalf("sent %q, want the message as written", got)
+	}
+
+	// A version bump delivers it again.
+	older := int32(agentcontext.Version - 1)
+	e.forgetGuidance(&older)
+	e.waitState(e.send("four"), dbstate.DeliveryCompleted)
+	wantContextOnly(t, log.last(t).Text, "four")
+	e.waitState(e.send("five"), dbstate.DeliveryCompleted)
+	if got := log.last(t).Text; got != "five" {
+		t.Fatalf("sent %q, want the message as written", got)
+	}
+
+	// The owner's conversation holds what they wrote, never the block.
+	e.wantNoPreambleInConversation()
+	for _, m := range e.messages() {
+		if m.Role == "user" && m.Content == "two" {
+			return
+		}
+	}
+	t.Fatal("the owner's message is missing from the conversation")
+}
+
+func TestGuidanceThatWasNotSentIsGivenBack(t *testing.T) {
+	var log sentLog
+	e := newEnv(t, carryOpt(t, 6, &log))
+	e.run()
+	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
+	e.forgetGuidance(nil)
+	e.srv.FailNext("SendStreamingMessage", kagenttest.Fault{RPC: &kagenttest.RPCError{Code: -32602, Message: "invalid params"}})
+
+	e.waitState(e.send("lost"), dbstate.DeliveryFailed)
+	if v := e.guidanceVersion(); v != nil {
+		t.Fatalf("the Session is recorded as having the guidance after a refusal: %d", *v)
+	}
+	if e.standingHash() == nil {
+		t.Fatal("the refusal took the standing context back too")
+	}
+
+	// kagent never saw it, so the next message carries the block, and only the block.
+	e.waitState(e.send("again"), dbstate.DeliveryCompleted)
+	wantContextOnly(t, log.last(t).Text, "again")
+	if v := e.guidanceVersion(); v == nil || *v != agentcontext.Version {
+		t.Fatalf("guidance version %v", v)
+	}
+}
+
+func TestANewSessionIsGivenTheGuidanceOnceWithItsContext(t *testing.T) {
+	var log sentLog
+	e := newEnv(t, carryOpt(t, 6, &log))
+	e.withProviders()
+	stop, _ := e.warm()
+	stop()
+	e.mustSelect("codex", false)
+	if v := e.guidanceVersion(); v != nil {
+		t.Fatalf("the switch left guidance version %d on the new Session", *v)
+	}
+	e.run()
+	e.waitState(e.send("two"), dbstate.DeliveryCompleted)
+	// The full preamble delivers the block, so the next message is not given it a second time.
+	wantCarried(t, log.last(t).Text, "two", "user: one", "assistant: ok")
+	e.waitState(e.send("three"), dbstate.DeliveryCompleted)
+	if got := log.last(t).Text; got != "three" {
+		t.Fatalf("sent %q", got)
+	}
 }

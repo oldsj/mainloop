@@ -39,6 +39,8 @@ type AgentBinding struct {
 	MainRecoverable            bool
 	CredentialIdentity         *string
 	MainReleasedAt             *time.Time
+	GuidanceVersion            *int32
+	GuidanceDeliveryID         *string
 }
 
 type AttentionItem struct {

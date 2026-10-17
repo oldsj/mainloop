@@ -32,14 +32,17 @@ const mainContext = "[mainloop:context] You are the Mainloop main agent, the own
 // Session (a first use, a provider switch, or a replacement for one kagent deleted) therefore carries
 // a short preamble of the last completed messages. The binding's standing_hash says whether this has
 // been done: NULL means the Session has not been given it, and the switch and the replacement of a
-// deleted Session both reset it. The owner's mirrored message stays what they wrote.
+// deleted Session both reset it. A Session that has its standing context but was given an older
+// guidance version (or none, as every main that predates the guidance) gets the context block alone
+// in front of its next message; the binding's guidance_version says which. The owner's mirrored
+// message stays what they wrote.
 //
 // The preamble opens with mainContext, then the earlier messages when there are any. It does not
 // render the main's standing context yet (see delegation.md). Children and workers are not main
 // bindings and send their message as written. It returns a nil text when the message goes as
-// written, and a hash only when the caller must record it on the binding (after the delivery row,
-// see decideSend).
-func (t *turn) frozenText(ctx context.Context, q *dbq.Queries) (text, hash *string, err error) {
+// written, and a non-nil record only when the caller must record what was given on the binding
+// (after the delivery row, see decideSend).
+func (t *turn) frozenText(ctx context.Context, q *dbq.Queries) (text *string, given *givenContext, err error) {
 	if t.d.SentText != nil {
 		return t.d.SentText, nil, nil
 	}
@@ -51,13 +54,24 @@ func (t *turn) frozenText(ctx context.Context, q *dbq.Queries) (text, hash *stri
 		return nil, nil, fmt.Errorf("load binding: %w", err)
 	}
 	if b.StandingHash != nil {
-		return nil, nil, nil
+		if b.GuidanceVersion != nil && *b.GuidanceVersion == agentcontext.Version {
+			return nil, nil, nil
+		}
+		rendered := t.withContext("")
+		return &rendered, &givenContext{}, nil
 	}
-	rendered, err := t.carryOver(ctx, q)
+	earlier, err := t.carriedConversation(ctx, q)
 	if err != nil {
 		return nil, nil, err
 	}
-	return &rendered, ptrStr(standingHash(t.c.ID, rendered)), nil
+	rendered := t.withContext(earlier)
+	return &rendered, &givenContext{standingHash: ptrStr(standingHash(t.c.ID, rendered))}, nil
+}
+
+// givenContext is what a delivery that froze context text records on the binding. A nil
+// standingHash means the Session already had its standing context and was given only the guidance.
+type givenContext struct {
+	standingHash *string
 }
 
 // standingHash is what the binding records for a delivery that froze this text. It includes the
@@ -68,14 +82,10 @@ func standingHash(deliveryID, text string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// carryOver renders the message with the preamble in front of it: mainContext, then the earlier
+// withContext renders the message with the preamble in front of it: mainContext, then the earlier
 // conversation when there is any to carry.
-func (t *turn) carryOver(ctx context.Context, q *dbq.Queries) (string, error) {
-	earlier, err := t.carriedConversation(ctx, q)
-	if err != nil {
-		return "", err
-	}
-	return mainContext + earlier + newMessageMarker + "\n" + t.d.Content, nil
+func (t *turn) withContext(earlier string) string {
+	return mainContext + earlier + newMessageMarker + "\n" + t.d.Content
 }
 
 // newMessageMarker ends the preamble; the owner's message follows it.
@@ -141,13 +151,18 @@ func carried(s string) string {
 }
 
 // returnStandingContext gives back, in the transaction that ends a delivery whose message kagent
-// never saw, the standing context that delivery froze, so the next message carries it again.
+// never saw, the standing context and the guidance version that delivery froze, so the next message
+// carries them again.
 func (t *turn) returnStandingContext(ctx context.Context, tx pgx.Tx, final dbstate.DeliveryState, task *a2a.Task) error {
 	if (final != dbstate.DeliveryFailed && final != dbstate.DeliveryCancelled) || task != nil || t.taskID != "" {
 		return nil
 	}
-	if err := dbq.New(tx).ClearBindingStandingHash(ctx, t.c.ID); err != nil {
+	q := dbq.New(tx)
+	if err := q.ClearBindingStandingHash(ctx, t.c.ID); err != nil {
 		return fmt.Errorf("return standing context: %w", err)
+	}
+	if err := q.ClearBindingGuidanceVersion(ctx, &t.c.ID); err != nil {
+		return fmt.Errorf("return guidance version: %w", err)
 	}
 	return nil
 }

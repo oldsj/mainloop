@@ -13,6 +13,19 @@ import (
 // grow into the 16 KiB the assigned work may use.
 const maxGuidanceBytes = 3072
 
+// TestGuidanceDoesNotKeyTheCheckoutOnTheRole holds the wording to what is true of every brief: the
+// checkout belongs to code tasks, whatever their role, and the guidance names no role as lacking it.
+func TestGuidanceDoesNotKeyTheCheckoutOnTheRole(t *testing.T) {
+	for _, bad := range []string{"main and supervisor sessions have no checkout", "supervisor sessions have no checkout"} {
+		if strings.Contains(agentcontext.Guidance, bad) {
+			t.Errorf("guidance says %q", bad)
+		}
+	}
+	if want := "Code tasks run in an isolated workspace"; !strings.Contains(agentcontext.Guidance, want) {
+		t.Errorf("guidance lacks %q", want)
+	}
+}
+
 func TestBriefsStateTheRoleAndShareTheGuidance(t *testing.T) {
 	const work = "Ship the thing"
 	cases := []struct {
@@ -23,16 +36,30 @@ func TestBriefsStateTheRoleAndShareTheGuidance(t *testing.T) {
 		not  []string
 	}{
 		{
-			name: "supervisor", role: dbstate.AttemptSupervisor, mode: dbstate.TaskModeCoordination,
+			name: "supervisor/coordination", role: dbstate.AttemptSupervisor, mode: dbstate.TaskModeCoordination,
 			want: []string{"You are the Mainloop task supervisor.", "no repository authority"},
 			not:  []string{"## Workspace environment", "open_pull_request"},
 		},
 		{
-			name: "child", role: dbstate.AttemptChild, mode: dbstate.TaskModeCode,
+			// A root code task is a supervisor by position and has the checkout.
+			name: "supervisor/code", role: dbstate.AttemptSupervisor, mode: dbstate.TaskModeCode,
+			want: []string{
+				"You are the Mainloop task supervisor.", "open_pull_request", "## Workspace environment",
+				"gVisor sandbox", "SSL_CERT_FILE",
+			},
+			not: []string{"no repository authority"},
+		},
+		{
+			name: "child/code", role: dbstate.AttemptChild, mode: dbstate.TaskModeCode,
 			want: []string{
 				"You are the Mainloop task child.", "open_pull_request", "## Workspace environment",
 				"gVisor sandbox", "SSL_CERT_FILE",
 			},
+		},
+		{
+			name: "child/coordination", role: dbstate.AttemptChild, mode: dbstate.TaskModeCoordination,
+			want: []string{"You are the Mainloop task child.", "no repository authority"},
+			not:  []string{"## Workspace environment", "open_pull_request"},
 		},
 	}
 	for _, c := range cases {
