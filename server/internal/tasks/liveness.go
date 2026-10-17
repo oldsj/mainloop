@@ -40,11 +40,12 @@ type LivenessObserver interface {
 }
 
 // KagentLivenessClient is the part of the kagent client [KagentLiveness] uses: whether a resolved
-// kagent session still exists and is live, and the A2A tasks of one of its contexts. *kagent.Client
+// kagent session still exists and is live, and the A2A tasks of one of its contexts, each with no
+// history — only status is judged here, the same as ListWaitingTasksPage's own watch. *kagent.Client
 // satisfies it.
 type KagentLivenessClient interface {
 	ObserveLiveness(ctx context.Context, kagentSessionID string) (kagent.SessionLiveness, error)
-	ListTasks(ctx context.Context, agent kagent.AgentRef, contextID string) ([]*a2a.Task, error)
+	ListTasksSummary(ctx context.Context, agent kagent.AgentRef, contextID string) ([]*a2a.Task, error)
 }
 
 // ActivityReader is the part of the sessions delivery ledger [KagentLiveness] uses for the fallback
@@ -61,8 +62,10 @@ type ActivityReader interface {
 // never on a turn, so a long working turn would otherwise look idle. Activity instead comes from
 // the A2A tasks of every native context the session has used (the same contexts
 // [KagentStops.Stopped] lists): a submitted or working task means activity right now, however old
-// its last recorded status change; otherwise the later of the newest task status timestamp and the
-// delivery ledger's own last-activity record stands in.
+// its last recorded status change, and so does one waiting on the owner (input-required or
+// auth-required) — the agent is not stalled while it waits for a reply, though the runtime bound
+// still applies; otherwise the later of the newest task status timestamp and the delivery ledger's
+// own last-activity record stands in.
 type KagentLiveness struct {
 	Pool    *pgxpool.Pool
 	OwnerID string
@@ -72,6 +75,15 @@ type KagentLiveness struct {
 	// Activity is consulted when kagent shows no A2A task for the session at all. *sessions.Ledger
 	// satisfies it; nil skips it (no fallback, only what kagent itself reports).
 	Activity ActivityReader
+	// Now is the clock for activity timestamps; time.Now when nil.
+	Now func() time.Time
+}
+
+func (k *KagentLiveness) now() time.Time {
+	if k.Now != nil {
+		return k.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 // ObserveLiveness implements [LivenessObserver].
@@ -103,8 +115,10 @@ func (k *KagentLiveness) ObserveLiveness(ctx context.Context, sessionID string) 
 	return live, true, nil
 }
 
-// activity is the later of: now, if any native context lists a submitted or working A2A task; the
-// newest status timestamp of any task any context listed; or the delivery ledger's own record.
+// activity is the later of: now, if any native context lists a task that is submitted, working, or
+// waiting on the owner (input-required or auth-required — the agent is blocked on a reply, not
+// idle); the newest status timestamp of any task any context listed; or the delivery ledger's own
+// record.
 func (k *KagentLiveness) activity(
 	ctx context.Context, q *dbq.Queries, sessionID string, b dbq.GetOwnedSessionBindingRow, ksid string,
 ) (time.Time, error) {
@@ -121,7 +135,7 @@ func (k *KagentLiveness) activity(
 	}
 	var latest time.Time
 	for _, c := range contexts {
-		listed, err := k.Kagent.ListTasks(ctx, agent, c)
+		listed, err := k.Kagent.ListTasksSummary(ctx, agent, c)
 		if err != nil {
 			return time.Time{}, fmt.Errorf("list tasks: %w", err)
 		}
@@ -129,8 +143,9 @@ func (k *KagentLiveness) activity(
 			if t == nil {
 				continue
 			}
-			if t.Status.State == a2a.TaskStateSubmitted || t.Status.State == a2a.TaskStateWorking {
-				return time.Now().UTC(), nil
+			switch t.Status.State {
+			case a2a.TaskStateSubmitted, a2a.TaskStateWorking, a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired:
+				return k.now(), nil
 			}
 			if ts := t.Status.Timestamp; ts != nil && ts.After(latest) {
 				latest = *ts
@@ -226,20 +241,21 @@ func (s *Service) touchLiveness(ctx context.Context, attemptID string) error {
 // active and the task's current one, and — since the observation above took no lock and the task
 // may have moved on while it was in flight — the task must still be exactly running with no reason:
 // anything else (a report that completed it, blocked it on an owner question, or anything else)
-// owns the task now, and the liveness signal that raced it is stale. The task row is locked before
-// anything is read of it, as every other task write in this package does.
+// owns the task now, and the liveness signal that raced it is stale. The task row is locked first,
+// then the attempt is re-read under that lock, the same order [Service.drain] uses: a write between
+// the sweep's read and this one (settling, fencing, replacing) is seen before this decides anything.
 func (s *Service) blockAttempt(ctx context.Context, a dbq.TaskAttempt, reason dbstate.TaskReason) error {
 	return s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
+		t, err := q.GetTaskByIDForUpdate(ctx, a.TaskID)
+		if err != nil {
+			return nil, err
+		}
 		cur, err := q.GetTaskAttempt(ctx, a.ID)
 		if err != nil {
 			return nil, err
 		}
 		if cur.State != dbstate.AttemptActive {
 			return nil, nil // drained, fenced or replaced since the sweep read it
-		}
-		t, err := q.GetTaskByIDForUpdate(ctx, a.TaskID)
-		if err != nil {
-			return nil, err
 		}
 		if t.CurrentAttemptID == nil || *t.CurrentAttemptID != a.ID || t.Status != dbstate.TaskRunning || t.Reason != nil {
 			return nil, nil

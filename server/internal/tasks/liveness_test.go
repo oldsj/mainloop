@@ -126,6 +126,25 @@ func TestLivenessActivityResetsTheStallClock(t *testing.T) {
 	}
 }
 
+// P2: an agent waiting on the owner (input-required or auth-required) is not stalled either — it
+// is blocked on a reply, not idle — though the runtime bound still applies regardless of activity.
+func TestLivenessWaitingOnTheOwnerResetsTheStallClock(t *testing.T) {
+	for _, state := range []a2a.TaskState{a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired} {
+		t.Run(string(state), func(t *testing.T) {
+			r := newRig(t)
+			id, bindingID := r.liveTask("ks-1")
+			r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
+			r.activity.set(bindingID, time.Now().Add(-46*time.Minute)) // would stall on its own
+			old := time.Now().Add(-50 * time.Minute)
+			r.live.setTasks("ks-1", []*a2a.Task{{ID: "t-1", Status: a2a.TaskStatus{State: state, Timestamp: &old}}})
+			r.sweep(r.svc.LivenessSweep())
+			if got := r.taskStatus(id); got != "running" {
+				t.Fatalf("status = %s, want running (waiting on the owner is activity now)", got)
+			}
+		})
+	}
+}
+
 func TestLivenessBlocksATaskPastItsRuntimeBound(t *testing.T) {
 	r := newRig(t)
 	id, bindingID := r.liveTask("ks-1")

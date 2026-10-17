@@ -453,12 +453,14 @@ SELECT 'attn_reconciliation_' || n.task_id, n.owner_id, 'owner_decision', 'task_
        n.task_id, n.title,
        CASE n.reason_code
            WHEN 'runtime_stop_unresolved' THEN 'Runtime stop remains unconfirmed; reconcile the held claim and capacity.'
-           WHEN 'session_lost' THEN 'The task''s native session is gone or terminal; it never reported back.'
+           WHEN 'session_lost' THEN 'The task''s native session is gone or terminal; confirm whether the work finished before it stopped responding.'
            WHEN 'stalled' THEN 'The task''s session has shown no activity for a while; it may be stuck.'
            WHEN 'runtime_limit' THEN 'The task has run longer than its runtime bound; check whether it is still working.'
            ELSE 'Task needs reconciliation; inspect its attempt evidence.' END,
        '/tasks/' || n.task_id, n.reason_code
-FROM task_reconciliation_needs n WHERE n.owner_id = $1
+FROM task_reconciliation_needs n
+JOIN tasks t ON t.id = n.task_id
+WHERE n.owner_id = $1 AND t.status NOT IN ('completed', 'failed', 'cancelled')
 ON CONFLICT (source_kind, source_id) DO UPDATE
 SET state = 'open', resolved_at = NULL, updated_at = now(),
     read_at = CASE WHEN a.state <> 'open' THEN NULL ELSE a.read_at END,
@@ -467,7 +469,10 @@ WHERE a.state <> 'open' OR (a.title, a.needed, a.reason_code) IS DISTINCT FROM (
 RETURNING id
 `
 
-// Reopen the same task item only when a need recurs; unchanged sweeps write nothing.
+// Reopen the same task item only when a need recurs; unchanged sweeps write nothing. A task that
+// has already reached a final status is never opened here, even if an attempt still carries
+// unconfirmed stop evidence: the owner has nothing left to decide for a task that is over, and the
+// held claim or capacity it may still name is a separate bookkeeping concern, not an owner decision.
 func (q *Queries) OpenTaskReconciliationAttention(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, openTaskReconciliationAttention, ownerID)
 	if err != nil {
@@ -570,23 +575,37 @@ func (q *Queries) ResolveFinishedSessionAttention(ctx context.Context, ownerID s
 const resolveMergeProposalAttention = `-- name: ResolveMergeProposalAttention :many
 UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at = now()
 WHERE a.owner_id = $1 AND a.source_kind = 'merge_proposal' AND a.state = 'open'
-  AND NOT EXISTS (
-      SELECT 1 FROM merge_proposals p JOIN merge_candidates c ON c.id = p.candidate_id
-      JOIN hitl_requests r ON r.id = a.detail->>'hitl_request_id'
-      JOIN hitl_merge_tools m ON m.request_id = r.id AND m.proposal_id = p.id
-      JOIN sessions s ON s.id = r.session_id AND s.user_id = r.owner_id
-      JOIN agent_bindings b ON b.session_id = r.session_id AND b.kagent_session_id = r.kagent_session_id AND b.kagent_deleted_at IS NULL
-      WHERE p.id = a.source_id AND p.owner_id = a.owner_id AND r.owner_id = p.owner_id AND p.session_id = r.session_id
-        AND r.availability IN ('pending', 'stale') AND c.route = 'approval' AND c.state = 'prepared'
-        AND (c.deadline IS NULL OR c.deadline > now())
-        AND s.project_id = c.project_id AND s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
-        AND NOT EXISTS (SELECT 1 FROM hitl_responses h WHERE h.request_id = r.id AND h.state IN ('recorded', 'sending', 'accepted', 'uncertain'))
+  AND (
+      NOT EXISTS (
+          SELECT 1 FROM merge_proposals p JOIN merge_candidates c ON c.id = p.candidate_id
+          JOIN hitl_requests r ON r.id = a.detail->>'hitl_request_id'
+          JOIN hitl_merge_tools m ON m.request_id = r.id AND m.proposal_id = p.id
+          JOIN sessions s ON s.id = r.session_id AND s.user_id = r.owner_id
+          JOIN agent_bindings b ON b.session_id = r.session_id AND b.kagent_session_id = r.kagent_session_id AND b.kagent_deleted_at IS NULL
+          WHERE p.id = a.source_id AND p.owner_id = a.owner_id AND r.owner_id = p.owner_id AND p.session_id = r.session_id
+            AND r.availability IN ('pending', 'stale') AND c.route = 'approval' AND c.state = 'prepared'
+            AND (c.deadline IS NULL OR c.deadline > now())
+            AND s.project_id = c.project_id AND s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+            AND NOT EXISTS (SELECT 1 FROM hitl_responses h WHERE h.request_id = r.id AND h.state IN ('recorded', 'sending', 'accepted', 'uncertain'))
+      )
+      OR EXISTS (
+          SELECT 1 FROM merge_proposals p JOIN merge_candidates c ON c.id = p.candidate_id
+          JOIN tasks t ON t.owner_id = a.owner_id AND t.pr_number = c.pr_number AND t.pr_repository = lower(c.repository)
+            AND t.pr_head_sha = c.head_sha
+          WHERE p.id = a.source_id AND p.owner_id = a.owner_id AND t.pr_state IN ('merged', 'closed')
+      )
   )
 RETURNING a.id
 `
 
 // Approval/refusal ends the owner's need as soon as it is recorded; a rejected transport can
-// reopen it. Supersession, expiry and all later candidate states also end it.
+// reopen it. Supersession, expiry and all later candidate states also end it. A candidate can also
+// stay `prepared` forever once the pull request is merged or closed outside Mainloop's own merge
+// flow, since nothing here claims a `prepared` row to ask GitHub again: a task's own, independently
+// polled pr_state for that exact repository, PR number and head is the durable signal that it is
+// settled, so the card drops for that reason too, with no GitHub call of its own. The head must
+// also match, not just the repository and PR number, so a stale snapshot from before the PR was
+// pushed to and reopened cannot resolve a later, unrelated proposal for the same PR.
 func (q *Queries) ResolveMergeProposalAttention(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, resolveMergeProposalAttention, ownerID)
 	if err != nil {
@@ -678,10 +697,16 @@ func (q *Queries) ResolveStaleTaskDecisions(ctx context.Context, ownerID string)
 const resolveTaskReconciliationAttention = `-- name: ResolveTaskReconciliationAttention :many
 UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at = now()
 WHERE a.owner_id = $1 AND a.source_kind = 'task_reconciliation' AND a.state = 'open'
-  AND NOT EXISTS (SELECT 1 FROM task_reconciliation_needs n WHERE n.task_id = a.task_id AND n.owner_id = a.owner_id)
+  AND (
+      NOT EXISTS (SELECT 1 FROM task_reconciliation_needs n WHERE n.task_id = a.task_id AND n.owner_id = a.owner_id)
+      OR EXISTS (SELECT 1 FROM tasks t WHERE t.id = a.task_id AND t.status IN ('completed', 'failed', 'cancelled'))
+  )
 RETURNING a.id
 `
 
+// A final task's item resolves outright, even one still named by task_reconciliation_needs for an
+// unconfirmed stop: the task is over, so there is no decision left for the owner, whatever the
+// attempt's held claim or capacity still needs behind the scenes.
 func (q *Queries) ResolveTaskReconciliationAttention(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, resolveTaskReconciliationAttention, ownerID)
 	if err != nil {
