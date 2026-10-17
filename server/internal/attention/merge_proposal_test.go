@@ -3,6 +3,7 @@ package attention_test
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // merge writes the full approval-route chain OpenMergeProposalAttention reads: a project, a
@@ -49,7 +50,10 @@ func TestMergeProposalAttentionResolvesASupersededCandidate(t *testing.T) {
 // A candidate that is merged or closed on GitHub without ever going through Mainloop's own merge
 // flow stays 'prepared' forever: nothing claims a prepared row to ask GitHub again on its own. A
 // task's own, independently polled pr_state for that exact repository and PR number is the durable
-// signal the sweep uses instead, with no GitHub call of its own.
+// signal the sweep uses instead, with no GitHub call of its own. Once resolved, a sweep that finds
+// nothing changed must write nothing and publish no further inbox:updated: the opener and the
+// resolver share one eligibility rule, so an externally settled proposal does not reopen and
+// re-resolve on every pass.
 func TestMergeProposalAttentionResolvesAnExternallySettledPullRequest(t *testing.T) {
 	for _, state := range []string{"merged", "closed"} {
 		t.Run(state, func(t *testing.T) {
@@ -63,15 +67,75 @@ func TestMergeProposalAttentionResolvesAnExternallySettledPullRequest(t *testing
 				t.Fatalf("before: %+v", snap)
 			}
 			e.exec(t, `INSERT INTO tasks (id, owner_id, root_task_id, title, brief, mode, assigned_profile_id, selection_source, status,
-				pr_number, pr_repository, pr_head_sha, pr_state) VALUES ('t-pr', $1, 't-pr', 'Ship it', 'brief', 'coordination', 'p', 'explicit',
-				'completed', 7, 'o/n', repeat('a', 40), $2)`, owner, state)
+				pr_number, pr_repository, pr_head_sha, pr_state, projected_at) VALUES ('t-pr', $1, 't-pr', 'Ship it', 'brief', 'coordination', 'p',
+				'explicit', 'completed', 7, 'o/n', repeat('a', 40), $2, now())`, owner, state)
 			if err := e.svc.SyncTasks(ctx); err != nil {
 				t.Fatal(err)
 			}
 			if snap, _ := e.svc.Snapshot(ctx); snap.Count != 0 {
 				t.Fatalf("a %s pull request's card must drop even while its candidate stays prepared: %+v", state, snap)
 			}
+
+			var updated time.Time
+			if err := e.pool.QueryRow(ctx, `SELECT updated_at FROM attention_items WHERE source_kind = 'merge_proposal'`).Scan(&updated); err != nil {
+				t.Fatal(err)
+			}
+			before := len(e.inboxEvents(t))
+			for range 2 {
+				if err := e.svc.SyncTasks(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var after time.Time
+			if err := e.pool.QueryRow(ctx, `SELECT updated_at FROM attention_items WHERE source_kind = 'merge_proposal'`).Scan(&after); err != nil {
+				t.Fatal(err)
+			}
+			if !updated.Equal(after) || before != len(e.inboxEvents(t)) {
+				t.Fatal("an externally settled proposal churned rows or events on an unchanged sweep")
+			}
 		})
+	}
+}
+
+// Only a current observation may settle a proposal. A closed or merged snapshot taken before the
+// proposal's own candidate was prepared predates the proposal and cannot speak to it, and once the
+// pull request reopens at the same head, a fresher open observation always wins over an older
+// closed one, even if that older snapshot was itself taken after the candidate was prepared.
+func TestMergeProposalAttentionIgnoresAStaleClosedObservationAfterASameHeadReopen(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.merge(t, "m1", 7)
+	if err := e.svc.SyncTasks(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	insertTask := func(id, status, prState, offset string) {
+		e.exec(t, `INSERT INTO tasks (id, owner_id, root_task_id, title, brief, mode, assigned_profile_id, selection_source, status,
+			pr_number, pr_repository, pr_head_sha, pr_state, projected_at)
+			SELECT $1, $2, $1, 'Ship it', 'brief', 'coordination', 'p', 'explicit', $3, 7, 'o/n', repeat('a', 40), $4, created_at + $5::interval
+			FROM merge_candidates WHERE id = 'c-m1'`, id, owner, status, prState, offset)
+	}
+
+	// A task observed the pull request closed before this proposal was even prepared: too old to
+	// trust, so the card must stay.
+	insertTask("t-old", "completed", "closed", "-1 hour")
+	if err := e.svc.SyncTasks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if snap, _ := e.svc.Snapshot(ctx); snap.Count != 1 || snap.Items[0].Id != "merge:m1" {
+		t.Fatalf("a closed snapshot older than preparation must not settle the proposal: %+v", snap)
+	}
+
+	// The pull request is reopened at the same head and a fresher task observes it open, after an
+	// otherwise-current closed snapshot that alone would have settled the proposal: the newer, open
+	// observation must still win.
+	insertTask("t-closed-current", "completed", "closed", "1 minute")
+	insertTask("t-reopened", "running", "open", "2 minutes")
+	if err := e.svc.SyncTasks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if snap, _ := e.svc.Snapshot(ctx); snap.Count != 1 || snap.Items[0].Id != "merge:m1" {
+		t.Fatalf("a newer open observation must win over a stale closed one: %+v", snap)
 	}
 }
 

@@ -379,6 +379,16 @@ WHERE r.owner_id = $1 AND r.availability IN ('pending', 'stale') AND c.route = '
           OR at.state NOT IN ('creating', 'active', 'draining')
           OR (at.state <> 'creating' AND t.current_attempt_id IS DISTINCT FROM at.id)))
   AND NOT EXISTS (SELECT 1 FROM hitl_responses h WHERE h.request_id = r.id AND h.state IN ('recorded', 'sending', 'accepted', 'uncertain'))
+  AND NOT EXISTS (
+      SELECT 1 FROM tasks pr
+      WHERE pr.owner_id = p.owner_id AND pr.pr_number = c.pr_number AND pr.pr_repository = lower(c.repository)
+        AND pr.pr_head_sha = c.head_sha AND pr.pr_state IN ('merged', 'closed') AND pr.projected_at >= c.created_at
+        AND NOT EXISTS (
+            SELECT 1 FROM tasks newer
+            WHERE newer.owner_id = pr.owner_id AND newer.pr_number = pr.pr_number AND lower(newer.pr_repository) = lower(pr.pr_repository)
+              AND newer.pr_state = 'open' AND newer.projected_at > pr.projected_at
+        )
+  )
 ORDER BY p.id, r.created_at DESC, r.id
 ON CONFLICT (source_kind, source_id) DO UPDATE
 SET state = 'open', resolved_at = NULL, updated_at = now(), session_id = EXCLUDED.session_id,
@@ -389,7 +399,11 @@ RETURNING id
 `
 
 // One proposal item linked to its latest live native approval request. The observer establishes
-// the trusted association; this sweep performs no runtime or GitHub I/O.
+// the trusted association; this sweep performs no runtime or GitHub I/O. Eligibility (the WHERE
+// below, from r.owner_id through the externally-settled-PR check) is the one rule shared with
+// ResolveMergeProposalAttention: an unchanged sweep finds the row already open and unchanged, so the
+// ON CONFLICT guard below writes nothing, and the resolver's mirrored, negated rule finds it still
+// eligible and also writes nothing. Neither side may drift from the other.
 func (q *Queries) OpenMergeProposalAttention(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, openMergeProposalAttention, ownerID)
 	if err != nil {
@@ -460,7 +474,7 @@ SELECT 'attn_reconciliation_' || n.task_id, n.owner_id, 'owner_decision', 'task_
        '/tasks/' || n.task_id, n.reason_code
 FROM task_reconciliation_needs n
 JOIN tasks t ON t.id = n.task_id
-WHERE n.owner_id = $1 AND t.status NOT IN ('completed', 'failed', 'cancelled')
+WHERE n.owner_id = $1 AND (t.status NOT IN ('completed', 'failed', 'cancelled') OR n.reason_code = 'runtime_stop_unresolved')
 ON CONFLICT (source_kind, source_id) DO UPDATE
 SET state = 'open', resolved_at = NULL, updated_at = now(),
     read_at = CASE WHEN a.state <> 'open' THEN NULL ELSE a.read_at END,
@@ -470,9 +484,11 @@ RETURNING id
 `
 
 // Reopen the same task item only when a need recurs; unchanged sweeps write nothing. A task that
-// has already reached a final status is never opened here, even if an attempt still carries
-// unconfirmed stop evidence: the owner has nothing left to decide for a task that is over, and the
-// held claim or capacity it may still name is a separate bookkeeping concern, not an owner decision.
+// has already reached a final status is never opened here for a plain block, since the owner has
+// nothing left to decide once the task is over. An unresolved runtime stop is the one exception: it
+// still holds a writer claim and capacity behind the scenes, so it keeps opening (and reopening)
+// the card regardless of the task's status until the stop observer confirms it or proves the
+// runtime absent; see ResolveTaskReconciliationAttention for the matching half of this rule.
 func (q *Queries) OpenTaskReconciliationAttention(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, openTaskReconciliationAttention, ownerID)
 	if err != nil {
@@ -575,25 +591,33 @@ func (q *Queries) ResolveFinishedSessionAttention(ctx context.Context, ownerID s
 const resolveMergeProposalAttention = `-- name: ResolveMergeProposalAttention :many
 UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at = now()
 WHERE a.owner_id = $1 AND a.source_kind = 'merge_proposal' AND a.state = 'open'
-  AND (
-      NOT EXISTS (
-          SELECT 1 FROM merge_proposals p JOIN merge_candidates c ON c.id = p.candidate_id
-          JOIN hitl_requests r ON r.id = a.detail->>'hitl_request_id'
-          JOIN hitl_merge_tools m ON m.request_id = r.id AND m.proposal_id = p.id
-          JOIN sessions s ON s.id = r.session_id AND s.user_id = r.owner_id
-          JOIN agent_bindings b ON b.session_id = r.session_id AND b.kagent_session_id = r.kagent_session_id AND b.kagent_deleted_at IS NULL
-          WHERE p.id = a.source_id AND p.owner_id = a.owner_id AND r.owner_id = p.owner_id AND p.session_id = r.session_id
-            AND r.availability IN ('pending', 'stale') AND c.route = 'approval' AND c.state = 'prepared'
-            AND (c.deadline IS NULL OR c.deadline > now())
-            AND s.project_id = c.project_id AND s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
-            AND NOT EXISTS (SELECT 1 FROM hitl_responses h WHERE h.request_id = r.id AND h.state IN ('recorded', 'sending', 'accepted', 'uncertain'))
-      )
-      OR EXISTS (
-          SELECT 1 FROM merge_proposals p JOIN merge_candidates c ON c.id = p.candidate_id
-          JOIN tasks t ON t.owner_id = a.owner_id AND t.pr_number = c.pr_number AND t.pr_repository = lower(c.repository)
-            AND t.pr_head_sha = c.head_sha
-          WHERE p.id = a.source_id AND p.owner_id = a.owner_id AND t.pr_state IN ('merged', 'closed')
-      )
+  AND NOT EXISTS (
+      SELECT 1 FROM merge_proposals p JOIN merge_candidates c ON c.id = p.candidate_id
+      JOIN hitl_requests r ON r.id = a.detail->>'hitl_request_id'
+      JOIN hitl_merge_tools m ON m.request_id = r.id AND m.proposal_id = p.id
+      JOIN sessions s ON s.id = r.session_id AND s.user_id = r.owner_id
+      JOIN agent_bindings b ON b.session_id = r.session_id AND b.kagent_session_id = r.kagent_session_id AND b.kagent_deleted_at IS NULL
+      WHERE p.id = a.source_id AND p.owner_id = a.owner_id AND r.owner_id = p.owner_id AND p.session_id = r.session_id
+        AND r.availability IN ('pending', 'stale') AND c.route = 'approval' AND c.state = 'prepared'
+        AND (c.deadline IS NULL OR c.deadline > now())
+        AND s.project_id = c.project_id AND s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+        AND NOT EXISTS (
+            SELECT 1 FROM task_attempts at JOIN tasks t ON t.id = at.task_id
+            WHERE at.session_id = r.session_id AND (
+                t.status IN ('completed', 'failed', 'cancelled') OR at.archived_at IS NOT NULL OR at.native_deleted_at IS NOT NULL
+                OR at.state NOT IN ('creating', 'active', 'draining')
+                OR (at.state <> 'creating' AND t.current_attempt_id IS DISTINCT FROM at.id)))
+        AND NOT EXISTS (SELECT 1 FROM hitl_responses h WHERE h.request_id = r.id AND h.state IN ('recorded', 'sending', 'accepted', 'uncertain'))
+        AND NOT EXISTS (
+            SELECT 1 FROM tasks pr
+            WHERE pr.owner_id = p.owner_id AND pr.pr_number = c.pr_number AND pr.pr_repository = lower(c.repository)
+              AND pr.pr_head_sha = c.head_sha AND pr.pr_state IN ('merged', 'closed') AND pr.projected_at >= c.created_at
+              AND NOT EXISTS (
+                  SELECT 1 FROM tasks newer
+                  WHERE newer.owner_id = pr.owner_id AND newer.pr_number = pr.pr_number AND lower(newer.pr_repository) = lower(pr.pr_repository)
+                    AND newer.pr_state = 'open' AND newer.projected_at > pr.projected_at
+              )
+        )
   )
 RETURNING a.id
 `
@@ -605,7 +629,14 @@ RETURNING a.id
 // polled pr_state for that exact repository, PR number and head is the durable signal that it is
 // settled, so the card drops for that reason too, with no GitHub call of its own. The head must
 // also match, not just the repository and PR number, so a stale snapshot from before the PR was
-// pushed to and reopened cannot resolve a later, unrelated proposal for the same PR.
+// pushed to and reopened cannot resolve a later, unrelated proposal for the same PR. Only a current
+// observation may settle it: a closed or merged snapshot taken before the proposal's own candidate
+// was prepared is ignored (it predates this proposal and cannot speak to it), and a later, open
+// snapshot for the same pull request always wins over an older closed one, so a same-head reopen
+// cannot be settled by a stale closed observation that a fresher one has superseded. The resolved
+// condition below is the exact negation of OpenMergeProposalAttention's WHERE, so the two queries
+// cannot disagree about whether the card belongs open: an unchanged sweep finds the row already
+// open there and still eligible here, so both write nothing and no inbox:updated event follows.
 func (q *Queries) ResolveMergeProposalAttention(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, resolveMergeProposalAttention, ownerID)
 	if err != nil {
@@ -697,16 +728,16 @@ func (q *Queries) ResolveStaleTaskDecisions(ctx context.Context, ownerID string)
 const resolveTaskReconciliationAttention = `-- name: ResolveTaskReconciliationAttention :many
 UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at = now()
 WHERE a.owner_id = $1 AND a.source_kind = 'task_reconciliation' AND a.state = 'open'
-  AND (
-      NOT EXISTS (SELECT 1 FROM task_reconciliation_needs n WHERE n.task_id = a.task_id AND n.owner_id = a.owner_id)
-      OR EXISTS (SELECT 1 FROM tasks t WHERE t.id = a.task_id AND t.status IN ('completed', 'failed', 'cancelled'))
-  )
+  AND NOT EXISTS (SELECT 1 FROM task_reconciliation_needs n WHERE n.task_id = a.task_id AND n.owner_id = a.owner_id)
 RETURNING a.id
 `
 
-// A final task's item resolves outright, even one still named by task_reconciliation_needs for an
-// unconfirmed stop: the task is over, so there is no decision left for the owner, whatever the
-// attempt's held claim or capacity still needs behind the scenes.
+// The item resolves once task_reconciliation_needs no longer names it: a plain block that cleared,
+// or a task that finished without ever leaving an unresolved stop behind. A final task whose attempt
+// still carries unconfirmed stop evidence stays named by the view (its CASE has no status guard for
+// that branch), so its card stays too: cancelOpenChildren can mark a child cancelled before its
+// attempt settles, and that attempt still holds a writer claim and capacity until the stop observer
+// confirms the stop or proves the runtime absent. Only final AND settled tasks lose their card here.
 func (q *Queries) ResolveTaskReconciliationAttention(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, resolveTaskReconciliationAttention, ownerID)
 	if err != nil {

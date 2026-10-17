@@ -92,12 +92,14 @@ coordination attempt with no kagent session yet (before its brief is delivered) 
 not treated as lost. `session_lost` means kagent reports no such session, or one whose runtime can
 no longer run again (failed, or on the way out). `stalled` means the session has shown no
 activity for `TASK_STALL_TIMEOUT` (default 45 minutes), where activity is a submitted or working
-A2A task in any native context the session has used, or else the later of the newest task status
-timestamp and the delivery ledger's own record — not kagent's Session.updated_at, which only moves
-on a lifecycle operation (create, resume, suspend, delete), never a turn. A working task counts as
-activity for as long as it keeps being reported working, however long that is. `runtime_limit` is
-the last-resort safety net: the attempt has run longer than `TASK_MAX_RUNTIME` (default 6 hours)
-regardless of activity, including a task the agent is actively working. None of these cancels the
+A2A task in any native context the session has used, and so is one waiting on the owner
+(`input-required` or `auth-required`) — the agent is not stalled while it waits for a reply — or
+else the later of the newest task status timestamp and the delivery ledger's own record — not
+kagent's Session.updated_at, which only moves on a lifecycle operation (create, resume, suspend,
+delete), never a turn. A working or owner-waiting task counts as activity for as long as it keeps
+being reported that way, however long that is. `runtime_limit` is the last-resort safety net: the
+attempt has run longer than `TASK_MAX_RUNTIME` (default 6 hours) regardless of activity, including
+a task the agent is actively working or one waiting on the owner. None of these cancels the
 native session; they only move the task to `blocked` with the matching reason and raise the
 owner's attention, the same way a `blocked` / `reconciliation` task does. There is no automatic
 retry: the owner decides whether to let the agent keep working, inspect it, or cancel it
@@ -109,9 +111,11 @@ moves it.
 
 Cancelling a task whose kagent session kagent has entirely forgotten (for instance across a
 kagent restart with no persistence) still settles: the stop resolver's own liveness check treats a
-session kagent has no record of, or that can never run again, as stopped at once, the same test
+session kagent has no record of, or that has settled terminal, as stopped at once, the same test
 the liveness sweep uses, rather than retrying `ListTasks`/`FindTaskForMessage` against a session
-that will never reappear.
+that will never reappear. A runtime reported `DELETING` is not that confirmation: it is still on
+its way out, not yet gone, so the resolver falls through to its own task listing instead of
+treating the stop as settled.
 
 A verified observation of the task's own linked PR projects both `pr_state: merged`
 and `merge_state: merged`, including a merge by the parent or another actor. It outranks
