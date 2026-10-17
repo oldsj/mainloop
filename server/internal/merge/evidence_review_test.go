@@ -296,8 +296,40 @@ func TestReviewFailedSuiteCannotDisappearBehindPassingRun(t *testing.T) {
 	}
 }
 
-func TestReviewNonSuccessChecksMustNotCountAsGreen(t *testing.T) {
+func TestNeutralAndSkippedChecksCountAsGreen(t *testing.T) {
 	for _, conclusion := range []string{"neutral", "skipped"} {
+		t.Run(conclusion, func(t *testing.T) {
+			e := newEnv(t)
+			e.run()
+			e.fake.Update("o", "n", func(r *githubtest.Repository) {
+				r.Runs[tip] = []githubtest.CheckRun{{ID: 1, AppID: 9, Name: "ci", Conclusion: conclusion}}
+			})
+			v, err := e.svc.Merge(context.Background(), e.input("r1"))
+			if err != nil || v.State != dbstate.MergeMerged || e.puts() != 1 {
+				t.Fatalf("view = %+v, %v, puts %d", v, err, e.puts())
+			}
+		})
+	}
+}
+
+func TestNeutralAndSkippedSuitesCountAsGreen(t *testing.T) {
+	for _, conclusion := range []string{"neutral", "skipped"} {
+		t.Run(conclusion, func(t *testing.T) {
+			e := newEnv(t)
+			e.run()
+			e.fake.Update("o", "n", func(r *githubtest.Repository) {
+				r.Suites[tip] = append(r.Suites[tip], githubtest.CheckSuite{ID: 2, AppID: 11, Conclusion: conclusion})
+			})
+			v, err := e.svc.Merge(context.Background(), e.input("r1"))
+			if err != nil || v.State != dbstate.MergeMerged || e.puts() != 1 {
+				t.Fatalf("view = %+v, %v, puts %d", v, err, e.puts())
+			}
+		})
+	}
+}
+
+func TestOtherNonSuccessChecksMustNotCountAsGreen(t *testing.T) {
+	for _, conclusion := range []string{"cancelled", "timed_out", "action_required", "stale", "startup_failure", "a_future_conclusion"} {
 		t.Run(conclusion, func(t *testing.T) {
 			e := newEnv(t)
 			e.run()
