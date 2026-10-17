@@ -99,7 +99,7 @@ func (q *Queries) GetMCPActor(ctx context.Context, tokenHash string) (GetMCPActo
 }
 
 const lockAgentBinding = `-- name: LockAgentBinding :one
-SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at FROM agent_bindings WHERE session_id = $1 FOR SHARE
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id FROM agent_bindings WHERE session_id = $1 FOR SHARE
 `
 
 // The binding row, locked FOR SHARE until the credential plan commits. A main-provider switch
@@ -136,6 +136,8 @@ func (q *Queries) LockAgentBinding(ctx context.Context, sessionID string) (Agent
 		&i.MainRecoverable,
 		&i.CredentialIdentity,
 		&i.MainReleasedAt,
+		&i.GuidanceVersion,
+		&i.GuidanceDeliveryID,
 	)
 	return i, err
 }
@@ -375,7 +377,7 @@ func (q *Queries) RevokeStalePlannedCredentials(ctx context.Context, olderThanSe
 }
 
 const setBindingGrant = `-- name: SetBindingGrant :one
-UPDATE agent_bindings SET mcp_grant_kind = $2, updated_at = now() WHERE session_id = $1 RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at
+UPDATE agent_bindings SET mcp_grant_kind = $2, updated_at = now() WHERE session_id = $1 RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id
 `
 
 type SetBindingGrantParams struct {
@@ -414,6 +416,8 @@ func (q *Queries) SetBindingGrant(ctx context.Context, arg SetBindingGrantParams
 		&i.MainRecoverable,
 		&i.CredentialIdentity,
 		&i.MainReleasedAt,
+		&i.GuidanceVersion,
+		&i.GuidanceDeliveryID,
 	)
 	return i, err
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oldsj/mainloop/server/internal/agentcontext"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 )
@@ -32,7 +33,7 @@ func TestDelegateProvisionsAndReports(t *testing.T) {
 	root, sup := r.supervisor()
 
 	// The supervisor: an active attempt with a session and binding, the brief in the ledger with
-	// the role guidance in front, and the stored brief as written.
+	// the role guidance in front and the shared guidance after it, and the stored brief as written.
 	v := r.view(r.own, root)
 	if v.Task.Status != "running" || len(v.Attempts) != 1 || v.Attempts[0].State != "active" || v.Attempts[0].Role != "supervisor" {
 		t.Fatalf("supervisor task = %+v attempts = %+v", v.Task, v.Attempts)
@@ -42,8 +43,8 @@ func TestDelegateProvisionsAndReports(t *testing.T) {
 		t.Fatalf("stored brief = %q", got)
 	}
 	msg := r.str(`SELECT content FROM session_messages WHERE session_id = $1`, supSession)
-	if !strings.HasPrefix(msg, "You are the Mainloop task supervisor.") || !strings.HasSuffix(msg, "Ship the thing") ||
-		!strings.Contains(msg, "no repository authority") {
+	if !strings.HasPrefix(msg, "You are the Mainloop task supervisor.") || !strings.HasSuffix(msg, strings.TrimSpace(agentcontext.Guidance)) || !strings.Contains(msg, "## Assigned work\nShip the thing\n\n") ||
+		!strings.Contains(msg, "no repository authority") || !strings.Contains(msg, "## Working in Mainloop") {
 		t.Fatalf("supervisor brief = %q", msg)
 	}
 	if got := r.str(`SELECT brief_delivery_id FROM task_attempts WHERE id = $1`, supAttempt); got != tasks.BriefMessageID(supAttempt) {

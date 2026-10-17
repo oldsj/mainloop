@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
+	"github.com/oldsj/mainloop/server/internal/agentcontext"
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
@@ -640,7 +641,7 @@ func (t *turn) decideSend(ctx context.Context, ksid string) (string, error) {
 		if err := checkTaskSendFence(ctx, q, t.d.SessionID); err != nil {
 			return err
 		}
-		frozen, hash, err := t.frozenText(ctx, q)
+		frozen, given, err := t.frozenText(ctx, q)
 		if err != nil {
 			return err
 		}
@@ -654,21 +655,37 @@ func (t *turn) decideSend(ctx context.Context, ksid string) (string, error) {
 		})); err != nil {
 			return err
 		}
-		if hash == nil {
+		if given == nil {
 			return nil
 		}
-		// Under the send lock the hash was read as NULL, so a miss means the binding moved; the
-		// transaction rolls back, and the next attempt renders again.
-		n, err := q.SetBindingStandingHash(ctx, dbq.SetBindingStandingHashParams{SessionID: t.d.SessionID, StandingHash: hash})
-		if err != nil {
-			return fmt.Errorf("record standing context: %w", err)
-		}
-		if n != 1 {
-			return fmt.Errorf("record standing context: binding changed (%d rows)", n)
-		}
-		return nil
+		return t.recordGiven(ctx, q, given)
 	})
 	return text, err
+}
+
+// recordGiven writes what the frozen text gave the Session on its binding, in the same transaction.
+// Under the send lock the binding was read as needing it, so a miss means it moved; the transaction
+// rolls back, and the next attempt renders again.
+func (t *turn) recordGiven(ctx context.Context, q *dbq.Queries, given *givenContext) error {
+	version := int32(agentcontext.Version)
+	var n int64
+	var err error
+	if given.standingHash != nil {
+		n, err = q.SetBindingStandingHash(ctx, dbq.SetBindingStandingHashParams{
+			SessionID: t.d.SessionID, StandingHash: given.standingHash, GuidanceVersion: version, DeliveryID: t.c.ID,
+		})
+	} else {
+		n, err = q.SetBindingGuidanceVersion(ctx, dbq.SetBindingGuidanceVersionParams{
+			SessionID: t.d.SessionID, GuidanceVersion: version, DeliveryID: t.c.ID,
+		})
+	}
+	if err != nil {
+		return fmt.Errorf("record standing context: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("record standing context: binding changed (%d rows)", n)
+	}
+	return nil
 }
 
 func (t *turn) checkSendFence(ctx context.Context) error {

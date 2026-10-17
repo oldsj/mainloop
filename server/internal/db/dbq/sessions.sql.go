@@ -34,7 +34,7 @@ SET kind = $1,
     credential_identity = $4,
     kagent_create_request_id = $4,
     kagent_create_agent_namespace = $2, kagent_create_agent_name = $3,
-    standing_hash = NULL, model = NULL, turns = 0, queue_held = false,
+    standing_hash = NULL, guidance_version = NULL, guidance_delivery_id = NULL, model = NULL, turns = 0, queue_held = false,
     main_pending = true, main_error = NULL, main_recoverable = false, updated_at = now()
 WHERE session_id = $5 AND role = 'main' AND main_released_at IS NULL
 `
@@ -123,6 +123,19 @@ func (q *Queries) CancelQueuedDeliveries(ctx context.Context, arg CancelQueuedDe
 		return nil, err
 	}
 	return items, nil
+}
+
+const clearBindingGuidanceVersion = `-- name: ClearBindingGuidanceVersion :exec
+UPDATE agent_bindings b SET guidance_version = NULL, guidance_delivery_id = NULL, updated_at = now()
+WHERE b.guidance_delivery_id = $1
+`
+
+// A delivery that ends without kagent having seen its message gives back the guidance version it
+// delivered, so the next message to the Session carries the context block again. Only the version
+// this delivery recorded is cleared.
+func (q *Queries) ClearBindingGuidanceVersion(ctx context.Context, guidanceDeliveryID *string) error {
+	_, err := q.db.Exec(ctx, clearBindingGuidanceVersion, guidanceDeliveryID)
+	return err
 }
 
 const clearBindingStandingHash = `-- name: ClearBindingStandingHash :exec
@@ -233,7 +246,7 @@ const createMainBinding = `-- name: CreateMainBinding :one
 
 INSERT INTO agent_bindings (session_id, kind, role, mcp_grant_kind)
 VALUES ($1, $2, 'main', 'coordination')
-RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at
+RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id
 `
 
 type CreateMainBindingParams struct {
@@ -279,6 +292,8 @@ func (q *Queries) CreateMainBinding(ctx context.Context, arg CreateMainBindingPa
 		&i.MainRecoverable,
 		&i.CredentialIdentity,
 		&i.MainReleasedAt,
+		&i.GuidanceVersion,
+		&i.GuidanceDeliveryID,
 	)
 	return i, err
 }
@@ -593,7 +608,7 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 
 const getMainBinding = `-- name: GetMainBinding :one
 
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, s.user_id, s.title, s.status AS session_status
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, b.guidance_version, b.guidance_delivery_id, s.user_id, s.title, s.status AS session_status
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
 WHERE b.role = 'main' AND b.main_released_at IS NULL AND s.user_id = $1 AND s.archived_at IS NULL
@@ -629,6 +644,8 @@ type GetMainBindingRow struct {
 	MainRecoverable            bool
 	CredentialIdentity         *string
 	MainReleasedAt             *time.Time
+	GuidanceVersion            *int32
+	GuidanceDeliveryID         *string
 	UserID                     string
 	Title                      string
 	SessionStatus              dbstate.SessionStatus
@@ -670,6 +687,8 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 		&i.MainRecoverable,
 		&i.CredentialIdentity,
 		&i.MainReleasedAt,
+		&i.GuidanceVersion,
+		&i.GuidanceDeliveryID,
 		&i.UserID,
 		&i.Title,
 		&i.SessionStatus,
@@ -678,7 +697,7 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 }
 
 const getOwnedSessionBinding = `-- name: GetOwnedSessionBinding :one
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, s.user_id, s.title, s.status AS session_status, s.archived_at,
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, b.guidance_version, b.guidance_delivery_id, s.user_id, s.title, s.status AS session_status, s.archived_at,
        w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name,
        coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
        coalesce(b.kagent_agent_name, w.agent_name, '') AS resolved_agent_name
@@ -721,6 +740,8 @@ type GetOwnedSessionBindingRow struct {
 	MainRecoverable            bool
 	CredentialIdentity         *string
 	MainReleasedAt             *time.Time
+	GuidanceVersion            *int32
+	GuidanceDeliveryID         *string
 	UserID                     string
 	Title                      string
 	SessionStatus              dbstate.SessionStatus
@@ -763,6 +784,8 @@ func (q *Queries) GetOwnedSessionBinding(ctx context.Context, arg GetOwnedSessio
 		&i.MainRecoverable,
 		&i.CredentialIdentity,
 		&i.MainReleasedAt,
+		&i.GuidanceVersion,
+		&i.GuidanceDeliveryID,
 		&i.UserID,
 		&i.Title,
 		&i.SessionStatus,
@@ -1681,7 +1704,7 @@ func (q *Queries) ListUnresolvedCreates(ctx context.Context, limit int32) ([]Lis
 }
 
 const lockMainBinding = `-- name: LockMainBinding :one
-SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at FROM agent_bindings
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id FROM agent_bindings
 WHERE session_id = $1 AND role = 'main' AND main_released_at IS NULL
 FOR UPDATE
 `
@@ -1718,6 +1741,8 @@ func (q *Queries) LockMainBinding(ctx context.Context, sessionID string) (AgentB
 		&i.MainRecoverable,
 		&i.CredentialIdentity,
 		&i.MainReleasedAt,
+		&i.GuidanceVersion,
+		&i.GuidanceDeliveryID,
 	)
 	return i, err
 }
@@ -2018,7 +2043,7 @@ func (q *Queries) ReleaseMainBinding(ctx context.Context, sessionID string) (int
 
 const replaceDeliveryKagentSession = `-- name: ReplaceDeliveryKagentSession :execrows
 UPDATE agent_bindings b
-SET kagent_session_id = NULL, kagent_request_id = $1, standing_hash = NULL,
+SET kagent_session_id = NULL, kagent_request_id = $1, standing_hash = NULL, guidance_version = NULL, guidance_delivery_id = NULL,
     kagent_create_request_id = NULL, kagent_create_agent_namespace = NULL, kagent_create_agent_name = NULL,
     updated_at = now()
 FROM deliveries d
@@ -2130,20 +2155,52 @@ func (q *Queries) SetBindingAgentRef(ctx context.Context, arg SetBindingAgentRef
 	return err
 }
 
+const setBindingGuidanceVersion = `-- name: SetBindingGuidanceVersion :execrows
+UPDATE agent_bindings SET guidance_version = $1::integer, guidance_delivery_id = $2::text,
+    updated_at = now()
+WHERE session_id = $3 AND standing_hash IS NOT NULL
+  AND guidance_version IS DISTINCT FROM $1::integer
+`
+
+type SetBindingGuidanceVersionParams struct {
+	GuidanceVersion int32
+	DeliveryID      string
+	SessionID       string
+}
+
+// Marks the Session as having been given the current guidance version alone, for a Session that
+// already has its standing context. Zero rows when it has none or already has this version.
+func (q *Queries) SetBindingGuidanceVersion(ctx context.Context, arg SetBindingGuidanceVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setBindingGuidanceVersion, arg.GuidanceVersion, arg.DeliveryID, arg.SessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setBindingStandingHash = `-- name: SetBindingStandingHash :execrows
-UPDATE agent_bindings SET standing_hash = $1, updated_at = now()
-WHERE session_id = $2 AND standing_hash IS NULL
+UPDATE agent_bindings SET standing_hash = $1, guidance_version = $2::integer,
+    guidance_delivery_id = $3::text, updated_at = now()
+WHERE session_id = $4 AND standing_hash IS NULL
 `
 
 type SetBindingStandingHashParams struct {
-	StandingHash *string
-	SessionID    string
+	StandingHash    *string
+	GuidanceVersion int32
+	DeliveryID      string
+	SessionID       string
 }
 
-// Marks the main binding's Session as having been given its standing context, in the transaction
-// that freezes the delivery's text. Zero rows when the binding already has one.
+// Marks the main binding's Session as having been given its standing context and the current
+// guidance version, in the transaction that freezes the delivery's text. Zero rows when the binding
+// already has one.
 func (q *Queries) SetBindingStandingHash(ctx context.Context, arg SetBindingStandingHashParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setBindingStandingHash, arg.StandingHash, arg.SessionID)
+	result, err := q.db.Exec(ctx, setBindingStandingHash,
+		arg.StandingHash,
+		arg.GuidanceVersion,
+		arg.DeliveryID,
+		arg.SessionID,
+	)
 	if err != nil {
 		return 0, err
 	}
