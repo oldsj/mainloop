@@ -524,3 +524,44 @@ func TestLivenessReadsArtifactsOnlyForUnfinishedTasks(t *testing.T) {
 		t.Fatalf("artifacts read for states %v with every task finished, want none", got)
 	}
 }
+
+// Review P2: a report recovers a task blocked for failed reads, and as long as the reads keep failing
+// the next sweep must not block it again over the failure that began before the report. The window
+// counts from the report, as the stall clock does.
+func TestReportAfterReadFailureStallIsNotBlockedAgainNextSweep(t *testing.T) {
+	r := newRig(t)
+	id, binding := r.liveTask("ks-1")
+	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
+	r.readsFailing(false)
+	start := time.Now()
+	look := func(after time.Duration) {
+		r.setClock(start.Add(after))
+		r.sweep(r.svc.LivenessSweep())
+	}
+
+	look(0)
+	look(46 * time.Minute)
+	if got := r.taskReason(id); got != "stalled" {
+		t.Fatalf("reason = %q after 46 minutes of failed reads, want stalled", got)
+	}
+
+	agent := r.agent(dbstate.RoleSupervisor, binding)
+	r.setClock(start.Add(47 * time.Minute))
+	if _, err := r.svc.Report(context.Background(), agent, report(agent, "r1", dbstate.OutcomeProgress)); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.taskStatus(id); got != "running" {
+		t.Fatalf("status after the report = %s, want running", got)
+	}
+
+	look(48 * time.Minute)
+	look(90 * time.Minute)
+	if got := r.taskStatus(id); got != "running" {
+		t.Fatalf("status = %s reason = %q 43 minutes after the report with reads still failing, want running", got, r.taskReason(id))
+	}
+
+	look(94 * time.Minute)
+	if got := r.taskReason(id); got != "stalled" {
+		t.Fatalf("reason = %q after another silent window of failed reads, want stalled again", got)
+	}
+}

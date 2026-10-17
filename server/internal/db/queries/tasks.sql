@@ -248,10 +248,14 @@ UPDATE task_attempts SET progress_marker = $2, progress_at = $3 WHERE id = $1;
 
 -- name: RestartAttemptStallClock :exec
 -- A progress report is proof of life: the stall clock counts from it, against the fingerprint the sweep
--- already holds. Without this, a report that recovers a stalled task is overridden by the next sweep,
--- which still finds the old fingerprint older than the stall timeout. Nothing is written for an attempt
--- the sweep has not fingerprinted yet; its clock has not started.
-UPDATE task_attempts SET progress_at = $2 WHERE id = $1 AND progress_marker IS NOT NULL;
+-- already holds, and so does the window of failed liveness reads. Without this, a report that recovers a
+-- stalled task is overridden by the next sweep, which still finds the old fingerprint, or the first
+-- failed read, older than the stall timeout. The stall clock is left alone for an attempt the sweep has
+-- not fingerprinted yet (its clock has not started), and the failed-read window for one whose reads work.
+UPDATE task_attempts
+SET progress_at = CASE WHEN progress_marker IS NOT NULL THEN $2 ELSE progress_at END,
+    liveness_failing_since = CASE WHEN liveness_failing_since IS NOT NULL THEN $2 END
+WHERE id = $1;
 
 -- name: ListAttemptWorkspaceCleanups :many
 -- Final attempts use a separate bounded batch, so cleanup cannot starve runtime stop resolution.
