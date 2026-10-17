@@ -1,0 +1,155 @@
+name: Publish workspace cache image
+
+# A cache image for production workspace sessions: the development image plus the Go module and
+# build caches and the pnpm store for one commit of main, so a fresh clone compiles nothing.
+#
+#   ghcr.io/oldsj/mainloop-dev:cache-<full sha>   one per merge
+#   ghcr.io/oldsj/mainloop-dev:cache-main         moved only after the smoke check passes
+#
+# Built natively for linux/arm64 (the workspace nodes): Go keys its cache on the compiler, so a
+# cache built under emulation or for another architecture would miss. Only trusted main code runs
+# here; there is no pull_request trigger. The environments service follows `cache-main`
+# (docs/specs/environments.md, "Following a watched tag").
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Publish cache image (arm64)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    env:
+      IMAGE: ghcr.io/oldsj/mainloop-dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Two commits: the previous one shows whether this merge changes the base image.
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # The base is the development image the workspaces run today. When this merge changes it
+      # (same paths as dev-image.yml), wait for that workflow to publish this commit's image.
+      - name: Resolve base image
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref=latest
+          if git diff --name-only HEAD~1 HEAD | grep -Eq '^(\.devcontainer/|\.trunk/|scripts/with-timeout\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.npmrc$|\.github/workflows/dev-image\.yml$)'; then
+            ref="$GITHUB_SHA"
+            echo "This commit changes the dev image; waiting for $IMAGE:$ref"
+            for _ in $(seq 1 60); do
+              docker buildx imagetools inspect "$IMAGE:$ref" > /dev/null 2>&1 && break
+              sleep 15
+            done
+          fi
+          digest=$(docker buildx imagetools inspect "$IMAGE:$ref" --format '{{json .Manifest}}' | jq -er '.digest')
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push cache-${{ github.sha }}
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: images/workspace-cache/Dockerfile
+          target: cache
+          platforms: linux/arm64
+          push: true
+          # A single-platform manifest, with no attestation index beside it.
+          provenance: false
+          sbom: false
+          build-args: |
+            BASE=${{ env.IMAGE }}@${{ steps.base.outputs.digest }}
+            SOURCE_SHA=${{ github.sha }}
+          tags: ${{ env.IMAGE }}:cache-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.base.name=${{ env.IMAGE }}:${{ steps.base.outputs.ref }}
+            org.opencontainers.image.base.digest=${{ steps.base.outputs.digest }}
+          cache-from: type=gha,scope=workspace-cache-arm64
+          cache-to: type=gha,mode=max,scope=workspace-cache-arm64
+
+      # A fresh clone of this commit, at the path sessions use, must compile nothing.
+      - name: Smoke check a fresh clone compiles nothing
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          docker run --rm --platform linux/arm64 --user 65532:65532 \
+            -v "$PWD/.git:/src/.git:ro" -e SOURCE_SHA="$GITHUB_SHA" \
+            "$IMAGE@$DIGEST" bash -euo pipefail -c '
+              git -c safe.directory="*" clone --quiet --depth 1 file:///src /data/workspace
+              cd /data/workspace
+              test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+              env | grep -E "^(GOMODCACHE|GOCACHE|npm_config_(store|virtual_store)_dir)=/opt/cache/"
+              cd server
+              go build -x ./... 2> /tmp/build.log
+              go test -x -exec /bin/true -run XXX_none ./... > /tmp/test.log 2>&1
+              build=$(grep -c "/compile " /tmp/build.log || true)
+              tests=$(grep -c "/compile " /tmp/test.log || true)
+              echo "compiles: go build=$build, go test=$tests"
+              test "$build" -eq 0 && test "$tests" -eq 0
+              (cd ../web && pnpm install --frozen-lockfile --offline > /dev/null)
+            '
+
+      # `cache-main` moves only for the newest commit of main, so a re-run of an old workflow
+      # cannot move it backwards.
+      - name: Move cache-main
+        id: main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          head=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [[ "$head" == "$GITHUB_SHA" ]]; then
+            docker buildx imagetools create --tag "$IMAGE:cache-main" "$IMAGE@$DIGEST"
+            echo "moved=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "main has moved on to $head; leaving cache-main alone"
+            echo "moved=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Record published digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          BASE_DIGEST: ${{ steps.base.outputs.digest }}
+          MOVED: ${{ steps.main.outputs.moved }}
+        run: |
+          {
+            printf '### Workspace cache image (linux/arm64)\n\n'
+            printf 'Source commit: `%s`\n\n' "$GITHUB_SHA"
+            printf 'Base: `%s@%s`\n\n' "$IMAGE" "$BASE_DIGEST"
+            printf 'Tags: `%s:cache-%s`%s\n\n' "$IMAGE" "$GITHUB_SHA" "$([[ "$MOVED" == true ]] && printf ', `%s:cache-main`' "$IMAGE")"
+            printf 'Immutable image: `%s@%s`\n' "$IMAGE" "$DIGEST"
+          } >> "$GITHUB_STEP_SUMMARY"
