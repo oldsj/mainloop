@@ -342,7 +342,8 @@ export function createChatBackend(
         message: null,
         spawned_session_id: null,
         pending: true,
-        delivery_message_id: message.id
+        delivery_message_id: message.id,
+        status: 'ok'
       };
       return HttpResponse.json(response);
     }),

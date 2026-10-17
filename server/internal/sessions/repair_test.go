@@ -110,8 +110,8 @@ func TestAnUncertainDeliveryIsInFlightOnlyInsideTheHold(t *testing.T) {
 	if !n.TurnInFlight || n.Note == nil || !strings.Contains(*n.Note, "new messages wait") {
 		t.Fatalf("inside the hold: in flight %v, note %v", n.TurnInFlight, n.Note)
 	}
-	if _, err := e.svc.Send(ctx, uuid.NewString(), "", "next"); !errors.Is(err, sessions.ErrBusy) {
-		t.Fatalf("send inside the hold: %v", err)
+	if sent, err := e.svc.Send(ctx, uuid.NewString(), "", "next"); err != nil || !sent.Queued {
+		t.Fatalf("send inside the hold: %+v, %v", sent, err)
 	}
 
 	set("2 hours")

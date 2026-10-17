@@ -179,6 +179,8 @@ func (s *Service) sendReport(ctx context.Context, c reconcile.Claim, d dbq.TaskE
 		}
 		switch {
 		case errors.Is(err, sessions.ErrBusy):
+			// A plain busy send now queues instead (see sessions.record): this only catches the rare
+			// unique-constraint race busyOrErr maps to ErrBusy, so one more pass clears it.
 			return reconcile.RetryAfter(3 * time.Second), nil
 		case errors.Is(err, sessions.ErrConflict), errors.Is(err, sessions.ErrNotFound):
 			// Not ready, or ended since the target was read: the next pass tells which.
@@ -224,7 +226,10 @@ func (s *Service) followReport(ctx context.Context, c reconcile.Claim, d dbq.Tas
 	switch row.State {
 	case dbstate.DeliveryDelivered, dbstate.DeliveryCompleted:
 		return s.setDelivery(ctx, c, dbstate.TaskDeliveryDelivered)
-	case dbstate.DeliveryRecorded, dbstate.DeliverySending:
+	case dbstate.DeliveryQueued, dbstate.DeliveryRecorded, dbstate.DeliverySending:
+		// Queued behind the target's open turn, or admitted and on its way: either way, not sent yet.
+		// It is looked at again, not resent; the sessions ledger admits it on its own once its turn
+		// comes, however long the wait.
 		return reconcile.RetryAfter(2 * time.Second), nil
 	case dbstate.DeliveryCancelled:
 		// The owner stopped the parent's turn, or the parent's session ended: that is an owner act, so

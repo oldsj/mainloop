@@ -56,13 +56,16 @@ func TestChatAndMainThreadOverHTTP(t *testing.T) {
 		t.Fatalf("%s", r.body)
 	}
 
-	// The turn is open (no delivery loop runs here), so the next message is refused.
+	// The turn is open (no delivery loop runs here), so the next message is queued behind it.
 	r = send(h, "POST", "/chat", `{"message":"again","conversation_id":"`+chat.ConversationId+`"}`, nil)
-	if r.status != 409 {
+	if r.status != 202 {
 		t.Fatalf("%d %s", r.status, r.body)
 	}
-	var he api.HTTPError
-	strict(t, r.body, &he)
+	var queued api.ChatResponse
+	strict(t, r.body, &queued)
+	if queued.Status != api.ChatResponseStatusQueued || !queued.Pending || queued.DeliveryMessageId == nil {
+		t.Fatalf("%s", r.body)
+	}
 
 	r = send(h, "POST", "/chat", `{"message":"x","conversation_id":"missing"}`, nil)
 	if r.status != 404 {
@@ -77,7 +80,8 @@ func TestChatAndMainThreadOverHTTP(t *testing.T) {
 
 	r = send(h, "GET", "/main-thread", "", nil)
 	strict(t, r.body, &info)
-	if info.Native == nil || !info.Native.TurnInFlight || len(info.Native.Deliveries) != 1 || info.Native.Deliveries[0].State != "recorded" {
+	if info.Native == nil || !info.Native.TurnInFlight || len(info.Native.Deliveries) != 2 ||
+		info.Native.Deliveries[0].State != "recorded" || info.Native.Deliveries[1].State != "queued" {
 		t.Fatalf("%s", r.body)
 	}
 
@@ -87,7 +91,8 @@ func TestChatAndMainThreadOverHTTP(t *testing.T) {
 	}
 	var conv api.ConversationResponse
 	strict(t, r.body, &conv)
-	if len(conv.Messages) != 1 || conv.Messages[0].Role != api.MessageRoleUser || conv.Messages[0].Content != "hello" {
+	if len(conv.Messages) != 2 || conv.Messages[0].Role != api.MessageRoleUser || conv.Messages[0].Content != "hello" ||
+		conv.Messages[1].Role != api.MessageRoleUser || conv.Messages[1].Content != "again" {
 		t.Fatalf("%s", r.body)
 	}
 	if r = send(h, "GET", "/conversations/missing", "", nil); r.status != 404 {
