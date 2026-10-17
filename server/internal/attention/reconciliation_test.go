@@ -54,11 +54,16 @@ func TestReconciliationAttentionTransitionsAndIdempotency(t *testing.T) {
 	sweep(1, "reconciliation")
 	e.exec(t, `UPDATE task_attempts SET state = 'draining', stop_state = 'unresolved', evidence_refs = ARRAY['runtime-stop-unresolved'] WHERE task_id = 't1'`)
 	sweep(1, "runtime_stop_unresolved")
-	e.exec(t, `UPDATE tasks SET status = 'cancelled', reason = NULL WHERE id = 't1'`)
-	sweep(1, "runtime_stop_unresolved")
 	unchanged(1, "runtime_stop_unresolved")
+	// The task ends while its stop is still unresolved: the card drops anyway. The task is over, so
+	// there is nothing left for the owner to decide, whatever the attempt still holds behind the
+	// scenes; see TestUnresolvedStopSurvivesEndedSessionAndReplacement for the live case, where the
+	// task itself stays open and the card must stay.
+	e.exec(t, `UPDATE tasks SET status = 'cancelled', reason = NULL WHERE id = 't1'`)
+	sweep(0, "")
+	unchanged(0, "")
 	e.exec(t, `UPDATE task_attempts SET stop_state = 'confirmed' WHERE task_id = 't1'`)
-	sweep(0, "") // the historical evidence stays but the stop was confirmed
+	sweep(0, "") // confirming the stop after the fact changes nothing: the card is already resolved
 	unchanged(0, "")
 	var count int
 	if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM attention_items WHERE source_kind = 'task_reconciliation'`).Scan(&count); err != nil || count != 1 {
@@ -89,6 +94,33 @@ func TestUnresolvedStopSurvivesEndedSessionAndReplacement(t *testing.T) {
 	snap, err := e.svc.Snapshot(ctx)
 	if err != nil || snap.Count != 0 {
 		t.Fatalf("confirmed stop still visible: %+v %v", snap, err)
+	}
+}
+
+// A task that is already cancelled (or completed, or failed) never gets a card at all, even when
+// its attempt still carries unconfirmed runtime-stop evidence: the owner cannot act on a task that
+// is already over, so the sweep must not open one in the first place, not just resolve one already
+// open.
+func TestReconciliationNeverOpensForAnAlreadyFinalTask(t *testing.T) {
+	for _, status := range []string{"cancelled", "completed", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			e := newEnv(t)
+			ctx := context.Background()
+			e.blockedTask(t, "t1", "", "r1")
+			e.exec(t, `UPDATE tasks SET status = $1, reason = NULL WHERE id = 't1'`, status)
+			e.exec(t, `UPDATE task_attempts SET state = 'draining', stop_state = 'unresolved', evidence_refs = ARRAY['runtime-stop-unresolved'] WHERE task_id = 't1'`)
+			if err := e.svc.SyncTasks(ctx); err != nil {
+				t.Fatal(err)
+			}
+			snap, err := e.svc.Snapshot(ctx)
+			if err != nil || snap.Count != 0 {
+				t.Fatalf("a %s task's unresolved stop must not reach the owner: %+v %v", status, snap, err)
+			}
+			var count int
+			if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM attention_items WHERE source_kind = 'task_reconciliation'`).Scan(&count); err != nil || count != 0 {
+				t.Fatalf("rows %d: %v", count, err)
+			}
+		})
 	}
 }
 

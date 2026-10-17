@@ -264,12 +264,17 @@ Implemented in the Go server with scratch PostgreSQL and fake-runtime tests; no 
 
 - The attention sweep opens one `task_reconciliation` item per task (`reconciliation:<task id>`)
   for `blocked/reconciliation`, or for any attempt carrying `runtime-stop-unresolved` evidence
-  whose durable stop state is not `confirmed`. Its closed `reason_code` is `reconciliation` or
-  `runtime_stop_unresolved`, with the unresolved stop taking precedence. A cancelled task, ended
-  session, or replaced attempt still needs this item while its stop remains unresolved. Confirmation
-  clears the stop need without deleting historical evidence; an independent reconciliation block
-  continues to need attention. The item resolves when both conditions clear, and reopens under
-  the same identity if the need recurs. It links to task evidence and grants no new task action.
+  whose durable stop state is not `confirmed`, as long as the task itself is not yet final. Its
+  closed `reason_code` is `reconciliation` or `runtime_stop_unresolved`, with the unresolved stop
+  taking precedence. The item resolves, and is never (re)opened, the moment the task reaches
+  `completed`, `failed` or `cancelled`, even while its stop remains unresolved: the task is over, so
+  there is no decision left for the owner, whatever claim or capacity the attempt still holds behind
+  the scenes. While the task stays open, an ended session or a replaced attempt does not by itself
+  resolve the item: it still needs this item while its stop remains unresolved. Confirmation clears
+  the stop need without deleting historical evidence; an independent reconciliation block continues
+  to need attention. The item resolves when both conditions clear (or the task finishes), and
+  reopens under the same identity if the need recurs. It links to task evidence and grants no new
+  task action.
 - The HITL observer binds merge calls to the runtime's named template and configured provider/tool,
   then stores their owner/session/project-scoped proposal associations. The attention sweep opens
   one `merge_proposal` item per approval-route proposal (`merge:<proposal id>`, reason
@@ -281,6 +286,12 @@ Implemented in the Go server with scratch PostgreSQL and fake-runtime tests; no 
 - Recording approval or refusal resolves proposal attention, as do supersession, expiry, a passed
   deadline, a request becoming unavailable, or the candidate leaving `prepared`. A response rejected
   by transport can reopen attention while the same proposal still waits. Final or archived sessions
-  and obsolete task attempts cannot reopen merge approval items.
+  and obsolete task attempts cannot reopen merge approval items. A candidate can also stay
+  `prepared` forever once its pull request is merged or closed outside Mainloop's own merge flow,
+  since nothing claims a `prepared` row to ask GitHub again on its own; the sweep instead resolves
+  the item once any task's own, independently polled `pr_state` for that exact repository, PR
+  number and head reads `merged` or `closed`, with no GitHub call of its own. The head must match
+  too, so a stale snapshot from before the pull request was pushed to and reopened cannot resolve a
+  later, unrelated proposal for the same PR.
 - Both lifecycles write only on a changed need or association. Repeated unchanged sweeps create no
   duplicate rows, change no item timestamps, and publish no extra `inbox:updated` events.
