@@ -24,6 +24,13 @@ func (s *Service) resolveBackoff() reconcile.Backoff {
 	return s.Limits.ResolveBackoff
 }
 
+func (s *Service) forceStopAfter() int {
+	if s.Limits.ForceStopAfter > 0 {
+		return s.Limits.ForceStopAfter
+	}
+	return defaultForceStopAfter
+}
+
 func (s *Service) resolveBound() int {
 	if s.Limits.ResolveBound > 0 {
 		return s.Limits.ResolveBound
@@ -79,6 +86,15 @@ func (s *Service) resolveStop(ctx context.Context, a dbq.TaskAttempt) (wait time
 			s.log().WarnContext(ctx, "observe requested stop", "attempt", a.ID, "error", oerr)
 			stopped = false
 		}
+		// A runtime that does not answer a cancel never will: after a few looks the observer ends the
+		// native session itself, so the stop settles without the owner. See [StopForcer].
+		if f, ok := s.StopObserver.(StopForcer); ok && !stopped && int(a.ResolveAttempts) >= s.forceStopAfter() {
+			var ferr error
+			if stopped, ferr = f.ForceStop(ctx, *a.SessionID); ferr != nil {
+				s.log().WarnContext(ctx, "force requested stop", "attempt", a.ID, "error", ferr)
+				stopped = false
+			}
+		}
 	}
 	if stopped {
 		if _, err := q.ConfirmAttemptStop(ctx, dbq.ConfirmAttemptStopParams{ID: a.ID, OutcomeVersion: version}); err == nil {
@@ -106,6 +122,8 @@ func (s *Service) resolveStop(ctx context.Context, a dbq.TaskAttempt) (wait time
 		if err := s.raiseUnresolved(ctx, a.ID); err != nil {
 			return 0, err
 		}
+		// A final task gets no owner card for this, so the log is where an operator sees it.
+		s.log().ErrorContext(ctx, "requested stop still unresolved", "attempt", a.ID, "looks", n)
 	}
 	return wait, nil
 }

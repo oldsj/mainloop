@@ -37,7 +37,12 @@ const (
 
 // defaultResolveBound is how many unsuccessful looks at kagent the resolver makes before it raises
 // evidence and blocks the task for reconciliation. It keeps looking afterwards, at the slowest pace.
-const defaultResolveBound = 6
+const defaultResolveBound = 8
+
+// defaultForceStopAfter is how many unsuccessful looks come before the resolver has the observer end
+// the native session: enough for a cancel to settle a runtime that is merely slow, few enough that a
+// dead one does not hold its claim and capacity for minutes.
+const defaultForceStopAfter = 2
 
 // defaultSettleIdle is how long the settle sweep leaves an attempt alone after its last change, so
 // it never races the handler that is still working on it.

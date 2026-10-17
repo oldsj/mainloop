@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,6 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/sessions"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
 )
 
 // StopObserver confirms that the runtime of a stopping attempt has stopped. It is the only thing
@@ -55,6 +57,9 @@ type KagentStops struct {
 	// list, and that listing is what cancels it, so it goes through the normal path below. Nil skips
 	// the check entirely.
 	Liveness KagentSessionLiveness
+	// Deleter, when set with Liveness, lets [KagentStops.ForceStop] end a runtime that does not answer
+	// a cancel. Nil leaves a stop to the ordinary observation.
+	Deleter KagentSessionDeleter
 	// UncertainHold is how long a message that was sent, and that no task carries yet, may still
 	// land. It is the sessions ledger's hold; zero takes that service's setting, then 30 minutes.
 	UncertainHold time.Duration
@@ -179,4 +184,63 @@ func (k *KagentStops) Stopped(ctx context.Context, sessionID string) (bool, erro
 		}
 	}
 	return stopped, nil
+}
+
+// StopForcer is implemented by an observer that can also end a session's runtime itself. The resolver
+// asks it once cancelling has failed to settle a stop for several looks: a runtime that is crashed,
+// suspended or wedged never answers a cancel, and waiting on it forever would hold the attempt's
+// claim and capacity for good.
+type StopForcer interface {
+	// ForceStop reports whether the session's runtime is gone. When it is not, it asks kagent to
+	// delete the session and reports false; the next call reads the result. An error means the
+	// session could not be observed or deleted, which is not a stop.
+	ForceStop(ctx context.Context, sessionID string) (bool, error)
+}
+
+// KagentSessionDeleter is the part of the kagent client that deletes a session. *kagent.Client
+// satisfies it.
+type KagentSessionDeleter interface {
+	DeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
+}
+
+// ForceStop implements [StopForcer]. Deleting the native session is what makes a stop certain when
+// the runtime does not answer: whatever state it is in (crashed, suspended, still working a turn
+// kagent can no longer reach), once kagent has no record of the session or reports it deleted,
+// nothing in it can run, and a suspended session cannot be resumed into the old turn. It checks
+// before it acts, so a repeat never deletes twice: a session already gone or settled terminal is
+// stopped; one still on its way out (deleting) is waited for; any other is deleted, which is
+// idempotent in kagent, and confirmed by the next look. Without a Liveness or Deleter it does
+// nothing and reports false.
+func (k *KagentStops) ForceStop(ctx context.Context, sessionID string) (bool, error) {
+	if k.Liveness == nil || k.Deleter == nil {
+		return false, nil
+	}
+	b, err := dbq.New(k.Pool).GetOwnedSessionBinding(ctx, dbq.GetOwnedSessionBindingParams{ID: sessionID, UserID: k.OwnerID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true, nil // no binding, no agent
+	}
+	if err != nil {
+		return false, err
+	}
+	if b.KagentSessionID == nil || *b.KagentSessionID == "" {
+		return false, nil // no native session to end; the ordinary observation decides
+	}
+	live, err := k.Liveness.ObserveLiveness(ctx, *b.KagentSessionID)
+	if err != nil {
+		return false, err
+	}
+	switch {
+	case !live.Exists || (live.Terminal && !live.Deleting):
+		return true, nil
+	case live.Deleting:
+		return false, nil // already on its way out; read the result on the next look
+	}
+	if _, err := k.Deleter.DeleteSession(ctx, *b.KagentSessionID); err != nil {
+		var se *kagent.SessionError
+		if errors.As(err, &se) && se.Wire && se.Code == connect.CodeNotFound {
+			return true, nil
+		}
+		return false, fmt.Errorf("delete session: %w", err)
+	}
+	return false, nil
 }

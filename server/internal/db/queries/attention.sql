@@ -166,10 +166,12 @@ SELECT coalesce(
 
 -- Reopen the same task item only when a need recurs; unchanged sweeps write nothing. A task that
 -- has already reached a final status is never opened here for a plain block, since the owner has
--- nothing left to decide once the task is over. An unresolved runtime stop is the one exception: it
--- still holds a writer claim and capacity behind the scenes, so it keeps opening (and reopening)
--- the card regardless of the task's status until the stop observer confirms it or proves the
--- runtime absent; see ResolveTaskReconciliationAttention for the matching half of this rule.
+-- nothing left to decide once the task is over. That includes a task whose runtime stop is still
+-- unresolved: the attempt keeps its writer claim and capacity until the stop resolver confirms the
+-- stop (it deletes a native session that never answers a cancel), but that is internal cleanup the
+-- owner cannot act on, so it is logged, never put in front of the owner. An unresolved stop on a
+-- task that is still open does open the card, since the task is blocked on it; see
+-- ResolveTaskReconciliationAttention for the matching half of this rule.
 -- name: OpenTaskReconciliationAttention :many
 INSERT INTO attention_items AS a (id, owner_id, kind, source_kind, source_id, task_id, title, needed, href, reason_code)
 SELECT 'attn_reconciliation_' || n.task_id, n.owner_id, 'owner_decision', 'task_reconciliation', n.task_id,
@@ -183,7 +185,7 @@ SELECT 'attn_reconciliation_' || n.task_id, n.owner_id, 'owner_decision', 'task_
        '/tasks/' || n.task_id, n.reason_code
 FROM task_reconciliation_needs n
 JOIN tasks t ON t.id = n.task_id
-WHERE n.owner_id = $1 AND (t.status NOT IN ('completed', 'failed', 'cancelled') OR n.reason_code = 'runtime_stop_unresolved')
+WHERE n.owner_id = $1 AND t.status NOT IN ('completed', 'failed', 'cancelled')
 ON CONFLICT (source_kind, source_id) DO UPDATE
 SET state = 'open', resolved_at = NULL, updated_at = now(),
     read_at = CASE WHEN a.state <> 'open' THEN NULL ELSE a.read_at END,
@@ -192,15 +194,16 @@ WHERE a.state <> 'open' OR (a.title, a.needed, a.reason_code) IS DISTINCT FROM (
 RETURNING id;
 
 -- The item resolves once task_reconciliation_needs no longer names it: a plain block that cleared,
--- or a task that finished without ever leaving an unresolved stop behind. A final task whose attempt
--- still carries unconfirmed stop evidence stays named by the view (its CASE has no status guard for
--- that branch), so its card stays too: cancelOpenChildren can mark a child cancelled before its
--- attempt settles, and that attempt still holds a writer claim and capacity until the stop observer
--- confirms the stop or proves the runtime absent. Only final AND settled tasks lose their card here.
+-- or a task that reached a final status. A final task whose attempt still carries unconfirmed stop
+-- evidence stays named by the view, but the owner has nothing to decide about it: its card resolves
+-- like any other, and the stop resolver keeps working on the claim and capacity behind it.
 -- name: ResolveTaskReconciliationAttention :many
 UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at = now()
 WHERE a.owner_id = $1 AND a.source_kind = 'task_reconciliation' AND a.state = 'open'
-  AND NOT EXISTS (SELECT 1 FROM task_reconciliation_needs n WHERE n.task_id = a.task_id AND n.owner_id = a.owner_id)
+  AND NOT EXISTS (
+      SELECT 1 FROM task_reconciliation_needs n JOIN tasks t ON t.id = n.task_id
+      WHERE n.task_id = a.task_id AND n.owner_id = a.owner_id
+        AND t.status NOT IN ('completed', 'failed', 'cancelled'))
 RETURNING a.id;
 
 -- One proposal item linked to its latest live native approval request. The observer establishes
