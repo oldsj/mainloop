@@ -74,6 +74,30 @@ make dev-live-purge    # delete namespace mainloop-dev and the *-dev agents (typ
 
 All targets use kube context `admin@internal-01` through DevSpace profile `live` in `devspace.yaml`, whose pipelines (`build`, `dev`, `deploy`, `deploy-agents`, `purge`) refuse any other context or namespace. Use these targets or `scripts/dev-live.sh`: raw `devspace sync`, `restart`, `enter`, `logs` and `attach` with `-p live` are not guarded and act on whatever `--kube-context` and `-n` say. This page covers only the `live` profile.
 
+### The devloop lease
+
+mainloop-dev has one live-sync lease (`docs/specs/devloop.md`), so the owner's own iteration and a
+task agent's `dev_sync` MCP tool calls do not race over the same pods. With `MAINLOOP_API_URL` set
+to the control-plane instance's own owner API base URL (the lease lives in that instance's
+database, not in mainloop-dev, and this needs no kube context), `make dev-live` acquires it before
+starting `devspace dev` and releases it on exit (Ctrl-C or otherwise); without that variable it
+prints a notice and skips lease coordination entirely. Acquire or release it by hand with:
+
+```bash
+MAINLOOP_API_URL=https://mainloop.example.com/api make dev-live-lease-acquire
+MAINLOOP_API_URL=https://mainloop.example.com/api make dev-live-lease-release
+```
+
+This calls `POST /devloop/lease/acquire` and `.../release` as the fixed owner holder (distinct
+from a task agent's own MCP session), and is a courtesy, not an admission gate: `devspace dev`
+itself runs whether or not the lease was acquired, since nothing else holding it stops the sync
+dirs from being written to.
+
+A task agent of project `oldsj/mainloop` iterates on mainloop-dev the same way through MCP tools
+(`dev_lease_acquire`, `dev_sync`, `dev_status`, `dev_logs`, `dev_smoke`; see
+`docs/specs/devloop.md`), which are disabled unless the **control-plane instance** (production,
+not mainloop-dev) sets `MAINLOOP_DEVLOOP_ENABLED=true`.
+
 What runs and syncs: the Go server and the React app.
 
 - `server/` syncs into `/src` in the backend, MCP and Git containers. Each runs `watchexec` over `go run ./cmd/mainloop serve-api|serve-mcp|serve-git`, so a change rebuilds and restarts only that listener. A change to `go.mod` or `go.sum` runs `go mod download` in the pod. Test files, `testdata`, `.git` and build output do not sync.

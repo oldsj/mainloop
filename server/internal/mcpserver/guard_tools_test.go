@@ -13,12 +13,15 @@ import (
 	"github.com/oldsj/mainloop/server/internal/agentauth/authtest"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/devloop"
 	"github.com/oldsj/mainloop/server/internal/mcpserver"
 )
 
 // readOnlyTools are the contract tools that never write. A tool added to api/mcp-tools.json must
 // be named here or given a case in writeCases, which is what keeps the revoked-credential table
-// below complete.
+// below complete. dev_status, dev_logs and dev_smoke are not listed here even though they only
+// read mainloop-dev: each still inserts a devloop_operations row in Mainloop's own database, so
+// they are write cases too.
 var readOnlyTools = []string{"get_pull_request_merge_status", "task_get", "task_history", "task_list", "topics", "whoami"}
 
 // A writeCase calls one write tool with arguments valid enough to reach its write. prepare runs
@@ -27,9 +30,37 @@ type writeCase struct {
 	tool    string
 	path    string
 	prs     bool
+	devloop bool
 	role    dbstate.BindingRole
 	grant   dbstate.MCPGrantKind
 	prepare func(t *testing.T, h *harness, p *prHarness, a authtest.Seeded) map[string]any
+}
+
+// newDevloopHarness serves the devloop tools with the flag on, a DB-only lease and an operations
+// service with no Kubernetes or GitHub dependency: enough to prove the write each tool makes
+// (the lease row, or the devloop_operations row) without needing a real cluster.
+func newDevloopHarness(t *testing.T) *harness {
+	t.Helper()
+	return buildHarness(t, true, true, func(srv *mcpserver.Server, pool *pgxpool.Pool) {
+		srv.Policy.DevLoop = true
+		srv.DevLease = &devloop.LeaseService{Pool: pool}
+		srv.DevOps = &devloop.OperationsService{Pool: pool}
+	})
+}
+
+// seedDevloopAgent seeds a workspace agent bound to the one project the devloop tools allow.
+func seedDevloopAgent(t *testing.T, h *harness) authtest.Seeded {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := h.env.Pool.Exec(ctx, `INSERT INTO projects (id, user_id, owner, name, full_name, html_url, default_branch)
+		VALUES ('devloop-p', 'owner', 'oldsj', 'mainloop', 'oldsj/mainloop', 'https://x', 'main') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+	a := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
+	if _, err := h.env.Pool.Exec(ctx, `UPDATE sessions SET project_id = 'devloop-p' WHERE id = $1`, a.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	return a
 }
 
 func setupCall(t *testing.T, h *harness, a authtest.Seeded, tool string, args map[string]any) map[string]any {
@@ -112,6 +143,23 @@ var writeCases = []writeCase{
 			p.consent(t, a.SessionID, proposal, "dead")
 			return map[string]any{"proposal_id": proposal, "request_id": "dead"}
 		}},
+	{tool: "dev_lease_acquire", devloop: true,
+		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any { return map[string]any{} }},
+	{tool: "dev_lease_release", devloop: true,
+		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any { return map[string]any{} }},
+	{tool: "dev_sync", devloop: true,
+		prepare: func(t *testing.T, h *harness, _ *prHarness, a authtest.Seeded) map[string]any {
+			setupCall(t, h, a, "dev_lease_acquire", map[string]any{})
+			return map[string]any{"commit_sha": prTip}
+		}},
+	{tool: "dev_status", devloop: true,
+		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any { return map[string]any{} }},
+	{tool: "dev_logs", devloop: true,
+		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
+			return map[string]any{"container": "backend"}
+		}},
+	{tool: "dev_smoke", devloop: true,
+		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any { return map[string]any{} }},
 }
 
 // dump is a digest of every table: its row count and a hash of all its rows, so a write to any
@@ -175,11 +223,15 @@ func TestEveryWriteToolIsRefusedAfterItsCredentialIsRevoked(t *testing.T) {
 			var h *harness
 			var p *prHarness
 			var a authtest.Seeded
-			if w.prs {
+			switch {
+			case w.prs:
 				p = newPRHarness(t)
 				h = p.harness
 				a = p.seedAgent(t, nil)
-			} else {
+			case w.devloop:
+				h = newDevloopHarness(t)
+				a = seedDevloopAgent(t, h)
+			default:
 				h = newTaskHarness(t, true)
 				a = h.env.Seed(t, authtest.Agent{Role: w.role, Grant: w.grant})
 			}

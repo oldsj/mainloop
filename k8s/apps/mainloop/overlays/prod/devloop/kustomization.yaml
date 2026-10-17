@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# No top-level `namespace:`: the RoleBinding below must stay in mainloop-dev even though this
+# overlay's own resources render into `mainloop`. This mirrors
+# overlays/dev-live/kagent/, a standalone kustomization for the same reason (a resource that must
+# land in a namespace other than the one `../../base` renders into).
+#
+# A separate GitOps source from overlays/prod itself (see docs/production-rollout.md's existing
+# "cross-namespace pieces" paragraph): the cluster repository's Argo Application for this piece
+# must point here directly, since namespace mainloop-dev is not Argo-managed and does not exist
+# until DevSpace creates it (`make dev-live`). Until that Application exists, apply it once by
+# hand: `kubectl --context admin@internal-01 apply -k k8s/apps/mainloop/overlays/prod/devloop`.
+resources:
+  - rolebinding.yaml

@@ -78,6 +78,66 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/devloop/lease': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Devloop Lease
+     * @description Read the mainloop-dev live-sync lease without acquiring it or joining its queue.
+     */
+    get: operations['getDevloopLease'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/devloop/lease/acquire': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Acquire Devloop Lease
+     * @description Acquire the mainloop-dev lease as the owner, or report the owner's place in its FIFO queue.
+     */
+    post: operations['acquireDevloopLease'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/devloop/lease/release': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Release Devloop Lease
+     * @description Release the mainloop-dev lease if the owner holds it; a no-op otherwise.
+     */
+    post: operations['releaseDevloopLease'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/environments': {
     parameters: {
       query?: never;
@@ -2781,6 +2841,17 @@ export interface components {
       message_id: string;
       state: string;
     };
+    DevloopLease: {
+      /** @enum {string} */
+      status: 'free' | 'acquired' | 'queued';
+      holder_session?: string;
+      /** Format: date-time */
+      acquired_at?: string;
+      /** Format: date-time */
+      last_used_at?: string;
+      idle_timeout_seconds: number;
+      queue_length: number;
+    };
     SmokePush: {
       request_id: string;
       state: string;
@@ -4793,6 +4864,93 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  getDevloopLease: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DevloopLease'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  acquireDevloopLease: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DevloopLease'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  releaseDevloopLease: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DevloopLease'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };

@@ -120,6 +120,40 @@ type DevEnvironment struct {
 	CreatedAt        time.Time
 }
 
+type DevloopLease struct {
+	ID                 string
+	HolderSessionID    *string
+	AcquiredAt         *time.Time
+	LastUsedAt         *time.Time
+	IdleTimeoutSeconds int32
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+type DevloopLeaseQueue struct {
+	LeaseID     string
+	SessionID   string
+	RequestedAt time.Time
+}
+
+type DevloopOperation struct {
+	ID             string
+	IdempotencyKey string
+	Kind           dbstate.DevloopOperationKind
+	SessionID      string
+	ProjectID      string
+	Params         json.RawMessage
+	Result         json.RawMessage
+	Detail         *string
+	State          dbstate.DevloopOperationState
+	Attempts       int32
+	NextAttemptAt  time.Time
+	LeaseOwner     *string
+	LeaseUntil     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 type EnvironmentGrant struct {
 	EnvironmentID string
 	ProjectID     string

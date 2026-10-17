@@ -35,6 +35,9 @@ func TestUnconfiguredServicesAnswerTheDeclared503(t *testing.T) {
 		{"DELETE", "/schedules/" + sid, ""},
 		{"POST", "/schedules/" + sid + "/trigger", `{"request_id":"r1"}`},
 		{"PUT", "/schedules/" + sid, `{"schedule":"0 * * * *","prompt":"go"}`},
+		{"GET", "/devloop/lease", ""},
+		{"POST", "/devloop/lease/acquire", ""},
+		{"POST", "/devloop/lease/release", ""},
 	} {
 		t.Run(c.method+" "+c.path, func(t *testing.T) {
 			hdr := map[string]string{}

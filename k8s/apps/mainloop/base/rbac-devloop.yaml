@@ -1,0 +1,19 @@
+# Cluster-scoped, so the top-level `namespace:` kustomize sets for every overlay (mainloop, or
+# mainloop-local for Kind) does not rewrite it: a ClusterRole carries no namespace of its own. It
+# grants nothing by itself; a RoleBinding scopes it to one namespace. Only the production overlay
+# binds it, to namespace mainloop-dev (see overlays/prod/devloop/), so only a production backend
+# can ever reach mainloop-dev's pods. See docs/specs/devloop.md.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mainloop-devloop
+rules:
+  - apiGroups: ['']
+    resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: ['']
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: ['']
+    resources: [pods/exec]
+    verbs: [create]

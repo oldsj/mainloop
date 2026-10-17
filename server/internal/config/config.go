@@ -39,6 +39,9 @@ type Config struct {
 	OwnerHITLWritesEnabled   ExactTrue `env:"MAINLOOP_OWNER_HITL_WRITES_ENABLED"`
 	OwnerPolicyWritesEnabled ExactTrue `env:"MAINLOOP_OWNER_POLICY_WRITES_ENABLED"`
 	MergeToolsEnabled        ExactTrue `env:"MAINLOOP_MERGE_TOOLS_ENABLED"`
+	// DevloopEnabled turns on the dev_* MCP tools (live sync to the shared mainloop-dev instance).
+	// Off by default; see docs/specs/devloop.md.
+	DevloopEnabled ExactTrue `env:"MAINLOOP_DEVLOOP_ENABLED"`
 
 	// MergeConfigurations is the operator allowlist of protected merge tool mappings.
 	MergeConfigurations MergeConfigurations `env:"MAINLOOP_MERGE_CONFIGURATIONS"`

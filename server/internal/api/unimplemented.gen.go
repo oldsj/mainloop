@@ -19,6 +19,11 @@ func (Unimplemented) AcceptEnvironmentDefault(context.Context, AcceptEnvironment
 	return nil, apierr.NotImplemented
 }
 
+// AcquireDevloopLease is not implemented yet.
+func (Unimplemented) AcquireDevloopLease(context.Context, AcquireDevloopLeaseRequestObject) (AcquireDevloopLeaseResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // ArchiveSession is not implemented yet.
 func (Unimplemented) ArchiveSession(context.Context, ArchiveSessionRequestObject) (ArchiveSessionResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -76,6 +81,11 @@ func (Unimplemented) GetAttention(context.Context, GetAttentionRequestObject) (G
 
 // GetConversation is not implemented yet.
 func (Unimplemented) GetConversation(context.Context, GetConversationRequestObject) (GetConversationResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// GetDevloopLease is not implemented yet.
+func (Unimplemented) GetDevloopLease(context.Context, GetDevloopLeaseRequestObject) (GetDevloopLeaseResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 
@@ -291,6 +301,11 @@ func (Unimplemented) RefreshWorkspace(context.Context, RefreshWorkspaceRequestOb
 
 // RegisterEnvironment is not implemented yet.
 func (Unimplemented) RegisterEnvironment(context.Context, RegisterEnvironmentRequestObject) (RegisterEnvironmentResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// ReleaseDevloopLease is not implemented yet.
+func (Unimplemented) ReleaseDevloopLease(context.Context, ReleaseDevloopLeaseRequestObject) (ReleaseDevloopLeaseResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

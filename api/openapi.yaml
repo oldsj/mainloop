@@ -37,6 +37,8 @@ tags:
     description: Task reads, task operations and task actions.
   - name: schedules
     description: Scheduled agent runs proxied from kagent; schedules, triggers and executions.
+  - name: devloop
+    description: The one live-sync lease on the shared mainloop-dev instance.
 paths:
   /activity:
     get:
@@ -163,6 +165,66 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /devloop/lease:
+    get:
+      tags:
+        - devloop
+      summary: Get Devloop Lease
+      description: Read the mainloop-dev live-sync lease without acquiring it or joining its queue.
+      operationId: getDevloopLease
+      responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DevloopLease'
+  /devloop/lease/acquire:
+    post:
+      tags:
+        - devloop
+      summary: Acquire Devloop Lease
+      description: Acquire the mainloop-dev lease as the owner, or report the owner's place in its FIFO queue.
+      operationId: acquireDevloopLease
+      responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DevloopLease'
+  /devloop/lease/release:
+    post:
+      tags:
+        - devloop
+      summary: Release Devloop Lease
+      description: Release the mainloop-dev lease if the owner holds it; a no-op otherwise.
+      operationId: releaseDevloopLease
+      responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DevloopLease'
   /environments:
     get:
       tags:
@@ -6179,6 +6241,29 @@ components:
       required:
         - message_id
         - state
+      additionalProperties: false
+    DevloopLease:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [free, acquired, queued]
+        holder_session:
+          type: string
+        acquired_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+        idle_timeout_seconds:
+          type: integer
+        queue_length:
+          type: integer
+      required:
+        - status
+        - idle_timeout_seconds
+        - queue_length
       additionalProperties: false
     SmokePush:
       type: object
