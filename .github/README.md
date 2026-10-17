@@ -59,8 +59,11 @@ digest: `latest`, or this commit's own tag when the commit changes the dev image
 paths (the job waits up to 15 minutes for [Mainloop dev image](workflows/dev-image.yml)
 to publish it). The build clones `main` at the merge commit into `/data/workspace` so
 Go's VCS stamping matches a session clone, then warms the Go build cache. Layer 1
-(Go modules, pnpm store) depends only on the lockfiles and has normalized file times,
-so it is reused unchanged across merges. Layer 2 (Go build cache) changes per commit
+(Go modules, pnpm store) depends only on the lockfiles and has normalized file times.
+With the Actions build cache warm, the unchanged step is not re-run and the layers
+are identical across merges. Rebuilt from scratch, the Go module layer is still
+identical but the two pnpm layers differ (pnpm writes its own timestamps), so nodes
+pull them once after a cache eviction or a lockfile change. Layer 2 (Go build cache) changes per commit
 and keeps current file times, because Go trims cache entries older than about five
 days.
 
