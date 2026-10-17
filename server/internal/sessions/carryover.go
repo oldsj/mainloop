@@ -10,6 +10,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/oldsj/mainloop/server/internal/agentcontext"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
@@ -17,6 +18,12 @@ import (
 // carryMessageChars cuts each carried message, so the preamble stays small however long the earlier
 // turns were.
 const carryMessageChars = 600
+
+// mainContext opens the first message to every main Session: what the agent is, then the guidance
+// every Mainloop agent gets. Its first line carries the marker, and no other line starts with one,
+// so the carried messages after it cannot be mistaken for it.
+const mainContext = "[mainloop:context] You are the Mainloop main agent, the owner's home chat. " +
+	"You coordinate and delegate code work with `delegate`; tasks report back to you.\n\n" + agentcontext.Guidance
 
 // frozenText returns the text a delivery sends and freezes it in the transaction that moves the row
 // to sending, so one A2A messageId always carries one payload.
@@ -27,10 +34,11 @@ const carryMessageChars = 600
 // been done: NULL means the Session has not been given it, and the switch and the replacement of a
 // deleted Session both reset it. The owner's mirrored message stays what they wrote.
 //
-// The preamble does not render the main's standing context yet (see delegation.md), so it holds only
-// the earlier messages. Children and workers are not main bindings and send their message as
-// written. It returns a nil text when the message goes as written, and a hash only when the caller
-// must record it on the binding (after the delivery row, see decideSend).
+// The preamble opens with mainContext, then the earlier messages when there are any. It does not
+// render the main's standing context yet (see delegation.md). Children and workers are not main
+// bindings and send their message as written. It returns a nil text when the message goes as
+// written, and a hash only when the caller must record it on the binding (after the delivery row,
+// see decideSend).
 func (t *turn) frozenText(ctx context.Context, q *dbq.Queries) (text, hash *string, err error) {
 	if t.d.SentText != nil {
 		return t.d.SentText, nil, nil
@@ -60,12 +68,25 @@ func standingHash(deliveryID, text string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// carryOver renders the message with the preamble in front of it. With nothing to carry, it is the
-// message as written.
+// carryOver renders the message with the preamble in front of it: mainContext, then the earlier
+// conversation when there is any to carry.
 func (t *turn) carryOver(ctx context.Context, q *dbq.Queries) (string, error) {
+	earlier, err := t.carriedConversation(ctx, q)
+	if err != nil {
+		return "", err
+	}
+	return mainContext + earlier + newMessageMarker + "\n" + t.d.Content, nil
+}
+
+// newMessageMarker ends the preamble; the owner's message follows it.
+const newMessageMarker = "[mainloop:new-message]"
+
+// carriedConversation renders the last completed messages as marker-led lines, or "" when there is
+// nothing to carry.
+func (t *turn) carriedConversation(ctx context.Context, q *dbq.Queries) (string, error) {
 	n := t.s.opts().CarryOverMessages
 	if n <= 0 {
-		return t.d.Content, nil
+		return "", nil
 	}
 	// Each completed delivery is one user message and at most one mirrored reply, so the last n
 	// messages are among the last n deliveries. Failed, cancelled, uncertain and still-open
@@ -82,7 +103,7 @@ func (t *turn) carryOver(ctx context.Context, q *dbq.Queries) (string, error) {
 		}
 	}
 	if len(ids) == 0 {
-		return t.d.Content, nil
+		return "", nil
 	}
 	msgs, err := q.ListSessionMessagesByID(ctx, dbq.ListSessionMessagesByIDParams{SessionID: t.d.SessionID, Ids: ids})
 	if err != nil {
@@ -92,7 +113,7 @@ func (t *turn) carryOver(ctx context.Context, q *dbq.Queries) (string, error) {
 		msgs = msgs[len(msgs)-n:]
 	}
 	if len(msgs) == 0 {
-		return t.d.Content, nil
+		return "", nil
 	}
 	var b strings.Builder
 	b.WriteString("[mainloop:carry-over] Earlier conversation, carried over: this session is new and has not seen it. " +
@@ -100,8 +121,6 @@ func (t *turn) carryOver(ctx context.Context, q *dbq.Queries) (string, error) {
 	for _, m := range msgs {
 		fmt.Fprintf(&b, "%s: %s\n", m.Role, carried(m.Content))
 	}
-	b.WriteString("[mainloop:new-message]\n")
-	b.WriteString(t.d.Content)
 	return b.String(), nil
 }
 

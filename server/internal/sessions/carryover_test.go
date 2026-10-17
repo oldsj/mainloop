@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/oldsj/mainloop/server/internal/agentcontext"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
@@ -29,8 +30,9 @@ import (
 )
 
 const (
-	carryMarker = "[mainloop:carry-over]"
-	newMarker   = "[mainloop:new-message]"
+	contextMarker = "[mainloop:context]"
+	carryMarker   = "[mainloop:carry-over]"
+	newMarker     = "[mainloop:new-message]"
 )
 
 // sentMsg is one message the fake kagent received, as the gateway saw it.
@@ -127,10 +129,35 @@ func (e *env) seed(state dbstate.DeliveryState, user, reply string, age time.Dur
 	return id
 }
 
-// wantCarried asserts a sent text is the preamble with exactly these lines, in this order, then the
+// mainContextBlock is what opens the first message to a main Session: its role, then the guidance
+// every Mainloop agent gets.
+const mainContextBlock = contextMarker + " You are the Mainloop main agent, the owner's home chat. " +
+	"You coordinate and delegate code work with `delegate`; tasks report back to you.\n\n" + agentcontext.Guidance
+
+// withoutContext checks a sent text opens with the main's context block and returns what follows.
+func withoutContext(t *testing.T, got string) string {
+	t.Helper()
+	rest, ok := strings.CutPrefix(got, mainContextBlock)
+	if !ok {
+		t.Fatalf("no context block at the start of %q", got)
+	}
+	return rest
+}
+
+// wantContextOnly asserts a sent text is the main's context block, no carried messages, then the
 // new message.
+func wantContextOnly(t *testing.T, got, content string) {
+	t.Helper()
+	if rest := withoutContext(t, got); rest != newMarker+"\n"+content {
+		t.Fatalf("after the context block: %q, want the marker and %q", rest, content)
+	}
+}
+
+// wantCarried asserts a sent text is the main's context block, then the preamble with exactly these
+// lines in this order, then the new message.
 func wantCarried(t *testing.T, got, content string, lines ...string) {
 	t.Helper()
+	got = withoutContext(t, got)
 	parts := strings.Split(got, "\n")
 	if len(parts) < len(lines)+3 || !strings.HasPrefix(parts[0], carryMarker) {
 		t.Fatalf("no preamble in %q", got)
@@ -168,7 +195,7 @@ func TestAFirstMessageCarriesTheLastCompletedMessagesInOrder(t *testing.T) {
 	}
 	// The last four messages of the completed conversation, oldest first, with their roles.
 	wantCarried(t, got.Text, "now", "user: third q", "assistant: third a", "user: fourth q", "assistant: fourth a")
-	for _, left := range []string{"failed", "cancelled", "uncertain", "first", "second"} {
+	for _, left := range []string{"failed q", "cancelled q", "uncertain q", "first q", "second q"} {
 		if strings.Contains(got.Text, left) {
 			t.Fatalf("%q was carried: %q", left, got.Text)
 		}
@@ -211,14 +238,12 @@ func TestTheNextMessageCarriesNoPreamble(t *testing.T) {
 	}
 }
 
-func TestAFirstMessageWithNothingToCarryIsSentAsWritten(t *testing.T) {
+func TestAFirstMessageWithNothingToCarryOnlyGetsTheContextLine(t *testing.T) {
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	e.run()
 	e.waitState(e.send("hello"), dbstate.DeliveryCompleted)
-	if got := log.last(t).Text; got != "hello" {
-		t.Fatalf("sent %q", got)
-	}
+	wantContextOnly(t, log.last(t).Text, "hello")
 	if e.standingHash() == nil {
 		t.Fatal("the Session is not recorded as started")
 	}
@@ -230,9 +255,7 @@ func TestZeroCarriedMessagesSendsNone(t *testing.T) {
 	e.seed(dbstate.DeliveryCompleted, "earlier q", "earlier a", time.Hour)
 	e.run()
 	e.waitState(e.send("now"), dbstate.DeliveryCompleted)
-	if got := log.last(t).Text; got != "now" {
-		t.Fatalf("sent %q, want the message as written", got)
-	}
+	wantContextOnly(t, log.last(t).Text, "now")
 }
 
 func TestOnlyTheLastNMessagesAreCarriedAndLongOnesAreCut(t *testing.T) {
@@ -335,9 +358,10 @@ func TestAKagentDeletedSessionGetsTheConversationOnTheNextMessage(t *testing.T) 
 	e.run()
 	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
 	e.waitState(e.send("two"), dbstate.DeliveryCompleted)
-	if msgs := log.all(); len(msgs) != 2 || msgs[0].Text != "one" || msgs[1].Text != "two" {
-		t.Fatalf("sends %+v, want both as written", msgs)
+	if msgs := log.all(); len(msgs) != 2 || msgs[1].Text != "two" {
+		t.Fatalf("sends %+v, want the second as written", msgs)
 	}
+	wantContextOnly(t, log.all()[0].Text, "one")
 	old := e.kagentSessionID()
 	if _, err := e.other().DeleteSession(context.Background(), old); err != nil {
 		t.Fatal(err)
@@ -362,9 +386,7 @@ func TestAProviderSwitchGivesTheNewSessionTheConversation(t *testing.T) {
 	e.withProviders()
 	stop, claude := e.warm()
 	stop()
-	if got := log.last(t).Text; got != "one" {
-		t.Fatalf("sent %q", got)
-	}
+	wantContextOnly(t, log.last(t).Text, "one")
 	if e.standingHash() == nil {
 		t.Fatal("the first Session was not recorded as started")
 	}

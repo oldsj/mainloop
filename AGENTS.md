@@ -96,6 +96,16 @@ pnpm build:design && pnpm check:design    # CI also installs Chromium first
 
 `web/` has a Playwright config and an `e2e` script, but no CI job runs it. Run browser tests only when a task asks for them, and only against a known target.
 
+## Building in a Mainloop workspace
+
+Generic workspace, cache and publishing guidance comes from Mainloop's agent instructions; these are specific to this repository.
+
+- `go` can be missing from `PATH` in a workspace shell. Run `export PATH=/usr/local/go/bin:$PATH`.
+- If the environment uses a prebuilt cache image for this repository, it carries the Go build cache, Go modules and the pnpm store for a `main` commit under `/opt/cache`. Measured on one arm64 workspace: `go test ./...` compiled nothing, `go build ./...` recompiled only the main packages `cmd/mainloop`, `tools/genfallback` and `tools/mcpcontract`, and `pnpm install --frozen-lockfile` took seconds.
+- Those three miss because a real clone stamps VCS data into main packages. `go build -buildvcs=false ./...` compiles nothing, but the binaries carry no VCS data, so use it for checks, not for release builds.
+- The pnpm virtual store sits outside the project, so `web/node_modules` is links. Do not copy or move it, and install with `pnpm install --frozen-lockfile --filter web...`.
+- The caches do not speed up `tsc -b`, `vitest run` or `vite build`. The full Vitest run took about five minutes in that workspace, so run the test files you changed first.
+
 ## Live and cluster work
 
 - Default automated tests for native-agent adapters must use sanitized fixtures or fakes. Keep live proofs opt-in and bounded.
