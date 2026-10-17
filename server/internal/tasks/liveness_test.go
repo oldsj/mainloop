@@ -2,6 +2,7 @@ package tasks_test
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -125,6 +126,30 @@ func stuckTurn(old time.Time, newest string) []*a2a.Task {
 	}}
 }
 
+// harnessTurn is a working turn the way the kagent harness records it: one brief in the history and
+// the status time of the turn's start, both fixed for the whole turn, while the text and tool calls
+// it produces arrive as artifacts. n artifacts of one part each are listed, and extra further parts
+// were appended to the last one (streamed text).
+func harnessTurn(start time.Time, n, extra int) []*a2a.Task {
+	task := &a2a.Task{
+		ID:      "t-1",
+		Status:  a2a.TaskStatus{State: a2a.TaskStateWorking, Timestamp: &start},
+		History: []*a2a.Message{{ID: "brief"}},
+	}
+	for i := range n {
+		task.Artifacts = append(task.Artifacts, &a2a.Artifact{
+			ID: a2a.ArtifactID("a-" + strconv.Itoa(i)), Parts: a2a.ContentParts{a2a.NewTextPart("x")},
+		})
+	}
+	if n > 0 {
+		last := task.Artifacts[n-1]
+		for range extra {
+			last.Parts = append(last.Parts, a2a.NewTextPart("x"))
+		}
+	}
+	return []*a2a.Task{task}
+}
+
 func TestLivenessBlocksAWorkingTurnThatRecordsNothingNew(t *testing.T) {
 	r := newRig(t)
 	id, _ := r.liveTask("ks-1")
@@ -170,6 +195,105 @@ func TestLivenessKeepsAWorkingTurnThatKeepsRecordingProgress(t *testing.T) {
 		if got := r.taskStatus(id); got != "running" {
 			t.Fatalf("step %d: status = %s, want running (the turn is still recording progress)", i, got)
 		}
+	}
+}
+
+// Review P1: a healthy harness turn that runs for hours changes nothing but its artifacts, so the
+// fingerprint must follow them. One new tool artifact every ten minutes for three hours is a busy
+// turn, never a stalled one.
+func TestReviewHealthyHarnessTurnIsNotStalled(t *testing.T) {
+	r := newRig(t)
+	id, _ := r.liveTask("ks-1")
+	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
+	start := time.Now()
+	turnStart := start.Add(-time.Minute)
+
+	for i := range 19 {
+		r.live.setTasks("ks-1", harnessTurn(turnStart, i, 0))
+		r.setClock(start.Add(time.Duration(i) * 10 * time.Minute))
+		r.sweep(r.svc.LivenessSweep())
+		if got := r.taskStatus(id); got != "running" {
+			t.Fatalf("minute %d: status = %s, want running (the turn keeps recording tool calls)", i*10, got)
+		}
+	}
+}
+
+// Streamed text appends parts to the artifact the turn already has, adding no new artifact.
+func TestLivenessKeepsAHarnessTurnThatOnlyStreamsMoreText(t *testing.T) {
+	r := newRig(t)
+	id, _ := r.liveTask("ks-1")
+	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
+	start := time.Now()
+
+	for i := range 13 {
+		r.live.setTasks("ks-1", harnessTurn(start.Add(-time.Minute), 1, i))
+		r.setClock(start.Add(time.Duration(i) * 20 * time.Minute))
+		r.sweep(r.svc.LivenessSweep())
+		if got := r.taskStatus(id); got != "running" {
+			t.Fatalf("minute %d: status = %s, want running (the text is still streaming)", i*20, got)
+		}
+	}
+}
+
+// A turn that records no artifact either is as stuck as one that records nothing at all.
+func TestLivenessBlocksAHarnessTurnWhoseArtifactsStopGrowing(t *testing.T) {
+	r := newRig(t)
+	id, _ := r.liveTask("ks-1")
+	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
+	start := time.Now()
+	r.live.setTasks("ks-1", harnessTurn(start.Add(-time.Hour), 4, 2))
+
+	for _, at := range []time.Duration{0, 30 * time.Minute} {
+		r.setClock(start.Add(at))
+		r.sweep(r.svc.LivenessSweep())
+		if got := r.taskStatus(id); got != "running" {
+			t.Fatalf("+%s: status = %s, want running", at, got)
+		}
+	}
+	r.setClock(start.Add(46 * time.Minute))
+	r.sweep(r.svc.LivenessSweep())
+	if got := r.taskReason(id); got != "stalled" {
+		t.Fatalf("reason = %q, want stalled (nothing new for 46 minutes)", got)
+	}
+}
+
+// Review P1: a progress report is proof of life. When the sweep was wrong and a report recovers the
+// task, the next sweep must not block it again over the same old fingerprint.
+func TestReviewReportAfterFalseStallIsBlockedAgainNextSweep(t *testing.T) {
+	r := newRig(t)
+	id, binding := r.liveTask("ks-1")
+	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
+	start := time.Now()
+	r.live.setTasks("ks-1", harnessTurn(start, 2, 0)) // does not change from here on
+
+	r.setClock(start)
+	r.sweep(r.svc.LivenessSweep())
+	r.setClock(start.Add(46 * time.Minute))
+	r.sweep(r.svc.LivenessSweep())
+	if got := r.taskReason(id); got != "stalled" {
+		t.Fatalf("reason = %q, want stalled", got)
+	}
+
+	agent := r.agent(dbstate.RoleSupervisor, binding)
+	reportAt := start.Add(47 * time.Minute)
+	r.setClock(reportAt)
+	if _, err := r.svc.Report(context.Background(), agent, report(agent, "r1", dbstate.OutcomeProgress)); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.taskStatus(id); got != "running" {
+		t.Fatalf("status after the report = %s, want running", got)
+	}
+
+	r.setClock(reportAt.Add(time.Minute))
+	r.sweep(r.svc.LivenessSweep())
+	if got := r.taskStatus(id); got != "running" {
+		t.Fatalf("status = %s a minute after the report, want running (the report restarted the clock)", got)
+	}
+
+	r.setClock(reportAt.Add(46 * time.Minute))
+	r.sweep(r.svc.LivenessSweep())
+	if got := r.taskReason(id); got != "stalled" {
+		t.Fatalf("reason = %q, want stalled again after another silent window", got)
 	}
 }
 

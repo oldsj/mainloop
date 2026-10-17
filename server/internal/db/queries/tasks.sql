@@ -236,6 +236,13 @@ UPDATE task_attempts SET updated_at = now() WHERE id = $1;
 -- It writes nothing else, so it never contends with a settle or a report on the attempt's state.
 UPDATE task_attempts SET progress_marker = $2, progress_at = $3 WHERE id = $1;
 
+-- name: RestartAttemptStallClock :exec
+-- A progress report is proof of life: the stall clock counts from it, against the fingerprint the sweep
+-- already holds. Without this, a report that recovers a stalled task is overridden by the next sweep,
+-- which still finds the old fingerprint older than the stall timeout. Nothing is written for an attempt
+-- the sweep has not fingerprinted yet; its clock has not started.
+UPDATE task_attempts SET progress_at = $2 WHERE id = $1 AND progress_marker IS NOT NULL;
+
 -- name: ListAttemptWorkspaceCleanups :many
 -- Final attempts use a separate bounded batch, so cleanup cannot starve runtime stop resolution.
 -- Unchecked cleanup comes first; unresolved looks move behind other due work durably.

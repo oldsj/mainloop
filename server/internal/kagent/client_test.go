@@ -882,6 +882,24 @@ func TestGetTaskAndListTasks(t *testing.T) {
 	}
 }
 
+// A busy harness turn records its text and tool calls as artifacts only, so the liveness read must
+// ask for them; without them a healthy long turn shows nothing new in the list.
+func TestListTasksLatestCarriesArtifactsAndTheNewestMessageOnly(t *testing.T) {
+	c, srv, _ := setup(t)
+	srv.AddTask(&a2a.Task{
+		ID: "t1", ContextID: "ctx-1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking},
+		History:   []*a2a.Message{{ID: "m1", Role: a2a.MessageRoleUser}, {ID: "m2", Role: a2a.MessageRoleUser}},
+		Artifacts: []*a2a.Artifact{{ID: "a", Parts: a2a.ContentParts{a2a.NewTextPart("x")}}},
+	})
+	got, err := c.ListTasksLatest(ctx, agent, "ctx-1")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("got %d tasks, err %v", len(got), err)
+	}
+	if len(got[0].Artifacts) != 1 || len(got[0].History) != 1 || got[0].History[0].ID != "m2" {
+		t.Fatalf("artifacts %d, history %+v; want the artifact and only the newest message", len(got[0].Artifacts), got[0].History)
+	}
+}
+
 func TestListWaitingTasksPageFiltersByStatusAndTrimsHistory(t *testing.T) {
 	c, srv, _ := setup(t)
 	msgs := func(ids ...string) []*a2a.Message {

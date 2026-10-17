@@ -2899,6 +2899,24 @@ func (q *Queries) ReserveAttemptWorkspaceCreate(ctx context.Context, arg Reserve
 	return i, err
 }
 
+const restartAttemptStallClock = `-- name: RestartAttemptStallClock :exec
+UPDATE task_attempts SET progress_at = $2 WHERE id = $1 AND progress_marker IS NOT NULL
+`
+
+type RestartAttemptStallClockParams struct {
+	ID         string
+	ProgressAt *time.Time
+}
+
+// A progress report is proof of life: the stall clock counts from it, against the fingerprint the sweep
+// already holds. Without this, a report that recovers a stalled task is overridden by the next sweep,
+// which still finds the old fingerprint older than the stall timeout. Nothing is written for an attempt
+// the sweep has not fingerprinted yet; its clock has not started.
+func (q *Queries) RestartAttemptStallClock(ctx context.Context, arg RestartAttemptStallClockParams) error {
+	_, err := q.db.Exec(ctx, restartAttemptStallClock, arg.ID, arg.ProgressAt)
+	return err
+}
+
 const setAttemptBrief = `-- name: SetAttemptBrief :exec
 UPDATE task_attempts SET brief_delivery_id = $2, updated_at = now() WHERE id = $1
 `

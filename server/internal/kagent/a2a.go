@@ -212,18 +212,21 @@ func (c *Client) ListTasks(ctx context.Context, agent AgentRef, contextID string
 }
 
 // ListTasksLatestPage reads one page of a conversation's tasks, each with at most its newest history
-// message: the status says what a task is doing and the newest message says whether it is still
-// doing it, which a liveness sweep needs because a turn whose process wedged keeps a working status
-// indefinitely. It stays small however long the conversation is.
+// message and with its artifacts. The status says what a task is doing; the newest message and the
+// artifacts say whether it is still doing it, which a liveness sweep needs because a turn whose
+// process wedged keeps a working status indefinitely. A harness turn records its text and tool calls
+// as artifact events, which add no history and do not move the status time, so the artifacts are the
+// only record of a turn that is busy. The history stays one message however long the conversation is.
 func (c *Client) ListTasksLatestPage(
 	ctx context.Context, agent AgentRef, contextID, token string, limit int,
 ) (tasks []*a2a.Task, next string, err error) {
 	history := 1
 	raw, err := c.call(ctx, agent, methodListTasks, a2a.ListTasksRequest{
-		ContextID:     contextID,
-		HistoryLength: &history,
-		PageSize:      min(max(limit, 1), maxPageSize),
-		PageToken:     token,
+		ContextID:        contextID,
+		HistoryLength:    &history,
+		IncludeArtifacts: true,
+		PageSize:         min(max(limit, 1), maxPageSize),
+		PageToken:        token,
 	})
 	if err != nil {
 		return nil, "", err
@@ -235,7 +238,8 @@ func (c *Client) ListTasksLatestPage(
 	return resp.Tasks, resp.NextPageToken, nil
 }
 
-// ListTasksLatest reads every task in a conversation with at most its newest history message.
+// ListTasksLatest reads every task in a conversation with at most its newest history message and
+// with its artifacts.
 func (c *Client) ListTasksLatest(ctx context.Context, agent AgentRef, contextID string) ([]*a2a.Task, error) {
 	return paginate("A2A "+methodListTasks, func(token string) ([]*a2a.Task, string, error) {
 		return c.ListTasksLatestPage(ctx, agent, contextID, token, maxPageSize)

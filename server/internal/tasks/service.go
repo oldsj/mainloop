@@ -802,6 +802,13 @@ func (s *Service) applyReport(ctx context.Context, q *dbq.Queries, t dbq.Task, i
 	if err != nil {
 		return t, report, err
 	}
+	if in.Outcome == dbstate.OutcomeProgress {
+		// The agent just spoke, so it is not stalled: the liveness clock counts from this report.
+		at := s.now()
+		if err := q.RestartAttemptStallClock(ctx, dbq.RestartAttemptStallClockParams{ID: in.AttemptID, ProgressAt: &at}); err != nil {
+			return t, report, err
+		}
+	}
 	if in.Outcome != dbstate.OutcomeProgress && !alreadyDone {
 		ref := "report:" + reportID
 		if err := q.SetAttemptResult(ctx, dbq.SetAttemptResultParams{ID: in.AttemptID, ResultRef: &ref}); err != nil {

@@ -42,8 +42,8 @@ type LivenessObserver interface {
 
 // KagentLivenessClient is the part of the kagent client [KagentLiveness] uses: whether a resolved
 // kagent session still exists and is live, and the A2A tasks of one of its contexts, each with at
-// most its newest history message — status and that message are all that is judged here. *kagent.Client
-// satisfies it.
+// most its newest history message and with its artifacts — status, that message and the artifacts
+// are all that is judged here. *kagent.Client satisfies it.
 type KagentLivenessClient interface {
 	ObserveLiveness(ctx context.Context, kagentSessionID string) (kagent.SessionLiveness, error)
 	ListTasksLatest(ctx context.Context, agent kagent.AgentRef, contextID string) ([]*a2a.Task, error)
@@ -174,9 +174,12 @@ func (k *KagentLiveness) activity(
 }
 
 // taskProgress fingerprints a running task by what kagent has recorded for it: its id, state and
-// status time, and the id of its newest history message. Every tool call and result of a live turn
-// adds a message, so a turn that is doing anything changes this, and one that is not leaves it as
-// it was.
+// status time, the id of its newest history message, and its artifacts (how many, how many parts
+// they hold in all, and the id of the last). A harness turn records almost nothing but artifacts:
+// text deltas, tool calls and tool results are artifact events, which add no history message and
+// leave the status time at the turn's start. Appended text grows a part list, a new tool call adds
+// an artifact, so a turn that is doing anything changes this and one that is not leaves it as it
+// was. The list read must ask for artifacts ([kagent.Client.ListTasksLatest] does).
 func taskProgress(t *a2a.Task) string {
 	newest := ""
 	if n := len(t.History); n > 0 && t.History[n-1] != nil {
@@ -186,7 +189,15 @@ func taskProgress(t *a2a.Task) string {
 	if t.Status.Timestamp != nil {
 		stamp = t.Status.Timestamp.UTC().Format(time.RFC3339Nano)
 	}
-	return fmt.Sprintf("%s|%s|%s|%s", t.ID, t.Status.State, stamp, newest)
+	parts, lastArtifact := 0, ""
+	for _, art := range t.Artifacts {
+		if art == nil {
+			continue
+		}
+		parts += len(art.Parts)
+		lastArtifact = string(art.ID)
+	}
+	return fmt.Sprintf("%s|%s|%s|%s|%d|%d|%s", t.ID, t.Status.State, stamp, newest, len(t.Artifacts), parts, lastArtifact)
 }
 
 // lastActivity is when the attempt last showed activity: the later of what the observation itself
