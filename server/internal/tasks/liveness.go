@@ -41,12 +41,15 @@ type LivenessObserver interface {
 }
 
 // KagentLivenessClient is the part of the kagent client [KagentLiveness] uses: whether a resolved
-// kagent session still exists and is live, and the A2A tasks of one of its contexts, each with at
-// most its newest history message and with its artifacts — status, that message and the artifacts
-// are all that is judged here. *kagent.Client satisfies it.
+// kagent session still exists and is live, and the A2A tasks of one of its contexts: all of them
+// with at most their newest history message and no artifacts, and then the ones in one state with
+// their artifacts too. Status, that message and the artifacts of the tasks still running are all
+// that is judged here; the artifacts of a finished task can run to megabytes and say nothing about
+// liveness. *kagent.Client satisfies it.
 type KagentLivenessClient interface {
 	ObserveLiveness(ctx context.Context, kagentSessionID string) (kagent.SessionLiveness, error)
 	ListTasksLatest(ctx context.Context, agent kagent.AgentRef, contextID string) ([]*a2a.Task, error)
+	ListTasksInStateLatest(ctx context.Context, agent kagent.AgentRef, contextID string, state a2a.TaskState) ([]*a2a.Task, error)
 }
 
 // ActivityReader is the part of the sessions delivery ledger [KagentLiveness] uses for the fallback
@@ -146,6 +149,7 @@ func (k *KagentLiveness) activity(
 		if err != nil {
 			return time.Time{}, "", fmt.Errorf("list tasks: %w", err)
 		}
+		var unfinished []a2a.TaskState
 		for _, t := range listed {
 			if t == nil {
 				continue
@@ -154,10 +158,24 @@ func (k *KagentLiveness) activity(
 			case a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired:
 				return k.now(), "", nil
 			case a2a.TaskStateSubmitted, a2a.TaskStateWorking:
-				running = append(running, taskProgress(t))
+				if !slices.Contains(unfinished, t.Status.State) {
+					unfinished = append(unfinished, t.Status.State)
+				}
 			}
 			if ts := t.Status.Timestamp; ts != nil && ts.After(latest) {
 				latest = *ts
+			}
+		}
+		// Only a task that can still change needs its artifacts, and only these are read with them.
+		for _, state := range unfinished {
+			busy, err := k.Kagent.ListTasksInStateLatest(ctx, agent, c, state)
+			if err != nil {
+				return time.Time{}, "", fmt.Errorf("list %s tasks: %w", state, err)
+			}
+			for _, t := range busy {
+				if t != nil {
+					running = append(running, taskProgress(t))
+				}
 			}
 		}
 	}
@@ -179,7 +197,7 @@ func (k *KagentLiveness) activity(
 // text deltas, tool calls and tool results are artifact events, which add no history message and
 // leave the status time at the turn's start. Appended text grows a part list, a new tool call adds
 // an artifact, so a turn that is doing anything changes this and one that is not leaves it as it
-// was. The list read must ask for artifacts ([kagent.Client.ListTasksLatest] does).
+// was. The task must come from a read that asks for artifacts ([kagent.Client.ListTasksInStateLatest]).
 func taskProgress(t *a2a.Task) string {
 	newest := ""
 	if n := len(t.History); n > 0 && t.History[n-1] != nil {
@@ -265,15 +283,20 @@ func (s *Service) checkLiveness(ctx context.Context, a dbq.TaskAttempt) error {
 	if a.BindingID == nil {
 		return nil
 	}
+	now := s.now()
 	live, known, err := s.Liveness.ObserveLiveness(ctx, *a.BindingID)
 	if err != nil {
 		s.log().WarnContext(ctx, "tasks: observe attempt liveness", "attempt", a.ID, "error", err)
-		return s.touchLiveness(ctx, a.ID)
+		return s.checkUnreadLiveness(ctx, a, now)
 	}
 	if !known {
-		return s.touchLiveness(ctx, a.ID) // no kagent session yet; nothing to judge
+		return s.checkUnobservedLiveness(ctx, a, now) // no kagent session yet; nothing else to judge
 	}
-	now := s.now()
+	if a.LivenessFailingSince != nil {
+		if err := dbq.New(s.Pool).ClearAttemptLivenessFailure(ctx, a.ID); err != nil {
+			return err
+		}
+	}
 	active, changed := lastActivity(live, a, now)
 	if changed && live.Exists && !live.Terminal {
 		if err := dbq.New(s.Pool).RecordAttemptProgress(ctx, dbq.RecordAttemptProgressParams{
@@ -287,10 +310,43 @@ func (s *Service) checkLiveness(ctx context.Context, a dbq.TaskAttempt) error {
 		return s.blockAttempt(ctx, a, dbstate.ReasonSessionLost)
 	case !active.IsZero() && now.Sub(active) > s.stallTimeout():
 		return s.blockAttempt(ctx, a, dbstate.ReasonStalled)
-	case now.Sub(a.CreatedAt) > s.maxRuntime():
+	case s.overRuntime(a, now):
 		return s.blockAttempt(ctx, a, dbstate.ReasonRuntimeLimit)
 	}
 	return s.touchLiveness(ctx, a.ID)
+}
+
+// overRuntime reports whether the attempt has run past the runtime bound. It needs nothing from
+// kagent, so it is judged on every path of [Service.checkLiveness], including the ones that could
+// not read the session.
+func (s *Service) overRuntime(a dbq.TaskAttempt, now time.Time) bool {
+	return now.Sub(a.CreatedAt) > s.maxRuntime()
+}
+
+// checkUnobservedLiveness judges an attempt with no kagent session yet: there is nothing to read,
+// but the runtime bound still holds.
+func (s *Service) checkUnobservedLiveness(ctx context.Context, a dbq.TaskAttempt, now time.Time) error {
+	if s.overRuntime(a, now) {
+		return s.blockAttempt(ctx, a, dbstate.ReasonRuntimeLimit)
+	}
+	return s.touchLiveness(ctx, a.ID)
+}
+
+// checkUnreadLiveness judges an attempt whose kagent session could not be read this time. One failed
+// read says nothing about the attempt, but it must not hide the bounds that need no read: the
+// runtime bound is judged as always. And a read that keeps failing for the stall timeout leaves the
+// attempt as unjudged as a session that shows no activity for that long, so it is blocked as
+// stalled: an owner is told, and a progress report recovers it should the sweep be wrong.
+func (s *Service) checkUnreadLiveness(ctx context.Context, a dbq.TaskAttempt, now time.Time) error {
+	if s.overRuntime(a, now) {
+		return s.blockAttempt(ctx, a, dbstate.ReasonRuntimeLimit)
+	}
+	if a.LivenessFailingSince != nil && now.Sub(*a.LivenessFailingSince) > s.stallTimeout() {
+		return s.blockAttempt(ctx, a, dbstate.ReasonStalled)
+	}
+	return dbq.New(s.Pool).MarkAttemptLivenessReadFailed(ctx, dbq.MarkAttemptLivenessReadFailedParams{
+		ID: a.ID, LivenessFailingSince: &now,
+	})
 }
 
 // touchLiveness bumps the attempt's updated_at alone; see [Service.checkLiveness].

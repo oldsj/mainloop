@@ -259,7 +259,7 @@ func TestLivenessBlocksAHarnessTurnWhoseArtifactsStopGrowing(t *testing.T) {
 
 // Review P1: a progress report is proof of life. When the sweep was wrong and a report recovers the
 // task, the next sweep must not block it again over the same old fingerprint.
-func TestReviewReportAfterFalseStallIsBlockedAgainNextSweep(t *testing.T) {
+func TestReviewReportAfterFalseStallIsNotBlockedAgainNextSweep(t *testing.T) {
 	r := newRig(t)
 	id, binding := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
@@ -402,4 +402,125 @@ func (r *rig) setClock(at time.Time) {
 	now := func() time.Time { return at }
 	r.svc.Now = now
 	r.svc.Liveness.(*tasks.KagentLiveness).Now = now
+}
+
+// unreadableList answers ObserveLiveness like the rig's fake but fails the task reads the way the
+// kagent client does when a reply is over its size limit: the plain list, or with inState the list of
+// the unfinished tasks with their artifacts.
+type unreadableList struct {
+	*fakeKagentLiveness
+	inState bool
+}
+
+var errUnreadable = &kagent.OutcomeUnknown{Op: "A2A ListTasks", Detail: "reply unreadable"}
+
+func (u unreadableList) ListTasksLatest(ctx context.Context, agent kagent.AgentRef, contextID string) ([]*a2a.Task, error) {
+	if u.inState {
+		return u.fakeKagentLiveness.ListTasksLatest(ctx, agent, contextID)
+	}
+	return nil, errUnreadable
+}
+
+func (u unreadableList) ListTasksInStateLatest(ctx context.Context, agent kagent.AgentRef, contextID string, state a2a.TaskState) ([]*a2a.Task, error) {
+	if u.inState {
+		return nil, errUnreadable
+	}
+	return u.fakeKagentLiveness.ListTasksInStateLatest(ctx, agent, contextID, state)
+}
+
+func (r *rig) readsFailing(inState bool) {
+	r.svc.Liveness = &tasks.KagentLiveness{
+		Pool: r.pool, OwnerID: owner, Sessions: r.ses.Service, Kagent: unreadableList{r.live, inState}, Activity: r.activity,
+	}
+}
+
+// Review P2: a task read that fails used to leave the attempt untouched by every bound, the runtime
+// limit included, so a conversation too big to read was never bounded at all.
+func TestLivenessAFailedTaskReadStillAppliesTheRuntimeBound(t *testing.T) {
+	for name, inState := range map[string]bool{"plain list": false, "list with artifacts": true} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t)
+			id, _ := r.liveTask("ks-1")
+			r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
+			r.live.setTasks("ks-1", harnessTurn(time.Now(), 1, 0))
+			r.readsFailing(inState)
+			r.setClock(time.Now().Add(7 * time.Hour))
+			r.sweep(r.svc.LivenessSweep())
+			if got := r.taskReason(id); got != "runtime_limit" {
+				t.Fatalf("7 hours in, task read failing: status = %s reason = %q, want blocked runtime_limit", r.taskStatus(id), got)
+			}
+		})
+	}
+}
+
+// The same bound holds for an attempt that has no kagent session to read.
+func TestLivenessAnAttemptWithNoKagentSessionIsStillBoundedByRuntime(t *testing.T) {
+	r := newRig(t)
+	id, _ := r.liveTask("")
+	r.setClock(time.Now().Add(7 * time.Hour))
+	r.sweep(r.svc.LivenessSweep())
+	if got := r.taskReason(id); got != "runtime_limit" {
+		t.Fatalf("status = %s reason = %q, want blocked runtime_limit", r.taskStatus(id), got)
+	}
+}
+
+// Review P2: one failed read says nothing, but reads that keep failing for the stall timeout leave the
+// attempt as unjudged as a silent one, and it is blocked as stalled; a read that works in between
+// starts the count over.
+func TestLivenessReadsThatKeepFailingBlockTheTaskAsStalled(t *testing.T) {
+	r := newRig(t)
+	id, _ := r.liveTask("ks-1")
+	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
+	r.live.setTasks("ks-1", harnessTurn(time.Now(), 1, 0))
+	healthy := r.svc.Liveness
+	start := time.Now()
+	look := func(after time.Duration) {
+		r.setClock(start.Add(after))
+		r.sweep(r.svc.LivenessSweep())
+	}
+
+	r.readsFailing(false)
+	look(0)
+	look(30 * time.Minute)
+	if got := r.taskStatus(id); got != "running" {
+		t.Fatalf("30 minutes of failed reads: status = %s, want running", got)
+	}
+
+	// A read that works clears the count; reads failing again start a new one.
+	r.svc.Liveness = healthy
+	look(31 * time.Minute)
+	r.readsFailing(false)
+	look(50 * time.Minute)
+	look(90 * time.Minute)
+	if got := r.taskStatus(id); got != "running" {
+		t.Fatalf("40 minutes into a new run of failed reads: status = %s, want running", got)
+	}
+
+	look(96 * time.Minute)
+	if got := r.taskReason(id); got != "stalled" {
+		t.Fatalf("46 minutes of failed reads: status = %s reason = %q, want blocked stalled", r.taskStatus(id), got)
+	}
+}
+
+// Review P2: artifacts can run to megabytes in a long conversation, and only a task that can still
+// change has any use for them. Finished tasks are listed without; a conversation with no unfinished
+// task reads no artifacts at all.
+func TestLivenessReadsArtifactsOnlyForUnfinishedTasks(t *testing.T) {
+	r := newRig(t)
+	r.liveTask("ks-1")
+	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
+	done := time.Now().Add(-time.Hour)
+	finished := &a2a.Task{ID: "t-0", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted, Timestamp: &done}}
+	r.live.setTasks("ks-1", append([]*a2a.Task{finished}, harnessTurn(time.Now(), 1, 0)...))
+	r.sweep(r.svc.LivenessSweep())
+	if got := r.live.artifactStatesRead(); len(got) != 1 || got[0] != a2a.TaskStateWorking {
+		t.Fatalf("artifacts read for states %v, want only working", got)
+	}
+
+	r.live.setTasks("ks-1", []*a2a.Task{finished})
+	r.live.resetArtifactReads()
+	r.sweep(r.svc.LivenessSweep())
+	if got := r.live.artifactStatesRead(); len(got) != 0 {
+		t.Fatalf("artifacts read for states %v with every task finished, want none", got)
+	}
 }

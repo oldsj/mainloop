@@ -232,6 +232,15 @@ LIMIT $1;
 -- behind others in ListActiveAttemptsForLiveness's order, instead of it being picked every pass.
 UPDATE task_attempts SET updated_at = now() WHERE id = $1;
 
+-- name: MarkAttemptLivenessReadFailed :exec
+-- A liveness read of the attempt's kagent session failed: remember since when reads have been failing
+-- (the first failure of a run), and rotate the attempt behind the others like a look that found nothing.
+UPDATE task_attempts SET liveness_failing_since = COALESCE(liveness_failing_since, $2), updated_at = now() WHERE id = $1;
+
+-- name: ClearAttemptLivenessFailure :exec
+-- A liveness read succeeded, so reads are no longer failing.
+UPDATE task_attempts SET liveness_failing_since = NULL WHERE id = $1 AND liveness_failing_since IS NOT NULL;
+
 -- name: RecordAttemptProgress :exec
 -- Stores the fingerprint of the attempt's kagent task the liveness sweep just saw change, and when.
 -- It writes nothing else, so it never contends with a settle or a report on the attempt's state.

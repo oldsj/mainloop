@@ -882,9 +882,9 @@ func TestGetTaskAndListTasks(t *testing.T) {
 	}
 }
 
-// A busy harness turn records its text and tool calls as artifacts only, so the liveness read must
-// ask for them; without them a healthy long turn shows nothing new in the list.
-func TestListTasksLatestCarriesArtifactsAndTheNewestMessageOnly(t *testing.T) {
+// The plain latest-task list is what a liveness sweep reads for every task of a conversation, so it
+// must stay small however long the conversation is: no artifacts, and only the newest message.
+func TestListTasksLatestCarriesTheNewestMessageAndNoArtifacts(t *testing.T) {
 	c, srv, _ := setup(t)
 	srv.AddTask(&a2a.Task{
 		ID: "t1", ContextID: "ctx-1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking},
@@ -894,6 +894,27 @@ func TestListTasksLatestCarriesArtifactsAndTheNewestMessageOnly(t *testing.T) {
 	got, err := c.ListTasksLatest(ctx, agent, "ctx-1")
 	if err != nil || len(got) != 1 {
 		t.Fatalf("got %d tasks, err %v", len(got), err)
+	}
+	if len(got[0].Artifacts) != 0 || len(got[0].History) != 1 || got[0].History[0].ID != "m2" {
+		t.Fatalf("artifacts %d, history %+v; want no artifacts and only the newest message", len(got[0].Artifacts), got[0].History)
+	}
+}
+
+// A busy harness turn records its text and tool calls as artifacts only, so the liveness read asks
+// for them, for the tasks in one state and no others.
+func TestListTasksInStateLatestCarriesArtifactsForThatStateOnly(t *testing.T) {
+	c, srv, _ := setup(t)
+	art := []*a2a.Artifact{{ID: "a", Parts: a2a.ContentParts{a2a.NewTextPart("x")}}}
+	srv.AddTask(&a2a.Task{
+		ID: "t1", ContextID: "ctx-1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking},
+		History:   []*a2a.Message{{ID: "m1", Role: a2a.MessageRoleUser}, {ID: "m2", Role: a2a.MessageRoleUser}},
+		Artifacts: art,
+	})
+	srv.AddTask(&a2a.Task{ID: "t2", ContextID: "ctx-1", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}, Artifacts: art})
+	srv.AddTask(&a2a.Task{ID: "t3", ContextID: "ctx-2", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}, Artifacts: art})
+	got, err := c.ListTasksInStateLatest(ctx, agent, "ctx-1", a2a.TaskStateWorking)
+	if err != nil || len(got) != 1 || got[0].ID != "t1" {
+		t.Fatalf("got %+v, err %v; want only the working task of the conversation", got, err)
 	}
 	if len(got[0].Artifacts) != 1 || len(got[0].History) != 1 || got[0].History[0].ID != "m2" {
 		t.Fatalf("artifacts %d, history %+v; want the artifact and only the newest message", len(got[0].Artifacts), got[0].History)

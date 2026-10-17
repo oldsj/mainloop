@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -216,6 +217,8 @@ type fakeKagentLiveness struct {
 	live  map[string]kagent.SessionLiveness
 	tasks map[string][]*a2a.Task
 	calls int
+	// artifactReads are the states ListTasksInStateLatest was asked for.
+	artifactReads []a2a.TaskState
 	// onObserve runs inside ObserveLiveness, before it answers, so a test can race a concurrent
 	// write against the write the sweep makes afterward.
 	onObserve func()
@@ -237,10 +240,44 @@ func (k *fakeKagentLiveness) ObserveLiveness(_ context.Context, id string) (kage
 	return kagent.SessionLiveness{Exists: true}, nil
 }
 
+func (k *fakeKagentLiveness) artifactStatesRead() []a2a.TaskState {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return slices.Clone(k.artifactReads)
+}
+
+func (k *fakeKagentLiveness) resetArtifactReads() {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.artifactReads = nil
+}
+
+// ListTasksLatest answers like kagent's plain list: every task, none with its artifacts.
 func (k *fakeKagentLiveness) ListTasksLatest(_ context.Context, _ kagent.AgentRef, contextID string) ([]*a2a.Task, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	return k.tasks[contextID], nil
+	var out []*a2a.Task
+	for _, t := range k.tasks[contextID] {
+		cp := *t
+		cp.Artifacts = nil
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+// ListTasksInStateLatest answers like kagent's list of one state: those tasks, with artifacts. The
+// states it was asked for are kept, so a test can see that finished tasks' artifacts were never read.
+func (k *fakeKagentLiveness) ListTasksInStateLatest(_ context.Context, _ kagent.AgentRef, contextID string, state a2a.TaskState) ([]*a2a.Task, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.artifactReads = append(k.artifactReads, state)
+	var out []*a2a.Task
+	for _, t := range k.tasks[contextID] {
+		if t.Status.State == state {
+			out = append(out, t)
+		}
+	}
+	return out, nil
 }
 
 func (k *fakeKagentLiveness) set(kagentSessionID string, live kagent.SessionLiveness) {

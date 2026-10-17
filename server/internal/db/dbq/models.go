@@ -668,6 +668,7 @@ type TaskAttempt struct {
 	ProgressMarker            *string
 	ProgressAt                *time.Time
 	StopRequestedAt           *time.Time
+	LivenessFailingSince      *time.Time
 }
 
 type TaskEventDelivery struct {
