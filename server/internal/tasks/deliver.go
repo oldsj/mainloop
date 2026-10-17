@@ -179,6 +179,8 @@ func (s *Service) sendReport(ctx context.Context, c reconcile.Claim, d dbq.TaskE
 		}
 		switch {
 		case errors.Is(err, sessions.ErrBusy):
+			// A plain busy send now queues instead (see sessions.record): this only catches the rare
+			// unique-constraint race busyOrErr maps to ErrBusy, so one more pass clears it.
 			return reconcile.RetryAfter(3 * time.Second), nil
 		case errors.Is(err, sessions.ErrConflict), errors.Is(err, sessions.ErrNotFound):
 			// Not ready, or ended since the target was read: the next pass tells which.
