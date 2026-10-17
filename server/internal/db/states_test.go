@@ -69,9 +69,9 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"project_merge_policy_audit", "old_policy", strs(string(dbstate.MergeAuto), string(dbstate.MergeApproval))},
 		{"project_merge_policy_audit", "new_policy", strs(string(dbstate.MergeAuto), string(dbstate.MergeApproval))},
 		{"deliveries", "state", strs(
-			string(dbstate.DeliveryRecorded), string(dbstate.DeliverySending), string(dbstate.DeliveryDelivered),
-			string(dbstate.DeliveryCompleted), string(dbstate.DeliveryFailed), string(dbstate.DeliveryCancelled),
-			string(dbstate.DeliveryUncertain))},
+			string(dbstate.DeliveryQueued), string(dbstate.DeliveryRecorded), string(dbstate.DeliverySending),
+			string(dbstate.DeliveryDelivered), string(dbstate.DeliveryCompleted), string(dbstate.DeliveryFailed),
+			string(dbstate.DeliveryCancelled), string(dbstate.DeliveryUncertain))},
 		{"tasks", "mode", strs(string(dbstate.TaskModeCode), string(dbstate.TaskModeCoordination))},
 		{"tasks", "selection_source", strs(
 			string(dbstate.SelectionExplicit), string(dbstate.SelectionProjectDefault),

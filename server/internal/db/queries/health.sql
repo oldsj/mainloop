@@ -319,7 +319,7 @@ JOIN sessions AS s ON s.id = d.session_id
 WHERE s.user_id = $1
   AND (s.project_id = $2 OR EXISTS (
       SELECT 1 FROM agent_bindings AS b WHERE b.session_id = s.id AND b.role = 'main'))
-  AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain')
+  AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain', 'queued')
 ORDER BY d.id
 LIMIT 101;
 

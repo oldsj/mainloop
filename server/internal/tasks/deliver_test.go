@@ -119,7 +119,8 @@ func TestBusyParentGetsTheReportLater(t *testing.T) {
 	r.run()
 	parent, sup := r.supervisor()
 	_, supSession := r.attemptOf(parent)
-	// The supervisor's brief turn is still open: one open turn per session, so the report waits.
+	// The supervisor's brief turn is still open: one open turn per session, so the report is
+	// recorded as queued behind it instead of refused.
 	child := r.codeChild(sup, "feat")
 	r.eventually("child provisioned", func() bool { return r.opState(child) == "completed" })
 	_, binding := r.attemptOf(child)
@@ -127,17 +128,25 @@ func TestBusyParentGetsTheReportLater(t *testing.T) {
 	if _, err := r.svc.Report(context.Background(), kid, report(kid, "r1", dbstate.OutcomeProgress)); err != nil {
 		t.Fatal(err)
 	}
-	r.eventually("attempted", func() bool {
-		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE attempts > 0`) == 1
+	r.eventually("the report is recorded, queued behind the open turn", func() bool {
+		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'queued' AND delivery_id IS NOT NULL`) == 1
 	})
-	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, supSession); n != 0 {
-		t.Fatalf("a report was sent into an open turn: %d", n)
+	// The message is recorded at once; only its delivery waits, not yet admitted.
+	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, supSession); n != 1 {
+		t.Fatalf("report messages = %d, want 1", n)
 	}
+	if got := r.str(`SELECT d.state FROM deliveries d JOIN session_messages m ON m.id = d.id
+		WHERE m.session_id = $1 AND m.content LIKE '[report from%'`, supSession); got != "queued" {
+		t.Fatalf("report delivery state = %s, want queued (not yet admitted)", got)
+	}
+
+	// fakeSessions runs with no kagent client, so nothing is ever actually sent; admission is as far
+	// as this rig can observe. Once the supervisor's turn ends, the queued report is admitted.
 	r.finishTurns()
-	r.exec(`UPDATE task_event_deliveries SET next_attempt_at = now()`)
-	r.eventually("sent", func() bool {
-		return r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, supSession) == 1
-	})
+	if got := r.str(`SELECT d.state FROM deliveries d JOIN session_messages m ON m.id = d.id
+		WHERE m.session_id = $1 AND m.content LIKE '[report from%'`, supSession); got != "recorded" {
+		t.Fatalf("report delivery state = %s, want recorded (admitted once the turn ended)", got)
+	}
 }
 
 // A main thread that is switching provider refuses chat; a child's report to it waits in the queue

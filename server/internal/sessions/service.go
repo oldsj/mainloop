@@ -1,10 +1,12 @@
 // Package sessions is the main thread and its delivery ledger.
 //
 // A message to a native session is written once, as a user message and a delivery row in state
-// recorded, in one transaction. A reconcile loop then sends it to kagent, follows the task and
-// settles the row (see deliver.go). The ledger's states are explicit:
+// recorded (or queued, while another turn is open), in one transaction. A reconcile loop then sends
+// a recorded message to kagent, follows the task and settles the row (see deliver.go). The ledger's
+// states are explicit:
 //
-//	recorded   written; nothing has been sent
+//	queued     written while another turn was open; waiting its turn, not yet admitted
+//	recorded   admitted; nothing has been sent
 //	sending    the claimer is calling kagent; the outcome is not known yet
 //	delivered  a task exists for the message; the turn is running
 //	completed  the task finished and its reply is mirrored (final)
@@ -13,9 +15,12 @@
 //	uncertain  the send may or may not have reached kagent; resolved by looking the message up
 //
 // A session has at most one open turn (recorded, sending or delivered), enforced by a partial
-// unique index. A message is retried only when kagent says it was not accepted, with the same
-// message id (the kagent client does that). Every other doubt becomes uncertain and is settled
-// by GetTask or ListTasks, never by sending again.
+// unique index; queued is deliberately excluded from it, so many messages may wait behind the open
+// one. Whenever a turn ends (settles in deliver.go, or is stopped in control.go), the oldest queued
+// message of that session, if any, is admitted (moved to recorded) in the same transaction: the
+// index has nothing left of the session's to conflict with. A message is retried only when kagent
+// says it was not accepted, with the same message id (the kagent client does that). Every other
+// doubt becomes uncertain and is settled by GetTask or ListTasks, never by sending again.
 package sessions
 
 import (
@@ -348,6 +353,9 @@ func (s *Service) EnsureMain(ctx context.Context) (Main, error) {
 type Sent struct {
 	ConversationID string
 	MessageID      string
+	// Queued is whether the message was recorded as queued, behind an open turn, instead of
+	// admitted at once.
+	Queued bool
 }
 
 // checkText trims and validates a message and its id.
@@ -375,56 +383,83 @@ const (
 	SourceMainloop Source = "mainloop"
 )
 
-// record writes a message from source and its delivery for a session, in tx. It is idempotent per message
-// id: an id that is already recorded for the session changes nothing. The caller has checked that
-// the session exists and may take a message.
-func (s *Service) record(ctx context.Context, tx pgx.Tx, source Source, sessionID, messageID, text string) error {
+// record writes a message from source and its delivery for a session, in tx, and reports whether it
+// was queued behind an open turn rather than admitted at once. It is idempotent per message id: an
+// id that is already recorded for the session changes nothing and reports the state it is actually
+// in. The caller has checked that the session exists and may take a message.
+func (s *Service) record(ctx context.Context, tx pgx.Tx, source Source, sessionID, messageID, text string) (bool, error) {
 	q := dbq.New(tx)
 	// One send at a time per session, so the open-turn check below cannot race another send.
 	if err := db.XactLock(ctx, tx, "mainloop:send:"+sessionID); err != nil {
-		return err
+		return false, err
 	}
 	if err := checkTaskSendFence(ctx, q, sessionID); err != nil {
-		return err
+		return false, err
 	}
 	if err := checkMainReady(ctx, q, sessionID); err != nil {
-		return err
+		return false, err
 	}
 	if d, err := q.GetDelivery(ctx, messageID); err == nil {
 		if d.SessionID != sessionID {
-			return fmt.Errorf("%w: the message id belongs to another conversation", ErrInvalid)
+			return false, fmt.Errorf("%w: the message id belongs to another conversation", ErrInvalid)
 		}
-		return nil // already recorded
+		return d.State == dbstate.DeliveryQueued, nil // already recorded
 	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("get delivery: %w", err)
+		return false, fmt.Errorf("get delivery: %w", err)
 	}
+	busy := false
 	if _, err := q.GetBlockingDelivery(ctx, dbq.GetBlockingDeliveryParams{
 		SessionID: sessionID, HoldSeconds: s.opts().UncertainHold.Seconds(),
 	}); err == nil {
-		return ErrBusy
+		busy = true
 	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("check open turn: %w", err)
+		return false, fmt.Errorf("check open turn: %w", err)
 	}
 	if n, err := q.InsertSessionMessage(ctx, dbq.InsertSessionMessageParams{
 		ID: messageID, SessionID: sessionID, Role: string(userRole), Content: text,
 	}); err != nil {
-		return fmt.Errorf("record message: %w", err)
+		return false, fmt.Errorf("record message: %w", err)
 	} else if n == 0 {
 		// No delivery has this id, so the row is some other message: ids are global.
-		return fmt.Errorf("%w: the message id is already used", ErrInvalid)
+		return false, fmt.Errorf("%w: the message id is already used", ErrInvalid)
 	}
-	if _, err := q.InsertDelivery(ctx, dbq.InsertDeliveryParams{ID: messageID, SessionID: sessionID, Source: string(source)}); err != nil {
-		return fmt.Errorf("record delivery: %w", err)
+	if busy {
+		// Durably queued, behind the open turn: deliveries_one_open excludes this state, so the
+		// insert cannot conflict with it. The reconcile loop never claims a queued row; whoever ends
+		// the open turn admits this one, in the order it arrived.
+		if _, err := q.InsertQueuedDelivery(ctx, dbq.InsertQueuedDeliveryParams{
+			ID: messageID, SessionID: sessionID, Source: string(source),
+		}); err != nil {
+			return false, fmt.Errorf("record queued delivery: %w", err)
+		}
+	} else if _, err := q.InsertDelivery(ctx, dbq.InsertDeliveryParams{
+		ID: messageID, SessionID: sessionID, Source: string(source),
+	}); err != nil {
+		return false, fmt.Errorf("record delivery: %w", err)
 	}
 	// The owner's next message releases the hold a stop left on the queue.
 	if err := q.SetBindingQueueHeld(ctx, dbq.SetBindingQueueHeldParams{SessionID: sessionID, QueueHeld: false}); err != nil {
-		return fmt.Errorf("release queue hold: %w", err)
+		return false, fmt.Errorf("release queue hold: %w", err)
 	}
 	if err := q.RefreshSessionStatus(ctx, sessionID); err != nil {
-		return fmt.Errorf("refresh session status: %w", err)
+		return false, fmt.Errorf("refresh session status: %w", err)
+	}
+	if busy {
+		return true, nil
 	}
 	// Delivered to listeners when the transaction commits.
-	return q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: DeliveryChannel, Payload: messageID})
+	return false, q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: DeliveryChannel, Payload: messageID})
+}
+
+// promoteNextQueued admits the oldest message still queued for the session, if any, once its open
+// turn has just ended in this same transaction. It returns the promoted delivery's id, or "" when
+// nothing was queued; the caller notifies DeliveryChannel so the reconcile loop picks it up at once.
+func promoteNextQueued(ctx context.Context, q *dbq.Queries, sessionID string) (string, error) {
+	id, err := q.PromoteNextQueuedDelivery(ctx, sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
 }
 
 // busyOrErr maps the database's one-open-turn index to ErrBusy.
@@ -462,7 +497,9 @@ func (s *Service) SendAs(ctx context.Context, source Source, messageID, conversa
 			return ErrNotFound
 		}
 		out = Sent{ConversationID: main.SessionID, MessageID: messageID}
-		return s.record(ctx, tx, source, main.SessionID, messageID, text)
+		queued, err := s.record(ctx, tx, source, main.SessionID, messageID, text)
+		out.Queued = queued
+		return err
 	})
 	if err = busyOrErr(err); err != nil {
 		return Sent{}, err
@@ -488,6 +525,7 @@ func (s *Service) SendToAs(ctx context.Context, source Source, sessionID, messag
 	if err != nil {
 		return Sent{}, err
 	}
+	var queued bool
 	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
 		// The lock cancel also takes, before the status is read: no message is recorded after a
 		// cancel commits. Stop and archive take no lock; the open-turn index and the status check
@@ -516,12 +554,14 @@ func (s *Service) SendToAs(ctx context.Context, source Source, sessionID, messag
 		if b.WorkspaceAgentName != nil && b.KagentSessionID == nil {
 			return conflict("The workspace is not ready yet; try again when it is.")
 		}
-		return s.record(ctx, tx, source, sessionID, messageID, text)
+		var rerr error
+		queued, rerr = s.record(ctx, tx, source, sessionID, messageID, text)
+		return rerr
 	})
 	if err = busyOrErr(err); err != nil {
 		return Sent{}, err
 	}
-	return Sent{ConversationID: sessionID, MessageID: messageID}, nil
+	return Sent{ConversationID: sessionID, MessageID: messageID, Queued: queued}, nil
 }
 
 // NewService builds the service from settings. k may be nil in a test that talks to no kagent. reg

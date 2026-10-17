@@ -56,9 +56,15 @@ func (a *SessionsAPI) SendMessage(ctx context.Context, r api.SendMessageRequestO
 	case err != nil:
 		return nil, err
 	}
-	return api.SendMessage200JSONResponse(api.ChatResponse{
+	resp := api.ChatResponse{
 		ConversationId: sent.ConversationID, DeliveryMessageId: &sent.MessageID, Pending: true,
-	}), nil
+		Status: api.ChatResponseStatusOk,
+	}
+	if sent.Queued {
+		resp.Status = api.ChatResponseStatusQueued
+		return api.SendMessage202JSONResponse(resp), nil
+	}
+	return api.SendMessage200JSONResponse(resp), nil
 }
 
 // GetConversation implements api.StrictServerInterface. The only conversation is the main
@@ -251,14 +257,27 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row nativeBind
 	n.SessionState, n.PreparationObservation = state, observation
 	if unknown {
 		note = "delivery unknown: the last message was not replayed; new messages wait until this is settled, then check the reply and send again if needed"
-	} else if n := len(deliveries); n > 0 && deliveries[n-1].State == string(dbstate.DeliveryUncertain) {
-		// Past the hold and not yet settled by the delivery loop: sends are open again.
+	} else if lastAttempted(deliveries) == string(dbstate.DeliveryUncertain) {
+		// Past the hold and not yet settled by the delivery loop: sends are open again. A message
+		// queued behind it has not been attempted yet and says nothing about this, so it is skipped
+		// when looking for the last one that was.
 		note = "delivery unknown: the last message was not sent again; check the reply, then send again if needed"
 	}
 	if note != "" {
 		n.Note = &note
 	}
 	return n, nil
+}
+
+// lastAttempted is the state of the newest delivery that is not itself still queued, or "" when
+// every delivery shown is queued (nothing has been attempted yet).
+func lastAttempted(ds []api.NativeDeliveryInfo) string {
+	for i := len(ds) - 1; i >= 0; i-- {
+		if ds[i].State != string(dbstate.DeliveryQueued) {
+			return ds[i].State
+		}
+	}
+	return ""
 }
 
 // sessionState reads the kagent session once, best effort: kagent being down must not take the
@@ -442,7 +461,7 @@ func (a *SessionsAPI) SendSessionMessage(ctx context.Context, r api.SendSessionM
 		return nil, apierr.Invalid("the body is required")
 	}
 	id := uuid.NewString()
-	_, err := a.Svc.SendTo(ctx, r.SessionId, id, r.Body.Message)
+	sent, err := a.Svc.SendTo(ctx, r.SessionId, id, r.Body.Message)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return nil, apierr.NotFound("Session not found")
@@ -454,6 +473,11 @@ func (a *SessionsAPI) SendSessionMessage(ctx context.Context, r api.SendSessionM
 		return nil, apierr.Invalid(reason(err, ErrInvalid))
 	case err != nil:
 		return nil, err
+	}
+	if sent.Queued {
+		return api.SendSessionMessage202JSONResponse(api.SessionMessageResponse{
+			MessageId: id, Status: api.SessionMessageResponseStatusQueued,
+		}), nil
 	}
 	return api.SendSessionMessage200JSONResponse(api.SessionMessageResponse{MessageId: id, Status: api.SessionMessageResponseStatusOk}), nil
 }

@@ -20,8 +20,10 @@ export const NOTICE_MAX = 300;
 export const UNCONFIRMED_NOTICE =
   'Could not confirm provider state. Waiting for a successful read before allowing another selection or main message.';
 
-/** Delivery states that keep the main provider in use: a switch waits until none of them remain. */
-const BUSY_DELIVERY_STATES = ['recorded', 'sending', 'delivered', 'uncertain'];
+/** Delivery states that keep the main provider in use: a switch waits until none of them remain.
+ * `queued` is included: a message waiting behind the open turn is still work the switch must not
+ * strand. */
+const BUSY_DELIVERY_STATES = ['recorded', 'sending', 'delivered', 'uncertain', 'queued'];
 
 /** The owner's controls for the main provider, as the header and the page share them. */
 export interface MainProviderControl {

@@ -234,7 +234,7 @@ func TestSessionRoutesRefuseWhatIsNotTheOwners(t *testing.T) {
 
 // ---- message: one open turn, ended and archived sessions ---------------------------------------------
 
-func TestOneOpenTurnPerSessionAndASecondMessageIsRefused(t *testing.T) {
+func TestOneOpenTurnPerSessionQueuesMessagesAndDeliversThemInOrderOnceTheTurnEnds(t *testing.T) {
 	e := newEnv(t)
 	e.withProviders()
 	a := e.API()
@@ -242,11 +242,25 @@ func TestOneOpenTurnPerSessionAndASecondMessageIsRefused(t *testing.T) {
 	id := e.newSession("first")
 	e.run()
 	e.waitState(e.firstDelivery(id), dbstate.DeliveryCompleted)
-	e.openTurn(id, "second")
+	mid := e.openTurn(id, "second")
 
-	_, err := a.SendSessionMessage(ctx, api.SendSessionMessageRequestObject{SessionId: id, Body: &api.SessionMessageRequest{Message: "third"}})
-	if busy, ok := apierr.As(err); !ok || busy.Status != 409 || !strings.Contains(busy.Message, "turn is already in progress") {
-		t.Fatalf("got %v", err)
+	send := func(text string) api.SendSessionMessage202JSONResponse {
+		r, err := a.SendSessionMessage(ctx, api.SendSessionMessageRequestObject{SessionId: id, Body: &api.SessionMessageRequest{Message: text}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		queued, isQueued := r.(api.SendSessionMessage202JSONResponse)
+		if !isQueued || queued.Status != api.SessionMessageResponseStatusQueued {
+			t.Fatalf("%s: got %T %+v", text, r, r)
+		}
+		return queued
+	}
+	third := send("third")
+	fourth := send("fourth")
+	for _, qid := range []string{third.MessageId, fourth.MessageId} {
+		if d := e.delivery(qid); d.State != dbstate.DeliveryQueued {
+			t.Fatalf("delivery %s state = %s", qid, d.State)
+		}
 	}
 	var open int
 	if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM deliveries WHERE session_id = $1 AND state IN ('recorded','sending','delivered')`, id).Scan(&open); err != nil || open != 1 {
@@ -258,6 +272,32 @@ func TestOneOpenTurnPerSessionAndASecondMessageIsRefused(t *testing.T) {
 	}
 	if _, err := a.SendSessionMessage(ctx, api.SendSessionMessageRequestObject{SessionId: id}); apierr.StatusOf(err) != 422 {
 		t.Fatalf("no body: %v", err)
+	}
+
+	// Once the open turn ends, the queued messages are admitted and delivered one turn each, in order.
+	if _, err := e.svc.Stop(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	e.waitState(mid, dbstate.DeliveryCancelled)
+	e.waitState(third.MessageId, dbstate.DeliveryCompleted)
+	e.waitState(fourth.MessageId, dbstate.DeliveryCompleted)
+	var userTexts []string
+	for _, m := range e.sessionMessages(id) {
+		if m.Role == "user" {
+			userTexts = append(userTexts, m.Content)
+		}
+	}
+	want := []string{"first", "second", "third", "fourth"}
+	if len(userTexts) != len(want) {
+		t.Fatalf("user messages %+v", userTexts)
+	}
+	for i, w := range want {
+		if userTexts[i] != w {
+			t.Fatalf("message %d = %q, want %q (%+v)", i, userTexts[i], w, userTexts)
+		}
+	}
+	if e.sends() != 4 {
+		t.Fatalf("%d sends", e.sends())
 	}
 }
 

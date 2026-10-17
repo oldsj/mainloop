@@ -1241,6 +1241,12 @@ export interface components {
       pending: boolean;
       /** Delivery Message Id */
       delivery_message_id: string | null;
+      /**
+       * @description `queued`: recorded durably behind an open turn, and delivered in its own turn once that one ends; `ok`: admitted at once.
+       * @default ok
+       * @enum {string}
+       */
+      status: 'ok' | 'queued';
     };
     /**
      * CommitSummary
@@ -2724,8 +2730,11 @@ export interface components {
       message: 'Response sent';
     };
     SessionMessageResponse: {
-      /** @enum {string} */
-      status: 'ok';
+      /**
+       * @description `queued`: recorded durably behind an open turn, and delivered in its own turn once that one ends; `ok`: admitted at once.
+       * @enum {string}
+       */
+      status: 'ok' | 'queued';
       message_id: string;
     };
     SessionCancelResponse: {
@@ -4703,6 +4712,15 @@ export interface operations {
     responses: {
       /** @description Successful Response */
       200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ChatResponse'];
+        };
+      };
+      /** @description Accepted: recorded durably as queued behind an open turn, and delivered once that turn ends. */
+      202: {
         headers: {
           [name: string]: unknown;
         };
@@ -7430,6 +7448,15 @@ export interface operations {
     responses: {
       /** @description Successful Response */
       200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SessionMessageResponse'];
+        };
+      };
+      /** @description Accepted: recorded durably as queued behind an open turn, and delivered once that turn ends. */
+      202: {
         headers: {
           [name: string]: unknown;
         };

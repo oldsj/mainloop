@@ -456,10 +456,30 @@ func (r *rig) opState(id string) string {
 	return r.str(`SELECT state FROM task_operations WHERE task_id = $1 AND kind = 'create'`, id)
 }
 
-// settleTurns marks every open delivery of the ledger completed, as a finished agent turn would.
+// settleTurns marks every open delivery of the ledger completed, as a finished agent turn would,
+// then admits the oldest message still queued behind each session's turn, as the sessions ledger's
+// own reconciler does in the same transaction that ends a turn (deliver.go's settle, control.go's
+// endDelivery). These raw-SQL helpers bypass that Go path, so it is replayed here.
 func (r *rig) finishTurns() {
 	r.t.Helper()
 	r.exec(`UPDATE deliveries SET state = 'completed' WHERE state IN ('recorded', 'sending', 'delivered')`)
+	r.promoteQueued()
+}
+
+// promoteQueued admits the oldest queued delivery of every session that currently has no open one.
+func (r *rig) promoteQueued() {
+	r.t.Helper()
+	r.exec(`
+		UPDATE deliveries d SET state = 'recorded', updated_at = now()
+		WHERE d.id IN (
+			SELECT DISTINCT ON (q.session_id) q.id FROM deliveries q
+			WHERE q.state = 'queued'
+			  AND NOT EXISTS (
+			      SELECT 1 FROM deliveries o
+			      WHERE o.session_id = q.session_id AND o.state IN ('recorded', 'sending', 'delivered')
+			  )
+			ORDER BY q.session_id, q.created_at, q.id
+		)`)
 }
 
 // attemptOf returns the current attempt id and binding of a task.

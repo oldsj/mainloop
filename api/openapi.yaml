@@ -106,6 +106,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ChatResponse'
+        '202':
+          description: 'Accepted: recorded durably as queued behind an open turn, and delivered once that turn ends.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
         '403':
           description: Forbidden
           content:
@@ -2428,6 +2434,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SessionMessageResponse'
+        '202':
+          description: 'Accepted: recorded durably as queued behind an open turn, and delivered once that turn ends.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionMessageResponse'
         '403':
           description: Forbidden
           content:
@@ -3593,6 +3605,13 @@ components:
             - type: string
             - type: 'null'
           title: Delivery Message Id
+        status:
+          type: string
+          enum:
+            - ok
+            - queued
+          default: ok
+          description: '`queued`: recorded durably behind an open turn, and delivered in its own turn once that one ends; `ok`: admitted at once.'
       type: object
       required:
         - conversation_id
@@ -3600,6 +3619,7 @@ components:
         - spawned_session_id
         - pending
         - delivery_message_id
+        - status
       title: ChatResponse
       description: Response model for chat interaction.
     CommitSummary:
@@ -6033,6 +6053,8 @@ components:
           type: string
           enum:
             - ok
+            - queued
+          description: '`queued`: recorded durably behind an open turn, and delivered in its own turn once that one ends; `ok`: admitted at once.'
         message_id:
           type: string
       required:

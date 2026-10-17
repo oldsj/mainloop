@@ -224,7 +224,10 @@ func (s *Service) followReport(ctx context.Context, c reconcile.Claim, d dbq.Tas
 	switch row.State {
 	case dbstate.DeliveryDelivered, dbstate.DeliveryCompleted:
 		return s.setDelivery(ctx, c, dbstate.TaskDeliveryDelivered)
-	case dbstate.DeliveryRecorded, dbstate.DeliverySending:
+	case dbstate.DeliveryQueued, dbstate.DeliveryRecorded, dbstate.DeliverySending:
+		// Queued behind the target's open turn, or admitted and on its way: either way, not sent yet.
+		// It is looked at again, not resent; the sessions ledger admits it on its own once its turn
+		// comes, however long the wait.
 		return reconcile.RetryAfter(2 * time.Second), nil
 	case dbstate.DeliveryCancelled:
 		// The owner stopped the parent's turn, or the parent's session ended: that is an owner act, so

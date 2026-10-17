@@ -53,7 +53,7 @@ describe('providerSwitchBlocked', () => {
     ).toBe(true);
   });
 
-  it.each(['recorded', 'sending', 'delivered', 'uncertain'])(
+  it.each(['recorded', 'sending', 'delivered', 'uncertain', 'queued'])(
     'is held while a delivery is %s',
     (state) => {
       expect(
@@ -67,7 +67,7 @@ describe('providerSwitchBlocked', () => {
     }
   );
 
-  it.each(['completed', 'failed', 'queued', 'cancelled'])(
+  it.each(['completed', 'failed', 'cancelled'])(
     'stays open when the last delivery is %s',
     (state) => {
       expect(

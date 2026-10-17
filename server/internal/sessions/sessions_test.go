@@ -215,16 +215,31 @@ func TestSendIsRecordedOncePerMessageID(t *testing.T) {
 	}
 }
 
-func TestSendIsRefusedWhileATurnIsOpen(t *testing.T) {
+func TestSendIsQueuedWhileATurnIsOpen(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	e.send("one")
-	_, err := e.svc.Send(ctx, uuid.NewString(), "", "two")
-	if !errors.Is(err, sessions.ErrBusy) {
-		t.Fatalf("got %v, want ErrBusy", err)
+	id := uuid.NewString()
+	sent, err := e.svc.Send(ctx, id, "", "two")
+	if err != nil || !sent.Queued {
+		t.Fatalf("send while busy: %+v, %v", sent, err)
 	}
-	if n := len(e.messages()); n != 1 {
-		t.Fatalf("a refused send left %d messages", n)
+	if n := len(e.messages()); n != 2 {
+		t.Fatalf("a queued send left %d messages", n)
+	}
+	if d := e.delivery(id); d.State != dbstate.DeliveryQueued {
+		t.Fatalf("queued delivery state = %s", d.State)
+	}
+	if e.sends() != 0 {
+		t.Fatalf("%d sends: the queued message was sent while the turn was open", e.sends())
+	}
+	// Sending the same id again is idempotent: it reports the same queued state and writes nothing new.
+	again, err := e.svc.Send(ctx, id, "", "two")
+	if err != nil || !again.Queued {
+		t.Fatalf("resend of a queued id: %+v, %v", again, err)
+	}
+	if n := len(e.messages()); n != 2 {
+		t.Fatalf("resending a queued id left %d messages", n)
 	}
 }
 
@@ -369,9 +384,17 @@ func TestADroppedStreamBecomesUncertainAndIsResolvedByLookup(t *testing.T) {
 	if d.TaskID != nil {
 		t.Fatalf("task %v", d.TaskID)
 	}
-	// While uncertain, the session stays blocked: nothing is replayed, nothing new is sent.
-	if _, err := e.svc.Send(context.Background(), uuid.NewString(), "", "next"); !errors.Is(err, sessions.ErrBusy) {
-		t.Fatalf("send during uncertain: %v", err)
+	// While uncertain, the session stays blocked: a new message queues instead of being sent.
+	nextID := uuid.NewString()
+	sent, err := e.svc.Send(context.Background(), nextID, "", "next")
+	if err != nil || !sent.Queued {
+		t.Fatalf("send during uncertain: %+v, %v", sent, err)
+	}
+	if got := e.delivery(nextID).State; got != dbstate.DeliveryQueued {
+		t.Fatalf("queued delivery state = %s", got)
+	}
+	if e.sends() != 1 {
+		t.Fatalf("%d sends: the queued message was sent while the first was still uncertain", e.sends())
 	}
 	// The message did reach kagent: its task shows up and the lookup adopts it.
 	e.srv.AddTask(completedTask("t-found", e.kagentSessionID(), id, "the reply"))
@@ -379,11 +402,16 @@ func TestADroppedStreamBecomesUncertainAndIsResolvedByLookup(t *testing.T) {
 	if deref(d.TaskID) != "t-found" {
 		t.Fatalf("task %v", d.TaskID)
 	}
-	if e.sends() != 1 {
-		t.Fatalf("%d sends: the message was replayed", e.sends())
+	// Once the turn ends, the queued message is admitted and delivered in its own turn, once, in
+	// order: its own user message was already written when it queued, ahead of the first reply.
+	e.waitState(nextID, dbstate.DeliveryCompleted)
+	if e.sends() != 2 {
+		t.Fatalf("%d sends: the queued message was not delivered exactly once", e.sends())
 	}
 	msgs := e.messages()
-	if len(msgs) != 2 || msgs[1].Content != "the reply" {
+	if len(msgs) != 4 || msgs[0].Content != "hi" || msgs[1].Content != "next" ||
+		msgs[2].Role != "assistant" || msgs[2].Content != "the reply" ||
+		msgs[3].Role != "assistant" {
 		t.Fatalf("messages %+v", msgs)
 	}
 }
@@ -566,7 +594,7 @@ func TestThePartialUniqueIndexAllowsOneOpenTurnPerSession(t *testing.T) {
 			t.Errorf("a second %s delivery was accepted", st)
 		}
 	}
-	for _, st := range []string{"completed", "failed", "cancelled", "uncertain"} {
+	for _, st := range []string{"completed", "failed", "cancelled", "uncertain", "queued"} {
 		if _, err := e.pool.Exec(ctx, `INSERT INTO deliveries (id, idempotency_key, session_id, state) VALUES ($1,$1,$2,$3)`,
 			uuid.NewString(), m.SessionID, st); err != nil {
 			t.Errorf("a %s delivery next to an open one was refused: %v", st, err)
