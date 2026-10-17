@@ -100,11 +100,10 @@ pnpm build:design && pnpm check:design    # CI also installs Chromium first
 
 Generic workspace, cache and publishing guidance comes from Mainloop's agent instructions; these are specific to this repository.
 
-- `go` can be missing from `PATH` in a workspace shell. Run `export PATH=/usr/local/go/bin:$PATH`.
-- If the environment uses a prebuilt cache image for this repository, it carries the Go build cache, Go modules and the pnpm store for a `main` commit under `/opt/cache`. Measured on one arm64 workspace: `go test ./...` compiled nothing, `go build ./...` recompiled only the main packages `cmd/mainloop`, `tools/genfallback` and `tools/mcpcontract`, and `pnpm install --frozen-lockfile` took seconds.
-- Those three miss because a real clone stamps VCS data into main packages. `go build -buildvcs=false ./...` compiles nothing, but the binaries carry no VCS data, so use it for checks, not for release builds.
+- This repository's environment can follow the `cache-main` workspace image (see [Workspace cache image](.github/README.md#workspace-cache-image) and `images/workspace-cache`). It carries the Go build cache, Go modules and pnpm store for one `main` commit under `/opt/cache`, built from a clone at `/data/workspace`. A clean checkout of that commit compiles nothing.
+- Go stamps the revision and dirty state into main packages (`cmd/mainloop`, `tools/genfallback`, `tools/mcpcontract`). On a task branch or with uncommitted changes those rebuild, and everything else still hits the cache. `go build -buildvcs=false ./...` skips the stamp for checks; do not use it for release builds. Run Go from `server/`.
 - The pnpm virtual store sits outside the project, so `web/node_modules` is links. Do not copy or move it, and install with `pnpm install --frozen-lockfile --filter web...`.
-- The caches do not speed up `tsc -b`, `vitest run` or `vite build`. The full Vitest run took about five minutes in that workspace, so run the test files you changed first.
+- The caches do not speed up `tsc -b`, `vitest run` or `vite build`. The full Vitest run took about five minutes in one measured workspace, so run the test files you changed first.
 
 ## Live and cluster work
 
