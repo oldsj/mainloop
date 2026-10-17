@@ -18,6 +18,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/attention"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
+	"github.com/oldsj/mainloop/server/internal/devloop"
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/gittransport"
@@ -195,6 +196,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		Config: cfg, Log: log, DB: pool, Pool: pool, Hub: hub, Live: live,
 		Providers: reg, Projects: projectSvc, Tasks: taskSvc, Workspaces: wsSvc, Sessions: svc, Preview: previews,
 		HITL: hitlSvc, Attention: attn, Health: healthSvc, Schedules: schedSvc, Merge: mergeSvc,
+		Devloop: &devloop.LeaseService{Pool: pool},
 	}).Handler()
 	if err != nil {
 		return err
@@ -234,6 +236,13 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner.AddSweep(schedSvc.Sweep())
 	previews.Register(runner)
 	taskSvc.Register(runner)
+	devOps, err := newDevloopOperations(cfg, pool)
+	if err != nil {
+		return err
+	}
+	if devOps != nil {
+		devOps.Register(runner)
+	}
 	if prSvc != nil {
 		runner.Add(prSvc.Loop())
 		// Merges run only where the merge tools are on: nothing else creates a candidate.

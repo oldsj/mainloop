@@ -193,6 +193,18 @@ sql:
                 import: github.com/oldsj/mainloop/server/internal/db/dbstate,
                 type: GitPublicationState
               }
+          - column: devloop_operations.kind
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: DevloopOperationKind
+              }
+          - column: devloop_operations.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: DevloopOperationState
+              }
           - db_type: jsonb
             go_type: { import: encoding/json, type: RawMessage }
           - db_type: jsonb
