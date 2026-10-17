@@ -472,6 +472,7 @@ func TestGatesAreOnlyForTheExactValueTrue(t *testing.T) {
 		"MAINLOOP_OWNER_POLICY_WRITES_ENABLED": func(c *Config) bool { return bool(c.OwnerPolicyWritesEnabled) },
 		"MAINLOOP_OWNER_HITL_WRITES_ENABLED":   func(c *Config) bool { return bool(c.OwnerHITLWritesEnabled) },
 		"MAINLOOP_MERGE_TOOLS_ENABLED":         func(c *Config) bool { return bool(c.MergeToolsEnabled) },
+		"MAINLOOP_MERGE_PROTECTED_AUTO":        func(c *Config) bool { return bool(c.MergeProtectedAuto) },
 	}
 	for name, on := range gates {
 		for value, want := range map[string]bool{

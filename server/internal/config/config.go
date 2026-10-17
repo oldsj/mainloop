@@ -39,6 +39,11 @@ type Config struct {
 	OwnerHITLWritesEnabled   ExactTrue `env:"MAINLOOP_OWNER_HITL_WRITES_ENABLED"`
 	OwnerPolicyWritesEnabled ExactTrue `env:"MAINLOOP_OWNER_POLICY_WRITES_ENABLED"`
 	MergeToolsEnabled        ExactTrue `env:"MAINLOOP_MERGE_TOOLS_ENABLED"`
+	// MergeProtectedAuto lets a protected-path match merge on green without an owner card (still
+	// recorded in the frozen facts and route for audit), and makes evidence Prepare could not read
+	// a refusal instead of an approval card nobody can safely approve. The project's own approval
+	// policy is unaffected.
+	MergeProtectedAuto ExactTrue `env:"MAINLOOP_MERGE_PROTECTED_AUTO"`
 
 	// MergeConfigurations is the operator allowlist of protected merge tool mappings.
 	MergeConfigurations MergeConfigurations `env:"MAINLOOP_MERGE_CONFIGURATIONS"`

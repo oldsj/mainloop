@@ -48,6 +48,18 @@ protected match requires approval; callers cannot edit the globs or select an ex
 This helper establishes path policy only; the merge service must prove GitHub path
 completeness and all other merge gates.
 
+An operator may set `MAINLOOP_MERGE_PROTECTED_AUTO=true` (same exact-value rule as the other
+gates) to let a protected-path match merge on green without an owner card. The match is still
+recorded in the proposal's immutable frozen facts and presentation (`protected`,
+`approval_reasons`, `protected_matches`) exactly as it is with the gate off; only the route
+changes, from `approval` to `auto`, which is the audit trail that the override applied. The
+project's own `approval` merge policy is unaffected and still forces the approval route
+regardless of this gate. With the gate on, evidence `prepare_pull_request_merge` could not read
+no longer forces the approval route either; `merge_pull_request` refuses it with
+`evidence_unavailable` instead of waiting behind a card nobody can safely approve, since
+unavailable evidence can never actually merge. With the gate off (the default), a protected
+match or unavailable evidence always takes the approval route, as above.
+
 The owner API uses the existing configured-owner/network-isolation boundary. It does not
 add request authentication. **Production enablement requires proof that actors cannot reach
 owner routes directly or through an external gateway, with or without an MCP bearer.** Unit

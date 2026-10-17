@@ -79,6 +79,13 @@ keys and its result are an append-only ledger (a trigger refuses updates and del
   `approval` route it returns `approval_required` and the proposal; the owner's consent and the
   approved-merge tool finish it. When the evidence is unavailable (draft, closed, wrong base,
   too many files, squash not allowed, archived) it refuses with `evidence_unavailable`.
+  With the operator gate `MAINLOOP_MERGE_PROTECTED_AUTO=true` (see
+  [Merge policy](merge-policy.md)), a protected-path match alone no longer forces the `approval`
+  route: it takes the `auto` route and merges on green like any other proposal, with the match
+  still recorded in the frozen facts and presentation for audit. Unavailable evidence takes the
+  `auto` route too, so this refusal is what stops it, instead of a card raised under a route nobody
+  will approve. The project's own `approval` policy still forces the approval route regardless of
+  this gate.
 - `merge_pull_request_with_approval` (only on `/mcp/merge-approval`) evaluates the exact merge the
   owner approved, once, and Mainloop then keeps evaluating under that consent until CI settles or
   the deadline passes. Re-calling it while it evaluates is a replay; read
@@ -176,8 +183,8 @@ make this repository public to enable this feature.` The evidence then records
   -history rules are ignored because a squash merge cannot break them. `merge_queue` always routes
   to approval.
 - CI is judged at the exact head. Every suite and run must name that head; a run of a suite that
-  was not listed is an inconsistent read. Only a completed `success` counts. `neutral`, `skipped`
-  and every other conclusion fail; `queued`, `in_progress`, `pending`, `waiting` and `requested` wait.
+  was not listed is an inconsistent read. A completed `success`, `neutral` or `skipped` counts;
+  every other conclusion fails; `queued`, `in_progress`, `pending`, `waiting` and `requested` wait.
   A suite with a failing conclusion fails the merge even when a newer run of the same app passes. A
   suite with no runs that was created more than 10 minutes ago and has not completed is abandoned
   and ignored; a fresh one waits. A required (context, app) pair with no result waits, and with no
@@ -573,9 +580,9 @@ A cap or incomplete inventory fails closed. Check reruns are ordered by numeric 
 within `(app ID, name)`: the REST run schema lacks a creation timestamp, and
 `started_at` can be absent for queued runs. This documented ordering ensures a newer
 queued run defeats old success. Statuses use creation time then ID per context.
-Every enumerated completed suite must have conclusion `success`, whether or not
-it emitted runs; a newer successful run or suite does not override an unsuccessful
-historical suite. Missing, unknown, cancelled, neutral and other non-success suite
+Every enumerated completed suite must have conclusion `success`, `neutral` or `skipped`,
+whether or not it emitted runs; a newer successful run or suite does not override an
+unsuccessful historical suite. Missing, unknown, cancelled and other non-passing suite
 conclusions block merging. Normalized suite outcomes are retained in CI evidence.
 An abandoned app suite is ignored only when it is `queued` with a null conclusion,
 none of the commit's runs reference its suite ID, and its reported
@@ -601,9 +608,10 @@ settlement replaces that transient claim record with the outcome. Proposal evide
 remains immutable.
 See [GitHub check-suite API](https://docs.github.com/en/rest/checks/suites).
 
-Every selected run must be completed/success and every selected status success;
-neutral/skipped/unknown and empty overall evidence are never green. Required named
-and app-bound checks must exist. Check and status namespaces remain separate.
+Every selected run must be completed with conclusion `success`, `neutral` or `skipped`,
+and every selected status success; unknown conclusions and empty overall evidence are
+never green. Required named and app-bound checks must exist. Check and status
+namespaces remain separate.
 Supported nonterminal suite/run states are `queued`, `in_progress`, `pending`,
 `waiting` and `requested`. They keep the existing bounded evaluation active, including
 when a run starts between the suite and run reads; completion within the original

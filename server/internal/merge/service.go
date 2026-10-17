@@ -50,6 +50,12 @@ type Service struct {
 	Configs []config.MergeConfiguration
 	// Runtime is the trusted kagent read behind the template mapping; without it no consent counts.
 	Runtime Runtime
+	// ProtectedAuto is the operator's MAINLOOP_MERGE_PROTECTED_AUTO opt-in. A protected-path match
+	// alone no longer forces the approval route (it still merges only on green, and the match is
+	// recorded in the frozen facts and route for audit); evidence Prepare could not read is left to
+	// Merge's existing evidence_unavailable refusal instead of waiting behind an approval card. The
+	// project's own approval policy always forces the approval route regardless of this flag.
+	ProtectedAuto bool
 
 	// Settle is how long a tool call waits for the loop to settle a merge before it returns the
 	// state it has (default 20s). A zero Settle returns at once.
@@ -218,7 +224,8 @@ func (s *Service) prepare(ctx context.Context, tool dbstate.MergeTool, in Prepar
 	}
 	f.Policy, f.PolicyVer = string(project.MergePolicy), int(project.MergePolicyVersion)
 	route := dbstate.RouteAuto
-	if project.MergePolicy == dbstate.MergeApproval || len(f.Protected) > 0 || len(f.Unavailable) > 0 {
+	if project.MergePolicy == dbstate.MergeApproval ||
+		(!s.ProtectedAuto && (len(f.Protected) > 0 || len(f.Unavailable) > 0)) {
 		route = dbstate.RouteApproval
 	}
 	f.Route = string(route)
@@ -510,5 +517,8 @@ const DefaultSettle = 20 * time.Second
 // NewService builds the service over the GitHub App. rt is the trusted kagent read that gives a
 // merge tool its authority; without it no consent counts.
 func NewService(cfg *config.Config, pool *pgxpool.Pool, gh GitHub, rt Runtime, log *slog.Logger) *Service {
-	return &Service{Pool: pool, GitHub: gh, Log: log, Configs: cfg.MergeConfigurations, Runtime: rt, Settle: DefaultSettle}
+	return &Service{
+		Pool: pool, GitHub: gh, Log: log, Configs: cfg.MergeConfigurations, Runtime: rt, Settle: DefaultSettle,
+		ProtectedAuto: bool(cfg.MergeProtectedAuto),
+	}
 }

@@ -155,12 +155,16 @@ func green(c ciCounts) bool { return c.Failed == 0 && c.Pending == 0 && c.Result
 // pendingStates are the in-flight states of a check run, suite or commit status.
 var pendingStates = []string{"queued", "in_progress", "pending", "waiting", "requested"}
 
-// checkResult judges a run or suite. Only a completed success passes: neutral, skipped and every
-// unfamiliar conclusion or state fail, so a result GitHub reports in a way Mainloop does not know
-// is never green.
+// passingConclusions are the completed conclusions that count as green: a plain success, and
+// neutral or skipped, which GitHub itself does not treat as blocking a merge.
+var passingConclusions = []string{"success", "neutral", "skipped"}
+
+// checkResult judges a run or suite. A completed success, neutral or skipped passes; every other
+// completed conclusion and every unfamiliar state fails, so a result GitHub reports in a way
+// Mainloop does not know is never green.
 func checkResult(status, conclusion string) string {
 	switch {
-	case status == "completed" && conclusion == "success":
+	case status == "completed" && slices.Contains(passingConclusions, conclusion):
 		return resultPassed
 	case status == "completed":
 		return resultFailed
