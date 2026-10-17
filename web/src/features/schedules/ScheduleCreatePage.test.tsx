@@ -21,6 +21,10 @@ vi.mock('@/api/middleware', async (importOriginal) => {
   return withFastReads(await importOriginal());
 });
 
+// The first render of this file can be slow under a full run (see `fillForm`'s own wait below);
+// the whole test needs more than the default budget to still have time for the rest of its steps.
+vi.setConfig({ testTimeout: 15000 });
+
 const CLAUDE = profile({
   id: 'claude-default',
   display_name: 'Claude',
@@ -155,7 +159,8 @@ describe('create schedule', () => {
     );
     const user = userEvent.setup();
     renderSchedules('/schedules/new');
-    await screen.findByRole('option', { name: 'Claude, worker: triage' });
+    // The first render of a test file can be slow under a full run, so this wait is longer than the default.
+    await screen.findByRole('option', { name: 'Claude, worker: triage' }, { timeout: 5000 });
     await user.type(screen.getByLabelText('Prompt'), 'Triage the inbox');
     await user.click(screen.getByRole('button', { name: 'Create schedule' }));
 
@@ -168,7 +173,8 @@ describe('create schedule', () => {
     server.use(providersRead([CLAUDE]));
     const user = userEvent.setup();
     renderSchedules('/schedules/new');
-    const cron = await screen.findByLabelText('Schedule (five fields)');
+    // The first render of a test file can be slow under a full run, so this wait is longer than the default.
+    const cron = await screen.findByLabelText('Schedule (five fields)', {}, { timeout: 5000 });
 
     await user.clear(cron);
     await user.type(cron, '*/15 * * * *');

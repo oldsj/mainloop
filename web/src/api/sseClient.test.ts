@@ -150,17 +150,25 @@ describe('createSseClient watchdog and wake-ups', () => {
     vi.useFakeTimers();
     const live = new Map<string, number>();
     const track = (target: EventTarget, label: string) => {
-      const add = target.addEventListener.bind(target);
-      const remove = target.removeEventListener.bind(target);
+      // Unbound: `target` (e.g. AbortSignal.prototype) is shared by many instances, so the real
+      // implementation must run against whichever instance the mock was actually called on.
+      const add = target.addEventListener;
+      const remove = target.removeEventListener;
       const bump = (type: string, delta: number) =>
         live.set(`${label}:${type}`, (live.get(`${label}:${type}`) ?? 0) + delta);
-      vi.spyOn(target, 'addEventListener').mockImplementation((type, ...rest) => {
-        bump(type, 1);
-        return add(type, ...rest);
+      vi.spyOn(target, 'addEventListener').mockImplementation(function (
+        this: EventTarget,
+        ...args: Parameters<EventTarget['addEventListener']>
+      ) {
+        bump(args[0], 1);
+        return add.apply(this, args);
       });
-      vi.spyOn(target, 'removeEventListener').mockImplementation((type, ...rest) => {
-        bump(type, -1);
-        return remove(type, ...rest);
+      vi.spyOn(target, 'removeEventListener').mockImplementation(function (
+        this: EventTarget,
+        ...args: Parameters<EventTarget['removeEventListener']>
+      ) {
+        bump(args[0], -1);
+        return remove.apply(this, args);
       });
     };
     track(window, 'window');

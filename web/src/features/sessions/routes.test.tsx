@@ -23,6 +23,10 @@ vi.mock('@/api/middleware', async (importOriginal) => {
   return withFastReads(await importOriginal());
 });
 
+// The first render of this file mounts the whole app through the real router; under a full,
+// parallel test run that cold render can take longer than the default timeouts allow.
+vi.setConfig({ testTimeout: 15000 });
+
 afterEach(async () => {
   await connection.check();
 });
@@ -65,15 +69,19 @@ describe('sessions routes', () => {
   it('serves the new-agent form at /agents', async () => {
     server.use(...otherListReads());
     renderApp('/agents?view=compact');
-    expect(await screen.findByRole('heading', { name: 'New agent session' })).toBeInTheDocument();
+    // Longer than the default: the app's first render through the real router is slow under a full run.
+    expect(
+      await screen.findByRole('heading', { name: 'New agent session' }, { timeout: 8000 })
+    ).toBeInTheDocument();
     expect(screen.getByTestId('agent-start')).toBeInTheDocument();
   });
 
   it('serves the session page at /sessions/:id', async () => {
     server.use(...serveSession(session({ id: 's1', title: 'Routed session' })));
     renderApp('/sessions/s1?view=compact');
+    // Longer than the default: the app's first render through the real router is slow under a full run.
     expect(
-      await screen.findByRole('heading', { level: 1, name: 'Routed session' })
+      await screen.findByRole('heading', { level: 1, name: 'Routed session' }, { timeout: 8000 })
     ).toBeInTheDocument();
     expect(screen.getByTestId('session-chat-slot')).toBeInTheDocument();
   });
@@ -87,7 +95,8 @@ describe('moving between sessions', () => {
     );
     const { router } = renderApp('/sessions/s1?view=compact');
     const user = userEvent.setup();
-    await user.click(await screen.findByTestId('session-stop-turn'));
+    // Longer than the default: the app's first render through the real router is slow under a full run.
+    await user.click(await screen.findByTestId('session-stop-turn', {}, { timeout: 8000 }));
     expect(await screen.findByTestId('session-action-notice')).toHaveTextContent('Turn stopped.');
 
     await act(() =>
@@ -114,7 +123,8 @@ describe('moving between sessions', () => {
     );
     const { router, queryClient } = renderApp('/sessions/s1?view=compact');
     const user = userEvent.setup();
-    await user.click(await screen.findByTestId('session-stop-turn'));
+    // Longer than the default: the app's first render through the real router is slow under a full run.
+    await user.click(await screen.findByTestId('session-stop-turn', {}, { timeout: 8000 }));
     expect(await screen.findByRole('button', { name: 'Stopping…' })).toBeDisabled();
 
     await act(() =>

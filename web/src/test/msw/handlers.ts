@@ -19,6 +19,14 @@ const activity: Schemas['ActivityItem'][] = [];
 const projects: Schemas['Project'][] = [];
 const workspaces: Schemas['WorkspaceLifecycle'][] = [];
 const tasks: Schemas['TaskView'][] = [];
+const orchestrationHealth: Schemas['HealthView'] = {
+  rows: [],
+  hours: 24,
+  partial: false,
+  unsupported: [],
+  retention: { events_days: 7, summaries_days: 90 }
+};
+const providers: Schemas['ProviderProfile'][] = [];
 
 /** A stream that sends `connected` and then stays open, like the real /events. */
 function eventStream() {
@@ -50,7 +58,10 @@ export const baseHandlers = [
   http.get(url('/workspaces'), () => HttpResponse.json(workspaces)),
   http.get(url('/tasks'), () => HttpResponse.json(tasks)),
   // The explorer reads schedules on every shell, so an empty page is the default.
-  http.get(url('/schedules'), () => HttpResponse.json({ items: [], next_page_token: null }))
+  http.get(url('/schedules'), () => HttpResponse.json({ items: [], next_page_token: null })),
+  // A test that only passes through /health incidentally (on its way elsewhere) still needs these.
+  http.get(url('/orchestration-health'), () => HttpResponse.json(orchestrationHealth)),
+  http.get(url('/providers'), () => HttpResponse.json(providers))
 ];
 
 /**
