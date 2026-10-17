@@ -7,8 +7,8 @@ SELECT user_id FROM projects WHERE id = $1;
 SELECT user_id FROM projects WHERE id = $1 FOR NO KEY UPDATE;
 
 -- name: InsertDevEnvironment :one
-INSERT INTO dev_environments (id, owner_id, name, source_kind, watched_tag, definition)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO dev_environments (id, owner_id, name, source_kind, watched_tag, follow_watched_tag, definition)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
 -- name: GetDevEnvironment :one
@@ -19,6 +19,12 @@ SELECT * FROM dev_environments WHERE id = $1 FOR UPDATE;
 
 -- name: ListDevEnvironments :many
 SELECT * FROM dev_environments WHERE owner_id = $1 ORDER BY created_at, id;
+
+-- name: ListFollowingDevEnvironments :many
+SELECT * FROM dev_environments WHERE owner_id = $1 AND follow_watched_tag ORDER BY created_at, id;
+
+-- name: LatestEnvironmentVersion :one
+SELECT * FROM environment_versions WHERE environment_id = $1 ORDER BY seq DESC LIMIT 1;
 
 -- name: SetDevEnvironmentDefault :one
 UPDATE dev_environments SET default_version_id = $2 WHERE id = $1 RETURNING *;

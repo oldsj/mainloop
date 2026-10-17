@@ -86,6 +86,8 @@ type Options struct {
 	// User is the config USER (default 65532:65532). NoUser omits the key.
 	User   string
 	NoUser bool
+	// Label, when set, goes into the config so images with different labels have different digests.
+	Label string
 	// Index stores a two-platform index (amd64 and arm64) and returns it as the top object.
 	Index bool
 }
@@ -133,6 +135,9 @@ func (r *Registry) AddImage(registry, repository string, o Options) Image {
 		cfg := map[string]any{"architecture": arch, "os": o.OS}
 		if withUser {
 			cfg["config"] = map[string]any{"User": o.User}
+			if o.Label != "" {
+				cfg["config"] = map[string]any{"User": o.User, "Labels": map[string]string{"label": o.Label}}
+			}
 		} else {
 			cfg["config"] = map[string]any{}
 		}

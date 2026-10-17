@@ -221,7 +221,8 @@ describe('registration', () => {
       name: 'Public',
       source_kind: 'prebuilt_image',
       image: IMAGE,
-      architecture: 'arm64'
+      architecture: 'arm64',
+      follow_watched_tag: false
     });
   });
 

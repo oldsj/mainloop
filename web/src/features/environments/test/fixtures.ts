@@ -13,6 +13,7 @@ export function environment(overrides: Partial<EnvironmentFixture> = {}): Enviro
     name: 'Python tools',
     source_kind: 'prebuilt_image',
     watched_tag: null,
+    follow_watched_tag: false,
     accepted_default_version_id: 'v1',
     definition: null,
     ...overrides

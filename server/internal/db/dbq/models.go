@@ -118,6 +118,7 @@ type DevEnvironment struct {
 	Definition       json.RawMessage
 	DefaultVersionID *string
 	CreatedAt        time.Time
+	FollowWatchedTag bool
 }
 
 type EnvironmentGrant struct {

@@ -203,7 +203,8 @@ export function registerRequest(draft: RegisterDraft) {
     name: draft.name.trim(),
     source_kind: 'prebuilt_image' as const,
     image: draft.image.trim(),
-    architecture: draft.architecture
+    architecture: draft.architecture,
+    follow_watched_tag: false
   };
 }
 

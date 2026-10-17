@@ -416,7 +416,13 @@ describe('environment selection', () => {
     await user.click(screen.getByRole('button', { name: 'Register and validate image' }));
     expect(await screen.findByText('Environment use grant required')).toBeInTheDocument();
     expect(registrations).toEqual([
-      { name: 'Public', source_kind: 'prebuilt_image', image: IMAGE, architecture: 'arm64' }
+      {
+        name: 'Public',
+        source_kind: 'prebuilt_image',
+        image: IMAGE,
+        architecture: 'arm64',
+        follow_watched_tag: false
+      }
     ]);
     expect(screen.queryByText(/Registration reply was not confirmed/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Register and validate image' })).toBeEnabled();

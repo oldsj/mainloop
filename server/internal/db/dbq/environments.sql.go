@@ -27,7 +27,7 @@ func (q *Queries) DeleteEnvironmentGrant(ctx context.Context, arg DeleteEnvironm
 }
 
 const getDevEnvironment = `-- name: GetDevEnvironment :one
-SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at FROM dev_environments WHERE id = $1
+SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag FROM dev_environments WHERE id = $1
 `
 
 func (q *Queries) GetDevEnvironment(ctx context.Context, id string) (DevEnvironment, error) {
@@ -42,6 +42,7 @@ func (q *Queries) GetDevEnvironment(ctx context.Context, id string) (DevEnvironm
 		&i.Definition,
 		&i.DefaultVersionID,
 		&i.CreatedAt,
+		&i.FollowWatchedTag,
 	)
 	return i, err
 }
@@ -129,18 +130,19 @@ func (q *Queries) GetProjectOwner(ctx context.Context, id string) (string, error
 }
 
 const insertDevEnvironment = `-- name: InsertDevEnvironment :one
-INSERT INTO dev_environments (id, owner_id, name, source_kind, watched_tag, definition)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at
+INSERT INTO dev_environments (id, owner_id, name, source_kind, watched_tag, follow_watched_tag, definition)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag
 `
 
 type InsertDevEnvironmentParams struct {
-	ID         string
-	OwnerID    string
-	Name       string
-	SourceKind dbstate.EnvironmentSourceKind
-	WatchedTag *string
-	Definition json.RawMessage
+	ID               string
+	OwnerID          string
+	Name             string
+	SourceKind       dbstate.EnvironmentSourceKind
+	WatchedTag       *string
+	FollowWatchedTag bool
+	Definition       json.RawMessage
 }
 
 func (q *Queries) InsertDevEnvironment(ctx context.Context, arg InsertDevEnvironmentParams) (DevEnvironment, error) {
@@ -150,6 +152,7 @@ func (q *Queries) InsertDevEnvironment(ctx context.Context, arg InsertDevEnviron
 		arg.Name,
 		arg.SourceKind,
 		arg.WatchedTag,
+		arg.FollowWatchedTag,
 		arg.Definition,
 	)
 	var i DevEnvironment
@@ -162,6 +165,7 @@ func (q *Queries) InsertDevEnvironment(ctx context.Context, arg InsertDevEnviron
 		&i.Definition,
 		&i.DefaultVersionID,
 		&i.CreatedAt,
+		&i.FollowWatchedTag,
 	)
 	return i, err
 }
@@ -249,8 +253,41 @@ func (q *Queries) InsertEnvironmentVersion(ctx context.Context, arg InsertEnviro
 	return i, err
 }
 
+const latestEnvironmentVersion = `-- name: LatestEnvironmentVersion :one
+SELECT id, environment_id, seq, registry, repository, index_digest, platform_manifest_digest, config_digest, declared_user, architecture, capability_profile, validation_status, validation_result, validator_version, provenance_kind, base_provenance, parent_version_id, package_declaration, approval_reference, definition, created_at FROM environment_versions WHERE environment_id = $1 ORDER BY seq DESC LIMIT 1
+`
+
+func (q *Queries) LatestEnvironmentVersion(ctx context.Context, environmentID string) (EnvironmentVersion, error) {
+	row := q.db.QueryRow(ctx, latestEnvironmentVersion, environmentID)
+	var i EnvironmentVersion
+	err := row.Scan(
+		&i.ID,
+		&i.EnvironmentID,
+		&i.Seq,
+		&i.Registry,
+		&i.Repository,
+		&i.IndexDigest,
+		&i.PlatformManifestDigest,
+		&i.ConfigDigest,
+		&i.DeclaredUser,
+		&i.Architecture,
+		&i.CapabilityProfile,
+		&i.ValidationStatus,
+		&i.ValidationResult,
+		&i.ValidatorVersion,
+		&i.ProvenanceKind,
+		&i.BaseProvenance,
+		&i.ParentVersionID,
+		&i.PackageDeclaration,
+		&i.ApprovalReference,
+		&i.Definition,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listDevEnvironments = `-- name: ListDevEnvironments :many
-SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at FROM dev_environments WHERE owner_id = $1 ORDER BY created_at, id
+SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag FROM dev_environments WHERE owner_id = $1 ORDER BY created_at, id
 `
 
 func (q *Queries) ListDevEnvironments(ctx context.Context, ownerID string) ([]DevEnvironment, error) {
@@ -271,6 +308,7 @@ func (q *Queries) ListDevEnvironments(ctx context.Context, ownerID string) ([]De
 			&i.Definition,
 			&i.DefaultVersionID,
 			&i.CreatedAt,
+			&i.FollowWatchedTag,
 		); err != nil {
 			return nil, err
 		}
@@ -328,8 +366,42 @@ func (q *Queries) ListEnvironmentVersions(ctx context.Context, environmentID str
 	return items, nil
 }
 
+const listFollowingDevEnvironments = `-- name: ListFollowingDevEnvironments :many
+SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag FROM dev_environments WHERE owner_id = $1 AND follow_watched_tag ORDER BY created_at, id
+`
+
+func (q *Queries) ListFollowingDevEnvironments(ctx context.Context, ownerID string) ([]DevEnvironment, error) {
+	rows, err := q.db.Query(ctx, listFollowingDevEnvironments, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DevEnvironment{}
+	for rows.Next() {
+		var i DevEnvironment
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.Name,
+			&i.SourceKind,
+			&i.WatchedTag,
+			&i.Definition,
+			&i.DefaultVersionID,
+			&i.CreatedAt,
+			&i.FollowWatchedTag,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockDevEnvironment = `-- name: LockDevEnvironment :one
-SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at FROM dev_environments WHERE id = $1 FOR UPDATE
+SELECT id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag FROM dev_environments WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockDevEnvironment(ctx context.Context, id string) (DevEnvironment, error) {
@@ -344,6 +416,7 @@ func (q *Queries) LockDevEnvironment(ctx context.Context, id string) (DevEnviron
 		&i.Definition,
 		&i.DefaultVersionID,
 		&i.CreatedAt,
+		&i.FollowWatchedTag,
 	)
 	return i, err
 }
@@ -362,7 +435,7 @@ func (q *Queries) LockProjectForSelection(ctx context.Context, id string) (strin
 }
 
 const setDevEnvironmentDefault = `-- name: SetDevEnvironmentDefault :one
-UPDATE dev_environments SET default_version_id = $2 WHERE id = $1 RETURNING id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at
+UPDATE dev_environments SET default_version_id = $2 WHERE id = $1 RETURNING id, owner_id, name, source_kind, watched_tag, definition, default_version_id, created_at, follow_watched_tag
 `
 
 type SetDevEnvironmentDefaultParams struct {
@@ -382,6 +455,7 @@ func (q *Queries) SetDevEnvironmentDefault(ctx context.Context, arg SetDevEnviro
 		&i.Definition,
 		&i.DefaultVersionID,
 		&i.CreatedAt,
+		&i.FollowWatchedTag,
 	)
 	return i, err
 }

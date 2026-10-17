@@ -31,6 +31,7 @@ type fixture struct {
 	handler  http.Handler
 	registry *fakeregistry.Registry
 	service  *environments.Service
+	moves    int
 }
 
 func newFixture(t *testing.T) *fixture {

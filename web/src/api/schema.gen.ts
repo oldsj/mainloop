@@ -2064,6 +2064,12 @@ export interface components {
       architecture: 'amd64' | 'arm64';
       /** Watched Tag */
       watched_tag?: string | null;
+      /**
+       * Follow Watched Tag
+       * @description Accept each new image the watched tag resolves to as the default. Needs a watched tag.
+       * @default false
+       */
+      follow_watched_tag: boolean;
       definition?: components['schemas']['DefinitionReference'] | null;
     };
     /** ScheduledRunAgentRef */
@@ -2825,6 +2831,8 @@ export interface components {
        * @default null
        */
       watched_tag: string | null;
+      /** Follow Watched Tag */
+      follow_watched_tag: boolean;
       /**
        * Accepted Default Version Id
        * @default null

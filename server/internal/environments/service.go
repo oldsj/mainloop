@@ -91,7 +91,11 @@ func (s *Service) Register(ctx context.Context, owner string, req api.RegisterEn
 		architecture = string(*req.Architecture)
 	}
 	envID := s.id()
-	env := dbq.InsertDevEnvironmentParams{ID: envID, OwnerID: owner, Name: req.Name, SourceKind: sourceKind, WatchedTag: req.WatchedTag}
+	follow := req.FollowWatchedTag != nil && *req.FollowWatchedTag
+	if follow && (req.WatchedTag == nil || sourceKind != dbstate.SourcePrebuiltImage) {
+		return api.RegisteredEnvironment{}, unprocessable("follow_watched_tag needs a prebuilt image and a watched tag")
+	}
+	env := dbq.InsertDevEnvironmentParams{ID: envID, OwnerID: owner, Name: req.Name, SourceKind: sourceKind, WatchedTag: req.WatchedTag, FollowWatchedTag: follow}
 
 	var version dbq.InsertEnvironmentVersionParams
 	switch sourceKind {
@@ -438,7 +442,7 @@ func environmentToAPI(e dbq.DevEnvironment) (api.DevEnvironment, error) {
 	}
 	return api.DevEnvironment{
 		Id: e.ID, OwnerId: e.OwnerID, Name: e.Name, SourceKind: api.DevEnvironmentSourceKind(e.SourceKind),
-		WatchedTag: e.WatchedTag, AcceptedDefaultVersionId: e.DefaultVersionID, Definition: definition,
+		WatchedTag: e.WatchedTag, FollowWatchedTag: e.FollowWatchedTag, AcceptedDefaultVersionId: e.DefaultVersionID, Definition: definition,
 	}, nil
 }
 

@@ -4913,6 +4913,11 @@ components:
               pattern: ^[\w][\w.-]{0,127}$
             - type: 'null'
           title: Watched Tag
+        follow_watched_tag:
+          type: boolean
+          title: Follow Watched Tag
+          description: Accept each new image the watched tag resolves to as the default. Needs a watched tag.
+          default: false
         definition:
           anyOf:
             - $ref: '#/components/schemas/DefinitionReference'
@@ -6283,6 +6288,9 @@ components:
             - type: 'null'
           default: null
           title: Watched Tag
+        follow_watched_tag:
+          type: boolean
+          title: Follow Watched Tag
         accepted_default_version_id:
           anyOf:
             - type: string
@@ -6300,6 +6308,7 @@ components:
         - name
         - source_kind
         - watched_tag
+        - follow_watched_tag
         - accepted_default_version_id
         - definition
       title: DevEnvironment
