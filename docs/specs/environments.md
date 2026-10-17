@@ -10,9 +10,12 @@ History before `e776537` describes the retired Python backend. Where other text 
 ## Registration and validation
 
 `POST /environments` accepts `name`, `source_kind` (`prebuilt_image` by default),
-`image`, `architecture` (`amd64` by default, or `arm64`) and optional `watched_tag`.
-Images must use `registry/repository@sha256:<64 lowercase hex digits>`; mutable
-references are rejected. Watched tags are metadata only.
+`image`, `architecture` (`amd64` by default, or `arm64`), optional `watched_tag` and
+optional `follow_watched_tag` (default false). Images must use
+`registry/repository@sha256:<64 lowercase hex digits>`; mutable references are
+rejected. A watched tag is metadata unless `follow_watched_tag` is set (see
+[Following a watched tag](#following-a-watched-tag)). `follow_watched_tag` needs a
+prebuilt image and a watched tag; otherwise registration returns 422.
 
 The operator setting `ENVIRONMENT_REGISTRY_ALLOWLIST` is a JSON list, defaulting to
 `["ghcr.io"]`. A registry outside this list is rejected before any registry request.
@@ -80,6 +83,30 @@ leaves prior state untouched. Versions are append-only at the database level.
 The default is an explicit owner decision; `static_validated` is metadata evidence,
 not runtime acceptance. Operator-default and derived-package provenance are modeled
 for future use; this API does not create operator defaults or derived builds.
+
+## Following a watched tag
+
+An environment registered with `follow_watched_tag: true` follows its tag
+automatically. About once a minute the server resolves the tag the way Refresh does.
+If the platform manifest differs from the newest version's, it appends a validated
+version. Either way the newest version becomes the accepted default if it is not
+already. A failed resolution or validation changes nothing, is logged, and is
+retried on the next pass. An unchanged tag appends nothing.
+
+Projects that follow the default pick up the new image for workspaces created
+afterwards; existing workspaces stay pinned. Projects that selected an explicit
+version keep it, which is also the rollback: select the older version, since the next
+pass would override a manual default change. Environments without the flag are never
+changed automatically.
+
+The intended use is a warm workspace image: CI publishes `cache-main` for every
+merge to `main` (see `.github/README.md`), and the project's environment follows it.
+The image carries the Go build cache, Go modules and pnpm store for that commit under
+`/opt/cache`, so a new session's first build compiles little or nothing.
+The first workspace on a new digest waits for the runtime to prepare that image, and
+creation can fail briefly and succeed on retry. A session whose repository state
+differs from the image's commit still works and only rebuilds what changed.
+Snapshots that keep only workspace data (data scope) drop `/opt/cache`.
 
 ## Project selection and sharing
 
@@ -176,6 +203,11 @@ above holds for these routes, with these details:
   two concurrent selections at the same revision give one 200 and one 409.
 - `follow_default` selections report `resolved_version_id` from the current default and keep
   revision unchanged when the default moves.
+- The follow pass (`environment-follow` sweep) runs as a lease-based reconciler sweep in the API process,
+  about once a minute, over the configured owner's environments with
+  `follow_watched_tag`. It reads the registry outside any transaction, then locks the environment
+  row, re-checks the flag and the newest version, inserts at most one version and sets the default.
+  Proven by offline tests against the fake registry only.
 - Registry and validation limits (4 MiB, 30 s read, 90 s validation and refresh) are measured by
   unit tests with short budgets, not against a live registry.
 

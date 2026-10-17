@@ -47,6 +47,34 @@ and `latest`. It validates and exposes the index `digest`, and records the sourc
 tags and immutable image reference in the job summary. This workspace image is
 distinct from the application images below.
 
+## Workspace cache image
+
+[Workspace cache image](workflows/workspace-cache-image.yml) runs on every push to
+`main` and manually (`workflow_dispatch`, `main` only). It has no pull-request
+trigger and uses only `GITHUB_TOKEN` with `packages: write`.
+
+One job (45 minutes) on `ubuntu-24.04-arm` builds `images/workspace-cache/Dockerfile`
+natively for `linux/arm64`. The base is the `ghcr.io/oldsj/mainloop-dev` index
+digest: `latest`, or this commit's own tag when the commit changes the dev image
+paths (the job waits up to 15 minutes for [Mainloop dev image](workflows/dev-image.yml)
+to publish it). The build clones `main` at the merge commit into `/data/workspace` so
+Go's VCS stamping matches a session clone, then warms the Go build cache. Layer 1
+(Go modules, pnpm store) depends only on the lockfiles and has normalized file times,
+so it is reused unchanged across merges. Layer 2 (Go build cache) changes per commit
+and keeps current file times, because Go trims cache entries older than about five
+days.
+
+The job pushes `ghcr.io/oldsj/mainloop-dev:cache-<full SHA>` labelled with the source
+SHA and base digest. A smoke step runs the image by digest: a fresh clone at the SHA
+must build with zero compiles (`go build` and test binaries) and install the pnpm
+workspace offline. Only then does `cache-main` move, and only if the commit is still
+the head of `main`. Runs for the same ref cancel each other.
+
+The tags are not pruned yet. Follow-up: a scheduled job that keeps the newest N
+`cache-<sha>` versions and any version a tag or a registered environment still
+references, deleting the rest through the GHCR package API. A kagent template per
+digest also accumulates until its own retention exists.
+
 ## Production application images
 
 [Publish images](workflows/images.yml) runs on all pushes to `main` and manual
