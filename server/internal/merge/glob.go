@@ -8,10 +8,15 @@ import (
 
 // ProtectedGlobs are the fixed path globs that always need the owner's approval, and
 // GlobsVersion is their version. They are not configurable.
-var ProtectedGlobs = []string{"k8s/**", ".github/**", "**/migrations/**"}
+//
+// Dockerfile* covers every image-build input that can set a runtime environment variable (such
+// as MAINLOOP_MERGE_PROTECTED_AUTO) baked into an image: a value set there must never be able to
+// win over the deployed k8s config, so the build input that could set it needs the same approval
+// as the config itself.
+var ProtectedGlobs = []string{"k8s/**", ".github/**", "**/migrations/**", "**/Dockerfile*"}
 
 // GlobsVersion is the version of ProtectedGlobs.
-const GlobsVersion = 1
+const GlobsVersion = 2
 
 // MaxFiles is the most changed files a preparation reads; a larger pull request is unavailable.
 const MaxFiles = 3000
@@ -32,6 +37,9 @@ func matchedGlobs(path string) []string {
 	}
 	if slices.Contains(parts[:len(parts)-1], "migrations") {
 		out = append(out, "**/migrations/**")
+	}
+	if strings.HasPrefix(parts[len(parts)-1], "Dockerfile") {
+		out = append(out, "**/Dockerfile*")
 	}
 	return out
 }
