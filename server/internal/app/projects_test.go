@@ -178,7 +178,7 @@ func TestMergePolicyReadAndGatedCompareAndSwap(t *testing.T) {
 	var v api.MergePolicyView
 	strict(t, r.body, &v)
 	if r.status != 200 || v.MergePolicy != api.MergePolicyAuto || v.MergePolicyVersion != 1 || !v.WritesEnabled ||
-		strings.Join(v.ProtectedGlobs, ",") != "k8s/**,.github/**,**/migrations/**" || v.ProtectedGlobsVersion != 1 {
+		strings.Join(v.ProtectedGlobs, ",") != "k8s/**,.github/**,**/migrations/**,**/Dockerfile*" || v.ProtectedGlobsVersion != 2 {
 		t.Fatalf("%d %s", r.status, r.body)
 	}
 

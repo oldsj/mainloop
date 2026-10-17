@@ -13,3 +13,6 @@ data:
   # Merge tools and owner write routes remain off pending deployed authority proof.
   MAINLOOP_MERGE_TOOLS_ENABLED: 'false'
   MAINLOOP_MERGE_CONFIGURATIONS: '[]'
+  # Pinned explicitly so a value baked into an image (e.g. by an ENV in a Dockerfile) can never
+  # win over the deployed config. Enable only through this checked-in config, not the image.
+  MAINLOOP_MERGE_PROTECTED_AUTO: 'false'

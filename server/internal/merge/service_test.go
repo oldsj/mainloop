@@ -290,6 +290,23 @@ func TestProtectedPathRoutesToApproval(t *testing.T) {
 	}
 }
 
+func TestDockerfileOnlyChangeRoutesToApprovalWhenFlagIsOff(t *testing.T) {
+	e := newEnv(t)
+	e.fake.Update("o", "n", func(r *githubtest.Repository) {
+		r.PullRequests[0].Files = append(r.PullRequests[0].Files, githubtest.File{Filename: "server/Dockerfile", Additions: 1})
+	})
+	v, err := e.svc.Merge(context.Background(), e.input("r1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Route != dbstate.RouteApproval || v.Status != "approval_required" || v.State != dbstate.MergePrepared || e.puts() != 0 {
+		t.Fatalf("view = %+v, puts %d", v, e.puts())
+	}
+	if len(v.Summary.ApprovalReasons) == 0 {
+		t.Fatal("no approval reasons")
+	}
+}
+
 func TestProtectedAutoMergesAProtectedPathOnGreenWithoutACard(t *testing.T) {
 	e := newEnv(t)
 	e.run()
@@ -340,6 +357,44 @@ func TestProtectedAutoRefusesUnavailableEvidenceInsteadOfACard(t *testing.T) {
 	var ref *merge.Refusal
 	if !errors.As(err, &ref) || ref.Code != "evidence_unavailable" || e.puts() != 0 {
 		t.Fatalf("merge = %+v, %v, puts %d", got, err, e.puts())
+	}
+}
+
+func TestTogglingProtectedAutoOffBlocksAnAlreadyQueuedCandidate(t *testing.T) {
+	e := newEnv(t)
+	e.svc.ProtectedAuto = true
+	e.svc.Settle = 10 * time.Millisecond
+	e.fake.Update("o", "n", func(r *githubtest.Repository) {
+		r.PullRequests[0].Files = append(r.PullRequests[0].Files, githubtest.File{Filename: "k8s/app.yaml", Additions: 1})
+	})
+	// Committed to the auto route and moved to evaluating while the flag is on, with no loop running
+	// yet to carry it further.
+	v, err := e.svc.Merge(context.Background(), e.input("r1"))
+	if err != nil || v.Route != dbstate.RouteAuto || v.State != dbstate.MergeEvaluating {
+		t.Fatalf("view = %+v, %v", v, err)
+	}
+
+	// A new service instance against the same database, as if the operator had restarted with the
+	// flag off, picks the candidate up instead.
+	off := *e.svc
+	off.ProtectedAuto = false
+	r := reconcile.NewRunner(e.pool, quiet(), nil)
+	l := off.Loop()
+	l.Interval = 10 * time.Millisecond
+	r.Add(l)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = r.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	if s := e.settled(v.ProposalID); s != dbstate.MergeBlocked {
+		t.Fatalf("state = %s", s)
+	}
+	if got := e.detail(v.ProposalID); got != "protected_auto_disabled" {
+		t.Fatalf("detail = %q", got)
+	}
+	if e.puts() != 0 {
+		t.Fatalf("puts = %d", e.puts())
 	}
 }
 

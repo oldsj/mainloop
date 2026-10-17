@@ -62,7 +62,7 @@ export function policy(overrides: Partial<PolicyFixture> = {}): PolicyFixture {
     merge_policy: 'auto',
     merge_policy_version: 3,
     protected_globs: ['k8s/**', 'docs/specs/**'],
-    protected_globs_version: 1,
+    protected_globs_version: 2,
     ...overrides
   };
 }

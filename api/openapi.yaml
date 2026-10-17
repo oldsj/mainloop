@@ -4069,12 +4069,13 @@ components:
             - k8s/**
             - .github/**
             - '**/migrations/**'
-          maxItems: 3
+            - '**/Dockerfile*'
+          maxItems: 4
         protected_globs_version:
           type: integer
-          const: 1
+          const: 2
           title: Protected Globs Version
-          default: 1
+          default: 2
       type: object
       required:
         - merge_policy

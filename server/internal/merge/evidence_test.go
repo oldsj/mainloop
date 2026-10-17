@@ -21,6 +21,13 @@ func TestProtectedGlobs(t *testing.T) {
 		"docs/readme.md":             nil,
 		"k8s/migrations/001.sql":     {"k8s/**", "**/migrations/**"},
 		".github/migrations/001.sql": {".github/**", "**/migrations/**"},
+		"server/Dockerfile":          {"**/Dockerfile*"},
+		"web/Dockerfile":             {"**/Dockerfile*"},
+		"Dockerfile":                 {"**/Dockerfile*"},
+		"server/Dockerfile.dev":      {"**/Dockerfile*"},
+		"server/dockerfile":          nil,
+		"server/DockerfileNotes.md":  {"**/Dockerfile*"},
+		"k8s/Dockerfile":             {"k8s/**", "**/Dockerfile*"},
 	}
 	for path, want := range cases {
 		if got := matchedGlobs(path); !slices.Equal(got, want) {
