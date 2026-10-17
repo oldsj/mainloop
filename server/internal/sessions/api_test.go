@@ -133,8 +133,13 @@ func TestSendMessageStatuses(t *testing.T) {
 	if _, err := uuid.Parse(*ok.DeliveryMessageId); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := call("again", &ok.ConversationId); apierr.StatusOf(err) != 409 {
-		t.Fatal("want 409 while the turn is open")
+	again, err := call("again", &ok.ConversationId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, isQueued := again.(api.SendMessage202JSONResponse)
+	if !isQueued || queued.Status != api.ChatResponseStatusQueued || !queued.Pending || queued.DeliveryMessageId == nil {
+		t.Fatalf("want 202 queued while the turn is open, got %T %+v", again, again)
 	}
 	other := "elsewhere"
 	if _, err := call("hello", &other); apierr.StatusOf(err) != 404 {

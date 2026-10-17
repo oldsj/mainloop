@@ -318,8 +318,8 @@ func (s *Service) retireIdle(ctx context.Context, b dbq.GetMainBindingRow) error
 	return nil
 }
 
-// requireNoOpenWork refuses while a delivery is recorded, sending, delivered or uncertain, or a
-// stop of the main is unconfirmed.
+// requireNoOpenWork refuses while a delivery is recorded, sending, delivered, queued or uncertain,
+// or a stop of the main is unconfirmed.
 func (s *Service) requireNoOpenWork(ctx context.Context, q *dbq.Queries, sessionID string) error {
 	c, err := q.CountMainBlockingWork(ctx, sessionID)
 	if err != nil {
@@ -327,7 +327,7 @@ func (s *Service) requireNoOpenWork(ctx context.Context, q *dbq.Queries, session
 	}
 	switch {
 	case c.Deliveries > 0:
-		return conflictCode(codeBusy, "The main thread has open work: a message is recorded, being sent, delivered or unconfirmed.")
+		return conflictCode(codeBusy, "The main thread has open work: a message is recorded, being sent, delivered, queued or unconfirmed.")
 	case c.Cancels > 0:
 		return conflictCode(codeUnconfirmed, "A stop of the main thread is unconfirmed.")
 	}

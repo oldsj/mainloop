@@ -129,6 +129,17 @@ func (s *Service) endDelivery(ctx context.Context, d dbq.Delivery, from []dbstat
 			return nil, fmt.Errorf("end delivery: %w", err)
 		}
 		previous, moved = dbstate.DeliveryState(prev), true
+		// The turn just ended, so the one-open-turn index has nothing of this session's left in it:
+		// admit the oldest message still queued.
+		promoted, err := promoteNextQueued(ctx, q, d.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		if promoted != "" {
+			if err := q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: DeliveryChannel, Payload: promoted}); err != nil {
+				return nil, err
+			}
+		}
 		if !e.note {
 			return nil, nil
 		}
@@ -382,6 +393,16 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 			closedNow = append(closedNow, cancelledDelivery{d: d, prev: dbstate.DeliveryState(prev)})
 			// Every ending publishes one event, so open clients see the turn end.
 			drafts = append(drafts, endedEvent(s.OwnerID, sessionID, d.ID))
+		}
+		// A cancelled session takes no more messages: anything still queued behind the open turn is
+		// cancelled with it, not admitted (there is no next turn for it to wait for).
+		det := "cancelled by user"
+		queuedIDs, err := q.CancelQueuedDeliveries(ctx, dbq.CancelQueuedDeliveriesParams{SessionID: sessionID, Detail: &det})
+		if err != nil {
+			return nil, fmt.Errorf("close queued deliveries: %w", err)
+		}
+		for _, id := range queuedIDs {
+			drafts = append(drafts, endedEvent(s.OwnerID, sessionID, id))
 		}
 		if _, err := q.SetSessionCancelled(ctx, sessionID); errors.Is(err, pgx.ErrNoRows) {
 			cur, err := q.GetSessionRow(ctx, dbq.GetSessionRowParams{ID: sessionID, UserID: s.OwnerID})
@@ -766,7 +787,9 @@ func (s *Service) Create(ctx context.Context, n NewSession) (string, error) {
 		if _, err := q.SetSessionStatus(ctx, dbq.SetSessionStatusParams{ID: id, Status: dbstate.SessionActive}); err != nil {
 			return fmt.Errorf("start session: %w", err)
 		}
-		return s.record(ctx, tx, SourceUser, id, messageID, prompt)
+		// A brand new session has no open turn to queue behind.
+		_, err = s.record(ctx, tx, SourceUser, id, messageID, prompt)
+		return err
 	})
 	if err != nil {
 		return "", busyOrErr(err)

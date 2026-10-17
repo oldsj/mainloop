@@ -70,6 +70,48 @@ VALUES ($1, $1, $2, $3)
 ON CONFLICT (id) DO NOTHING
 RETURNING *;
 
+-- A message durably recorded while another turn is open. The partial index behind
+-- deliveries_one_open excludes this state, so many may queue up; PromoteNextQueuedDelivery admits
+-- them in the order they arrived, once each turn ends.
+-- name: InsertQueuedDelivery :one
+INSERT INTO deliveries (id, idempotency_key, session_id, source, state)
+VALUES ($1, $1, $2, $3, 'queued')
+ON CONFLICT (id) DO NOTHING
+RETURNING *;
+
+-- Admits the oldest queued message, but only once the session truly has no open turn left: the
+-- delivery that just ended may not have been the session's only open one (an uncertain delivery
+-- past its hold no longer blocks a send, so a newer one can be open while an older one is still
+-- being settled). Promoting while another delivery holds the one-open-turn slot would violate
+-- deliveries_one_open and roll back the settle that called this. Zero rows when nothing is queued
+-- or the slot is still held.
+-- name: PromoteNextQueuedDelivery :one
+WITH next AS (
+    SELECT q.id FROM deliveries q
+    WHERE q.session_id = sqlc.arg(session_id) AND q.state = 'queued'
+      AND NOT EXISTS (
+          SELECT 1 FROM deliveries o
+          WHERE o.session_id = q.session_id AND o.state IN ('recorded', 'sending', 'delivered')
+      )
+    ORDER BY q.created_at, q.id
+    LIMIT 1
+    FOR UPDATE
+)
+UPDATE deliveries d
+SET state = 'recorded', updated_at = now()
+FROM next
+WHERE d.id = next.id
+RETURNING d.id;
+
+-- A session that is cancelled outright takes no more messages: every message still queued behind
+-- its last open turn is cancelled with it, not admitted (Cancel ends the whole session, not one
+-- turn).
+-- name: CancelQueuedDeliveries :many
+UPDATE deliveries
+SET state = 'cancelled', detail = sqlc.arg(detail), outcome_version = outcome_version + 1, updated_at = now()
+WHERE session_id = sqlc.arg(session_id) AND state = 'queued'
+RETURNING id;
+
 -- name: GetDelivery :one
 SELECT * FROM deliveries WHERE id = $1;
 
@@ -468,10 +510,11 @@ UPDATE agent_bindings SET main_error = NULL, updated_at = now()
 WHERE session_id = sqlc.arg(session_id) AND main_pending AND kagent_request_id = sqlc.arg(request_id)::text;
 
 -- name: CountMainBlockingWork :one
--- Work that stops a provider switch: an open or uncertain delivery, or an unconfirmed cancel.
+-- Work that stops a provider switch: an open or uncertain delivery, a message still queued behind
+-- one, or an unconfirmed cancel.
 SELECT
     (SELECT count(*) FROM deliveries d
-      WHERE d.session_id = sqlc.arg(session_id) AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain'))::bigint AS deliveries,
+      WHERE d.session_id = sqlc.arg(session_id) AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain', 'queued'))::bigint AS deliveries,
     (SELECT count(*) FROM sessions s
       WHERE s.id = sqlc.arg(session_id) AND s.agent_cancel_outcome = 'unknown')::bigint AS cancels;
 

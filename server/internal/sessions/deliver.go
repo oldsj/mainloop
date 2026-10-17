@@ -979,6 +979,12 @@ func (t *turn) settle(
 		})); err != nil {
 			return nil, err
 		}
+		// The turn just ended, so the one-open-turn index has nothing of this session's left in it:
+		// admit the oldest message still queued, before refreshing the session's status below sees it.
+		promoted, err := promoteNextQueued(ctx, q, t.d.SessionID)
+		if err != nil {
+			return nil, err
+		}
 		msg, err := writeEnded(ctx, q, ended{
 			sessionID: t.d.SessionID, userID: t.d.UserID, messageID: t.c.ID, final: final, task: task,
 		})
@@ -991,6 +997,11 @@ func (t *turn) settle(
 		}
 		if err := t.ingestHealth(ctx, tx, task); err != nil {
 			return nil, err
+		}
+		if promoted != "" {
+			if err := q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: DeliveryChannel, Payload: promoted}); err != nil {
+				return nil, err
+			}
 		}
 		return []events.Draft{endedEvent(t.d.UserID, t.d.SessionID, msg)}, nil
 	})

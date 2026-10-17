@@ -90,6 +90,41 @@ func (q *Queries) BumpBindingTurns(ctx context.Context, sessionID string) error 
 	return err
 }
 
+const cancelQueuedDeliveries = `-- name: CancelQueuedDeliveries :many
+UPDATE deliveries
+SET state = 'cancelled', detail = $1, outcome_version = outcome_version + 1, updated_at = now()
+WHERE session_id = $2 AND state = 'queued'
+RETURNING id
+`
+
+type CancelQueuedDeliveriesParams struct {
+	Detail    *string
+	SessionID string
+}
+
+// A session that is cancelled outright takes no more messages: every message still queued behind
+// its last open turn is cancelled with it, not admitted (Cancel ends the whole session, not one
+// turn).
+func (q *Queries) CancelQueuedDeliveries(ctx context.Context, arg CancelQueuedDeliveriesParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, cancelQueuedDeliveries, arg.Detail, arg.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const clearBindingStandingHash = `-- name: ClearBindingStandingHash :exec
 UPDATE agent_bindings b SET standing_hash = NULL, updated_at = now()
 FROM deliveries d
@@ -164,7 +199,7 @@ func (q *Queries) ClearUnprovenMainPin(ctx context.Context, arg ClearUnprovenMai
 const countMainBlockingWork = `-- name: CountMainBlockingWork :one
 SELECT
     (SELECT count(*) FROM deliveries d
-      WHERE d.session_id = $1 AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain'))::bigint AS deliveries,
+      WHERE d.session_id = $1 AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain', 'queued'))::bigint AS deliveries,
     (SELECT count(*) FROM sessions s
       WHERE s.id = $1 AND s.agent_cancel_outcome = 'unknown')::bigint AS cancels
 `
@@ -174,7 +209,8 @@ type CountMainBlockingWorkRow struct {
 	Cancels    int64
 }
 
-// Work that stops a provider switch: an open or uncertain delivery, or an unconfirmed cancel.
+// Work that stops a provider switch: an open or uncertain delivery, a message still queued behind
+// one, or an unconfirmed cancel.
 func (q *Queries) CountMainBlockingWork(ctx context.Context, sessionID string) (CountMainBlockingWorkRow, error) {
 	row := q.db.QueryRow(ctx, countMainBlockingWork, sessionID)
 	var i CountMainBlockingWorkRow
@@ -920,6 +956,49 @@ func (q *Queries) InsertMainProviderHistory(ctx context.Context, arg InsertMainP
 		arg.Error,
 	)
 	return err
+}
+
+const insertQueuedDelivery = `-- name: InsertQueuedDelivery :one
+INSERT INTO deliveries (id, idempotency_key, session_id, source, state)
+VALUES ($1, $1, $2, $3, 'queued')
+ON CONFLICT (id) DO NOTHING
+RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text
+`
+
+type InsertQueuedDeliveryParams struct {
+	ID        string
+	SessionID string
+	Source    string
+}
+
+// A message durably recorded while another turn is open. The partial index behind
+// deliveries_one_open excludes this state, so many may queue up; PromoteNextQueuedDelivery admits
+// them in the order they arrived, once each turn ends.
+func (q *Queries) InsertQueuedDelivery(ctx context.Context, arg InsertQueuedDeliveryParams) (Delivery, error) {
+	row := q.db.QueryRow(ctx, insertQueuedDelivery, arg.ID, arg.SessionID, arg.Source)
+	var i Delivery
+	err := row.Scan(
+		&i.ID,
+		&i.IdempotencyKey,
+		&i.SessionID,
+		&i.State,
+		&i.Source,
+		&i.TaskID,
+		&i.EvidenceRef,
+		&i.Detail,
+		&i.OutcomeVersion,
+		&i.KagentSessionID,
+		&i.HealthTracked,
+		&i.Attempts,
+		&i.CreateFailures,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SentText,
+	)
+	return i, err
 }
 
 const insertSessionMessage = `-- name: InsertSessionMessage :execrows
@@ -1794,6 +1873,38 @@ func (q *Queries) NoteHoldPassed(ctx context.Context, arg NoteHoldPassedParams) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const promoteNextQueuedDelivery = `-- name: PromoteNextQueuedDelivery :one
+WITH next AS (
+    SELECT q.id FROM deliveries q
+    WHERE q.session_id = $1 AND q.state = 'queued'
+      AND NOT EXISTS (
+          SELECT 1 FROM deliveries o
+          WHERE o.session_id = q.session_id AND o.state IN ('recorded', 'sending', 'delivered')
+      )
+    ORDER BY q.created_at, q.id
+    LIMIT 1
+    FOR UPDATE
+)
+UPDATE deliveries d
+SET state = 'recorded', updated_at = now()
+FROM next
+WHERE d.id = next.id
+RETURNING d.id
+`
+
+// Admits the oldest queued message, but only once the session truly has no open turn left: the
+// delivery that just ended may not have been the session's only open one (an uncertain delivery
+// past its hold no longer blocks a send, so a newer one can be open while an older one is still
+// being settled). Promoting while another delivery holds the one-open-turn slot would violate
+// deliveries_one_open and roll back the settle that called this. Zero rows when nothing is queued
+// or the slot is still held.
+func (q *Queries) PromoteNextQueuedDelivery(ctx context.Context, sessionID string) (string, error) {
+	row := q.db.QueryRow(ctx, promoteNextQueuedDelivery, sessionID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const recordSessionCancelOutcome = `-- name: RecordSessionCancelOutcome :exec
