@@ -424,6 +424,52 @@ func (q *Queries) FinishMainSwitch(ctx context.Context, arg FinishMainSwitchPara
 	return result.RowsAffected(), nil
 }
 
+const finishSessionRestart = `-- name: FinishSessionRestart :execrows
+UPDATE session_restarts
+SET state = 'done', detail = NULL, failed_message_ids = $1::text[], updated_at = now()
+WHERE id = $2 AND state = 'requested'
+`
+
+type FinishSessionRestartParams struct {
+	FailedMessageIds []string
+	ID               string
+}
+
+// Zero rows when another caller settled it first.
+func (q *Queries) FinishSessionRestart(ctx context.Context, arg FinishSessionRestartParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishSessionRestart, arg.FailedMessageIds, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const forgetDeletedKagentSession = `-- name: ForgetDeletedKagentSession :execrows
+UPDATE agent_bindings
+SET kagent_session_id = NULL, kagent_request_id = $1, standing_hash = NULL,
+    guidance_version = NULL, guidance_delivery_id = NULL,
+    kagent_create_request_id = NULL, kagent_create_agent_namespace = NULL, kagent_create_agent_name = NULL,
+    updated_at = now()
+WHERE session_id = $2 AND kagent_session_id = $3::text
+`
+
+type ForgetDeletedKagentSessionParams struct {
+	NewRequestID *string
+	SessionID    string
+	OldSessionID string
+}
+
+// Forgets the deleted Session so the next message creates a new one under a new request id and
+// carries the recent conversation again. Fenced on the Session the restart deleted: a binding that
+// has moved on to a newer Session is left alone.
+func (q *Queries) ForgetDeletedKagentSession(ctx context.Context, arg ForgetDeletedKagentSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, forgetDeletedKagentSession, arg.NewRequestID, arg.SessionID, arg.OldSessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getBlockingDelivery = `-- name: GetBlockingDelivery :one
 SELECT id, state FROM deliveries
 WHERE session_id = $1
@@ -696,6 +742,27 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 	return i, err
 }
 
+const getOpenSessionRestart = `-- name: GetOpenSessionRestart :one
+SELECT id, session_id, kagent_session_id, state, detail, failed_message_ids, attempts, created_at, updated_at FROM session_restarts WHERE session_id = $1 AND state = 'requested'
+`
+
+func (q *Queries) GetOpenSessionRestart(ctx context.Context, sessionID string) (SessionRestart, error) {
+	row := q.db.QueryRow(ctx, getOpenSessionRestart, sessionID)
+	var i SessionRestart
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.KagentSessionID,
+		&i.State,
+		&i.Detail,
+		&i.FailedMessageIds,
+		&i.Attempts,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getOwnedSessionBinding = `-- name: GetOwnedSessionBinding :one
 SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, b.guidance_version, b.guidance_delivery_id, s.user_id, s.title, s.status AS session_status, s.archived_at,
        w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name,
@@ -794,6 +861,29 @@ func (q *Queries) GetOwnedSessionBinding(ctx context.Context, arg GetOwnedSessio
 		&i.WorkspaceAgentName,
 		&i.ResolvedAgentNamespace,
 		&i.ResolvedAgentName,
+	)
+	return i, err
+}
+
+const getSessionRestart = `-- name: GetSessionRestart :one
+SELECT id, session_id, kagent_session_id, state, detail, failed_message_ids, attempts, created_at, updated_at FROM session_restarts WHERE id = $1
+`
+
+// A restart of a session whose turn cannot be stopped (restart.go). The row is written before the
+// native delete, and settled in the transaction that fails the turns that were open on the Session.
+func (q *Queries) GetSessionRestart(ctx context.Context, id string) (SessionRestart, error) {
+	row := q.db.QueryRow(ctx, getSessionRestart, id)
+	var i SessionRestart
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.KagentSessionID,
+		&i.State,
+		&i.Detail,
+		&i.FailedMessageIds,
+		&i.Attempts,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -1064,6 +1154,35 @@ func (q *Queries) InsertSessionMessage(ctx context.Context, arg InsertSessionMes
 	return result.RowsAffected(), nil
 }
 
+const insertSessionRestart = `-- name: InsertSessionRestart :one
+INSERT INTO session_restarts (id, session_id, kagent_session_id)
+VALUES ($1, $2, $3)
+RETURNING id, session_id, kagent_session_id, state, detail, failed_message_ids, attempts, created_at, updated_at
+`
+
+type InsertSessionRestartParams struct {
+	ID              string
+	SessionID       string
+	KagentSessionID *string
+}
+
+func (q *Queries) InsertSessionRestart(ctx context.Context, arg InsertSessionRestartParams) (SessionRestart, error) {
+	row := q.db.QueryRow(ctx, insertSessionRestart, arg.ID, arg.SessionID, arg.KagentSessionID)
+	var i SessionRestart
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.KagentSessionID,
+		&i.State,
+		&i.Detail,
+		&i.FailedMessageIds,
+		&i.Attempts,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listCancelledSessionSends = `-- name: ListCancelledSessionSends :many
 SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text FROM deliveries WHERE session_id = $1 AND state = 'cancelled' AND detail = 'cancelled by user'
   AND (kagent_session_id IS NOT NULL OR task_id IS NOT NULL)
@@ -1139,6 +1258,104 @@ func (q *Queries) ListCompletedDeliveries(ctx context.Context, arg ListCompleted
 	for rows.Next() {
 		var i ListCompletedDeliveriesRow
 		if err := rows.Scan(&i.ID, &i.TaskID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDeliveriesOnKagentSession = `-- name: ListDeliveriesOnKagentSession :many
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text FROM deliveries
+WHERE session_id = $1 AND state IN ('sending', 'delivered', 'uncertain')
+  AND (kagent_session_id IS NULL OR kagent_session_id = $2::text)
+ORDER BY created_at, id
+`
+
+type ListDeliveriesOnKagentSessionParams struct {
+	SessionID       string
+	KagentSessionID string
+}
+
+// The turns a restart settles: every delivery that was sent, or may have been, to the deleted
+// Session (or to none). A recorded one has not been sent and is left for the next Session.
+func (q *Queries) ListDeliveriesOnKagentSession(ctx context.Context, arg ListDeliveriesOnKagentSessionParams) ([]Delivery, error) {
+	rows, err := q.db.Query(ctx, listDeliveriesOnKagentSession, arg.SessionID, arg.KagentSessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Delivery{}
+	for rows.Next() {
+		var i Delivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.IdempotencyKey,
+			&i.SessionID,
+			&i.State,
+			&i.Source,
+			&i.TaskID,
+			&i.EvidenceRef,
+			&i.Detail,
+			&i.OutcomeVersion,
+			&i.KagentSessionID,
+			&i.HealthTracked,
+			&i.Attempts,
+			&i.CreateFailures,
+			&i.NextAttemptAt,
+			&i.LeaseOwner,
+			&i.LeaseUntil,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SentText,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDueSessionRestarts = `-- name: ListDueSessionRestarts :many
+SELECT id, session_id, kagent_session_id, state, detail, failed_message_ids, attempts, created_at, updated_at FROM session_restarts
+WHERE state = 'requested' AND updated_at < now() - make_interval(secs => $1::float8)
+ORDER BY created_at, id
+LIMIT $2
+`
+
+type ListDueSessionRestartsParams struct {
+	IdleSeconds float64
+	LimitCount  int32
+}
+
+// Requested restarts nobody has touched for a while: a request that was cut off, or a delete that
+// kagent did not confirm.
+func (q *Queries) ListDueSessionRestarts(ctx context.Context, arg ListDueSessionRestartsParams) ([]SessionRestart, error) {
+	rows, err := q.db.Query(ctx, listDueSessionRestarts, arg.IdleSeconds, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SessionRestart{}
+	for rows.Next() {
+		var i SessionRestart
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.KagentSessionID,
+			&i.State,
+			&i.Detail,
+			&i.FailedMessageIds,
+			&i.Attempts,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1954,6 +2171,22 @@ func (q *Queries) NoteHoldPassed(ctx context.Context, arg NoteHoldPassedParams) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const noteSessionRestartAttempt = `-- name: NoteSessionRestartAttempt :exec
+UPDATE session_restarts SET attempts = attempts + 1, detail = $1, updated_at = now()
+WHERE id = $2 AND state = 'requested'
+`
+
+type NoteSessionRestartAttemptParams struct {
+	Detail *string
+	ID     string
+}
+
+// Records one unconfirmed delete. updated_at moves, so the resume sweep waits before it looks again.
+func (q *Queries) NoteSessionRestartAttempt(ctx context.Context, arg NoteSessionRestartAttemptParams) error {
+	_, err := q.db.Exec(ctx, noteSessionRestartAttempt, arg.Detail, arg.ID)
+	return err
 }
 
 const promoteNextQueuedDelivery = `-- name: PromoteNextQueuedDelivery :one

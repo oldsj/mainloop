@@ -773,10 +773,16 @@ func (t *turn) observe(ctx context.Context) (reconcile.Outcome, error) {
 		t.s.log().WarnContext(ctx, "read task failed", "message_id", t.c.ID, "error", err)
 		return t.lookAgainLater(ctx, t.s.opts().UncertainRecheck)
 	case !found:
+		if t.s.kagentSessionGone(ctx, ksid) {
+			return t.settle(ctx, dbstate.DeliveryFailed, sessionGoneDetail, nil, false)
+		}
 		return t.undecided(ctx, "no task shows this message; it is looked up, not sent again")
 	}
 	return t.adopt(ctx, task)
 }
+
+// sessionGoneDetail is the reason of a turn whose kagent Session kagent no longer has.
+const sessionGoneDetail = "the kagent session no longer exists, so this turn cannot finish; it was not sent again"
 
 // refresh reads the delivery's task and carries on from there.
 func (t *turn) refresh(ctx context.Context) (reconcile.Outcome, error) {
@@ -786,6 +792,12 @@ func (t *turn) refresh(ctx context.Context) (reconcile.Outcome, error) {
 	case ctx.Err() != nil:
 		return reconcile.Retry(), ctx.Err()
 	case errors.As(err, &gone):
+		if t.s.kagentSessionGone(ctx, t.ksid) {
+			// The task and its Session are both gone (deleted out of band, or the runtime lost them):
+			// nothing can still be running it, so the turn fails now instead of holding the queue for
+			// the uncertain hold. It is not sent again.
+			return t.settle(ctx, dbstate.DeliveryFailed, sessionGoneDetail, nil, false)
+		}
 		if t.cur != dbstate.DeliveryUncertain {
 			if err := t.markUncertain(ctx, "the task no longer exists in kagent; the message is not sent again"); err != nil {
 				return reconcile.Retry(), err

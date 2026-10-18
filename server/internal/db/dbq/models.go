@@ -614,6 +614,18 @@ type SessionMessage struct {
 	CreatedAt time.Time
 }
 
+type SessionRestart struct {
+	ID               string
+	SessionID        string
+	KagentSessionID  *string
+	State            dbstate.RestartState
+	Detail           *string
+	FailedMessageIds []string
+	Attempts         int32
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
 type SweepLease struct {
 	Name   string
 	Holder string

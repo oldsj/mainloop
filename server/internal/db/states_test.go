@@ -72,6 +72,7 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.DeliveryQueued), string(dbstate.DeliveryRecorded), string(dbstate.DeliverySending),
 			string(dbstate.DeliveryDelivered), string(dbstate.DeliveryCompleted), string(dbstate.DeliveryFailed),
 			string(dbstate.DeliveryCancelled), string(dbstate.DeliveryUncertain))},
+		{"session_restarts", "state", strs(string(dbstate.RestartRequested), string(dbstate.RestartDone))},
 		{"tasks", "mode", strs(string(dbstate.TaskModeCode), string(dbstate.TaskModeCoordination))},
 		{"tasks", "selection_source", strs(
 			string(dbstate.SelectionExplicit), string(dbstate.SelectionProjectDefault),

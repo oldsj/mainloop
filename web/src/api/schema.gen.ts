@@ -969,6 +969,36 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/sessions/{session_id}/restart': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Restart Session Runtime
+     * @description Recover a session whose turn cannot be stopped: delete its native kagent Session and settle
+     *     the turns that were open on it as ``failed`` (never resent), so the messages queued behind them
+     *     move on at once. The next message creates a new native Session, which carries the recent
+     *     conversation; the old native context is lost. The main thread and standalone native sessions
+     *     can be restarted; a workspace or task-owned session cannot (409).
+     *
+     *     ``request_id`` is the idempotency key: repeating it returns the restart's recorded outcome, or
+     *     continues one that was interrupted, and never deletes a newer Session. ``status`` is
+     *     ``restarted`` when a native Session was deleted, else ``no_native_session``. A delete kagent
+     *     did not confirm is 502 and is retried by repeating the request (a background sweep also
+     *     continues it).
+     */
+    post: operations['restartSession'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/task-operations/{operation_id}': {
     parameters: {
       query?: never;
@@ -1798,6 +1828,12 @@ export interface components {
        * @default false
        */
       turn_in_flight: boolean;
+      /**
+       * Restartable
+       * @description Whether POST /sessions/{session_id}/restart applies to this session (the main thread or a standalone native session that has not ended).
+       * @default false
+       */
+      restartable: boolean;
       /**
        * Deliveries
        * @description The newest 20 ledgered deliveries of the session, oldest first (the last item is the newest).
@@ -2851,6 +2887,19 @@ export interface components {
     SessionStopTurnResponse: {
       /** @enum {string} */
       status: 'stopped' | 'finished' | 'no_open_turn';
+    };
+    SessionRestartRequest: {
+      /**
+       * Format: uuid
+       * @description Idempotency key chosen by the caller; repeat it to retry the same restart.
+       */
+      request_id: string;
+    };
+    SessionRestartResponse: {
+      /** @enum {string} */
+      status: 'restarted' | 'no_native_session';
+      /** @description The open turns the restart settled as failed (their messages are not resent). */
+      failed_message_ids: string[];
     };
     SessionArchiveResponse: {
       /** @enum {string} */
@@ -7924,6 +7973,86 @@ export interface operations {
       };
       /** @description Conflict */
       409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  restartSession: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SessionRestartRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SessionRestartResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Request Entity Too Large */
+      413: {
         headers: {
           [name: string]: unknown;
         };

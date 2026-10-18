@@ -324,6 +324,11 @@ func (Unimplemented) RespondToQueueItem(context.Context, RespondToQueueItemReque
 	return nil, apierr.NotImplemented
 }
 
+// RestartSession is not implemented yet.
+func (Unimplemented) RestartSession(context.Context, RestartSessionRequestObject) (RestartSessionResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // ResumeWorkspace is not implemented yet.
 func (Unimplemented) ResumeWorkspace(context.Context, ResumeWorkspaceRequestObject) (ResumeWorkspaceResponseObject, error) {
 	return nil, apierr.NotImplemented

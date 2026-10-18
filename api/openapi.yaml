@@ -2698,6 +2698,80 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+  /sessions/{session_id}/restart:
+    post:
+      tags:
+        - sessions
+      summary: Restart Session Runtime
+      description: |-
+        Recover a session whose turn cannot be stopped: delete its native kagent Session and settle
+        the turns that were open on it as ``failed`` (never resent), so the messages queued behind them
+        move on at once. The next message creates a new native Session, which carries the recent
+        conversation; the old native context is lost. The main thread and standalone native sessions
+        can be restarted; a workspace or task-owned session cannot (409).
+
+        ``request_id`` is the idempotency key: repeating it returns the restart's recorded outcome, or
+        continues one that was interrupted, and never deletes a newer Session. ``status`` is
+        ``restarted`` when a native Session was deleted, else ``no_native_session``. A delete kagent
+        did not confirm is 502 and is retried by repeating the request (a background sweep also
+        continues it).
+      operationId: restartSession
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionRestartRequest'
+      responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionRestartResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
   /task-operations/{operation_id}:
     get:
       tags:
@@ -4541,6 +4615,11 @@ components:
           type: boolean
           title: Turn In Flight
           default: false
+        restartable:
+          type: boolean
+          title: Restartable
+          description: Whether POST /sessions/{session_id}/restart applies to this session (the main thread or a standalone native session that has not ended).
+          default: false
         deliveries:
           description: The newest 20 ledgered deliveries of the session, oldest first (the last item is the newest).
           items:
@@ -6256,6 +6335,34 @@ components:
             - no_open_turn
       required:
         - status
+      additionalProperties: false
+    SessionRestartRequest:
+      type: object
+      properties:
+        request_id:
+          type: string
+          format: uuid
+          description: Idempotency key chosen by the caller; repeat it to retry the same restart.
+      required:
+        - request_id
+      additionalProperties: false
+    SessionRestartResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - restarted
+            - no_native_session
+        failed_message_ids:
+          description: The open turns the restart settled as failed (their messages are not resent).
+          type: array
+          items:
+            type: string
+          maxItems: 100
+      required:
+        - status
+        - failed_message_ids
       additionalProperties: false
     SessionArchiveResponse:
       type: object
