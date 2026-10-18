@@ -13,12 +13,12 @@ const Version = 3
 // role, and a role-specific line never lives here. Keep it short: agents read it every session.
 // TestGuidanceIsBounded holds the size.
 const Guidance = "## Working in Mainloop (guidance v3)\n" +
-	"- Where you run: Mainloop sessions are isolated. Code tasks run in an isolated workspace whose checkout is `/data/workspace`. The main session and coordination tasks have no checkout and hand code work to code tasks.\n" +
-	"- What survives a pause: committed work and `/data`. Writes elsewhere, `/tmp` and processes may be reset, so commit work in progress or keep it under `/data`, and run builds and tests in the foreground.\n" +
-	"- Caches: a project may use a prebuilt cache image. If it does, Go, pnpm and similar caches live under `/opt/cache`, set through environment variables such as `GOCACHE`, `GOMODCACHE` and `npm_config_store_dir`. Check the environment and use them as set; do not move them into `/data` or the repository. The first session on a new cache image can start slower.\n" +
-	"- Project specifics: the repository's AGENTS.md and CLAUDE.md apply. Run the smallest checks that establish confidence, then widen them when risk warrants.\n" +
-	"- Publishing: code tasks publish through Mainloop's tools (branch, pull request, CI, then merge subject to policy). Run no production commands unless the task says so. Where your tools include `dev_*`, the shared dev instance is the expected place to try a change before merge; it is not production.\n" +
-	"- GitHub: reach it only through Mainloop's tools. Workspaces have no `gh` and no GitHub API access, and no tool files issues yet, so ask the owner to file one rather than delegating it.\n" +
-	"- Task links: in text the owner reads, write a task as `[<task title>](/tasks/<task id>)`, not a bare id.\n" +
-	"- Reporting: tasks `report` evidence such as commits, pull requests and check output, not claims. For a decision only the owner can make, a task reports `outcome=blocked` with `owner_action` stating the question; the main session asks the owner directly in chat.\n" +
-	"- Insights: the owner's Insights page (`/health`) shows orchestration health, such as tool failures and token use.\n"
+	"- Where you run: sessions are isolated. Code tasks run in a workspace checked out at `/data/workspace`; the main session and coordination tasks have no checkout and hand code work to code tasks.\n" +
+	"- What survives a pause: committed work and `/data`. Other writes, `/tmp` and processes may be reset: commit work in progress or keep it under `/data`, and run builds and tests in the foreground.\n" +
+	"- Caches: with a prebuilt cache image, Go, pnpm and similar caches live under `/opt/cache` (`GOCACHE`, `GOMODCACHE`, `npm_config_store_dir`). Use them as set; do not move them into `/data` or the repository. A new image's first session can be slower.\n" +
+	"- Project specifics: the repository's AGENTS.md and CLAUDE.md apply. Run the smallest checks that establish confidence; widen them as risk warrants.\n" +
+	"- Publishing: code tasks publish through Mainloop's tools (branch, pull request, CI, then merge subject to policy). Run no production commands unless the task says so. Where your tools include `dev_*`, the shared dev instance (not production) is where to try a change before merge.\n" +
+	"- GitHub: use Mainloop's tools only; there is no `gh` or issue tool yet, so ask the owner to file issues.\n" +
+	"- Task links: write tasks as `[<title>](/tasks/<id>)`, not bare ids.\n" +
+	"- Reporting: tasks `report` evidence (commits, pull requests, check output), not claims. For an owner-only decision, a task reports `outcome=blocked` with `owner_action` stating the question; the main session asks the owner directly in chat.\n" +
+	"- Insights: the owner's Insights page (`/health`) shows orchestration health: tool failures, token use.\n"
