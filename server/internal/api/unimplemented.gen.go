@@ -219,6 +219,11 @@ func (Unimplemented) ListActivity(context.Context, ListActivityRequestObject) (L
 	return nil, apierr.NotImplemented
 }
 
+// ListDevloopOperations is not implemented yet.
+func (Unimplemented) ListDevloopOperations(context.Context, ListDevloopOperationsRequestObject) (ListDevloopOperationsResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // ListEnvironmentVersions is not implemented yet.
 func (Unimplemented) ListEnvironmentVersions(context.Context, ListEnvironmentVersionsRequestObject) (ListEnvironmentVersionsResponseObject, error) {
 	return nil, apierr.NotImplemented

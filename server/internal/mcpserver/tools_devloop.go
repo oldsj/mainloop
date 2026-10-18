@@ -27,7 +27,7 @@ const devloopProject = "oldsj/mainloop"
 // devLoopWaitBound is how long each tool call waits for its devloop_operations row to finish
 // before answering with whatever is known so far; the row itself (and serve-api's reconcile loop)
 // keeps working past this bound.
-const devLoopWaitBound = 90 * time.Second
+const devLoopWaitBound = 4 * time.Minute
 
 // devLoopTools let a task agent of devloopProject iterate on the shared mainloop-dev instance:
 // one FIFO lease, a sync that fetches a pushed commit and copies it into mainloop-dev's synced
@@ -52,9 +52,11 @@ func (s *Server) devLoopTools() []Tool {
 		},
 		{
 			Name: agentauth.ToolDevSync,
-			Description: "Sync commit_sha (already pushed through the git push transport) into mainloop-dev. " +
-				"Requires holding the lease. Waits for mainloop-dev's own /health to report ok, or a bounded " +
-				"timeout with the last log lines; retrying with the same commit_sha is safe.",
+			Description: "Use after pushing and before open_pull_request. Syncs commit_sha (already pushed through " +
+				"the git push transport) into mainloop-dev, migrates its database, waits for its /health, and runs " +
+				"the read-only smoke check. Succeeds only when mainloop-dev is healthy and the smoke passes; any " +
+				"other result is failed, with the output that explains it. Requires holding the lease. Waits up to " +
+				"4 minutes, then reports the state so far; retrying with the same commit_sha is safe.",
 			InputSchema: objectSchema(map[string]any{"commit_sha": sha}, "commit_sha"), Handle: s.devSync,
 		},
 		{

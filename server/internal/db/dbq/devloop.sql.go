@@ -297,6 +297,51 @@ func (q *Queries) InsertDevloopOperation(ctx context.Context, arg InsertDevloopO
 	return i, err
 }
 
+const listDevloopSyncs = `-- name: ListDevloopSyncs :many
+SELECT id, idempotency_key, kind, session_id, project_id, params, result, detail, state, attempts, interrupted, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM devloop_operations
+WHERE kind = 'sync' AND ($1::text = '' OR session_id = $1::text)
+ORDER BY created_at DESC, id
+LIMIT 50
+`
+
+// The owner's view of dev_sync history, newest first. An empty session_id means every session.
+func (q *Queries) ListDevloopSyncs(ctx context.Context, sessionID string) ([]DevloopOperation, error) {
+	rows, err := q.db.Query(ctx, listDevloopSyncs, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DevloopOperation{}
+	for rows.Next() {
+		var i DevloopOperation
+		if err := rows.Scan(
+			&i.ID,
+			&i.IdempotencyKey,
+			&i.Kind,
+			&i.SessionID,
+			&i.ProjectID,
+			&i.Params,
+			&i.Result,
+			&i.Detail,
+			&i.State,
+			&i.Attempts,
+			&i.Interrupted,
+			&i.NextAttemptAt,
+			&i.LeaseOwner,
+			&i.LeaseUntil,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockDevloopLease = `-- name: LockDevloopLease :one
 SELECT id, holder_session_id, acquired_at, last_used_at, idle_timeout_seconds, created_at, updated_at FROM devloop_lease WHERE id = $1 FOR UPDATE
 `

@@ -581,7 +581,7 @@
     },
     {
       "name": "dev_sync",
-      "description": "Sync commit_sha (already pushed through the git push transport) into mainloop-dev. Requires holding the lease. Waits for mainloop-dev's own /health to report ok, or a bounded timeout with the last log lines; retrying with the same commit_sha is safe.",
+      "description": "Use after pushing and before open_pull_request. Syncs commit_sha (already pushed through the git push transport) into mainloop-dev, migrates its database, waits for its /health, and runs the read-only smoke check. Succeeds only when mainloop-dev is healthy and the smoke passes; any other result is failed, with the output that explains it. Requires holding the lease. Waits up to 4 minutes, then reports the state so far; retrying with the same commit_sha is safe.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {

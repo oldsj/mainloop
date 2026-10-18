@@ -34,11 +34,13 @@ cannot express a project restriction.
 
 - `dev_lease_acquire`, `dev_lease_release`: the one lease on mainloop-dev.
 - `dev_sync(commit_sha)`: sync a commit already pushed through the git push transport into
-  mainloop-dev. Requires holding the lease.
+  mainloop-dev, migrate its database, and check it is healthy and passes the read-only smoke.
+  Requires holding the lease. Its description starts "Use after pushing and before
+  open_pull_request." and says it succeeds only when mainloop-dev is healthy and the smoke passes.
 - `dev_status`: read mainloop-dev's pod status.
 
 `dev_sync` and `dev_status` each write one `devloop_operations` row and poll it for up to a bound
-(90s for `dev_sync`, 15s for `dev_status`), returning the row's state and detail either way:
+(4 minutes for `dev_sync`, 15s for `dev_status`), returning the row's state and detail either way:
 `succeeded`, `failed`, or still `pending`/`unknown` if the bound passed first. The agent may call
 the same tool again. The idempotency key is the session and commit. A repeat call while the row is
 still `pending`, `running` or `unknown` returns that row and copies nothing extra. A repeat call
@@ -94,13 +96,58 @@ loop to drive (`server/internal/reconcile`):
    `tar -x` over a Kubernetes exec (`k8s.io/client-go/tools/remotecommand`): the backend, mcp and
    git containers' `/src`, and the frontend container's `/app/web`. mainloop-dev's existing
    `watchexec` and Vite reload pick up the change; devloop restarts nothing itself.
-4. The loop waits a short settle delay (default 3s), because the old backend process keeps
-   answering until `watchexec` restarts it. It then runs `curl` against `127.0.0.1:8000/health`
-   inside the backend container over exec, once per second, for up to `HealthTimeout` (default
-   60s). It does not call mainloop-dev over HTTP: the namespace's NetworkPolicy admits port 8000
-   only from the frontend pod and the tailscale gateway, so a call from the production backend
-   would be dropped. The result is `succeeded` with `health_ok` true or false. When it is false,
-   the detail carries the backend's last 20 log lines, which is where a compile error shows.
+4. The sync then earns its verdict. Each step runs inside the backend container over exec, and the
+   first miss ends the sync as `failed` with that step's output in the detail:
+   1. `go run ./cmd/mainloop migrate up` from the copied tree (idempotent, holds the migrate lock;
+      bounded by `MigrateTimeout`, default 150s). Unmerged migrations land in the shared dev
+      database, which is disposable, so a branch's migration can reach it before the branch merges.
+      Goose matches applied versions by number only: two branches that add the same version number
+      leave the second one's file silently skipped, and a version applied from an abandoned branch
+      makes a later, lower main migration fail with "missing (out-of-order)". The detail then names
+      the recovery: the owner runs `mainloop migrate reset` in the backend container with
+      `MAINLOOP_ALLOW_RESET=1`, which wipes mainloop-dev's data. `dev_sync` never resets it. The tail
+      of the output (25 lines, 3000 bytes, cut on a character boundary) is attached on failure.
+   2. After a short settle delay (default 3s, because the old backend process keeps answering until
+      `watchexec` restarts it), one exec per second, for up to `HealthTimeout` (default 180s: a stale
+      instance rebuilds all three Go containers under `go run`), that first checks the commit marker
+      and then runs `curl` against `127.0.0.1:8000`, `:8002` and `:8003` `/health` (API, MCP, git
+      read), so the smoke cannot race the mcp and git rebuilds. It does not call mainloop-dev over
+      HTTP: the namespace's NetworkPolicy admits port 8000 only from the frontend pod and the
+      tailscale gateway, so a call from the production backend would be dropped. On a miss the detail
+      carries the backend's last 20 log lines, which is where a compile error shows.
+   3. `go run ./cmd/mainloop smoke --read-only` against the pod's loopback listeners (API `:8000`,
+      MCP `:8002`, git read `:8003`, git push `:8004`; mainloop-dev runs with `DEV_MODE`, so the
+      Host guard accepts loopback). On mainloop-dev, where git transport and the push gate are off,
+      it proves the owner-API reads against the real database, an MCP listener that is up and
+      refusing unauthenticated calls, and two git listeners that are up but off (their checks are
+      reported as skipped). It sends no chat turn, writes nothing and spends no quota. Bounded by `SmokeTimeout` (default 90s). A
+      passing run's summary line is kept; a failing run's output tail is attached.
+
+   Only a sync that passes all three is `succeeded`. `health_ok: false` is `failed`, never a success
+   with a warning. The row's result records how far the sync got: `migrate_ok`, `health_ok` and
+   `smoke` ({`passed`, `summary`}) are each absent until that step ran.
+
+   **The tree must stay the one the sync wrote.** The backend, mcp and git containers keep `/src` in
+   their writable layer, so a container restart (a liveness kill after a startup crash, say) puts
+   back the image's tree and loses the copy; a replaced pod never had it. Left unchecked, the
+   restarted instance would answer `/health` and pass the smoke for code that is not the commit
+   under test. So the sync records, before its first copy, the name and restart count of the backend
+   and frontend pods, and writes the commit to `/src/.devloop-commit` in the backend container after
+   the copies. Every health round, and once more after the smoke, it fails the sync if a pod was
+   replaced or deleted or its restart count rose, with the previous container instance's last log
+   lines (where a crash shows); the health exec fails it too if the marker does not hold the
+   commit. Migrate, health and smoke all run in the pod recorded before the copy. A backend that
+   crashed on an old schema before the migration ran is not restarted by the migration, and the
+   liveness restart that follows fails the sync; calling `dev_sync` again copies again.
+
+Pods are picked by label and must be `Running` and not deleting (Ready ones first), so a terminating
+or evicted pod that still matches the label is never a target. BusyBox `tar` in the alpine frontend
+image warns on stderr while still extracting and exiting 0; those warnings (a skipped PAX header, a
+stripped leading `/`) are not failures. Any other `tar` stderr line, and any non-zero exit, is.
+
+`GET /devloop/operations?session_id=` (owner API) lists the session's syncs, newest first (at most 50;
+without `session_id`, every session's): id, commit, state, `health_ok`, `migrate_ok`, the smoke
+summary, detail and times. This is how the owner reads each verdict without taking the agent's word.
 
 Syncs run one at a time. Before copying, the loop takes a database lock row (`devloop_sync_lock`,
 held until the sync's deadline plus a margin, so a replica that dies does not block syncs for
@@ -110,7 +157,7 @@ session exists. A new `dev_sync` also marks the session's older `pending` and `u
 `failed` with detail `superseded by a newer sync from this session`, so an older commit that was
 waiting to retry cannot later overwrite a newer one.
 
-A sync fails if it is not done five minutes after it was requested; waiting for the lock and every
+A sync fails if it is not done ten minutes after it was requested; waiting for the lock and every
 retry count against that one deadline. A copy that is cut five times fails with "gave up after 5
 interrupted copies" instead of staying `unknown` forever.
 
@@ -146,7 +193,7 @@ Kubernetes pod client, a fake GitHub seeder, and a real local `git`, with scratc
 lease acquire/queue/idle-expiry/takeover/release; `dev_sync` idempotency (a repeat call while the row is in flight
 returns it; a repeat call after it finished syncs again, including after a failure); refusal of
 `dev_sync` without the lease, at the tool and again at claim time; the lease heartbeat and expiry
-rules; the health wait and the unhealthy-backend detail (against a fake `curl`); the retry cap; recovery from an uncertain copy outcome
+rules; the health wait, an unhealthy backend failing the sync with its log tail (against a fake `curl`); `migrate up` and the read-only smoke run after the copies and after `/health`, in that order, and a failure of either fails the sync with its output (fake exec; each check mutation-tested); a backend restart or pod replacement after the copy (at the first health probe, mid-wait, or during the smoke) and a missing commit marker each failing the sync (the restart check mutation-tested); each step's timeout naming its own cap and the sync deadline named as such; goose's out-of-order refusal naming the owner's recovery; a multibyte output tail staying valid UTF-8; pod selection ignoring terminating, evicted and pending pods; harmless BusyBox `tar` warnings accepted and real `tar` errors still failing; the sync history endpoint; the retry cap; recovery from an uncertain copy outcome
 (the row moves to `unknown` and a later claim retries the copy to success); every devloop tool
 refused with the flag off (not even listed in discovery) and with the flag on but the session
 bound to another project, or to none; every devloop write refused after its credential is
@@ -185,9 +232,9 @@ Known differences from `devspace dev` sync:
 Also proven by tests: syncs copy one at a time (and the test fails without the lock); a newer
 sync supersedes an older interrupted one, including the review's overwrite scenario; abandoned
 queue entries do not hold the lease; a session that ends drops its hold and its place; a tar exit
-status is a definite failure even when its message contains words like "reset"; the five-minute
+status is a definite failure even when its message contains words like "reset"; the ten-minute
 deadline runs from the request.
 
-Not proven: any run against a real mainloop-dev instance, a deployed image, the RBAC manifests
+Not proven: any run against a real mainloop-dev instance (including the in-container `go run` migrate and smoke commands and their working directory and environment), a deployed image, the RBAC manifests
 applied to a live cluster, or `scripts/dev-live.sh`'s lease coordination against a real
 control-plane owner API.

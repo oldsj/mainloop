@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
@@ -57,8 +59,8 @@ func holdLease(t *testing.T, d *testdb.DB, session string) {
 func TestSyncStartIsIdempotent(t *testing.T) {
 	d := testdb.New(t)
 	pods := devlooptest.New()
-	pods.BySelector["app=mainloop-backend"] = []devloop.PodStatus{{Name: "backend-0"}}
-	pods.BySelector["app=mainloop-frontend"] = []devloop.PodStatus{{Name: "frontend-0"}}
+	pods.BySelector["app=mainloop-backend"] = []devloop.PodStatus{{Name: "backend-0", Phase: "Running", Ready: true}}
+	pods.BySelector["app=mainloop-frontend"] = []devloop.PodStatus{{Name: "frontend-0", Phase: "Running", Ready: true}}
 	sha, pack := scratchRepo(t)
 	seed := &devlooptest.Seeder{Payload: pack}
 	svc := newOperationsService(d, pods, seed)
@@ -102,8 +104,8 @@ func TestSyncStartIsIdempotent(t *testing.T) {
 func TestSyncRetriesAnUncertainCopyToASuccessfulOutcome(t *testing.T) {
 	d := testdb.New(t)
 	pods := devlooptest.New()
-	pods.BySelector["app=mainloop-backend"] = []devloop.PodStatus{{Name: "backend-0"}}
-	pods.BySelector["app=mainloop-frontend"] = []devloop.PodStatus{{Name: "frontend-0"}}
+	pods.BySelector["app=mainloop-backend"] = []devloop.PodStatus{{Name: "backend-0", Phase: "Running", Ready: true}}
+	pods.BySelector["app=mainloop-frontend"] = []devloop.PodStatus{{Name: "frontend-0", Phase: "Running", Ready: true}}
 	// The frontend copy is cut once, then succeeds on retry.
 	pods.QueueCopyResult("frontend", devlooptest.ErrStreamReset)
 	sha, pack := scratchRepo(t)
@@ -177,8 +179,8 @@ func waitSync(t *testing.T, svc *devloop.OperationsService, id string) dbq.Devlo
 
 func syncPods() *devlooptest.Pods {
 	pods := devlooptest.New()
-	pods.BySelector["app=mainloop-backend"] = []devloop.PodStatus{{Name: "backend-0"}}
-	pods.BySelector["app=mainloop-frontend"] = []devloop.PodStatus{{Name: "frontend-0"}}
+	pods.BySelector["app=mainloop-backend"] = []devloop.PodStatus{{Name: "backend-0", Phase: "Running", Ready: true}}
+	pods.BySelector["app=mainloop-frontend"] = []devloop.PodStatus{{Name: "frontend-0", Phase: "Running", Ready: true}}
 	return pods
 }
 
@@ -254,14 +256,20 @@ func TestSyncWaitsForTheBackendToComeBackHealthy(t *testing.T) {
 	if row.State != dbstate.DevloopSucceeded || !strings.Contains(string(row.Result), `"health_ok": true`) {
 		t.Fatalf("sync = %s result %s (%v), want succeeded with health_ok", row.State, row.Result, row.Detail)
 	}
+	for _, want := range []string{`"migrate_ok": true`, `"passed": true`, "summary: 8 ok, 0 fail, 2 skip"} {
+		if !strings.Contains(string(row.Result), want) {
+			t.Errorf("result %s lacks %s", row.Result, want)
+		}
+	}
 	if pods.HealthCalls != 3 {
 		t.Errorf("health was checked %d times, want 3 (two failures, then ok)", pods.HealthCalls)
 	}
 }
 
-// TestSyncReportsAnUnhealthyBackendWithItsLogs proves a backend that never comes up (a compile
-// error under `go run`) still finishes the sync, with health_ok false and the log tail.
-func TestSyncReportsAnUnhealthyBackendWithItsLogs(t *testing.T) {
+// TestSyncFailsWhenTheBackendIsUnhealthy proves a backend that never comes up (a compile error
+// under `go run`) fails the sync: the state is failed, not succeeded, the detail carries the log
+// tail, and neither the smoke run nor anything after the health wait happens.
+func TestSyncFailsWhenTheBackendIsUnhealthy(t *testing.T) {
 	d := testdb.New(t)
 	pods := syncPods()
 	pods.HealthFailFirst = 1 << 30
@@ -273,11 +281,134 @@ func TestSyncReportsAnUnhealthyBackendWithItsLogs(t *testing.T) {
 	runOperations(t, svc, d)
 
 	row := waitSync(t, svc, startSync(t, svc, "session-a", "key-sick", sha).ID)
-	if row.State != dbstate.DevloopSucceeded || !strings.Contains(string(row.Result), `"health_ok": false`) {
-		t.Fatalf("sync = %s result %s, want succeeded with health_ok false", row.State, row.Result)
+	if row.State != dbstate.DevloopFailed || !strings.Contains(string(row.Result), `"health_ok": false`) {
+		t.Fatalf("sync = %s result %s, want failed with health_ok false", row.State, row.Result)
 	}
 	if row.Detail == nil || !strings.Contains(*row.Detail, "undefined: nope") {
 		t.Errorf("detail = %v, want the backend's last log lines", row.Detail)
+	}
+	if slices.Contains(pods.Seen(), "smoke") {
+		t.Errorf("smoke ran against an unhealthy backend: %v", pods.Seen())
+	}
+}
+
+// TestSyncFailsWhenMigrateFails proves `migrate up` failing fails the sync with the command's
+// output, before the health wait.
+func TestSyncFailsWhenMigrateFails(t *testing.T) {
+	d := testdb.New(t)
+	pods := syncPods()
+	pods.MigrateErr = devlooptest.ExitError{Code: 1, Msg: "command terminated with exit code 1"}
+	pods.MigrateOut = "migrate: 00251_x.sql: column \"y\" does not exist"
+	sha, pack := scratchRepo(t)
+	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+	holdLease(t, d, "session-a")
+	runOperations(t, svc, d)
+
+	row := waitSync(t, svc, startSync(t, svc, "session-a", "key-migrate", sha).ID)
+	if row.State != dbstate.DevloopFailed || row.Detail == nil ||
+		!strings.Contains(*row.Detail, "migrate up failed") || !strings.Contains(*row.Detail, `column "y" does not exist`) {
+		t.Fatalf("sync = %s (%v), want failed naming migrate and its output", row.State, row.Detail)
+	}
+	if !strings.Contains(string(row.Result), `"migrate_ok": false`) {
+		t.Errorf("result = %s, want migrate_ok false", row.Result)
+	}
+	if seen := pods.Seen(); slices.Contains(seen, "health") || slices.Contains(seen, "smoke") {
+		t.Errorf("health or smoke ran after a failed migrate: %v", seen)
+	}
+}
+
+// TestSyncFailsWhenSmokeFails proves a failing read-only smoke run fails the sync and attaches
+// the run's output, even though the backend is healthy.
+func TestSyncFailsWhenSmokeFails(t *testing.T) {
+	d := testdb.New(t)
+	pods := syncPods()
+	pods.SmokeErr = devlooptest.ExitError{Code: 1, Msg: "command terminated with exit code 1"}
+	pods.SmokeOut = "ok   health\nFAIL projects: GET /projects: status 500\nsummary: 1 ok, 1 fail, 0 skip\n"
+	sha, pack := scratchRepo(t)
+	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+	holdLease(t, d, "session-a")
+	runOperations(t, svc, d)
+
+	row := waitSync(t, svc, startSync(t, svc, "session-a", "key-smoke", sha).ID)
+	if row.State != dbstate.DevloopFailed || row.Detail == nil ||
+		!strings.Contains(*row.Detail, "smoke") || !strings.Contains(*row.Detail, "GET /projects: status 500") {
+		t.Fatalf("sync = %s (%v), want failed with the smoke output", row.State, row.Detail)
+	}
+	if !strings.Contains(string(row.Result), `"health_ok": true`) || !strings.Contains(string(row.Result), `"passed": false`) {
+		t.Errorf("result = %s, want health_ok true and smoke passed false", row.Result)
+	}
+}
+
+// TestSyncMigratesAfterTheCopiesAndSmokesAfterHealth proves the order: every copy, then migrate,
+// then /health, then smoke.
+func TestSyncMigratesAfterTheCopiesAndSmokesAfterHealth(t *testing.T) {
+	d := testdb.New(t)
+	pods := syncPods()
+	sha, pack := scratchRepo(t)
+	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+	holdLease(t, d, "session-a")
+	runOperations(t, svc, d)
+
+	row := waitSync(t, svc, startSync(t, svc, "session-a", "key-order", sha).ID)
+	if row.State != dbstate.DevloopSucceeded {
+		t.Fatalf("sync = %s (%v), want succeeded", row.State, row.Detail)
+	}
+	got := strings.Join(pods.Seen(), ",")
+	if want := "tar:backend,tar:mcp,tar:git,tar:frontend,marker,migrate,health,smoke"; got != want {
+		t.Errorf("exec order = %s, want %s", got, want)
+	}
+}
+
+// TestSyncPicksARunningPodThatIsNotBeingDeleted proves a terminating, pending or evicted pod that
+// matches the label is not a copy target, and that no such pod at all fails the sync.
+func TestSyncPicksARunningPodThatIsNotBeingDeleted(t *testing.T) {
+	d := testdb.New(t)
+	pods := syncPods()
+	pods.BySelector["app=mainloop-backend"] = []devloop.PodStatus{
+		{Name: "backend-old", Phase: "Running", Ready: true, Deleting: true},
+		{Name: "backend-evicted", Phase: "Failed"},
+		{Name: "backend-new", Phase: "Running", Ready: true},
+	}
+	sha, pack := scratchRepo(t)
+	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+	holdLease(t, d, "session-a")
+	runOperations(t, svc, d)
+
+	row := waitSync(t, svc, startSync(t, svc, "session-a", "key-pick", sha).ID)
+	if row.State != dbstate.DevloopSucceeded || pods.LastPod["backend"] != "backend-new" {
+		t.Fatalf("sync = %s (%v) copied to %q, want succeeded on backend-new", row.State, row.Detail, pods.LastPod["backend"])
+	}
+
+	pods.BySelector["app=mainloop-backend"] = []devloop.PodStatus{{Name: "backend-old", Phase: "Running", Deleting: true}}
+	row = waitSync(t, svc, startSync(t, svc, "session-a", "key-nopod", sha).ID)
+	if row.State != dbstate.DevloopFailed || row.Detail == nil || !strings.Contains(*row.Detail, "no running pod") {
+		t.Fatalf("sync with only a terminating pod = %s (%v), want failed naming the missing pod", row.State, row.Detail)
+	}
+}
+
+// TestSyncToleratesHarmlessBusyBoxTarWarnings proves a BusyBox tar that warns about PAX headers
+// and exits 0 does not fail the sync, while any other stderr still does.
+func TestSyncToleratesHarmlessBusyBoxTarWarnings(t *testing.T) {
+	d := testdb.New(t)
+	pods := syncPods()
+	pods.QueueCopyStderr("frontend", "tar: warning: skipping header 'x'\ntar: removing leading '/' from member names\n")
+	sha, pack := scratchRepo(t)
+	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+	holdLease(t, d, "session-a")
+	runOperations(t, svc, d)
+
+	row := waitSync(t, svc, startSync(t, svc, "session-a", "key-busybox", sha).ID)
+	if row.State != dbstate.DevloopSucceeded {
+		t.Fatalf("sync with BusyBox warnings = %s (%v), want succeeded", row.State, row.Detail)
+	}
+
+	pods.QueueCopyStderr("frontend", "tar: warning: skipping header 'x'\ntar: can't open 'src/a.ts': Permission denied\n")
+	row = waitSync(t, svc, startSync(t, svc, "session-a", "key-realerr", sha).ID)
+	if row.State != dbstate.DevloopFailed || row.Detail == nil || !strings.Contains(*row.Detail, "Permission denied") {
+		t.Fatalf("sync with a real tar error = %s (%v), want failed naming it", row.State, row.Detail)
+	}
+	if strings.Contains(*row.Detail, "skipping header") {
+		t.Errorf("detail = %q, should not repeat the harmless warning", *row.Detail)
 	}
 }
 
@@ -505,7 +636,7 @@ func TestSyncDeadlineRunsFromTheRequest(t *testing.T) {
 	ctx := context.Background()
 
 	stale := startSync(t, svc, "session-a", "key-stale", sha)
-	if _, err := d.Pool.Exec(ctx, `UPDATE devloop_operations SET created_at = now() - interval '10 minutes' WHERE id = $1`, stale.ID); err != nil {
+	if _, err := d.Pool.Exec(ctx, `UPDATE devloop_operations SET created_at = now() - interval '20 minutes' WHERE id = $1`, stale.ID); err != nil {
 		t.Fatal(err)
 	}
 	runOperations(t, svc, d)
@@ -518,7 +649,7 @@ func TestSyncDeadlineRunsFromTheRequest(t *testing.T) {
 	var hungTries atomic.Int32
 	pods.CopyHook = func(ctx context.Context, _ string) { hungTries.Add(1); <-ctx.Done() }
 	hung := startSync(t, svc, "session-a", "key-hung", sha)
-	if _, err := d.Pool.Exec(ctx, `UPDATE devloop_operations SET created_at = now() - interval '5 minutes' + interval '600 milliseconds' WHERE id = $1`, hung.ID); err != nil {
+	if _, err := d.Pool.Exec(ctx, `UPDATE devloop_operations SET created_at = now() - interval '10 minutes' + interval '600 milliseconds' WHERE id = $1`, hung.ID); err != nil {
 		t.Fatal(err)
 	}
 	row = waitSync(t, svc, hung.ID)
@@ -579,5 +710,201 @@ func TestRepeatCallOfAnOlderSyncDoesNotFailTheNewerOne(t *testing.T) {
 	runOperations(t, svc, d)
 	if got := waitSync(t, svc, newer.ID); got.State != dbstate.DevloopSucceeded {
 		t.Fatalf("newer sync = %s (%v), want succeeded", got.State, got.Detail)
+	}
+}
+
+// runningBackend is syncPods' backend pod with a restart count and a container to read logs from.
+func runningBackend(name string, restarts int32) []devloop.PodStatus {
+	return []devloop.PodStatus{{Name: name, Phase: "Running", Ready: true, RestartCount: restarts, Containers: []string{"backend"}}}
+}
+
+// TestSyncFailsWhenTheBackendRestartsAfterTheCopy proves the case the verdict exists to catch: a
+// container that restarts after the copy starts again from the image's tree, so its /health and
+// the smoke would pass for code that is not the commit under test. The restart count rising at the
+// first health probe, or during the smoke, fails the sync, with the previous instance's log.
+func TestSyncFailsWhenTheBackendRestartsAfterTheCopy(t *testing.T) {
+	for _, at := range []string{"health", "smoke"} {
+		t.Run(at, func(t *testing.T) {
+			d := testdb.New(t)
+			pods := syncPods()
+			pods.SetPods("app=mainloop-backend", runningBackend("backend-0", 0))
+			pods.LogLines["backend-0/backend/previous"] = "panic: nil pointer in newWiring"
+			var once sync.Once
+			pods.Hook = func(_ context.Context, event string) {
+				if event == at {
+					once.Do(func() { pods.SetPods("app=mainloop-backend", runningBackend("backend-0", 1)) })
+				}
+			}
+			sha, pack := scratchRepo(t)
+			svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+			holdLease(t, d, "session-a")
+			runOperations(t, svc, d)
+
+			row := waitSync(t, svc, startSync(t, svc, "session-a", "key-restart-"+at, sha).ID)
+			if row.State != dbstate.DevloopFailed || row.Detail == nil ||
+				!strings.Contains(*row.Detail, "restarted during the sync") || !strings.Contains(*row.Detail, "panic: nil pointer in newWiring") {
+				t.Fatalf("sync with a restart at %s = %s (%v), want failed naming the restart and the previous log", at, row.State, row.Detail)
+			}
+		})
+	}
+}
+
+// TestSyncFailsWhenThePodIsReplacedMidWait proves a pod replaced after the copy fails the sync: the
+// new pod never got the copy, so asking it for /health would be asking about the image's tree.
+func TestSyncFailsWhenThePodIsReplacedMidWait(t *testing.T) {
+	d := testdb.New(t)
+	pods := syncPods()
+	var once sync.Once
+	pods.Hook = func(_ context.Context, event string) {
+		if event == "health" {
+			once.Do(func() { pods.SetPods("app=mainloop-backend", runningBackend("backend-1", 0)) })
+		}
+	}
+	sha, pack := scratchRepo(t)
+	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+	holdLease(t, d, "session-a")
+	runOperations(t, svc, d)
+
+	row := waitSync(t, svc, startSync(t, svc, "session-a", "key-replaced", sha).ID)
+	if row.State != dbstate.DevloopFailed || row.Detail == nil || !strings.Contains(*row.Detail, "backend-0 was replaced") {
+		t.Fatalf("sync with a replaced pod = %s (%v), want failed naming the pod", row.State, row.Detail)
+	}
+}
+
+// TestSyncFailsWhenTheCommitMarkerIsGone proves the same-exec marker check: a container restarted
+// from the image has no marker for this commit, whatever its restart count says.
+func TestSyncFailsWhenTheCommitMarkerIsGone(t *testing.T) {
+	d := testdb.New(t)
+	pods := syncPods()
+	pods.Hook = func(_ context.Context, event string) {
+		if event == "migrate" {
+			pods.ResetMarker()
+		}
+	}
+	sha, pack := scratchRepo(t)
+	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+	holdLease(t, d, "session-a")
+	runOperations(t, svc, d)
+
+	row := waitSync(t, svc, startSync(t, svc, "session-a", "key-marker", sha).ID)
+	if row.State != dbstate.DevloopFailed || row.Detail == nil || !strings.Contains(*row.Detail, "not the synced commit") {
+		t.Fatalf("sync with the marker gone = %s (%v), want failed saying the tree is not the synced commit", row.State, row.Detail)
+	}
+	if slices.Contains(pods.Seen(), "smoke") {
+		t.Errorf("smoke ran after the marker check failed: %v", pods.Seen())
+	}
+}
+
+// TestSyncNamesTheStepThatTimedOut proves each step's timeout names its own cap, and that the
+// overall sync deadline is named as such instead of as the step's cap.
+func TestSyncNamesTheStepThatTimedOut(t *testing.T) {
+	block := func(step string) func(context.Context, string) {
+		return func(ctx context.Context, event string) {
+			if event == step {
+				<-ctx.Done()
+			}
+		}
+	}
+	for _, tc := range []struct{ step, want string }{
+		{"migrate", "migrate up failed: did not finish within 50ms"},
+		{"smoke", "did not finish within 50ms"},
+	} {
+		t.Run(tc.step, func(t *testing.T) {
+			d := testdb.New(t)
+			pods := syncPods()
+			pods.Hook = block(tc.step)
+			sha, pack := scratchRepo(t)
+			svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+			svc.MigrateTimeout, svc.SmokeTimeout = 50*time.Millisecond, 50*time.Millisecond
+			holdLease(t, d, "session-a")
+			runOperations(t, svc, d)
+
+			row := waitSync(t, svc, startSync(t, svc, "session-a", "key-timeout-"+tc.step, sha).ID)
+			if row.State != dbstate.DevloopFailed || row.Detail == nil || !strings.Contains(*row.Detail, tc.want) {
+				t.Fatalf("%s timeout = %s (%v), want failed with %q", tc.step, row.State, row.Detail, tc.want)
+			}
+		})
+	}
+
+	for _, step := range []string{"migrate", "smoke"} {
+		t.Run(step+" past the sync deadline", func(t *testing.T) {
+			d := testdb.New(t)
+			pods := syncPods()
+			pods.Hook = block(step)
+			sha, pack := scratchRepo(t)
+			svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+			holdLease(t, d, "session-a")
+			runOperations(t, svc, d)
+
+			sync := startSync(t, svc, "session-a", "key-deadline-"+step, sha)
+			if _, err := d.Pool.Exec(context.Background(), `UPDATE devloop_operations SET created_at = now() - interval '10 minutes' + interval '1500 milliseconds' WHERE id = $1`, sync.ID); err != nil {
+				t.Fatal(err)
+			}
+			row := waitSync(t, svc, sync.ID)
+			if row.State != dbstate.DevloopFailed || row.Detail == nil ||
+				!strings.Contains(*row.Detail, "the sync was cut off") || strings.Contains(*row.Detail, "did not finish within 2m30s") {
+				t.Fatalf("%s past the deadline = %s (%v), want failed naming the sync deadline", step, row.State, row.Detail)
+			}
+		})
+	}
+}
+
+// TestSyncNamesTheRecoveryForOutOfOrderMigrations proves goose's refusal (another branch's
+// migration already applied in the shared dev database) comes with what the owner can do, and that
+// the sync does not reset anything itself.
+func TestSyncNamesTheRecoveryForOutOfOrderMigrations(t *testing.T) {
+	d := testdb.New(t)
+	pods := syncPods()
+	pods.MigrateErr = devlooptest.ExitError{Code: 1, Msg: "command terminated with exit code 1"}
+	pods.MigrateOut = "migrate: detected 1 missing (out-of-order) migration lower than database version (270): version 260"
+	sha, pack := scratchRepo(t)
+	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+	holdLease(t, d, "session-a")
+	runOperations(t, svc, d)
+
+	row := waitSync(t, svc, startSync(t, svc, "session-a", "key-ooo", sha).ID)
+	if row.State != dbstate.DevloopFailed || row.Detail == nil ||
+		!strings.Contains(*row.Detail, "MAINLOOP_ALLOW_RESET=1") || !strings.Contains(*row.Detail, "version 260") {
+		t.Fatalf("sync with out-of-order migrations = %s (%v), want failed naming the owner's recovery", row.State, row.Detail)
+	}
+}
+
+// TestSyncDetailStaysValidUTF8WhenTheTailIsCutMidCharacter proves a long multibyte output tail
+// cannot make the detail something the database refuses (which would rerun the whole sync).
+func TestSyncDetailStaysValidUTF8WhenTheTailIsCutMidCharacter(t *testing.T) {
+	d := testdb.New(t)
+	pods := syncPods()
+	pods.MigrateErr = devlooptest.ExitError{Code: 1, Msg: "command terminated with exit code 1"}
+	pods.MigrateOut = strings.Repeat("é", 2000) + "x" // 4001 bytes on one line: the 3000-byte cut lands inside a character
+	sha, pack := scratchRepo(t)
+	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+	holdLease(t, d, "session-a")
+	runOperations(t, svc, d)
+
+	row := waitSync(t, svc, startSync(t, svc, "session-a", "key-utf8", sha).ID)
+	if row.State != dbstate.DevloopFailed || row.Detail == nil || !utf8.ValidString(*row.Detail) {
+		t.Fatalf("sync with a multibyte tail = %s (%v), want failed with a valid UTF-8 detail", row.State, row.Detail)
+	}
+}
+
+// TestSyncWaitsForTheMCPAndGitListeners proves a backend that answers while mcp or git still does
+// not is not yet healthy: the health probe covers all three, so smoke cannot race their rebuilds.
+func TestSyncWaitsForTheMCPAndGitListeners(t *testing.T) {
+	d := testdb.New(t)
+	pods := syncPods()
+	pods.HealthFailFirst = 2
+	sha, pack := scratchRepo(t)
+	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+	holdLease(t, d, "session-a")
+	runOperations(t, svc, d)
+
+	row := waitSync(t, svc, startSync(t, svc, "session-a", "key-listeners", sha).ID)
+	if row.State != dbstate.DevloopSucceeded || pods.HealthCalls != 3 {
+		t.Fatalf("sync = %s (%v) after %d probes, want succeeded on the third", row.State, row.Detail, pods.HealthCalls)
+	}
+	for _, port := range []string{":8000/health", ":8002/health", ":8003/health"} {
+		if !strings.Contains(pods.HealthScripts[0], port) {
+			t.Errorf("health probe %q does not ask %s", pods.HealthScripts[0], port)
+		}
 	}
 }

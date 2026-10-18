@@ -31,9 +31,19 @@ type SyncParams struct {
 	CommitSHA string `json:"commit_sha"`
 }
 
-// SyncResult is dev_sync's result once the row is terminal.
+// SyncResult is dev_sync's result once the row is terminal. Each check's field is absent until
+// that check ran, so a failed sync shows how far it got.
 type SyncResult struct {
-	HealthOK bool `json:"health_ok"`
+	MigrateOK *bool        `json:"migrate_ok,omitempty"`
+	HealthOK  *bool        `json:"health_ok,omitempty"`
+	Smoke     *SmokeResult `json:"smoke,omitempty"`
+}
+
+// SmokeResult is the read-only smoke run's verdict: its own summary line when it passed, the tail
+// of its output when it did not.
+type SmokeResult struct {
+	Passed  bool   `json:"passed"`
+	Summary string `json:"summary"`
 }
 
 // StatusResult is dev_status's result.
@@ -55,8 +65,12 @@ type OperationsService struct {
 	Pods PodClient
 	Seed GitSeeder
 	// HealthTimeout bounds how long a sync waits for mainloop-dev's own /health after copying
-	// (default 60s).
+	// (default 180s: a stale instance rebuilds all three Go containers under `go run`).
 	HealthTimeout time.Duration
+	// MigrateTimeout bounds `migrate up` in the backend container (default 150s; it compiles first).
+	MigrateTimeout time.Duration
+	// SmokeTimeout bounds the read-only smoke run in the backend container (default 90s).
+	SmokeTimeout time.Duration
 	// SettleDelay is how long a sync waits after copying before it asks for /health, so the
 	// pre-copy process (still answering until watchexec restarts it) cannot pass for the new one
 	// (default 3s).
@@ -192,7 +206,7 @@ func (s *OperationsService) runStatus(ctx context.Context) (any, dbstate.Devloop
 // included.
 const (
 	maxSyncAttempts = 5
-	syncTimeout     = 5 * time.Minute
+	syncTimeout     = 10 * time.Minute
 	syncLockID      = "mainloop-dev"
 	// syncLockWait is how long a sync that found the sync lock taken waits before it asks again.
 	syncLockWait = 2 * time.Second
@@ -213,7 +227,7 @@ var (
 		{prefix: "server", selector: "app=mainloop-backend", container: "backend", dest: "/src", exclude: serverExcludes},
 		{prefix: "server", selector: "app=mainloop-backend", container: "mcp", dest: "/src", exclude: serverExcludes},
 		{prefix: "server", selector: "app=mainloop-backend", container: "git", dest: "/src", exclude: serverExcludes},
-		{prefix: "web", selector: "app=mainloop-frontend", container: "frontend", dest: "/app/web", exclude: webExcludes},
+		{prefix: "web", selector: frontendSelector, container: "frontend", dest: "/app/web", exclude: webExcludes},
 	}
 )
 
@@ -270,15 +284,19 @@ func (s *OperationsService) runSync(
 	if err != nil {
 		return fail(fmt.Sprintf("fetch %s: %v", p.CommitSHA, err))
 	}
+	// The pods this sync targets, with their restart counts before the first copy. A container that
+	// restarts (or a pod that is replaced) after the copy starts again from the image's source tree,
+	// so the tree the sync wrote is gone; every later check compares against this.
+	base, err := s.baseline(ctx)
+	if err != nil {
+		return fail(err.Error())
+	}
 	for _, t := range syncTargets {
 		filtered, err := FilterTar(bytes.NewReader(tree), t.prefix, t.exclude)
 		if err != nil {
 			return fail(fmt.Sprintf("filter %s: %v", t.prefix, err))
 		}
-		pod, err := s.onePodBySelector(ctx, t.selector)
-		if err != nil {
-			return fail(err.Error())
-		}
+		pod := base.bySelector(t.selector).pod.Name
 		if err := CopyTree(ctx, s.Pods, Namespace, pod, t.container, t.dest, filtered); err != nil {
 			switch {
 			case ctx.Err() != nil:
@@ -295,8 +313,134 @@ func (s *OperationsService) runSync(
 			}
 		}
 	}
-	healthy, detail := s.waitHealthy(ctx)
-	return SyncResult{HealthOK: healthy}, dbstate.DevloopSucceeded, 0, detail, false
+	// The verdict: the schema is migrated, every server listener answers /health from the synced
+	// tree, and the read-only smoke run passes. Any miss fails the sync, with the output that
+	// explains it.
+	var res SyncResult
+	backend := base.bySelector(backendSelector).pod.Name
+	if err := s.writeMarker(ctx, backend, p.CommitSHA); err != nil {
+		return res, dbstate.DevloopFailed, 0, "could not record the synced commit in the backend: " + err.Error(), false
+	}
+	migrated, detail := s.migrate(ctx, backend)
+	res.MigrateOK = &migrated
+	if !migrated {
+		return res, dbstate.DevloopFailed, 0, detail, false
+	}
+	healthy, detail := s.waitHealthy(ctx, base, p.CommitSHA)
+	res.HealthOK = &healthy
+	if !healthy {
+		return res, dbstate.DevloopFailed, 0, detail, false
+	}
+	res.Smoke = s.smoke(ctx, backend)
+	if !res.Smoke.Passed {
+		return res, dbstate.DevloopFailed, 0, "the read-only smoke run failed:\n" + res.Smoke.Summary, false
+	}
+	// Once more after the smoke: it compiles and runs from /src too, so a restart in between would
+	// have made it pass on the image's tree.
+	if msg := s.unstable(ctx, base); msg != "" {
+		res.Smoke.Passed = false
+		return res, dbstate.DevloopFailed, 0, msg, false
+	}
+	return res, dbstate.DevloopSucceeded, 0, "", false
+}
+
+// The backend container's source tree, where its own `go run` compiles from, and the listeners it
+// shares with the mcp and git containers in the same pod. Smoke runs against these loopback ports
+// because mainloop-dev's NetworkPolicy admits the Services only from its own frontend and the gateway.
+const (
+	backendSrc = "/src"
+	smokeArgs  = "smoke --read-only --base-url http://127.0.0.1:8000 --mcp-url http://127.0.0.1:8002" +
+		" --git-url http://127.0.0.1:8003 --git-push-url http://127.0.0.1:8004"
+)
+
+// maxOutputTail bounds the command output a sync attaches to its detail.
+const (
+	maxTailLines = 25
+	maxTailBytes = 3000
+)
+
+// migrate runs `migrate up` in the backend container from the copied tree. It is idempotent and
+// takes the migrate lock, so a concurrent start is safe; the shared dev database is disposable.
+func (s *OperationsService) migrate(ctx context.Context, pod string) (bool, string) {
+	out, err := s.runMainloop(ctx, pod, orDefault(s.MigrateTimeout, 150*time.Second), "migrate up")
+	if err != nil {
+		detail := "migrate up failed: " + err.Error() + tailSuffix(out)
+		if strings.Contains(out, "missing (out-of-order)") {
+			detail += "\n" + outOfOrderRecovery
+		}
+		return false, detail
+	}
+	return true, ""
+}
+
+// outOfOrderRecovery is what to do when goose refuses because the shared dev database has a
+// migration version applied that this tree does not have in order, usually another branch's. The
+// sync does not reset the database itself: that wipes mainloop-dev's data, which is the owner's call.
+const outOfOrderRecovery = "mainloop-dev's database holds migrations this tree does not have in order " +
+	"(usually another branch's). dev_sync never resets it. The owner can run `mainloop migrate reset` in the " +
+	"backend container with MAINLOOP_ALLOW_RESET=1, which wipes mainloop-dev's data, then sync again."
+
+// smoke runs the existing read-only smoke against the pod's own listeners. It sends no chat turns,
+// writes nothing and spends no quota, and it only ever targets 127.0.0.1 inside mainloop-dev.
+func (s *OperationsService) smoke(ctx context.Context, pod string) *SmokeResult {
+	out, err := s.runMainloop(ctx, pod, orDefault(s.SmokeTimeout, 90*time.Second), smokeArgs)
+	if err != nil {
+		return &SmokeResult{Passed: false, Summary: err.Error() + tailSuffix(out)}
+	}
+	summary := "smoke passed"
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "summary:") {
+			summary = strings.TrimSpace(line)
+		}
+	}
+	return &SmokeResult{Passed: true, Summary: summary}
+}
+
+// runMainloop runs `go run ./cmd/mainloop <args>` in the backend container of pod, which inherits
+// that container's environment (database credentials, config). It returns the combined output and,
+// when the command did not exit 0, an error saying how it ended.
+func (s *OperationsService) runMainloop(ctx context.Context, pod string, timeout time.Duration, args string) (string, error) {
+	stepCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	stdout, stderr, err := s.Pods.Exec(stepCtx, Namespace, pod, "backend",
+		[]string{"sh", "-c", "cd " + backendSrc + " && exec go run ./cmd/mainloop " + args}, nil)
+	out := strings.TrimSpace(stdout + "\n" + stderr)
+	if err == nil {
+		return out, nil
+	}
+	// The sync's own context first: its deadline or a lost claim also cancels the step's context, and
+	// blaming the step's timeout for that would send the reader to the wrong cap.
+	if ctx.Err() != nil {
+		return out, fmt.Errorf("the sync was cut off (its deadline is %s from the request, or its claim was lost)", syncTimeout)
+	}
+	if stepCtx.Err() != nil {
+		return out, fmt.Errorf("did not finish within %s", timeout)
+	}
+	return out, err
+}
+
+func orDefault(d, def time.Duration) time.Duration {
+	if d <= 0 {
+		return def
+	}
+	return d
+}
+
+// tailSuffix formats the last lines of a command's output for a detail line.
+func tailSuffix(out string) string {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) > maxTailLines {
+		lines = lines[len(lines)-maxTailLines:]
+	}
+	tail := strings.Join(lines, "\n")
+	if len(tail) > maxTailBytes {
+		// The cut can land inside a multibyte character, and the detail column rejects invalid UTF-8.
+		tail = strings.ToValidUTF8(tail[len(tail)-maxTailBytes:], "")
+	}
+	if strings.TrimSpace(tail) == "" {
+		return ""
+	}
+	return "\n" + tail
 }
 
 // syncStale reports why a sync must not run now: its session no longer holds the lease (the new
@@ -322,37 +466,62 @@ func (s *OperationsService) syncStale(ctx context.Context, row dbq.DevloopOperat
 	return "", nil
 }
 
-// backendHealthCommand asks the backend container's own listener for /health. It runs inside the
-// pod because mainloop-dev's NetworkPolicy admits port 8000 only from its frontend and the
-// gateway, so the production control plane cannot reach the Service over the network.
-var backendHealthCommand = []string{"curl", "-fsS", "--max-time", "3", "http://127.0.0.1:8000/health"}
+// markerFile records, inside the backend container, the commit the sync copied. Nothing but a sync
+// writes it, and a restart that puts back the image's tree loses it, so finding it with this
+// sync's commit proves the tree under test is the one the container still has.
+const markerFile = backendSrc + "/.devloop-commit"
 
-func (s *OperationsService) waitHealthy(ctx context.Context) (bool, string) {
-	timeout := s.HealthTimeout
-	if timeout <= 0 {
-		timeout = 60 * time.Second
+// markerMissExit is the exit status healthScript uses when the marker does not hold the commit.
+const markerMissExit = 42
+
+// healthScript asks the three server listeners in the backend pod for /health, after checking the
+// marker. It runs inside the pod because mainloop-dev's NetworkPolicy admits port 8000 only from
+// its frontend and the gateway, so the production control plane cannot reach the Services over the
+// network. The mcp and git listeners rebuild on their own; the smoke needs them up. $1 is the commit.
+var healthScript = `[ "$(cat ` + markerFile + ` 2>/dev/null)" = "$1" ] || { echo "marker missing or not $1" >&2; exit ` + fmt.Sprint(markerMissExit) + ` ; }` +
+	` ; curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:8000/health` +
+	` && curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:8002/health` +
+	` && curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:8003/health`
+
+// writeMarker records sha in the backend container's marker file. The sha is an argument, never
+// part of the script.
+func (s *OperationsService) writeMarker(ctx context.Context, pod, sha string) error {
+	_, stderr, err := s.Pods.Exec(ctx, Namespace, pod, "backend",
+		[]string{"sh", "-c", `printf %s "$1" > ` + markerFile, "sh", sha}, nil)
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr))
 	}
-	settle := s.SettleDelay
-	if settle <= 0 {
-		settle = 3 * time.Second
-	}
+	return nil
+}
+
+func (s *OperationsService) waitHealthy(ctx context.Context, base podBaselines, sha string) (bool, string) {
+	timeout := orDefault(s.HealthTimeout, 180*time.Second)
+	settle := orDefault(s.SettleDelay, 3*time.Second)
 	if !sleep(ctx, settle) {
 		return false, ctx.Err().Error()
 	}
 	deadline := time.Now().Add(timeout)
-	pod, podErr := s.onePodBySelector(ctx, "app=mainloop-backend")
+	pod := base.bySelector(backendSelector).pod.Name
 	for {
-		if podErr == nil {
-			if _, _, err := s.Pods.Exec(ctx, Namespace, pod, "backend", backendHealthCommand, nil); err == nil {
-				return true, ""
-			}
+		// A restart or replacement is a failure, not something to wait out: the new container runs
+		// the image's tree, and would answer /health for code that is not the commit under test.
+		if msg := s.unstable(ctx, base); msg != "" {
+			return false, msg
+		}
+		_, _, err := s.Pods.Exec(ctx, Namespace, pod, "backend",
+			[]string{"sh", "-c", healthScript, "sh", sha}, nil)
+		if err == nil {
+			return true, ""
+		}
+		var exit exitStatuser
+		if errors.As(err, &exit) && exit.ExitStatus() == markerMissExit {
+			return false, "the backend's source tree is not the synced commit " + sha +
+				" (its marker file is missing or differs): the container was restarted from the image's tree"
 		}
 		if !time.Now().Before(deadline) {
-			detail := "the backend did not report healthy within the timeout"
-			if podErr == nil {
-				if lines, err := s.Pods.Logs(ctx, Namespace, pod, "backend", LogOptions{TailLines: 20}); err == nil {
-					detail += "; last log lines:\n" + lines
-				}
+			detail := "the backend did not report healthy on :8000, :8002 and :8003 within " + timeout.String()
+			if lines, err := s.Pods.Logs(ctx, Namespace, pod, "backend", LogOptions{TailLines: 20}); err == nil {
+				detail += "; last log lines:\n" + lines
 			}
 			return false, detail
 		}
@@ -360,6 +529,75 @@ func (s *OperationsService) waitHealthy(ctx context.Context) (bool, string) {
 			return false, ctx.Err().Error()
 		}
 	}
+}
+
+// podBaseline is one target pod as it was before the first copy.
+type podBaseline struct {
+	label, selector string
+	pod             PodStatus
+}
+
+type podBaselines []podBaseline
+
+func (b podBaselines) bySelector(selector string) podBaseline {
+	for _, p := range b {
+		if p.selector == selector {
+			return p
+		}
+	}
+	return podBaseline{}
+}
+
+// baselineTargets are the pods a sync writes into, by what to call them.
+var baselineTargets = []struct{ label, selector string }{
+	{"backend", backendSelector},
+	{"frontend", frontendSelector},
+}
+
+// baseline records the name and restart count of each target pod before the first copy.
+func (s *OperationsService) baseline(ctx context.Context) (podBaselines, error) {
+	var out podBaselines
+	for _, t := range baselineTargets {
+		pod, err := s.runningPod(ctx, t.selector)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, podBaseline{label: t.label, selector: t.selector, pod: pod})
+	}
+	return out, nil
+}
+
+// unstable returns why the sync's tree can no longer be trusted, or "" while every target pod is
+// still the pod it copied into with the restart count it started with. Containers of a restarted
+// pod are read for their previous log, where the crash shows.
+func (s *OperationsService) unstable(ctx context.Context, base podBaselines) string {
+	for _, b := range base {
+		pods, err := s.Pods.ListPods(ctx, Namespace, b.selector)
+		if err != nil {
+			return fmt.Sprintf("could not re-check mainloop-dev's %s pod: %v", b.label, err)
+		}
+		var now *PodStatus
+		for i := range pods {
+			if pods[i].Name == b.pod.Name {
+				now = &pods[i]
+			}
+		}
+		switch {
+		case now == nil || now.Deleting:
+			return fmt.Sprintf("mainloop-dev's %s pod %s was replaced during the sync, which discards the synced tree; "+
+				"the commit under test is not what is running.", b.label, b.pod.Name)
+		case now.RestartCount > b.pod.RestartCount:
+			msg := fmt.Sprintf("mainloop-dev's %s restarted during the sync (restart count %d, was %d), which discards the "+
+				"synced tree; the commit under test is not what is running.", b.label, now.RestartCount, b.pod.RestartCount)
+			for _, c := range now.Containers {
+				if lines, err := s.Pods.Logs(ctx, Namespace, b.pod.Name, c, LogOptions{TailLines: 20, Previous: true}); err == nil && strings.TrimSpace(lines) != "" {
+					msg += fmt.Sprintf("\nprevious %s container, last log lines:\n%s", c, strings.TrimSpace(lines))
+				}
+			}
+			return msg
+		}
+	}
+	return ""
 }
 
 func sleep(ctx context.Context, d time.Duration) bool {
@@ -371,15 +609,35 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-func (s *OperationsService) onePodBySelector(ctx context.Context, selector string) (string, error) {
+const (
+	backendSelector  = "app=mainloop-backend"
+	frontendSelector = "app=mainloop-frontend"
+)
+
+// runningPod picks the pod to copy into or exec in: Running and not being deleted, Ready ones
+// first. A terminating, evicted or still-starting pod that matches the label is not a target.
+func (s *OperationsService) runningPod(ctx context.Context, selector string) (PodStatus, error) {
 	pods, err := s.Pods.ListPods(ctx, Namespace, selector)
 	if err != nil {
-		return "", err
+		return PodStatus{}, err
 	}
-	if len(pods) == 0 {
-		return "", fmt.Errorf("devloop: no pod matches %q in %s", selector, Namespace)
+	var pick *PodStatus
+	for i := range pods {
+		p := &pods[i]
+		if p.Phase != "Running" || p.Deleting {
+			continue
+		}
+		if p.Ready {
+			return *p, nil
+		}
+		if pick == nil {
+			pick = p
+		}
 	}
-	return pods[0].Name, nil
+	if pick == nil {
+		return PodStatus{}, fmt.Errorf("devloop: no running pod matches %q in %s (%d matched, none Running and not deleting)", selector, Namespace, len(pods))
+	}
+	return *pick, nil
 }
 
 func (s *OperationsService) finish(ctx context.Context, c reconcile.Claim, state dbstate.DevloopOperationState, result any, detail string) (reconcile.Outcome, error) {
