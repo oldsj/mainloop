@@ -8,7 +8,9 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/mainloop ./cmd/mainloop
+# REVISION is the commit the image is built from; /health reports it.
+ARG REVISION=dev
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/oldsj/mainloop/server/internal/buildinfo.Revision=${REVISION}" -o /out/mainloop ./cmd/mainloop
 
 # prod: git for the git transport, util-linux for the workspace helpers, CA certificates for
 # TLS to GitHub and kagent.

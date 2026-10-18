@@ -13,6 +13,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/attention"
+	"github.com/oldsj/mainloop/server/internal/buildinfo"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/devloop"
 	"github.com/oldsj/mainloop/server/internal/environments"
@@ -139,7 +140,7 @@ const maxBodyBytes = 4 << 20
 // New builds the Server from services the caller has already built.
 func New(d Deps) *Server {
 	return &Server{
-		HealthAPI:       &HealthAPI{DB: d.DB, Log: d.Log},
+		HealthAPI:       &HealthAPI{DB: d.DB, Log: d.Log, Revision: buildinfo.Revision},
 		ProjectsAPI:     &projects.ProjectsAPI{Svc: d.Projects},
 		ProvidersAPI:    providers.NewAPI(d.Config, d.Pool, d.Providers),
 		EnvironmentsAPI: environments.NewAPI(d.Config, d.Pool, d.Registry),

@@ -2841,6 +2841,8 @@ export interface components {
       /** @enum {string} */
       status: 'healthy';
       database: string;
+      /** @description Git commit the server image was built from; `dev` for an unstamped build. */
+      revision?: string;
     };
     HITLObserverDiagnostic: {
       runtime_session_id: string;

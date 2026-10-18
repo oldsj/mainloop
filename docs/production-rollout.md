@@ -1,6 +1,6 @@
 # Production deployment
 
-`k8s/apps/mainloop/overlays/prod` is a generic, single-owner production overlay: the base plus a CloudNativePG database, with the server's settings made explicit. It contains no domains, gateway wiring, image digests or credential sources. The deployment repository supplies those (see [Site contract](#site-contract)), so the same overlay serves any cluster that provides the prerequisites.
+`k8s/apps/mainloop/overlays/prod` is a generic, single-owner production overlay: the base plus a CloudNativePG database, with the server's settings made explicit. It contains no domains, gateway wiring or credential sources, and `main` carries no image digests. The deployment repository supplies those (see [Site contract](#site-contract)), so the same overlay serves any cluster that provides the prerequisites.
 
 Native sessions run as kagent harness Agents on Substrate, so the cluster needs kagent and Substrate before Mainloop can serve a turn. The overlay does not install either.
 
@@ -41,7 +41,7 @@ The overlay needs these objects in the `mainloop` namespace. Any deployment can 
 | Secret `ghcr-secret`      | dockerconfigjson                                                                                      | Image pulls                                                                                                                                                                                                                                                                                                          |
 | Gateway routes            | frontend `:3000`, API `:8000`, wildcard preview host `:8000`                                          | Never `:8002`. The preview wildcard must match exactly one label under the base host: with base `https://preview.example.test`, previews are `<port>--<workspace>--preview.preview.example.test`, so route and certify `*.preview.example.test`. Keep it off any wildcard that also covers the frontend or API hosts |
 | NetworkPolicy peer        | gateway pods to backend `:8000`                                                                       | Added as its own policy, since the prod overlay replaces the base ingress list. The gateway's labels belong to the cluster                                                                                                                                                                                           |
-| Images                    | `ghcr.io/oldsj/mainloop-backend`, `ghcr.io/oldsj/mainloop-frontend`                                   | Pin by digest. The `Publish images` workflow publishes them on pushes to `main`                                                                                                                                                                                                                                      |
+| Images                    | `ghcr.io/oldsj/mainloop-backend`, `ghcr.io/oldsj/mainloop-frontend`                                   | Pin by digest, in the deployment repository or through the [`release` branch](#production-changes-are-gitops-only). The `Publish images` workflow publishes them on pushes to `main`                                                                                                                                 |
 
 The frontend image bakes the API URL at build time (`VITE_API_URL`); the runtime `ORIGIN` does not change it. Build it for the deployment's API domain.
 
@@ -52,8 +52,20 @@ Cross-namespace pieces are owned by the cluster repository, not this overlay: th
 Argo CD applies this overlay (with the site layer) from Git. The repository has no Make target that applies, restarts or resets anything in a production cluster. To ship a change:
 
 1. Merge to `main`. The `Publish images` workflow pushes `linux/arm64` images tagged with the first seven characters of the commit SHA.
-2. Copy the digest references from the job summary into the deployment repository, and pin them there.
-3. Let Argo roll them out.
+2. Its `release` job then force-pushes the `release` branch: the merged `main` commit plus one `Release <sha7>` commit that adds an `images:` block with those two digests to `k8s/apps/mainloop/overlays/prod/kustomization.yaml`. It also pushes a lightweight tag `release-<sha7>` for that commit. The job releases only while its commit is still the tip of `main` (so a re-run or late run of an older commit skips with a notice), refuses an overlay that already has an `images:` key, renders the overlay, and pushes only if both digests appear. It uses `GITHUB_TOKEN`, so the push starts no workflow.
+3. Argo CD tracks `release` (`targetRevision: release`) for the Mainloop sources and rolls the new digests out. The deployment repository keeps only site values and no per-release pin. A deployment that prefers its own pins can keep a `kustomize.images` list and copy the digests from the job summary instead.
+
+Only CI writes `release`. Protect it with a GitHub ruleset that restricts creation, update and deletion, with bypass for repository admins and GitHub Actions only (never the Mainloop GitHub App). The push gate also refuses a `release` push from any Mainloop task.
+
+`GET /health` reports `revision`, the commit the running image was built from (`dev` for an unstamped build). After a release, compare it with the merged commit.
+
+Mainloop deploys itself this way, so a bad merge can take down the thing that would fix it, and CI cannot smoke production. Every merge also restarts the backend. Each release rewrites `release`, so the previous one is no longer in its history; the tag keeps it. The release job's summary prints the exact rollback for the release before it. To roll back from any clone:
+
+```bash
+git fetch origin tag release-<prev-sha7> && git push --force origin release-<prev-sha7>:refs/heads/release
+```
+
+Changes to the deployment repository's site ConfigMap do not restart the backend by themselves; bump the annotation it patches onto the pod template.
 
 For a local image build, use `docker build --target prod server` for the server and `docker build -f web/Dockerfile .` for the web app.
 

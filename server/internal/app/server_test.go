@@ -133,6 +133,9 @@ func TestHealth(t *testing.T) {
 		if r.status != 200 || !strings.Contains(r.body, `"status":"healthy"`) {
 			t.Fatalf("got %d %s", r.status, r.body)
 		}
+		if !strings.Contains(r.body, `"revision":"dev"`) {
+			t.Fatalf("an unstamped build should report revision dev, got %s", r.body)
+		}
 	})
 	t.Run("database down", func(t *testing.T) {
 		h := newHandler(t, nil, pinger(func(context.Context) error { return errors.New("dial tcp: password=hunter2") }))

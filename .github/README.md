@@ -95,8 +95,10 @@ digest also accumulates until its own retention exists.
 The frontend uses the workflow's production API build argument. There is no
 `latest` tag or job-level output. Step outputs provide the short SHA and build
 digest; summaries record source, tag, digest and an immutable infrastructure pin.
-Manual runs are not restricted to `main` by a job condition. Production pin
-updates require a separate manually reviewed infrastructure PR, not this build.
+The image jobs are not restricted to `main`, but the `release` job is: it runs only on
+`main`, and only while its commit is still the tip of `main`. It force-pushes the
+`release` branch and a `release-<sha7>` tag with the digests pinned in the prod overlay.
+Argo tracks `release`; no infrastructure PR is needed per release.
 
 ## Shared live-development application images
 

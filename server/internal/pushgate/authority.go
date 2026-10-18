@@ -24,6 +24,10 @@ import (
 	ka "github.com/oldsj/mainloop/server/third_party/kagentapi"
 )
 
+// deployBranch is the branch Argo tracks for production. CI alone writes it, so no policy, task
+// or allowlist can grant it.
+const deployBranch = "release"
+
 // Policy is server-owned. Protected and all previously observed default branches override
 // AllowedPatterns. An absent allowlist permits feature branches; an absent default denies all.
 type Policy struct {
@@ -46,6 +50,9 @@ func (p Policy) permits(branch string) error {
 	}
 	if branch == p.DefaultBranch {
 		return denial("default_branch")
+	}
+	if branch == deployBranch {
+		return denial("protected_branch")
 	}
 	for _, b := range p.PreviousDefaults {
 		if branch == b {
