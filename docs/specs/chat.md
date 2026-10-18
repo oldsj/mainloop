@@ -69,6 +69,7 @@ Bootstrap reuses a main only while its binding has active coordination authority
 - Explicit progress and result reports persist against their task attempt and queue notifications to the current authorized parent and main. Busy parents use the existing delivery ledger.
 - `task_get`, `task_list` and `task_history` inspect stored progress without native turns. Task cancellation uses the shared service; retry/reassign remain unavailable until handoff is installed.
 - Native turn completion creates no automatic report or task success. Coding success requires verified merged publication; coordination completion requires explicit success, no live children and confirmed runtime settlement.
+- In agent text, a markdown link to `/tasks/<task id>` opens that task's page in the app. Other links work only for http, https and mailto and open in a new tab. The standing guidance tells agents to write tasks this way (see [delegation](delegation.md)).
 - See [delegation](delegation.md) for inputs, scope and restart behavior.
 
 ## Identity and policy
