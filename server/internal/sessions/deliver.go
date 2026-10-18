@@ -120,6 +120,9 @@ func (s *Service) promoteStrandedQueued(ctx context.Context, sessionID string, h
 			return nil, err
 		}
 		if promoted != "" {
+			if err := q.RefreshSessionStatus(ctx, sessionID); err != nil {
+				return nil, fmt.Errorf("refresh session status: %w", err)
+			}
 			if err := q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: DeliveryChannel, Payload: promoted}); err != nil {
 				return nil, err
 			}
