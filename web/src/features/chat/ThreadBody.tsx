@@ -3,6 +3,7 @@ import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Composer } from './Composer';
 import { assignmentIds } from './assignments';
 import { MessageList } from './MessageList';
+import type { SlashCommandSpec } from './slashCommand';
 import { TurnRecovery } from './TurnRecovery';
 import { useLiveTurn } from './useLiveTurn';
 import type { ThreadView } from './useThread';
@@ -32,6 +33,8 @@ export interface ThreadBodyProps {
   onSend?: (text: string) => Promise<boolean> | null;
   /** The last local command's output, shown above the composer until the next send. */
   commandNotice?: string | null;
+  /** Slash commands the composer's autosuggest dropdown offers. Omitted where there are none. */
+  commands?: readonly SlashCommandSpec[];
 }
 
 /** The conversation timeline, the send and stop errors, and the composer, for any thread. */
@@ -46,7 +49,8 @@ export function ThreadBody({
   requests,
   starters,
   onSend,
-  commandNotice = null
+  commandNotice = null,
+  commands
 }: ThreadBodyProps) {
   const live = useLiveTurn(thread.sessionId, thread.busy, thread.messages);
   return (
@@ -131,6 +135,7 @@ export function ThreadBody({
         prefill={prefill}
         onPrefillUsed={onPrefillUsed}
         onSend={(text) => onSend?.(text) ?? thread.send(text, thread.conversationId)}
+        commands={commands}
       />
     </>
   );
