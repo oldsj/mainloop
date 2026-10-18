@@ -87,7 +87,7 @@ export interface paths {
     };
     /**
      * Get Devloop Lease
-     * @description Read the mainloop-dev live-sync lease without acquiring it or joining its queue.
+     * @description Read the mainloop-staging live-sync lease without acquiring it or joining its queue.
      */
     get: operations['getDevloopLease'];
     put?: never;
@@ -109,7 +109,7 @@ export interface paths {
     put?: never;
     /**
      * Acquire Devloop Lease
-     * @description Acquire the mainloop-dev lease as the owner, or report the owner's place in its FIFO queue.
+     * @description Acquire the mainloop-staging lease as the owner, or report the owner's place in its FIFO queue.
      */
     post: operations['acquireDevloopLease'];
     delete?: never;
@@ -129,7 +129,7 @@ export interface paths {
     put?: never;
     /**
      * Release Devloop Lease
-     * @description Release the mainloop-dev lease if the owner holds it; a no-op otherwise.
+     * @description Release the mainloop-staging lease if the owner holds it; a no-op otherwise.
      */
     post: operations['releaseDevloopLease'];
     delete?: never;
@@ -147,7 +147,7 @@ export interface paths {
     };
     /**
      * List Devloop Syncs
-     * @description The dev_sync operations on mainloop-dev, newest first (at most 50): the commit, the verdict, and what the health and smoke checks said. session_id narrows to one task session.
+     * @description The dev_sync operations on mainloop-staging, newest first (at most 50): the commit, the verdict, and what the health and smoke checks said. session_id narrows to one task session.
      */
     get: operations['listDevloopOperations'];
     put?: never;
@@ -2910,7 +2910,7 @@ export interface components {
       state: 'pending' | 'succeeded' | 'failed' | 'unknown';
       /** @description Why the sync failed, or what it is waiting on. */
       detail?: string;
-      /** @description Whether mainloop-dev's backend reported healthy after the copy. Absent until the check ran. */
+      /** @description Whether mainloop-staging's backend reported healthy after the copy. Absent until the check ran. */
       health_ok?: boolean;
       /** @description Whether migrate up succeeded after the copy. Absent until it ran. */
       migrate_ok?: boolean;

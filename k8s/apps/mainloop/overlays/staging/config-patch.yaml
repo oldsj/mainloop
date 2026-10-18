@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mainloop-config
+  namespace: mainloop
+data:
+  DB_HOST: mainloop-pg-rw.mainloop-staging.svc.cluster.local
+  DB_PORT: '5432'
+  DB_NAME: mainloop
+  FRONTEND_DOMAIN: mainloop-staging.olds.network
+  FRONTEND_SCHEME: https
+  MAINLOOP_API_HOSTS: mainloop-backend,mainloop-backend.mainloop-staging,mainloop-backend.mainloop-staging.svc,mainloop-backend.mainloop-staging.svc.cluster.local
+  MAINLOOP_OWNER_ID: dev-owner
+  # Hosts the MCP listener accepts; in-cluster it must include its own Service name.
+  MAINLOOP_MCP_HOSTS: mainloop-mcp,mainloop-mcp.mainloop-staging,mainloop-mcp.mainloop-staging.svc,mainloop-mcp.mainloop-staging.svc.cluster.local
+  # Lets `mainloop migrate reset` run in this prototype instance (docs/dev-environment.md#staging-instance).
+  MAINLOOP_ALLOW_RESET: '1'
+  DEV_MODE: 'true'
+  IS_TEST_ENV: 'false'
+  NATIVE_CHILD_KINDS: claude,codex
+  # Derives the MCP and Git origins (*.mainloop-staging.svc.cluster.local) and the
+  # mainloop-staging- prefix of this instance's credential Secrets in the kagent namespace.
+  MAINLOOP_NAMESPACE: mainloop-staging
+  # Off: kagent's service policy accepts only production's Git origins, so staging Git
+  # needs a kagent change; a testrepo-only path is also undecided, since the shared
+  # GitHub App can reach every repository it is installed on
+  # (see docs/dev-environment.md#staging-instance).
+  GIT_TRANSPORT_ENABLED: 'false'
+  PUSH_GATE_ENABLED: 'false'
+  MAINLOOP_MERGE_TOOLS_ENABLED: 'false'
+  MAINLOOP_OWNER_HITL_WRITES_ENABLED: 'true'
+  # Staging-only kagent agents; production agents are never used from here.
+  KAGENT_NAMESPACE: kagent
+  KAGENT_ACTOR_ATESPACE: kagent
+  KAGENT_MAIN_AGENT: claude-workspace-staging
+  # Codex main uses the staging workspace Agent, like the Claude main. The default (mainloop-main-codex)
+  # is production's Agent on this shared kagent.
+  KAGENT_MAIN_CODEX_AGENT: codex-workspace-staging
+  KAGENT_CLAUDE_AGENT: claude-workspace-staging
+  KAGENT_CODEX_AGENT: codex-workspace-staging
+  KAGENT_WORKSPACE_CLAUDE_AGENT: claude-workspace-staging
+  KAGENT_WORKSPACE_CODEX_AGENT: codex-workspace-staging
+  KAGENT_SUPERVISOR_CLAUDE_AGENT: claude-workspace-staging
+  KAGENT_SUPERVISOR_CODEX_AGENT: codex-workspace-staging

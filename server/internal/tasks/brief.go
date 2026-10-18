@@ -16,7 +16,7 @@ func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief strin
 	fmt.Fprintf(&b, "You are the Mainloop task %s. First call `whoami`, then `task_get` with its task_id.", role)
 	if mode == dbstate.TaskModeCode {
 		b.WriteString(" Do the work and run the project's checks. `git push` the task branch." +
-			" If you have `dev_sync`, try the pushed head on mainloop-dev before the pull request:" +
+			" If you have `dev_sync`, try the pushed head on mainloop-staging before the PR:" +
 			" `dev_lease_acquire` until `acquired` (within 2 minutes while `queued`), then `dev_sync` with that SHA." +
 			" Repeat while `pending`/`unknown`. Proceed only on `succeeded` with `result.health_ok` true; else fix, push, sync again." +
 			" Then `dev_lease_release`. Put the sync id in `evidence_refs`; re-sync after any push." +

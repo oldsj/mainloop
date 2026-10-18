@@ -42,7 +42,7 @@ type LogOptions struct {
 }
 
 // maxLogBytes and maxExecOutputBytes bound what a pod can make this process hold in memory. A
-// workspace never reaches this code; a slow or hostile mainloop-dev container cannot use this
+// workspace never reaches this code; a slow or hostile mainloop-staging container cannot use this
 // path to exhaust the control plane.
 const (
 	maxLogBytes        = 256 << 10
@@ -67,7 +67,7 @@ type K8sPods struct {
 
 // NewInClusterPods builds a [K8sPods] from the pod's own ServiceAccount. It needs the RBAC
 // described in docs/specs/devloop.md: pods get/list/watch, pods/log get, pods/exec create, scoped
-// to the mainloop-dev namespace only.
+// to the mainloop-staging namespace only.
 func NewInClusterPods() (*K8sPods, error) {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
@@ -229,7 +229,7 @@ rm -f ` + manifestFile + `
 // CopyTree mirrors tarData (from [MirrorTar], rooted at destDir) onto destDir inside one container
 // by piping it to [mirrorScript] over exec: new and changed files are written, and files the
 // archive does not hold are removed, except the paths exclude names (the same list the archive was
-// filtered with). It is the only write devloop makes inside a mainloop-dev pod. An error that wraps
+// filtered with). It is the only write devloop makes inside a mainloop-staging pod. An error that wraps
 // [ErrCopyInterrupted] means the outcome is unknown; any other error is a definite failure, the
 // script's stderr included. Running it again with the same archive is safe.
 func CopyTree(ctx context.Context, pods PodClient, namespace, pod, container, destDir string, exclude []string, tarData []byte) error {

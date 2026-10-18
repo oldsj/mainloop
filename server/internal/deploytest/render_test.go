@@ -166,7 +166,7 @@ func serverContainers(pod corev1.PodSpec) []corev1.Container {
 	return out
 }
 
-var overlays = []string{"base", "overlays/prod", "overlays/dev-live", "overlays/kind"}
+var overlays = []string{"base", "overlays/prod", "overlays/staging", "overlays/kind"}
 
 func TestServerContainersRunTheGoBinary(t *testing.T) {
 	for _, path := range overlays {
@@ -307,7 +307,7 @@ func TestSecretsAreReferencedNotEmbedded(t *testing.T) {
 	}
 }
 
-// Base and prod require the GitHub App keys from mainloop-secrets; dev-live makes them optional.
+// Base and prod require the GitHub App keys from mainloop-secrets; staging makes them optional.
 func TestGitHubAppKeysComeFromMainloopSecrets(t *testing.T) {
 	for _, path := range overlays {
 		t.Run(path, func(t *testing.T) {
@@ -322,7 +322,7 @@ func TestGitHubAppKeysComeFromMainloopSecrets(t *testing.T) {
 					if ref.SecretKeyRef.Name != "mainloop-secrets" || ref.SecretKeyRef.Key != key {
 						t.Errorf("%s: %s refs %s/%s", name, envName, ref.SecretKeyRef.Name, ref.SecretKeyRef.Key)
 					}
-					if optional := ref.SecretKeyRef.Optional != nil && *ref.SecretKeyRef.Optional; optional != (path == "overlays/dev-live") {
+					if optional := ref.SecretKeyRef.Optional != nil && *ref.SecretKeyRef.Optional; optional != (path == "overlays/staging") {
 						t.Errorf("%s: %s optional=%v in %s", name, envName, optional, path)
 					}
 				}
@@ -476,9 +476,9 @@ func TestNoClusterScopedSecretAccess(t *testing.T) {
 
 func TestFeatureFlagsDefaultOff(t *testing.T) {
 	flags := []string{"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_MERGE_TOOLS_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED", "MAINLOOP_OWNER_POLICY_WRITES_ENABLED"}
-	// The live dev instance is a single-owner prototype, so the owner turned HITL answers on there.
+	// The staging instance is a single-owner prototype, so the owner turned HITL answers on there.
 	// Every other overlay, prod included, keeps every flag off.
-	allowed := map[string]string{"overlays/dev-live": "MAINLOOP_OWNER_HITL_WRITES_ENABLED"}
+	allowed := map[string]string{"overlays/staging": "MAINLOOP_OWNER_HITL_WRITES_ENABLED"}
 	for _, path := range overlays {
 		t.Run(path, func(t *testing.T) {
 			data := render(t, path).configMaps["mainloop-config"].Data
@@ -507,7 +507,7 @@ func TestProdIsNotTheLiveDevInstance(t *testing.T) {
 }
 
 func TestLiveDev(t *testing.T) {
-	r := render(t, "overlays/dev-live")
+	r := render(t, "overlays/staging")
 	pod := r.backend(t)
 
 	t.Run("images are the arm64 main dev images", func(t *testing.T) {
@@ -559,7 +559,7 @@ func TestLiveDev(t *testing.T) {
 		if env["VITE_API_URL"].Value != "/api" || env["VITE_HOST"].Value != "0.0.0.0" || env["VITE_PORT"].Value != "3000" {
 			t.Errorf("vite env: %+v", env)
 		}
-		if env["__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS"].Value != "mainloop-dev.olds.network" {
+		if env["__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS"].Value != "mainloop-staging.olds.network" {
 			t.Errorf("allowed host: %q", env["__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS"].Value)
 		}
 	})
@@ -570,15 +570,15 @@ func TestLiveDev(t *testing.T) {
 			t.Errorf("MAINLOOP_ALLOW_RESET=%q, want exactly 1", data["MAINLOOP_ALLOW_RESET"])
 		}
 		hosts := strings.Split(data["MAINLOOP_MCP_HOSTS"], ",")
-		if !slices.Contains(hosts, "mainloop-mcp.mainloop-dev.svc.cluster.local") {
+		if !slices.Contains(hosts, "mainloop-mcp.mainloop-staging.svc.cluster.local") {
 			t.Errorf("MAINLOOP_MCP_HOSTS=%q lacks the in-cluster MCP host", data["MAINLOOP_MCP_HOSTS"])
 		}
-		if data["MAINLOOP_NAMESPACE"] != "mainloop-dev" {
+		if data["MAINLOOP_NAMESPACE"] != "mainloop-staging" {
 			t.Errorf("MAINLOOP_NAMESPACE=%q", data["MAINLOOP_NAMESPACE"])
 		}
 		for key, v := range data {
-			if strings.HasPrefix(key, "KAGENT_") && strings.HasSuffix(key, "_AGENT") && !strings.HasSuffix(v, "-dev") {
-				t.Errorf("%s=%s: dev-live must use the *-dev agents", key, v)
+			if strings.HasPrefix(key, "KAGENT_") && strings.HasSuffix(key, "_AGENT") && !strings.HasSuffix(v, "-staging") {
+				t.Errorf("%s=%s: staging must use the *-staging agents", key, v)
 			}
 		}
 	})
@@ -613,20 +613,20 @@ func TestLiveDev(t *testing.T) {
 }
 
 // The backend publishes per-session MCP credential Secrets into kagent, so its ServiceAccount
-// needs the production Role there. `make dev-agents` applies the binding.
+// needs the production Role there. `make staging-agents` applies the binding.
 func TestLiveDevBackendMayPublishAgentCredentials(t *testing.T) {
-	live := render(t, "overlays/dev-live")
+	live := render(t, "overlays/staging")
 	if got := live.backend(t).ServiceAccountName; got != "mainloop-backend" {
 		t.Fatalf("backend ServiceAccount %q, want mainloop-backend", got)
 	}
 	var binding *rbacv1.RoleBinding
-	for _, b := range render(t, "overlays/dev-live/kagent").roleBindings {
-		if b.Name == "mainloop-dev-agent-tokens" {
+	for _, b := range render(t, "overlays/staging/kagent").roleBindings {
+		if b.Name == "mainloop-staging-agent-tokens" {
 			binding = &b
 		}
 	}
 	if binding == nil {
-		t.Fatal("no RoleBinding mainloop-dev-agent-tokens in the dev-live kagent render")
+		t.Fatal("no RoleBinding mainloop-staging-agent-tokens in the staging kagent render")
 	}
 	if binding.Namespace != "kagent" {
 		t.Errorf("namespace %q, want kagent", binding.Namespace)
@@ -634,7 +634,7 @@ func TestLiveDevBackendMayPublishAgentCredentials(t *testing.T) {
 	if binding.RoleRef.Kind != "Role" || binding.RoleRef.Name != "mainloop-agent-tokens" {
 		t.Errorf("roleRef %+v, want Role mainloop-agent-tokens", binding.RoleRef)
 	}
-	want := rbacv1.Subject{Kind: "ServiceAccount", Name: "mainloop-backend", Namespace: "mainloop-dev"}
+	want := rbacv1.Subject{Kind: "ServiceAccount", Name: "mainloop-backend", Namespace: "mainloop-staging"}
 	if len(binding.Subjects) != 1 || binding.Subjects[0] != want {
 		t.Errorf("subjects %+v, want only %+v", binding.Subjects, want)
 	}

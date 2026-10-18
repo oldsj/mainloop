@@ -20,7 +20,7 @@ import (
 )
 
 // Namespace is the one namespace devloop ever reaches.
-const Namespace = "mainloop-dev"
+const Namespace = "mainloop-staging"
 
 // Channel wakes the operations loop when a row is inserted.
 const Channel = "mainloop_devloop_operations"
@@ -64,7 +64,7 @@ type OperationsService struct {
 	Pool *pgxpool.Pool
 	Pods PodClient
 	Seed GitSeeder
-	// HealthTimeout bounds how long a sync waits for mainloop-dev's own /health after copying
+	// HealthTimeout bounds how long a sync waits for mainloop-staging's own /health after copying
 	// (default 180s: a stale instance rebuilds all three Go containers under `go run`).
 	HealthTimeout time.Duration
 	// MigrateTimeout bounds `migrate up` in the backend container (default 150s; it compiles first).
@@ -207,7 +207,7 @@ func (s *OperationsService) runStatus(ctx context.Context) (any, dbstate.Devloop
 const (
 	maxSyncAttempts = 5
 	syncTimeout     = 10 * time.Minute
-	syncLockID      = "mainloop-dev"
+	syncLockID      = "mainloop-staging"
 	// syncLockWait is how long a sync that found the sync lock taken waits before it asks again.
 	syncLockWait = 2 * time.Second
 	// syncLockSlack keeps the lock past the holder's deadline so it never lapses mid-copy.
@@ -346,7 +346,7 @@ func (s *OperationsService) runSync(
 
 // The backend container's source tree, where its own `go run` compiles from, and the listeners it
 // shares with the mcp and git containers in the same pod. Smoke runs against these loopback ports
-// because mainloop-dev's NetworkPolicy admits the Services only from its own frontend and the gateway.
+// because mainloop-staging's NetworkPolicy admits the Services only from its own frontend and the gateway.
 const (
 	backendSrc = "/src"
 	smokeArgs  = "smoke --read-only --base-url http://127.0.0.1:8000 --mcp-url http://127.0.0.1:8002" +
@@ -379,14 +379,14 @@ func (s *OperationsService) migrate(ctx context.Context, pod string) (bool, stri
 
 // outOfOrderRecovery is what to do when goose refuses because the shared dev database has a
 // migration version applied that this tree does not have in order, usually another branch's. The
-// sync does not reset the database itself: that wipes mainloop-dev's data, which is the owner's call.
-const outOfOrderRecovery = "mainloop-dev's database holds migrations this tree does not have in order " +
+// sync does not reset the database itself: that wipes mainloop-staging's data, which is the owner's call.
+const outOfOrderRecovery = "mainloop-staging's database holds migrations this tree does not have in order " +
 	"(usually another branch's). dev_sync never resets it. The owner can run `mainloop migrate reset` in the " +
-	"backend container with MAINLOOP_ALLOW_RESET=1, which wipes mainloop-dev's data, then sync again. " +
+	"backend container with MAINLOOP_ALLOW_RESET=1, which wipes mainloop-staging's data, then sync again. " +
 	"The backend's source tree mirrors the synced commit, so the reset applies only the migrations that commit has."
 
 // smoke runs the existing read-only smoke against the pod's own listeners. It sends no chat turns,
-// writes nothing and spends no quota, and it only ever targets 127.0.0.1 inside mainloop-dev.
+// writes nothing and spends no quota, and it only ever targets 127.0.0.1 inside mainloop-staging.
 func (s *OperationsService) smoke(ctx context.Context, pod string) *SmokeResult {
 	out, err := s.runMainloop(ctx, pod, orDefault(s.SmokeTimeout, 90*time.Second), smokeArgs)
 	if err != nil {
@@ -463,7 +463,7 @@ func (s *OperationsService) syncStale(ctx context.Context, row dbq.DevloopOperat
 		return "", err
 	}
 	if !held {
-		return "the mainloop-dev lease is no longer held by this session; acquire it again", nil
+		return "the mainloop-staging lease is no longer held by this session; acquire it again", nil
 	}
 	newer, err := dbq.New(s.Pool).NewerDevloopSyncExists(ctx, dbq.NewerDevloopSyncExistsParams{
 		SessionID: row.SessionID, ID: row.ID, CreatedAt: row.CreatedAt,
@@ -486,7 +486,7 @@ const markerFile = backendSrc + "/.devloop-commit"
 const markerMissExit = 42
 
 // healthScript asks the three server listeners in the backend pod for /health, after checking the
-// marker. It runs inside the pod because mainloop-dev's NetworkPolicy admits port 8000 only from
+// marker. It runs inside the pod because mainloop-staging's NetworkPolicy admits port 8000 only from
 // its frontend and the gateway, so the production control plane cannot reach the Services over the
 // network. The mcp and git listeners rebuild on their own; the smoke needs them up. $1 is the commit.
 var healthScript = `[ "$(cat ` + markerFile + ` 2>/dev/null)" = "$1" ] || { echo "marker missing or not $1" >&2; exit ` + fmt.Sprint(markerMissExit) + ` ; }` +
@@ -586,7 +586,7 @@ func (s *OperationsService) unstable(ctx context.Context, base podBaselines) str
 	for _, b := range base {
 		pods, err := s.Pods.ListPods(ctx, Namespace, b.selector)
 		if err != nil {
-			return fmt.Sprintf("could not re-check mainloop-dev's %s pod: %v", b.label, err)
+			return fmt.Sprintf("could not re-check mainloop-staging's %s pod: %v", b.label, err)
 		}
 		var now *PodStatus
 		for i := range pods {
@@ -596,10 +596,10 @@ func (s *OperationsService) unstable(ctx context.Context, base podBaselines) str
 		}
 		switch {
 		case now == nil || now.Deleting:
-			return fmt.Sprintf("mainloop-dev's %s pod %s was replaced during the sync, which discards the synced tree; "+
+			return fmt.Sprintf("mainloop-staging's %s pod %s was replaced during the sync, which discards the synced tree; "+
 				"the commit under test is not what is running.", b.label, b.pod.Name)
 		case now.RestartCount > b.pod.RestartCount:
-			msg := fmt.Sprintf("mainloop-dev's %s restarted during the sync (restart count %d, was %d), which discards the "+
+			msg := fmt.Sprintf("mainloop-staging's %s restarted during the sync (restart count %d, was %d), which discards the "+
 				"synced tree; the commit under test is not what is running.", b.label, now.RestartCount, b.pod.RestartCount)
 			for _, c := range now.Containers {
 				if now.ContainerRestarts[c] <= b.pod.ContainerRestarts[c] {

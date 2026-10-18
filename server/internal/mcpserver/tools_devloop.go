@@ -29,8 +29,8 @@ const devloopProject = "oldsj/mainloop"
 // keeps working past this bound.
 const devLoopWaitBound = 4 * time.Minute
 
-// devLoopTools let a task agent of devloopProject iterate on the shared mainloop-dev instance:
-// one FIFO lease, a sync that fetches a pushed commit and copies it into mainloop-dev's synced
+// devLoopTools let a task agent of devloopProject iterate on the shared mainloop-staging instance:
+// one FIFO lease, a sync that fetches a pushed commit and copies it into mainloop-staging's synced
 // containers, and a read-only pod status. The MCP listener never reaches Kubernetes itself;
 // every tool but the lease ones writes a devloop_operations row and polls it,
 // and serve-api's reconcile loop (the only holder of a Kubernetes client) does the work.
@@ -40,28 +40,28 @@ func (s *Server) devLoopTools() []Tool {
 	return []Tool{
 		{
 			Name: agentauth.ToolDevLeaseAcquire,
-			Description: "Acquire the one live-sync lease on mainloop-dev, or report your place in its FIFO " +
+			Description: "Acquire the one live-sync lease on mainloop-staging, or report your place in its FIFO " +
 				"queue. An idle-expired lease is taken over by the earliest queued session. A queued " +
 				"session must call this again within 2 minutes to keep its place.",
 			InputSchema: none, Handle: s.devLeaseAcquire,
 		},
 		{
 			Name:        agentauth.ToolDevLeaseRelease,
-			Description: "Release the mainloop-dev lease if this session holds it.",
+			Description: "Release the mainloop-staging lease if this session holds it.",
 			InputSchema: none, Handle: s.devLeaseRelease,
 		},
 		{
 			Name: agentauth.ToolDevSync,
 			Description: "Use after pushing and before open_pull_request. Syncs commit_sha (already pushed through " +
-				"the git push transport) into mainloop-dev, migrates its database, waits for its /health, and runs " +
-				"the read-only smoke check. Succeeds only when mainloop-dev is healthy and the smoke passes; any " +
+				"the git push transport) into mainloop-staging, migrates its database, waits for its /health, and runs " +
+				"the read-only smoke check. Succeeds only when mainloop-staging is healthy and the smoke passes; any " +
 				"other result is failed, with the output that explains it. Requires holding the lease. Waits up to " +
 				"4 minutes, then reports the state so far; retrying with the same commit_sha is safe.",
 			InputSchema: objectSchema(map[string]any{"commit_sha": sha}, "commit_sha"), Handle: s.devSync,
 		},
 		{
 			Name:        agentauth.ToolDevStatus,
-			Description: "Read mainloop-dev's pod status: phase, readiness and restart counts.",
+			Description: "Read mainloop-staging's pod status: phase, readiness and restart counts.",
 			InputSchema: none, Handle: s.devStatus,
 		},
 	}
@@ -154,7 +154,7 @@ func (s *Server) devSync(ctx context.Context, a agentauth.Actor, raw json.RawMes
 	// Using the lease is also its heartbeat, so a session that syncs steadily never idles out.
 	if err := s.DevLease.Use(ctx, a.BindingID); err != nil {
 		if errors.Is(err, devloop.ErrNotHolder) {
-			return Result{}, failure("lease_required", "acquire the mainloop-dev lease with dev_lease_acquire first")
+			return Result{}, failure("lease_required", "acquire the mainloop-staging lease with dev_lease_acquire first")
 		}
 		return Result{}, err
 	}

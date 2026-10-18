@@ -1,5 +1,5 @@
-// Package devloop lets a task agent iterate on the shared mainloop-dev instance the way `make
-// dev-live` does: change code, sync, read logs, run a smoke check. It never gives a workspace
+// Package devloop lets a task agent iterate on the shared mainloop-staging instance the way `make
+// staging` does: change code, sync, read logs, run a smoke check. It never gives a workspace
 // Kubernetes credentials. The MCP listener (serve-mcp) only reads and writes durable rows in this
 // package; serve-api's reconcile loop is the only caller that holds a Kubernetes client, mirroring
 // the boundary serve-mcp already keeps for credential Secrets. See docs/specs/devloop.md.
@@ -17,8 +17,8 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 )
 
-// LeaseID is the one lease this package manages: mainloop-dev has exactly one live-sync target.
-const LeaseID = "mainloop-dev"
+// LeaseID is the one lease this package manages: mainloop-staging has exactly one live-sync target.
+const LeaseID = "mainloop-staging"
 
 // DefaultIdleTimeout is how long a held lease may go unused before it is taken over.
 const DefaultIdleTimeout = 20 * time.Minute
@@ -51,7 +51,7 @@ type LeaseInfo struct {
 	QueueLength int
 }
 
-// LeaseService holds the one mainloop-dev lease: a durable row, acquired_at, last_used_at, an
+// LeaseService holds the one mainloop-staging lease: a durable row, acquired_at, last_used_at, an
 // idle timeout, and a FIFO queue. Every operation is DB-only; this package never opens a
 // transaction around network or Kubernetes I/O.
 type LeaseService struct {
@@ -174,7 +174,7 @@ func (s *LeaseService) Status(ctx context.Context) (LeaseInfo, error) {
 
 // ErrNotHolder means the session does not hold the lease, or held it but let it idle-expire with
 // another session waiting.
-var ErrNotHolder = errors.New("devloop: this session does not hold the mainloop-dev lease")
+var ErrNotHolder = errors.New("devloop: this session does not hold the mainloop-staging lease")
 
 // holds applies the one rule for "this session still holds the lease": it is the recorded holder,
 // and either its idle timeout has not run out or nobody else is waiting for the lease (a live

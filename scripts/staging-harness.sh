@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Dev kagent harness images for mainloop-dev (`make dev-harness`).
+# Staging kagent harness images for mainloop-staging (`make staging-harness`).
 #
-#   dev-live-harness.sh build        build arm64 Claude and Codex harness images from the
+#   staging-harness.sh build        build arm64 Claude and Codex harness images from the
 #                                    kagent fork, push dev-<sha> tags to ghcr, record them
-#                                    and apply the *-workspace-dev agents with them
-#   dev-live-harness.sh image <p>    print the recorded image for claude|codex, else the
-#                                    production pin from the dev manifests (DevSpace var)
-#   dev-live-harness.sh reset        forget recorded images (next `make dev-live` uses the pins)
+#                                    and apply the *-workspace-staging agents with them
+#   staging-harness.sh image <p>    print the recorded image for claude|codex, else the
+#                                    production pin from the staging manifests (DevSpace var)
+#   staging-harness.sh reset        forget recorded images (next `make staging` uses the pins)
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-STATE="${ROOT}/.devspace/dev-harness"
-MANIFESTS="${ROOT}/k8s/apps/mainloop/overlays/dev-live/kagent"
+STATE="${ROOT}/.devspace/staging-harness"
+MANIFESTS="${ROOT}/k8s/apps/mainloop/overlays/staging/kagent"
 KAGENT_DIR=${KAGENT_DIR:-${HOME}/dev/kagent}
 REGISTRY=ghcr.io
 REPO=oldsj
@@ -50,9 +50,9 @@ build() {
     ref="${REGISTRY}/${REPO}/kagent-${provider}-harness:${tag}"
     digest=$(docker buildx imagetools inspect "${ref}" --format '{{json .Manifest}}' | jq -er .digest)
     echo "${ref}@${digest}" >"${STATE}/${provider}"
-    echo "${provider}-workspace-dev-harness -> ${ref}@${digest}"
+    echo "${provider}-workspace-staging-harness -> ${ref}@${digest}"
   done
-  "${ROOT}/scripts/dev-live.sh" agents
+  "${ROOT}/scripts/staging.sh" agents
 }
 
 case "${1-}" in

@@ -1,13 +1,13 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Shared live-sync instance (`make dev-live`). DevSpace deploys and owns this
+# Shared staging instance (`make staging`). DevSpace deploys and owns this
 # namespace directly; it is not Argo-managed. Secrets are supplied separately
-# (see docs/dev-environment.md#live-dev-instance). The server needs
+# (see docs/dev-environment.md#staging-instance). The server needs
 # mainloop-secrets/agent-token-key and the control-auth Secrets to start; the GitHub
 # App keys are optional.
 
-namespace: mainloop-dev
+namespace: mainloop-staging
 
 resources:
   - ../../base
@@ -19,7 +19,7 @@ patches:
   - path: backend-patch.yaml
   - path: frontend-patch.yaml
 
-# Needs kagent-control-token and kagent-control-ca in mainloop-dev.
+# Needs kagent-control-token and kagent-control-ca in mainloop-staging.
 components:
   - control-auth
 

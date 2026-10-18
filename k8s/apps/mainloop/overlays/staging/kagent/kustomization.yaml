@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Staging-only kagent agents for mainloop-staging. kagent itself is shared and
+# Argo-managed; these objects are not, and only mainloop-staging refers to them.
+# Not applied by default: `make staging` never touches kagent; run `make staging-agents`.
+# They share the kagent-default worker pool (fine for a prototype) but snapshot under
+# their own prefix, s3://ate-snapshots/kagent-staging/, never beside production's.
+# DevSpace applies them (deployment staging-agents) and `make staging-harness` swaps
+# their harness images without touching the production agents.
+
+namespace: kagent
+
+resources:
+  - remotemcpserver.yaml
+  - claude.yaml
+  - codex.yaml
+  - agent-tokens.yaml

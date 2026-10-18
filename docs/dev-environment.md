@@ -1,6 +1,6 @@
 # Development environment
 
-Local checks run from the repository root and from `server/` and `web/`. [CONTRIBUTING.md](../CONTRIBUTING.md#verification) lists the commands and [AGENTS.md](../AGENTS.md#verification) lists the matching CI jobs. This page covers the root Make targets, their foreground caps, the local Kind stack, and the shared live dev instance.
+Local checks run from the repository root and from `server/` and `web/`. [CONTRIBUTING.md](../CONTRIBUTING.md#verification) lists the commands and [AGENTS.md](../AGENTS.md#verification) lists the matching CI jobs. This page covers the root Make targets, their foreground caps, the local Kind stack, and the shared staging instance.
 
 ## Make targets and caps
 
@@ -60,44 +60,44 @@ Without DevSpace, `make kind-up` creates the cluster, builds and loads the image
 
 What works without kagent: the web app, the REST API (migrations run on start), and the MCP and Git listeners, which start with Git transport off. Not available: native Claude Code and Codex sessions, workspaces, and schedules. They need a kagent installation that this stack does not set up, so `/schedules` returns 502. GitHub is not configured, so there are no repository reads or pushes. The [Kind overlay README](../k8s/apps/mainloop/overlays/kind/README.md) lists what the overlay changes.
 
-## Live dev instance
+## Staging instance
 
-`mainloop-dev` is a shared, prototype instance for fast iteration. It runs in namespace `mainloop-dev` on the production cluster, next to production `mainloop`, but DevSpace deploys and owns it directly; it is not Argo-managed. Production still changes only through pull requests, CI and GitOps.
+`mainloop-staging` is a shared, prototype instance for fast iteration. It runs in namespace `mainloop-staging` on the production cluster, next to production `mainloop`, but DevSpace deploys and owns it directly; it is not Argo-managed. Production still changes only through pull requests, CI and GitOps.
 
 ```bash
-make dev-live          # deploy mainloop-dev, then sync and stream logs (Ctrl-C stops sync)
-make dev-live-status   # pods, database, route and dev agents
-make dev-agents        # apply the *-dev kagent agents (shared kagent namespace)
-make dev-harness       # build arm64 harness images from ../kagent, apply them to the dev agents
-make dev-live-purge    # delete namespace mainloop-dev and the *-dev agents (typed confirmation)
+make staging          # deploy mainloop-staging, then sync and stream logs (Ctrl-C stops sync)
+make staging-status   # pods, database, route and staging agents
+make staging-agents        # apply the *-staging kagent agents (shared kagent namespace)
+make staging-harness       # build arm64 harness images from ../kagent, apply them to the staging agents
+make staging-purge    # delete namespace mainloop-staging and the *-staging agents (typed confirmation)
 ```
 
-All targets use kube context `admin@internal-01` through DevSpace profile `live` in `devspace.yaml`, whose pipelines (`build`, `dev`, `deploy`, `deploy-agents`, `purge`) refuse any other context or namespace. Use these targets or `scripts/dev-live.sh`: raw `devspace sync`, `restart`, `enter`, `logs` and `attach` with `-p live` are not guarded and act on whatever `--kube-context` and `-n` say. This page covers only the `live` profile.
+All targets use kube context `admin@internal-01` through DevSpace profile `staging` in `devspace.yaml`, whose pipelines (`build`, `dev`, `deploy`, `deploy-agents`, `purge`) refuse any other context or namespace. Use these targets or `scripts/staging.sh`: raw `devspace sync`, `restart`, `enter`, `logs` and `attach` with `-p staging` are not guarded and act on whatever `--kube-context` and `-n` say. This page covers only the `staging` profile.
 
 ### The devloop lease
 
-mainloop-dev has one live-sync lease (`docs/specs/devloop.md`), so the owner's own iteration and a
+mainloop-staging has one live-sync lease (`docs/specs/devloop.md`), so the owner's own iteration and a
 task agent's `dev_sync` MCP tool calls do not race over the same pods. With `MAINLOOP_API_URL` set
 to the control-plane instance's own owner API base URL (the lease lives in that instance's
-database, not in mainloop-dev, and this needs no kube context), `make dev-live` acquires it before
+database, not in mainloop-staging, and this needs no kube context), `make staging` acquires it before
 starting `devspace dev`, refuses to start unless the lease is granted (a queued reply is a
 refusal: another session is syncing), renews it every four minutes while `devspace dev` runs (stopping `devspace` if the lease is lost), and
 releases it on exit (Ctrl-C or otherwise); without that variable it prints a notice and skips lease
 coordination entirely. Acquire or release it by hand with:
 
 ```bash
-MAINLOOP_API_URL=https://mainloop.example.com/api make dev-live-lease-acquire
-MAINLOOP_API_URL=https://mainloop.example.com/api make dev-live-lease-release
+MAINLOOP_API_URL=https://mainloop.example.com/api make staging-lease-acquire
+MAINLOOP_API_URL=https://mainloop.example.com/api make staging-lease-release
 ```
 
 This calls `POST /devloop/lease/acquire` and `.../release` as the fixed owner holder (distinct
 from a task agent's own MCP session). Raw `devspace` commands do not check the lease; only
-`make dev-live` does.
+`make staging` does.
 
-A task agent of project `oldsj/mainloop` iterates on mainloop-dev the same way through MCP tools
+A task agent of project `oldsj/mainloop` iterates on mainloop-staging the same way through MCP tools
 (`dev_lease_acquire`, `dev_sync`, `dev_status`; see `docs/specs/devloop.md`). They are on in
-production, where the **control-plane instance** (production, not mainloop-dev) sets
-`MAINLOOP_DEVLOOP_ENABLED=true`, by owner decision 2026-10-17. mainloop-dev still shares production's
+production, where the **control-plane instance** (production, not mainloop-staging) sets
+`MAINLOOP_DEVLOOP_ENABLED=true`, by owner decision 2026-10-17. mainloop-staging still shares production's
 credentials and has open egress; the gaps are listed under "Not built" in `docs/specs/devloop.md`.
 
 What runs and syncs: the Go server and the React app.
@@ -107,62 +107,62 @@ What runs and syncs: the Go server and the React app.
 - The images already hold the source they were built from, so a pod serves before the first sync lands. A `migrate` initContainer runs `mainloop migrate up` on every pod start, but it sees only that baked-in source, never synced files. After syncing a new migration, apply it yourself in the backend container:
 
   ```bash
-  kubectl --context admin@internal-01 -n mainloop-dev exec deploy/mainloop-backend -c backend -- \
+  kubectl --context admin@internal-01 -n mainloop-staging exec deploy/mainloop-backend -c backend -- \
     go run ./cmd/mainloop migrate up
   ```
 
   (Under `devspace dev` the serving pod is `mainloop-backend-devspace`; see Reset below for addressing it.)
 
-The UI is `https://mainloop-dev.olds.network` (tailnet only, through the same Envoy gateway as production). The browser calls `/api` on that host, and Vite forwards it to the backend Service (`MAINLOOP_API_PROXY`), so the backend needs no route of its own. Vite accepts the gateway host through `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`.
+The UI is `https://mainloop-staging.olds.network` (tailnet only, through the same Envoy gateway as production). The browser calls `/api` on that host, and Vite forwards it to the backend Service (`MAINLOOP_API_PROXY`), so the backend needs no route of its own. Vite accepts the gateway host through `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`.
 
 Images: the **Publish live dev images** workflow builds arm64 images on each push to `main` and pushes `ghcr.io/oldsj/mainloop-server-dev` (`server/Dockerfile --target dev`: Go toolchain, `git`, `watchexec`) and `ghcr.io/oldsj/mainloop-web-dev` (`web/Dockerfile --target dev`: node 24, pnpm, Vite on `0.0.0.0:3000`), each tagged `<short SHA>` and `main`. The overlay pulls the `main` tag. The pods pull the moving tag and the sync overlays the working tree. The pods carry no pull secret, so after the first build of each of the two `-dev` packages make it public once in the GitHub UI (package settings, change visibility); until then the pods sit in `ImagePullBackOff`.
 
 Data: a one-instance CloudNativePG cluster on `local-path` storage. CNPG creates the database credentials. Purging deletes the data.
 
-Reset: the overlay sets `MAINLOOP_ALLOW_RESET=1`, which lets `mainloop migrate reset` drop the schema and migrate back to the latest version. Run it in the backend container of the pod that is serving, then delete that pod so the listeners reconnect. While `devspace dev` is running (`make dev-live`), the serving pod is `mainloop-backend-devspace` and the Deployment's own pod is replaced; otherwise it is the Deployment's `mainloop-backend` pod. Select it by label so both states work:
+Reset: the overlay sets `MAINLOOP_ALLOW_RESET=1`, which lets `mainloop migrate reset` drop the schema and migrate back to the latest version. Run it in the backend container of the pod that is serving, then delete that pod so the listeners reconnect. While `devspace dev` is running (`make staging`), the serving pod is `mainloop-backend-devspace` and the Deployment's own pod is replaced; otherwise it is the Deployment's `mainloop-backend` pod. Select it by label so both states work:
 
 ```bash
-K="kubectl --context admin@internal-01 -n mainloop-dev"
+K="kubectl --context admin@internal-01 -n mainloop-staging"
 POD=$($K get pod -l app=mainloop-backend -o name | head -n1)
 $K exec "$POD" -c backend -- go run ./cmd/mainloop migrate reset
 $K delete "$POD"
 ```
 
 The Go server keeps its tables in the `mainloop` schema. A database first used by the retired Python backend may still have tables in `public`. `migrate reset` does not touch them. To drop them as well:
-`kubectl --context admin@internal-01 -n mainloop-dev exec mainloop-pg-1 -c postgres -- psql -d mainloop -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'`.
-`make dev-live-purge` drops all the data, along with the namespace.
+`kubectl --context admin@internal-01 -n mainloop-staging exec mainloop-pg-1 -c postgres -- psql -d mainloop -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'`.
+`make staging-purge` drops all the data, along with the namespace.
 
-Settings (`k8s/apps/mainloop/overlays/dev-live`): `DEV_MODE=true`; merge tools, owner writes, Git transport and the push gate are off; every kagent role uses `claude-workspace-dev` or `codex-workspace-dev`; `MAINLOOP_MCP_HOSTS` lists the `mainloop-mcp` Service names in `mainloop-dev`; the `control-auth` component is on. Dev work targets `oldsj/testrepo` only through the dev agents' instructions: Mainloop has no repository allowlist, and the shared production GitHub App can reach every repository it is installed on. With Git transport off, nothing reaches GitHub today.
+Settings (`k8s/apps/mainloop/overlays/staging`): `DEV_MODE=true`; merge tools, owner writes, Git transport and the push gate are off; every kagent role uses `claude-workspace-staging` or `codex-workspace-staging`; `MAINLOOP_MCP_HOSTS` lists the `mainloop-mcp` Service names in `mainloop-staging`; the `control-auth` component is on. Dev work targets `oldsj/testrepo` only through the staging agents' instructions: Mainloop has no repository allowlist, and the shared production GitHub App can reach every repository it is installed on. With Git transport off, nothing reaches GitHub today.
 
-Secrets are not in this repository. The infrastructure repository supplies them from production's existing items (mainloop-dev shares production's GitHub App, agent token key and kagent control principal). The server needs `agent-token-key` and the kagent control Secrets to start, because it has no fallback for the token key; the GitHub App keys are optional, so without them the instance runs with GitHub unavailable:
+Secrets are not in this repository. The infrastructure repository supplies them from production's existing items (mainloop-staging shares production's GitHub App, agent token key and kagent control principal). The server needs `agent-token-key` and the kagent control Secrets to start, because it has no fallback for the token key; the GitHub App keys are optional, so without them the instance runs with GitHub unavailable:
 
-| Secret in `mainloop-dev` | Keys                                      | Without it                                              |
-| ------------------------ | ----------------------------------------- | ------------------------------------------------------- |
-| `mainloop-secrets`       | `agent-token-key`                         | The backend, MCP and Git containers do not start        |
-| `mainloop-secrets`       | `github-app-id`, `github-app-private-key` | No GitHub access (set both or neither)                  |
-| `kagent-control-token`   | `current`                                 | The pods wait on the missing volume; no kagent sessions |
-| `kagent-control-ca`      | `ca.crt` (cert-manager)                   | As above                                                |
+| Secret in `mainloop-staging` | Keys                                      | Without it                                              |
+| ---------------------------- | ----------------------------------------- | ------------------------------------------------------- |
+| `mainloop-secrets`           | `agent-token-key`                         | The backend, MCP and Git containers do not start        |
+| `mainloop-secrets`           | `github-app-id`, `github-app-private-key` | No GitHub access (set both or neither)                  |
+| `kagent-control-token`       | `current`                                 | The pods wait on the missing volume; no kagent sessions |
+| `kagent-control-ca`          | `ca.crt` (cert-manager)                   | As above                                                |
 
-Agent paths are per namespace. `MAINLOOP_NAMESPACE` (default `mainloop`, set to `mainloop-dev` here) sets the origins agents call, `http://mainloop-mcp.<ns>.svc.cluster.local` and `http://mainloop-git-{read,push}.<ns>.svc.cluster.local`, the MCP server's accepted Host, and the prefix of the per-binding credential Secrets Mainloop writes in the shared `kagent` namespace. The prefix is the namespace itself, so production keeps `mainloop-mcp-*` and `mainloop-git-{read,push}-*`, and mainloop-dev writes `mainloop-dev-mcp-*` and `mainloop-dev-git-{read,push}-*`. Secrets are deleted only by exact name. The Git origin settings accept only the configured namespace's two origins.
+Agent paths are per namespace. `MAINLOOP_NAMESPACE` (default `mainloop`, set to `mainloop-staging` here) sets the origins agents call, `http://mainloop-mcp.<ns>.svc.cluster.local` and `http://mainloop-git-{read,push}.<ns>.svc.cluster.local`, the MCP server's accepted Host, and the prefix of the per-binding credential Secrets Mainloop writes in the shared `kagent` namespace. The prefix is the namespace itself, so production keeps `mainloop-mcp-*` and `mainloop-git-{read,push}-*`, and mainloop-staging writes `mainloop-staging-mcp-*` and `mainloop-staging-git-{read,push}-*`. Secrets are deleted only by exact name. The Git origin settings accept only the configured namespace's two origins.
 
-`make dev-agents` also applies a RoleBinding (`mainloop-dev-agent-tokens`, in `kagent`) that gives `mainloop-dev:mainloop-backend` production's `mainloop-agent-tokens` Role, so it can create, read and delete its credential Secrets there. Only the API container writes them; the MCP and Git containers verify tokens against the database and need nothing more. kagent's service policy (infrastructure repository) accepts mainloop-dev's MCP credential tuple (`mainloop-dev-mcp-*`, origin `http://mainloop-mcp.mainloop-dev.svc.cluster.local`), so the dev agents can call Mainloop tools.
+`make staging-agents` also applies a RoleBinding (`mainloop-staging-agent-tokens`, in `kagent`) that gives `mainloop-staging:mainloop-backend` production's `mainloop-agent-tokens` Role, so it can create, read and delete its credential Secrets there. Only the API container writes them; the MCP and Git containers verify tokens against the database and need nothing more. kagent's service policy (infrastructure repository) accepts mainloop-staging's MCP credential tuple (`mainloop-staging-mcp-*`, origin `http://mainloop-mcp.mainloop-staging.svc.cluster.local`), so the staging agents can call Mainloop tools.
 
-Git through the dev proxies also needs a kagent change. kagent's service policy (`controlauth/policy.go` in the `oldsj/kagent` fork) accepts only production's Git origins, `http://mainloop-git-{read,push}.mainloop.svc.cluster.local`, with the `mainloop-git-{read,push}-*` patterns. A Git tuple for mainloop-dev would make the policy invalid and stop the shared kagent controller, so mainloop-dev keeps Git transport off.
+Git through the staging proxies also needs a kagent change. kagent's service policy (`controlauth/policy.go` in the `oldsj/kagent` fork) accepts only production's Git origins, `http://mainloop-git-{read,push}.mainloop.svc.cluster.local`, with the `mainloop-git-{read,push}-*` patterns. A Git tuple for mainloop-staging would make the policy invalid and stop the shared kagent controller, so mainloop-staging keeps Git transport off.
 
-Production and mainloop-dev share one kagent principal, so each can list the other's Sessions. `mainloop sweep-orphans` and unbound HITL discovery only consider Sessions on the Agents their own settings name (`KAGENT_*_AGENT` and provider profiles), so keep the two instances' Agents disjoint, as the `*-dev` names do. HITL for an existing local binding retains its pinned Agent identity after configuration changes; creator, ownership, lifecycle and stored identity checks still apply.
+Production and mainloop-staging share one kagent principal, so each can list the other's Sessions. `mainloop sweep-orphans` and unbound HITL discovery only consider Sessions on the Agents their own settings name (`KAGENT_*_AGENT` and provider profiles), so keep the two instances' Agents disjoint, as the `*-staging` names do. HITL for an existing local binding retains its pinned Agent identity after configuration changes; creator, ownership, lifecycle and stored identity checks still apply.
 
 Smoke: `mainloop smoke --read-only` probes a running instance: health, the owner reads, the event stream, the MCP and Git listeners' refusals, and with `--kagent` the kagent probe. It sends no writes and spends no quota, so run it after each deploy. Run it in the backend container, where the in-cluster Service names resolve:
 
 ```bash
-kubectl --context admin@internal-01 -n mainloop-dev exec deploy/mainloop-backend -c backend -- \
+kubectl --context admin@internal-01 -n mainloop-staging exec deploy/mainloop-backend -c backend -- \
   go run ./cmd/mainloop smoke --read-only --kagent
 ```
 
 Git transport is off here, so `git-read` and `git-push` report `skip` and no run can reach merge on this instance. The live run (`smoke --live`) therefore needs an instance with git transport on. It drives one task from chat to merge and spends quota. Run it from an operator machine, not the pod: the pod has no `gh` login, and the live path reads GitHub through the operator's `gh auth status`. It checks `gh` before anything else and refuses, spending no budget, when `gh` is missing or not logged in. Open two port-forwards first, each in its own terminal:
 
 ```bash
-kubectl --context admin@internal-01 -n mainloop-dev port-forward svc/mainloop-backend 8000:8000
-kubectl --context admin@internal-01 -n mainloop-dev port-forward svc/mainloop-git-push 8004:80
+kubectl --context admin@internal-01 -n mainloop-staging port-forward svc/mainloop-backend 8000:8000
+kubectl --context admin@internal-01 -n mainloop-staging port-forward svc/mainloop-git-push 8004:80
 ```
 
 Then, from `server/`:
@@ -181,19 +181,19 @@ in dev mode: outside it each listener refuses a Host it does not serve, and a po
 `127.0.0.1`. See [live-smoke.md](live-smoke.md). Only a run that reaches completion proves the
 full path.
 
-Teardown: `make dev-live-purge` deletes everything DevSpace deployed, including the namespace, the database and the dev agents.
+Teardown: `make staging-purge` deletes everything DevSpace deployed, including the namespace, the database and the staging agents.
 
 Previews do not work on this instance. The overlay sets no `SUBSTRATE_PREVIEW_BASE_URL`, so
 the ports API returns `http://<port>--<workspace>--preview.localhost:8001` links. No gateway
 route serves a preview wildcard for the dev host. The `atenet-router-ingress` NetworkPolicy in
 `ate-system` admits port 8081 only from the `mainloop` namespace's backend, so the proxy's
-tunnel dial from `mainloop-dev` times out and the proxy answers 503 "Workspace waking up" on
+tunnel dial from `mainloop-staging` times out and the proxy answers 503 "Workspace waking up" on
 every request. Proving previews needs an infra change (a base domain, a wildcard route and a
-policy entry for `mainloop-dev`); until then they are proven in production.
+policy entry for `mainloop-staging`); until then they are proven in production.
 
-### Testing approvals on dev
+### Testing approvals on staging
 
-The overlay's `claude-workspace-dev-template` has no approval gate. To test the Approve and
+The overlay's `claude-workspace-staging-template` has no approval gate. To test the Approve and
 Reject flow on this instance, gate a tool temporarily and restore the template afterwards.
 
 1. Add `tools: [whoami]` and `requireApproval: true` to the template's `mcp` binding (next to
@@ -207,6 +207,6 @@ Reject flow on this instance, gate a tool temporarily and restore the template a
    the agent-side connection is cut at about 360 s, an approval after that resumes into a
    dead call, and the agent reports "The call timed out." This is a known kagent issue; Mainloop's
    request stays pending and answerable meanwhile.
-4. Restore: re-apply the template from `k8s/apps/mainloop/overlays/dev-live/kagent/claude.yaml`
-   (`make dev-agents`), then switch the provider away and back again so the main chat drops the
+4. Restore: re-apply the template from `k8s/apps/mainloop/overlays/staging/kagent/claude.yaml`
+   (`make staging-agents`), then switch the provider away and back again so the main chat drops the
    gated session.

@@ -1,4 +1,4 @@
-.PHONY: help dev dev-stop dev-reset kind-up kind-create kind-delete kind-load kind-secrets kind-deploy kind-forward kind-reset kind-logs kind-shell dev-live dev-live-status dev-live-purge dev-agents dev-harness dev-live-lease-acquire dev-live-lease-release install check check-mcp-tools check-server check-web lint lint-all fmt fmt-all _fmt _fmt-all test-timeouts test-timeout-integration
+.PHONY: help dev dev-stop dev-reset kind-up kind-create kind-delete kind-load kind-secrets kind-deploy kind-forward kind-reset kind-logs kind-shell staging staging-status staging-purge staging-agents staging-harness staging-lease-acquire staging-lease-release install check check-mcp-tools check-server check-web lint lint-all fmt fmt-all _fmt _fmt-all test-timeouts test-timeout-integration
 
 # Load .env file if it exists
 -include .env
@@ -26,29 +26,29 @@ dev-reset: ## Wipe the Kind database and restart the backend
 	@./scripts/kind/reset-data.sh
 
 # =============================================================================
-# Shared live instance (DevSpace profile `live`, namespace mainloop-dev on internal-01)
+# Shared staging instance (DevSpace profile `staging`, namespace mainloop-staging on internal-01)
 # =============================================================================
 
-dev-live: ## Deploy mainloop-dev and live-sync the Go server and web app into it
-	./scripts/dev-live.sh dev
+staging: ## Deploy mainloop-staging and live-sync the Go server and web app into it
+	./scripts/staging.sh dev
 
-dev-live-status: ## Show mainloop-dev pods and the dev kagent agents
-	./scripts/dev-live.sh status
+staging-status: ## Show mainloop-staging pods and the staging kagent agents
+	./scripts/staging.sh status
 
-dev-live-purge: ## Delete namespace mainloop-dev and the *-dev kagent agents
-	./scripts/dev-live.sh purge
+staging-purge: ## Delete namespace mainloop-staging and the *-staging kagent agents
+	./scripts/staging.sh purge
 
-dev-agents: ## Apply the *-dev kagent agents (shared kagent namespace)
-	./scripts/dev-live.sh agents
+staging-agents: ## Apply the *-staging kagent agents (shared kagent namespace)
+	./scripts/staging.sh agents
 
-dev-live-lease-acquire: ## Acquire the devloop lease as the owner (needs MAINLOOP_API_URL)
-	./scripts/dev-live.sh lease-acquire
+staging-lease-acquire: ## Acquire the devloop lease as the owner (needs MAINLOOP_API_URL)
+	./scripts/staging.sh lease-acquire
 
-dev-live-lease-release: ## Release the devloop lease as the owner (needs MAINLOOP_API_URL)
-	./scripts/dev-live.sh lease-release
+staging-lease-release: ## Release the devloop lease as the owner (needs MAINLOOP_API_URL)
+	./scripts/staging.sh lease-release
 
-dev-harness: ## Build arm64 harness images from ~/dev/kagent and point the dev agents at them
-	./scripts/dev-live-harness.sh build
+staging-harness: ## Build arm64 harness images from ~/dev/kagent and point the staging agents at them
+	./scripts/staging-harness.sh build
 
 kind-up: kind-create kind-load kind-secrets kind-deploy ## Create the cluster, build and load images, deploy (no DevSpace)
 

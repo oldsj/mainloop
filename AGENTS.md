@@ -59,10 +59,10 @@ cd server && go run ./cmd/mainloop serve-api          # :8000
 # UI with hot reload on http://127.0.0.1:5173; forwards /api to MAINLOOP_API_PROXY (default 127.0.0.1:8000)
 pnpm --dir web dev
 
-# Shared live instance in namespace mainloop-dev (see docs/dev-environment.md)
-make dev-live             # deploy, then sync server/ and web/ and stream logs
-make dev-live-status      # pods, database, route and dev agents
-make dev-live-purge       # delete the namespace and the *-dev agents (typed confirmation)
+# Shared staging instance in namespace mainloop-staging (see docs/dev-environment.md)
+make staging             # deploy, then sync server/ and web/ and stream logs
+make staging-status      # pods, database, route and staging agents
+make staging-purge       # delete the namespace and the *-staging agents (typed confirmation)
 ```
 
 ## Verification
@@ -110,7 +110,7 @@ Generic workspace, cache and publishing guidance comes from Mainloop's agent ins
 - Default automated tests for native-agent adapters must use sanitized fixtures or fakes. Keep live proofs opt-in and bounded.
 - Do not run live-agent tests, `mainloop smoke --live`, subscription-consuming commands, deployments, destructive resets (`mainloop migrate reset`), or production commands unless the task explicitly requires them and their target is known.
 - For Kubernetes commands, always specify the intended context. Tests must not rely on a developer's current context or mutate production resources.
-- Task agents try changes on mainloop-dev through the `dev_*` MCP tools (see `docs/specs/devloop.md`); `make dev-live` needs a kube context that a task workspace does not have, so it is for operators only.
+- Task agents try changes on mainloop-staging through the `dev_*` MCP tools (see `docs/specs/devloop.md`); `make staging` needs a kube context that a task workspace does not have, so it is for operators only.
 
 ## Documentation
 

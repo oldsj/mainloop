@@ -1,18 +1,18 @@
 apiVersion: api.kagent.dev/v1alpha3
 kind: Harness
 metadata:
-  name: codex-workspace-dev-harness
+  name: claude-workspace-staging-harness
 spec:
-  codex: {}
+  claude: {}
   workload:
-    # Production pin; `make dev-harness` overrides it through DevSpace.
-    image: ghcr.io/oldsj/kagent-codex-harness:0.0.0-4616d73@sha256:df7350affc0d08adea5ae68c736a54266be18425e147c3e8c9b4519ead05d1ac
+    # Production pin; `make staging-harness` overrides it through DevSpace.
+    image: ghcr.io/oldsj/kagent-claude-harness:0.0.0-4616d73@sha256:960e7d93aec31060a8e909d22eb5aebc394c966cf383569d47f2c47d30b09280
   substrate:
     workerPoolRef:
       name: kagent-default
     snapshotPolicy:
-      location: s3://ate-snapshots/kagent-dev/
-      onQuiesce: Full
+      location: s3://ate-snapshots/kagent-staging/
+      onQuiesce: Data
   sessionIdleTTL: 0s
   env:
     - name: KAGENT_RUNTIME_GENERATION
@@ -28,7 +28,7 @@ spec:
     - name: GIT_CONFIG_VALUE_1
       value: 12104969+oldsj@users.noreply.github.com
   # No Git proxies: kagent's Harness CRD accepts only production's proxy origins, and
-  # mainloop-dev keeps Git transport off.
+  # mainloop-staging keeps Git transport off.
   git:
     origins:
       - github.com
@@ -43,11 +43,11 @@ spec:
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
 metadata:
-  name: codex-workspace-dev-template
+  name: claude-workspace-staging-template
 spec:
   modelConfig:
-    name: codex-subscription-model
-  description: mainloop-dev codex workspace
+    name: claude-subscription-model
+  description: mainloop-staging claude workspace
   systemPrompt: You are working in a persistent Mainloop development workspace. Work only
     in oldsj/testrepo. Preserve uncommitted and unpushed work. Use the repository and
     branch prepared for this Session.
@@ -55,14 +55,14 @@ spec:
     - mcp:
         server:
           kind: RemoteMCPServer
-          name: mainloop-dev
+          name: mainloop-staging
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
 metadata:
-  name: codex-workspace-dev
+  name: claude-workspace-staging
 spec:
   templateRef:
-    name: codex-workspace-dev-template
+    name: claude-workspace-staging-template
   harnessRef:
-    name: codex-workspace-dev-harness
+    name: claude-workspace-staging-harness

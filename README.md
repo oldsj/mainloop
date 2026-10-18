@@ -160,7 +160,7 @@ You stay in main thread, checking in on agents and spawning new ones as needed.
 **Guides**:
 
 - [Architecture](docs/architecture.md) - Workspaces, delivery, previews, and agent tools
-- [Development environment](docs/dev-environment.md) - Make targets and the shared live dev instance
+- [Development environment](docs/dev-environment.md) - Make targets and the shared staging instance
 - [Production rollout](docs/production-rollout.md) - Production overlay, site contract and GitOps boundary
 - [Performance](docs/performance.md) - Open performance items for the current stack
 - [Contributing](CONTRIBUTING.md) - Local setup, development commands, and contribution guidance
