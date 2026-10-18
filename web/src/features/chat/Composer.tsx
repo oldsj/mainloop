@@ -172,7 +172,9 @@ export function Composer({
   /** Reads accepted image files into memory and adds them as pending attachments. */
   async function addFiles(files: File[]) {
     if (!allowImages || files.length === 0) return;
-    const valid = files.filter((file) => isAllowedImageType(file.type) && file.size <= MAX_IMAGE_BYTES);
+    const valid = files.filter(
+      (file) => isAllowedImageType(file.type) && file.size <= MAX_IMAGE_BYTES
+    );
     const room = Math.max(0, MAX_IMAGES - images.length);
     const accepted = valid.slice(0, room);
     if (accepted.length < files.length) {
@@ -209,7 +211,9 @@ export function Composer({
 
   function drop(event: DragEvent<HTMLDivElement>) {
     if (!allowImages) return;
-    const files = Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith('image/'));
+    const files = Array.from(event.dataTransfer.files).filter((file) =>
+      file.type.startsWith('image/')
+    );
     if (files.length === 0) return;
     event.preventDefault();
     void addFiles(files);
@@ -273,7 +277,11 @@ export function Composer({
         </div>
       ) : null}
       {imageError ? (
-        <p className="text-destructive px-md pt-xs text-xs" role="alert" data-testid="composer-image-error">
+        <p
+          className="text-destructive px-md pt-xs text-xs"
+          role="alert"
+          data-testid="composer-image-error"
+        >
           {imageError}
         </p>
       ) : null}

@@ -241,7 +241,9 @@ describe('Composer pasted images', () => {
     await userEvent.click(screen.getByTestId('exec-button'));
 
     await waitFor(() =>
-      expect(onSend).toHaveBeenCalledWith('', [{ mediaType: 'image/png', data: expect.any(String) }])
+      expect(onSend).toHaveBeenCalledWith('', [
+        { mediaType: 'image/png', data: expect.any(String) }
+      ])
     );
   });
 
@@ -288,7 +290,9 @@ describe('Composer pasted images', () => {
     await screen.findByTestId('composer-image-thumbnail');
     await userEvent.click(screen.getByTestId('exec-button'));
     await waitFor(() =>
-      expect(onSend).toHaveBeenCalledWith('', [{ mediaType: 'image/png', data: expect.any(String) }])
+      expect(onSend).toHaveBeenCalledWith('', [
+        { mediaType: 'image/png', data: expect.any(String) }
+      ])
     );
   });
 
