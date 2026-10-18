@@ -95,10 +95,10 @@ from a task agent's own MCP session). Raw `devspace` commands do not check the l
 `make dev-live` does.
 
 A task agent of project `oldsj/mainloop` iterates on mainloop-dev the same way through MCP tools
-(`dev_lease_acquire`, `dev_sync`, `dev_status`; see
-`docs/specs/devloop.md`), which are disabled unless the **control-plane instance** (production,
-not mainloop-dev) sets `MAINLOOP_DEVLOOP_ENABLED=true`. It is off in production until mainloop-dev
-has its own credentials and egress policy (`docs/specs/devloop.md`, "Not built").
+(`dev_lease_acquire`, `dev_sync`, `dev_status`; see `docs/specs/devloop.md`). They are on in
+production, where the **control-plane instance** (production, not mainloop-dev) sets
+`MAINLOOP_DEVLOOP_ENABLED=true`, by owner decision 2026-10-17. mainloop-dev still shares production's
+credentials and has open egress; the gaps are listed under "Not built" in `docs/specs/devloop.md`.
 
 What runs and syncs: the Go server and the React app.
 

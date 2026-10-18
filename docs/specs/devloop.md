@@ -1,7 +1,7 @@
 # Live dev loop on mainloop-dev
 
-Status: slice 1 (lease, `dev_sync`, `dev_status`) implemented in `server/internal/devloop`, disabled by
-default, not proven live. Slice 2 (`dev_logs`, `dev_smoke`) is not built.
+Status: slice 1 (lease, `dev_sync`, `dev_status`) implemented in `server/internal/devloop` and on in
+production by owner decision 2026-10-17, not proven live. Slice 2 (`dev_logs`, `dev_smoke`) is not built.
 
 ## What it does
 
@@ -154,7 +154,8 @@ revoked (`TestEveryWriteToolIsRefusedAfterItsCredentialIsRevoked`); `FetchArchiv
 packfile and archiving real `server/` and `web/` trees; `FilterTar` re-rooting and excluding
 entries.
 
-Not built (prerequisites for turning the feature on; nothing here is enabled until all exist):
+Not built (on in production by owner decision 2026-10-17; these would narrow the boundary above,
+and none is required to use it):
 
 - mainloop-dev has its own agent token key, instead of production's.
 - mainloop-dev holds no write-capable GitHub App private key.

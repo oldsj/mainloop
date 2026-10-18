@@ -110,6 +110,7 @@ Generic workspace, cache and publishing guidance comes from Mainloop's agent ins
 - Default automated tests for native-agent adapters must use sanitized fixtures or fakes. Keep live proofs opt-in and bounded.
 - Do not run live-agent tests, `mainloop smoke --live`, subscription-consuming commands, deployments, destructive resets (`mainloop migrate reset`), or production commands unless the task explicitly requires them and their target is known.
 - For Kubernetes commands, always specify the intended context. Tests must not rely on a developer's current context or mutate production resources.
+- Task agents try changes on mainloop-dev through the `dev_*` MCP tools (see `docs/specs/devloop.md`); `make dev-live` needs a kube context that a task workspace does not have, so it is for operators only.
 
 ## Documentation
 
