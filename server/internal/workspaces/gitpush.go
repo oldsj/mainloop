@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
+	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/pushgate"
@@ -126,6 +127,53 @@ func pushAllowed(ctx context.Context, q *dbq.Queries, project, branch string) (b
 	}
 	var policy pushgate.Policy
 	return json.Unmarshal(p.Policy, &policy) == nil && policy.Allows(branch), nil
+}
+
+// readOnly pairs the contract's read-only mode with the reason a push would be refused.
+func readOnly(reason api.WorkspaceLifecyclePublicationReason) (api.WorkspaceLifecyclePublicationMode, *api.WorkspaceLifecyclePublicationReason) {
+	return api.ReadOnly, &reason
+}
+
+// publicationOf reports the push authority a workspace actually has, from the same stored policy
+// and grant [pushgate.Service] checks before admitting a push: read-only with the reason a push
+// would be refused, or branch when a published grant backs the workspace's current branch. It is
+// independent of runtime state, so it reads no live Session.
+func publicationOf(ctx context.Context, q *dbq.Queries, enabled bool, w wsRow) (api.WorkspaceLifecyclePublicationMode, *api.WorkspaceLifecyclePublicationReason) {
+	if !enabled {
+		return readOnly(api.Disabled)
+	}
+	p, err := q.GetPushPolicy(ctx, w.ProjectID)
+	if err != nil {
+		return readOnly(api.MissingMetadata)
+	}
+	var policy pushgate.Policy
+	if json.Unmarshal(p.Policy, &policy) != nil {
+		return readOnly(api.MissingMetadata)
+	}
+	switch policy.Reason(w.Branch) {
+	case "default_branch":
+		return readOnly(api.DefaultBranch)
+	case "protected_branch":
+		return readOnly(api.ProtectedBranch)
+	case "metadata_unavailable":
+		return readOnly(api.MissingMetadata)
+	case "":
+		// The policy permits the branch; whether this workspace has actually been granted a
+		// push authority for it is what the grant row below decides.
+	default:
+		return readOnly(api.NoGrant)
+	}
+	g, err := q.GetPushGrant(ctx, w.ID)
+	if err != nil || g.State != dbstate.GitGrantPublished || g.Branch != w.Branch {
+		return readOnly(api.NoGrant)
+	}
+	return api.Branch, nil
+}
+
+// publication is [publicationOf] for a Service's own pool, for callers outside an existing
+// transaction.
+func (s *Service) publication(ctx context.Context, w wsRow) (api.WorkspaceLifecyclePublicationMode, *api.WorkspaceLifecyclePublicationReason) {
+	return publicationOf(ctx, dbq.New(s.Pool), s.GitPush.enabled(), w)
 }
 
 // PushReservationTable shares the grant's planned -> published/revoked state machine. A released
