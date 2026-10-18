@@ -191,7 +191,7 @@ tunnel dial from `mainloop-staging` times out and the proxy answers 503 "Workspa
 every request. Proving previews needs an infra change (a base domain, a wildcard route and a
 policy entry for `mainloop-staging`); until then they are proven in production.
 
-### Testing approvals on dev
+### Testing approvals on staging
 
 The overlay's `claude-workspace-staging-template` has no approval gate. To test the Approve and
 Reject flow on this instance, gate a tool temporarily and restore the template afterwards.
