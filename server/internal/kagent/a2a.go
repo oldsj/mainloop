@@ -39,10 +39,22 @@ type SendParams struct {
 	ContextID string
 	TaskID    string // empty starts a new task
 
+	// Images are multimodal attachments sent alongside Text, each its own A2A part. Only the main
+	// chat populates this today; a worker session's turn is text-only.
+	Images []ImageAttachment
+
 	// Metadata and Extensions go on the a2a.Message as given; the HITL response is the one user of
 	// them. Extensions name the A2A extensions the message uses.
 	Metadata   map[string]any
 	Extensions []string
+}
+
+// ImageAttachment is one image sent as a multimodal part of a turn. MediaType is one of the
+// formats the owner's paste UI accepts (png, jpeg, webp, gif), already validated when the image
+// was uploaded; this type trusts it.
+type ImageAttachment struct {
+	Data      []byte
+	MediaType string
 }
 
 type rpcRequest struct {
@@ -297,6 +309,26 @@ func (c *Client) SubscribeToTask(ctx context.Context, agent AgentRef, taskID str
 	})
 }
 
+// buildMessage builds the A2A message for one turn: the text part, if any, followed by one raw
+// part per image, each carrying its media type. This is the multimodal content block this repo
+// hands to kagent; translating it into a provider's own wire format (e.g. Anthropic's
+// base64-image content block) is the harness's job, not this client's.
+func buildMessage(p SendParams) *a2a.Message {
+	parts := make([]*a2a.Part, 0, 1+len(p.Images))
+	if p.Text != "" {
+		parts = append(parts, a2a.NewTextPart(p.Text))
+	}
+	for _, img := range p.Images {
+		part := a2a.NewRawPart(img.Data)
+		part.MediaType = img.MediaType
+		parts = append(parts, part)
+	}
+	msg := a2a.NewMessage(a2a.MessageRoleUser, parts...)
+	msg.ID, msg.ContextID, msg.TaskID = p.MessageID, p.ContextID, a2a.TaskID(p.TaskID)
+	msg.Metadata, msg.Extensions = p.Metadata, p.Extensions
+	return msg
+}
+
 // SendMessage sends one user message and streams the task's events.
 //
 // If kagent refuses the message before any event (SendNotAccepted), the identical message is
@@ -308,13 +340,11 @@ func (c *Client) SubscribeToTask(ctx context.Context, agent AgentRef, taskID str
 // SendMessage again, and only when NotSent says the first send did not happen.
 func (c *Client) SendMessage(ctx context.Context, agent AgentRef, p SendParams) iter.Seq2[a2a.Event, error] {
 	return singleUse(func(yield func(a2a.Event, error) bool) {
-		if p.Text == "" || p.MessageID == "" || p.ContextID == "" {
-			yield(nil, errors.New("kagent: a message needs text, a message id and a context id"))
+		if (p.Text == "" && len(p.Images) == 0) || p.MessageID == "" || p.ContextID == "" {
+			yield(nil, errors.New("kagent: a message needs text or an image, a message id and a context id"))
 			return
 		}
-		msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(p.Text))
-		msg.ID, msg.ContextID, msg.TaskID = p.MessageID, p.ContextID, a2a.TaskID(p.TaskID)
-		msg.Metadata, msg.Extensions = p.Metadata, p.Extensions
+		msg := buildMessage(p)
 		params := a2a.SendMessageRequest{Message: msg}
 
 		deadline := c.now().Add(c.budget)

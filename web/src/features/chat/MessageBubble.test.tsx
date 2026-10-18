@@ -55,6 +55,25 @@ describe('MessageBubble', () => {
     expect(screen.queryByTestId('assignment-block')).toBeNull();
   });
 
+  it('shows a pasted image attached to a sent message', () => {
+    render(
+      <MessageBubble
+        message={messageFixture({
+          role: 'user',
+          content: 'what is this?',
+          images: [{ id: 'img-1', media_type: 'image/png', data: 'AQIDBA==' }]
+        })}
+      />
+    );
+    const image = screen.getByTestId('message-image');
+    expect(image).toHaveAttribute('src', 'data:image/png;base64,AQIDBA==');
+  });
+
+  it('renders no image strip for a message without images', () => {
+    render(<MessageBubble message={messageFixture({ role: 'user', content: 'hi' })} />);
+    expect(screen.queryByTestId('message-images')).toBeNull();
+  });
+
   it('labels a reply by the provider that wrote it, not the session it is bound to now', () => {
     render(
       <MessageBubble

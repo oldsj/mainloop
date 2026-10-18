@@ -58,6 +58,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/chat/images': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Upload Chat Image
+     * @description Upload an image, scoped to the main session, to attach to the next message sent with POST /chat. Unattached uploads are not shown anywhere until a message claims them.
+     */
+    post: operations['uploadChatImage'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/conversations/{conversation_id}': {
     parameters: {
       query?: never;
@@ -1293,6 +1313,55 @@ export interface components {
      */
     CapabilityState: 'proved' | 'partial' | 'unsupported' | 'unknown';
     /**
+     * ChatImageUpload
+     * @description Request model for uploading an image to attach to the next main-chat message.
+     */
+    ChatImageUpload: {
+      /**
+       * Media Type
+       * @description The image's MIME type. Anthropic's Messages API accepts these four formats.
+       * @enum {string}
+       */
+      media_type: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+      /**
+       * Data
+       * Format: byte
+       * @description Base64-encoded image bytes.
+       */
+      data: string;
+    };
+    /**
+     * ChatImageUploadResponse
+     * @description Response model for an uploaded chat image.
+     */
+    ChatImageUploadResponse: {
+      /**
+       * Id
+       * @description The uploaded image's id, attached to a message via ChatRequest.image_ids.
+       */
+      id: string;
+      /** Media Type */
+      media_type: string;
+      /** Size Bytes */
+      size_bytes: number;
+    };
+    /**
+     * ChatMessageImage
+     * @description An image attached to a chat message.
+     */
+    ChatMessageImage: {
+      /** Id */
+      id: string;
+      /** Media Type */
+      media_type: string;
+      /**
+       * Data
+       * Format: byte
+       * @description Base64-encoded image bytes.
+       */
+      data: string;
+    };
+    /**
      * ChatRequest
      * @description Request model for sending a message.
      */
@@ -1307,6 +1376,11 @@ export interface components {
        * @description Existing conversation ID
        */
       conversation_id?: string | null;
+      /**
+       * Image Ids
+       * @description IDs of images uploaded with POST /chat/images (still unattached) to attach to this message, in order. The message may be empty when at least one image is given.
+       */
+      image_ids?: string[];
     };
     /**
      * ChatResponse
@@ -1610,6 +1684,11 @@ export interface components {
        * @description Message content
        */
       content: string;
+      /**
+       * Images
+       * @description Images pasted into this message, if any. Only ever set on a main-chat message.
+       */
+      images?: components['schemas']['ChatMessageImage'][];
       /**
        * Source
        * @description Who wrote a user message. `mainloop` marks one Mainloop sent on the owner's behalf (a delegated brief, a task report); `user` is the owner's own. Absent on assistant messages.
@@ -4904,6 +4983,48 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['CodedHTTPError'];
+        };
+      };
+      /** @description Request Entity Too Large */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  uploadChatImage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ChatImageUpload'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ChatImageUploadResponse'];
         };
       };
       /** @description Request Entity Too Large */

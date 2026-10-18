@@ -138,6 +138,40 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /chat/images:
+    post:
+      tags:
+        - chat
+      summary: Upload Chat Image
+      description: >-
+        Upload an image, scoped to the main session, to attach to the next message sent with
+        POST /chat. Unattached uploads are not shown anywhere until a message claims them.
+      operationId: uploadChatImage
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatImageUpload'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatImageUploadResponse'
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /conversations/{conversation_id}:
     get:
       tags:
@@ -3711,6 +3745,67 @@ components:
         - unsupported
         - unknown
       title: CapabilityState
+    ChatImageUpload:
+      properties:
+        media_type:
+          type: string
+          enum:
+            - image/png
+            - image/jpeg
+            - image/webp
+            - image/gif
+          title: Media Type
+          description: The image's MIME type. Anthropic's Messages API accepts these four formats.
+        data:
+          type: string
+          format: byte
+          title: Data
+          description: Base64-encoded image bytes.
+      type: object
+      required:
+        - media_type
+        - data
+      title: ChatImageUpload
+      description: Request model for uploading an image to attach to the next main-chat message.
+    ChatImageUploadResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: The uploaded image's id, attached to a message via ChatRequest.image_ids.
+        media_type:
+          type: string
+          title: Media Type
+        size_bytes:
+          type: integer
+          title: Size Bytes
+      type: object
+      required:
+        - id
+        - media_type
+        - size_bytes
+      title: ChatImageUploadResponse
+      description: Response model for an uploaded chat image.
+    ChatMessageImage:
+      properties:
+        id:
+          type: string
+          title: Id
+        media_type:
+          type: string
+          title: Media Type
+        data:
+          type: string
+          format: byte
+          title: Data
+          description: Base64-encoded image bytes.
+      type: object
+      required:
+        - id
+        - media_type
+        - data
+      title: ChatMessageImage
+      description: An image attached to a chat message.
     ChatRequest:
       properties:
         message:
@@ -3723,6 +3818,14 @@ components:
             - type: 'null'
           title: Conversation Id
           description: Existing conversation ID
+        image_ids:
+          items:
+            type: string
+          type: array
+          title: Image Ids
+          description: >-
+            IDs of images uploaded with POST /chat/images (still unattached) to attach to this
+            message, in order. The message may be empty when at least one image is given.
       type: object
       required:
         - message
@@ -4199,6 +4302,12 @@ components:
           type: string
           title: Content
           description: Message content
+        images:
+          items:
+            $ref: '#/components/schemas/ChatMessageImage'
+          type: array
+          title: Images
+          description: Images pasted into this message, if any. Only ever set on a main-chat message.
         source:
           type: string
           enum:

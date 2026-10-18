@@ -62,6 +62,7 @@ export function ChatPage({
         prefill={prefill}
         onPrefillUsed={onPrefillUsed}
         starters={starters}
+        allowImages
         requests={
           <PanelBoundary name="Requests">
             {hitlId ? (

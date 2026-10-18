@@ -48,6 +48,10 @@ export interface ChatBackendState {
   hitlIds: string[];
   /** Every `POST /chat` body the backend received, in order. */
   chatPosts: Schemas['ChatRequest'][];
+  /** Every `POST /chat/images` body the backend received, in order. */
+  imageUploads: Schemas['ChatImageUpload'][];
+  /** Uploaded images, by id, available to a `POST /chat` that names them in `image_ids`. */
+  uploadedImages: Record<string, Schemas['ChatMessageImage']>;
   /** Every `POST /sessions/{id}/message` body the backend received, by session, in order. */
   sessionPosts: Record<string, Schemas['SessionMessageRequest'][]>;
   /** Every session id that got a stop-turn POST. */
@@ -129,6 +133,8 @@ export function createChatBackend(
     messages: [],
     hitlIds: [],
     chatPosts: [],
+    imageUploads: [],
+    uploadedImages: {},
     sessionPosts: {},
     stopped: [],
     mainThreadReads: 0,
@@ -308,6 +314,21 @@ export function createChatBackend(
       };
       return HttpResponse.json(body);
     }),
+    http.post(url('/chat/images'), async ({ request }) => {
+      const body = (await request.json()) as Schemas['ChatImageUpload'];
+      state.imageUploads.push(body);
+      const id = `img-${++counter}`;
+      state.uploadedImages = {
+        ...state.uploadedImages,
+        [id]: { id, media_type: body.media_type, data: body.data }
+      };
+      const response: Schemas['ChatImageUploadResponse'] = {
+        id,
+        media_type: body.media_type,
+        size_bytes: Math.ceil((body.data.length * 3) / 4)
+      };
+      return HttpResponse.json(response);
+    }),
     http.post(url('/chat'), async ({ request }) => {
       const body = (await request.json()) as Schemas['ChatRequest'];
       state.chatPosts.push(body);
@@ -322,11 +343,15 @@ export function createChatBackend(
       const lost = takeLostSend();
       if (lost === 'unrecorded') return HttpResponse.error();
       const conversationId = state.mainThread.conversation_id ?? CONVERSATION_ID;
+      const images = body.image_ids
+        ?.map((imageId) => state.uploadedImages[imageId])
+        .filter((image): image is Schemas['ChatMessageImage'] => image !== undefined);
       const message = messageFixture({
         id: `sent-${++counter}`,
         conversation_id: conversationId,
         content: body.message,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        images: images && images.length > 0 ? images : undefined
       });
       state.messages = [...state.messages, message];
       // Native answer: the message is recorded and the turn starts; the reply comes later.

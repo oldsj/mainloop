@@ -388,3 +388,8 @@ func (Unimplemented) UpdateProjectDefaultProvider(context.Context, UpdateProject
 func (Unimplemented) UpdateSchedule(context.Context, UpdateScheduleRequestObject) (UpdateScheduleResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
+
+// UploadChatImage is not implemented yet.
+func (Unimplemented) UploadChatImage(context.Context, UploadChatImageRequestObject) (UploadChatImageResponseObject, error) {
+	return nil, apierr.NotImplemented
+}

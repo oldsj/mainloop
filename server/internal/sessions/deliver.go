@@ -521,7 +521,11 @@ func changing(s *kagentapi.Session) bool {
 
 // send delivers a recorded message for the first time.
 func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
-	if t.d.Content == "" {
+	images, err := t.images(ctx)
+	if err != nil {
+		return reconcile.Retry(), err
+	}
+	if t.d.Content == "" && len(images) == 0 {
 		return t.settle(ctx, dbstate.DeliveryFailed, "the message text is missing", nil, false)
 	}
 	ksid, err := t.ensureKagentSession(ctx)
@@ -593,7 +597,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 	var sendErr error
 	t.s.Progress.Begin(t.progressRef())
 	for ev, err := range t.s.Kagent.SendMessage(ctx, t.agent, kagent.SendParams{
-		Text: text, MessageID: t.c.ID, ContextID: ksid,
+		Text: text, MessageID: t.c.ID, ContextID: ksid, Images: images,
 	}) {
 		if err != nil {
 			sendErr = err
@@ -634,6 +638,23 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 // send lock also serializes cancellation with admission. A crash after commit is observed, never
 // replayed, by the next delivery claimer. It returns the text to send, frozen on the row in the same
 // transaction when it differs from the message (see frozenText).
+// images loads the message's pasted images, oldest first, to build into the turn's multimodal
+// parts alongside its text. A worker session's message never has any.
+func (t *turn) images(ctx context.Context) ([]kagent.ImageAttachment, error) {
+	rows, err := dbq.New(t.s.Pool).ListMessageImagesByMessage(ctx, t.c.ID)
+	if err != nil {
+		return nil, fmt.Errorf("load message images: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	images := make([]kagent.ImageAttachment, len(rows))
+	for i, r := range rows {
+		images[i] = kagent.ImageAttachment{Data: r.Data, MediaType: r.MediaType}
+	}
+	return images, nil
+}
+
 func (t *turn) decideSend(ctx context.Context, ksid string) (string, error) {
 	text := t.d.Content
 	err := db.InTx(ctx, t.s.Pool, func(tx pgx.Tx) error {

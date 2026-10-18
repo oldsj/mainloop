@@ -56,6 +56,25 @@ const DeliveryChannel = "mainloop_deliveries"
 // MaxMessageRunes bounds one chat message.
 const MaxMessageRunes = 100_000
 
+// MaxImageBytes bounds one pasted image: Anthropic's Messages API rejects a base64 image source
+// over 5MB.
+const MaxImageBytes = 5 << 20
+
+// MaxImagesPerMessage bounds how many images one message carries: Anthropic's Messages API
+// accepts at most 20 images in one request.
+const MaxImagesPerMessage = 20
+
+// allowedImageMediaTypes are the formats the paste UI accepts, the same set Anthropic's Messages
+// API accepts for image content blocks.
+var allowedImageMediaTypes = map[string]bool{
+	"image/png": true, "image/jpeg": true, "image/webp": true, "image/gif": true,
+}
+
+// AllowedImageMediaType reports whether mediaType is one the main chat accepts for a pasted image.
+func AllowedImageMediaType(mediaType string) bool {
+	return allowedImageMediaTypes[mediaType]
+}
+
 // Errors the API maps to the contract's statuses.
 var (
 	// ErrNotFound is a conversation that is not the owner's.
@@ -358,11 +377,15 @@ type Sent struct {
 	Queued bool
 }
 
-// checkText trims and validates a message and its id.
-func checkText(messageID, text string) (string, error) {
+// checkTextOrImages trims and validates a message and its id. The text may be empty only when
+// imageCount is over zero: a pasted image needs no caption, as Claude.ai and Claude Code allow.
+func checkTextOrImages(messageID, text string, imageCount int) (string, error) {
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && imageCount == 0 {
 		return "", fmt.Errorf("%w: the message is empty", ErrInvalid)
+	}
+	if imageCount > MaxImagesPerMessage {
+		return "", fmt.Errorf("%w: too many images", ErrInvalid)
 	}
 	if utf8.RuneCountInString(text) > MaxMessageRunes {
 		return "", fmt.Errorf("%w: the message is too long", ErrInvalid)
@@ -505,12 +528,26 @@ func busyOrErr(err error) error {
 //
 // It touches only the database. The delivery loop makes the kagent calls.
 func (s *Service) Send(ctx context.Context, messageID, conversationID, text string) (Sent, error) {
-	return s.SendAs(ctx, SourceUser, messageID, conversationID, text)
+	return s.SendWithImages(ctx, messageID, conversationID, text, nil)
 }
 
 // SendAs is Send for a message from source (SourceUser or SourceMainloop).
 func (s *Service) SendAs(ctx context.Context, source Source, messageID, conversationID, text string) (Sent, error) {
-	text, err := checkText(messageID, text)
+	return s.sendAsWithImages(ctx, source, messageID, conversationID, text, nil)
+}
+
+// SendWithImages is Send for a message that also attaches images already uploaded with
+// UploadImage (still unclaimed). The main chat is the only caller: imageIDs is always nil from a
+// worker session's send.
+func (s *Service) SendWithImages(ctx context.Context, messageID, conversationID, text string, imageIDs []string) (Sent, error) {
+	return s.sendAsWithImages(ctx, SourceUser, messageID, conversationID, text, imageIDs)
+}
+
+// sendAsWithImages is the shared body of Send, SendAs and SendWithImages.
+func (s *Service) sendAsWithImages(
+	ctx context.Context, source Source, messageID, conversationID, text string, imageIDs []string,
+) (Sent, error) {
+	text, err := checkTextOrImages(messageID, text, len(imageIDs))
 	if err != nil {
 		return Sent{}, err
 	}
@@ -526,12 +563,64 @@ func (s *Service) SendAs(ctx context.Context, source Source, messageID, conversa
 		out = Sent{ConversationID: main.SessionID, MessageID: messageID}
 		queued, err := s.record(ctx, tx, source, main.SessionID, messageID, text)
 		out.Queued = queued
-		return err
+		if err != nil {
+			return err
+		}
+		if len(imageIDs) == 0 {
+			return nil
+		}
+		attached, err := dbq.New(tx).AttachMessageImages(ctx, dbq.AttachMessageImagesParams{
+			MessageID: messageID, Ids: imageIDs, SessionID: main.SessionID,
+		})
+		if err != nil {
+			return fmt.Errorf("attach images: %w", err)
+		}
+		if len(attached) != len(imageIDs) {
+			return fmt.Errorf("%w: an attached image was not found", ErrInvalid)
+		}
+		return nil
 	})
 	if err = busyOrErr(err); err != nil {
 		return Sent{}, err
 	}
 	return out, nil
+}
+
+// ImageRef is an uploaded image, not yet attached to a message.
+type ImageRef struct {
+	ID        string
+	MediaType string
+	SizeBytes int
+}
+
+// UploadImage stores a pasted image, scoped to the main session, for a later SendWithImages to
+// attach to the message it is sent with. It creates the main session on first use, like Send.
+func (s *Service) UploadImage(ctx context.Context, mediaType string, data []byte) (ImageRef, error) {
+	if !AllowedImageMediaType(mediaType) {
+		return ImageRef{}, fmt.Errorf("%w: unsupported image format", ErrInvalid)
+	}
+	if len(data) == 0 {
+		return ImageRef{}, fmt.Errorf("%w: the image is empty", ErrInvalid)
+	}
+	if len(data) > MaxImageBytes {
+		return ImageRef{}, fmt.Errorf("%w: the image is too large", ErrInvalid)
+	}
+	ref := ImageRef{MediaType: mediaType, SizeBytes: len(data)}
+	err := db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+		main, err := s.ensureMain(ctx, tx)
+		if err != nil {
+			return err
+		}
+		ref.ID = uuid.NewString()
+		return dbq.New(tx).InsertMessageImage(ctx, dbq.InsertMessageImageParams{
+			ID: ref.ID, SessionID: main.SessionID, MediaType: mediaType, Data: data,
+			SizeBytes: int32(len(data)), //nolint:gosec // bounded by MaxImageBytes above
+		})
+	})
+	if err != nil {
+		return ImageRef{}, err
+	}
+	return ref, nil
 }
 
 // endedStatus is a status after which a session takes no more messages.
@@ -548,7 +637,7 @@ func (s *Service) SendTo(ctx context.Context, sessionID, messageID, text string)
 
 // SendToAs is SendTo for a message from source (SourceUser or SourceMainloop).
 func (s *Service) SendToAs(ctx context.Context, source Source, sessionID, messageID, text string) (Sent, error) {
-	text, err := checkText(messageID, text)
+	text, err := checkTextOrImages(messageID, text, 0)
 	if err != nil {
 		return Sent{}, err
 	}

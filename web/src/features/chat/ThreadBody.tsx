@@ -24,6 +24,8 @@ export interface ThreadBodyProps {
   requests?: ReactNode;
   /** Shown in the empty state of a loaded thread. */
   starters?: ReactNode;
+  /** The composer accepts a pasted or dropped image. Only the main thread sets this. */
+  allowImages?: boolean;
 }
 
 /** The conversation timeline, the send and stop errors, and the composer, for any thread. */
@@ -36,7 +38,8 @@ export function ThreadBody({
   prefill,
   onPrefillUsed,
   requests,
-  starters
+  starters,
+  allowImages = false
 }: ThreadBodyProps) {
   const live = useLiveTurn(thread.sessionId, thread.busy, thread.messages);
   return (
@@ -110,7 +113,8 @@ export function ThreadBody({
         closedPlaceholder={closedPlaceholder}
         prefill={prefill}
         onPrefillUsed={onPrefillUsed}
-        onSend={(text) => thread.send(text, thread.conversationId)}
+        onSend={(text, images) => thread.send(text, thread.conversationId, images)}
+        allowImages={allowImages}
       />
     </>
   );
