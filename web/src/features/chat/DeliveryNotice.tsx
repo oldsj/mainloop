@@ -9,19 +9,26 @@ export interface DeliveryNoticeProps {
   retryDisabled?: boolean;
 }
 
+const NOTICE_STYLE: Record<DeliveryNoticeProps['notice']['state'], string> = {
+  queued: 'border-term-fg-muted text-term-fg-muted',
+  failed: 'border-term-red text-term-red',
+  uncertain: 'border-term-yellow text-term-yellow'
+};
+
 /**
- * Says what happened to a message that was not delivered, with the server's reason. A failed
- * delivery can be retried; an unconfirmed one never is, because the agent may have received it.
+ * Says what happened to a message that was not delivered, with the server's reason, or that it is
+ * still queued behind the turn in flight. A failed delivery can be retried; a queued or
+ * unconfirmed one never is: a queued send has not reached the agent yet, and the agent may already
+ * have received an unconfirmed one.
  */
 export function DeliveryNotice({ notice, onRetry, retryDisabled = false }: DeliveryNoticeProps) {
-  const failed = notice.state === 'failed';
   return (
     <div
       role="status"
       data-testid="delivery-notice"
       className={cn(
         'mt-sm gap-x-md gap-y-xs px-sm py-xs bg-muted flex flex-wrap items-center border text-xs',
-        failed ? 'border-term-red text-term-red' : 'border-term-yellow text-term-yellow'
+        NOTICE_STYLE[notice.state]
       )}
     >
       <span className="font-medium" data-testid="delivery-notice-label">
@@ -32,6 +39,7 @@ export function DeliveryNotice({ notice, onRetry, retryDisabled = false }: Deliv
           {notice.reason}
         </span>
       ) : null}
+      {notice.state === 'queued' ? <span>Waiting for the current turn to finish.</span> : null}
       {notice.state === 'uncertain' ? (
         <span>Not replayed. Check for a reply before sending again.</span>
       ) : null}

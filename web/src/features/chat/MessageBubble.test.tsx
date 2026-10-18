@@ -247,6 +247,27 @@ describe('MessageBubble', () => {
       expect(screen.queryByTestId('delivery-retry')).toBeNull();
     });
 
+    it('marks a queued message as pending, distinct from a sent one, with no Retry', () => {
+      const { rerender } = render(
+        <MessageBubble
+          message={messageFixture({ content: 'one more thing' })}
+          notice={{ state: 'queued', label: 'Queued', reason: null, retryable: false }}
+          onRetry={vi.fn()}
+        />
+      );
+      const notice = screen.getByTestId('delivery-notice');
+      expect(within(notice).getByTestId('delivery-notice-label')).toHaveTextContent('Queued');
+      expect(screen.queryByTestId('delivery-retry')).toBeNull();
+      const queuedArticle = screen.getByRole('article', { name: /, queued$/ });
+      expect(queuedArticle.className).toMatch(/opacity-60/);
+
+      // Once promoted, the server stops reporting a queued delivery; the bubble must read as a
+      // normal sent message again, not stay dimmed from stale client state.
+      rerender(<MessageBubble message={messageFixture({ content: 'one more thing' })} />);
+      expect(screen.queryByTestId('delivery-notice')).toBeNull();
+      expect(screen.getByRole('article', { name: /^You/ }).className).not.toMatch(/opacity-60/);
+    });
+
     it('shows the reason as text, never as markup', () => {
       render(
         <MessageBubble

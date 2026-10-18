@@ -47,6 +47,10 @@ export default function MessageBubblePreview() {
         }}
         onRetry={() => {}}
       />
+      <MessageBubble
+        message={messageFixture({ id: 'f', content: 'One more thing' })}
+        notice={{ state: 'queued', label: 'Queued', reason: null, retryable: false }}
+      />
     </div>
   );
 }

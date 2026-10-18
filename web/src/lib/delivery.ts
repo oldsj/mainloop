@@ -2,7 +2,7 @@
 import type { NativeDelivery } from './contract';
 
 export interface DeliveryNotice {
-  state: 'failed' | 'uncertain';
+  state: 'queued' | 'failed' | 'uncertain';
   /** Short headline: whether the agent ever saw the message. */
   label: string;
   /** The recorded reason (error class and message), if any. */
@@ -17,7 +17,9 @@ export type ThreadStatus = 'unreachable' | 'working' | 'failed' | 'unconfirmed' 
 const OPEN_STATES = ['recorded', 'sending', 'delivered'];
 
 /**
- * Notices keyed by message id, for every failed or uncertain delivery.
+ * Notices keyed by message id, for every queued, failed or uncertain delivery. A queued delivery
+ * is waiting behind the turn in flight: it has not been sent to the agent yet, unlike one that is
+ * `recorded`, `sending` or `delivered`.
  *
  * Only the newest delivery of a user message can be retried, and only while nothing is in
  * flight: an older failure has been superseded, and a retry is a new message that the backend
@@ -28,6 +30,15 @@ export function deliveryNotices(deliveries: NativeDelivery[]): Map<string, Deliv
   const last = deliveries.at(-1);
   const inFlight = deliveries.some((d) => OPEN_STATES.includes(d.state));
   for (const d of deliveries) {
+    if (d.state === 'queued') {
+      notices.set(d.message_id, {
+        state: 'queued',
+        label: 'Queued',
+        reason: null,
+        retryable: false
+      });
+      continue;
+    }
     if (d.state !== 'failed' && d.state !== 'uncertain') continue;
     const neverSent = d.state === 'failed' && (d.detail ?? '').startsWith('not sent');
     notices.set(d.message_id, {

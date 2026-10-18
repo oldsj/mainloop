@@ -474,6 +474,71 @@ describe('sending', () => {
     expect(input()).toBeEnabled();
   });
 
+  it('marks a message sent while a turn is in flight as queued, and clears that once it is promoted', async () => {
+    const { state } = setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({ turn_in_flight: true })
+        })
+      })
+    );
+    await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
+
+    // The server records the message and a `queued` delivery row in the same transaction it
+    // answers 202 with, before the turn behind it ends and the row is promoted.
+    server.use(
+      http.post(`${API_URL}/chat`, async ({ request }) => {
+        state.chatPosts.push((await request.json()) as ChatBackendState['chatPosts'][number]);
+        state.messages = [
+          ...state.messages,
+          messageFixture({ id: 'queued-1', content: 'one more thing' })
+        ];
+        recordDelivery(state, deliveryFixture({ message_id: 'queued-1', state: 'queued' }));
+        return HttpResponse.json(
+          {
+            conversation_id: CONVERSATION_ID,
+            message: null,
+            spawned_session_id: null,
+            pending: true,
+            delivery_message_id: 'queued-1',
+            status: 'queued'
+          },
+          { status: 202 }
+        );
+      })
+    );
+
+    await userEvent.type(input(), 'one more thing{Enter}');
+    await waitFor(() => expect(state.chatPosts).toHaveLength(1));
+
+    const bubble = (await screen.findByText('one more thing')).closest('article')!;
+    await waitFor(() =>
+      expect(within(bubble).getByTestId('delivery-notice-label')).toHaveTextContent('Queued')
+    );
+    expect(within(bubble).queryByTestId('delivery-retry')).toBeNull();
+    expect(bubble.className).toMatch(/opacity-60/);
+    // The earlier, already-sent message must never read as queued.
+    expect(screen.getByText('build it').closest('article')!.className).not.toMatch(/opacity-60/);
+
+    // The open turn behind it ends and the backend promotes the queued row, as the reconcile loop
+    // does; the page picks this up on its next poll of the main thread.
+    state.mainThread = {
+      ...state.mainThread,
+      native: {
+        ...state.mainThread.native!,
+        deliveries: state.mainThread.native!.deliveries.map((delivery) =>
+          delivery.message_id === 'queued-1' ? { ...delivery, state: 'recorded' } : delivery
+        )
+      }
+    };
+
+    await waitFor(() => expect(within(bubble).queryByTestId('delivery-notice')).toBeNull(), {
+      timeout: 5000
+    });
+    expect(bubble.className).not.toMatch(/opacity-60/);
+  });
+
   it('locks and says so while the backend is unreachable', async () => {
     connectionState.current = {
       status: 'offline',
