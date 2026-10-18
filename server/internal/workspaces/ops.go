@@ -248,7 +248,8 @@ func (s *Service) settle(ctx context.Context, w wsRow, sess *kagentapi.Session, 
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
-		lc := project(w, sess, create, time.Time{})
+		mode, reason := publicationOf(ctx, q, s.GitPush.enabled(), w)
+		lc := project(w, sess, create, time.Time{}, mode, reason)
 		return []events.Draft{{UserID: w.UserID, Type: events.TypeWorkspaceUpdated, Payload: api.EventWorkspaceUpdated{Workspace: lc}}}, nil
 	})
 }

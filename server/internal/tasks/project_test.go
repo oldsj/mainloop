@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 )
@@ -107,6 +109,40 @@ func TestProjectionIgnoresAnotherBranchOrRepo(t *testing.T) {
 		if got := r.view(r.own, id).Projection; got.PrNumber != nil || string(got.PrState) != "unknown" {
 			t.Fatalf("projection took %+v: %+v", o, got)
 		}
+	}
+}
+
+func environmentJSON(version string) string {
+	return `{"environment_id":"e-` + version + `","image":"img:` + version + `","platform":"linux/amd64","policy_identity":"pol-` + version + `","version_id":"` + version + `"}`
+}
+
+// TestProjectionEnvironmentVersionFollowsCurrentAttempt checks that a task's projection reports
+// the environment version of its current attempt, not an attempt with no recorded environment
+// and not a superseded one left behind by a retry.
+func TestProjectionEnvironmentVersionFollowsCurrentAttempt(t *testing.T) {
+	r := newRig(t)
+	id := r.mustCreate(r.own, tasks.CreateInput{ProjectID: "p1"})
+	if got := r.view(r.own, id).Projection.EnvironmentVersionId; got != nil {
+		t.Fatalf("environment_version_id before any attempt = %v, want nil", *got)
+	}
+
+	first := r.attempt(id, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-p1")
+	r.exec(`UPDATE task_attempts SET environment = $2::jsonb WHERE id = $1`, first, environmentJSON("v1"))
+	if got := r.view(r.own, id).Projection.EnvironmentVersionId; got == nil || *got != "v1" {
+		t.Fatalf("environment_version_id = %v, want v1", got)
+	}
+
+	// A retry supersedes the first attempt with a new one on a different environment version;
+	// the projection must follow the task's current attempt.
+	second := uuid.NewString()
+	r.exec(`UPDATE task_attempts SET state = 'superseded' WHERE id = $1`, first)
+	r.exec(`INSERT INTO task_attempts (id, task_id, number, profile_id, native_provider, configuration_revision,
+	        agent_namespace, agent_name, role, depth, state, binding_id, capacity_held, predecessor_id, environment)
+	        VALUES ($1, $2, 2, 'claude', 'claude', 'native-v1', 'kagent', 'agent', 'supervisor', 1, 'active', 'sup-p2', true, $3, $4::jsonb)`,
+		second, id, first, environmentJSON("v2"))
+	r.exec(`UPDATE tasks SET current_attempt_id = $1 WHERE id = $2`, second, id)
+	if got := r.view(r.own, id).Projection.EnvironmentVersionId; got == nil || *got != "v2" {
+		t.Fatalf("environment_version_id after retry = %v, want v2", got)
 	}
 }
 

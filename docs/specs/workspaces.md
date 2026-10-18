@@ -132,9 +132,7 @@ History before `e776537` describes the retired Python backend. Where other text 
 
 ### Proposed, not built
 
-- Checkout SHA resolution and lifecycle publication projection. The Git read/push transports and
-  per-workspace MCP grants are implemented above, but the lifecycle response still reports
-  `publication_mode: read_only` with reason `disabled`; it does not yet project the push grant.
+- Checkout SHA resolution.
 
 ## React status (migration slice F8)
 
