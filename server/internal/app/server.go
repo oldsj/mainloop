@@ -107,7 +107,7 @@ type Deps struct {
 	Schedules *schedules.Service
 	// Merge serves the owner's read of a merge proposal's details. Nil answers that route with 503.
 	Merge *merge.Service
-	// Devloop serves the owner's view of the mainloop-dev lease. Nil answers those routes with 501
+	// Devloop serves the owner's view of the mainloop-staging lease. Nil answers those routes with 501
 	// (the fallback), since devloop's own operator flag already covers "not configured".
 	Devloop *devloop.LeaseService
 }

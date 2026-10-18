@@ -14,7 +14,7 @@ import (
 const OwnerHolder = "owner"
 
 // DevloopAPI serves the owner's REST view of the lease: GET to read it without acquiring it,
-// POST to acquire or release it as the owner. `make dev-live` acquires it this way (see
+// POST to acquire or release it as the owner. `make staging` acquires it this way (see
 // docs/dev-environment.md); task agents use the dev_lease_acquire/dev_lease_release MCP tools.
 type DevloopAPI struct {
 	Lease *LeaseService

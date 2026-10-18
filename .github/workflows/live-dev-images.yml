@@ -1,12 +1,12 @@
 name: Publish live dev images
 
-# --target=dev images for the shared mainloop-dev instance (`make dev-live`).
+# --target=dev images for the shared mainloop-staging instance (`make staging`).
 # DevSpace pulls the mutable tag and syncs the working tree over the image source.
 #
 #   mainloop-server-dev:<sha7> and :main
 #   mainloop-web-dev:<sha7> and :main
 #
-# The dev-live overlay pins :main, so the mutable tag is what the shared instance pulls.
+# The staging overlay pins :main, so the mutable tag is what the shared instance pulls.
 
 on:
   push:

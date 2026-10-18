@@ -58,7 +58,7 @@ New server code goes in `server/` (Go). New frontend code goes in `web/` (React 
 - **Mobile-first**: Design for mobile, enhance for desktop
 - **Delete old code**: Don't keep unused code for backward compatibility
 - **Avoid over-engineering**: Keep solutions simple and focused
-- **Use Make targets from the repo root**: `make lint`, `make fmt` and the `dev-live` targets
+- **Use Make targets from the repo root**: `make lint`, `make fmt` and the `staging` targets
 
 ## Project Structure
 

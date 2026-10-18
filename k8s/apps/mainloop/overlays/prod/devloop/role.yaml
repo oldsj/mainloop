@@ -1,12 +1,12 @@
-# What the production backend may do in mainloop-dev: read pod status and logs, and exec into
-# mainloop-dev's own containers to copy a synced commit and check the backend's /health. Namespaced
-# on purpose (no ClusterRole), so nothing outside mainloop-dev is ever granted. See
+# What the production backend may do in mainloop-staging: read pod status and logs, and exec into
+# mainloop-staging's own containers to copy a synced commit and check the backend's /health. Namespaced
+# on purpose (no ClusterRole), so nothing outside mainloop-staging is ever granted. See
 # docs/specs/devloop.md.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: mainloop-devloop
-  namespace: mainloop-dev
+  namespace: mainloop-staging
 rules:
   - apiGroups: ['']
     resources: [pods]

@@ -77,7 +77,7 @@ func TestDevSyncRequiresTheLease(t *testing.T) {
 	a := seedDevloopAgent(t, h)
 
 	_, r := h.call(ordinary, a.Token, "dev_sync", map[string]any{"commit_sha": prTip})
-	if !r.Result.IsError || r.text() != "[lease_required] acquire the mainloop-dev lease with dev_lease_acquire first" {
+	if !r.Result.IsError || r.text() != "[lease_required] acquire the mainloop-staging lease with dev_lease_acquire first" {
 		t.Fatalf("dev_sync without the lease = error %v, %q, want the lease_required refusal", r.Result.IsError, r.text())
 	}
 	var n int
@@ -100,7 +100,7 @@ func TestDevSyncDescriptionTellsAgentsWhenToUseItAndWhatItProves(t *testing.T) {
 		if !strings.HasPrefix(tool.Description, "Use after pushing and before open_pull_request.") {
 			t.Errorf("dev_sync description = %q, want it to start with when to use it", tool.Description)
 		}
-		if !strings.Contains(tool.Description, "Succeeds only when mainloop-dev is healthy and the smoke passes") {
+		if !strings.Contains(tool.Description, "Succeeds only when mainloop-staging is healthy and the smoke passes") {
 			t.Errorf("dev_sync description = %q, want it to say what success proves", tool.Description)
 		}
 		return

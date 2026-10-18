@@ -233,7 +233,7 @@ func RevokeInTx(ctx context.Context, q *dbq.Queries, bindingID string) (int, err
 	if err != nil {
 		return 0, fmt.Errorf("agentauth: revoke credentials of %s: %w", bindingID, err)
 	}
-	// A binding that ends also gives up its place in the mainloop-dev lease queue and the lease
+	// A binding that ends also gives up its place in the mainloop-staging lease queue and the lease
 	// itself (docs/specs/devloop.md); both are plain rows, so this stays in the caller's transaction.
 	if err := q.DropDevloopSessionQueueEntries(ctx, bindingID); err != nil {
 		return 0, fmt.Errorf("agentauth: drop devloop queue entries of %s: %w", bindingID, err)

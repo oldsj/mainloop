@@ -6,7 +6,7 @@ policy, and CI. It drives one task from chat to a merged documentation PR and
 spends quota. It never answers approval cards; configure the test project's
 policy beforehand or expect a bounded failure while approval is pending.
 
-The read-only checks (`mainloop smoke --read-only`) cost no quota and can run after any deploy. See [Development environment](dev-environment.md#live-dev-instance) for those and for the port-forwards this command needs.
+The read-only checks (`mainloop smoke --read-only`) cost no quota and can run after any deploy. See [Development environment](dev-environment.md#staging-instance) for those and for the port-forwards this command needs.
 
 ## Run
 

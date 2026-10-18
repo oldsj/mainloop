@@ -10,7 +10,7 @@ import (
 // switch that allows destroying it. It does not require the agent token key.
 type Migrate struct {
 	DB Database
-	// AllowReset permits `migrate reset`, which drops the whole schema. Only the dev-live overlay
+	// AllowReset permits `migrate reset`, which drops the whole schema. Only the staging overlay
 	// sets it, and only the exact value 1 counts.
 	AllowReset bool `env:"-"`
 	// ResetFlag is the raw MAINLOOP_ALLOW_RESET value; AllowReset is derived from it.

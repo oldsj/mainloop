@@ -20,7 +20,7 @@ import (
 // readOnlyTools are the contract tools that never write. A tool added to api/mcp-tools.json must
 // be named here or given a case in writeCases, which is what keeps the revoked-credential table
 // below complete. dev_status, dev_logs and dev_smoke are not listed here even though they only
-// read mainloop-dev: each still inserts a devloop_operations row in Mainloop's own database, so
+// read mainloop-staging: each still inserts a devloop_operations row in Mainloop's own database, so
 // they are write cases too.
 var readOnlyTools = []string{"get_pull_request_merge_status", "task_get", "task_history", "task_list", "topics", "whoami"}
 

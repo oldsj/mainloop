@@ -1,15 +1,15 @@
-# Lets mainloop-dev publish and revoke its per-session MCP credential Secrets
-# (mainloop-dev-mcp-*) in kagent. The Role is production's, defined in
+# Lets mainloop-staging publish and revoke its per-session MCP credential Secrets
+# (mainloop-staging-mcp-*) in kagent. The Role is production's, defined in
 # k8s/integrations/kagent/agent-tokens.yaml and managed by Argo; only this binding is new.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: mainloop-dev-agent-tokens
+  name: mainloop-staging-agent-tokens
   namespace: kagent
 subjects:
   - kind: ServiceAccount
     name: mainloop-backend
-    namespace: mainloop-dev
+    namespace: mainloop-staging
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

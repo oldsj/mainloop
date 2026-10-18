@@ -27,6 +27,6 @@ data:
   # Owner decision 2026-10-17: Mainloop's own PRs that touch protected paths merge on green
   # without an owner card. Matches are still recorded on the proposal (docs/specs/merge-policy.md).
   MAINLOOP_MERGE_PROTECTED_AUTO: 'true'
-  # On by owner decision 2026-10-17: synced agent code runs in mainloop-dev with credentials shared
+  # On by owner decision 2026-10-17: synced agent code runs in mainloop-staging with credentials shared
   # with production; see "The boundary this does not give you" in docs/specs/devloop.md.
   MAINLOOP_DEVLOOP_ENABLED: 'true'

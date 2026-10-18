@@ -38,7 +38,7 @@ tags:
   - name: schedules
     description: Scheduled agent runs proxied from kagent; schedules, triggers and executions.
   - name: devloop
-    description: The one live-sync lease on the shared mainloop-dev instance.
+    description: The one live-sync lease on the shared mainloop-staging instance.
 paths:
   /activity:
     get:
@@ -176,7 +176,7 @@ paths:
       tags:
         - devloop
       summary: Get Devloop Lease
-      description: Read the mainloop-dev live-sync lease without acquiring it or joining its queue.
+      description: Read the mainloop-staging live-sync lease without acquiring it or joining its queue.
       operationId: getDevloopLease
       responses:
         '503':
@@ -196,7 +196,7 @@ paths:
       tags:
         - devloop
       summary: Acquire Devloop Lease
-      description: Acquire the mainloop-dev lease as the owner, or report the owner's place in its FIFO queue.
+      description: Acquire the mainloop-staging lease as the owner, or report the owner's place in its FIFO queue.
       operationId: acquireDevloopLease
       responses:
         '503':
@@ -216,7 +216,7 @@ paths:
       tags:
         - devloop
       summary: Release Devloop Lease
-      description: Release the mainloop-dev lease if the owner holds it; a no-op otherwise.
+      description: Release the mainloop-staging lease if the owner holds it; a no-op otherwise.
       operationId: releaseDevloopLease
       responses:
         '503':
@@ -237,7 +237,7 @@ paths:
         - devloop
       summary: List Devloop Syncs
       description: >-
-        The dev_sync operations on mainloop-dev, newest first (at most 50): the commit, the verdict, and
+        The dev_sync operations on mainloop-staging, newest first (at most 50): the commit, the verdict, and
         what the health and smoke checks said. session_id narrows to one task session.
       operationId: listDevloopOperations
       parameters:
@@ -6408,7 +6408,7 @@ components:
           description: Why the sync failed, or what it is waiting on.
         health_ok:
           type: boolean
-          description: Whether mainloop-dev's backend reported healthy after the copy. Absent until the check ran.
+          description: Whether mainloop-staging's backend reported healthy after the copy. Absent until the check ran.
         migrate_ok:
           type: boolean
           description: Whether migrate up succeeded after the copy. Absent until it ran.

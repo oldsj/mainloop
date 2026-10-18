@@ -1,21 +1,21 @@
-# Live dev loop on mainloop-dev
+# Dev loop on mainloop-staging
 
 Status: slice 1 (lease, `dev_sync`, `dev_status`) implemented in `server/internal/devloop` and on in
 production by owner decision 2026-10-17, not proven live. Slice 2 (`dev_logs`, `dev_smoke`) is not built.
 
 ## What it does
 
-A task agent of project `oldsj/mainloop` can iterate on the shared `mainloop-dev` instance
-(`docs/dev-environment.md#live-dev-instance`) the way an operator's `make dev-live` does: acquire
+A task agent of project `oldsj/mainloop` can iterate on the shared `mainloop-staging` instance
+(`docs/dev-environment.md#staging-instance`) the way an operator's `make staging` does: acquire
 the one lease, push its branch through the existing git push transport, sync the pushed commit
-into mainloop-dev and read pod status. The task's
+into mainloop-staging and read pod status. The task's
 workspace never receives a Kubernetes credential or kubeconfig: every devloop MCP tool is served by
 `serve-mcp`, which reaches only Mainloop's own database, never Kubernetes. The Kubernetes- and
 GitHub-reaching work runs in `serve-api`'s reconcile loop, the same process and credential that
 already issue the MCP and git capability Secrets (`server/internal/k8ssecrets`).
 
-**The boundary this does not give you.** The code a task syncs runs inside mainloop-dev's own pods,
-with mainloop-dev's credentials, not in the task's workspace. Today those pods share production's
+**The boundary this does not give you.** The code a task syncs runs inside mainloop-staging's own pods,
+with mainloop-staging's credentials, not in the task's workspace. Today those pods share production's
 secret set (the agent token key, the GitHub App private key, the kagent control token), their
 ServiceAccount can read and write Secrets in the kagent namespace, and the namespace's
 NetworkPolicies limit ingress only, so egress is open. A synced commit can therefore reach all of
@@ -32,12 +32,12 @@ grant — the same population `open_pull_request` is visible to). A further hand
 refuses every call whose session is not bound to project `oldsj/mainloop`, because the flag alone
 cannot express a project restriction.
 
-- `dev_lease_acquire`, `dev_lease_release`: the one lease on mainloop-dev.
+- `dev_lease_acquire`, `dev_lease_release`: the one lease on mainloop-staging.
 - `dev_sync(commit_sha)`: sync a commit already pushed through the git push transport into
-  mainloop-dev, migrate its database, and check it is healthy and passes the read-only smoke.
+  mainloop-staging, migrate its database, and check it is healthy and passes the read-only smoke.
   Requires holding the lease. Its description starts "Use after pushing and before
-  open_pull_request." and says it succeeds only when mainloop-dev is healthy and the smoke passes.
-- `dev_status`: read mainloop-dev's pod status.
+  open_pull_request." and says it succeeds only when mainloop-staging is healthy and the smoke passes.
+- `dev_status`: read mainloop-staging's pod status.
 
 `dev_sync` and `dev_status` each write one `devloop_operations` row and poll it for up to a bound
 (4 minutes for `dev_sync`, 15s for `dev_status`), returning the row's state and detail either way:
@@ -54,7 +54,7 @@ fails with a detail naming the lease and copies nothing.
 
 ## The lease
 
-One durable row (`devloop_lease`, singleton id `mainloop-dev`): `holder_session_id`,
+One durable row (`devloop_lease`, singleton id `mainloop-staging`): `holder_session_id`,
 `acquired_at`, `last_used_at`, `idle_timeout_seconds` (default 1200 = 20 minutes). A FIFO queue
 (`devloop_lease_queue`) orders waiting sessions by first request, so a retried or polling acquire
 never jumps the line. Every acquire call refreshes the caller's `last_seen_at`; an entry not seen
@@ -73,7 +73,7 @@ call does, finding the lease free.
 
 `GET /devloop/lease` (owner API) reads the lease without acquiring it or joining the queue;
 `POST /devloop/lease/acquire` and `.../release` act as the fixed owner holder (`devloop.OwnerHolder`,
-distinct from any MCP session id), for `make dev-live` (`docs/dev-environment.md`). None of these
+distinct from any MCP session id), for `make staging` (`docs/dev-environment.md`). None of these
 three are yet wired into a task-view UI component: a known gap, see Not implemented below.
 
 ## Sync
@@ -94,7 +94,7 @@ loop to drive (`server/internal/reconcile`):
    `*.test` for `server/`; `node_modules/`, `dist/`, `e2e/`, `playwright-report/`,
    `test-results/` for `web/`), and mirrored onto each target container by piping a tar stream to a
    short `sh` script over a Kubernetes exec (`k8s.io/client-go/tools/remotecommand`): the backend,
-   mcp and git containers' `/src`, and the frontend container's `/app/web`. mainloop-dev's existing
+   mcp and git containers' `/src`, and the frontend container's `/app/web`. mainloop-staging's existing
    `watchexec` and Vite reload pick up the change; devloop restarts nothing itself.
 
    **Each copy mirrors the commit.** The archive ends with a manifest of every path it holds. The
@@ -130,7 +130,7 @@ loop to drive (`server/internal/reconcile`):
       leave the second one's file silently skipped, and a version applied from an abandoned branch
       makes a later, lower main migration fail with "missing (out-of-order)". The detail then names
       the recovery: the owner runs `mainloop migrate reset` in the backend container with
-      `MAINLOOP_ALLOW_RESET=1`, which wipes mainloop-dev's data, then syncs again. The backend's
+      `MAINLOOP_ALLOW_RESET=1`, which wipes mainloop-staging's data, then syncs again. The backend's
       tree mirrors the synced commit, so the reset applies only that commit's migrations and does
       not bring the abandoned branch's file back. `dev_sync` never resets it. The tail
       of the output (25 lines, 3000 bytes, cut on a character boundary) is attached on failure.
@@ -138,13 +138,13 @@ loop to drive (`server/internal/reconcile`):
       `watchexec` restarts it), one exec per second, for up to `HealthTimeout` (default 180s: a stale
       instance rebuilds all three Go containers under `go run`), that first checks the commit marker
       and then runs `curl` against `127.0.0.1:8000`, `:8002` and `:8003` `/health` (API, MCP, git
-      read), so the smoke cannot race the mcp and git rebuilds. It does not call mainloop-dev over
+      read), so the smoke cannot race the mcp and git rebuilds. It does not call mainloop-staging over
       HTTP: the namespace's NetworkPolicy admits port 8000 only from the frontend pod and the
       tailscale gateway, so a call from the production backend would be dropped. On a miss the detail
       carries the backend's last 20 log lines, which is where a compile error shows.
    3. `go run ./cmd/mainloop smoke --read-only` against the pod's loopback listeners (API `:8000`,
-      MCP `:8002`, git read `:8003`, git push `:8004`; mainloop-dev runs with `DEV_MODE`, so the
-      Host guard accepts loopback). On mainloop-dev, where git transport and the push gate are off,
+      MCP `:8002`, git read `:8003`, git push `:8004`; mainloop-staging runs with `DEV_MODE`, so the
+      Host guard accepts loopback). On mainloop-staging, where git transport and the push gate are off,
       it proves the owner-API reads against the real database, an MCP listener that is up and
       refusing unauthenticated calls, and two git listeners that are up but off (their checks are
       reported as skipped). It sends no chat turn, writes nothing and spends no quota. Bounded by `SmokeTimeout` (default 90s). A
@@ -202,12 +202,12 @@ distinct remote state to observe first, unlike a git push or a GitHub mutation.
 
 ## Operator configuration
 
-| Setting                                    | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MAINLOOP_DEVLOOP_ENABLED`                 | Exactly `true` turns on tool visibility ([agentauth.Policy.DevLoop]) and registers the operations reconcile loop in `serve-api`. Off in the base config; on in the prod overlay by owner decision (see the boundary paragraph above).                                                                                                                                                                                                                                                                                                                                                                                                     |
-| GitHub App configured                      | Required for `dev_sync`'s fetch step; without it, `dev_sync` fails with a clear detail and the other tools still work.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| In-cluster (`KUBERNETES_SERVICE_HOST` set) | Required for the Kubernetes client (`devloop.NewInClusterPods`); outside a cluster `serve-api` builds no `OperationsService` and every devloop tool answers `[unavailable] devloop is not available`.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| RBAC                                       | `k8s/apps/mainloop/overlays/prod/devloop/` holds a namespaced `Role` in `mainloop-dev` (`pods` get/list, `pods/log` get, `pods/exec` create) and a `RoleBinding` to the production `mainloop-backend` ServiceAccount. There is no ClusterRole. It is applied by Argo as a second source of `mainloop-dev-config`, pinned to the same mainloop revision as the production app. Namespace mainloop-dev is owned by the cluster repository's Argo Application `mainloop-dev-config` (automated prune and selfHeal). A hand-applied copy is not tracked by it, `make dev-live-purge` deletes it with the namespace, and nothing recreates it. |
+| Setting                                    | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MAINLOOP_DEVLOOP_ENABLED`                 | Exactly `true` turns on tool visibility ([agentauth.Policy.DevLoop]) and registers the operations reconcile loop in `serve-api`. Off in the base config; on in the prod overlay by owner decision (see the boundary paragraph above).                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| GitHub App configured                      | Required for `dev_sync`'s fetch step; without it, `dev_sync` fails with a clear detail and the other tools still work.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| In-cluster (`KUBERNETES_SERVICE_HOST` set) | Required for the Kubernetes client (`devloop.NewInClusterPods`); outside a cluster `serve-api` builds no `OperationsService` and every devloop tool answers `[unavailable] devloop is not available`.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| RBAC                                       | `k8s/apps/mainloop/overlays/prod/devloop/` holds a namespaced `Role` in `mainloop-staging` (`pods` get/list, `pods/log` get, `pods/exec` create) and a `RoleBinding` to the production `mainloop-backend` ServiceAccount. There is no ClusterRole. It is applied by Argo as a second source of `mainloop-staging-config`, pinned to the same mainloop revision as the production app. Namespace mainloop-staging is owned by the cluster repository's Argo Application `mainloop-staging-config` (automated prune and selfHeal). A hand-applied copy is not tracked by it, `make staging-purge` deletes it with the namespace, and nothing recreates it. |
 
 No credential, kubeconfig or Kubernetes client ever reaches a workspace: `serve-mcp`'s process
 (where every devloop tool handler runs) never imports a Kubernetes client package at all, the same
@@ -233,14 +233,14 @@ entries.
 Not built (on in production by owner decision 2026-10-17; these would narrow the boundary above,
 and none is required to use it):
 
-- mainloop-dev has its own agent token key, instead of production's.
-- mainloop-dev holds no write-capable GitHub App private key.
-- mainloop-dev has its own kagent control token, not production's.
-- The mainloop-dev ServiceAccount has no broad Secret access in the kagent namespace.
-- An egress NetworkPolicy for mainloop-dev, so synced code cannot reach arbitrary destinations.
-- The Role and RoleBinding applied by the `mainloop-dev-config` Application (see the RBAC row).
+- mainloop-staging has its own agent token key, instead of production's.
+- mainloop-staging holds no write-capable GitHub App private key.
+- mainloop-staging has its own kagent control token, not production's.
+- The mainloop-staging ServiceAccount has no broad Secret access in the kagent namespace.
+- An egress NetworkPolicy for mainloop-staging, so synced code cannot reach arbitrary destinations.
+- The Role and RoleBinding applied by the `mainloop-staging-config` Application (see the RBAC row).
 - The production backend pod's mcp and git containers still mount the `mainloop-backend`
-  ServiceAccount token, which the RoleBinding would give `pods/exec` in mainloop-dev (and which
+  ServiceAccount token, which the RoleBinding would give `pods/exec` in mainloop-staging (and which
   holds the kagent Secret grant). Splitting them from the container that runs the reconcile loop
   is deferred until those grants are reconsidered.
 
@@ -263,6 +263,6 @@ queue entries do not hold the lease; a session that ends drops its hold and its 
 status is a definite failure even when its message contains words like "reset"; the ten-minute
 deadline runs from the request.
 
-Not proven: any run against a real mainloop-dev instance (including the in-container `go run` migrate and smoke commands and their working directory and environment), a deployed image, the RBAC manifests
-applied to a live cluster, or `scripts/dev-live.sh`'s lease coordination against a real
+Not proven: any run against a real mainloop-staging instance (including the in-container `go run` migrate and smoke commands and their working directory and environment), a deployed image, the RBAC manifests
+applied to a live cluster, or `scripts/staging.sh`'s lease coordination against a real
 control-plane owner API.
