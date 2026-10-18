@@ -1,9 +1,15 @@
 import { DeliveryNotice } from './DeliveryNotice';
 
-/** A message that was not sent (with Retry), a failed one with no Retry, and an unconfirmed one. */
+/**
+ * A message that was not sent (with Retry), a failed one with no Retry, an unconfirmed one, and
+ * one still queued behind the turn in flight.
+ */
 export default function DeliveryNoticePreview() {
   return (
     <div className="p-md gap-sm flex flex-col">
+      <DeliveryNotice
+        notice={{ state: 'queued', label: 'Queued', reason: null, retryable: false }}
+      />
       <DeliveryNotice
         notice={{
           state: 'failed',

@@ -38,6 +38,18 @@ test('uncertain deliveries are flagged but never offered a retry', () => {
   expect(n?.retryable).toBe(false);
 });
 
+test('a queued delivery is flagged pending, not failed or uncertain, and never offered a retry', () => {
+  const n = deliveryNotices([row('m1', 'queued')]).get('m1');
+  expect(n?.state).toBe('queued');
+  expect(n?.label).toBe('Queued');
+  expect(n?.retryable).toBe(false);
+});
+
+test('a queued delivery is superseded once it is promoted: the notice follows the live state', () => {
+  const promoted = [row('m1', 'recorded')];
+  expect(deliveryNotices(promoted).get('m1')).toBeUndefined();
+});
+
 test('a report delivery is never retried as a user message', () => {
   const n = deliveryNotices([row('m1', 'failed', 'not sent: x', 'report')]).get('m1');
   expect(n?.retryable).toBe(false);
