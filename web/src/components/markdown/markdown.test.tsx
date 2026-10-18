@@ -1,3 +1,11 @@
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet,
+  RouterProvider
+} from '@tanstack/react-router';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { Markdown } from './markdown';
@@ -91,6 +99,29 @@ describe('links', () => {
     const link = screen.getByRole('link', { name: 'https://example.test/x' });
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('renders a task link as an in-app route, not a new-tab link', async () => {
+    const root = createRootRoute({ component: Outlet });
+    const router = createRouter({
+      routeTree: root.addChildren([
+        createRoute({
+          getParentRoute: () => root,
+          path: '/',
+          component: () => <Markdown>{'[the task](/tasks/task-1)'}</Markdown>
+        }),
+        createRoute({
+          getParentRoute: () => root,
+          path: '/tasks/$id',
+          component: () => <p>Task page</p>
+        })
+      ]),
+      history: createMemoryHistory({ initialEntries: ['/'] })
+    });
+    render(<RouterProvider router={router} />);
+    const link = await screen.findByRole('link', { name: 'the task' });
+    expect(link).toHaveAttribute('href', '/tasks/task-1');
+    expect(link).not.toHaveAttribute('target');
   });
 });
 

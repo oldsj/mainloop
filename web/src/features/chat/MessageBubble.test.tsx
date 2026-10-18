@@ -1,3 +1,11 @@
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet,
+  RouterProvider
+} from '@tanstack/react-router';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -150,6 +158,41 @@ describe('MessageBubble', () => {
       />
     );
     expect(screen.queryByTestId('child-report')).toBeNull();
+  });
+
+  describe('task references', () => {
+    function renderMessageAt(path: string, content: string) {
+      const root = createRootRoute({ component: Outlet });
+      const router = createRouter({
+        routeTree: root.addChildren([
+          createRoute({
+            getParentRoute: () => root,
+            path: '/',
+            component: () => (
+              <MessageBubble message={messageFixture({ role: 'assistant', content })} />
+            )
+          }),
+          createRoute({
+            getParentRoute: () => root,
+            path: '/tasks/$id',
+            component: () => <p>Task page</p>
+          })
+        ]),
+        history: createMemoryHistory({ initialEntries: [path] })
+      });
+      render(<RouterProvider router={router} />);
+    }
+
+    it('renders a task reference as a clickable in-app link and navigates on click', async () => {
+      renderMessageAt(
+        '/',
+        'See [Fix sweep connection pinning](/tasks/158f277e-83bc-4584-9b29-88d217542832)'
+      );
+      const link = await screen.findByRole('link', { name: 'Fix sweep connection pinning' });
+      expect(link).toHaveAttribute('href', '/tasks/158f277e-83bc-4584-9b29-88d217542832');
+      await userEvent.click(link);
+      expect(screen.getByText('Task page')).toBeInTheDocument();
+    });
   });
 
   describe('delivery notice', () => {
