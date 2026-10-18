@@ -418,7 +418,7 @@ describe('sending', () => {
     expect(loadDraft(CONVERSATION_ID)).toBe('held');
   });
 
-  it('locks the composer while a turn is in flight', async () => {
+  it('shows a working placeholder, but never locks the composer, while a turn is in flight', async () => {
     setup(
       existing({
         mainThread: mainThreadFixture({
@@ -428,8 +428,50 @@ describe('sending', () => {
       })
     );
     await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
-    expect(input()).toBeDisabled();
+    expect(input()).toBeEnabled();
     expect(screen.getByTestId('mt-state')).toHaveTextContent('ready');
+  });
+
+  it('lets the owner type and send a message while a turn is in flight, queued behind it', async () => {
+    const { state } = setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({ turn_in_flight: true })
+        })
+      })
+    );
+    await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
+    expect(input()).toBeEnabled();
+
+    // The server durably queues a send behind an open turn instead of refusing it: 202, not 409.
+    server.use(
+      http.post(`${API_URL}/chat`, async ({ request }) => {
+        state.chatPosts.push((await request.json()) as ChatBackendState['chatPosts'][number]);
+        return HttpResponse.json(
+          {
+            conversation_id: CONVERSATION_ID,
+            message: null,
+            spawned_session_id: null,
+            pending: true,
+            delivery_message_id: 'queued-1',
+            status: 'queued'
+          },
+          { status: 202 }
+        );
+      })
+    );
+
+    await userEvent.type(input(), 'one more thing{Enter}');
+
+    await waitFor(() =>
+      expect(state.chatPosts).toEqual([
+        { message: 'one more thing', conversation_id: CONVERSATION_ID }
+      ])
+    );
+    expect(screen.queryByTestId('send-error')).toBeNull();
+    expect(await screen.findByText('one more thing')).toBeInTheDocument();
+    expect(input()).toBeEnabled();
   });
 
   it('locks and says so while the backend is unreachable', async () => {
@@ -457,20 +499,22 @@ describe('sending', () => {
 });
 
 describe('the native /chat answer', () => {
-  it('locks the composer after a send and polls until the turn ends', async () => {
+  it('polls until the turn ends, without locking the composer', async () => {
     const { state, endTurn } = setup(existing());
     await screen.findByText('build it');
     await userEvent.type(input(), 'next step{Enter}');
-    // No message body came back, yet the bubble stays and the composer is locked.
+    // No message body came back, yet the bubble stays and the composer stays open.
     expect(await screen.findByText('next step')).toBeInTheDocument();
     await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
-    expect(input()).toBeDisabled();
+    expect(input()).toBeEnabled();
     expect(screen.getAllByText('next step')).toHaveLength(1);
 
     // Started by the send alone: the backend finishes the turn and no SSE event arrives.
     const reads = state.mainThreadReads;
     endTurn('All done.');
-    await waitFor(() => expect(input()).toBeEnabled(), { timeout: 5000 });
+    await waitFor(() => expect(input()).not.toHaveAttribute('placeholder', 'Working…'), {
+      timeout: 5000
+    });
     expect(state.mainThreadReads).toBeGreaterThan(reads);
     expect(await screen.findByText('All done.')).toBeInTheDocument();
     expect(screen.getAllByText('next step')).toHaveLength(1);
@@ -766,7 +810,7 @@ describe('staying current', () => {
     expect(await screen.findByText('Finished the build.')).toBeInTheDocument();
   });
 
-  it('polls while a turn is in flight and unlocks when it ends', async () => {
+  it('polls while a turn is in flight and clears the working placeholder when it ends', async () => {
     const { state } = setup(
       existing({
         mainThread: mainThreadFixture({
@@ -775,7 +819,8 @@ describe('staying current', () => {
         })
       })
     );
-    await waitFor(() => expect(input()).toBeDisabled());
+    await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
+    expect(input()).toBeEnabled();
     state.mainThread = mainThreadFixture({
       conversation_id: CONVERSATION_ID,
       native: nativeFixture({ turn_in_flight: false })
@@ -785,7 +830,9 @@ describe('staying current', () => {
       messageFixture({ id: 'm3', role: 'assistant', content: 'Done.' })
     ];
     // No SSE event: the poll alone picks it up.
-    await waitFor(() => expect(input()).toBeEnabled(), { timeout: 5000 });
+    await waitFor(() => expect(input()).not.toHaveAttribute('placeholder', 'Working…'), {
+      timeout: 5000
+    });
     // The turn ending also re-reads the conversation, so the last reply is not missed.
     expect(await screen.findByText('Done.')).toBeInTheDocument();
   });
@@ -901,7 +948,7 @@ describe('the main provider', () => {
     expect(state.providerPosts).toHaveLength(0);
   });
 
-  it('holds the selection and the main input while a turn is open', async () => {
+  it('holds the selection while a turn is open, but leaves the main input open to a queued send', async () => {
     setup({
       mainThread: mainThreadFixture({
         conversation_id: CONVERSATION_ID,
@@ -914,7 +961,7 @@ describe('the main provider', () => {
     });
     await screen.findByText('build it');
     expect(providerSelect()).toBeDisabled();
-    expect(input()).toBeDisabled();
+    expect(input()).toBeEnabled();
   });
 
   it('locks the selection and the main input while the provider is preparing', async () => {
@@ -1166,17 +1213,17 @@ describe('the main lock while a send, a stop or a load is in flight', () => {
     expect(input()).toBeDisabled();
 
     release();
-    // The send was recorded, so the turn runs and the lock holds until it ends.
+    // The send was recorded, so the turn runs and the selection lock holds until it ends.
     await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
     expect(providerSelect()).toBeDisabled();
     endTurn('done');
-    await waitFor(() => expect(input()).toBeEnabled(), { timeout: 5000 });
-    expect(providerSelect()).toBeEnabled();
+    await waitFor(() => expect(providerSelect()).toBeEnabled(), { timeout: 5000 });
+    expect(input()).not.toHaveAttribute('placeholder', 'Working…');
   });
 
-  it('locks the selection and the main input while a stop is in flight', async () => {
-    // The turn is in flight, so the lock also comes from the turn rule. The held stop is what
-    // shows the lock holding while the stop itself is pending.
+  it('locks the selection while a stop is in flight, but leaves the main input open', async () => {
+    // The provider selection is held by the turn rule and by the stop itself; the main input is
+    // never held by either, since a send while busy is durably queued rather than refused.
     const { state, endTurn, hold } = setup(
       existing({
         mainThread: mainThreadFixture({
@@ -1192,7 +1239,7 @@ describe('the main lock while a send, a stop or a load is in flight', () => {
     await waitFor(() => expect(state.stopped).toEqual([MAIN_SESSION_ID]));
     expect(screen.getByTestId('mt-stop-turn')).toHaveTextContent('stopping…');
     expect(providerSelect()).toBeDisabled();
-    expect(input()).toBeDisabled();
+    expect(input()).toBeEnabled();
 
     release();
     await waitFor(() =>
