@@ -29,6 +29,8 @@ type PodStatus struct {
 	// picked as a sync or health target.
 	Deleting   bool     `json:"deleting,omitempty"`
 	Containers []string `json:"containers"`
+	// ContainerRestarts is each container's own restart count; RestartCount is their sum.
+	ContainerRestarts map[string]int32 `json:"container_restarts,omitempty"`
 }
 
 // LogOptions bounds a log read.
@@ -97,6 +99,10 @@ func (p *K8sPods) ListPods(ctx context.Context, namespace, labelSelector string)
 		for _, cs := range pod.Status.ContainerStatuses {
 			st.Containers = append(st.Containers, cs.Name)
 			st.RestartCount += cs.RestartCount
+			if st.ContainerRestarts == nil {
+				st.ContainerRestarts = map[string]int32{}
+			}
+			st.ContainerRestarts[cs.Name] = cs.RestartCount
 			ready = ready && cs.Ready
 		}
 		st.Ready = ready
@@ -173,17 +179,66 @@ var ErrCopyInterrupted = errors.New("devloop: copy interrupted")
 // exitStatuser is what client-go's exec errors implement when the remote command ran and exited.
 type exitStatuser interface{ ExitStatus() int }
 
-// CopyTree extracts tarData (already rooted at destDir, see [FilterTar]) into destDir inside one
-// container by piping it to `tar -x`. It is the only write devloop makes inside a mainloop-dev
-// pod. An error that wraps [ErrCopyInterrupted] means the outcome is unknown; any other error is a
-// definite failure, tar's stderr included.
-func CopyTree(ctx context.Context, pods PodClient, namespace, pod, container, destDir string, tarData []byte) error {
-	stdout, stderr, err := pods.Exec(ctx, namespace, pod, container,
-		[]string{"tar", "-x", "-f", "-", "-C", destDir}, bytes.NewReader(tarData))
+// manifestFile is the entry [MirrorTar] adds as the archive's last, listing every path the archive
+// holds, and manifestEnd its final line. The copy script prunes against the manifest and removes it.
+const (
+	manifestFile = ".devloop-manifest"
+	manifestEnd  = "# devloop manifest end"
+)
+
+// mirrorScript makes the destination equal to the archive on stdin, apart from the excluded paths:
+// it extracts the archive over the destination, then deletes every path under it that is neither in
+// the archive's manifest nor excluded, files and links first and then the directories that are left
+// empty (a directory still holding an excluded path stays). $1 is the destination and the rest are
+// the excludes: "dir/" for a top-level directory, anything else a glob on the base name, the same
+// rules as [FilterTar]. Nothing is deleted unless tar succeeded and the manifest arrived whole, so
+// a cut or failed extraction leaves the old files in place next to the new ones.
+//
+// A path with a newline in its name cannot be told apart from two paths in find's output, so the
+// script refuses to prune when the destination holds one.
+//
+// It sticks to POSIX sh and the find, awk, sort and tail that both GNU (the Go server images) and
+// BusyBox (the alpine web image) provide, and prints nothing to stderr unless something went wrong.
+const mirrorScript = `cd "$1" || exit 1
+shift
+rm -f ` + manifestFile + `
+tar -x -f - || exit $?
+[ "$(tail -n 1 ` + manifestFile + ` 2>/dev/null)" = "` + manifestEnd + `" ] || { echo "devloop: the archive carried no complete manifest" >&2; exit 1; }
+n=$#
+for ex in "$@"; do
+  case $ex in
+    */) set -- "$@" -o -path "./${ex%/}" ;;
+    *) set -- "$@" -o -name "$ex" ;;
+  esac
+done
+shift "$n"
+nl='
+'
+if [ -n "$(find . \( -path ./` + manifestFile + ` "$@" \) -prune -o -name "*$nl*" -print)" ]; then
+  echo "devloop: a path under the destination has a newline in its name" >&2; exit 1
+fi
+find . \( -path ./` + manifestFile + ` "$@" \) -prune -o -print |
+  awk 'NR == FNR { keep[$0] = 1; next } $0 != "." && !(substr($0, 3) in keep)' ` + manifestFile + ` - |
+  LC_ALL=C sort -r |
+  while IFS= read -r p; do
+    if [ -d "$p" ] && [ ! -L "$p" ]; then rmdir -- "$p" 2>/dev/null || true; else rm -f -- "$p" || exit 1; fi
+  done || exit $?
+rm -f ` + manifestFile + `
+`
+
+// CopyTree mirrors tarData (from [MirrorTar], rooted at destDir) onto destDir inside one container
+// by piping it to [mirrorScript] over exec: new and changed files are written, and files the
+// archive does not hold are removed, except the paths exclude names (the same list the archive was
+// filtered with). It is the only write devloop makes inside a mainloop-dev pod. An error that wraps
+// [ErrCopyInterrupted] means the outcome is unknown; any other error is a definite failure, the
+// script's stderr included. Running it again with the same archive is safe.
+func CopyTree(ctx context.Context, pods PodClient, namespace, pod, container, destDir string, exclude []string, tarData []byte) error {
+	cmd := append([]string{"sh", "-c", mirrorScript, "sh", destDir}, exclude...)
+	stdout, stderr, err := pods.Exec(ctx, namespace, pod, container, cmd, bytes.NewReader(tarData))
 	if err != nil {
 		var exit exitStatuser
 		if ctx.Err() == nil && errors.As(err, &exit) {
-			return fmt.Errorf("devloop: copy to %s/%s: tar exited with status %d: %s", pod, container, exit.ExitStatus(), strings.TrimSpace(stderr))
+			return fmt.Errorf("devloop: copy to %s/%s: copy exited with status %d: %s", pod, container, exit.ExitStatus(), strings.TrimSpace(stderr))
 		}
 		if ctx.Err() != nil {
 			return fmt.Errorf("devloop: copy to %s/%s: %w", pod, container, ctx.Err())
@@ -191,7 +246,7 @@ func CopyTree(ctx context.Context, pods PodClient, namespace, pod, container, de
 		return fmt.Errorf("%w: copy to %s/%s: %w (stdout=%q stderr=%q)", ErrCopyInterrupted, pod, container, err, stdout, stderr)
 	}
 	if rest := unexpectedTarStderr(stderr); rest != "" {
-		return fmt.Errorf("devloop: copy to %s/%s: tar reported: %s", pod, container, rest)
+		return fmt.Errorf("devloop: copy to %s/%s: copy reported: %s", pod, container, rest)
 	}
 	return nil
 }
@@ -230,17 +285,36 @@ lines:
 // directories or matching one of its glob patterns. It mirrors the excludePaths devspace.yaml
 // already applies to the same two trees.
 func FilterTar(src io.Reader, prefix string, exclude []string) ([]byte, error) {
-	tr := tar.NewReader(src)
 	var out bytes.Buffer
-	tw := tar.NewWriter(&out)
+	if err := filterTarTo(&out, src, prefix, exclude, false); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// MirrorTar is [FilterTar] with a manifest of every path it kept appended as the last entry, which
+// [CopyTree] needs to delete what the archive no longer holds. A path with a newline in it cannot be
+// listed, so it fails the call instead of being copied unmanaged.
+func MirrorTar(src io.Reader, prefix string, exclude []string) ([]byte, error) {
+	var out bytes.Buffer
+	if err := filterTarTo(&out, src, prefix, exclude, true); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func filterTarTo(out io.Writer, src io.Reader, prefix string, exclude []string, manifest bool) error {
+	tr := tar.NewReader(src)
+	tw := tar.NewWriter(out)
 	prefix = strings.TrimSuffix(prefix, "/")
+	var list strings.Builder
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 		rel, ok := stripTarPrefix(hdr.Name, prefix)
 		if !ok || rel == "" || excludedTarEntry(rel, exclude) {
@@ -248,18 +322,34 @@ func FilterTar(src io.Reader, prefix string, exclude []string) ([]byte, error) {
 		}
 		hdr.Name = rel
 		if err := tw.WriteHeader(hdr); err != nil {
-			return nil, err
+			return err
 		}
 		if hdr.Typeflag == tar.TypeReg {
 			if _, err := io.CopyN(tw, tr, hdr.Size); err != nil {
-				return nil, err
+				return err
 			}
 		}
+		if manifest {
+			name := strings.TrimSuffix(rel, "/")
+			if strings.Contains(name, "\n") {
+				return fmt.Errorf("devloop: cannot mirror a path with a newline in it: %q", name)
+			}
+			if name == manifestFile {
+				return fmt.Errorf("devloop: the tree holds %s, which the copy reserves", manifestFile)
+			}
+			list.WriteString(name + "\n")
+		}
 	}
-	if err := tw.Close(); err != nil {
-		return nil, err
+	if manifest {
+		list.WriteString(manifestEnd + "\n")
+		if err := tw.WriteHeader(&tar.Header{Name: manifestFile, Mode: 0o644, Size: int64(list.Len()), Typeflag: tar.TypeReg}); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(tw, list.String()); err != nil {
+			return err
+		}
 	}
-	return out.Bytes(), nil
+	return tw.Close()
 }
 
 func stripTarPrefix(name, prefix string) (string, bool) {
