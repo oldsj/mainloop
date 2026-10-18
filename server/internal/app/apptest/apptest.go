@@ -42,9 +42,10 @@ func WithRemote(r projects.Remote) Option { return func(o *options) { o.remote =
 func WithTaskObserver(obs *github.TaskObserver) Option { return func(o *options) { o.observer = obs } }
 
 // Deps builds the services every API route needs over pool, which may be nil for a test that
-// reaches no database. Services whose runtime a test does not provide (workspaces, merge, preview)
-// are nil, so their routes answer 503; with a nil pool there are no tasks either. The caller sets
-// the fields it needs (DB, Hub, Registry, Preview) on the result.
+// reaches no database. Services whose runtime a test does not provide (workspaces, merge,
+// preview, devloop) are nil, so their routes answer 503; with a nil pool there are no tasks
+// either. The caller sets the fields it needs (DB, Hub, Registry, Preview, Devloop) on the
+// result.
 func Deps(t testing.TB, cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, opts ...Option) app.Deps {
 	t.Helper()
 	var o options

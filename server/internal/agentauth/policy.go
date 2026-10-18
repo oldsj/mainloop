@@ -26,6 +26,10 @@ const (
 	ToolMergePullRequest          = "merge_pull_request"
 	ToolMergePullRequestApproval  = "merge_pull_request_with_approval"
 	ToolGetPullRequestMergeStatus = "get_pull_request_merge_status"
+	ToolDevLeaseAcquire           = "dev_lease_acquire"
+	ToolDevLeaseRelease           = "dev_lease_release"
+	ToolDevSync                   = "dev_sync"
+	ToolDevStatus                 = "dev_status"
 )
 
 // AllTools lists every tool, in the order api/mcp-tools.json lists them.
@@ -35,6 +39,7 @@ var AllTools = []string{
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolDelegate, ToolTaskCancel, ToolReport,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
+	ToolDevLeaseAcquire, ToolDevLeaseRelease, ToolDevSync, ToolDevStatus,
 }
 
 // Surface is one of the two MCP endpoints. The approval-gated merge tool is served alone on its
@@ -86,6 +91,9 @@ func ValidPair(role dbstate.BindingRole, grant dbstate.MCPGrantKind) bool {
 type Policy struct {
 	// MergeTools turns the merge tools on (MAINLOOP_MERGE_TOOLS_ENABLED=true).
 	MergeTools bool
+	// DevLoop turns the devloop tools on (MAINLOOP_DEVLOOP_ENABLED=true). A handler-level check
+	// further limits them to tasks of the one allowed project; the flag alone decides visibility.
+	DevLoop bool
 }
 
 var (
@@ -95,6 +103,9 @@ var (
 	mergeTools     = []string{
 		ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 		ToolGetPullRequestMergeStatus,
+	}
+	devLoopTools = []string{
+		ToolDevLeaseAcquire, ToolDevLeaseRelease, ToolDevSync, ToolDevStatus,
 	}
 )
 
@@ -151,6 +162,9 @@ func (p Policy) actorTools(a Actor) []string {
 	}
 	if p.MergeTools && slices.Contains(tools, ToolOpenPullRequest) {
 		tools = append(tools, mergeTools...)
+	}
+	if p.DevLoop && slices.Contains(tools, ToolOpenPullRequest) {
+		tools = append(tools, devLoopTools...)
 	}
 	return tools
 }

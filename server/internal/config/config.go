@@ -48,6 +48,9 @@ type Config struct {
 	// a refusal instead of an approval card nobody can safely approve. The project's own approval
 	// policy is unaffected.
 	MergeProtectedAuto ExactTrue `env:"MAINLOOP_MERGE_PROTECTED_AUTO"`
+	// DevloopEnabled turns on the dev_* MCP tools (live sync to the shared mainloop-dev instance).
+	// Off by default; see docs/specs/devloop.md.
+	DevloopEnabled ExactTrue `env:"MAINLOOP_DEVLOOP_ENABLED"`
 
 	// MergeConfigurations is the operator allowlist of protected merge tool mappings.
 	MergeConfigurations MergeConfigurations `env:"MAINLOOP_MERGE_CONFIGURATIONS"`

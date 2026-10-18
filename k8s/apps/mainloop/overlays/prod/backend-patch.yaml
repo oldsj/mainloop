@@ -19,7 +19,7 @@ spec:
       annotations:
         # Pods read mainloop-config as env vars, which only load at start. Bump this whenever
         # config-patch.yaml changes so the rollout picks the new values up.
-        mainloop.olds.network/config-revision: '2'
+        mainloop.olds.network/config-revision: '3'
     spec:
       initContainers:
         - name: migrate

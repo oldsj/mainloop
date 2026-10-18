@@ -46,6 +46,7 @@ type ContractRow struct {
 	Grant           *string  `json:"grant"`
 	MergeStatusOnly bool     `json:"merge_status_only"`
 	MergeEnabled    bool     `json:"merge_tools_enabled"`
+	DevLoopEnabled  bool     `json:"devloop_enabled"`
 	Ordinary        []string `json:"ordinary"`
 	Approval        []string `json:"approval"`
 }
@@ -76,13 +77,15 @@ func BuildContract() (Contract, error) {
 	}
 	// Actors that see nothing are left out: every actor not listed sees nothing.
 	add := func(r ContractRow, a agentauth.Actor) {
-		r.Ordinary, r.Approval = row(agentauth.Policy{MergeTools: r.MergeEnabled}, a)
+		r.Ordinary, r.Approval = row(agentauth.Policy{MergeTools: r.MergeEnabled, DevLoop: r.DevLoopEnabled}, a)
 		if len(r.Ordinary) > 0 || len(r.Approval) > 0 {
 			c.Visibility = append(c.Visibility, r)
 		}
 	}
 	for _, merge := range []bool{false, true} {
-		add(ContractRow{MergeStatusOnly: true, MergeEnabled: merge}, agentauth.Actor{MergeStatusOnly: true})
+		for _, dev := range []bool{false, true} {
+			add(ContractRow{MergeStatusOnly: true, MergeEnabled: merge, DevLoopEnabled: dev}, agentauth.Actor{MergeStatusOnly: true})
+		}
 	}
 	roles := []dbstate.BindingRole{dbstate.RoleMain, dbstate.RoleSupervisor, dbstate.RoleChild, dbstate.RoleAgent}
 	grants := []dbstate.MCPGrantKind{dbstate.GrantNone, dbstate.GrantCoordination, dbstate.GrantWorkspace}
@@ -90,9 +93,11 @@ func BuildContract() (Contract, error) {
 		for depth := 0; depth <= 2; depth++ {
 			for _, grant := range grants {
 				for _, merge := range []bool{false, true} {
-					role, depth, grant := string(role), depth, string(grant)
-					add(ContractRow{Role: &role, Depth: &depth, Grant: &grant, MergeEnabled: merge},
-						agentauth.Actor{Role: dbstate.BindingRole(role), Depth: depth, Grant: dbstate.MCPGrantKind(grant)})
+					for _, dev := range []bool{false, true} {
+						role, depth, grant := string(role), depth, string(grant)
+						add(ContractRow{Role: &role, Depth: &depth, Grant: &grant, MergeEnabled: merge, DevLoopEnabled: dev},
+							agentauth.Actor{Role: dbstate.BindingRole(role), Depth: depth, Grant: dbstate.MCPGrantKind(grant)})
+					}
 				}
 			}
 		}

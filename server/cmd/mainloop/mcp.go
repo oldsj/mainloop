@@ -11,6 +11,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/devloop"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/k8ssecrets"
 	"github.com/oldsj/mainloop/server/internal/kagent"
@@ -45,12 +46,18 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	prSvc, mergeSvc := newPullRequestServices(cfg, pool, gh, kc, log)
 	q := dbq.New(pool)
+	// The lease is DB-only and the operations service here carries no Kubernetes client or GitHub
+	// seeder: this process only inserts and polls devloop_operations rows (see
+	// internal/devloop's package doc); serve-api's instance, built in newDevloopOperations, is the
+	// one that actually reaches Kubernetes and GitHub.
 	srv := &mcpserver.Server{
 		PRs:          prSvc,
 		Merge:        mergeSvc,
+		DevLease:     &devloop.LeaseService{Pool: pool},
+		DevOps:       &devloop.OperationsService{Pool: pool},
 		Auth:         &agentauth.Authenticator{Q: q, Depth: taskSvc.AuthDepth},
 		Tasks:        taskSvc,
-		Policy:       agentauth.Policy{MergeTools: bool(cfg.MergeToolsEnabled)},
+		Policy:       agentauth.Policy{MergeTools: bool(cfg.MergeToolsEnabled), DevLoop: bool(cfg.DevloopEnabled)},
 		Queries:      q,
 		Topics:       topics.NewService(pool),
 		Log:          log,

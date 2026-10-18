@@ -21,6 +21,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/devloop"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/merge"
 	"github.com/oldsj/mainloop/server/internal/prs"
@@ -46,7 +47,11 @@ type Server struct {
 	// they are unavailable.
 	PRs   *prs.Service
 	Merge *merge.Service
-	Log   *slog.Logger
+	// DevLease and DevOps serve the devloop tools. With none, those tools answer that they are
+	// unavailable.
+	DevLease *devloop.LeaseService
+	DevOps   *devloop.OperationsService
+	Log      *slog.Logger
 	// AllowedHosts are the Host names the listener answers to; Dev also allows loopback.
 	AllowedHosts map[string]bool
 	Dev          bool
@@ -56,7 +61,7 @@ type Server struct {
 // later adds its function here and nothing else changes.
 func (s *Server) tools() map[string]Tool {
 	all := map[string]Tool{}
-	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.pullRequestTools()} {
+	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.pullRequestTools(), s.devLoopTools()} {
 		for _, t := range domain {
 			all[t.Name] = t
 		}

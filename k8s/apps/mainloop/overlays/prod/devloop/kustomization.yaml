@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# No top-level `namespace:`: the RoleBinding below must stay in mainloop-dev even though this
+# overlay's own resources render into `mainloop`. This mirrors
+# overlays/dev-live/kagent/, a standalone kustomization for the same reason (a resource that must
+# land in a namespace other than the one `../../base` renders into).
+#
+# Applied by Argo as a second source of `mainloop-dev-config`. Namespace mainloop-dev has a
+# GitOps owner: the cluster repository's Argo Application `mainloop-dev-config` (automated prune
+# and selfHeal, CreateNamespace). This directory is a second source of that Application, pinned to
+# the same mainloop revision as the production app. Applied by hand it is not tracked by Argo,
+# `make dev-live-purge` deletes it with the namespace, and nothing recreates it.
+resources:
+  - role.yaml
+  - rolebinding.yaml

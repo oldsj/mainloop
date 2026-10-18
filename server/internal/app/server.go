@@ -14,6 +14,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/attention"
 	"github.com/oldsj/mainloop/server/internal/config"
+	"github.com/oldsj/mainloop/server/internal/devloop"
 	"github.com/oldsj/mainloop/server/internal/environments"
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/health"
@@ -55,6 +56,7 @@ type Server struct {
 	*health.DataAPI
 	*schedules.SchedulesAPI
 	*merge.MergeAPI
+	*devloop.DevloopAPI
 
 	fallback
 
@@ -104,6 +106,9 @@ type Deps struct {
 	Schedules *schedules.Service
 	// Merge serves the owner's read of a merge proposal's details. Nil answers that route with 503.
 	Merge *merge.Service
+	// Devloop serves the owner's view of the mainloop-dev lease. Nil answers those routes with 501
+	// (the fallback), since devloop's own operator flag already covers "not configured".
+	Devloop *devloop.LeaseService
 }
 
 // missing names the required services Deps lacks. A nil one would otherwise fail as a nil dereference
@@ -147,6 +152,7 @@ func New(d Deps) *Server {
 		DataAPI:         health.NewAPI(d.Health),
 		SchedulesAPI:    schedules.NewAPI(d.Schedules),
 		MergeAPI:        &merge.MergeAPI{Svc: d.Merge, OwnerID: d.Config.Identity.OwnerID},
+		DevloopAPI:      devloop.NewAPI(d.Devloop),
 		deps:            d,
 	}
 }
