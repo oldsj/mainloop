@@ -36,6 +36,8 @@ type SessionRuntime interface {
 	SendAs(ctx context.Context, source sessions.Source, messageID, conversationID, text string) (sessions.Sent, error)
 	EnsureMain(ctx context.Context) (sessions.Main, error)
 	Cancel(ctx context.Context, sessionID string) (sessions.CancelResult, error)
+	Complete(ctx context.Context, sessionID string) (sessions.CancelResult, error)
+	Fail(ctx context.Context, sessionID string) (sessions.CancelResult, error)
 }
 
 // Register adds the task loops and sweeps to the runner. Without Workspaces and Sessions the rows

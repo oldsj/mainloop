@@ -323,14 +323,32 @@ type CancelResult struct {
 	Agent string
 }
 
-// Cancel ends a session: it sets the final cancelled status and cancels non-final native tasks,
-// including those started outside the delivery ledger. Task-owned sending and uncertain deliveries
-// stay open for reconciliation; other open deliveries are closed. The status and an unknown agent
-// outcome are written first and are sticky, so no later delivery
-// brings the session back and no message is taken. A cancel kagent does not confirm is reported as
-// unknown. The scheduled-cancel sweep revisits it without replaying the scheduled send. A session
-// that had already finished is left as it is.
+// Cancel ends a session as cancelled, the user-initiated terminal status: see [Service.end].
 func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, error) {
+	return s.end(ctx, sessionID, dbstate.SessionCancelled, "cancelled by user", "The main thread cannot be cancelled.")
+}
+
+// Complete ends a session as completed: the task that owned it finished successfully, so nothing
+// more will be sent and whatever the agent still runs is stopped. See [Service.end].
+func (s *Service) Complete(ctx context.Context, sessionID string) (CancelResult, error) {
+	return s.end(ctx, sessionID, dbstate.SessionCompleted, "ended: the task completed", "The main thread cannot be ended.")
+}
+
+// Fail ends a session as failed: the task that owned it failed, so nothing more will be sent and
+// whatever the agent still runs is stopped. See [Service.end].
+func (s *Service) Fail(ctx context.Context, sessionID string) (CancelResult, error) {
+	return s.end(ctx, sessionID, dbstate.SessionFailed, "ended: the task failed", "The main thread cannot be ended.")
+}
+
+// end sets the session's final status (completed, failed or cancelled) and stops its non-final
+// native tasks, including those started outside the delivery ledger. Task-owned sending and
+// uncertain deliveries stay open for reconciliation; other open deliveries are closed with detail.
+// The status and an unknown agent outcome are written first and are sticky, so no later delivery
+// brings the session back and no message is taken. A stop kagent does not confirm is reported as
+// unknown. The scheduled-cancel sweep revisits it without replaying the scheduled send. A session
+// that had already finished is left as it is. mainConflict is the error when sessionID is the main
+// thread, which this never ends.
+func (s *Service) end(ctx context.Context, sessionID string, status dbstate.SessionStatus, detail, mainConflict string) (CancelResult, error) {
 	q := dbq.New(s.Pool)
 	row, err := q.GetSessionRow(ctx, dbq.GetSessionRowParams{ID: sessionID, UserID: s.OwnerID})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -347,7 +365,7 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 		return CancelResult{}, err
 	}
 	if b.Role == dbstate.RoleMain {
-		return CancelResult{}, conflict("The main thread cannot be cancelled.")
+		return CancelResult{}, conflict("%s", mainConflict)
 	}
 
 	var closedNow []cancelledDelivery
@@ -381,7 +399,7 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 		}
 		var drafts []events.Draft
 		for _, d := range open {
-			det := "cancelled by user"
+			det := detail
 			prev, err := q.EndDelivery(ctx, dbq.EndDeliveryParams{
 				ID: d.ID, FromStates: states, State: dbstate.DeliveryCancelled, Detail: &det,
 			})
@@ -399,9 +417,9 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 			// Every ending publishes one event, so open clients see the turn end.
 			drafts = append(drafts, endedEvent(s.OwnerID, sessionID, d.ID))
 		}
-		// A cancelled session takes no more messages: anything still queued behind the open turn is
-		// cancelled with it, not admitted (there is no next turn for it to wait for).
-		det := "cancelled by user"
+		// An ended session takes no more messages: anything still queued behind the open turn ends
+		// with it, not admitted (there is no next turn for it to wait for).
+		det := detail
 		queuedIDs, err := q.CancelQueuedDeliveries(ctx, dbq.CancelQueuedDeliveriesParams{SessionID: sessionID, Detail: &det})
 		if err != nil {
 			return nil, fmt.Errorf("close queued deliveries: %w", err)
@@ -409,7 +427,7 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 		for _, id := range queuedIDs {
 			drafts = append(drafts, endedEvent(s.OwnerID, sessionID, id))
 		}
-		if _, err := q.SetSessionCancelled(ctx, sessionID); errors.Is(err, pgx.ErrNoRows) {
+		if _, err := q.SetSessionEnded(ctx, dbq.SetSessionEndedParams{ID: sessionID, Status: status}); errors.Is(err, pgx.ErrNoRows) {
 			cur, err := q.GetSessionRow(ctx, dbq.GetSessionRowParams{ID: sessionID, UserID: s.OwnerID})
 			if err != nil {
 				return nil, err
@@ -417,7 +435,7 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 			finished = cur
 			return nil, errFinishedMeanwhile // rolls back: a finished session keeps its deliveries as they are
 		} else if err != nil {
-			return nil, fmt.Errorf("cancel session: %w", err)
+			return nil, fmt.Errorf("end session: %w", err)
 		}
 		// The agent can no longer reach MCP; the Secret is deleted after this commits.
 		if _, err := agentauth.RevokeInTx(ctx, q, sessionID); err != nil {
@@ -445,7 +463,7 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 	}); err != nil {
 		return CancelResult{}, fmt.Errorf("record agent cancel outcome: %w", err)
 	}
-	return CancelResult{Status: dbstate.SessionCancelled, Agent: agentOutcome}, nil
+	return CancelResult{Status: status, Agent: agentOutcome}, nil
 }
 
 type cancelledDelivery struct {
@@ -453,10 +471,10 @@ type cancelledDelivery struct {
 	prev dbstate.DeliveryState
 }
 
-// cancelledResult never treats an earlier uncertain cancel as evidence the agent stopped.
+// cancelledResult never treats an earlier uncertain ending as evidence the agent stopped.
 func cancelledResult(row dbq.GetSessionRowRow) CancelResult {
 	agent := AgentNotRunning
-	if row.Status == dbstate.SessionCancelled {
+	if finishedStatus(row.Status) {
 		agent = AgentUnknown
 		if row.AgentCancelOutcome != nil {
 			agent = *row.AgentCancelOutcome
