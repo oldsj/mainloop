@@ -1,4 +1,4 @@
-.PHONY: help dev dev-stop dev-reset kind-up kind-create kind-delete kind-load kind-secrets kind-deploy kind-forward kind-reset kind-logs kind-shell dev-live dev-live-status dev-live-purge dev-agents dev-harness install check check-mcp-tools check-server check-web lint lint-all fmt fmt-all _fmt _fmt-all test-timeouts test-timeout-integration
+.PHONY: help dev dev-stop dev-reset kind-up kind-create kind-delete kind-load kind-secrets kind-deploy kind-forward kind-reset kind-logs kind-shell dev-live dev-live-status dev-live-purge dev-agents dev-harness dev-live-lease-acquire dev-live-lease-release install check check-mcp-tools check-server check-web lint lint-all fmt fmt-all _fmt _fmt-all test-timeouts test-timeout-integration
 
 # Load .env file if it exists
 -include .env
@@ -40,6 +40,12 @@ dev-live-purge: ## Delete namespace mainloop-dev and the *-dev kagent agents
 
 dev-agents: ## Apply the *-dev kagent agents (shared kagent namespace)
 	./scripts/dev-live.sh agents
+
+dev-live-lease-acquire: ## Acquire the devloop lease as the owner (needs MAINLOOP_API_URL)
+	./scripts/dev-live.sh lease-acquire
+
+dev-live-lease-release: ## Release the devloop lease as the owner (needs MAINLOOP_API_URL)
+	./scripts/dev-live.sh lease-release
 
 dev-harness: ## Build arm64 harness images from ~/dev/kagent and point the dev agents at them
 	./scripts/dev-live-harness.sh build

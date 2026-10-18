@@ -16,3 +16,5 @@ data:
   # Pinned explicitly so a value baked into an image (e.g. by an ENV in a Dockerfile) can never
   # win over the deployed config. Enable only through this checked-in config, not the image.
   MAINLOOP_MERGE_PROTECTED_AUTO: 'false'
+  # The live dev loop (dev_sync and the lease tools) stays off except where an overlay turns it on.
+  MAINLOOP_DEVLOOP_ENABLED: 'false'
