@@ -44,6 +44,14 @@ While a switch is pending, `POST /chat` returns `409`. The orphan sweep refuses 
 
 Bootstrap reuses a main only while its binding has active coordination authority. Otherwise it creates the replacement and releases the old owner slot in one transaction; concurrent requests share one replacement, on the first-use provider, and the old binding's credential is revoked. Earlier main rows are not backfilled or migrated.
 
+## The `/model` command
+
+Status: **implemented** in `web/src/features/chat`, client-side only; covered by component tests, not run against a live backend.
+
+Mainloop has no model registry and no reasoning-effort field anywhere in its contract or in kagent's session API: the LLM a provider's native session runs is fixed by kagent's Agent/AgentTemplate/ModelConfig chain, set by operators outside this repo, which Mainloop neither stores nor injects (see [credentials](credentials.md)). The main provider (Claude Code or Codex) is the only axis Mainloop can actually switch at runtime, so `/model` is a composer-native way to drive the existing main-provider switch above, not a new model or effort mechanism.
+
+Typing `/model` in the main composer and sending it is intercepted client-side: the text is never posted as a chat message, and the sent draft is cleared the same way an accepted message's is. `/model` alone shows the current provider, the status (`ready`/`not_started`/`pending`/`failed`), the available provider names, and a fixed line stating that reasoning effort is not supported and why. `/model <name>` (for example `/model codex`) calls the same `PUT /main-thread/provider` write the header's provider select uses, subject to the same idle, busy and conflict rules, and the header shows the switch's progress and any refusal as it always does; a name that is already the ready provider reports a no-op and writes nothing, and a name the registry does not have is reported as unknown, not switched. A second argument (a reasoning effort) is refused outright with the same fixed line, rather than silently accepted and discarded. The command's own output is a transient status line above the composer; it is not a conversation message, is not persisted, and is replaced or cleared by the next command or ordinary send. There is no command for a session's own chat, only the main thread's.
+
 ## Sending messages
 
 - The input field submits one user message to the main session.

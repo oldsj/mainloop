@@ -1411,3 +1411,77 @@ describe('refusal codes from the backend', () => {
     );
   });
 });
+
+describe('the /model command', () => {
+  it('with no args, shows the current model and choices without sending a chat message', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/model{Enter}');
+    const notice = await screen.findByTestId('command-notice');
+    expect(notice).toHaveTextContent('Current model: Claude (ready).');
+    expect(notice).toHaveTextContent('Available: claude, codex.');
+    expect(notice).toHaveTextContent('Reasoning effort is not supported');
+    expect(state.chatPosts).toHaveLength(0);
+    expect(input()).toHaveValue('');
+  });
+
+  it('switches the main provider instead of posting a chat message', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/model codex{Enter}');
+    expect(await screen.findByTestId('command-notice')).toHaveTextContent(
+      'Switching main model to Codex'
+    );
+    await waitFor(() =>
+      expect(state.providerPosts).toEqual([{ provider: 'codex', restart_failed: false }])
+    );
+    expect(state.chatPosts).toHaveLength(0);
+  });
+
+  it('matches the provider name case-insensitively', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/model Codex{Enter}');
+    await waitFor(() => expect(state.providerPosts).toHaveLength(1));
+    expect(state.providerPosts[0]).toEqual({ provider: 'codex', restart_failed: false });
+  });
+
+  it('reports a no-op, without a write, for the provider already selected and ready', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/model claude{Enter}');
+    expect(await screen.findByTestId('command-notice')).toHaveTextContent('Already on Claude.');
+    expect(state.providerPosts).toHaveLength(0);
+  });
+
+  it('reports an unknown model instead of switching', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/model opus-5.5{Enter}');
+    expect(await screen.findByTestId('command-notice')).toHaveTextContent(
+      'Unknown model "opus-5.5"'
+    );
+    expect(state.providerPosts).toHaveLength(0);
+  });
+
+  it('refuses a reasoning-effort argument rather than silently dropping it', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/model codex medium{Enter}');
+    expect(await screen.findByTestId('command-notice')).toHaveTextContent(
+      'Reasoning effort is not supported'
+    );
+    expect(state.providerPosts).toHaveLength(0);
+    expect(state.chatPosts).toHaveLength(0);
+  });
+
+  it('clears the command notice once an ordinary message is sent', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/model claude{Enter}');
+    await screen.findByTestId('command-notice');
+    await userEvent.type(input(), 'carry on{Enter}');
+    await waitFor(() => expect(state.chatPosts).toHaveLength(1));
+    expect(screen.queryByTestId('command-notice')).toBeNull();
+  });
+});
