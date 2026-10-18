@@ -24,6 +24,13 @@ export interface ThreadBodyProps {
   requests?: ReactNode;
   /** Shown in the empty state of a loaded thread. */
   starters?: ReactNode;
+  /**
+   * Intercepts a composer send before the thread's own `send`, for a local command such as
+   * `/model` that must not become a chat message. Returning null defers to the thread's `send`.
+   */
+  onSend?: (text: string) => Promise<boolean> | null;
+  /** The last local command's output, shown above the composer until the next send. */
+  commandNotice?: string | null;
 }
 
 /** The conversation timeline, the send and stop errors, and the composer, for any thread. */
@@ -36,7 +43,9 @@ export function ThreadBody({
   prefill,
   onPrefillUsed,
   requests,
-  starters
+  starters,
+  onSend,
+  commandNotice = null
 }: ThreadBodyProps) {
   const live = useLiveTurn(thread.sessionId, thread.busy, thread.messages);
   return (
@@ -99,6 +108,15 @@ export function ThreadBody({
           {closedReason}
         </p>
       ) : null}
+      {commandNotice ? (
+        <p
+          className="text-muted-foreground px-md py-xs shrink-0 text-sm whitespace-pre-line"
+          role="status"
+          data-testid="command-notice"
+        >
+          {commandNotice}
+        </p>
+      ) : null}
       <Composer
         draftKey={thread.draftKey}
         busy={thread.sendPending}
@@ -110,7 +128,7 @@ export function ThreadBody({
         closedPlaceholder={closedPlaceholder}
         prefill={prefill}
         onPrefillUsed={onPrefillUsed}
-        onSend={(text) => thread.send(text, thread.conversationId)}
+        onSend={(text) => onSend?.(text) ?? thread.send(text, thread.conversationId)}
       />
     </>
   );
