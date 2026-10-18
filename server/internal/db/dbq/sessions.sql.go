@@ -2264,19 +2264,24 @@ func (q *Queries) SetMainTargetSession(ctx context.Context, arg SetMainTargetSes
 	return result.RowsAffected(), nil
 }
 
-const setSessionCancelled = `-- name: SetSessionCancelled :one
+const setSessionEnded = `-- name: SetSessionEnded :one
 UPDATE sessions
-SET status = 'cancelled', completed_at = coalesce(completed_at, now()), agent_cancel_outcome = 'unknown',
+SET status = $1, completed_at = coalesce(completed_at, now()), agent_cancel_outcome = 'unknown',
     agent_cancel_attempts = 0, agent_cancel_next_attempt_at = now() + interval '30 seconds'
-WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')
+WHERE id = $2 AND status NOT IN ('completed', 'failed', 'cancelled')
 RETURNING id
 `
 
-// The cancelled status is final (RefreshSessionStatus leaves it alone). Nothing changes once the
-// session is finished.
-func (q *Queries) SetSessionCancelled(ctx context.Context, id string) (string, error) {
-	row := q.db.QueryRow(ctx, setSessionCancelled, id)
-	var id_2 string
-	err := row.Scan(&id_2)
-	return id_2, err
+type SetSessionEndedParams struct {
+	Status dbstate.SessionStatus
+	ID     string
+}
+
+// Ends a session as completed, failed or cancelled. That status is final (RefreshSessionStatus
+// leaves it alone). Nothing changes once the session is finished.
+func (q *Queries) SetSessionEnded(ctx context.Context, arg SetSessionEndedParams) (string, error) {
+	row := q.db.QueryRow(ctx, setSessionEnded, arg.Status, arg.ID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }

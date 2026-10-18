@@ -408,13 +408,13 @@ ORDER BY s.created_at DESC, s.id;
 -- name: CountSessions :one
 SELECT count(*) FROM sessions WHERE user_id = $1;
 
--- name: SetSessionCancelled :one
--- The cancelled status is final (RefreshSessionStatus leaves it alone). Nothing changes once the
--- session is finished.
+-- name: SetSessionEnded :one
+-- Ends a session as completed, failed or cancelled. That status is final (RefreshSessionStatus
+-- leaves it alone). Nothing changes once the session is finished.
 UPDATE sessions
-SET status = 'cancelled', completed_at = coalesce(completed_at, now()), agent_cancel_outcome = 'unknown',
+SET status = sqlc.arg(status), completed_at = coalesce(completed_at, now()), agent_cancel_outcome = 'unknown',
     agent_cancel_attempts = 0, agent_cancel_next_attempt_at = now() + interval '30 seconds'
-WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')
+WHERE id = sqlc.arg(id) AND status NOT IN ('completed', 'failed', 'cancelled')
 RETURNING id;
 
 -- name: RecordSessionCancelOutcome :exec

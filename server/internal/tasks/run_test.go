@@ -143,11 +143,16 @@ func ptr[T any](v T) *T { return &v }
 type fakeSessions struct {
 	*sessions.Service
 	mu sync.Mutex
-	// agent overrides what Cancel reports about the agent (stopped, not_running, unknown).
+	// agent overrides what Cancel, Complete and Fail report about the agent (stopped, not_running,
+	// unknown).
 	agent string
 	// cancels counts Cancel calls; cancelled lists the session ids they named.
 	cancels   int
 	cancelled []string
+	// completed lists the session ids Complete named.
+	completed []string
+	// failed lists the session ids Fail named.
+	failed []string
 }
 
 func (f *fakeSessions) Cancel(ctx context.Context, id string) (sessions.CancelResult, error) {
@@ -156,6 +161,28 @@ func (f *fakeSessions) Cancel(ctx context.Context, id string) (sessions.CancelRe
 	defer f.mu.Unlock()
 	f.cancels++
 	f.cancelled = append(f.cancelled, id)
+	if f.agent != "" && err == nil {
+		res.Agent = f.agent
+	}
+	return res, err
+}
+
+func (f *fakeSessions) Complete(ctx context.Context, id string) (sessions.CancelResult, error) {
+	res, err := f.Service.Complete(ctx, id)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.completed = append(f.completed, id)
+	if f.agent != "" && err == nil {
+		res.Agent = f.agent
+	}
+	return res, err
+}
+
+func (f *fakeSessions) Fail(ctx context.Context, id string) (sessions.CancelResult, error) {
+	res, err := f.Service.Fail(ctx, id)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failed = append(f.failed, id)
 	if f.agent != "" && err == nil {
 		res.Agent = f.agent
 	}
@@ -179,6 +206,32 @@ func (f *fakeSessions) cancelCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.cancels
+}
+
+// completeCountOf counts the Complete calls made for one session.
+func (f *fakeSessions) completeCountOf(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.completed {
+		if c == id {
+			n++
+		}
+	}
+	return n
+}
+
+// failCountOf counts the Fail calls made for one session.
+func (f *fakeSessions) failCountOf(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.failed {
+		if c == id {
+			n++
+		}
+	}
+	return n
 }
 
 // fakeStops answers the resolver of an unconfirmed stop: it reports the agent as still running
