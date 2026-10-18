@@ -241,10 +241,18 @@ func TestPromoteStrandedQueuedSweepReleasesABacklogNothingIsBlocking(t *testing.
 	if sent, err := e.svc.Send(ctx, qID, "", "two"); err != nil || !sent.Queued {
 		t.Fatalf("queued send: %+v, %v", sent, err)
 	}
-	// The turn it queued behind ended (or went stale) without ever releasing it.
+	// The turn it queued behind ended (or went stale) without ever releasing it, and whatever
+	// handled that already refreshed the session to idle (the queued row does not count as active).
+	main, err := e.svc.EnsureMain(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := e.pool.Exec(ctx,
 		`UPDATE deliveries SET state = 'failed', updated_at = now() - interval '1 hour' WHERE id = $1`, oldID,
 	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(ctx, `UPDATE sessions SET status = 'idle' WHERE id = $1`, main.SessionID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -253,5 +261,10 @@ func TestPromoteStrandedQueuedSweepReleasesABacklogNothingIsBlocking(t *testing.
 	}
 	if got := e.delivery(qID).State; got != dbstate.DeliveryRecorded {
 		t.Fatalf("stranded queued delivery state = %s, want recorded", got)
+	}
+	// The promotion leaves a recorded delivery behind, so the session is active again, not stuck
+	// showing idle until something else happens to refresh it.
+	if got := e.sessionStatus(main.SessionID); got != dbstate.SessionActive {
+		t.Fatalf("session status = %s, want active", got)
 	}
 }
