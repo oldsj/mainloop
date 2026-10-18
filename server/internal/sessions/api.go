@@ -253,6 +253,11 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row nativeBind
 			n.Topic = &name
 		}
 	}
+	if st, err := q.GetStalledTurn(ctx, row.SessionID); err == nil {
+		n.StalledTurn = turnStall(row.SessionID, row.Role == dbstate.RoleMain, st)
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
 	restartable, err := a.Svc.isRestartable(ctx, row.SessionID)
 	if err != nil {
 		return nil, err

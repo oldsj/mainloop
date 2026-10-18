@@ -1828,6 +1828,8 @@ export interface components {
        * @default false
        */
       turn_in_flight: boolean;
+      /** @description The session's turn, when it is stalled (no task activity past its allowance); null otherwise. */
+      stalled_turn?: components['schemas']['TurnStall'] | null;
       /**
        * Restartable
        * @description Whether POST /sessions/{session_id}/restart applies to this session (the main thread or a standalone native session that has not ended).
@@ -4682,8 +4684,28 @@ export interface components {
       /** @description Whether Mainloop has already asked kagent to delete the runtime's session. */
       native_deleted: boolean;
     };
+    /** @description A delivered turn whose task has shown no activity for longer than its allowance. It may still finish; the next task event clears it. Nothing is replayed: stop or restart the session to recover. */
+    TurnStall: {
+      /** @description The delivery (the user message) whose turn is stalled. */
+      message_id: string;
+      session_id: string;
+      task_id: string | null;
+      /** @description Whether the session is the owner's main thread. */
+      main_thread: boolean;
+      /**
+       * Format: date-time
+       * @description The last task event Mainloop saw, or when the turn was delivered if none.
+       */
+      last_activity_at: string;
+      /** Format: date-time */
+      stalled_at: string;
+      /** @description The last event started a tool call with no result yet, which has the longer allowance. */
+      tool_running: boolean;
+    };
     HealthView: {
       rows: components['schemas']['HealthRow'][];
+      /** @description Delivered turns marked stalled (no task activity past their allowance), oldest stall first. Always sent; absent only from older servers. */
+      stalled_turns?: components['schemas']['TurnStall'][];
       /** @description Requested stops that stayed unconfirmed past the resolver's bound, oldest first. */
       stops: components['schemas']['HealthStop'][];
       hours: number;

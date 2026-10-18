@@ -165,6 +165,7 @@ LIMIT 1;
 -- name: GetDeliveryContext :one
 SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.updated_at,
        d.kagent_session_id AS sent_kagent_session_id, d.sent_text,
+       d.activity_at, d.activity_kind, d.stalled_at,
        b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id,
        b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
        b.credential_identity,
@@ -636,3 +637,42 @@ SELECT * FROM deliveries
 WHERE session_id = sqlc.arg(session_id) AND state IN ('sending', 'delivered', 'uncertain')
   AND (kagent_session_id IS NULL OR kagent_session_id = sqlc.arg(kagent_session_id)::text)
 ORDER BY created_at, id;
+
+-- Stalled turns (stall.go). Records what the delivery loop last saw a turn's task do, and clears a
+-- stall. Fenced on the claim like the outcome writes, but it is not an outcome: state,
+-- outcome_version and updated_at stay. at is null for a kind change seen in a snapshot (the task as
+-- it stood), which is not new activity. Returns whether the turn was marked stalled before.
+-- name: NoteDeliveryActivity :one
+WITH old AS (
+    SELECT id, stalled_at FROM deliveries
+    WHERE deliveries.id = sqlc.arg(id) AND deliveries.lease_owner = sqlc.arg(lease_owner)
+      AND deliveries.attempts = sqlc.arg(attempts) AND deliveries.state IN ('sending', 'delivered')
+    FOR UPDATE
+)
+UPDATE deliveries d
+SET activity_at = coalesce(sqlc.narg(at)::timestamptz, d.activity_at),
+    activity_kind = sqlc.arg(kind)::text,
+    stalled_at = CASE WHEN sqlc.narg(at)::timestamptz IS NULL THEN d.stalled_at END
+FROM old
+WHERE d.id = old.id
+RETURNING (old.stalled_at IS NOT NULL)::boolean AS was_stalled, d.session_id;
+
+-- Marks every delivered turn that has been quiet past its allowance: tool_seconds while its last
+-- event left a tool call running, seconds otherwise. A turn parked for the owner is never stalled.
+-- Quiet is counted from the last live event, else from when the turn was marked delivered.
+-- name: MarkStalledTurns :many
+-- now is the caller's clock, so the allowance can be tested without waiting it out.
+UPDATE deliveries d
+SET stalled_at = sqlc.arg(now)::timestamptz
+WHERE d.state = 'delivered' AND d.stalled_at IS NULL
+  AND d.activity_kind IS DISTINCT FROM 'parked'
+  AND coalesce(d.activity_at, d.updated_at) < sqlc.arg(now)::timestamptz - make_interval(secs => CASE
+      WHEN d.activity_kind = 'tool' THEN sqlc.arg(tool_seconds)::float8 ELSE sqlc.arg(seconds)::float8 END)
+RETURNING d.id, d.session_id, (SELECT s.user_id FROM sessions s WHERE s.id = d.session_id)::text AS user_id;
+
+-- The session's stalled turn, if any: the delivered delivery the sweep marked.
+-- name: GetStalledTurn :one
+SELECT id, task_id, activity_at, activity_kind, stalled_at, updated_at FROM deliveries
+WHERE session_id = $1 AND state = 'delivered' AND stalled_at IS NOT NULL
+ORDER BY created_at DESC
+LIMIT 1;

@@ -178,4 +178,5 @@ MSW fixtures typed from `api/openapi.yaml`.
   **Start a task in <first project>**, **What's running?**, **Pause a schedule**). Each fills the
   composer, unsent. They go once the thread has a message.
 - The native identity strip in the header details is supplied by the sessions slice.
+- A stalled turn (no task activity past its allowance, see [orchestration health](orchestration-health.md#stalled-turns)) shows the turn recovery panel instead of leaving only the spinner: "No activity for 25m. It may still finish. Stop or restart?" (with "while a tool runs" when the last event started a tool call), a **stop** button, and **restart session** when the thread is restartable. A stalled turn stays separate from a failed one: the next task event clears the panel, and nothing is resent. The owner also gets an attention item for it. Tested with MSW only.
 - A failed stop on the main thread shows the turn recovery panel below the conversation, with **restart session** behind an in-app confirmation that says the native context is lost (see [sessions](sessions.md#react-status)). The stop error now carries the server's reason. Tested with MSW only.

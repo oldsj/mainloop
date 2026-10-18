@@ -428,6 +428,21 @@ func (tr *turn) artifact(a *a2a.Artifact, appendTo bool) {
 	tr.entries = append(tr.entries, entry{artifact: id, text: text.String()})
 }
 
+// ToolPart reports whether p is a kagent tool-activity part, with its call id and whether it starts
+// the call (a function call) rather than ends it (the call's response).
+func ToolPart(p *a2a.Part) (id string, starts, ok bool) {
+	if p == nil {
+		return "", false, false
+	}
+	kind, _ := p.Metadata[partTypeKey].(string)
+	if kind != callKind && kind != resultKind {
+		return "", false, false
+	}
+	m, _ := p.Data().(map[string]any)
+	id, _ = m["id"].(string)
+	return id, kind == callKind, true
+}
+
 func (tr *turn) toolPart(kind string, data any) {
 	m, _ := data.(map[string]any)
 	id, _ := m["id"].(string)

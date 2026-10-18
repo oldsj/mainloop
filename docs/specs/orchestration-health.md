@@ -473,3 +473,52 @@ the section rather than hidden.
 Not built: a push notification for an unresolved stop. Not proven: the signal against a live
 runtime that refuses to die, only against the fake in `server/internal/tasks/stop_force_test.go`
 and the database-backed `TestViewListsUnresolvedStops`.
+
+## Stalled turns
+
+Status: **implemented**, 2026-10-18 (issue #265). Tested against the fake kagent and a scratch
+PostgreSQL with a test clock; **not measured** against a live kagent.
+
+On 2026-10-18 the main thread showed "Searching the web…" for over two hours, and four tasks were
+in the same state: each turn's task had gone silent inside kagent and nothing in Mainloop treated
+that as abnormal. A stalled turn is that signal for one delivered turn. It is separate from task
+liveness above (which blocks a `running` task) and from a failed delivery: a stalled turn may still
+finish.
+
+- **What is tracked.** For every `delivered` delivery, the delivery loop records when it last saw a
+  live event of the turn's task (`deliveries.activity_at`) and what that event left the turn doing
+  (`activity_kind`): `event` (thinking or writing), `tool` (a tool call started with no result yet)
+  or `parked` (waiting for the owner's input or auth). Live events are the send stream and every
+  event of a subscription after its first. The first event of a subscription is the task as it
+  stands, so a resubscribe to a silent task does not reset the clock; it counts only when its status
+  was recorded after the activity already stored. Writes are throttled (at most one activity time
+  per 30 seconds per turn; a change of kind or the end of a stall is written at once), fenced on the
+  delivery's claim, and never touch `updated_at`, `state` or `outcome_version`.
+- **When a turn is stalled.** A `mark-stalled-turns` sweep (every 30 seconds) sets `stalled_at` on a
+  delivered turn whose last activity (or, before any, the time it was marked delivered) is older
+  than its allowance: `SESSION_STALL_SECONDS` (1500, 25 minutes), or `SESSION_STALL_TOOL_SECONDS`
+  (3600, an hour; never less than the first) while a tool call is running, since a web search or a
+  long build emits nothing until it ends. A parked turn is never stalled. The sweep publishes
+  `session:message` for the turn's session so an open page re-reads it, and logs a warning.
+- **Clearing.** The next live event clears `stalled_at` in the same write that records it and
+  publishes `session:message` again. A turn that ends is no longer counted, whatever its
+  `stalled_at`.
+- **Where it shows.** `NativeSessionInfo.stalled_turn` (`GET /main-thread` and
+  `GET /sessions/{id}/native`) carries the turn, its last activity, when it was marked and whether a
+  tool was running; `null` otherwise. `HealthView.stalled_turns` lists every stalled turn of the
+  owner, oldest stall first (at most 200). The `task`, `session` and `attempt` filters narrow it;
+  the time window does not. The Health page shows a "Stalled turns" section above the rows when the
+  list is not empty, and counts an entry it cannot read rather than hiding it.
+- **Attention.** The attention sweep opens one `owner_decision` item per stalled turn of the main
+  thread or a standalone session (`source_kind = turn_stalled`, `reason_code = stalled`, linking to
+  the main thread or the session) and resolves it once the turn moves again or ends. A task-owned
+  session is left to the task liveness sweep, which already blocks the task as `stalled` and opens
+  its own card.
+- **Never a replay.** The watch only surfaces the stall. It changes no delivery state, sends
+  nothing and retries nothing. Recovery is the owner's stop, or the restart of
+  [sessions](sessions.md#go-server-status-g6a-g6b), which deletes the native session and fails the turn.
+
+Not proven: behavior against a live kagent. The fake-clock tests in
+`server/internal/sessions/stall_test.go` cover a turn stalled past its allowance and cleared by
+the next event, no stall while a tool runs within its longer allowance, and no stall for a parked
+turn.

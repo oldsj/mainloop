@@ -21,9 +21,12 @@ import {
   retentionText,
   sessionChoices,
   sortByFailures,
+  STALLS_NOTE,
+  stallText,
   STOPS_NOTE,
   stopText,
   taskChoices,
+  unreadableStallsText,
   unreadableStopsText,
   WIDE_MIN_PX,
   windowSummary,
@@ -187,6 +190,22 @@ export function HealthPage({ search }: { search: HealthSearch }) {
               {view.unreadableStops > 0 ? (
                 <p role="status" className="text-term-yellow">
                   {unreadableStopsText(view.unreadableStops)}
+                </p>
+              ) : null}
+            </section>
+          ) : null}
+          {view.stalls.length > 0 || view.unreadableStalls > 0 ? (
+            <section aria-label="Stalled turns" className="gap-sm grid">
+              <h2 className="text-term-yellow font-medium">Stalled turns</h2>
+              <p className="text-muted-foreground max-w-prose text-sm">{STALLS_NOTE}</p>
+              <ul className="gap-xs grid font-mono text-xs break-words">
+                {view.stalls.map((stall) => (
+                  <li key={stall.message_id}>{stallText(stall)}</li>
+                ))}
+              </ul>
+              {view.unreadableStalls > 0 ? (
+                <p role="status" className="text-term-yellow">
+                  {unreadableStallsText(view.unreadableStalls)}
                 </p>
               ) : null}
             </section>
