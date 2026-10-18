@@ -251,14 +251,18 @@ func TestFailedWakeIsRetried(t *testing.T) {
 	h := newHarness(t, slow)
 	w := h.running()
 	h.run()
+	restore := h.patient(15 * time.Second) // the suspend must finish; only the failed wake below is meant to stay unconfirmed
 	if _, err := h.svc.Suspend(bg, w.WorkspaceId); err != nil {
 		t.Fatal(err)
 	}
+	restore()
 	h.fake.FailNext(kagent.ProcResumeSession, kagenttestDrop)
 	var unc *UnconfirmedError
 	if err := h.svc.WakeForPreview(bg, w.WorkspaceId); !errors.As(err, &unc) {
 		t.Fatalf("%v", err)
 	}
+	// As in TestDeleteWithKagentUnreachableKeepsRows: the failed attempt must happen before due().
+	eventually(t, "failure recorded", func() bool { return h.op(w.WorkspaceId, "resume").Failures == 1 })
 	h.due()
 	eventually(t, "running", func() bool {
 		got, _ := h.svc.Get(bg, w.WorkspaceId)

@@ -172,11 +172,22 @@ func (h *harness) create(body api.CreateWorkspaceRequest) (api.WorkspaceLifecycl
 	return h.svc.Create(context.Background(), body)
 }
 
+// patient lets requests wait up to d for their operation, which returns as soon as the runner has
+// finished it. A short wait is for asserting that an operation is still unconfirmed; one that must
+// finish needs a wait the runner cannot outrun on a loaded machine. The returned func restores the
+// previous wait. It is for the test goroutine, the only reader of the setting.
+func (h *harness) patient(d time.Duration) (restore func()) {
+	prev := h.svc.Config.Workspaces.OperationWait
+	h.svc.Config.Workspaces.OperationWait = config.Seconds(d)
+	return func() { h.svc.Config.Workspaces.OperationWait = prev }
+}
+
 // running creates a workspace with a runner and returns it once kagent has the Session.
 func (h *harness) running() api.WorkspaceLifecycle {
 	h.t.Helper()
 	stop := h.run()
 	defer stop()
+	defer h.patient(15 * time.Second)()
 	w, err := h.create(api.CreateWorkspaceRequest{})
 	if err != nil {
 		h.t.Fatal(err)

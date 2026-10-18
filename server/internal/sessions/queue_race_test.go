@@ -35,6 +35,32 @@ func waitForBlockedQuery(t *testing.T, pool *pgxpool.Pool, like string) {
 	}
 }
 
+// waitForBlockedOrDone is waitForBlockedQuery for an operation that is expected to block but may,
+// if the code under test is wrong, finish instead. It reports whether the operation finished first, and its result if so.
+func waitForBlockedOrDone(t *testing.T, pool *pgxpool.Pool, like string, done <-chan error) (finished bool, err error) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		select {
+		case doneErr := <-done:
+			return true, doneErr
+		default:
+		}
+		var n int
+		if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE $1`, like).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n > 0 {
+			return false, nil
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("operation neither blocked on a query matching %q nor finished", like)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // Reproduces the race #224's reviewer found: a send decides the session is busy and queues the
 // message, under mainloop:send:<session>; if the open turn it queued behind ends in between that
 // decision and the queued row's commit, and the ending does not take the same lock, the ending's
@@ -78,16 +104,16 @@ func TestASendRacingTurnCompletionIsPromotedNotStuckQueued(t *testing.T) {
 	waitForBlockedQuery(t, e.pool, `%INSERT INTO deliveries (id, idempotency_key, session_id, source, state)%`)
 
 	// End the open turn while the send is paused mid-decision. On unfixed code nothing stops this
-	// from completing (and looking for a queued row to promote) well before the paused send ever
-	// commits its own; a short head start is enough for an unblocked operation to finish, and the
-	// fixed code cannot finish early no matter how long this waits, since it is blocked on the same
-	// lock the send holds.
+	// from completing (and looking for a queued row to promote) before the paused send ever commits
+	// its own. The fixed code cannot finish early, since it is blocked on the same lock the send
+	// holds; so wait until the stop is either blocked on that lock (the fixed code) or has already
+	// finished (the race the test exists to catch), rather than guessing how long that takes.
 	stopDone := make(chan error, 1)
 	go func() {
 		_, err := e.svc.Stop(ctx, id)
 		stopDone <- err
 	}()
-	time.Sleep(300 * time.Millisecond)
+	stopFinished, stopErr := waitForBlockedOrDone(t, e.pool, `SELECT pg_advisory_xact_lock(%`, stopDone)
 
 	if _, err := holder.Exec(ctx, `SELECT pg_advisory_unlock(900001)`); err != nil {
 		t.Fatal(err)
@@ -95,8 +121,11 @@ func TestASendRacingTurnCompletionIsPromotedNotStuckQueued(t *testing.T) {
 	if err := <-sendErr; err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	if err := <-stopDone; err != nil {
-		t.Fatalf("stop: %v", err)
+	if !stopFinished {
+		stopErr = <-stopDone
+	}
+	if stopErr != nil {
+		t.Fatalf("stop: %v", stopErr)
 	}
 	e.waitState(mid, dbstate.DeliveryCancelled)
 	// The queued message must be promoted once the turn it waited behind ended, not stranded.
