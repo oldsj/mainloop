@@ -183,7 +183,7 @@ func CopyTree(ctx context.Context, pods PodClient, namespace, pod, container, de
 		if ctx.Err() != nil {
 			return fmt.Errorf("devloop: copy to %s/%s: %w", pod, container, ctx.Err())
 		}
-		return fmt.Errorf("%w: copy to %s/%s: %v (stdout=%q stderr=%q)", ErrCopyInterrupted, pod, container, err, stdout, stderr)
+		return fmt.Errorf("%w: copy to %s/%s: %w (stdout=%q stderr=%q)", ErrCopyInterrupted, pod, container, err, stdout, stderr)
 	}
 	if strings.TrimSpace(stderr) != "" {
 		return fmt.Errorf("devloop: copy to %s/%s: tar reported: %s", pod, container, strings.TrimSpace(stderr))
