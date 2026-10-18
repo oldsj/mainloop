@@ -502,6 +502,71 @@ describe('sending', () => {
     expect(input()).toBeEnabled();
   });
 
+  it('marks a message sent while a turn is in flight as queued, and clears that once it is promoted', async () => {
+    const { state } = setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({ turn_in_flight: true })
+        })
+      })
+    );
+    await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
+
+    // The server records the message and a `queued` delivery row in the same transaction it
+    // answers 202 with, before the turn behind it ends and the row is promoted.
+    server.use(
+      http.post(`${API_URL}/chat`, async ({ request }) => {
+        state.chatPosts.push((await request.json()) as ChatBackendState['chatPosts'][number]);
+        state.messages = [
+          ...state.messages,
+          messageFixture({ id: 'queued-1', content: 'one more thing' })
+        ];
+        recordDelivery(state, deliveryFixture({ message_id: 'queued-1', state: 'queued' }));
+        return HttpResponse.json(
+          {
+            conversation_id: CONVERSATION_ID,
+            message: null,
+            spawned_session_id: null,
+            pending: true,
+            delivery_message_id: 'queued-1',
+            status: 'queued'
+          },
+          { status: 202 }
+        );
+      })
+    );
+
+    await userEvent.type(input(), 'one more thing{Enter}');
+    await waitFor(() => expect(state.chatPosts).toHaveLength(1));
+
+    const bubble = (await screen.findByText('one more thing')).closest('article')!;
+    await waitFor(() =>
+      expect(within(bubble).getByTestId('delivery-notice-label')).toHaveTextContent('Queued')
+    );
+    expect(within(bubble).queryByTestId('delivery-retry')).toBeNull();
+    expect(bubble.className).toMatch(/opacity-60/);
+    // The earlier, already-sent message must never read as queued.
+    expect(screen.getByText('build it').closest('article')!.className).not.toMatch(/opacity-60/);
+
+    // The open turn behind it ends and the backend promotes the queued row, as the reconcile loop
+    // does; the page picks this up on its next poll of the main thread.
+    state.mainThread = {
+      ...state.mainThread,
+      native: {
+        ...state.mainThread.native!,
+        deliveries: state.mainThread.native!.deliveries.map((delivery) =>
+          delivery.message_id === 'queued-1' ? { ...delivery, state: 'recorded' } : delivery
+        )
+      }
+    };
+
+    await waitFor(() => expect(within(bubble).queryByTestId('delivery-notice')).toBeNull(), {
+      timeout: 5000
+    });
+    expect(bubble.className).not.toMatch(/opacity-60/);
+  });
+
   it('locks and says so while the backend is unreachable', async () => {
     connectionState.current = {
       status: 'offline',
@@ -820,6 +885,100 @@ describe('stopping a turn', () => {
     );
     await userEvent.click(await screen.findByTestId('mt-stop-turn'));
     await waitFor(() => expect(state.stopped).toEqual([MAIN_SESSION_ID]));
+  });
+
+  it('offers a confirmed restart when the stop fails, and sends one request id', async () => {
+    const { state } = setup(
+      existing({
+        failStop: true,
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({
+            turn_in_flight: true,
+            restartable: true,
+            deliveries: [deliveryFixture({ message_id: 'm1', state: 'delivered' })]
+          })
+        })
+      })
+    );
+    expect(screen.queryByTestId('turn-recovery')).toBeNull();
+    await userEvent.click(await screen.findByTestId('mt-stop-turn'));
+    const panel = await screen.findByTestId('turn-recovery');
+    expect(panel).toHaveTextContent('The turn could not be stopped.');
+    await userEvent.click(within(panel).getByTestId('turn-restart'));
+    // The confirmation says the native context is lost; nothing is sent until it is confirmed.
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('native context is lost');
+    expect(state.restarts).toEqual([]);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Restart' }));
+    await waitFor(() => expect(state.restarts).toHaveLength(1));
+    expect(state.restarts[0]?.sessionId).toBe(MAIN_SESSION_ID);
+    expect(state.restarts[0]?.body.request_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
+    // The turn is no longer in flight, so the panel goes.
+    await waitFor(() => expect(screen.queryByTestId('turn-recovery')).toBeNull());
+  });
+
+  it('shows a stalled turn with how long it has been quiet, and offers stop and restart', async () => {
+    const quietSince = new Date(Date.now() - 25 * 60_000 - 5_000).toISOString();
+    const { state } = setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({
+            turn_in_flight: true,
+            restartable: true,
+            stalled_turn: {
+              message_id: 'm1',
+              session_id: MAIN_SESSION_ID,
+              task_id: 't1',
+              main_thread: true,
+              last_activity_at: quietSince,
+              stalled_at: new Date().toISOString(),
+              tool_running: true
+            }
+          })
+        })
+      })
+    );
+    const panel = await screen.findByTestId('turn-recovery');
+    expect(panel).toHaveTextContent(
+      'No activity for 25m while a tool runs. It may still finish. Stop or restart?'
+    );
+    expect(within(panel).getByTestId('turn-restart')).toBeEnabled();
+    await userEvent.click(within(panel).getByTestId('turn-recovery-stop'));
+    await waitFor(() => expect(state.stopped).toEqual([MAIN_SESSION_ID]));
+    // Nothing restarts on its own.
+    expect(state.restarts).toEqual([]);
+  });
+
+  it('shows no stall notice once the turn is no longer stalled', async () => {
+    setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({ turn_in_flight: true, restartable: true, stalled_turn: null })
+        })
+      })
+    );
+    await screen.findByTestId('mt-stop-turn');
+    expect(screen.queryByTestId('turn-recovery')).toBeNull();
+  });
+
+  it('does not offer a restart for a thread the server cannot restart', async () => {
+    setup(
+      existing({
+        failStop: true,
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({ turn_in_flight: true, restartable: false })
+        })
+      })
+    );
+    await userEvent.click(await screen.findByTestId('mt-stop-turn'));
+    await screen.findByText(/Could not stop the turn/);
+    expect(screen.queryByTestId('turn-recovery')).toBeNull();
   });
 });
 
@@ -1437,5 +1596,79 @@ describe('refusal codes from the backend', () => {
     expect(await screen.findByTestId('send-error')).toHaveTextContent(
       'Raw server prose. Your message is back in the box.'
     );
+  });
+});
+
+describe('the /model command', () => {
+  it('with no args, shows the current model and choices without sending a chat message', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/model{Enter}');
+    const notice = await screen.findByTestId('command-notice');
+    expect(notice).toHaveTextContent('Current model: Claude (ready).');
+    expect(notice).toHaveTextContent('Available: claude, codex.');
+    expect(notice).toHaveTextContent('Reasoning effort is not supported');
+    expect(state.chatPosts).toHaveLength(0);
+    expect(input()).toHaveValue('');
+  });
+
+  it('switches the main provider instead of posting a chat message', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/model codex{Enter}');
+    expect(await screen.findByTestId('command-notice')).toHaveTextContent(
+      'Switching main model to Codex'
+    );
+    await waitFor(() =>
+      expect(state.providerPosts).toEqual([{ provider: 'codex', restart_failed: false }])
+    );
+    expect(state.chatPosts).toHaveLength(0);
+  });
+
+  it('matches the provider name case-insensitively', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/model Codex{Enter}');
+    await waitFor(() => expect(state.providerPosts).toHaveLength(1));
+    expect(state.providerPosts[0]).toEqual({ provider: 'codex', restart_failed: false });
+  });
+
+  it('reports a no-op, without a write, for the provider already selected and ready', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/model claude{Enter}');
+    expect(await screen.findByTestId('command-notice')).toHaveTextContent('Already on Claude.');
+    expect(state.providerPosts).toHaveLength(0);
+  });
+
+  it('reports an unknown model instead of switching', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/model opus-5.5{Enter}');
+    expect(await screen.findByTestId('command-notice')).toHaveTextContent(
+      'Unknown model "opus-5.5"'
+    );
+    expect(state.providerPosts).toHaveLength(0);
+  });
+
+  it('refuses a reasoning-effort argument rather than silently dropping it', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/model codex medium{Enter}');
+    expect(await screen.findByTestId('command-notice')).toHaveTextContent(
+      'Reasoning effort is not supported'
+    );
+    expect(state.providerPosts).toHaveLength(0);
+    expect(state.chatPosts).toHaveLength(0);
+  });
+
+  it('clears the command notice once an ordinary message is sent', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/model claude{Enter}');
+    await screen.findByTestId('command-notice');
+    await userEvent.type(input(), 'carry on{Enter}');
+    await waitFor(() => expect(state.chatPosts).toHaveLength(1));
+    expect(screen.queryByTestId('command-notice')).toBeNull();
   });
 });

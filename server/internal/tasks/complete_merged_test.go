@@ -83,8 +83,14 @@ func TestMergedPRCompletesTheCodeTaskAndFreesItsAttempt(t *testing.T) {
 	if got := r.attemptState(id); got != "completed" {
 		t.Fatalf("attempt = %s; want completed", got)
 	}
-	if r.ses.cancelCountOf(binding) == 0 {
-		t.Fatal("the child's session was not cancelled")
+	if r.ses.completeCountOf(binding) == 0 {
+		t.Fatal("the child's session was not completed")
+	}
+	if r.ses.cancelCountOf(binding) != 0 {
+		t.Fatal("the child's session was cancelled instead of completed")
+	}
+	if got := r.str(`SELECT status FROM sessions WHERE id = $1`, binding); got != "completed" {
+		t.Fatalf("session status = %s; want completed", got)
 	}
 	live := func(b string) int {
 		return r.count(`SELECT count(*) FROM credentials WHERE binding_id = $1 AND state IN ('planned', 'published')`, b)

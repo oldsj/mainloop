@@ -41,6 +41,17 @@ type Policy struct {
 // Enrollment and each publication still recheck the policy and fresh repository metadata.
 func (p Policy) Allows(branch string) bool { return p.permits(branch) == nil }
 
+// Reason names why Allows would refuse branch, "" when it would not. Callers outside this package
+// use it to report the same policy-level denial the gate itself would hit, without reaching the
+// gate's finer-grained internal denials (those cover protocol and runtime checks this reports as
+// a plain refusal).
+func (p Policy) Reason(branch string) string {
+	if err := p.permits(branch); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
 func (p Policy) permits(branch string) error {
 	if !gitref.Valid(p.DefaultBranch) {
 		return denial("metadata_unavailable")

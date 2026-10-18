@@ -47,6 +47,7 @@ export function nativeFixture(overrides: Partial<NativeSessionInfo> = {}): Nativ
     model: 'claude-sonnet-5-5',
     turns: 1,
     turn_in_flight: false,
+    restartable: false,
     deliveries: [],
     note: null,
     ...overrides

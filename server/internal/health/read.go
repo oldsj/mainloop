@@ -158,6 +158,11 @@ func (s *Service) View(ctx context.Context, f Filter) (api.HealthView, error) {
 			return err
 		}
 		view.Stops = stops
+		stalled, err := s.stalledTurns(ctx, q, f)
+		if err != nil {
+			return err
+		}
+		view.StalledTurns = &stalled
 
 		groups, order := s.groups(sessions, unassigned, turns)
 		if err := s.decorate(ctx, q, f, since, groups, order); err != nil {
@@ -207,6 +212,33 @@ func (s *Service) unresolvedStops(ctx context.Context, q *dbq.Queries, f Filter)
 		}
 	}
 	return stops, nil
+}
+
+// stalledTurns lists the delivered turns the sessions stall sweep marked stalled: no task activity
+// past their allowance. Like the stops, the window does not apply (a stall stays listed until the
+// turn moves again or ends); the task, session and attempt filters do.
+func (s *Service) stalledTurns(ctx context.Context, q *dbq.Queries, f Filter) ([]api.TurnStall, error) {
+	rows, err := q.ListStalledTurns(ctx, s.OwnerID)
+	if err != nil {
+		return nil, err
+	}
+	out := []api.TurnStall{}
+	for _, r := range rows {
+		if t := nonEmpty(f.TaskID); t != nil && (r.ProductTaskID == nil || *r.ProductTaskID != *t) {
+			continue
+		}
+		if a := nonEmpty(f.AttemptID); a != nil && (r.AttemptID == nil || *r.AttemptID != *a) {
+			continue
+		}
+		if sid := nonEmpty(f.SessionID); sid != nil && r.SessionID != *sid {
+			continue
+		}
+		out = append(out, api.TurnStall{
+			MessageId: r.MessageID, SessionId: r.SessionID, TaskId: r.TaskID, MainThread: r.MainThread,
+			LastActivityAt: r.LastActivityAt, StalledAt: r.StalledAt, ToolRunning: r.ToolRunning,
+		})
+	}
+	return out, nil
 }
 
 // groups seeds one group per task, or per session that has none, in the order the page lists them:

@@ -72,8 +72,9 @@ func stateOf(sess *kagentapi.Session) (api.WorkspaceObservedState, *string) {
 }
 
 // project builds the contract lifecycle. sess is what kagent reported, nil when there is no
-// Session or it could not be read; create is the newest create operation, nil if none.
-func project(w wsRow, sess *kagentapi.Session, create *dbq.WorkspaceOp, delivery time.Time) api.WorkspaceLifecycle {
+// Session or it could not be read; create is the newest create operation, nil if none. mode and
+// reason are the workspace's actual push authority, from [publicationOf].
+func project(w wsRow, sess *kagentapi.Session, create *dbq.WorkspaceOp, delivery time.Time, mode api.WorkspaceLifecyclePublicationMode, reason *api.WorkspaceLifecyclePublicationReason) api.WorkspaceLifecycle {
 	state, detail := api.WorkspaceObservedStateUnknown, (*string)(nil)
 	switch {
 	case sess != nil:
@@ -96,7 +97,6 @@ func project(w wsRow, sess *kagentapi.Session, create *dbq.WorkspaceOp, delivery
 			detail = &msg
 		}
 	}
-	reason := api.Disabled
 	active := w.LastActiveAt
 	if !delivery.IsZero() && (active == nil || delivery.After(*active)) {
 		active = &delivery
@@ -113,8 +113,8 @@ func project(w wsRow, sess *kagentapi.Session, create *dbq.WorkspaceOp, delivery
 			Ref:                    w.Ref, RepoUrl: w.RepoURL,
 		},
 		ObservedState:     state,
-		PublicationMode:   api.ReadOnly,
-		PublicationReason: &reason,
+		PublicationMode:   mode,
+		PublicationReason: reason,
 		SessionId:         w.ID,
 		UpdatedAt:         w.UpdatedAt,
 		WorkspaceId:       w.ID,

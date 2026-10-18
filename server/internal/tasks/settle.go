@@ -126,19 +126,50 @@ func (s *Service) cancelOpenChildren(ctx context.Context, q *dbq.Queries, t dbq.
 	return drafts, nil
 }
 
-// stop acts on a draining attempt: it cancels its session, which closes Mainloop's own open
-// deliveries, and removes its workspace when the agent never ran. What the session's Cancel reports
-// never confirms a stop (it may be a repeat on a cancelled session, or have no kagent session to ask):
-// [Service.resolveStop] asks the observer, and only the observer confirms. stop is safe to repeat, and
-// session cancel is skipped once the resolver has looked: the observer cancels whatever runs.
-// Workspace cleanup still checks its key on every pass until it is confirmed.
-func (s *Service) stop(ctx context.Context, a dbq.TaskAttempt) error {
+// stop acts on a draining attempt: it ends its session with the given terminal status, which
+// closes Mainloop's own open deliveries, and removes its workspace when the agent never ran. What
+// the session's ending reports never confirms a stop (it may be a repeat on an already-ended
+// session, or have no kagent session to ask): [Service.resolveStop] asks the observer, and only the
+// observer confirms. stop is safe to repeat, and ending the session is skipped once the resolver has
+// looked: the observer cancels whatever runs. Workspace cleanup still checks its key on every pass
+// until it is confirmed.
+func (s *Service) stop(ctx context.Context, a dbq.TaskAttempt, status dbstate.SessionStatus) error {
 	if a.ResolveAttempts == 0 && a.SessionID != nil {
-		if _, err := s.Sessions.Cancel(ctx, *a.SessionID); err != nil && !errors.Is(err, sessions.ErrNotFound) {
+		if err := s.endSession(ctx, *a.SessionID, status); err != nil && !errors.Is(err, sessions.ErrNotFound) {
 			return err
 		}
 	}
 	return s.cleanupWorkspace(ctx, a)
+}
+
+// endSession ends a session the way its owning task ended: completed and failed leave the session
+// in the matching terminal status instead of the generic cancelled one, so a task that finished
+// successfully does not look cancelled. Anything other than a completed or failed task (including a
+// real cancel) ends the session cancelled.
+func (s *Service) endSession(ctx context.Context, sessionID string, status dbstate.SessionStatus) error {
+	switch status {
+	case dbstate.SessionCompleted:
+		_, err := s.Sessions.Complete(ctx, sessionID)
+		return err
+	case dbstate.SessionFailed:
+		_, err := s.Sessions.Fail(ctx, sessionID)
+		return err
+	default:
+		_, err := s.Sessions.Cancel(ctx, sessionID)
+		return err
+	}
+}
+
+// sessionStatusFor is the terminal session status that matches a task's own final status.
+func sessionStatusFor(t dbstate.TaskStatus) dbstate.SessionStatus {
+	switch t {
+	case dbstate.TaskCompleted:
+		return dbstate.SessionCompleted
+	case dbstate.TaskFailed:
+		return dbstate.SessionFailed
+	default:
+		return dbstate.SessionCancelled
+	}
 }
 
 // orphanWorkspace finds the workspace a cut-off create made for an attempt, if there is one.
@@ -317,7 +348,14 @@ func (s *Service) settle(ctx context.Context, attemptID string) error {
 		return s.cleanupWorkspace(ctx, a)
 	}
 	if a.State == dbstate.AttemptDraining {
-		if err := s.stop(ctx, a); err != nil {
+		// By the time an attempt reaches here, its task has already ended (the precondition of
+		// [Service.runSettle] and of [Service.abort]): the task's own final status is what the
+		// session should end with too, not the generic cancelled one settle used to force on it.
+		t, err := dbq.New(s.Pool).GetTaskByID(ctx, a.TaskID)
+		if err != nil {
+			return err
+		}
+		if err := s.stop(ctx, a, sessionStatusFor(t.Status)); err != nil {
 			return err
 		}
 		if a, err = dbq.New(s.Pool).GetTaskAttempt(ctx, attemptID); err != nil {
@@ -407,7 +445,9 @@ func (s *Service) driveCancel(ctx context.Context, c reconcile.Claim, op dbq.Tas
 			return reconcile.Outcome{}, err
 		}
 		if a.State == dbstate.AttemptDraining {
-			if err := s.stop(ctx, a); err != nil {
+			// This is a real cancel: the task is not final yet (it only becomes cancelled when this
+			// operation finishes it below), so the session ends cancelled too, not by the task's status.
+			if err := s.stop(ctx, a, dbstate.SessionCancelled); err != nil {
 				return reconcile.Outcome{}, err
 			}
 			if a, err = dbq.New(s.Pool).GetTaskAttempt(ctx, src); err != nil {

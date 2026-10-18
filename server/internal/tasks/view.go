@@ -247,7 +247,13 @@ func buildViews(tasks []dbq.Task, attempts []dbq.TaskAttempt, ops []dbq.TaskOper
 		if err != nil {
 			return nil, err
 		}
-		byID[a.TaskID].Attempts = append(byID[a.TaskID].Attempts, v)
+		view := byID[a.TaskID]
+		view.Attempts = append(view.Attempts, v)
+		// The projection's environment version comes from the task's current attempt: that is
+		// the environment the task is actually running under, not necessarily the first one.
+		if v.Environment != nil && view.Task.CurrentAttemptId != nil && a.ID == *view.Task.CurrentAttemptId {
+			view.Projection.EnvironmentVersionId = &v.Environment.VersionId
+		}
 	}
 	opTask := map[string]string{}
 	for _, o := range ops {

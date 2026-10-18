@@ -26,6 +26,24 @@ const LOST_REPLY_UNCONFIRMED =
 
 const isClientError = (status: number) => status >= 400 && status < 500;
 
+/** A version 4 UUID. getRandomValues also works on the local HTTP preview, where randomUUID does not. */
+export function newRequestId(): string {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = ((b[6] ?? 0) & 0x0f) | 0x40;
+  b[8] = ((b[8] ?? 0) & 0x3f) | 0x80;
+  const h = Array.from(b, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/** The server's reason in an error body (`{"detail": "..."}`), when it has one. */
+function errorDetail(error: unknown): string | null {
+  if (error && typeof error === 'object' && 'detail' in error) {
+    const detail = (error as { detail?: unknown }).detail;
+    if (typeof detail === 'string' && detail) return detail;
+  }
+  return null;
+}
+
 /**
  * The words for a send the backend did not accept. A 4xx refusal shows the server's reason, as does
  * a send with no reply at all; a 5xx keeps the generic line.
@@ -161,6 +179,11 @@ export function useThread(source: ThreadSource) {
   const sessionChat = $api.useMutation('post', '/sessions/{session_id}/message');
   const stopTurn = $api.useMutation('post', '/sessions/{session_id}/stop-turn');
   const [stopError, setStopError] = useState<string | null>(null);
+  const restartSession = $api.useMutation('post', '/sessions/{session_id}/restart');
+  const [restartError, setRestartError] = useState<string | null>(null);
+  // One idempotency key per restart the owner asked for: a retry after a lost reply or a 502 repeats
+  // it, so the server continues the same restart instead of starting another.
+  const restartRequest = useRef<string | null>(null);
 
   const serverMessages = useMemo(() => conversation.data?.messages ?? [], [conversation.data]);
 
@@ -438,11 +461,37 @@ export function useThread(source: ThreadSource) {
     stopTurn.mutate(
       { params: { path: { session_id: threadSessionId } } },
       {
-        onError: () => setStopError('Could not stop the turn. Try again.'),
+        onError: (error) =>
+          setStopError(
+            `Could not stop the turn${errorDetail(error) ? ` (${errorDetail(error)})` : '.'} Try again.`
+          ),
         onSettled: () => void refresh().catch(() => undefined)
       }
     );
   }, [threadSessionId, refresh, stopTurn]);
+
+  const restart = useCallback(() => {
+    if (!threadSessionId) return;
+    setRestartError(null);
+    restartRequest.current ??= newRequestId();
+    restartSession.mutate(
+      {
+        params: { path: { session_id: threadSessionId } },
+        body: { request_id: restartRequest.current }
+      },
+      {
+        onSuccess: () => {
+          restartRequest.current = null;
+          setStopError(null);
+        },
+        onError: (error) =>
+          setRestartError(
+            `Could not restart the session${errorDetail(error) ? `: ${errorDetail(error)}` : '.'} Try again.`
+          ),
+        onSettled: () => void refresh().catch(() => undefined)
+      }
+    );
+  }, [threadSessionId, refresh, restartSession]);
 
   // The last poll of the conversation can predate the agent's reply; read it once more when the
   // turn ends.
@@ -488,7 +537,13 @@ export function useThread(source: ThreadSource) {
     retry,
     stop,
     stopping: stopTurn.isPending,
-    stopError
+    stopError,
+    /** The server can restart this thread's native session (main thread or standalone session). */
+    restartable: native?.restartable === true,
+    /** Deletes the native session and fails the open turn; see POST /sessions/{id}/restart. */
+    restart,
+    restarting: restartSession.isPending,
+    restartError
   };
 }
 

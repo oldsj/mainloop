@@ -212,6 +212,10 @@ func TestWorkspacePushAttachmentAndReadiness(t *testing.T) {
 	if a.Cluster.UID(authtest.Namespace, want.GetSecretRef().GetName()) == "" {
 		t.Fatal("push Secret was not published")
 	}
+	// The lifecycle reports the authority the workspace actually holds once the gate enrolls it.
+	if lc, err := h.svc.Get(bg, w.ID); err != nil || lc.PublicationMode != api.Branch || lc.PublicationReason != nil {
+		t.Fatalf("lifecycle publication after enrollment: %v, mode %v, reason %v", err, lc.PublicationMode, lc.PublicationReason)
+	}
 	// Another workspace cannot take this attempt's key, and terminal release cannot reopen it.
 	if _, err = h.svc.Pool.Exec(bg, `INSERT INTO workspace_push_reservations (id,idempotency_key,workspace_id,attempt_id,reference,expires_at)
 	    VALUES ('other','workspace-push:attempt','other','attempt','{}',now()+interval '1 hour')`); err == nil {

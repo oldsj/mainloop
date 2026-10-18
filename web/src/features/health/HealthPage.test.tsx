@@ -21,9 +21,12 @@ import {
   PARTIAL_NOTICE,
   reportText,
   retentionText,
+  STALLS_NOTE,
+  stallText,
   STOPS_NOTE,
   stopText,
   unreadableClaimsText,
+  unreadableStallsText,
   unreadableStopsText
 } from './model';
 import { events, healthRow, healthView, session, toolEvent, totals } from './test/fixtures';
@@ -340,6 +343,42 @@ describe('health page: rows', () => {
     expect(await screen.findByText(unreadableStopsText(1))).toBeInTheDocument();
     expect(screen.getByText(/attempt-9/)).toBeInTheDocument();
     expect(screen.queryByText(/attempt-bad/)).not.toBeInTheDocument();
+  });
+
+  const stall = (overrides: Record<string, unknown> = {}) => ({
+    message_id: 'msg-7',
+    session_id: 'session-7',
+    task_id: 'a2a-7',
+    main_thread: true,
+    last_activity_at: '2026-10-18T16:13:33Z',
+    stalled_at: '2026-10-18T17:13:40Z',
+    tool_running: true,
+    ...overrides
+  });
+
+  it('lists stalled turns, drops a malformed one and says so', async () => {
+    respond = () =>
+      HttpResponse.json(
+        healthView([healthRow({ id: 'good' })], {
+          stalled_turns: [stall(), stall({ message_id: 'msg-bad', tool_running: 'yes' })]
+        })
+      );
+    renderHealth('/health');
+
+    const section = await screen.findByRole('region', { name: 'Stalled turns' });
+    expect(within(section).getByText(STALLS_NOTE)).toBeInTheDocument();
+    expect(within(section).getByText(stallText(stall() as never))).toBeInTheDocument();
+    expect(stallText(stall() as never)).toMatch(/Main thread.*msg-7.*while a tool runs/);
+    expect(within(section).getByText(unreadableStallsText(1))).toBeInTheDocument();
+    expect(screen.queryByText(/msg-bad/)).not.toBeInTheDocument();
+  });
+
+  it('shows no stalled-turn section when nothing is stalled or the server sends none', async () => {
+    respond = () => HttpResponse.json(healthView([healthRow({ id: 'good' })]));
+    renderHealth('/health');
+
+    await screen.findByRole('button', { name: /^Add retry button/ });
+    expect(screen.queryByRole('region', { name: 'Stalled turns' })).not.toBeInTheDocument();
   });
 
   it('shows a repeated row id once and says the repeat was dropped', async () => {

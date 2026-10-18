@@ -195,6 +195,15 @@ type Options struct {
 	// CarryOverMessages is how many recent completed messages the first message to a new main
 	// Session carries. The zero value carries none; OptionsFrom sets the configured default.
 	CarryOverMessages int
+	// StallAfter is how long a delivered turn may show no task event before it reads as stalled.
+	StallAfter time.Duration
+	// StallToolAfter replaces StallAfter while the last event left a tool call running.
+	StallToolAfter time.Duration
+	// StallEvery is the period of the stall sweep.
+	StallEvery time.Duration
+	// ActivityWriteEvery is the shortest time between two writes of a turn's activity time; a change
+	// of what the turn is doing, or the end of a stall, is written at once.
+	ActivityWriteEvery time.Duration
 }
 
 // OptionsFrom reads the settings.
@@ -208,6 +217,8 @@ func OptionsFrom(c config.Sessions) Options {
 		ReadyWait:         c.ReadyWait.Duration(),
 		Concurrency:       c.DeliveryConcurrency,
 		EnsureEvery:       c.EnsureEvery.Duration(),
+		StallAfter:        c.StallAfter.Duration(),
+		StallToolAfter:    c.StallToolAfter.Duration(),
 	}
 }
 
@@ -225,6 +236,13 @@ func (o Options) withDefaults() Options {
 	def(&o.EnsureEvery, time.Minute)
 	def(&o.ResolveEvery, 5*time.Minute)
 	def(&o.Lease, 30*time.Second)
+	def(&o.StallAfter, 25*time.Minute)
+	def(&o.StallToolAfter, time.Hour)
+	if o.StallToolAfter < o.StallAfter {
+		o.StallToolAfter = o.StallAfter
+	}
+	def(&o.StallEvery, 30*time.Second)
+	def(&o.ActivityWriteEvery, 30*time.Second)
 	if o.Concurrency <= 0 {
 		o.Concurrency = 16
 	}
@@ -267,6 +285,8 @@ type Service struct {
 	Progress *progress.Tracker
 	Log      *slog.Logger
 	Opts     Options
+	// Now is the clock of the stall watch (activity times and the stall sweep). Nil is time.Now.
+	Now func() time.Time
 }
 
 func (s *Service) opts() Options { return s.Opts.withDefaults() }

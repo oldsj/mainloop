@@ -122,9 +122,21 @@ const StopShape = z.looseObject({
   native_deleted: z.boolean()
 }) satisfies z.ZodType<Schemas['HealthStop']>;
 
+const StallShape = z.looseObject({
+  message_id: z.string(),
+  session_id: z.string(),
+  task_id: z.string().nullable(),
+  main_thread: z.boolean(),
+  last_activity_at: z.string(),
+  stalled_at: z.string(),
+  tool_running: z.boolean()
+}) satisfies z.ZodType<Schemas['TurnStall']>;
+
 const ViewShape = z.looseObject({
   rows: z.array(z.unknown()),
   stops: z.array(z.unknown()),
+  // Optional: an older server does not send it.
+  stalled_turns: z.array(z.unknown()).optional(),
   hours: z.number(),
   partial: z.boolean(),
   retention: z.looseObject({ events_days: z.number(), summaries_days: z.number() })
@@ -135,6 +147,7 @@ export type HealthSession = z.infer<typeof SessionShape>;
 export type HealthReport = z.infer<typeof ReportShape>;
 export type HealthApproval = z.infer<typeof ApprovalShape>;
 export type HealthStop = z.infer<typeof StopShape>;
+export type HealthStall = z.infer<typeof StallShape>;
 export type HealthRow = z.infer<typeof RowFields> & {
   reports: HealthReport[];
   approvals: HealthApproval[];
@@ -152,6 +165,10 @@ export interface HealthView {
   stops: HealthStop[];
   /** Stops that could not be read. They are not listed, and the page says so. */
   unreadableStops: number;
+  /** Delivered turns with no task activity past their allowance, oldest stall first. */
+  stalls: HealthStall[];
+  /** Stalled turns that could not be read. They are not listed, and the page says so. */
+  unreadableStalls: number;
   partial: boolean;
   retention: Schemas['HealthView']['retention'];
 }
@@ -207,10 +224,13 @@ export function readView(value: unknown): HealthView | null {
   if (!parsed.success) return null;
   const { rows, dropped, repeated } = parseRows(parsed.data.rows);
   const stops = readClaims(parsed.data.stops, StopShape);
+  const stalls = readClaims(parsed.data.stalled_turns ?? [], StallShape);
   return {
     rows,
     stops: stops.items,
     unreadableStops: stops.unreadable,
+    stalls: stalls.items,
+    unreadableStalls: stalls.unreadable,
     dropped,
     repeated,
     partial: parsed.data.partial,
@@ -266,6 +286,21 @@ export function unreadableStopsText(count: number): string {
   return count === 1
     ? 'One unconfirmed stop could not be read and is not listed.'
     : `${count} unconfirmed stops could not be read and are not listed.`;
+}
+
+export function stallText(stall: HealthStall): string {
+  const where = stall.main_thread ? 'Main thread' : `Session ${stall.session_id}`;
+  const tool = stall.tool_running ? ' while a tool runs' : '';
+  return `${where} · message ${stall.message_id} · no activity since ${stall.last_activity_at}${tool} · stalled ${stall.stalled_at}.`;
+}
+
+export const STALLS_NOTE =
+  'These turns have shown no task activity past their allowance. They may still finish, and the next event clears them. Nothing is resent: stop or restart the session from its chat.';
+
+export function unreadableStallsText(count: number): string {
+  return count === 1
+    ? 'One stalled turn could not be read and is not listed.'
+    : `${count} stalled turns could not be read and are not listed.`;
 }
 
 export function providerLabel(provider: string): string {

@@ -22,4 +22,10 @@ type Sessions struct {
 	// CarryOverMessages is how many recent completed user and assistant messages the first
 	// message to a new main Session carries from the earlier conversation. 0 carries none; at most 100.
 	CarryOverMessages int `env:"MAIN_CARRY_OVER_MESSAGES" envDefault:"6"`
+	// StallAfter is how long a delivered turn may go without a task event before it reads as
+	// stalled. Generous: a turn that thinks for a long time says nothing meanwhile.
+	StallAfter Seconds `env:"SESSION_STALL_SECONDS" envDefault:"1500"`
+	// StallToolAfter replaces StallAfter while the last event started a tool call with no result yet:
+	// a web search or a long build emits nothing until it ends.
+	StallToolAfter Seconds `env:"SESSION_STALL_TOOL_SECONDS" envDefault:"3600"`
 }

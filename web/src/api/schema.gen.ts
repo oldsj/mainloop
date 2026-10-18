@@ -989,6 +989,36 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/sessions/{session_id}/restart': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Restart Session Runtime
+     * @description Recover a session whose turn cannot be stopped: delete its native kagent Session and settle
+     *     the turns that were open on it as ``failed`` (never resent), so the messages queued behind them
+     *     move on at once. The next message creates a new native Session, which carries the recent
+     *     conversation; the old native context is lost. The main thread and standalone native sessions
+     *     can be restarted; a workspace or task-owned session cannot (409).
+     *
+     *     ``request_id`` is the idempotency key: repeating it returns the restart's recorded outcome, or
+     *     continues one that was interrupted, and never deletes a newer Session. ``status`` is
+     *     ``restarted`` when a native Session was deleted, else ``no_native_session``. A delete kagent
+     *     did not confirm is 502 and is retried by repeating the request (a background sweep also
+     *     continues it).
+     */
+    post: operations['restartSession'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/task-operations/{operation_id}': {
     parameters: {
       query?: never;
@@ -1877,6 +1907,14 @@ export interface components {
        * @default false
        */
       turn_in_flight: boolean;
+      /** @description The session's turn, when it is stalled (no task activity past its allowance); null otherwise. */
+      stalled_turn?: components['schemas']['TurnStall'] | null;
+      /**
+       * Restartable
+       * @description Whether POST /sessions/{session_id}/restart applies to this session (the main thread or a standalone native session that has not ended).
+       * @default false
+       */
+      restartable: boolean;
       /**
        * Deliveries
        * @description The newest 20 ledgered deliveries of the session, oldest first (the last item is the newest).
@@ -2930,6 +2968,19 @@ export interface components {
     SessionStopTurnResponse: {
       /** @enum {string} */
       status: 'stopped' | 'finished' | 'no_open_turn';
+    };
+    SessionRestartRequest: {
+      /**
+       * Format: uuid
+       * @description Idempotency key chosen by the caller; repeat it to retry the same restart.
+       */
+      request_id: string;
+    };
+    SessionRestartResponse: {
+      /** @enum {string} */
+      status: 'restarted' | 'no_native_session';
+      /** @description The open turns the restart settled as failed (their messages are not resent). */
+      failed_message_ids: string[];
     };
     SessionArchiveResponse: {
       /** @enum {string} */
@@ -4712,8 +4763,28 @@ export interface components {
       /** @description Whether Mainloop has already asked kagent to delete the runtime's session. */
       native_deleted: boolean;
     };
+    /** @description A delivered turn whose task has shown no activity for longer than its allowance. It may still finish; the next task event clears it. Nothing is replayed: stop or restart the session to recover. */
+    TurnStall: {
+      /** @description The delivery (the user message) whose turn is stalled. */
+      message_id: string;
+      session_id: string;
+      task_id: string | null;
+      /** @description Whether the session is the owner's main thread. */
+      main_thread: boolean;
+      /**
+       * Format: date-time
+       * @description The last task event Mainloop saw, or when the turn was delivered if none.
+       */
+      last_activity_at: string;
+      /** Format: date-time */
+      stalled_at: string;
+      /** @description The last event started a tool call with no result yet, which has the longer allowance. */
+      tool_running: boolean;
+    };
     HealthView: {
       rows: components['schemas']['HealthRow'][];
+      /** @description Delivered turns marked stalled (no task activity past their allowance), oldest stall first. Always sent; absent only from older servers. */
+      stalled_turns?: components['schemas']['TurnStall'][];
       /** @description Requested stops that stayed unconfirmed past the resolver's bound, oldest first. */
       stops: components['schemas']['HealthStop'][];
       hours: number;
@@ -8045,6 +8116,86 @@ export interface operations {
       };
       /** @description Conflict */
       409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  restartSession: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SessionRestartRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SessionRestartResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Request Entity Too Large */
+      413: {
         headers: {
           [name: string]: unknown;
         };

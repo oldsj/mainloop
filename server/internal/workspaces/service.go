@@ -64,10 +64,11 @@ func (s *Service) lifecycle(ctx context.Context, w wsRow) api.WorkspaceLifecycle
 	if s.Deliveries != nil {
 		delivery, _ = s.Deliveries.LastActivity(ctx, w.ID)
 	}
+	mode, reason := s.publication(ctx, w)
 	if sess == nil {
-		return project(w, nil, create, delivery)
+		return project(w, nil, create, delivery, mode, reason)
 	}
-	return project(w, sess.s, create, delivery)
+	return project(w, sess.s, create, delivery, mode, reason)
 }
 
 // Get returns one workspace.
@@ -111,10 +112,11 @@ func (s *Service) List(ctx context.Context) ([]api.WorkspaceLifecycle, error) {
 			if s.Deliveries != nil {
 				delivery, _ = s.Deliveries.LastActivity(ctx, w.ID)
 			}
+			mode, reason := s.publication(ctx, w)
 			if sess == nil {
-				out[i] = project(w, nil, create, delivery)
+				out[i] = project(w, nil, create, delivery, mode, reason)
 			} else {
-				out[i] = project(w, sess.s, create, delivery)
+				out[i] = project(w, sess.s, create, delivery, mode, reason)
 			}
 			return nil
 		})
@@ -544,7 +546,8 @@ func (s *Service) create(ctx context.Context, body api.CreateWorkspaceRequest, r
 			Branch: w.Branch, Depth: w.Depth, AgentKind: w.AgentKind, Ports: w.Ports,
 			IdleTimeoutMinutes: w.IdleTimeoutMinutes, Environment: w.Environment, RequestID: w.RequestID,
 			CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
-		lc := project(row, nil, &op, time.Time{})
+		mode, reason := publicationOf(ctx, q, s.GitPush.enabled(), row)
+		lc := project(row, nil, &op, time.Time{}, mode, reason)
 		return []events.Draft{{UserID: s.OwnerID, Type: events.TypeWorkspaceUpdated, Payload: api.EventWorkspaceUpdated{Workspace: lc}}}, nil
 	})
 	if err != nil {
@@ -612,7 +615,8 @@ func (s *Service) dropRejected(ctx context.Context, id string, create dbq.Worksp
 		if _, err := agentauth.RevokeInTx(ctx, q, id); err != nil {
 			return nil, err
 		}
-		lc := project(wsRow(row), nil, &create, time.Time{})
+		mode, reason := publicationOf(ctx, q, s.GitPush.enabled(), wsRow(row))
+		lc := project(wsRow(row), nil, &create, time.Time{}, mode, reason)
 		return []events.Draft{{UserID: row.UserID, Type: events.TypeWorkspaceUpdated, Payload: api.EventWorkspaceUpdated{Workspace: lc}}}, nil
 	})
 }
