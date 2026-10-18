@@ -23,6 +23,7 @@ data:
   KAGENT_WORKSPACE_CLAUDE_AGENT: claude-workspace
   KAGENT_WORKSPACE_CODEX_AGENT: codex-workspace
   SUBSTRATE_ROUTER_ADDRESS: http://atenet-router.ate-system.svc.cluster.local:8081
+  # Bump mainloop.olds.network/config-revision in backend-patch.yaml when this file changes.
   # Owner decision 2026-10-17: Mainloop's own PRs that touch protected paths merge on green
   # without an owner card. Matches are still recorded on the proposal (docs/specs/merge-policy.md).
   MAINLOOP_MERGE_PROTECTED_AUTO: 'true'
