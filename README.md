@@ -84,13 +84,15 @@ context); it receives `VITE_API_URL=https://mainloop-api.olds.network` at build 
 Images are published to `ghcr.io/oldsj/mainloop-backend` and
 `ghcr.io/oldsj/mainloop-frontend`, tagged with the first seven characters of the
 source commit SHA. Each image's job summary records the full source SHA, tag,
-digest, and copyable `image@sha256:...` reference. Wait for both image jobs to
-succeed, then copy their digest references into a manually reviewed infrastructure
-PR that updates the Mainloop Application's `kustomize.images` pins. Publishing
-images does not update pins or deploy them.
+digest, and copyable `image@sha256:...` reference. When both image jobs succeed and
+the commit is still the tip of `main`, the `release` job force-pushes the `release`
+branch (the `main` commit plus one commit pinning both digests in the prod overlay) and
+tags it `release-<sha7>`. Once the deployment repository points Argo at `release`, a merge to `main` deploys. Rolling
+back is pushing the previous release tag back to `release`
+([details](docs/production-rollout.md#production-changes-are-gitops-only)).
 
-The workflow authenticates with `GITHUB_TOKEN` (`contents: read`,
-`packages: write`) and uses separate GitHub Actions caches for each image. Existing
+The image jobs authenticate with `GITHUB_TOKEN` (`contents: read`,
+`packages: write`; the `release` job has `contents: write`) and use separate GitHub Actions caches for each image. Existing
 GHCR packages must grant this repository Actions write access. New pushes cancel
 older image builds for the same ref; a cancelled run may have published only one
 image, so use a fully successful run for a pin update.

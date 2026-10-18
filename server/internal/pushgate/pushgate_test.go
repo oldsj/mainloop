@@ -925,6 +925,22 @@ func TestPolicyVersionsAndPreviousDefaults(t *testing.T) {
 	}
 }
 
+// The release branch carries what Argo deploys to production, so no policy can open it to tasks.
+func TestReleaseBranchIsAlwaysDenied(t *testing.T) {
+	for _, p := range []Policy{
+		{DefaultBranch: "main"},
+		{DefaultBranch: "main", AllowedPatterns: []string{"release", "*"}},
+		{DefaultBranch: "trunk"},
+	} {
+		if p.permits("release") == nil || p.Allows("release") {
+			t.Fatalf("release permitted under %+v", p)
+		}
+	}
+	if (Policy{DefaultBranch: "main"}).permits("release-notes") != nil {
+		t.Fatal("only the exact release branch is denied")
+	}
+}
+
 func TestBranchGlobClasses(t *testing.T) {
 	for _, tc := range []struct {
 		pattern, branch string
