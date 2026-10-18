@@ -7,8 +7,13 @@ const MAX_HEIGHT_PX = 160;
 export interface ComposerProps {
   /** Which draft this box holds: the conversation id, or `new` before there is one. */
   draftKey: string;
-  /** A turn is in flight, or a send is pending. */
+  /** A send on this thread (this box's own, or another's, such as Retry) is pending. */
   busy: boolean;
+  /**
+   * A turn is in flight on the thread. Shown in the placeholder only: a send while a turn is open
+   * is durably queued behind it rather than refused, so this never disables the box.
+   */
+  turnBusy?: boolean;
   /** The thread has not been read yet, so the draft's conversation is not known. */
   loading?: boolean;
   /** The first read of the thread failed, so there is nothing to send to. */
@@ -34,7 +39,7 @@ export interface ComposerProps {
 
 function placeholder(
   offline: boolean,
-  busy: boolean,
+  working: boolean,
   loading: boolean,
   unavailable: boolean,
   closed: string | null
@@ -43,7 +48,7 @@ function placeholder(
   if (unavailable) return 'Thread did not load…';
   if (closed) return closed;
   if (loading) return 'Loading…';
-  if (busy) return 'Working…';
+  if (working) return 'Working…';
   return 'Enter command...';
 }
 
@@ -51,6 +56,7 @@ function placeholder(
 export function Composer({
   draftKey,
   busy,
+  turnBusy = false,
   loading = false,
   unavailable = false,
   offline,
@@ -161,7 +167,7 @@ export function Composer({
     <div
       className="border-border bg-background px-md py-sm gap-sm relative flex shrink-0 items-end border-t"
       data-testid="input-bar"
-      aria-busy={sending || busy}
+      aria-busy={sending || busy || turnBusy}
     >
       <span className="text-term-accent flex min-h-11 items-center" aria-hidden="true">
         $
@@ -173,7 +179,7 @@ export function Composer({
         disabled={disabled}
         placeholder={placeholder(
           offline,
-          busy,
+          busy || turnBusy,
           loading,
           unavailable,
           closed ? closedPlaceholder : null
