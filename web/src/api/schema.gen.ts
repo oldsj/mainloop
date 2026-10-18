@@ -138,6 +138,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/devloop/operations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Devloop Syncs
+     * @description The dev_sync operations on mainloop-dev, newest first (at most 50): the commit, the verdict, and what the health and smoke checks said. session_id narrows to one task session.
+     */
+    get: operations['listDevloopOperations'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/environments': {
     parameters: {
       query?: never;
@@ -2882,6 +2902,29 @@ export interface components {
       idle_timeout_seconds: number;
       queue_length: number;
     };
+    DevloopOperation: {
+      id: string;
+      session_id: string;
+      commit_sha: string;
+      /** @enum {string} */
+      state: 'pending' | 'succeeded' | 'failed' | 'unknown';
+      /** @description Why the sync failed, or what it is waiting on. */
+      detail?: string;
+      /** @description Whether mainloop-dev's backend reported healthy after the copy. Absent until the check ran. */
+      health_ok?: boolean;
+      /** @description Whether migrate up succeeded after the copy. Absent until it ran. */
+      migrate_ok?: boolean;
+      smoke?: components['schemas']['DevloopSmoke'];
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    DevloopSmoke: {
+      passed: boolean;
+      /** @description The smoke run's own summary line, or the tail of its output when it failed. */
+      summary: string;
+    };
     SmokePush: {
       request_id: string;
       state: string;
@@ -4997,6 +5040,37 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['DevloopLease'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  listDevloopOperations: {
+    parameters: {
+      query?: {
+        session_id?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DevloopOperation'][];
         };
       };
       /** @description Service Unavailable */

@@ -3,6 +3,7 @@ package mcpserver_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -83,4 +84,26 @@ func TestDevSyncRequiresTheLease(t *testing.T) {
 	if err := h.env.Pool.QueryRow(context.Background(), `SELECT count(*) FROM devloop_operations`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("devloop_operations rows = %d, %v, want none", n, err)
 	}
+}
+
+// TestDevSyncDescriptionTellsAgentsWhenToUseItAndWhatItProves proves the description an agent reads
+// puts dev_sync before open_pull_request and says success means healthy and smoke-passing.
+func TestDevSyncDescriptionTellsAgentsWhenToUseItAndWhatItProves(t *testing.T) {
+	c, err := mcpserver.BuildContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range c.Tools {
+		if tool.Name != "dev_sync" {
+			continue
+		}
+		if !strings.HasPrefix(tool.Description, "Use after pushing and before open_pull_request.") {
+			t.Errorf("dev_sync description = %q, want it to start with when to use it", tool.Description)
+		}
+		if !strings.Contains(tool.Description, "Succeeds only when mainloop-dev is healthy and the smoke passes") {
+			t.Errorf("dev_sync description = %q, want it to say what success proves", tool.Description)
+		}
+		return
+	}
+	t.Fatal("dev_sync is not in the contract")
 }

@@ -231,6 +231,38 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DevloopLease'
+  /devloop/operations:
+    get:
+      tags:
+        - devloop
+      summary: List Devloop Syncs
+      description: >-
+        The dev_sync operations on mainloop-dev, newest first (at most 50): the commit, the verdict, and
+        what the health and smoke checks said. session_id narrows to one task session.
+      operationId: listDevloopOperations
+      parameters:
+        - name: session_id
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 200
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 50
+                items:
+                  $ref: '#/components/schemas/DevloopOperation'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
   /environments:
     get:
       tags:
@@ -6358,6 +6390,55 @@ components:
         - status
         - idle_timeout_seconds
         - queue_length
+      additionalProperties: false
+    DevloopOperation:
+      type: object
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+        commit_sha:
+          type: string
+        state:
+          type: string
+          enum: [pending, succeeded, failed, unknown]
+        detail:
+          type: string
+          description: Why the sync failed, or what it is waiting on.
+        health_ok:
+          type: boolean
+          description: Whether mainloop-dev's backend reported healthy after the copy. Absent until the check ran.
+        migrate_ok:
+          type: boolean
+          description: Whether migrate up succeeded after the copy. Absent until it ran.
+        smoke:
+          $ref: '#/components/schemas/DevloopSmoke'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - session_id
+        - commit_sha
+        - state
+        - created_at
+        - updated_at
+      additionalProperties: false
+    DevloopSmoke:
+      type: object
+      properties:
+        passed:
+          type: boolean
+        summary:
+          type: string
+          description: The smoke run's own summary line, or the tail of its output when it failed.
+      required:
+        - passed
+        - summary
       additionalProperties: false
     SmokePush:
       type: object

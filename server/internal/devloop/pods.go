@@ -21,17 +21,22 @@ import (
 
 // PodStatus is one pod's observable state, for dev_status.
 type PodStatus struct {
-	Name         string   `json:"name"`
-	Phase        string   `json:"phase"`
-	Ready        bool     `json:"ready"`
-	RestartCount int32    `json:"restart_count"`
-	Containers   []string `json:"containers"`
+	Name         string `json:"name"`
+	Phase        string `json:"phase"`
+	Ready        bool   `json:"ready"`
+	RestartCount int32  `json:"restart_count"`
+	// Deleting is true once the pod has a deletion timestamp: it is on its way out and must not be
+	// picked as a sync or health target.
+	Deleting   bool     `json:"deleting,omitempty"`
+	Containers []string `json:"containers"`
 }
 
 // LogOptions bounds a log read.
 type LogOptions struct {
 	TailLines int64
 	Since     time.Time
+	// Previous reads the log of the container's last terminated instance, where a crash shows.
+	Previous bool
 }
 
 // maxLogBytes and maxExecOutputBytes bound what a pod can make this process hold in memory. A
@@ -87,7 +92,7 @@ func (p *K8sPods) ListPods(ctx context.Context, namespace, labelSelector string)
 	}
 	out := make([]PodStatus, 0, len(list.Items))
 	for _, pod := range list.Items {
-		st := PodStatus{Name: pod.Name, Phase: string(pod.Status.Phase)}
+		st := PodStatus{Name: pod.Name, Phase: string(pod.Status.Phase), Deleting: pod.DeletionTimestamp != nil}
 		ready := len(pod.Status.ContainerStatuses) > 0
 		for _, cs := range pod.Status.ContainerStatuses {
 			st.Containers = append(st.Containers, cs.Name)
@@ -101,7 +106,7 @@ func (p *K8sPods) ListPods(ctx context.Context, namespace, labelSelector string)
 }
 
 func (p *K8sPods) Logs(ctx context.Context, namespace, pod, container string, opts LogOptions) (string, error) {
-	po := &corev1.PodLogOptions{Container: container}
+	po := &corev1.PodLogOptions{Container: container, Previous: opts.Previous}
 	if opts.TailLines > 0 {
 		po.TailLines = &opts.TailLines
 	}
@@ -185,10 +190,39 @@ func CopyTree(ctx context.Context, pods PodClient, namespace, pod, container, de
 		}
 		return fmt.Errorf("%w: copy to %s/%s: %w (stdout=%q stderr=%q)", ErrCopyInterrupted, pod, container, err, stdout, stderr)
 	}
-	if strings.TrimSpace(stderr) != "" {
-		return fmt.Errorf("devloop: copy to %s/%s: tar reported: %s", pod, container, strings.TrimSpace(stderr))
+	if rest := unexpectedTarStderr(stderr); rest != "" {
+		return fmt.Errorf("devloop: copy to %s/%s: tar reported: %s", pod, container, rest)
 	}
 	return nil
+}
+
+// harmlessTarWarnings are the stderr lines BusyBox tar (the alpine frontend image) prints while
+// still extracting every file and exiting 0: it skips PAX extended headers it does not understand
+// and strips a leading "/". Anything else on stderr is a real problem.
+var harmlessTarWarnings = []string{
+	"tar: warning: skipping header '",
+	"tar: removing leading '/' from member names",
+	"tar: removing leading '/' from hard link targets",
+}
+
+// unexpectedTarStderr returns the stderr lines that are not a known harmless BusyBox warning, joined
+// by newlines; empty when every line is harmless or stderr is blank.
+func unexpectedTarStderr(stderr string) string {
+	var rest []string
+lines:
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		for _, w := range harmlessTarWarnings {
+			if strings.HasPrefix(line, w) {
+				continue lines
+			}
+		}
+		rest = append(rest, line)
+	}
+	return strings.Join(rest, "\n")
 }
 
 // FilterTar rewrites a tar stream (as `git archive` produces) to hold only the entries under

@@ -104,3 +104,10 @@ WHERE id = $1 AND (op_id IS NULL OR held_until < now() OR op_id = $2);
 
 -- name: DropDevloopSyncLock :exec
 UPDATE devloop_sync_lock SET op_id = NULL, held_until = NULL, updated_at = now() WHERE id = $1 AND op_id = $2;
+
+-- The owner's view of dev_sync history, newest first. An empty session_id means every session.
+-- name: ListDevloopSyncs :many
+SELECT * FROM devloop_operations
+WHERE kind = 'sync' AND (sqlc.arg(session_id)::text = '' OR session_id = sqlc.arg(session_id)::text)
+ORDER BY created_at DESC, id
+LIMIT 50;
