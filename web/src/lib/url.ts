@@ -5,7 +5,8 @@
  * - `httpsUrl`: https only (PR, CI and project links);
  * - `httpUrl`: http and https (dev previews and declared repository URLs);
  * - `githubUrl`: https on github.com only;
- * - `markdownHref`: http, https and mailto (links in agent text).
+ * - `markdownHref`: http, https and mailto (links in agent text), plus a same-origin task link
+ *   (`taskPathId`) so an agent can reference a task's page without a full origin.
  *
  * A value with surrounding whitespace is refused, not trimmed. Credentials are removed from the URL
  * that is returned. A refused value returns null, so the caller shows the words without a link.
@@ -14,6 +15,7 @@
 const HTTPS = ['https:'];
 const HTTP_OR_HTTPS = ['http:', 'https:'];
 const MARKDOWN = ['http:', 'https:', 'mailto:'];
+const TASK_PATH = /^\/tasks\/([^\s/]+)$/;
 
 function allowedUrl(value: unknown, protocols: string[], host?: string): string | null {
   if (typeof value !== 'string' || value.trim() !== value) return null;
@@ -42,7 +44,14 @@ export function githubUrl(value: unknown): string | null {
   return allowedUrl(value, HTTPS, 'github.com');
 }
 
+/** The task id, if `value` is a same-origin task page link (`/tasks/<id>`), else null. */
+export function taskPathId(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim() !== value) return null;
+  return TASK_PATH.exec(value)?.[1] ?? null;
+}
+
 /** For react-markdown's `urlTransform`: a refused link loses its target and keeps its words. */
 export function markdownHref(value: unknown): string | null {
+  if (taskPathId(value) !== null) return value as string;
   return allowedUrl(value, MARKDOWN);
 }

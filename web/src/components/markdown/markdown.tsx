@@ -1,21 +1,36 @@
+import { Link } from '@tanstack/react-router';
 import type { Components } from 'react-markdown';
 import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import { cn } from '@/components/ui/cn';
-import { markdownHref } from '@/lib/url';
+import { markdownHref, taskPathId } from '@/lib/url';
 
 /**
  * Message text can come from agents, so it is never trusted:
  * - raw HTML is shown as text (no `rehype-raw`, no `dangerouslySetInnerHTML`), so `<file>` in
  *   prose stays visible;
- * - only http, https and mailto links work (`markdownHref`), and they open in a new tab with
- *   noopener; any other link keeps its words and loses its target;
+ * - only http, https, mailto and same-origin task links work (`markdownHref`); a task link
+ *   (`/tasks/<id>`) navigates in-app, other links open in a new tab with noopener; any other
+ *   link keeps its words and loses its target;
  * - an image shows its alt text and never loads.
  */
 const components: Components = {
   a({ href, title, children }) {
     if (!href) return <>{children}</>;
+    const taskId = taskPathId(href);
+    if (taskId !== null) {
+      return (
+        <Link
+          to="/tasks/$id"
+          params={{ id: taskId }}
+          title={title}
+          className="text-term-info hover:text-term-accent underline"
+        >
+          {children}
+        </Link>
+      );
+    }
     return (
       <a
         href={href}

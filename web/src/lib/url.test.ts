@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { githubUrl, httpUrl, httpsUrl, markdownHref } from './url';
+import { githubUrl, httpUrl, httpsUrl, markdownHref, taskPathId } from './url';
 
 // One row per value: what each helper returns. null means the link is refused.
 const REFUSED = null;
@@ -13,6 +13,16 @@ it.each<[unknown, string | null, string | null, string | null, string | null]>([
   // Protocol-relative and relative values have no scheme to allow.
   ['//evil.example/o/r', REFUSED, REFUSED, REFUSED, REFUSED],
   ['/o/r/pull/1', REFUSED, REFUSED, REFUSED, REFUSED],
+  // A same-origin task link is the one relative value `markdownHref` allows.
+  [
+    '/tasks/158f277e-83bc-4584-9b29-88d217542832',
+    REFUSED,
+    REFUSED,
+    REFUSED,
+    '/tasks/158f277e-83bc-4584-9b29-88d217542832'
+  ],
+  ['/tasks/158f277e-83bc-4584-9b29-88d217542832/', REFUSED, REFUSED, REFUSED, REFUSED],
+  ['/tasks/', REFUSED, REFUSED, REFUSED, REFUSED],
   // Mixed-case scheme and host are the same URL, so they are accepted and normalised.
   [
     'HTTPS://GitHub.com/o/r',
@@ -74,4 +84,14 @@ it('accepts a github.com PR link as it is', () => {
   expect(githubUrl('https://github.com/owner/repo/pull/7')).toBe(
     'https://github.com/owner/repo/pull/7'
   );
+});
+
+it('reads the id out of a task link, and nothing else', () => {
+  expect(taskPathId('/tasks/158f277e-83bc-4584-9b29-88d217542832')).toBe(
+    '158f277e-83bc-4584-9b29-88d217542832'
+  );
+  expect(taskPathId('/tasks/158f277e-83bc-4584-9b29-88d217542832/extra')).toBeNull();
+  expect(taskPathId('/sessions/1')).toBeNull();
+  expect(taskPathId('https://evil.example/tasks/1')).toBeNull();
+  expect(taskPathId(42)).toBeNull();
 });
