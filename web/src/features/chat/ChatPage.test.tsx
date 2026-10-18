@@ -793,6 +793,54 @@ describe('stopping a turn', () => {
     await userEvent.click(await screen.findByTestId('mt-stop-turn'));
     await waitFor(() => expect(state.stopped).toEqual([MAIN_SESSION_ID]));
   });
+
+  it('offers a confirmed restart when the stop fails, and sends one request id', async () => {
+    const { state } = setup(
+      existing({
+        failStop: true,
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({
+            turn_in_flight: true,
+            restartable: true,
+            deliveries: [deliveryFixture({ message_id: 'm1', state: 'delivered' })]
+          })
+        })
+      })
+    );
+    expect(screen.queryByTestId('turn-recovery')).toBeNull();
+    await userEvent.click(await screen.findByTestId('mt-stop-turn'));
+    const panel = await screen.findByTestId('turn-recovery');
+    expect(panel).toHaveTextContent('The turn could not be stopped.');
+    await userEvent.click(within(panel).getByTestId('turn-restart'));
+    // The confirmation says the native context is lost; nothing is sent until it is confirmed.
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('native context is lost');
+    expect(state.restarts).toEqual([]);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Restart' }));
+    await waitFor(() => expect(state.restarts).toHaveLength(1));
+    expect(state.restarts[0]?.sessionId).toBe(MAIN_SESSION_ID);
+    expect(state.restarts[0]?.body.request_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
+    // The turn is no longer in flight, so the panel goes.
+    await waitFor(() => expect(screen.queryByTestId('turn-recovery')).toBeNull());
+  });
+
+  it('does not offer a restart for a thread the server cannot restart', async () => {
+    setup(
+      existing({
+        failStop: true,
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({ turn_in_flight: true, restartable: false })
+        })
+      })
+    );
+    await userEvent.click(await screen.findByTestId('mt-stop-turn'));
+    await screen.findByText(/Could not stop the turn/);
+    expect(screen.queryByTestId('turn-recovery')).toBeNull();
+  });
 });
 
 describe('staying current', () => {

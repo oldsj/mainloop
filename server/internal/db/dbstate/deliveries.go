@@ -17,3 +17,13 @@ const (
 	DeliveryCancelled DeliveryState = "cancelled"
 	DeliveryUncertain DeliveryState = "uncertain"
 )
+
+// RestartState is session_restarts.state: requested until the native Session is confirmed gone and
+// the turns on it are settled, then done.
+type RestartState string
+
+// Restart states.
+const (
+	RestartRequested RestartState = "requested"
+	RestartDone      RestartState = "done"
+)

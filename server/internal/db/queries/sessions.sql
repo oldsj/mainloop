@@ -585,3 +585,54 @@ WHERE d.id = $1 AND b.session_id = d.session_id AND d.sent_text IS NOT NULL
 -- name: ClearBindingGuidanceVersion :exec
 UPDATE agent_bindings b SET guidance_version = NULL, guidance_delivery_id = NULL, updated_at = now()
 WHERE b.guidance_delivery_id = $1;
+
+-- A restart of a session whose turn cannot be stopped (restart.go). The row is written before the
+-- native delete, and settled in the transaction that fails the turns that were open on the Session.
+-- name: GetSessionRestart :one
+SELECT * FROM session_restarts WHERE id = $1;
+
+-- name: GetOpenSessionRestart :one
+SELECT * FROM session_restarts WHERE session_id = $1 AND state = 'requested';
+
+-- name: InsertSessionRestart :one
+INSERT INTO session_restarts (id, session_id, kagent_session_id)
+VALUES (sqlc.arg(id), sqlc.arg(session_id), sqlc.narg(kagent_session_id))
+RETURNING *;
+
+-- Records one unconfirmed delete. updated_at moves, so the resume sweep waits before it looks again.
+-- name: NoteSessionRestartAttempt :exec
+UPDATE session_restarts SET attempts = attempts + 1, detail = sqlc.narg(detail), updated_at = now()
+WHERE id = sqlc.arg(id) AND state = 'requested';
+
+-- Zero rows when another caller settled it first.
+-- name: FinishSessionRestart :execrows
+UPDATE session_restarts
+SET state = 'done', detail = NULL, failed_message_ids = sqlc.arg(failed_message_ids)::text[], updated_at = now()
+WHERE id = sqlc.arg(id) AND state = 'requested';
+
+-- Requested restarts nobody has touched for a while: a request that was cut off, or a delete that
+-- kagent did not confirm.
+-- name: ListDueSessionRestarts :many
+SELECT * FROM session_restarts
+WHERE state = 'requested' AND updated_at < now() - make_interval(secs => sqlc.arg(idle_seconds)::float8)
+ORDER BY created_at, id
+LIMIT sqlc.arg(limit_count);
+
+-- Forgets the deleted Session so the next message creates a new one under a new request id and
+-- carries the recent conversation again. Fenced on the Session the restart deleted: a binding that
+-- has moved on to a newer Session is left alone.
+-- name: ForgetDeletedKagentSession :execrows
+UPDATE agent_bindings
+SET kagent_session_id = NULL, kagent_request_id = sqlc.arg(new_request_id), standing_hash = NULL,
+    guidance_version = NULL, guidance_delivery_id = NULL,
+    kagent_create_request_id = NULL, kagent_create_agent_namespace = NULL, kagent_create_agent_name = NULL,
+    updated_at = now()
+WHERE session_id = sqlc.arg(session_id) AND kagent_session_id = sqlc.arg(old_session_id)::text;
+
+-- The turns a restart settles: every delivery that was sent, or may have been, to the deleted
+-- Session (or to none). A recorded one has not been sent and is left for the next Session.
+-- name: ListDeliveriesOnKagentSession :many
+SELECT * FROM deliveries
+WHERE session_id = sqlc.arg(session_id) AND state IN ('sending', 'delivered', 'uncertain')
+  AND (kagent_session_id IS NULL OR kagent_session_id = sqlc.arg(kagent_session_id)::text)
+ORDER BY created_at, id;

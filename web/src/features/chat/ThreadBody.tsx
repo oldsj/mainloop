@@ -3,6 +3,7 @@ import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Composer } from './Composer';
 import { assignmentIds } from './assignments';
 import { MessageList } from './MessageList';
+import { TurnRecovery } from './TurnRecovery';
 import { useLiveTurn } from './useLiveTurn';
 import type { ThreadView } from './useThread';
 
@@ -102,6 +103,7 @@ export function ThreadBody({
           {thread.stopError}
         </p>
       ) : null}
+      <TurnRecovery thread={thread} offline={offline} />
 
       {closedReason ? (
         <p className="text-muted-foreground px-md py-xs shrink-0 text-sm" role="status">

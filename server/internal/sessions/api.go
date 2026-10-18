@@ -253,6 +253,11 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row nativeBind
 			n.Topic = &name
 		}
 	}
+	restartable, err := a.Svc.isRestartable(ctx, row.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	n.Restartable = &restartable
 	state, observation, note := a.sessionState(ctx, row)
 	n.SessionState, n.PreparationObservation = state, observation
 	if unknown {
@@ -501,6 +506,34 @@ func (a *SessionsAPI) StopTurn(ctx context.Context, r api.StopTurnRequestObject)
 		return nil, err
 	}
 	return api.StopTurn200JSONResponse(api.SessionStopTurnResponse{Status: api.SessionStopTurnResponseStatus(out)}), nil
+}
+
+// RestartSession implements api.StrictServerInterface.
+func (a *SessionsAPI) RestartSession(ctx context.Context, r api.RestartSessionRequestObject) (api.RestartSessionResponseObject, error) {
+	if r.Body == nil {
+		return nil, apierr.Invalid("the body is required")
+	}
+	res, err := a.Svc.Restart(ctx, r.SessionId, r.Body.RequestId.String())
+	var kerr *KagentError
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, apierr.NotFound("Session not found")
+	case errors.Is(err, ErrConflict):
+		return nil, apierr.Conflict(reason(err, ErrConflict))
+	case errors.Is(err, ErrInvalid):
+		return nil, apierr.Invalid(reason(err, ErrInvalid))
+	case errors.As(err, &kerr):
+		return nil, apierr.BadGateway("Could not restart the session: " + safeDetail(kerr.Err.Error()))
+	case err != nil:
+		return nil, err
+	}
+	failed := res.Failed
+	if len(failed) > 100 {
+		failed = failed[:100]
+	}
+	return api.RestartSession200JSONResponse(api.SessionRestartResponse{
+		Status: api.SessionRestartResponseStatus(res.Outcome), FailedMessageIds: failed,
+	}), nil
 }
 
 // CancelSession implements api.StrictServerInterface.
