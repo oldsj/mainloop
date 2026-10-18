@@ -38,14 +38,14 @@ func TestBriefsStateTheRoleAndShareTheGuidance(t *testing.T) {
 		{
 			name: "supervisor/coordination", role: dbstate.AttemptSupervisor, mode: dbstate.TaskModeCoordination,
 			want: []string{"You are the Mainloop task supervisor.", "no repository authority"},
-			not:  []string{"## Workspace environment", "open_pull_request"},
+			not:  []string{"## Workspace environment", "open_pull_request", "dev_sync"},
 		},
 		{
 			// A root code task is a supervisor by position and has the checkout.
 			name: "supervisor/code", role: dbstate.AttemptSupervisor, mode: dbstate.TaskModeCode,
 			want: []string{
 				"You are the Mainloop task supervisor.", "open_pull_request", "## Workspace environment",
-				"gVisor sandbox", "SSL_CERT_FILE",
+				"gVisor sandbox", "SSL_CERT_FILE", "dev_sync", "empty commit",
 			},
 			not: []string{"no repository authority"},
 		},
@@ -53,13 +53,13 @@ func TestBriefsStateTheRoleAndShareTheGuidance(t *testing.T) {
 			name: "child/code", role: dbstate.AttemptChild, mode: dbstate.TaskModeCode,
 			want: []string{
 				"You are the Mainloop task child.", "open_pull_request", "## Workspace environment",
-				"gVisor sandbox", "SSL_CERT_FILE",
+				"gVisor sandbox", "SSL_CERT_FILE", "dev_sync", "empty commit",
 			},
 		},
 		{
 			name: "child/coordination", role: dbstate.AttemptChild, mode: dbstate.TaskModeCoordination,
 			want: []string{"You are the Mainloop task child.", "no repository authority"},
-			not:  []string{"## Workspace environment", "open_pull_request"},
+			not:  []string{"## Workspace environment", "open_pull_request", "dev_sync"},
 		},
 	}
 	for _, c := range cases {
