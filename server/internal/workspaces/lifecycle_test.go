@@ -312,6 +312,9 @@ func TestDeleteWithKagentUnreachableKeepsRows(t *testing.T) {
 	if !errors.As(err, &unc) || h.workspaceCount() != 1 || len(h.sessions()) != 1 {
 		t.Fatalf("%v, rows %d", err, h.workspaceCount())
 	}
+	// Delete returned after the short wait, maybe before the runner tried; let the failed attempt
+	// happen first, or due() is a no-op and the 30 s backoff outlasts the wait below.
+	eventually(t, "failure recorded", func() bool { return h.op(w.WorkspaceId, "delete").Failures == 1 })
 	h.due()
 	eventually(t, "rows removed", func() bool { return h.workspaceCount() == 0 })
 	if len(h.sessions()) != 0 {
@@ -343,6 +346,9 @@ func TestDeleteBeforeAnyCreateAttempt(t *testing.T) {
 	// runner started below cannot claim and send it before Delete cancels it.
 	h.exec(`UPDATE workspace_ops SET next_attempt_at = now() + interval '1 hour' WHERE kind = 'create'`)
 	h.run()
+	// Delete waits for the runner to claim and finish the delete, which the runner is free to take
+	// its time over; the short wait above was for Create, which has no runner.
+	defer h.patient(15 * time.Second)()
 	if err := h.svc.Delete(bg, w.WorkspaceId); err != nil {
 		t.Fatal(err)
 	}

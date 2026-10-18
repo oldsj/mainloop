@@ -68,12 +68,18 @@ func TestFailedDeliveryIsSentAgainThenBlocksTheTask(t *testing.T) {
 func TestParentEndedAfterTheReportCancelsTheDelivery(t *testing.T) {
 	r := newRig(t)
 	parent, _, child, kid := r.reportingChild()
-	// The parent ends between the report committing and the loop sending it.
-	r.exec(`UPDATE task_event_deliveries SET next_attempt_at = now() + interval '1 hour'`)
+	// The parent ends between the report committing and the loop sending it. The runner is already
+	// polling, so the report's delivery row is born parked (by a trigger, in the same insert) rather
+	// than parked afterwards, which the loop could beat.
+	r.exec(`CREATE FUNCTION park_event_delivery() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN NEW.next_attempt_at := now() + interval '1 hour'; RETURN NEW; END $$;
+		CREATE TRIGGER park_event_delivery BEFORE INSERT ON task_event_deliveries
+		FOR EACH ROW EXECUTE FUNCTION park_event_delivery()`)
 	if _, err := r.svc.Report(context.Background(), kid, report(kid, "r1", dbstate.OutcomeProgress)); err != nil {
 		t.Fatal(err)
 	}
 	r.exec(`UPDATE tasks SET status = 'cancelled', reason = NULL, version = version + 1 WHERE id = $1`, parent)
+	r.exec(`DROP TRIGGER park_event_delivery ON task_event_deliveries`)
 	r.exec(`UPDATE task_event_deliveries SET next_attempt_at = now()`)
 	r.eventually("delivery cancelled", func() bool {
 		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'cancelled'`) == 1
