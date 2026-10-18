@@ -292,12 +292,12 @@ func (s *OperationsService) runSync(
 		return fail(err.Error())
 	}
 	for _, t := range syncTargets {
-		filtered, err := FilterTar(bytes.NewReader(tree), t.prefix, t.exclude)
+		filtered, err := MirrorTar(bytes.NewReader(tree), t.prefix, t.exclude)
 		if err != nil {
 			return fail(fmt.Sprintf("filter %s: %v", t.prefix, err))
 		}
 		pod := base.bySelector(t.selector).pod.Name
-		if err := CopyTree(ctx, s.Pods, Namespace, pod, t.container, t.dest, filtered); err != nil {
+		if err := CopyTree(ctx, s.Pods, Namespace, pod, t.container, t.dest, t.exclude, filtered); err != nil {
 			switch {
 			case ctx.Err() != nil:
 				return fail(fmt.Sprintf("the sync did not finish within %s (copy to %s: %v)", syncTimeout, t.container, err))
@@ -353,10 +353,14 @@ const (
 		" --git-url http://127.0.0.1:8003 --git-push-url http://127.0.0.1:8004"
 )
 
-// maxOutputTail bounds the command output a sync attaches to its detail.
+// maxTailLines and maxTailBytes bound the command output a sync attaches to its detail. A crashed
+// container's previous log gets more room (maxCrashLines, maxCrashBytes): a Go panic header sits
+// above its goroutine dump.
 const (
-	maxTailLines = 25
-	maxTailBytes = 3000
+	maxTailLines  = 25
+	maxTailBytes  = 3000
+	maxCrashLines = 60
+	maxCrashBytes = 6000
 )
 
 // migrate runs `migrate up` in the backend container from the copied tree. It is idempotent and
@@ -378,7 +382,8 @@ func (s *OperationsService) migrate(ctx context.Context, pod string) (bool, stri
 // sync does not reset the database itself: that wipes mainloop-dev's data, which is the owner's call.
 const outOfOrderRecovery = "mainloop-dev's database holds migrations this tree does not have in order " +
 	"(usually another branch's). dev_sync never resets it. The owner can run `mainloop migrate reset` in the " +
-	"backend container with MAINLOOP_ALLOW_RESET=1, which wipes mainloop-dev's data, then sync again."
+	"backend container with MAINLOOP_ALLOW_RESET=1, which wipes mainloop-dev's data, then sync again. " +
+	"The backend's source tree mirrors the synced commit, so the reset applies only the migrations that commit has."
 
 // smoke runs the existing read-only smoke against the pod's own listeners. It sends no chat turns,
 // writes nothing and spends no quota, and it only ever targets 127.0.0.1 inside mainloop-dev.
@@ -428,19 +433,25 @@ func orDefault(d, def time.Duration) time.Duration {
 
 // tailSuffix formats the last lines of a command's output for a detail line.
 func tailSuffix(out string) string {
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) > maxTailLines {
-		lines = lines[len(lines)-maxTailLines:]
-	}
-	tail := strings.Join(lines, "\n")
-	if len(tail) > maxTailBytes {
-		// The cut can land inside a multibyte character, and the detail column rejects invalid UTF-8.
-		tail = strings.ToValidUTF8(tail[len(tail)-maxTailBytes:], "")
-	}
-	if strings.TrimSpace(tail) == "" {
+	tail := tailOf(out, maxTailLines, maxTailBytes)
+	if tail == "" {
 		return ""
 	}
 	return "\n" + tail
+}
+
+// tailOf is the last maxLines lines of out, cut to the last maxBytes bytes on a character boundary
+// (the detail column rejects invalid UTF-8); empty when out is blank.
+func tailOf(out string, maxLines, maxBytes int) string {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	tail := strings.Join(lines, "\n")
+	if len(tail) > maxBytes {
+		tail = strings.ToValidUTF8(tail[len(tail)-maxBytes:], "")
+	}
+	return strings.TrimSpace(tail)
 }
 
 // syncStale reports why a sync must not run now: its session no longer holds the lease (the new
@@ -568,8 +579,9 @@ func (s *OperationsService) baseline(ctx context.Context) (podBaselines, error) 
 }
 
 // unstable returns why the sync's tree can no longer be trusted, or "" while every target pod is
-// still the pod it copied into with the restart count it started with. Containers of a restarted
-// pod are read for their previous log, where the crash shows.
+// still the pod it copied into with the restart count it started with. Containers whose own restart
+// count rose are read for their previous log, where the crash shows; one that crashed in an earlier
+// sync is not.
 func (s *OperationsService) unstable(ctx context.Context, base podBaselines) string {
 	for _, b := range base {
 		pods, err := s.Pods.ListPods(ctx, Namespace, b.selector)
@@ -590,8 +602,13 @@ func (s *OperationsService) unstable(ctx context.Context, base podBaselines) str
 			msg := fmt.Sprintf("mainloop-dev's %s restarted during the sync (restart count %d, was %d), which discards the "+
 				"synced tree; the commit under test is not what is running.", b.label, now.RestartCount, b.pod.RestartCount)
 			for _, c := range now.Containers {
-				if lines, err := s.Pods.Logs(ctx, Namespace, b.pod.Name, c, LogOptions{TailLines: 20, Previous: true}); err == nil && strings.TrimSpace(lines) != "" {
-					msg += fmt.Sprintf("\nprevious %s container, last log lines:\n%s", c, strings.TrimSpace(lines))
+				if now.ContainerRestarts[c] <= b.pod.ContainerRestarts[c] {
+					continue
+				}
+				if lines, err := s.Pods.Logs(ctx, Namespace, b.pod.Name, c, LogOptions{TailLines: maxCrashLines, Previous: true}); err == nil {
+					if tail := tailOf(lines, maxCrashLines, maxCrashBytes); tail != "" {
+						msg += fmt.Sprintf("\nprevious %s container, last log lines:\n%s", c, tail)
+					}
 				}
 			}
 			return msg

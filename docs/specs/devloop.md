@@ -92,10 +92,35 @@ loop to drive (`server/internal/reconcile`):
 3. The archive is filtered and re-rooted per target (`FilterTar`), with the same exclusions
    `devspace.yaml`'s sync already applies (`.git/`, `bin/`, `tmp/`, `testdata/`, `*_test.go`,
    `*.test` for `server/`; `node_modules/`, `dist/`, `e2e/`, `playwright-report/`,
-   `test-results/` for `web/`), and copied into each target container by piping a tar stream to
-   `tar -x` over a Kubernetes exec (`k8s.io/client-go/tools/remotecommand`): the backend, mcp and
-   git containers' `/src`, and the frontend container's `/app/web`. mainloop-dev's existing
+   `test-results/` for `web/`), and mirrored onto each target container by piping a tar stream to a
+   short `sh` script over a Kubernetes exec (`k8s.io/client-go/tools/remotecommand`): the backend,
+   mcp and git containers' `/src`, and the frontend container's `/app/web`. mainloop-dev's existing
    `watchexec` and Vite reload pick up the change; devloop restarts nothing itself.
+
+   **Each copy mirrors the commit.** The archive ends with a manifest of every path it holds. The
+   script extracts the archive over the destination, and only if `tar` succeeded and the manifest
+   arrived whole, deletes every other path under the destination that the excludes do not cover:
+   files and links first, then the directories that are left empty. A file the commit deleted or
+   renamed is gone afterwards (so no "redeclared" build failure from the old name, and a deleted
+   migration is not embedded and re-applied by a later `migrate up` or `migrate reset`). The
+   excluded paths (build caches, `bin/`, `node_modules/`, the test files the filter drops) are
+   neither written nor deleted; the exclude rules are the filter's own, so `bin/` means the
+   top-level directory only. `watchexec` and Vite see the extraction, then the deletions, and the
+   last event is the finished tree. The script needs only POSIX `sh` and `find`, `awk`, `sort`,
+   `tail`, `rm`, `rmdir` and `tar`, which GNU (the Go server images) and BusyBox (the alpine web image) both
+   provide. A failed extraction deletes nothing; a failed deletion (a read-only directory, say)
+   fails the sync with the tool's message and leaves the new files in place. A name with a newline in
+   it under the destination makes the script refuse before deleting anything (a commit cannot
+   bring one in; `MirrorTar` refuses them). Links are removed as links, never followed.
+
+   A path whose type changes between commits fails the extraction, clearly, and nothing is
+   deleted. GNU `tar` (the Go server containers) copes with a file becoming a directory but fails
+   on a directory becoming a file ("Cannot open: File exists"); BusyBox `tar` (the frontend)
+   fails both ways. A container restart does not clear it, because the image's tree comes from
+   `main`: `dev_sync` cannot test such a commit until the image has the new layout, or someone
+   removes the old path in the container by hand. The commit marker (`/src/.devloop-commit`) is not excluded: a copy removes the
+   previous sync's marker and the sync writes this commit's after the last copy.
+
 4. The sync then earns its verdict. Each step runs inside the backend container over exec, and the
    first miss ends the sync as `failed` with that step's output in the detail:
    1. `go run ./cmd/mainloop migrate up` from the copied tree (idempotent, holds the migrate lock;
@@ -105,7 +130,9 @@ loop to drive (`server/internal/reconcile`):
       leave the second one's file silently skipped, and a version applied from an abandoned branch
       makes a later, lower main migration fail with "missing (out-of-order)". The detail then names
       the recovery: the owner runs `mainloop migrate reset` in the backend container with
-      `MAINLOOP_ALLOW_RESET=1`, which wipes mainloop-dev's data. `dev_sync` never resets it. The tail
+      `MAINLOOP_ALLOW_RESET=1`, which wipes mainloop-dev's data, then syncs again. The backend's
+      tree mirrors the synced commit, so the reset applies only that commit's migrations and does
+      not bring the abandoned branch's file back. `dev_sync` never resets it. The tail
       of the output (25 lines, 3000 bytes, cut on a character boundary) is attached on failure.
    2. After a short settle delay (default 3s, because the old backend process keeps answering until
       `watchexec` restarts it), one exec per second, for up to `HealthTimeout` (default 180s: a stale
@@ -134,8 +161,9 @@ loop to drive (`server/internal/reconcile`):
    under test. So the sync records, before its first copy, the name and restart count of the backend
    and frontend pods, and writes the commit to `/src/.devloop-commit` in the backend container after
    the copies. Every health round, and once more after the smoke, it fails the sync if a pod was
-   replaced or deleted or its restart count rose, with the previous container instance's last log
-   lines (where a crash shows); the health exec fails it too if the marker does not hold the
+   replaced or deleted or its restart count rose, with the last log lines (60, at most 6000 bytes) of
+   the previous instance of each container whose own restart count rose (where a crash shows; a
+   container that crashed in an earlier sync is not read); the health exec fails it too if the marker does not hold the
    commit. Migrate, health and smoke all run in the pod recorded before the copy. A backend that
    crashed on an old schema before the migration ran is not restarted by the migration, and the
    liveness restart that follows fails the sync; calling `dev_sync` again copies again.
@@ -193,7 +221,8 @@ Kubernetes pod client, a fake GitHub seeder, and a real local `git`, with scratc
 lease acquire/queue/idle-expiry/takeover/release; `dev_sync` idempotency (a repeat call while the row is in flight
 returns it; a repeat call after it finished syncs again, including after a failure); refusal of
 `dev_sync` without the lease, at the tool and again at claim time; the lease heartbeat and expiry
-rules; the health wait, an unhealthy backend failing the sync with its log tail (against a fake `curl`); `migrate up` and the read-only smoke run after the copies and after `/health`, in that order, and a failure of either fails the sync with its output (fake exec; each check mutation-tested); a backend restart or pod replacement after the copy (at the first health probe, mid-wait, or during the smoke) and a missing commit marker each failing the sync (the restart check mutation-tested); each step's timeout naming its own cap and the sync deadline named as such; goose's out-of-order refusal naming the owner's recovery; a multibyte output tail staying valid UTF-8; pod selection ignoring terminating, evicted and pending pods; harmless BusyBox `tar` warnings accepted and real `tar` errors still failing; the sync history endpoint; the retry cap; recovery from an uncertain copy outcome
+rules; the health wait, an unhealthy backend failing the sync with its log tail (against a fake `curl`); `migrate up` and the read-only smoke run after the copies and after `/health`, in that order, and a failure of either fails the sync with its output (fake exec; each check mutation-tested); a backend restart or pod replacement after the copy (at the first health probe, mid-wait, or during the smoke) and a missing commit marker each failing the sync (the restart check mutation-tested); a restart while health keeps failing ending the sync at the next round with the restart named, no smoke and no wait for the health deadline (mutation-tested); previous logs read only for containers whose own count rose, 60 lines capped by bytes;
+each copy leaving the destination equal to the commit: a deleted file, a renamed file and a deleted migration gone, excluded paths untouched, awkward file names (spaces, a leading dash, glob characters) handled, a repeat copy a no-op, a failed extraction deleting nothing, a failed deletion failing clearly, a newline name refused before any deletion, stale links removed without touching their targets (the link and newline guards mutation-tested), and a plain tar without a manifest refused. The script runs for real in the tests, under this machine's `sh` with GNU tools and, where `busybox` is installed, under BusyBox applets (the deletion mutation-tested); a two-commit sync through the loop checks all four containers; each step's timeout naming its own cap and the sync deadline named as such; goose's out-of-order refusal naming the owner's recovery; a multibyte output tail staying valid UTF-8; pod selection ignoring terminating, evicted and pending pods; harmless BusyBox `tar` warnings accepted and real `tar` errors still failing; the sync history endpoint; the retry cap; recovery from an uncertain copy outcome
 (the row moves to `unknown` and a later claim retries the copy to success); every devloop tool
 refused with the flag off (not even listed in discovery) and with the flag on but the session
 bound to another project, or to none; every devloop write refused after its credential is
@@ -223,7 +252,6 @@ call); a cleanup sweep for old `devloop_operations` rows.
 
 Known differences from `devspace dev` sync:
 
-- A file deleted in the commit stays in the pod, because the copy only overwrites.
 - A change to `web/package.json` or `pnpm-lock.yaml` does not run `pnpm install`.
 - A change to `go.mod` alone does not restart `watchexec`, which watches `.go` and `.sql` files.
 - The commit is not checked against what this session pushed; any commit GitHub holds for the

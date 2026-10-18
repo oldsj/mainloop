@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -715,7 +716,8 @@ func TestRepeatCallOfAnOlderSyncDoesNotFailTheNewerOne(t *testing.T) {
 
 // runningBackend is syncPods' backend pod with a restart count and a container to read logs from.
 func runningBackend(name string, restarts int32) []devloop.PodStatus {
-	return []devloop.PodStatus{{Name: name, Phase: "Running", Ready: true, RestartCount: restarts, Containers: []string{"backend"}}}
+	return []devloop.PodStatus{{Name: name, Phase: "Running", Ready: true, RestartCount: restarts, Containers: []string{"backend"},
+		ContainerRestarts: map[string]int32{"backend": restarts}}}
 }
 
 // TestSyncFailsWhenTheBackendRestartsAfterTheCopy proves the case the verdict exists to catch: a
@@ -907,4 +909,140 @@ func TestSyncWaitsForTheMCPAndGitListeners(t *testing.T) {
 			t.Errorf("health probe %q does not ask %s", pods.HealthScripts[0], port)
 		}
 	}
+}
+
+// TestSyncFailsOnARestartWhileHealthKeepsFailing proves the per-round restart check on its own. A
+// restart at the first health probe, with health never recovering, is caught at the top of the
+// next round: the detail names the restart, the smoke never ran, and the sync did not wait out the
+// health deadline. Without the per-round check, only the check after the smoke would catch a
+// restart, and a health that never passes never gets that far.
+func TestSyncFailsOnARestartWhileHealthKeepsFailing(t *testing.T) {
+	d := testdb.New(t)
+	pods := syncPods()
+	pods.SetPods("app=mainloop-backend", runningBackend("backend-0", 0))
+	pods.HealthFailFirst = 1000
+	pods.LogLines["backend-0/backend/previous"] = "panic: nil pointer in newWiring"
+	var once sync.Once
+	pods.Hook = func(_ context.Context, event string) {
+		if event == "health" {
+			once.Do(func() { pods.SetPods("app=mainloop-backend", runningBackend("backend-0", 1)) })
+		}
+	}
+	sha, pack := scratchRepo(t)
+	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+	svc.HealthTimeout = 20 * time.Second
+	holdLease(t, d, "session-a")
+	runOperations(t, svc, d)
+
+	started := time.Now()
+	row := waitSync(t, svc, startSync(t, svc, "session-a", "key-restart-unhealthy", sha).ID)
+	if row.State != dbstate.DevloopFailed || row.Detail == nil ||
+		!strings.Contains(*row.Detail, "restarted during the sync") || !strings.Contains(*row.Detail, "panic: nil pointer in newWiring") {
+		t.Fatalf("sync = %s (%v), want failed naming the restart and the previous log", row.State, row.Detail)
+	}
+	if strings.Contains(*row.Detail, "did not report healthy") {
+		t.Errorf("the detail is the health timeout, not the restart: %s", *row.Detail)
+	}
+	if slices.Contains(pods.Seen(), "smoke") {
+		t.Errorf("smoke ran: %v", pods.Seen())
+	}
+	if pods.HealthCalls != 1 {
+		t.Errorf("health was probed %d times, want 1: the restart should end the wait at the next round", pods.HealthCalls)
+	}
+	if took := time.Since(started); took > 10*time.Second {
+		t.Errorf("sync took %s, so it waited for the %s health deadline", took, svc.HealthTimeout)
+	}
+}
+
+// TestSyncReadsPreviousLogsOnlyForContainersThatRestarted proves the detail does not carry an
+// older crash: the mcp container restarted in an earlier sync, and this sync only the backend's
+// count rose.
+func TestSyncReadsPreviousLogsOnlyForContainersThatRestarted(t *testing.T) {
+	d := testdb.New(t)
+	pods := syncPods()
+	pod := func(backend int32) []devloop.PodStatus {
+		return []devloop.PodStatus{{
+			Name: "backend-0", Phase: "Running", Ready: true, RestartCount: backend + 1,
+			Containers:        []string{"backend", "mcp", "git"},
+			ContainerRestarts: map[string]int32{"backend": backend, "mcp": 1, "git": 0},
+		}}
+	}
+	pods.SetPods("app=mainloop-backend", pod(0))
+	pods.LogLines["backend-0/backend/previous"] = "panic: backend crashed just now"
+	pods.LogLines["backend-0/mcp/previous"] = "panic: mcp crashed in an earlier sync"
+	var once sync.Once
+	pods.Hook = func(_ context.Context, event string) {
+		if event == "health" {
+			once.Do(func() { pods.SetPods("app=mainloop-backend", pod(1)) })
+		}
+	}
+	sha, pack := scratchRepo(t)
+	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+	holdLease(t, d, "session-a")
+	runOperations(t, svc, d)
+
+	row := waitSync(t, svc, startSync(t, svc, "session-a", "key-restart-which", sha).ID)
+	if row.State != dbstate.DevloopFailed || row.Detail == nil {
+		t.Fatalf("sync = %s (%v), want failed", row.State, row.Detail)
+	}
+	if !strings.Contains(*row.Detail, "backend crashed just now") {
+		t.Errorf("the detail lacks the container that restarted: %s", *row.Detail)
+	}
+	if strings.Contains(*row.Detail, "mcp crashed in an earlier sync") {
+		t.Errorf("the detail carries a container that did not restart this sync: %s", *row.Detail)
+	}
+}
+
+// TestSyncCrashLogTailIsSixtyLinesCappedByBytes proves a long goroutine dump still shows the panic
+// header 50 lines up, and that a log of very long lines is cut by bytes on a character boundary.
+func TestSyncCrashLogTailIsSixtyLinesCappedByBytes(t *testing.T) {
+	run := func(t *testing.T, log string) string {
+		t.Helper()
+		d := testdb.New(t)
+		pods := syncPods()
+		pods.SetPods("app=mainloop-backend", runningBackend("backend-0", 0))
+		pods.LogLines["backend-0/backend/previous"] = log
+		var once sync.Once
+		pods.Hook = func(_ context.Context, event string) {
+			if event == "health" {
+				once.Do(func() { pods.SetPods("app=mainloop-backend", runningBackend("backend-0", 1)) })
+			}
+		}
+		sha, pack := scratchRepo(t)
+		svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
+		holdLease(t, d, "session-a")
+		runOperations(t, svc, d)
+		row := waitSync(t, svc, startSync(t, svc, "session-a", "key-crash-tail", sha).ID)
+		if row.State != dbstate.DevloopFailed || row.Detail == nil {
+			t.Fatalf("sync = %s (%v), want failed", row.State, row.Detail)
+		}
+		return *row.Detail
+	}
+	t.Run("lines", func(t *testing.T) {
+		var lines []string
+		lines = append(lines, "panic: header")
+		for i := 1; i <= 79; i++ {
+			lines = append(lines, fmt.Sprintf("goroutine frame %d", i))
+		}
+		detail := run(t, strings.Join(lines, "\n"))
+		// 80 lines: the last 60 are frames 20 through 79.
+		if !strings.Contains(detail, "goroutine frame 20\n") || !strings.Contains(detail, "goroutine frame 79") || strings.Contains(detail, "goroutine frame 19\n") {
+			t.Errorf("detail does not hold exactly the last 60 lines:\n%s", detail)
+		}
+	})
+	t.Run("bytes", func(t *testing.T) {
+		line := strings.Repeat("é", 100) // 200 bytes
+		var lines []string
+		for i := 0; i < 60; i++ {
+			lines = append(lines, line)
+		}
+		lines = append(lines, "last line")
+		detail := run(t, strings.Join(lines, "\n"))
+		if len(detail) > 8000 {
+			t.Errorf("detail is %d bytes, want the crash log capped near 6000", len(detail))
+		}
+		if !strings.HasSuffix(detail, "last line") || !utf8.ValidString(detail) {
+			t.Errorf("detail should end with the last line and stay valid UTF-8, got ...%q", detail[max(0, len(detail)-40):])
+		}
+	})
 }

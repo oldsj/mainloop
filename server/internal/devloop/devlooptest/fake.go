@@ -8,6 +8,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -49,8 +52,14 @@ type Pods struct {
 	CopyHook func(ctx context.Context, container string)
 	// Hook, when set, runs at the start of every Exec with its event name, without the fake's lock
 	// held (so it may call SetPods or ResetMarker). It may block until ctx is done.
-	Hook   func(ctx context.Context, event string)
-	marker string
+	Hook func(ctx context.Context, event string)
+	// LocalDirs, when it holds a container, makes that container's copy real: the Exec runs the
+	// copy script on this machine with the destination swapped for the directory, so a test can
+	// look at the files left behind. LocalBin, when set, is a directory of tools (BusyBox applets,
+	// say) that replaces PATH for it. The copy is still recorded and queued as for any container.
+	LocalDirs map[string]string
+	LocalBin  string
+	marker    string
 	// HealthScripts are the scripts the health probes ran, in order.
 	HealthScripts []string
 	queue         map[string][]error
@@ -117,16 +126,15 @@ func (p *Pods) Logs(_ context.Context, _, pod, container string, opts devloop.Lo
 	return p.LogLines[pod+"/"+container], nil
 }
 
-// event names what an Exec is: a tar copy, a sh -c step (marker, health, migrate, smoke), or other.
+// event names what an Exec is: the mirror copy (a sh -c script that runs tar), a sh -c step (marker, health, migrate, smoke), or other.
 func event(container string, cmd []string) string {
 	if len(cmd) == 0 {
 		return "other"
 	}
-	if cmd[0] == "tar" {
-		return "tar:" + container
-	}
 	if cmd[0] == "sh" && len(cmd) > 2 && cmd[1] == "-c" {
 		switch script := cmd[2]; {
+		case strings.Contains(script, "tar -x -f -"):
+			return "tar:" + container
 		case strings.HasSuffix(script, "migrate up"):
 			return "migrate"
 		case strings.Contains(script, " smoke --read-only "):
@@ -189,8 +197,9 @@ func (p *Pods) Exec(ctx context.Context, _, pod, container string, cmd []string,
 	}
 	p.CopyCalls[container]++
 	p.LastPod[container] = pod
+	var data []byte
 	if stdin != nil {
-		data, _ := io.ReadAll(stdin)
+		data, _ = io.ReadAll(stdin)
 		p.Received[container] = data
 	}
 	if q := p.queue[container]; len(q) > 0 {
@@ -204,7 +213,30 @@ func (p *Pods) Exec(ctx context.Context, _, pod, container string, cmd []string,
 		p.stderr[container] = q[1:]
 		return "", q[0], nil
 	}
+	if dir, ok := p.LocalDirs[container]; ok {
+		return p.runLocal(ctx, dir, cmd, data)
+	}
 	return "", "", nil
+}
+
+// runLocal runs the copy script cmd with its destination argument replaced by dir.
+func (p *Pods) runLocal(ctx context.Context, dir string, cmd []string, stdin []byte) (string, string, error) {
+	args := append([]string(nil), cmd[1:]...)
+	args[3] = dir                                // sh -c <script> sh <dest> <excludes...>
+	c := exec.CommandContext(ctx, "sh", args...) //nolint:gosec // the copy script this package built, run on the test machine
+	if p.LocalBin != "" {
+		c.Path = filepath.Join(p.LocalBin, "sh")
+		c.Env = []string{"PATH=" + p.LocalBin}
+	}
+	c.Stdin = bytes.NewReader(stdin)
+	var stdout, stderr bytes.Buffer
+	c.Stdout, c.Stderr = &stdout, &stderr
+	err := c.Run()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		err = ExitError{Code: ee.ExitCode(), Msg: "command terminated with exit code " + strconv.Itoa(ee.ExitCode())}
+	}
+	return stdout.String(), stderr.String(), err
 }
 
 // ErrStreamReset looks like a cut exec stream: it is not an exit status, so devloop treats the
