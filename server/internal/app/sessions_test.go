@@ -198,7 +198,7 @@ func TestMainProviderRefusals(t *testing.T) {
 		"unknown field":     {`{"provider":"codex","force":true}`, nil, 422},
 		"foreign origin":    {`{"provider":"codex"}`, map[string]string{"Origin": "https://evil.example"}, 403},
 		"frontend origin":   {`{"provider":"codex"}`, map[string]string{"Origin": "https://mainloop.test"}, 200},
-		"oversized request": {`{"provider":"codex","pad":"` + strings.Repeat("x", 5<<20) + `"}`, nil, 413},
+		"oversized request": {`{"provider":"codex","pad":"` + strings.Repeat("x", 9<<20) + `"}`, nil, 413},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := send(h, "PUT", "/main-thread/provider", tc.body, tc.headers)

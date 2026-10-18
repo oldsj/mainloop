@@ -299,7 +299,7 @@ func TestStubHandler(t *testing.T) {
 
 func TestRequestBodyCap(t *testing.T) {
 	h := newHandler(t, nil, up())
-	huge := `{"message": "` + strings.Repeat("a", 5<<20) + `"}`
+	huge := `{"message": "` + strings.Repeat("a", 9<<20) + `"}`
 	// Declared length: refused before the validator reads anything.
 	r := send(h, "POST", "/chat", huge, nil)
 	if r.status != http.StatusRequestEntityTooLarge || detail(t, r) != "Request body too large" {
