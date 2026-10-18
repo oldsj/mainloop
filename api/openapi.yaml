@@ -4615,6 +4615,11 @@ components:
           type: boolean
           title: Turn In Flight
           default: false
+        stalled_turn:
+          description: The session's turn, when it is stalled (no task activity past its allowance); null otherwise.
+          anyOf:
+            - $ref: '#/components/schemas/TurnStall'
+            - type: 'null'
         restartable:
           type: boolean
           title: Restartable
@@ -10054,6 +10059,44 @@ components:
         - looks
         - native_deleted
       additionalProperties: false
+    TurnStall:
+      description: >-
+        A delivered turn whose task has shown no activity for longer than its allowance. It may still
+        finish; the next task event clears it. Nothing is replayed: stop or restart the session to
+        recover.
+      type: object
+      properties:
+        message_id:
+          description: The delivery (the user message) whose turn is stalled.
+          type: string
+        session_id:
+          type: string
+        task_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+        main_thread:
+          description: Whether the session is the owner's main thread.
+          type: boolean
+        last_activity_at:
+          description: The last task event Mainloop saw, or when the turn was delivered if none.
+          type: string
+          format: date-time
+        stalled_at:
+          type: string
+          format: date-time
+        tool_running:
+          description: The last event started a tool call with no result yet, which has the longer allowance.
+          type: boolean
+      required:
+        - message_id
+        - session_id
+        - task_id
+        - main_thread
+        - last_activity_at
+        - stalled_at
+        - tool_running
+      additionalProperties: false
     HealthView:
       type: object
       properties:
@@ -10062,6 +10105,12 @@ components:
           items:
             $ref: '#/components/schemas/HealthRow'
           maxItems: 3000
+        stalled_turns:
+          description: Delivered turns marked stalled (no task activity past their allowance), oldest stall first. Always sent; absent only from older servers.
+          type: array
+          items:
+            $ref: '#/components/schemas/TurnStall'
+          maxItems: 200
         stops:
           description: Requested stops that stayed unconfirmed past the resolver's bound, oldest first.
           type: array

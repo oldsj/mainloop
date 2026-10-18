@@ -109,6 +109,9 @@ type Delivery struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	SentText        *string
+	ActivityAt      *time.Time
+	ActivityKind    *string
+	StalledAt       *time.Time
 }
 
 type DevEnvironment struct {

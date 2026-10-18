@@ -1195,6 +1195,65 @@ func (q *Queries) ListSmokePushes(ctx context.Context, arg ListSmokePushesParams
 	return items, nil
 }
 
+const listStalledTurns = `-- name: ListStalledTurns :many
+SELECT d.id AS message_id, d.session_id, d.task_id, d.stalled_at::timestamptz AS stalled_at,
+       coalesce(d.activity_at, d.updated_at)::timestamptz AS last_activity_at,
+       coalesce(d.activity_kind = 'tool', false)::boolean AS tool_running,
+       coalesce(b.role = 'main', false)::boolean AS main_thread,
+       ta.id AS attempt_id, ta.task_id AS product_task_id
+FROM deliveries d
+JOIN sessions s ON s.id = d.session_id
+LEFT JOIN agent_bindings b ON b.session_id = d.session_id
+LEFT JOIN task_attempts ta ON ta.session_id = d.session_id
+WHERE s.user_id = $1 AND d.state = 'delivered' AND d.stalled_at IS NOT NULL
+ORDER BY d.stalled_at, d.id
+LIMIT 200
+`
+
+type ListStalledTurnsRow struct {
+	MessageID      string
+	SessionID      string
+	TaskID         *string
+	StalledAt      time.Time
+	LastActivityAt time.Time
+	ToolRunning    bool
+	MainThread     bool
+	AttemptID      *string
+	ProductTaskID  *string
+}
+
+// Delivered turns of the owner's sessions that the stall sweep marked, oldest stall first. A stall
+// stays listed until the turn shows activity again or ends.
+func (q *Queries) ListStalledTurns(ctx context.Context, userID string) ([]ListStalledTurnsRow, error) {
+	rows, err := q.db.Query(ctx, listStalledTurns, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStalledTurnsRow{}
+	for rows.Next() {
+		var i ListStalledTurnsRow
+		if err := rows.Scan(
+			&i.MessageID,
+			&i.SessionID,
+			&i.TaskID,
+			&i.StalledAt,
+			&i.LastActivityAt,
+			&i.ToolRunning,
+			&i.MainThread,
+			&i.AttemptID,
+			&i.ProductTaskID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockHealthTurns = `-- name: LockHealthTurns :many
 SELECT turn_key, frozen
 FROM health_turns

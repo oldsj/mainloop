@@ -145,6 +145,8 @@ type turn struct {
 	taskID string
 	// uncertainSince is when the delivery became uncertain.
 	uncertainSince time.Time
+	// act is what the task has been seen doing, for the stall watch (stall.go).
+	act activity
 }
 
 func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outcome, error) {
@@ -158,6 +160,14 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 		return reconcile.Retry(), fmt.Errorf("load delivery: %w", err)
 	}
 	t := &turn{s: s, c: c, d: d, cur: d.State, uncertainSince: d.UpdatedAt}
+	if d.ActivityKind != nil {
+		t.act.kind = dbstate.ActivityKind(*d.ActivityKind)
+	}
+	t.act.stalled = d.StalledAt != nil
+	t.act.at = d.UpdatedAt
+	if d.ActivityAt != nil {
+		t.act.at = *d.ActivityAt
+	}
 	if d.TaskID != nil {
 		t.taskID = *d.TaskID
 	}
@@ -605,6 +615,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 			}
 		}
 		t.s.Progress.Observe(t.progressRef(), ev)
+		t.noteActivity(ctx, ev, true)
 	}
 
 	switch {
@@ -917,6 +928,7 @@ func (t *turn) advance(ctx context.Context, task *a2a.Task, follow bool) (reconc
 		// the observer to list this session's tasks now, so the owner sees the request at once instead
 		// of after its scan period. The observer adopts nothing for auth-required, so that one is not hinted.
 		t.s.Progress.Observe(t.progressRef(), task)
+		t.noteActivity(ctx, task, false)
 		if st == "input_required" {
 			t.hintHITL(ctx, task)
 		}
@@ -926,11 +938,17 @@ func (t *turn) advance(ctx context.Context, task *a2a.Task, follow bool) (reconc
 		return reconcile.RetryAfter(t.s.opts().FollowPoll), nil
 	}
 	t.s.Progress.Begin(t.progressRef())
+	// The first event of a subscription is the task as it stands: it shows what the task is doing,
+	// but it is no sign of new activity, so a resubscribe to a silent task does not reset its stall
+	// clock.
+	first := true
 	for ev, err := range t.s.Kagent.SubscribeToTask(ctx, t.agent, string(task.ID)) {
 		if err != nil || endsTask(ev) {
 			break
 		}
 		t.s.Progress.Observe(t.progressRef(), ev)
+		t.noteActivity(ctx, ev, !first)
+		first = false
 	}
 	if ctx.Err() != nil {
 		return reconcile.Retry(), ctx.Err()

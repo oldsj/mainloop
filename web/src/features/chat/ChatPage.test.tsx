@@ -827,6 +827,52 @@ describe('stopping a turn', () => {
     await waitFor(() => expect(screen.queryByTestId('turn-recovery')).toBeNull());
   });
 
+  it('shows a stalled turn with how long it has been quiet, and offers stop and restart', async () => {
+    const quietSince = new Date(Date.now() - 25 * 60_000 - 5_000).toISOString();
+    const { state } = setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({
+            turn_in_flight: true,
+            restartable: true,
+            stalled_turn: {
+              message_id: 'm1',
+              session_id: MAIN_SESSION_ID,
+              task_id: 't1',
+              main_thread: true,
+              last_activity_at: quietSince,
+              stalled_at: new Date().toISOString(),
+              tool_running: true
+            }
+          })
+        })
+      })
+    );
+    const panel = await screen.findByTestId('turn-recovery');
+    expect(panel).toHaveTextContent(
+      'No activity for 25m while a tool runs. It may still finish. Stop or restart?'
+    );
+    expect(within(panel).getByTestId('turn-restart')).toBeEnabled();
+    await userEvent.click(within(panel).getByTestId('turn-recovery-stop'));
+    await waitFor(() => expect(state.stopped).toEqual([MAIN_SESSION_ID]));
+    // Nothing restarts on its own.
+    expect(state.restarts).toEqual([]);
+  });
+
+  it('shows no stall notice once the turn is no longer stalled', async () => {
+    setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({ turn_in_flight: true, restartable: true, stalled_turn: null })
+        })
+      })
+    );
+    await screen.findByTestId('mt-stop-turn');
+    expect(screen.queryByTestId('turn-recovery')).toBeNull();
+  });
+
   it('does not offer a restart for a thread the server cannot restart', async () => {
     setup(
       existing({

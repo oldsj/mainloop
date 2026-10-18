@@ -301,3 +301,31 @@ WHERE a.owner_id = $1 AND a.source_kind = 'merge_proposal' AND a.state = 'open'
         )
   )
 RETURNING a.id;
+
+-- One item per stalled turn of the main thread or a standalone session. A task-owned session is
+-- left to the task liveness sweep, which blocks the task as stalled and opens its own card. The
+-- item reopens when the same turn stalls again after it cleared.
+-- name: OpenStalledTurnAttention :many
+INSERT INTO attention_items AS a (id, owner_id, kind, source_kind, source_id, session_id, title, needed, href, reason_code)
+SELECT 'attn_stalled_' || d.id, s.user_id, 'owner_decision', 'turn_stalled', d.id, d.session_id,
+       CASE WHEN b.role = 'main' THEN 'Main thread' ELSE s.title END,
+       'The turn has shown no activity for a while and may be stuck. Stop it, or restart the session.',
+       CASE WHEN b.role = 'main' THEN '/' ELSE '/sessions/' || d.session_id END, 'stalled'
+FROM deliveries d
+JOIN sessions s ON s.id = d.session_id
+JOIN agent_bindings b ON b.session_id = d.session_id
+WHERE s.user_id = $1 AND d.state = 'delivered' AND d.stalled_at IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM task_attempts ta WHERE ta.session_id = d.session_id)
+ON CONFLICT (source_kind, source_id) DO UPDATE
+SET state = 'open', resolved_at = NULL, updated_at = now(),
+    read_at = CASE WHEN a.state <> 'open' THEN NULL ELSE a.read_at END
+WHERE a.state <> 'open'
+RETURNING id;
+
+-- A stalled-turn item resolves once its turn shows activity again or ends.
+-- name: ResolveStalledTurnAttention :many
+UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at = now()
+WHERE a.owner_id = $1 AND a.source_kind = 'turn_stalled' AND a.state = 'open'
+  AND NOT EXISTS (
+      SELECT 1 FROM deliveries d WHERE d.id = a.source_id AND d.state = 'delivered' AND d.stalled_at IS NOT NULL)
+RETURNING a.id;
