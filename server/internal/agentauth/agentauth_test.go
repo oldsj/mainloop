@@ -194,12 +194,12 @@ func TestPolicyTable(t *testing.T) {
 		got  string
 		want string
 	}{
-		{"main", join(off, main, ord), want("whoami", "topics", "topic_open", "note", "decide", "pending_add", "pending_done", "open_pull_request", "task_get", "task_list", "task_history", "delegate", "task_cancel")},
+		{"main", join(off, main, ord), want("whoami", "topics", "topic_open", "note", "decide", "pending_add", "pending_done", "open_pull_request", "get_issue", "list_dependabot_alerts", "task_get", "task_list", "task_history", "delegate", "task_cancel")},
 		{"supervisor coordination", join(off, sup, ord), want("whoami", "task_get", "task_list", "task_history", "delegate", "task_cancel", "report")},
-		{"supervisor workspace", join(off, supWS, ord), want("whoami", "open_pull_request", "task_get", "task_list", "task_history", "delegate", "task_cancel", "report")},
+		{"supervisor workspace", join(off, supWS, ord), want("whoami", "open_pull_request", "get_issue", "list_dependabot_alerts", "task_get", "task_list", "task_history", "delegate", "task_cancel", "report")},
 		{"child", join(off, child, ord), want("whoami", "task_get", "task_list", "task_history", "report")},
-		{"workspace agent", join(off, ws, ord), want("whoami", "open_pull_request")},
-		{"workspace agent with merge", join(on, ws, ord), want("whoami", "open_pull_request", "prepare_pull_request_merge", "merge_pull_request", "get_pull_request_merge_status")},
+		{"workspace agent", join(off, ws, ord), want("whoami", "open_pull_request", "get_issue", "list_dependabot_alerts")},
+		{"workspace agent with merge", join(on, ws, ord), want("whoami", "open_pull_request", "get_issue", "list_dependabot_alerts", "prepare_pull_request_merge", "merge_pull_request", "get_pull_request_merge_status")},
 		{"workspace agent approval", join(on, ws, agentauth.SurfaceApproval), "merge_pull_request_with_approval"},
 		{"approval off", join(off, ws, agentauth.SurfaceApproval), ""},
 		{"child has no merge", join(on, child, agentauth.SurfaceApproval), ""},

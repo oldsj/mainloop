@@ -250,15 +250,16 @@ func TestDiscoveryFollowsThePerActorTable(t *testing.T) {
 	ws := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
 	sup := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleSupervisor, Grant: dbstate.GrantCoordination, Parent: main.SessionID})
 
-	// With the merge tools off, only open_pull_request is listed of the pull request tools.
+	// With the merge tools off, only open_pull_request (and the issue/alert reads it carries with
+	// it) is listed of the pull request tools.
 	want := []string{
-		"decide", "delegate", "note", "open_pull_request", "pending_add", "pending_done", "task_cancel", "task_get",
-		"task_history", "task_list", "topic_open", "topics", "whoami",
+		"decide", "delegate", "get_issue", "list_dependabot_alerts", "note", "open_pull_request", "pending_add",
+		"pending_done", "task_cancel", "task_get", "task_history", "task_list", "topic_open", "topics", "whoami",
 	}
 	if got := h.list(t, mcpserver.PathOrdinary, main.Token); !slices.Equal(got, want) {
 		t.Errorf("main lists %v, want %v", got, want)
 	}
-	if got := h.list(t, mcpserver.PathOrdinary, ws.Token); !slices.Equal(got, []string{"open_pull_request", "whoami"}) {
+	if got := h.list(t, mcpserver.PathOrdinary, ws.Token); !slices.Equal(got, []string{"get_issue", "list_dependabot_alerts", "open_pull_request", "whoami"}) {
 		t.Errorf("workspace agent lists %v", got)
 	}
 	if got := h.list(t, mcpserver.PathOrdinary, sup.Token); !slices.Equal(got, []string{"delegate", "report", "task_cancel", "task_get", "task_history", "task_list", "whoami"}) {

@@ -16,6 +16,8 @@ const (
 	ToolPendingAdd                = "pending_add"
 	ToolPendingDone               = "pending_done"
 	ToolOpenPullRequest           = "open_pull_request"
+	ToolGetIssue                  = "get_issue"
+	ToolListDependabotAlerts      = "list_dependabot_alerts"
 	ToolTaskGet                   = "task_get"
 	ToolTaskList                  = "task_list"
 	ToolTaskHistory               = "task_history"
@@ -36,6 +38,7 @@ const (
 var AllTools = []string{
 	ToolWhoami, ToolTopics, ToolTopicOpen, ToolNote, ToolDecide, ToolPendingAdd, ToolPendingDone,
 	ToolOpenPullRequest,
+	ToolGetIssue, ToolListDependabotAlerts,
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolDelegate, ToolTaskCancel, ToolReport,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
@@ -107,6 +110,10 @@ var (
 	devLoopTools = []string{
 		ToolDevLeaseAcquire, ToolDevLeaseRelease, ToolDevSync, ToolDevStatus,
 	}
+	// issueTools are the read-only GitHub issue and Dependabot-alert tools. They carry no feature
+	// gate of their own: wherever an actor can open a pull request on its bound project, it can
+	// also read that project's issues and alerts.
+	issueTools = []string{ToolGetIssue, ToolListDependabotAlerts}
 )
 
 // Tools returns the tool names the actor may use on the surface, in [AllTools] order.
@@ -159,6 +166,9 @@ func (p Policy) actorTools(a Actor) []string {
 		}
 	case a.Role == dbstate.RoleAgent && a.Depth == 0:
 		tools = append(tools, workspaceTools...)
+	}
+	if slices.Contains(tools, ToolOpenPullRequest) {
+		tools = append(tools, issueTools...)
 	}
 	if p.MergeTools && slices.Contains(tools, ToolOpenPullRequest) {
 		tools = append(tools, mergeTools...)

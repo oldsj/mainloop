@@ -134,6 +134,8 @@ func permissionFields(p Permissions) (*gh.InstallationPermissions, error) {
 			out.PullRequests = &l
 		case "issues":
 			out.Issues = &l
+		case "vulnerability_alerts":
+			out.VulnerabilityAlerts = &l
 		case "checks":
 			out.Checks = &l
 		case "statuses":
