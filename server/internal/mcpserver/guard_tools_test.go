@@ -22,7 +22,10 @@ import (
 // below complete. dev_status, dev_logs and dev_smoke are not listed here even though they only
 // read mainloop-dev: each still inserts a devloop_operations row in Mainloop's own database, so
 // they are write cases too.
-var readOnlyTools = []string{"get_pull_request_merge_status", "task_get", "task_history", "task_list", "topics", "whoami"}
+var readOnlyTools = []string{
+	"get_issue", "get_pull_request_merge_status", "list_dependabot_alerts", "task_get", "task_history", "task_list",
+	"topics", "whoami",
+}
 
 // A writeCase calls one write tool with arguments valid enough to reach its write. prepare runs
 // while the credential is live and returns the arguments.

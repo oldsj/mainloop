@@ -23,6 +23,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/devloop"
 	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/issues"
 	"github.com/oldsj/mainloop/server/internal/merge"
 	"github.com/oldsj/mainloop/server/internal/prs"
 	"github.com/oldsj/mainloop/server/internal/tasks"
@@ -47,6 +48,9 @@ type Server struct {
 	// they are unavailable.
 	PRs   *prs.Service
 	Merge *merge.Service
+	// Issues serves the read-only issue and Dependabot-alert tools, over the same GitHub App as
+	// PRs and Merge. With none, those tools answer that they are unavailable.
+	Issues *issues.Service
 	// DevLease and DevOps serve the devloop tools. With none, those tools answer that they are
 	// unavailable.
 	DevLease *devloop.LeaseService
@@ -61,7 +65,7 @@ type Server struct {
 // later adds its function here and nothing else changes.
 func (s *Server) tools() map[string]Tool {
 	all := map[string]Tool{}
-	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.pullRequestTools(), s.devLoopTools()} {
+	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.pullRequestTools(), s.issueTools(), s.devLoopTools()} {
 		for _, t := range domain {
 			all[t.Name] = t
 		}
