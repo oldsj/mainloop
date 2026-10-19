@@ -49,9 +49,19 @@ distinct from the application images below.
 
 ## Workspace cache image
 
-[Workspace cache image](workflows/workspace-cache-image.yml) runs on every push to
-`main` and manually (`workflow_dispatch`, `main` only). It has no pull-request
-trigger and uses only `GITHUB_TOKEN` with `packages: write`.
+[Workspace cache image](workflows/workspace-cache-image.yml) runs on a push to `main`
+that changes one of its inputs, once a day (09:23 UTC), and manually
+(`workflow_dispatch`, `main` only). Its inputs are `images/workspace-cache/**`, the
+workflow itself, `server/go.mod` and `server/go.sum`, the pnpm manifests (`package.json`,
+`web/package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.npmrc`) and the dev image
+paths. It has no pull-request trigger and uses only `GITHUB_TOKEN` with `packages: write`.
+
+It no longer runs per merge. Each new digest becomes a new environment version, and each
+workspace node then pulls about 380 MB of new layers and prepares that image before its
+first session. When ghcr was slow from the cluster (about 0.2 MB/s, #274), those pulls
+failed and no new version could start a workspace. The daily run keeps the Go build cache
+inside Go's five-day trim. A session on an image that is up to a day old rebuilds only
+the packages that changed since.
 
 One job (45 minutes) on `ubuntu-24.04-arm` builds `images/workspace-cache/Dockerfile`
 natively for `linux/arm64`. The base is the `ghcr.io/oldsj/mainloop-dev` index

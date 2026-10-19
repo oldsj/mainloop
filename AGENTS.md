@@ -100,7 +100,7 @@ pnpm build:design && pnpm check:design    # CI also installs Chromium first
 
 Generic workspace, cache and publishing guidance comes from Mainloop's agent instructions; these are specific to this repository.
 
-- This repository's environment can follow the `cache-main` workspace image (see [Workspace cache image](.github/README.md#workspace-cache-image) and `images/workspace-cache`). It carries the Go build cache, Go modules and pnpm store for one `main` commit under `/opt/cache`, built from a clone at `/data/workspace`. A clean checkout of that commit compiles nothing.
+- This repository's environment can follow the `cache-main` workspace image (see [Workspace cache image](.github/README.md#workspace-cache-image) and `images/workspace-cache`). It carries the Go build cache, Go modules and pnpm store for one `main` commit under `/opt/cache`, built from a clone at `/data/workspace`. A clean checkout of that commit compiles nothing. The image is rebuilt when dependencies or the image's inputs change, and daily otherwise, so it can be up to a day behind `main`.
 - Go stamps the revision and dirty state into main packages (`cmd/mainloop`, `tools/genfallback`, `tools/mcpcontract`). Once HEAD moves past the cached commit, or the tree has uncommitted changes, those three rebuild; everything else still hits the cache. `go build -buildvcs=false ./...` skips the stamp for checks; do not use it for release builds.
 - With that image, the pnpm virtual store sits outside the project, so `web/node_modules` is links. Do not copy or move it.
 - The caches do not speed up `tsc -b`, `vitest run` or `vite build`. The full Vitest run took about five minutes in one measured workspace, so run the test files you changed first.
