@@ -38,7 +38,7 @@ on:
       - scripts/with-timeout.mjs
       - .github/workflows/dev-image.yml
   schedule:
-    - cron: '23 9 * * *'
+    - cron: 23 9 * * *
   workflow_dispatch: {}
 
 permissions:
