@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadDraft, saveDraft } from './drafts';
 import { Composer } from './Composer';
+import type { SlashCommandSpec } from './slashCommand';
 
 afterEach(() => sessionStorage.clear());
 
@@ -123,6 +124,130 @@ describe('Composer', () => {
     // sr-only is position:absolute. Without a positioned ancestor it sizes the page to itself.
     const status = screen.getByRole('status');
     expect(status.closest('[data-testid="input-bar"]')).toHaveClass('relative');
+  });
+});
+
+// "move" diverges from "model" at its third letter, so a query can match both, only one, or
+// neither, without one name ever being a prefix of the other.
+const COMMANDS: SlashCommandSpec[] = [
+  { name: 'model', summary: 'Switch the main model provider' },
+  { name: 'move', summary: 'Move the conversation' }
+];
+
+const menu = () => screen.queryByTestId('slash-command-menu');
+const option = (name: string) => screen.getByTestId(`slash-command-option-${name}`);
+
+describe('Composer slash command autosuggest', () => {
+  it('stays closed with no commands registered, even while typing a slash', async () => {
+    setup();
+    await userEvent.type(input(), '/model');
+    expect(menu()).toBeNull();
+  });
+
+  it('opens on a leading slash, listing every command', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/');
+    expect(menu()).not.toBeNull();
+    expect(option('model')).toBeInTheDocument();
+    expect(option('move')).toBeInTheDocument();
+  });
+
+  it('narrows to commands whose name starts with what was typed, case-insensitively', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/Mo');
+    expect(option('model')).toBeInTheDocument();
+    expect(option('move')).toBeInTheDocument();
+  });
+
+  it('narrows to a single match once enough of the name is typed', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/Mod');
+    expect(option('model')).toBeInTheDocument();
+    expect(screen.queryByTestId('slash-command-option-move')).toBeNull();
+  });
+
+  it('closes once the caret moves past the command name into its arguments', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/model more text');
+    expect(menu()).toBeNull();
+  });
+
+  it('closes on ordinary text that does not start with a slash', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), 'hello /model');
+    expect(menu()).toBeNull();
+  });
+
+  it('highlights the first match by default and moves it with Up/Down, wrapping both ways', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/mo');
+    expect(option('model')).toHaveAttribute('aria-selected', 'true');
+    expect(option('move')).toHaveAttribute('aria-selected', 'false');
+
+    await userEvent.keyboard('{ArrowDown}');
+    expect(option('move')).toHaveAttribute('aria-selected', 'true');
+    expect(option('model')).toHaveAttribute('aria-selected', 'false');
+
+    await userEvent.keyboard('{ArrowDown}');
+    expect(option('model')).toHaveAttribute('aria-selected', 'true');
+
+    await userEvent.keyboard('{ArrowUp}');
+    expect(option('move')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('Tab accepts the highlighted command, inserting it with a trailing space and closing the menu', async () => {
+    const { onSend } = setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/mo');
+    await userEvent.keyboard('{ArrowDown}'); // highlight "move"
+    await userEvent.keyboard('{Tab}');
+    expect(input().value).toBe('/move ');
+    expect(menu()).toBeNull();
+    expect(onSend).not.toHaveBeenCalled();
+    // The caret lands right after the inserted space, so typing continues the arguments.
+    await userEvent.type(input(), 'x');
+    expect(input().value).toBe('/move x');
+  });
+
+  it('Enter accepts the highlighted command instead of sending, while the name is not yet exact', async () => {
+    const { onSend } = setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/mo{Enter}');
+    expect(input().value).toBe('/model ');
+    expect(menu()).toBeNull();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('Enter sends once the typed name is already an exact command, instead of re-accepting it', async () => {
+    const { onSend } = setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/model{Enter}');
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('/model'));
+    expect(input().value).toBe('');
+  });
+
+  it('Escape closes the menu without changing the text, and typing more reopens it', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/mo');
+    await userEvent.keyboard('{Escape}');
+    expect(menu()).toBeNull();
+    expect(input().value).toBe('/mo');
+
+    await userEvent.type(input(), 'd');
+    expect(menu()).not.toBeNull();
+  });
+
+  it('accepts a command on a mouse click without losing focus', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/mo');
+    await userEvent.click(option('move'));
+    expect(input().value).toBe('/move ');
+    expect(input()).toHaveFocus();
+    expect(menu()).toBeNull();
+  });
+
+  it('leaves ordinary typing and Enter-to-send unaffected when commands are registered', async () => {
+    const { onSend } = setup({ commands: COMMANDS });
+    await userEvent.type(input(), 'just a normal message{Enter}');
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('just a normal message'));
+    expect(input().value).toBe('');
   });
 });
 
