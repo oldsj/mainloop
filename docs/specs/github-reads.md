@@ -38,14 +38,14 @@ repository, owner, URL or token argument.
 
 `get_issue(project_id, issue_number)` reads one issue of the bound repository and returns:
 
-| Field    | Type     | Meaning                                                      |
-| -------- | -------- | ------------------------------------------------------------- |
-| `number` | integer  | The issue number                                               |
-| `title`  | string   | The issue title                                                |
-| `body`   | string   | The issue body (empty string when GitHub reports none)        |
-| `state`  | string   | `open` or `closed`                                             |
-| `labels` | string[] | The label names                                                |
-| `url`    | string   | The issue's `html_url`                                         |
+| Field    | Type     | Meaning                                                |
+| -------- | -------- | ------------------------------------------------------ |
+| `number` | integer  | The issue number                                       |
+| `title`  | string   | The issue title                                        |
+| `body`   | string   | The issue body (empty string when GitHub reports none) |
+| `state`  | string   | `open` or `closed`                                     |
+| `labels` | string[] | The label names                                        |
+| `url`    | string   | The issue's `html_url`                                 |
 
 GitHub serves issues and pull requests from the same numbering space and the same endpoint. A
 number that names a pull request answers `[not_found] no such issue`: this tool reads issues only.
@@ -56,16 +56,16 @@ An issue number that does not exist answers the same refusal.
 `list_dependabot_alerts(project_id)` lists the bound repository's open Dependabot alerts (GitHub's
 `state=open`) as an `alerts` array, each entry:
 
-| Field                      | Type   | Meaning                                                                                  |
-| -------------------------- | ------ | ----------------------------------------------------------------------------------------- |
-| `package`                  | string | The vulnerable dependency's name                                                          |
-| `ecosystem`                | string | Its package ecosystem (`npm`, `pip`, `go`, ...)                                           |
-| `severity`                 | string | `low`, `moderate`, `high` or `critical`                                                   |
-| `vulnerable_version_range` | string | The version range the advisory matched                                                    |
-| `patched_version`          | string | The first version that fixes it; empty when GitHub does not report one                    |
-| `advisory_ghsa_id`         | string | The GitHub Security Advisory id                                                           |
-| `advisory_summary`         | string | The advisory's short summary                                                              |
-| `url`                      | string | The alert's `html_url`                                                                    |
+| Field                      | Type   | Meaning                                                                |
+| -------------------------- | ------ | ---------------------------------------------------------------------- |
+| `package`                  | string | The vulnerable dependency's name                                       |
+| `ecosystem`                | string | Its package ecosystem (`npm`, `pip`, `go`, ...)                        |
+| `severity`                 | string | `low`, `moderate`, `high` or `critical`                                |
+| `vulnerable_version_range` | string | The version range the advisory matched                                 |
+| `patched_version`          | string | The first version that fixes it; empty when GitHub does not report one |
+| `advisory_ghsa_id`         | string | The GitHub Security Advisory id                                        |
+| `advisory_summary`         | string | The advisory's short summary                                           |
+| `url`                      | string | The alert's `html_url`                                                 |
 
 GitHub's alert does not report the exact version a manifest resolved to; it reports the vulnerable
 range the advisory matched (`vulnerable_version_range`) and, when known, the first fixing version
