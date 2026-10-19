@@ -10,10 +10,10 @@ import (
 	"github.com/oldsj/mainloop/server/internal/issues"
 )
 
-// issueTools are the read-only GitHub issue and Dependabot-alert tools. Unlike the pull-request
-// tools, these write no durable intent row: a read that fails is simply retried by the caller.
-// The services are nil in a process that has no GitHub App, and then the tools answer that they
-// are unavailable.
+// issueTools are the read-only GitHub issue, Dependabot-alert and check-run tools. Unlike the
+// pull-request tools, these write no durable intent row: a read that fails is simply retried by
+// the caller. The services are nil in a process that has no GitHub App, and then the tools answer
+// that they are unavailable.
 func (s *Server) issueTools() []Tool {
 	id := stringSchema(1, 100)
 	return []Tool{
@@ -32,6 +32,18 @@ func (s *Server) issueTools() []Tool {
 			Description: "List open Dependabot security alerts for the bound project's repository.",
 			InputSchema: objectSchema(map[string]any{"project_id": id}, "project_id"),
 			Handle:      s.listDependabotAlerts,
+		},
+		{
+			Name: agentauth.ToolListCheckRuns,
+			Description: "List the GitHub Actions check runs at a pull request's current head commit, for the bound " +
+				"project's repository: each run's name, status, conclusion, timing and its own short output summary. " +
+				"Use this to see which checks failed and why after merge_pull_request reports checks_failed; it " +
+				"cannot rerun, cancel or trigger a check, and does not fetch raw CI logs.",
+			InputSchema: objectSchema(map[string]any{
+				"project_id": id,
+				"pr_number":  map[string]any{"type": "integer", "exclusiveMinimum": 0},
+			}, "project_id", "pr_number"),
+			Handle: s.listCheckRuns,
 		},
 	}
 }
@@ -101,6 +113,44 @@ func (s *Server) listDependabotAlerts(ctx context.Context, a agentauth.Actor, ra
 	}
 	m := map[string]any{"alerts": list}
 	line := fmt.Sprintf("%d open Dependabot alert(s)", len(list))
+	m["text"] = line
+	return Result{Text: line, Structured: m}, nil
+}
+
+func (s *Server) listCheckRuns(ctx context.Context, a agentauth.Actor, raw json.RawMessage) (Result, error) {
+	var in struct {
+		ProjectID string `json:"project_id"`
+		PRNumber  int    `json:"pr_number"`
+	}
+	if err := decode(raw, &in); err != nil {
+		return Result{}, err
+	}
+	var err error
+	if in.ProjectID, err = text(in.ProjectID, 1, 100); err != nil {
+		return Result{}, err
+	}
+	if in.PRNumber <= 0 {
+		return Result{}, errValidation
+	}
+	if s.Issues == nil {
+		return Result{}, failure("unavailable", "issues are not available")
+	}
+	if err := projectAuthority(a, in.ProjectID); err != nil {
+		return Result{}, err
+	}
+	runs, err := s.Issues.ListCheckRuns(ctx, a.UserID, in.ProjectID, in.PRNumber)
+	if err != nil {
+		return Result{}, issuesFailure(err)
+	}
+	list := make([]map[string]any, 0, len(runs))
+	for _, r := range runs {
+		list = append(list, map[string]any{
+			"name": r.Name, "status": r.Status, "conclusion": r.Conclusion,
+			"started_at": r.StartedAt, "completed_at": r.CompletedAt, "output_summary": r.OutputSummary,
+		})
+	}
+	m := map[string]any{"check_runs": list}
+	line := fmt.Sprintf("%d check run(s)", len(list))
 	m["text"] = line
 	return Result{Text: line, Structured: m}, nil
 }

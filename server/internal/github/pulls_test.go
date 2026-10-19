@@ -313,6 +313,24 @@ func TestCheckReadsRefuseWhatIsNotThisCommitsEvidence(t *testing.T) {
 	}
 }
 
+func TestCheckRunsIncludeTimingAndOutputSummary(t *testing.T) {
+	ctx := context.Background()
+	app, _ := pullApp(t, func(r *githubtest.Repository) {
+		r.Runs = map[string][]githubtest.CheckRun{tipSHA: {
+			{ID: 1, AppID: 9, Name: "ci", Conclusion: "failure", StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:05:00Z", OutputTitle: "2 tests failed", OutputSummary: "TestFoo and TestBar failed"},
+		}}
+	})
+	runs, err := app.CheckRuns(ctx, repoON, tipSHA)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs = %+v, %v", runs, err)
+	}
+	r := runs[0]
+	if r.StartedAt != "2026-01-01T00:00:00Z" || r.CompletedAt != "2026-01-01T00:05:00Z" ||
+		r.OutputTitle != "2 tests failed" || r.OutputSummary != "TestFoo and TestBar failed" {
+		t.Fatalf("run = %+v", r)
+	}
+}
+
 func TestCommitSHA(t *testing.T) {
 	app, _ := pullApp(t, nil)
 	ctx := context.Background()

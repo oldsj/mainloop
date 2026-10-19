@@ -48,8 +48,8 @@ type Server struct {
 	// they are unavailable.
 	PRs   *prs.Service
 	Merge *merge.Service
-	// Issues serves the read-only issue and Dependabot-alert tools, over the same GitHub App as
-	// PRs and Merge. With none, those tools answer that they are unavailable.
+	// Issues serves the read-only issue, Dependabot-alert and check-run tools, over the same
+	// GitHub App as PRs and Merge. With none, those tools answer that they are unavailable.
 	Issues *issues.Service
 	// DevLease and DevOps serve the devloop tools. With none, those tools answer that they are
 	// unavailable.

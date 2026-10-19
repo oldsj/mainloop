@@ -18,6 +18,7 @@ const (
 	ToolOpenPullRequest           = "open_pull_request"
 	ToolGetIssue                  = "get_issue"
 	ToolListDependabotAlerts      = "list_dependabot_alerts"
+	ToolListCheckRuns             = "list_check_runs"
 	ToolTaskGet                   = "task_get"
 	ToolTaskList                  = "task_list"
 	ToolTaskHistory               = "task_history"
@@ -38,7 +39,7 @@ const (
 var AllTools = []string{
 	ToolWhoami, ToolTopics, ToolTopicOpen, ToolNote, ToolDecide, ToolPendingAdd, ToolPendingDone,
 	ToolOpenPullRequest,
-	ToolGetIssue, ToolListDependabotAlerts,
+	ToolGetIssue, ToolListDependabotAlerts, ToolListCheckRuns,
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolDelegate, ToolTaskCancel, ToolReport,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
@@ -110,10 +111,10 @@ var (
 	devLoopTools = []string{
 		ToolDevLeaseAcquire, ToolDevLeaseRelease, ToolDevSync, ToolDevStatus,
 	}
-	// issueTools are the read-only GitHub issue and Dependabot-alert tools. They carry no feature
-	// gate of their own: wherever an actor can open a pull request on its bound project, it can
-	// also read that project's issues and alerts.
-	issueTools = []string{ToolGetIssue, ToolListDependabotAlerts}
+	// issueTools are the read-only GitHub issue, Dependabot-alert and check-run tools. They carry
+	// no feature gate of their own: wherever an actor can open a pull request on its bound
+	// project, it can also read that project's issues, alerts and PR check runs.
+	issueTools = []string{ToolGetIssue, ToolListDependabotAlerts, ToolListCheckRuns}
 )
 
 // Tools returns the tool names the actor may use on the surface, in [AllTools] order.

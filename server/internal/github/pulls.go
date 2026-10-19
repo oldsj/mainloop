@@ -119,15 +119,21 @@ type CheckSuite struct {
 	LatestCheckRunsCount *int
 }
 
-// CheckRun is one check run on a commit. SuiteID is the check suite it belongs to.
+// CheckRun is one check run on a commit. SuiteID is the check suite it belongs to. StartedAt and
+// CompletedAt are empty until GitHub reports them; OutputTitle and OutputSummary are the run's own
+// short output, empty when it reported none.
 type CheckRun struct {
-	ID         int64
-	AppID      int64
-	SuiteID    int64
-	Name       string
-	HeadSHA    string
-	Status     string
-	Conclusion string
+	ID            int64
+	AppID         int64
+	SuiteID       int64
+	Name          string
+	HeadSHA       string
+	Status        string
+	Conclusion    string
+	StartedAt     string
+	CompletedAt   string
+	OutputTitle   string
+	OutputSummary string
 }
 
 // CommitStatus is one commit status (the older CI interface).
@@ -591,17 +597,23 @@ func (a *App) CheckRuns(ctx context.Context, repo Repo, sha string) ([]CheckRun,
 		return nil, ErrUnavailable
 	}
 	type runJSON struct {
-		ID         int64   `json:"id"`
-		Name       string  `json:"name"`
-		HeadSHA    string  `json:"head_sha"`
-		Status     *string `json:"status"`
-		Conclusion *string `json:"conclusion"`
-		App        *struct {
+		ID          int64   `json:"id"`
+		Name        string  `json:"name"`
+		HeadSHA     string  `json:"head_sha"`
+		Status      *string `json:"status"`
+		Conclusion  *string `json:"conclusion"`
+		StartedAt   *string `json:"started_at"`
+		CompletedAt *string `json:"completed_at"`
+		App         *struct {
 			ID int64 `json:"id"`
 		} `json:"app"`
 		Suite *struct {
 			ID int64 `json:"id"`
 		} `json:"check_suite"`
+		Output *struct {
+			Title   *pullBody `json:"title"`
+			Summary *pullBody `json:"summary"`
+		} `json:"output"`
 	}
 	var all []CheckRun
 	seen := map[int64]bool{}
@@ -614,7 +626,19 @@ func (a *App) CheckRuns(ctx context.Context, repo Repo, sha string) ([]CheckRun,
 			return ErrUnavailable
 		}
 		seen[r.ID] = true
-		all = append(all, CheckRun{ID: r.ID, Name: r.Name, HeadSHA: r.HeadSHA, Status: *r.Status, Conclusion: deref(r.Conclusion), AppID: r.App.ID, SuiteID: r.Suite.ID})
+		run := CheckRun{
+			ID: r.ID, Name: r.Name, HeadSHA: r.HeadSHA, Status: *r.Status, Conclusion: deref(r.Conclusion),
+			AppID: r.App.ID, SuiteID: r.Suite.ID, StartedAt: deref(r.StartedAt), CompletedAt: deref(r.CompletedAt),
+		}
+		if r.Output != nil {
+			if r.Output.Title != nil {
+				run.OutputTitle = string(*r.Output.Title)
+			}
+			if r.Output.Summary != nil {
+				run.OutputSummary = string(*r.Output.Summary)
+			}
+		}
+		all = append(all, run)
 		return nil
 	})
 	if err != nil {
