@@ -17,6 +17,16 @@ function setup(props: Partial<React.ComponentProps<typeof Composer>> = {}) {
 
 const input = () => screen.getByTestId('command-input') as HTMLTextAreaElement;
 
+/** A pasted or dropped file clipboard items reference by `getAsFile`. */
+function imageFile(name = 'pixel.png', type = 'image/png', bytes = [1, 2, 3, 4]) {
+  return new File([new Uint8Array(bytes)], name, { type });
+}
+
+/** A fake `DataTransferItem` for a pasted file: jsdom has no real clipboard support. */
+function fileClipboardItem(file: File) {
+  return { kind: 'file', type: file.type, getAsFile: () => file };
+}
+
 describe('Composer', () => {
   it('sends on Enter, trimmed, and clears the box', async () => {
     const { onSend } = setup();
@@ -323,5 +333,102 @@ describe('Composer prefill when the conversation arrives later', () => {
 
     expect(input().value).toBe('typed earlyalready here');
     expect(loadDraft('conv-1')).toBe('typed earlyalready here');
+  });
+});
+
+describe('Composer pasted images', () => {
+  it('shows a thumbnail for a pasted image and attaches it when sent', async () => {
+    const { onSend } = setup({ allowImages: true });
+    const file = imageFile();
+    fireEvent.paste(input(), { clipboardData: { items: [fileClipboardItem(file)] } });
+
+    const thumbnail = await screen.findByTestId('composer-image-thumbnail');
+    expect(thumbnail).toHaveAttribute('src', expect.stringContaining('data:image/png;base64,'));
+    expect(screen.getByTestId('exec-button')).not.toBeDisabled();
+
+    await userEvent.type(input(), 'what is this?');
+    await userEvent.click(screen.getByTestId('exec-button'));
+
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith('what is this?', [
+        { mediaType: 'image/png', data: expect.any(String) }
+      ])
+    );
+    expect(screen.queryByTestId('composer-image-thumbnail')).not.toBeInTheDocument();
+  });
+
+  it('sends an image with no caption', async () => {
+    const { onSend } = setup({ allowImages: true });
+    fireEvent.paste(input(), { clipboardData: { items: [fileClipboardItem(imageFile())] } });
+    await screen.findByTestId('composer-image-thumbnail');
+
+    expect(screen.getByTestId('exec-button')).not.toBeDisabled();
+    await userEvent.click(screen.getByTestId('exec-button'));
+
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith('', [
+        { mediaType: 'image/png', data: expect.any(String) }
+      ])
+    );
+  });
+
+  it('removes a pending image with its remove button, before send', async () => {
+    const { onSend } = setup({ allowImages: true });
+    fireEvent.paste(input(), { clipboardData: { items: [fileClipboardItem(imageFile())] } });
+    await screen.findByTestId('composer-image-thumbnail');
+
+    await userEvent.click(screen.getByTestId('composer-image-remove'));
+    expect(screen.queryByTestId('composer-image-thumbnail')).not.toBeInTheDocument();
+    expect(screen.getByTestId('exec-button')).toBeDisabled();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('ignores a pasted image when the composer does not allow images', () => {
+    setup({ allowImages: false });
+    fireEvent.paste(input(), { clipboardData: { items: [fileClipboardItem(imageFile())] } });
+    expect(screen.queryByTestId('composer-image-thumbnail')).not.toBeInTheDocument();
+  });
+
+  it('refuses an unsupported image format with an inline error', async () => {
+    setup({ allowImages: true });
+    const svg = imageFile('pic.svg', 'image/svg+xml');
+    fireEvent.paste(input(), { clipboardData: { items: [fileClipboardItem(svg)] } });
+
+    await screen.findByTestId('composer-image-error');
+    expect(screen.queryByTestId('composer-image-thumbnail')).not.toBeInTheDocument();
+  });
+
+  it('refuses an image over the size cap with an inline error', async () => {
+    setup({ allowImages: true });
+    const big = imageFile('big.png', 'image/png', new Array(5 * 1024 * 1024 + 1).fill(0));
+    fireEvent.paste(input(), { clipboardData: { items: [fileClipboardItem(big)] } });
+
+    await screen.findByTestId('composer-image-error');
+    expect(screen.queryByTestId('composer-image-thumbnail')).not.toBeInTheDocument();
+  });
+
+  it('attaches a dropped image the same way as a pasted one', async () => {
+    const { onSend } = setup({ allowImages: true });
+    const file = imageFile();
+    fireEvent.drop(screen.getByTestId('input-bar'), { dataTransfer: { files: [file] } });
+
+    await screen.findByTestId('composer-image-thumbnail');
+    await userEvent.click(screen.getByTestId('exec-button'));
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith('', [
+        { mediaType: 'image/png', data: expect.any(String) }
+      ])
+    );
+  });
+
+  it('puts the image back when the send is not accepted', async () => {
+    const { onSend } = setup({ allowImages: true });
+    onSend.mockResolvedValue(false);
+    fireEvent.paste(input(), { clipboardData: { items: [fileClipboardItem(imageFile())] } });
+    await screen.findByTestId('composer-image-thumbnail');
+
+    await userEvent.click(screen.getByTestId('exec-button'));
+    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    expect(await screen.findByTestId('composer-image-thumbnail')).toBeInTheDocument();
   });
 });

@@ -5,6 +5,7 @@ import type { Message, NativeDelivery } from '@/lib/contract';
 import { deliveryNotices } from '@/lib/delivery';
 import { createSendGuard, retryMessage } from '@/lib/messageSend';
 import { clearDraft, NEW_CONVERSATION, sessionDraftKey } from './drafts';
+import type { PendingImage } from './imageLimits';
 import { refusalCode, sendRefusalNotice } from './mainProvider';
 import type { NativeSessionInfo } from './types';
 
@@ -174,6 +175,7 @@ export function useThread(source: ThreadSource) {
   const guard = useMemo(() => createSendGuard(setSendPending), []);
   const sequence = useRef(0);
   const mainChat = $api.useMutation('post', '/chat');
+  const uploadImage = $api.useMutation('post', '/chat/images');
   const sessionChat = $api.useMutation('post', '/sessions/{session_id}/message');
   const stopTurn = $api.useMutation('post', '/sessions/{session_id}/stop-turn');
   const [stopError, setStopError] = useState<string | null>(null);
@@ -204,13 +206,28 @@ export function useThread(source: ThreadSource) {
 
   /**
    * Posts one message and returns the id the backend recorded it under. The two routes answer
-   * differently: the main thread gives a delivery id, a session gives its message id.
+   * differently: the main thread gives a delivery id, a session gives its message id. Images are
+   * uploaded first, each its own request, so the chat send carries only their ids; only the main
+   * thread ever has any (the worker session route takes no image field).
    */
   const post = useCallback(
-    async (text: string, targetConversation: string | null): Promise<string | null | undefined> => {
+    async (
+      text: string,
+      targetConversation: string | null,
+      images?: PendingImage[]
+    ): Promise<string | null | undefined> => {
       if (isMain) {
+        let imageIds: string[] | undefined;
+        if (images && images.length > 0) {
+          const uploaded = await Promise.all(
+            images.map((image) =>
+              uploadImage.mutateAsync({ body: { media_type: image.mediaType, data: image.data } })
+            )
+          );
+          imageIds = uploaded.map((response) => response.id);
+        }
         const response = await mainChat.mutateAsync({
-          body: { message: text, conversation_id: targetConversation }
+          body: { message: text, conversation_id: targetConversation, image_ids: imageIds }
         });
         // The native backend answers with the delivery id and no message body.
         return response.delivery_message_id ?? response.message?.id;
@@ -221,7 +238,7 @@ export function useThread(source: ThreadSource) {
       });
       return response.message_id;
     },
-    [isMain, mainChat, sessionChat, sessionId]
+    [isMain, mainChat, sessionChat, sessionId, uploadImage]
   );
 
   /**
@@ -305,7 +322,8 @@ export function useThread(source: ThreadSource) {
     async (
       text: string,
       targetConversation: string | null,
-      composer: boolean
+      composer: boolean,
+      images?: PendingImage[]
     ): Promise<boolean> => {
       let accepted = false;
       const entry: Optimistic = {
@@ -314,7 +332,14 @@ export function useThread(source: ThreadSource) {
           conversation_id: targetConversation ?? '',
           role: 'user',
           content: text,
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
+          // Shown at once from what the composer already has in memory, before the upload and the
+          // send both round-trip; the real message replaces this bubble once the conversation lists it.
+          images: images?.map((image, index) => ({
+            id: `pending-image-${index}`,
+            media_type: image.mediaType,
+            data: image.data
+          }))
         }
       };
       setSendError(null);
@@ -333,7 +358,7 @@ export function useThread(source: ThreadSource) {
         return false;
       }
       try {
-        const acceptedId = await post(text, targetConversation);
+        const acceptedId = await post(text, targetConversation, images);
         accepted = true;
         // Only the composer's own text is a draft; a retry must not wipe what the owner is typing.
         if (composer) clearDraft(draftKey);
@@ -378,10 +403,14 @@ export function useThread(source: ThreadSource) {
    * Resolves true when the backend recorded the message.
    */
   const send = useCallback(
-    async (text: string, targetConversation: string | null): Promise<boolean> => {
+    async (
+      text: string,
+      targetConversation: string | null,
+      images?: PendingImage[]
+    ): Promise<boolean> => {
       let accepted = false;
       await guard(async () => {
-        accepted = await submit(text, targetConversation, true);
+        accepted = await submit(text, targetConversation, true, images);
       });
       return accepted;
     },

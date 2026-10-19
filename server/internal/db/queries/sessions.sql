@@ -47,6 +47,35 @@ INSERT INTO session_messages (id, session_id, role, content)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (id) DO NOTHING;
 
+-- An image pasted into the main chat composer, uploaded (unclaimed) ahead of the message that
+-- attaches it.
+-- name: InsertMessageImage :exec
+INSERT INTO message_images (id, session_id, media_type, data, size_bytes)
+VALUES ($1, $2, $3, $4, $5);
+
+-- Claims the given uploads for the message, idempotently: a retry of the same message id matches
+-- rows it already claimed (message_id = the same message), not just unclaimed ones. The caller
+-- compares the returned ids against what it asked for; fewer means some id was unknown, belonged
+-- to another session, or was already claimed by a different message.
+-- name: AttachMessageImages :many
+UPDATE message_images
+SET message_id = sqlc.arg(message_id)::text
+WHERE id = ANY(sqlc.arg(ids)::text[]) AND session_id = sqlc.arg(session_id)
+  AND (message_id IS NULL OR message_id = sqlc.arg(message_id)::text)
+RETURNING id;
+
+-- The images of one message, oldest first, built into the outbound turn alongside its text.
+-- name: ListMessageImagesByMessage :many
+SELECT id, media_type, data FROM message_images
+WHERE message_id = sqlc.arg(message_id)::text
+ORDER BY created_at, id;
+
+-- The images of every message in a conversation, oldest first, grouped by the caller.
+-- name: ListMessageImagesBySession :many
+SELECT id, message_id, media_type, data FROM message_images
+WHERE session_id = sqlc.arg(session_id) AND message_id IS NOT NULL
+ORDER BY created_at, id;
+
 -- A user message carries its delivery's source, so who wrote it covers the whole history, not just
 -- the newest deliveries. Assistant messages have no delivery.
 -- name: ListSessionMessages :many

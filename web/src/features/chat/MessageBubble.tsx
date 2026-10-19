@@ -6,6 +6,7 @@ import type { DeliveryNotice as Notice } from '@/lib/delivery';
 import { messageTime } from '@/lib/time';
 import { parseChildReport } from './childReport';
 import { DeliveryNotice } from './DeliveryNotice';
+import { imageDataUrl } from './imageLimits';
 
 export const STOPPED_NOTE = 'This turn was stopped before it finished.';
 
@@ -105,6 +106,19 @@ export function MessageBubble({
           <Markdown className="text-foreground text-sm md:text-base">
             {report ? report.body : content}
           </Markdown>
+          {message.images && message.images.length > 0 ? (
+            <div className="gap-xs mt-sm flex flex-wrap" data-testid="message-images">
+              {message.images.map((image) => (
+                <img
+                  key={image.id}
+                  src={imageDataUrl({ mediaType: image.media_type, data: image.data })}
+                  alt=""
+                  className="border-border size-24 border object-cover"
+                  data-testid="message-image"
+                />
+              ))}
+            </div>
+          ) : null}
           {stopped ? (
             <p className="mt-sm text-muted-foreground text-sm" data-testid="turn-stopped-note">
               {STOPPED_NOTE}

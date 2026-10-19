@@ -26,6 +26,44 @@ func (q *Queries) ArchiveFinishedSession(ctx context.Context, id string) (int64,
 	return result.RowsAffected(), nil
 }
 
+const attachMessageImages = `-- name: AttachMessageImages :many
+UPDATE message_images
+SET message_id = $1::text
+WHERE id = ANY($2::text[]) AND session_id = $3
+  AND (message_id IS NULL OR message_id = $1::text)
+RETURNING id
+`
+
+type AttachMessageImagesParams struct {
+	MessageID string
+	Ids       []string
+	SessionID string
+}
+
+// Claims the given uploads for the message, idempotently: a retry of the same message id matches
+// rows it already claimed (message_id = the same message), not just unclaimed ones. The caller
+// compares the returned ids against what it asked for; fewer means some id was unknown, belonged
+// to another session, or was already claimed by a different message.
+func (q *Queries) AttachMessageImages(ctx context.Context, arg AttachMessageImagesParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, attachMessageImages, arg.MessageID, arg.Ids, arg.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const beginMainSwitch = `-- name: BeginMainSwitch :execrows
 UPDATE agent_bindings
 SET kind = $1,
@@ -1129,6 +1167,32 @@ func (q *Queries) InsertMainProviderHistory(ctx context.Context, arg InsertMainP
 	return err
 }
 
+const insertMessageImage = `-- name: InsertMessageImage :exec
+INSERT INTO message_images (id, session_id, media_type, data, size_bytes)
+VALUES ($1, $2, $3, $4, $5)
+`
+
+type InsertMessageImageParams struct {
+	ID        string
+	SessionID string
+	MediaType string
+	Data      []byte
+	SizeBytes int32
+}
+
+// An image pasted into the main chat composer, uploaded (unclaimed) ahead of the message that
+// attaches it.
+func (q *Queries) InsertMessageImage(ctx context.Context, arg InsertMessageImageParams) error {
+	_, err := q.db.Exec(ctx, insertMessageImage,
+		arg.ID,
+		arg.SessionID,
+		arg.MediaType,
+		arg.Data,
+		arg.SizeBytes,
+	)
+	return err
+}
+
 const insertQueuedDelivery = `-- name: InsertQueuedDelivery :one
 INSERT INTO deliveries (id, idempotency_key, session_id, source, state)
 VALUES ($1, $1, $2, $3, 'queued')
@@ -1446,6 +1510,78 @@ func (q *Queries) ListMainProviderHistory(ctx context.Context, sessionID string)
 			&i.Abandoned,
 			&i.Error,
 			&i.RetiredAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMessageImagesByMessage = `-- name: ListMessageImagesByMessage :many
+SELECT id, media_type, data FROM message_images
+WHERE message_id = $1::text
+ORDER BY created_at, id
+`
+
+type ListMessageImagesByMessageRow struct {
+	ID        string
+	MediaType string
+	Data      []byte
+}
+
+// The images of one message, oldest first, built into the outbound turn alongside its text.
+func (q *Queries) ListMessageImagesByMessage(ctx context.Context, messageID string) ([]ListMessageImagesByMessageRow, error) {
+	rows, err := q.db.Query(ctx, listMessageImagesByMessage, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMessageImagesByMessageRow{}
+	for rows.Next() {
+		var i ListMessageImagesByMessageRow
+		if err := rows.Scan(&i.ID, &i.MediaType, &i.Data); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMessageImagesBySession = `-- name: ListMessageImagesBySession :many
+SELECT id, message_id, media_type, data FROM message_images
+WHERE session_id = $1 AND message_id IS NOT NULL
+ORDER BY created_at, id
+`
+
+type ListMessageImagesBySessionRow struct {
+	ID        string
+	MessageID *string
+	MediaType string
+	Data      []byte
+}
+
+// The images of every message in a conversation, oldest first, grouped by the caller.
+func (q *Queries) ListMessageImagesBySession(ctx context.Context, sessionID string) ([]ListMessageImagesBySessionRow, error) {
+	rows, err := q.db.Query(ctx, listMessageImagesBySession, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMessageImagesBySessionRow{}
+	for rows.Next() {
+		var i ListMessageImagesBySessionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.MessageID,
+			&i.MediaType,
+			&i.Data,
 		); err != nil {
 			return nil, err
 		}

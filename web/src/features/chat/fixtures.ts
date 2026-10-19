@@ -17,6 +17,7 @@ export function messageFixture(overrides: Partial<ChatMessage> = {}): ChatMessag
     role: 'user',
     content: 'hello',
     created_at: '2026-01-01T10:00:00Z',
+    images: undefined,
     ...overrides
   };
 }

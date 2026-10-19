@@ -26,6 +26,8 @@ export interface ThreadBodyProps {
   requests?: ReactNode;
   /** Shown in the empty state of a loaded thread. */
   starters?: ReactNode;
+  /** The composer accepts a pasted or dropped image. Only the main thread sets this. */
+  allowImages?: boolean;
   /**
    * Intercepts a composer send before the thread's own `send`, for a local command such as
    * `/model` that must not become a chat message. Returning null defers to the thread's `send`.
@@ -48,6 +50,7 @@ export function ThreadBody({
   onPrefillUsed,
   requests,
   starters,
+  allowImages = false,
   onSend,
   commandNotice = null,
   commands
@@ -134,7 +137,10 @@ export function ThreadBody({
         closedPlaceholder={closedPlaceholder}
         prefill={prefill}
         onPrefillUsed={onPrefillUsed}
-        onSend={(text) => onSend?.(text) ?? thread.send(text, thread.conversationId)}
+        onSend={(text, images) =>
+          onSend?.(text) ?? thread.send(text, thread.conversationId, images)
+        }
+        allowImages={allowImages}
         commands={commands}
       />
     </>

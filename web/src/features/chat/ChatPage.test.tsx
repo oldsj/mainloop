@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { delay, http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -184,6 +184,34 @@ describe('sending', () => {
     expect(input().value).toBe('');
     // The recorded message replaces the optimistic one: it appears once.
     await waitFor(() => expect(screen.getAllByText('next step')).toHaveLength(1));
+  });
+
+  it('uploads a pasted image, sends its id, and shows the image once the message lands', async () => {
+    const { state } = setup(existing());
+    await screen.findByText('build it');
+
+    const file = new File([new Uint8Array([1, 2, 3, 4])], 'pixel.png', { type: 'image/png' });
+    fireEvent.paste(input(), {
+      clipboardData: { items: [{ kind: 'file', type: file.type, getAsFile: () => file }] }
+    });
+    await screen.findByTestId('composer-image-thumbnail');
+
+    await userEvent.type(input(), 'what is this?{Enter}');
+
+    await waitFor(() => expect(state.imageUploads).toHaveLength(1));
+    expect(state.imageUploads).toEqual([expect.objectContaining({ media_type: 'image/png' })]);
+    await waitFor(() => expect(state.chatPosts).toHaveLength(1));
+    expect(state.chatPosts).toEqual([
+      expect.objectContaining({ message: 'what is this?', image_ids: [expect.any(String)] })
+    ]);
+
+    // The real, recorded message (echoed back with the image the upload stored) replaces the
+    // optimistic bubble, and still shows the image.
+    await waitFor(() => expect(screen.getAllByTestId('message-image')).toHaveLength(1));
+    expect(screen.getByTestId('message-image')).toHaveAttribute(
+      'src',
+      expect.stringContaining('data:image/png;base64,')
+    );
   });
 
   it('starts the conversation with a null id from an empty thread', async () => {

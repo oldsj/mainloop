@@ -85,6 +85,7 @@ export function ChatPage({
         prefill={prefill}
         onPrefillUsed={onPrefillUsed}
         starters={starters}
+        allowImages
         onSend={interceptSend}
         commandNotice={commandNotice}
         commands={SLASH_COMMANDS}
