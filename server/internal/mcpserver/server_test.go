@@ -253,13 +253,13 @@ func TestDiscoveryFollowsThePerActorTable(t *testing.T) {
 	// With the merge tools off, only open_pull_request (and the issue/alert reads it carries with
 	// it) is listed of the pull request tools.
 	want := []string{
-		"decide", "delegate", "get_issue", "list_dependabot_alerts", "note", "open_pull_request", "pending_add",
+		"decide", "delegate", "get_issue", "list_check_runs", "list_dependabot_alerts", "note", "open_pull_request", "pending_add",
 		"pending_done", "task_cancel", "task_get", "task_history", "task_list", "topic_open", "topics", "whoami",
 	}
 	if got := h.list(t, mcpserver.PathOrdinary, main.Token); !slices.Equal(got, want) {
 		t.Errorf("main lists %v, want %v", got, want)
 	}
-	if got := h.list(t, mcpserver.PathOrdinary, ws.Token); !slices.Equal(got, []string{"get_issue", "list_dependabot_alerts", "open_pull_request", "whoami"}) {
+	if got := h.list(t, mcpserver.PathOrdinary, ws.Token); !slices.Equal(got, []string{"get_issue", "list_check_runs", "list_dependabot_alerts", "open_pull_request", "whoami"}) {
 		t.Errorf("workspace agent lists %v", got)
 	}
 	if got := h.list(t, mcpserver.PathOrdinary, sup.Token); !slices.Equal(got, []string{"delegate", "report", "task_cancel", "task_get", "task_history", "task_list", "whoami"}) {

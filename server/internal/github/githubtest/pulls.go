@@ -32,15 +32,20 @@ type CheckSuite struct {
 }
 
 // CheckRun is a check run on a commit. Status defaults to "completed"; SuiteID to 1; HeadSHA to the
-// commit it is listed under.
+// commit it is listed under. StartedAt and CompletedAt, when set, are RFC 3339 times; OutputTitle
+// and OutputSummary, when either is set, are served as the run's output.
 type CheckRun struct {
-	ID         int64
-	AppID      int64
-	SuiteID    int64
-	Name       string
-	Status     string
-	Conclusion string
-	HeadSHA    string
+	ID            int64
+	AppID         int64
+	SuiteID       int64
+	Name          string
+	Status        string
+	Conclusion    string
+	HeadSHA       string
+	StartedAt     string
+	CompletedAt   string
+	OutputTitle   string
+	OutputSummary string
 }
 
 // Status is a commit status. CreatedAt defaults to a time that grows with ID.
@@ -658,7 +663,17 @@ func (s *Server) commitFacts(w http.ResponseWriter, r *http.Request, repo *Repos
 			if suite == 0 {
 				suite = 1
 			}
-			runs = append(runs, map[string]any{"id": c.ID, "name": c.Name, "head_sha": head, "status": status, "conclusion": conclusion, "app": map[string]any{"id": c.AppID}, "check_suite": map[string]any{"id": suite}})
+			item := map[string]any{"id": c.ID, "name": c.Name, "head_sha": head, "status": status, "conclusion": conclusion, "app": map[string]any{"id": c.AppID}, "check_suite": map[string]any{"id": suite}}
+			if c.StartedAt != "" {
+				item["started_at"] = c.StartedAt
+			}
+			if c.CompletedAt != "" {
+				item["completed_at"] = c.CompletedAt
+			}
+			if c.OutputTitle != "" || c.OutputSummary != "" {
+				item["output"] = map[string]any{"title": c.OutputTitle, "summary": c.OutputSummary}
+			}
+			runs = append(runs, item)
 		}
 		from, to, pageNo, last := page(r, len(runs))
 		s.link(w, r, pageNo, last)
