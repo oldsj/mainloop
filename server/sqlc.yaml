@@ -208,6 +208,12 @@ sql:
                 import: github.com/oldsj/mainloop/server/internal/db/dbstate,
                 type: DevloopOperationState
               }
+          - column: devloop_targets.kind
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: DevloopTargetKind
+              }
           - db_type: jsonb
             go_type: { import: encoding/json, type: RawMessage }
           - db_type: jsonb

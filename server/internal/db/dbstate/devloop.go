@@ -22,3 +22,12 @@ const (
 	DevloopFailed    DevloopOperationState = "failed"
 	DevloopUnknown   DevloopOperationState = "unknown"
 )
+
+// DevloopTargetKind is devloop_targets.kind: how to reach the workload's Kubernetes location.
+type DevloopTargetKind string
+
+// Devloop target kinds.
+const (
+	DevloopTargetNamespace DevloopTargetKind = "namespace"
+	DevloopTargetVCluster  DevloopTargetKind = "vcluster"
+)

@@ -617,7 +617,7 @@
     },
     {
       "name": "dev_lease_acquire",
-      "description": "Acquire the one live-sync lease on mainloop-dev, or report your place in its FIFO queue. An idle-expired lease is taken over by the earliest queued session. A queued session must call this again within 2 minutes to keep its place.",
+      "description": "Acquire the one live-sync lease on your project's staging target, or report your place in its FIFO queue. An idle-expired lease is taken over by the earliest queued session. A queued session must call this again within 2 minutes to keep its place.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {},
@@ -627,7 +627,7 @@
     },
     {
       "name": "dev_lease_release",
-      "description": "Release the mainloop-dev lease if this session holds it.",
+      "description": "Release your project's staging-target lease if this session holds it.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {},
@@ -637,7 +637,7 @@
     },
     {
       "name": "dev_sync",
-      "description": "Use after pushing and before open_pull_request. Syncs commit_sha (already pushed through the git push transport) into mainloop-dev, migrates its database, waits for its /health, and runs the read-only smoke check. Succeeds only when mainloop-dev is healthy and the smoke passes; any other result is failed, with the output that explains it. Requires holding the lease. Waits up to 4 minutes, then reports the state so far; retrying with the same commit_sha is safe.",
+      "description": "Use after pushing and before open_pull_request. Syncs commit_sha (already pushed through the git push transport) into your project's staging target, migrates its database, waits for its health, and runs its read-only smoke check. Succeeds only when the target is healthy and the smoke passes; any other result is failed, with the output that explains it. Requires holding the lease. Waits up to 4 minutes, then reports the state so far; retrying with the same commit_sha is safe.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -652,7 +652,7 @@
     },
     {
       "name": "dev_status",
-      "description": "Read mainloop-dev's pod status: phase, readiness and restart counts.",
+      "description": "Read your project's staging-target pod status: phase, readiness and restart counts.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {},

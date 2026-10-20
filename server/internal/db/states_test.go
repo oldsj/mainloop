@@ -150,6 +150,8 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"devloop_operations", "state", strs(
 			string(dbstate.DevloopPending), string(dbstate.DevloopSucceeded),
 			string(dbstate.DevloopFailed), string(dbstate.DevloopUnknown))},
+		{"devloop_targets", "kind", strs(
+			string(dbstate.DevloopTargetNamespace), string(dbstate.DevloopTargetVCluster))},
 		// No state machine, so no dbstate type: the contract enum is the constant the CHECK must match.
 		{"attention_items", "reason_code", strs(
 			string(api.AttentionItemReasonCodeReconciliation), string(api.AttentionItemReasonCodeRuntimeStopUnresolved),

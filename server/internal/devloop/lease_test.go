@@ -19,7 +19,7 @@ func TestLeaseAcquireIsGrantedWhenFree(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
-	info, err := s.Acquire(context.Background(), "session-a")
+	info, err := s.Acquire(context.Background(), devloop.LeaseID, "session-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,12 +36,12 @@ func TestLeaseAcquireIsIdempotentForTheHolder(t *testing.T) {
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
-	first, err := s.Acquire(ctx, "session-a")
+	first, err := s.Acquire(ctx, devloop.LeaseID, "session-a")
 	if err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(10 * time.Millisecond)
-	second, err := s.Acquire(ctx, "session-a")
+	second, err := s.Acquire(ctx, devloop.LeaseID, "session-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,17 +60,17 @@ func TestLeaseQueuesASecondCallerFIFO(t *testing.T) {
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
-	if _, err := s.Acquire(ctx, "session-a"); err != nil {
+	if _, err := s.Acquire(ctx, devloop.LeaseID, "session-a"); err != nil {
 		t.Fatal(err)
 	}
-	b, err := s.Acquire(ctx, "session-b")
+	b, err := s.Acquire(ctx, devloop.LeaseID, "session-b")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if b.Status != devloop.LeaseQueued || b.HolderSession != "session-a" || b.Position != 1 {
 		t.Fatalf("second caller = %+v, want queued behind session-a at position 1", b)
 	}
-	c, err := s.Acquire(ctx, "session-c")
+	c, err := s.Acquire(ctx, devloop.LeaseID, "session-c")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,27 +86,27 @@ func TestLeaseReleaseHandsOffToTheEarliestQueuedCaller(t *testing.T) {
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
-	if _, err := s.Acquire(ctx, "session-a"); err != nil {
+	if _, err := s.Acquire(ctx, devloop.LeaseID, "session-a"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Acquire(ctx, "session-b"); err != nil {
+	if _, err := s.Acquire(ctx, devloop.LeaseID, "session-b"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Acquire(ctx, "session-c"); err != nil {
+	if _, err := s.Acquire(ctx, devloop.LeaseID, "session-c"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Release(ctx, "session-a"); err != nil {
+	if err := s.Release(ctx, devloop.LeaseID, "session-a"); err != nil {
 		t.Fatal(err)
 	}
 	// session-c calls first but must not jump session-b's place in line.
-	c, err := s.Acquire(ctx, "session-c")
+	c, err := s.Acquire(ctx, devloop.LeaseID, "session-c")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Status != devloop.LeaseQueued || c.HolderSession != "session-b" {
 		t.Fatalf("session-c after release = %+v, want still queued behind session-b", c)
 	}
-	b, err := s.Acquire(ctx, "session-b")
+	b, err := s.Acquire(ctx, devloop.LeaseID, "session-b")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,10 +122,10 @@ func TestLeaseExpiredIdleLeaseIsTakenOver(t *testing.T) {
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
-	if _, err := s.Acquire(ctx, "session-a"); err != nil {
+	if _, err := s.Acquire(ctx, devloop.LeaseID, "session-a"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Acquire(ctx, "session-b"); err != nil {
+	if _, err := s.Acquire(ctx, devloop.LeaseID, "session-b"); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate 20+ minutes of inactivity by backdating the lease and shortening its timeout,
@@ -135,14 +135,14 @@ func TestLeaseExpiredIdleLeaseIsTakenOver(t *testing.T) {
 		devloop.LeaseID); err != nil {
 		t.Fatal(err)
 	}
-	b, err := s.Acquire(ctx, "session-b")
+	b, err := s.Acquire(ctx, devloop.LeaseID, "session-b")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if b.Status != devloop.LeaseAcquired || b.HolderSession != "session-b" {
 		t.Fatalf("session-b after expiry = %+v, want acquired", b)
 	}
-	status, err := s.Status(ctx)
+	status, err := s.Status(ctx, devloop.LeaseID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,13 +156,13 @@ func TestLeaseReleaseByNonHolderIsANoOp(t *testing.T) {
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
-	if _, err := s.Acquire(ctx, "session-a"); err != nil {
+	if _, err := s.Acquire(ctx, devloop.LeaseID, "session-a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Release(ctx, "session-b"); err != nil {
+	if err := s.Release(ctx, devloop.LeaseID, "session-b"); err != nil {
 		t.Fatal(err)
 	}
-	status, err := s.Status(ctx)
+	status, err := s.Status(ctx, devloop.LeaseID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,19 +179,19 @@ func TestLeaseUseHeartbeatsTheHolderAndRefusesEveryoneElse(t *testing.T) {
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
-	if err := s.Use(ctx, "session-a"); !errors.Is(err, devloop.ErrNotHolder) {
+	if err := s.Use(ctx, devloop.LeaseID, "session-a"); !errors.Is(err, devloop.ErrNotHolder) {
 		t.Fatalf("Use with a free lease = %v, want ErrNotHolder", err)
 	}
-	if _, err := s.Acquire(ctx, "session-a"); err != nil {
+	if _, err := s.Acquire(ctx, devloop.LeaseID, "session-a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Use(ctx, "session-b"); !errors.Is(err, devloop.ErrNotHolder) {
+	if err := s.Use(ctx, devloop.LeaseID, "session-b"); !errors.Is(err, devloop.ErrNotHolder) {
 		t.Fatalf("Use by a stranger = %v, want ErrNotHolder", err)
 	}
 	if _, err := d.Pool.Exec(ctx, `UPDATE devloop_lease SET last_used_at = now() - interval '10 minutes' WHERE id = $1`, devloop.LeaseID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Use(ctx, "session-a"); err != nil {
+	if err := s.Use(ctx, devloop.LeaseID, "session-a"); err != nil {
 		t.Fatalf("Use by the holder = %v", err)
 	}
 	var idle float64
@@ -206,16 +206,16 @@ func TestLeaseUseHeartbeatsTheHolderAndRefusesEveryoneElse(t *testing.T) {
 	if _, err := d.Pool.Exec(ctx, `UPDATE devloop_lease SET last_used_at = now() - interval '1 hour' WHERE id = $1`, devloop.LeaseID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Use(ctx, "session-a"); err != nil {
+	if err := s.Use(ctx, devloop.LeaseID, "session-a"); err != nil {
 		t.Fatalf("Use by an expired holder with an empty queue = %v, want accepted", err)
 	}
-	if _, err := s.Acquire(ctx, "session-b"); err != nil {
+	if _, err := s.Acquire(ctx, devloop.LeaseID, "session-b"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.Pool.Exec(ctx, `UPDATE devloop_lease SET last_used_at = now() - interval '1 hour' WHERE id = $1`, devloop.LeaseID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Use(ctx, "session-a"); !errors.Is(err, devloop.ErrNotHolder) {
+	if err := s.Use(ctx, devloop.LeaseID, "session-a"); !errors.Is(err, devloop.ErrNotHolder) {
 		t.Fatalf("Use by an expired holder with session-b waiting = %v, want ErrNotHolder", err)
 	}
 }
@@ -238,17 +238,17 @@ func TestReviewAbandonedQueueEntryIsGrantedTheLease(t *testing.T) {
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
-	if _, err := s.Acquire(ctx, "holder"); err != nil {
+	if _, err := s.Acquire(ctx, devloop.LeaseID, "holder"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Acquire(ctx, "gone"); err != nil { // queues once, then stops polling
+	if _, err := s.Acquire(ctx, devloop.LeaseID, "gone"); err != nil { // queues once, then stops polling
 		t.Fatal(err)
 	}
 	backdateQueueEntry(t, d, "gone", 3*devloop.QueueStaleAfter)
-	if err := s.Release(ctx, "holder"); err != nil {
+	if err := s.Release(ctx, devloop.LeaseID, "holder"); err != nil {
 		t.Fatal(err)
 	}
-	live, err := s.Acquire(ctx, "live")
+	live, err := s.Acquire(ctx, devloop.LeaseID, "live")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,26 +265,26 @@ func TestLeaseQueuePollKeepsAnEntryFresh(t *testing.T) {
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
 	for _, id := range []string{"holder", "polling", "silent"} {
-		if _, err := s.Acquire(ctx, id); err != nil {
+		if _, err := s.Acquire(ctx, devloop.LeaseID, id); err != nil {
 			t.Fatal(err)
 		}
 	}
 	backdateQueueEntry(t, d, "polling", devloop.QueueStaleAfter-10*time.Second)
 	backdateQueueEntry(t, d, "silent", devloop.QueueStaleAfter+10*time.Second)
-	if _, err := s.Acquire(ctx, "polling"); err != nil { // the poll bumps last_seen_at
+	if _, err := s.Acquire(ctx, devloop.LeaseID, "polling"); err != nil { // the poll bumps last_seen_at
 		t.Fatal(err)
 	}
-	status, err := s.Status(ctx)
+	status, err := s.Status(ctx, devloop.LeaseID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if status.QueueLength != 1 {
 		t.Fatalf("queue length = %d, want 1 (the silent entry is stale)", status.QueueLength)
 	}
-	if err := s.Release(ctx, "holder"); err != nil {
+	if err := s.Release(ctx, devloop.LeaseID, "holder"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.Acquire(ctx, "polling")
+	got, err := s.Acquire(ctx, devloop.LeaseID, "polling")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestLeaseHoldsAppliesTheIdleExpiryRuleOfUse(t *testing.T) {
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
-	if _, err := s.Acquire(ctx, "session-a"); err != nil {
+	if _, err := s.Acquire(ctx, devloop.LeaseID, "session-a"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.Pool.Exec(ctx,
@@ -309,14 +309,14 @@ func TestLeaseHoldsAppliesTheIdleExpiryRuleOfUse(t *testing.T) {
 		devloop.LeaseID); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := s.Holds(ctx, "session-a"); err != nil || !ok {
+	if ok, err := s.Holds(ctx, devloop.LeaseID, "session-a"); err != nil || !ok {
 		t.Fatalf("Holds with an expired lease and nobody waiting = %v, %v, want true", ok, err)
 	}
-	if _, err := s.Acquire(ctx, "session-b"); err != nil && !errors.Is(err, devloop.ErrNotHolder) {
+	if _, err := s.Acquire(ctx, devloop.LeaseID, "session-b"); err != nil && !errors.Is(err, devloop.ErrNotHolder) {
 		t.Fatal(err)
 	}
 	// session-b's Acquire took the expired lease over; session-a no longer holds it.
-	if ok, err := s.Holds(ctx, "session-a"); err != nil || ok {
+	if ok, err := s.Holds(ctx, devloop.LeaseID, "session-a"); err != nil || ok {
 		t.Fatalf("Holds for the displaced holder = %v, %v, want false", ok, err)
 	}
 	// An expired lease with a fresh waiter that has not taken over yet: Holds and Use must agree.
@@ -329,8 +329,8 @@ func TestLeaseHoldsAppliesTheIdleExpiryRuleOfUse(t *testing.T) {
 		devloop.LeaseID); err != nil {
 		t.Fatal(err)
 	}
-	holds, _ := s.Holds(ctx, "session-b")
-	useErr := s.Use(ctx, "session-b")
+	holds, _ := s.Holds(ctx, devloop.LeaseID, "session-b")
+	useErr := s.Use(ctx, devloop.LeaseID, "session-b")
 	if holds != (useErr == nil) || holds {
 		t.Fatalf("Holds = %v, Use err = %v, want both to refuse the expired holder", holds, useErr)
 	}
@@ -345,27 +345,27 @@ func TestSessionEndDropsItsQueueEntryAndHoldership(t *testing.T) {
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
 	for _, id := range []string{"holder", "waiting"} {
-		if _, err := s.Acquire(ctx, id); err != nil {
+		if _, err := s.Acquire(ctx, devloop.LeaseID, id); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := agentauth.RevokeInTx(ctx, dbq.New(d.Pool), "waiting"); err != nil {
 		t.Fatal(err)
 	}
-	if status, err := s.Status(ctx); err != nil || status.QueueLength != 0 {
+	if status, err := s.Status(ctx, devloop.LeaseID); err != nil || status.QueueLength != 0 {
 		t.Fatalf("after the waiting session ended: %+v, %v, want an empty queue", status, err)
 	}
 	if _, err := agentauth.RevokeInTx(ctx, dbq.New(d.Pool), "holder"); err != nil {
 		t.Fatal(err)
 	}
-	status, err := s.Status(ctx)
+	status, err := s.Status(ctx, devloop.LeaseID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if status.HolderSession != "" {
 		t.Fatalf("after the holder ended: %+v, want the lease free", status)
 	}
-	next, err := s.Acquire(ctx, "next")
+	next, err := s.Acquire(ctx, devloop.LeaseID, "next")
 	if err != nil || next.Status != devloop.LeaseAcquired {
 		t.Fatalf("Acquire after the holder ended = %+v, %v, want acquired", next, err)
 	}

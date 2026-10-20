@@ -597,6 +597,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/projects/{project_id}/devloop-target': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Project Devloop Target
+     * @description Read the project's staging target: where its code runs and the commands dev_sync uses. Owner-only over this route; a task's own project is also visible to it through the dev_lease_acquire, dev_sync and dev_status MCP tools.
+     */
+    get: operations['getProjectDevloopTarget'];
+    /**
+     * Set Project Devloop Target
+     * @description Create or replace the project's staging target. Owner-only; never set from the project's own repository, since the owner works on arbitrary and third-party repos. Replacing an existing target keeps its lease and sync lock (and so any session already holding or queued for it).
+     */
+    put: operations['updateProjectDevloopTarget'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/projects/{project_id}/environment': {
     parameters: {
       query?: never;
@@ -3168,6 +3192,69 @@ export interface components {
       passed: boolean;
       /** @description The smoke run's own summary line, or the tail of its output when it failed. */
       summary: string;
+    };
+    /** @description One container a sync copies into: a repository subtree (prefix) lands at dest inside container, in the pod selector matches, excluding the listed paths under prefix. */
+    DevloopSyncPath: {
+      /** @description A Kubernetes label selector identifying the pod, e.g. "app=mainloop-backend". */
+      selector: string;
+      container: string;
+      /** @description The repository subtree this path copies from, relative to the project root. */
+      prefix: string;
+      /** @description Where prefix lands inside container. */
+      dest: string;
+      /**
+       * @description Paths under prefix a copy never writes or deletes: a trailing slash excludes a top-level directory, anything else is a glob matched against a path's base name.
+       * @default []
+       */
+      exclude: string[];
+    };
+    /**
+     * @description How to reach the target's Kubernetes location: a plain namespace, or a namespace inside a vcluster reached through its own API server.
+     * @enum {string}
+     */
+    DevloopTargetKind: 'namespace' | 'vcluster';
+    /** @description A project's staging target: Mainloop-side configuration (never a file in the project's own repository) describing where its code runs and the commands dev_sync uses to bring it up to date. See docs/specs/devloop.md. */
+    DevloopTarget: {
+      id: string;
+      project_id: string;
+      kind: components['schemas']['DevloopTargetKind'];
+      /** @description The Kubernetes namespace the workload runs in for kind "namespace", or the host namespace holding the vcluster for kind "vcluster". */
+      namespace: string;
+      /** @description Set only for kind "vcluster". */
+      vcluster_name?: string;
+      /** @description The namespace inside the vcluster's own API server. Set only for kind "vcluster". */
+      vcluster_namespace?: string;
+      /** @description A label selector identifying the pod that restart_cmd, migrate_cmd, health_cmd and smoke_cmd run in, inside command_container. */
+      workload: string;
+      command_container: string;
+      /** @default [] */
+      sync_paths: components['schemas']['DevloopSyncPath'][];
+      /** @description Run after copying, before migrate. Optional; a target without one skips this step. */
+      restart_cmd?: string;
+      /** @description Optional; a target without one skips this step. */
+      migrate_cmd?: string;
+      /** @description Optional. The commit marker is always checked regardless; a target without a health command gets only that check, not a liveness probe. */
+      health_cmd?: string;
+      /** @description Expected to be read-only. Optional; a target without one skips this step. */
+      smoke_cmd?: string;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    DevloopTargetUpdate: {
+      kind: components['schemas']['DevloopTargetKind'];
+      namespace: string;
+      vcluster_name?: string;
+      vcluster_namespace?: string;
+      workload: string;
+      command_container: string;
+      /** @default [] */
+      sync_paths: components['schemas']['DevloopSyncPath'][];
+      restart_cmd?: string;
+      migrate_cmd?: string;
+      health_cmd?: string;
+      smoke_cmd?: string;
     };
     SmokePush: {
       request_id: string;
@@ -6712,6 +6799,110 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  getProjectDevloopTarget: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DevloopTarget'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  updateProjectDevloopTarget: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['DevloopTargetUpdate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DevloopTarget'];
+        };
+      };
+      /** @description Bad Request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Request Entity Too Large */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
         };
       };
     };

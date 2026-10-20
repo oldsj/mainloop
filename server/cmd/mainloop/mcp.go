@@ -57,6 +57,7 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		Issues:       issuesSvc,
 		DevLease:     &devloop.LeaseService{Pool: pool},
 		DevOps:       &devloop.OperationsService{Pool: pool},
+		DevTargets:   &devloop.TargetService{Pool: pool},
 		Auth:         &agentauth.Authenticator{Q: q, Depth: taskSvc.AuthDepth},
 		Tasks:        taskSvc,
 		Policy:       agentauth.Policy{MergeTools: bool(cfg.MergeToolsEnabled), DevLoop: bool(cfg.DevloopEnabled)},
