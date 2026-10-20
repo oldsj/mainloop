@@ -148,6 +148,23 @@ func toAPI(p config.ProviderProfile) api.ProviderProfile {
 	if aliases == nil {
 		aliases = []string{}
 	}
+	models := make([]api.ProviderModel, len(p.Models))
+	for i, m := range p.Models {
+		models[i] = api.ProviderModel{Id: m.ID, Label: m.Label}
+	}
+	effortLevels := make([]api.EffortLevel, len(p.EffortLevels))
+	for i, e := range p.EffortLevels {
+		effortLevels[i] = api.EffortLevel(e)
+	}
+	var defaultModel *string
+	if p.DefaultModel != "" {
+		defaultModel = &p.DefaultModel
+	}
+	var defaultEffort *api.EffortLevel
+	if p.DefaultEffort != "" {
+		e := api.EffortLevel(p.DefaultEffort)
+		defaultEffort = &e
+	}
 	return api.ProviderProfile{
 		Agents:                agents,
 		Aliases:               aliases,
@@ -158,6 +175,10 @@ func toAPI(p config.ProviderProfile) api.ProviderProfile {
 		Id:                    p.ID,
 		NativeProvider:        api.ProviderProfileNativeProvider(p.NativeProvider),
 		RuntimeAdapter:        api.ProviderProfileRuntimeAdapter(p.RuntimeAdapter),
+		Models:                models,
+		DefaultModel:          defaultModel,
+		EffortLevels:          effortLevels,
+		DefaultEffort:         defaultEffort,
 	}
 }
 

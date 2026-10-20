@@ -41,6 +41,9 @@ type AgentBinding struct {
 	MainReleasedAt             *time.Time
 	GuidanceVersion            *int32
 	GuidanceDeliveryID         *string
+	ModelOverride              *string
+	EffortOverride             *string
+	ModelEffortTouched         bool
 }
 
 type AttentionItem struct {

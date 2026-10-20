@@ -64,7 +64,22 @@ func sanitizeJSONError(err error) error {
 var (
 	providerIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 	kagentNamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
+	modelIDPattern    = regexp.MustCompile(`^[A-Za-z0-9._:/-]{1,200}$`)
 )
+
+// EffortLevels is every reasoning-effort word a profile's effort_levels may name, in display
+// order. A profile's own effort_levels is a subset: Mainloop's built-in Claude profile offers
+// low, medium, high, xhigh, max; its built-in Codex profile offers minimal, low, medium, high.
+var EffortLevels = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
+
+func validEffortLevel(level string) bool {
+	for _, l := range EffortLevels {
+		if l == level {
+			return true
+		}
+	}
+	return false
+}
 
 // Provider and agent role names.
 const (
@@ -123,6 +138,12 @@ func (c CapabilityResult) validate() error {
 	return nil
 }
 
+// ProviderModel is one model a profile offers, for /model's listing and autocomplete.
+type ProviderModel struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
 // ProviderProfile is an operator-owned native provider profile (PROVIDER_PROFILES entry).
 type ProviderProfile struct {
 	ID                    string              `json:"id"`
@@ -134,6 +155,23 @@ type ProviderProfile struct {
 	Aliases               []string            `json:"aliases"`
 	Enabled               bool                `json:"enabled"`
 	Capabilities          []CapabilityResult  `json:"capabilities"`
+	// Models is what /model lists and autocompletes for a session on this profile. Mainloop does
+	// not enforce it on a model override: kagent is the real gate, and rejects an unknown model
+	// when the turn starts. Empty means /model lists nothing, but a model may still be set by name.
+	Models []ProviderModel `json:"models"`
+	// DefaultModel is one of Models' ids, required when Models is not empty and empty otherwise.
+	// It is never sent to kagent for its own sake: a Claude override reset to default omits the
+	// metadata key, as empty or absent already means the harness default. Codex is the exception
+	// (see server/internal/sessions): once a session has any override, every turn names a model and
+	// an effort explicitly, this one included, because Codex keeps the last explicit value across
+	// turns and an empty value does not clear it.
+	DefaultModel string `json:"default_model"`
+	// EffortLevels is the subset of EffortLevels this profile offers; /effort rejects any other
+	// word for a session on this profile.
+	EffortLevels []string `json:"effort_levels"`
+	// DefaultEffort is one of EffortLevels, required when EffortLevels is not empty and empty
+	// otherwise. See DefaultModel for why it is ever sent at all.
+	DefaultEffort string `json:"default_effort"`
 }
 
 // UnmarshalJSON applies the field defaults before strict decoding.
@@ -201,6 +239,61 @@ func (p ProviderProfile) validate() error {
 			return fmt.Errorf("profile %q: capability evidence must be unique by capability", p.ID)
 		}
 		caps[c.Capability] = true
+	}
+	if err := p.validateModels(); err != nil {
+		return err
+	}
+	if err := p.validateEffortLevels(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p ProviderProfile) validateModels() error {
+	if len(p.Models) == 0 {
+		if p.DefaultModel != "" {
+			return fmt.Errorf("profile %q: default_model is set but models is empty", p.ID)
+		}
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, m := range p.Models {
+		if !modelIDPattern.MatchString(m.ID) {
+			return fmt.Errorf("profile %q: model id must match %s", p.ID, modelIDPattern.String())
+		}
+		if seen[m.ID] {
+			return fmt.Errorf("profile %q: model ids must be unique", p.ID)
+		}
+		seen[m.ID] = true
+		if n := utf8.RuneCountInString(m.Label); n < 1 || n > 200 {
+			return fmt.Errorf("profile %q: model %q label must be 1 to 200 characters", p.ID, m.ID)
+		}
+	}
+	if !seen[p.DefaultModel] {
+		return fmt.Errorf("profile %q: default_model must name one of models", p.ID)
+	}
+	return nil
+}
+
+func (p ProviderProfile) validateEffortLevels() error {
+	if len(p.EffortLevels) == 0 {
+		if p.DefaultEffort != "" {
+			return fmt.Errorf("profile %q: default_effort is set but effort_levels is empty", p.ID)
+		}
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, e := range p.EffortLevels {
+		if !validEffortLevel(e) {
+			return fmt.Errorf("profile %q: unknown effort level %q", p.ID, e)
+		}
+		if seen[e] {
+			return fmt.Errorf("profile %q: effort_levels must be unique", p.ID)
+		}
+		seen[e] = true
+	}
+	if !seen[p.DefaultEffort] {
+		return fmt.Errorf("profile %q: default_effort must name one of effort_levels", p.ID)
 	}
 	return nil
 }

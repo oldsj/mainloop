@@ -604,10 +604,11 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 		return reconcile.Retry(), err
 	}
 	t.cur, t.ksid = dbstate.DeliverySending, ksid
+	metadata := t.s.turnMetadata(derefStr(t.d.BindingKind), t.d.ModelOverride, t.d.EffortOverride, t.d.ModelEffortTouched)
 	var sendErr error
 	t.s.Progress.Begin(t.progressRef())
 	for ev, err := range t.s.Kagent.SendMessage(ctx, t.agent, kagent.SendParams{
-		Text: text, MessageID: t.c.ID, ContextID: ksid, Images: images,
+		Text: text, MessageID: t.c.ID, ContextID: ksid, Images: images, Metadata: metadata,
 	}) {
 		if err != nil {
 			sendErr = err

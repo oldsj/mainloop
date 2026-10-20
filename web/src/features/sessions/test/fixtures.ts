@@ -50,6 +50,8 @@ export function native(overrides: Partial<NativeFixture> = {}): NativeFixture {
     kagent_session_id: 'kagent-session-123',
     session_state: 'ready',
     model: 'claude-sonnet-5-5',
+    model_override: null,
+    effort_override: null,
     turns: 2,
     turn_in_flight: false,
     restartable: false,

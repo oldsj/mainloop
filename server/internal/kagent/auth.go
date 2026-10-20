@@ -13,6 +13,15 @@ import (
 // HITLExtension is sent on every request so kagent offers human-in-the-loop prompts.
 const HITLExtension = "https://kagent.dev/extensions/hitl/v1"
 
+// ModelMetadataKey and EffortMetadataKey are the A2A message metadata keys that carry a turn's
+// model and reasoning-effort override. Empty or absent means kagent's harness default for the
+// provider; kagent validates a value it is given and rejects a bad one synchronously, before the
+// turn starts, with an A2A error (see classifyRPCError and sessions.turnMetadata).
+const (
+	ModelMetadataKey  = "kagent.dev/model"
+	EffortMetadataKey = "kagent.dev/effort"
+)
+
 const controlTokenMaxBytes = 4096
 
 // tokenSource reads a bearer token file and re-reads it when its mtime or size changes. The

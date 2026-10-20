@@ -23,7 +23,8 @@ export interface SlashCommandSpec {
 
 /** Every slash command the composer offers, in the order the autosuggest list shows them. */
 export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
-  { name: 'model', summary: "Switch the main session's model provider" }
+  { name: 'model', summary: "Set the session's model" },
+  { name: 'effort', summary: "Set the session's reasoning effort" }
 ];
 
 /** The commands in `registry` whose name starts with `query`, case-insensitively, in list order. */

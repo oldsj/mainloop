@@ -1,55 +1,57 @@
-import { MAIN_PROVIDERS, providerLabel, providerReady, selectionIsNoop } from './mainProvider';
-import type { MainProvider, MainThreadInfo } from './types';
+import type { NativeSessionInfo, ProviderProfile } from './types';
+
+const MODEL_PATTERN = /^[A-Za-z0-9._:/-]{1,200}$/;
+
+function modelLabel(id: string, profile: ProviderProfile | undefined): string {
+  return profile?.models.find((model) => model.id === id)?.label ?? id;
+}
+
+function availableLine(profile: ProviderProfile | undefined): string {
+  if (!profile || profile.models.length === 0) {
+    return 'This provider lists no models; set one by name, or /model default.';
+  }
+  const names = profile.models.map((model) => model.id).join(', ');
+  return `Available: ${names}, or default. Usage: /model <name>.`;
+}
+
+/** `/model`'s help text for a bare `/model`: the session's current model and the choices. */
+export function describeModel(
+  native: NativeSessionInfo | null | undefined,
+  profile: ProviderProfile | undefined
+): string {
+  const current = native?.model_override
+    ? modelLabel(native.model_override, profile)
+    : `default${native?.model ? ` (currently ${native.model})` : ''}`;
+  return [`Current model: ${current}.`, availableLine(profile)].join('\n');
+}
+
+export type ModelCommandOutcome = { notice: string } | { model: string | null };
 
 /**
- * Mainloop has no model registry and no reasoning-effort field anywhere in its contract or in
- * kagent's session API. The only axis it can actually switch at runtime is the main session's
- * provider (Claude Code or Codex) — the closest real analogue to "model" this repo controls. The
- * LLM a provider's native session actually runs is fixed by kagent's Agent/AgentTemplate/
- * ModelConfig chain, set by operators outside this repo, which Mainloop neither stores nor
- * injects. So `/model` exposes the provider switch and refuses a reasoning-effort argument rather
- * than silently accepting and discarding it.
- */
-export const EFFORT_UNSUPPORTED_NOTICE =
-  'Reasoning effort is not supported: Mainloop has no reasoning-effort parameter in its session ' +
-  "contract, and kagent's session API has none to carry it either.";
-
-function providerStatusLine(info: MainThreadInfo | null | undefined): string {
-  const current = info?.provider;
-  if (!current) return 'Current model: unknown (main thread not read yet).';
-  const label = providerLabel(current.desired_provider);
-  return providerReady(current)
-    ? `Current model: ${label} (ready).`
-    : `Current model: ${label} (${current.status}).`;
-}
-
-function availableLine(): string {
-  const names = MAIN_PROVIDERS.map((option) => option.value).join(', ');
-  return `Available: ${names}. Usage: /model <name>.`;
-}
-
-/** `/model`'s help text for a bare `/model`: the current provider, the choices, and the effort gap. */
-export function describeModel(info: MainThreadInfo | null | undefined): string {
-  return [providerStatusLine(info), availableLine(), EFFORT_UNSUPPORTED_NOTICE].join('\n');
-}
-
-export type ModelCommandOutcome = { notice: string } | { provider: MainProvider };
-
-/**
- * `args[0]` names a provider; a second argument would be a reasoning effort, which is refused
- * outright. An unknown or already-selected provider is reported, not switched.
+ * `args[0]` names a model, matched against the session's provider profile when it is one of the
+ * profile's listed models, or taken as written otherwise: kagent is the real gate on whether a
+ * model exists, and rejects an unknown one when the next turn starts. `/model default` clears the
+ * override. A name is checked against the wire's bounded pattern before it is ever sent.
  */
 export function resolveModelCommand(
   args: string[],
-  info: MainThreadInfo | null | undefined
+  native: NativeSessionInfo | null | undefined,
+  profile: ProviderProfile | undefined
 ): ModelCommandOutcome {
-  if (args.length === 0) return { notice: describeModel(info) };
-  if (args.length > 1) return { notice: EFFORT_UNSUPPORTED_NOTICE };
+  if (args.length === 0) return { notice: describeModel(native, profile) };
+  if (args.length > 1)
+    return { notice: `Usage: /model <name>, or /model default.\n${availableLine(profile)}` };
   const requested = args[0] ?? '';
-  const match = MAIN_PROVIDERS.find((option) => option.value === requested.toLowerCase());
-  if (!match) return { notice: `Unknown model "${requested}". ${availableLine()}` };
-  if (selectionIsNoop(match.value, info?.provider)) {
-    return { notice: `Already on ${match.label}.` };
+  if (requested.toLowerCase() === 'default') {
+    if (!native?.model_override) return { notice: 'Already on the default model.' };
+    return { model: null };
   }
-  return { provider: match.value };
+  const match = profile?.models.find((model) => model.id.toLowerCase() === requested.toLowerCase());
+  const modelId = match?.id ?? requested;
+  if (!MODEL_PATTERN.test(modelId)) {
+    return { notice: `"${requested}" is not a valid model name.\n${availableLine(profile)}` };
+  }
+  if (native?.model_override === modelId)
+    return { notice: `Already on ${modelLabel(modelId, profile)}.` };
+  return { model: modelId };
 }

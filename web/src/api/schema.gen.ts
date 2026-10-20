@@ -946,6 +946,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/sessions/{session_id}/model': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Set Session Model
+     * @description Set, or clear (`null`, "default"), this session's model override: which model its native provider's next turn runs on. Sticky until changed and durable across reloads and restarts. Takes effect from the session's next turn; a turn already sending keeps the value it started with. The main thread is a session like any other here. kagent validates the model itself and rejects an unknown one when the turn starts (see the delivery's failure detail), so this route only checks the wire format, not that kagent actually offers the model.
+     */
+    post: operations['setSessionModel'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/sessions/{session_id}/effort': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Set Session Effort
+     * @description Set, or clear (`null`, "default"), this session's reasoning-effort override. The level must be one the session's current provider offers (`GET /providers` lists each profile's `effort_levels`); any other level is `422`. Sticky until changed and durable across reloads and restarts. Takes effect from the session's next turn; a turn already sending keeps the value it started with. The main thread is a session like any other here.
+     */
+    post: operations['setSessionEffort'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/sessions/{session_id}/native': {
     parameters: {
       query?: never;
@@ -1898,6 +1938,16 @@ export interface components {
       /** Model */
       model: string | null;
       /**
+       * Model Override
+       * @description The owner's /model override, null for the provider's default.
+       */
+      model_override: string | null;
+      /**
+       * Effort Override
+       * @description The owner's /effort override, null for the provider's default.
+       */
+      effort_override: components['schemas']['EffortLevel'] | null;
+      /**
        * Turns
        * @default 0
        */
@@ -2071,6 +2121,22 @@ export interface components {
       /** Name */
       name: string;
     };
+    /**
+     * EffortLevel
+     * @description A reasoning-effort level. Which of these a profile actually offers is its own `effort_levels`: Mainloop's built-in Claude profile offers low, medium, high, xhigh, max; its built-in Codex profile offers minimal, low, medium, high. Setting a level the session's profile does not offer is `422`.
+     * @enum {string}
+     */
+    EffortLevel: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+    /**
+     * ProviderModel
+     * @description One model a provider profile offers, for /model's listing and autocomplete.
+     */
+    ProviderModel: {
+      /** Id */
+      id: string;
+      /** Label */
+      label: string;
+    };
     /** ProviderProfile */
     ProviderProfile: {
       /** Id */
@@ -2109,6 +2175,26 @@ export interface components {
        * @default []
        */
       capabilities: components['schemas']['CapabilityResult'][];
+      /**
+       * Models
+       * @default []
+       */
+      models: components['schemas']['ProviderModel'][];
+      /**
+       * Default Model
+       * @description One of models' ids, or null when models is empty.
+       */
+      default_model: string | null;
+      /**
+       * Effort Levels
+       * @default []
+       */
+      effort_levels: components['schemas']['EffortLevel'][];
+      /**
+       * Default Effort
+       * @description One of effort_levels, or null when effort_levels is empty.
+       */
+      default_effort: components['schemas']['EffortLevel'] | null;
     };
     /**
      * QueueItem
@@ -2671,6 +2757,34 @@ export interface components {
     SessionMessageRequest: {
       /** Message */
       message: string;
+    };
+    /**
+     * SessionModelRequest
+     * @description Request to set (or, null, clear) a session's model override.
+     */
+    SessionModelRequest: {
+      /** Model */
+      model: string | null;
+    };
+    /**
+     * SessionEffortRequest
+     * @description Request to set (or, null, clear) a session's reasoning-effort override.
+     */
+    SessionEffortRequest: {
+      /** Effort */
+      effort: components['schemas']['EffortLevel'] | null;
+    };
+    /**
+     * SessionModelEffort
+     * @description A session's model and reasoning-effort override state, after a write.
+     */
+    SessionModelEffort: {
+      /** Session Id */
+      session_id: string;
+      /** Model */
+      model: string | null;
+      /** Effort */
+      effort: components['schemas']['EffortLevel'] | null;
     };
     /**
      * SessionStatus
@@ -8032,6 +8146,98 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  setSessionModel: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SessionModelRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SessionModelEffort'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  setSessionEffort: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SessionEffortRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SessionModelEffort'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
         };
       };
     };

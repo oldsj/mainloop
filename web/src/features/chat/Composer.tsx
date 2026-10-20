@@ -67,6 +67,9 @@ export interface ComposerProps {
    * such as a session's own composer: typed text there always goes to the thread as a message.
    */
   commands?: readonly SlashCommandSpec[];
+  /** The session's current /model and /effort override, null for the provider's default. Omitted
+   * before the thread's native state has loaded. */
+  modelEffort?: { model: string | null; effort: string | null } | null;
 }
 
 function placeholder(
@@ -103,7 +106,8 @@ export function Composer({
   prefill,
   onPrefillUsed,
   allowImages = false,
-  commands
+  commands,
+  modelEffort
 }: ComposerProps) {
   const [text, setText] = useState(() => loadDraft(draftKey));
   const [shownKey, setShownKey] = useState(draftKey);
@@ -380,6 +384,14 @@ export function Composer({
           data-testid="composer-image-error"
         >
           {imageError}
+        </p>
+      ) : null}
+      {modelEffort ? (
+        <p
+          className="text-muted-foreground px-md pt-xs text-xs"
+          data-testid="composer-model-effort"
+        >
+          model: {modelEffort.model ?? 'default'} · effort: {modelEffort.effort ?? 'default'}
         </p>
       ) : null}
       <div

@@ -1,7 +1,9 @@
 import { useMemo } from 'react';
 import { SessionRequests } from '@/features/chat/SessionRequests';
 import { statusWords } from '@/features/chat/MainThreadHeader';
+import { SLASH_COMMANDS } from '@/features/chat/slashCommand';
 import { ThreadBody } from '@/features/chat/ThreadBody';
+import { useModelEffortCommands } from '@/features/chat/useModelEffortCommands';
 import { useThread, type ThreadSource } from '@/features/chat/useThread';
 import { useSessionRequests } from '@/features/hitl/session-requests';
 import { threadStatus } from '@/lib/delivery';
@@ -36,6 +38,11 @@ export function SessionChatSlot({
     sessionState: native?.session_state
   });
   const { pending } = useSessionRequests(sessionId);
+  const { commandNotice, intercept } = useModelEffortCommands(
+    thread.sessionId,
+    native,
+    thread.draftKey
+  );
   // A pending request holds the turn until the owner answers, so "working" would mislead.
   const needsYou =
     !cancelled &&
@@ -71,6 +78,9 @@ export function SessionChatSlot({
           offline={offline}
           label="session conversation"
           closedReason={closedReason}
+          onSend={intercept}
+          commandNotice={commandNotice}
+          commands={SLASH_COMMANDS}
           requests={<SessionRequests sessionId={sessionId} />}
         />
       </div>

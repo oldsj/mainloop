@@ -2644,6 +2644,99 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /sessions/{session_id}/model:
+    post:
+      tags:
+        - sessions
+      summary: Set Session Model
+      description: >-
+        Set, or clear (`null`, "default"), this session's model override: which model its native
+        provider's next turn runs on. Sticky until changed and durable across reloads and restarts.
+        Takes effect from the session's next turn; a turn already sending keeps the value it
+        started with. The main thread is a session like any other here. kagent validates the model
+        itself and rejects an unknown one when the turn starts (see the delivery's failure detail),
+        so this route only checks the wire format, not that kagent actually offers the model.
+      operationId: setSessionModel
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionModelRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionModelEffort'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
+  /sessions/{session_id}/effort:
+    post:
+      tags:
+        - sessions
+      summary: Set Session Effort
+      description: >-
+        Set, or clear (`null`, "default"), this session's reasoning-effort override. The level
+        must be one the session's current provider offers (`GET /providers` lists each profile's
+        `effort_levels`); any other level is `422`. Sticky until changed and durable across
+        reloads and restarts. Takes effect from the session's next turn; a turn already sending
+        keeps the value it started with. The main thread is a session like any other here.
+      operationId: setSessionEffort
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionEffortRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionModelEffort'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
   /sessions/{session_id}/native:
     get:
       tags:
@@ -4721,6 +4814,19 @@ components:
             - type: string
             - type: 'null'
           title: Model
+        model_override:
+          anyOf:
+            - type: string
+              pattern: ^[A-Za-z0-9._:/-]{1,200}$
+            - type: 'null'
+          title: Model Override
+          description: The owner's /model override, null for the provider's default.
+        effort_override:
+          anyOf:
+            - $ref: '#/components/schemas/EffortLevel'
+            - type: 'null'
+          title: Effort Override
+          description: The owner's /effort override, null for the provider's default.
         turns:
           type: integer
           title: Turns
@@ -4761,6 +4867,8 @@ components:
         - kagent_session_id
         - session_state
         - model
+        - model_override
+        - effort_override
         - turns
         - turn_in_flight
         - deliveries
@@ -4985,6 +5093,38 @@ components:
         - namespace
         - name
       title: ProviderAgentRef
+    EffortLevel:
+      type: string
+      enum:
+        - minimal
+        - low
+        - medium
+        - high
+        - xhigh
+        - max
+      title: EffortLevel
+      description: >-
+        A reasoning-effort level. Which of these a profile actually offers is its own
+        `effort_levels`: Mainloop's built-in Claude profile offers low, medium, high, xhigh, max;
+        its built-in Codex profile offers minimal, low, medium, high. Setting a level the
+        session's profile does not offer is `422`.
+    ProviderModel:
+      properties:
+        id:
+          type: string
+          pattern: ^[A-Za-z0-9._:/-]{1,200}$
+          title: Id
+        label:
+          type: string
+          minLength: 1
+          title: Label
+      additionalProperties: false
+      type: object
+      required:
+        - id
+        - label
+      title: ProviderModel
+      description: One model a provider profile offers, for /model's listing and autocomplete.
     ProviderProfile:
       properties:
         id:
@@ -5045,6 +5185,32 @@ components:
           type: array
           title: Capabilities
           default: []
+        models:
+          # no cap in the code: models are unique by id, but their number is not limited
+          items:
+            $ref: '#/components/schemas/ProviderModel'
+          type: array
+          title: Models
+          default: []
+        default_model:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Default Model
+          description: One of models' ids, or null when models is empty.
+        effort_levels:
+          # no cap in the code: levels are unique, but their number is not limited
+          items:
+            $ref: '#/components/schemas/EffortLevel'
+          type: array
+          title: Effort Levels
+          default: []
+        default_effort:
+          anyOf:
+            - $ref: '#/components/schemas/EffortLevel'
+            - type: 'null'
+          title: Default Effort
+          description: One of effort_levels, or null when effort_levels is empty.
       additionalProperties: false
       type: object
       required:
@@ -5057,6 +5223,10 @@ components:
         - aliases
         - enabled
         - capabilities
+        - models
+        - default_model
+        - effort_levels
+        - default_effort
       title: ProviderProfile
     QueueItem:
       properties:
@@ -5861,6 +6031,53 @@ components:
         - message
       title: SessionMessageRequest
       description: Request to send a message to a session.
+    SessionModelRequest:
+      properties:
+        model:
+          anyOf:
+            - type: string
+              pattern: ^[A-Za-z0-9._:/-]{1,200}$
+            - type: 'null'
+          title: Model
+      type: object
+      required:
+        - model
+      title: SessionModelRequest
+      description: Request to set (or, null, clear) a session's model override.
+    SessionEffortRequest:
+      properties:
+        effort:
+          anyOf:
+            - $ref: '#/components/schemas/EffortLevel'
+            - type: 'null'
+          title: Effort
+      type: object
+      required:
+        - effort
+      title: SessionEffortRequest
+      description: Request to set (or, null, clear) a session's reasoning-effort override.
+    SessionModelEffort:
+      properties:
+        session_id:
+          type: string
+          title: Session Id
+        model:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Model
+        effort:
+          anyOf:
+            - $ref: '#/components/schemas/EffortLevel'
+            - type: 'null'
+          title: Effort
+      type: object
+      required:
+        - session_id
+        - model
+        - effort
+      title: SessionModelEffort
+      description: A session's model and reasoning-effort override state, after a write.
     SessionStatus:
       type: string
       enum:

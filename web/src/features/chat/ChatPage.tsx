@@ -1,15 +1,14 @@
-import { useState, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { HITLCard } from '@/features/hitl';
 import { PanelBoundary } from '@/shell/PanelBoundary';
 import { useConnection } from '@/shell/ConnectionBanner';
-import { clearDraft } from './drafts';
-import { mainInputLock, providerLabel } from './mainProvider';
+import { mainInputLock } from './mainProvider';
 import { MainThreadHeader } from './MainThreadHeader';
-import { resolveModelCommand } from './modelCommand';
 import { SessionRequests } from './SessionRequests';
-import { parseSlashCommand, SLASH_COMMANDS } from './slashCommand';
+import { SLASH_COMMANDS } from './slashCommand';
 import { ThreadBody } from './ThreadBody';
 import { useMainProvider } from './useMainProvider';
+import { useModelEffortCommands } from './useModelEffortCommands';
 import { MAIN_THREAD, useThread } from './useThread';
 
 export interface ChatPageProps {
@@ -43,25 +42,14 @@ export function ChatPage({
   );
   const inputLock = mainInputLock(info, provider);
 
-  // `/model` is a local command: it never becomes a chat message. Its own output replaces any
-  // earlier one; an ordinary send clears it, so a stale notice cannot linger under a new reply.
-  const [commandNotice, setCommandNotice] = useState<string | null>(null);
-  function interceptSend(text: string): Promise<boolean> | null {
-    const command = parseSlashCommand(text);
-    if (!command || command.name !== 'model') {
-      if (commandNotice) setCommandNotice(null);
-      return null;
-    }
-    const outcome = resolveModelCommand(command.args, info);
-    setCommandNotice(
-      'provider' in outcome
-        ? `Switching main model to ${providerLabel(outcome.provider)}… see the header for status.`
-        : outcome.notice
-    );
-    if ('provider' in outcome) provider.select(outcome.provider);
-    clearDraft(chat.draftKey);
-    return Promise.resolve(true);
-  }
+  // `/model` and `/effort` are local commands: neither ever becomes a chat message. Their own
+  // output replaces any earlier one; an ordinary send clears it, so a stale notice cannot linger
+  // under a new reply.
+  const { commandNotice, intercept } = useModelEffortCommands(
+    chat.sessionId,
+    chat.native,
+    chat.draftKey
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="main-thread">
@@ -86,7 +74,7 @@ export function ChatPage({
         onPrefillUsed={onPrefillUsed}
         starters={starters}
         allowImages
-        onSend={interceptSend}
+        onSend={intercept}
         commandNotice={commandNotice}
         commands={SLASH_COMMANDS}
         requests={

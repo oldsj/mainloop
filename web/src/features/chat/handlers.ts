@@ -11,9 +11,50 @@ import {
   providerFixture,
   sessionFixture
 } from './fixtures';
-import type { ChatMessage, MainProviderInfo, MainThreadInfo, NativeSessionInfo } from './types';
+import type {
+  ChatMessage,
+  MainProviderInfo,
+  MainThreadInfo,
+  NativeSessionInfo,
+  ProviderProfile
+} from './types';
 
 type Schemas = components['schemas'];
+
+/** The built-in Claude and Codex profiles' /model and /effort choices, as the real registry lists
+ * them (see server/internal/providers), for a backend a test does not otherwise configure. */
+export const CLAUDE_PROFILE: ProviderProfile = {
+  id: 'claude',
+  display_name: 'Claude Code',
+  runtime_adapter: 'kagent',
+  native_provider: 'claude',
+  configuration_revision: 'native-v1',
+  agents: {},
+  aliases: [],
+  enabled: true,
+  capabilities: [],
+  models: [
+    { id: 'claude-sonnet-5', label: 'Sonnet 5' },
+    { id: 'claude-opus-5', label: 'Opus 5' },
+    { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+    { id: 'claude-fable-5-1', label: 'Fable 5.1' }
+  ],
+  default_model: 'claude-sonnet-5',
+  effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+  default_effort: 'medium'
+};
+export const CODEX_PROFILE: ProviderProfile = {
+  ...CLAUDE_PROFILE,
+  id: 'codex',
+  display_name: 'Codex',
+  native_provider: 'codex',
+  models: [
+    { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex' },
+    { id: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini' }
+  ],
+  default_model: 'gpt-5.1-codex',
+  effort_levels: ['minimal', 'low', 'medium', 'high']
+};
 
 /** A refusal the next request gets: the status, the detail, and the contract's `code` when it has one. */
 export interface Refusal {
@@ -78,6 +119,12 @@ export interface ChatBackendState {
   lostProvider: LostSend | null;
   /** How many provider reads fail before they succeed again. Each failed read counts once. */
   failProviderReads: number;
+  /** The profiles `GET /providers` serves: /model and /effort's source of models and levels. */
+  providers: ProviderProfile[];
+  /** Every `POST /sessions/{id}/model` body the backend received, by session, in order. */
+  modelPosts: { sessionId: string; body: Schemas['SessionModelRequest'] }[];
+  /** Every `POST /sessions/{id}/effort` body the backend received, by session, in order. */
+  effortPosts: { sessionId: string; body: Schemas['SessionEffortRequest'] }[];
 }
 
 /** The provider a completed selection leaves behind: chosen, prepared and confirmed. */
@@ -152,6 +199,9 @@ export function createChatBackend(
     rejectNextProvider: null,
     lostProvider: null,
     failProviderReads: 0,
+    providers: [CLAUDE_PROFILE, CODEX_PROFILE],
+    modelPosts: [],
+    effortPosts: [],
     ...initial
   });
   const state = freshState();
@@ -272,7 +322,50 @@ export function createChatBackend(
     putSessionThread(sessionId, { native: completeTurn(thread.native), messages });
   }
 
+  /** The native state behind session_id, main or worker, or undefined for an unknown one. */
+  function nativeFor(sessionId: string): NativeSessionInfo | undefined {
+    if (sessionId === MAIN_SESSION_ID) return state.mainThread.native ?? undefined;
+    return state.sessionThreads[sessionId]?.native;
+  }
+
+  function putNativeFor(sessionId: string, native: NativeSessionInfo) {
+    if (sessionId === MAIN_SESSION_ID) {
+      state.mainThread = { ...state.mainThread, native };
+      return;
+    }
+    putSessionThread(sessionId, { ...sessionThread(sessionId), native });
+  }
+
   const handlers = [
+    http.get(url('/providers'), () => HttpResponse.json(state.providers)),
+    http.post(url('/sessions/:sessionId/model'), async ({ params, request }) => {
+      const sessionId = params.sessionId as string;
+      const body = (await request.json()) as Schemas['SessionModelRequest'];
+      state.modelPosts = [...state.modelPosts, { sessionId, body }];
+      const native = nativeFor(sessionId);
+      if (!native) return HttpResponse.json({ detail: 'Session not found' }, { status: 404 });
+      putNativeFor(sessionId, { ...native, model_override: body.model });
+      const response: Schemas['SessionModelEffort'] = {
+        session_id: sessionId,
+        model: body.model,
+        effort: native.effort_override ?? null
+      };
+      return HttpResponse.json(response);
+    }),
+    http.post(url('/sessions/:sessionId/effort'), async ({ params, request }) => {
+      const sessionId = params.sessionId as string;
+      const body = (await request.json()) as Schemas['SessionEffortRequest'];
+      state.effortPosts = [...state.effortPosts, { sessionId, body }];
+      const native = nativeFor(sessionId);
+      if (!native) return HttpResponse.json({ detail: 'Session not found' }, { status: 404 });
+      putNativeFor(sessionId, { ...native, effort_override: body.effort });
+      const response: Schemas['SessionModelEffort'] = {
+        session_id: sessionId,
+        model: native.model_override ?? null,
+        effort: body.effort
+      };
+      return HttpResponse.json(response);
+    }),
     http.get(url('/main-thread'), () => {
       state.mainThreadReads += 1;
       return HttpResponse.json(state.mainThread);

@@ -234,6 +234,10 @@ export function profile(overrides: Partial<ProviderProfile> = {}): ProviderProfi
     aliases: [],
     enabled: true,
     capabilities: [],
+    models: [],
+    default_model: null,
+    effort_levels: [],
+    default_effort: null,
     ...overrides
   };
 }
@@ -241,6 +245,18 @@ export function profile(overrides: Partial<ProviderProfile> = {}): ProviderProfi
 export const CLAUDE_PROFILE = profile({
   id: 'claude-default',
   display_name: 'Claude',
-  native_provider: 'claude'
+  native_provider: 'claude',
+  models: [
+    { id: 'claude-sonnet-5', label: 'Sonnet 5' },
+    { id: 'claude-opus-5', label: 'Opus 5' }
+  ],
+  default_model: 'claude-sonnet-5',
+  effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+  default_effort: 'medium'
 });
-export const CODEX_PROFILE = profile();
+export const CODEX_PROFILE = profile({
+  models: [{ id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex' }],
+  default_model: 'gpt-5.1-codex',
+  effort_levels: ['minimal', 'low', 'medium', 'high'],
+  default_effort: 'medium'
+});
