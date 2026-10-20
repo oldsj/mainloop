@@ -134,8 +134,10 @@ func (d Deps) missing() error {
 }
 
 // maxBodyBytes caps request bodies. The validator buffers the whole body before any handler runs,
-// so the cap has to sit in this chain.
-const maxBodyBytes = 4 << 20
+// so the cap has to sit in this chain. Sized for POST /chat/images: a base64 image up to
+// sessions.MaxImageBytes (5MiB raw, Anthropic's own per-image limit) inflates by about a third,
+// plus room for the JSON envelope.
+const maxBodyBytes = 8 << 20
 
 // New builds the Server from services the caller has already built.
 func New(d Deps) *Server {

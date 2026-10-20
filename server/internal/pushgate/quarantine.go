@@ -194,15 +194,42 @@ type validation struct {
 	Objects       int64 `json:"objects"`
 	ExpandedBytes int64 `json:"expanded_bytes"`
 	DiskBytes     int64 `json:"disk_bytes"`
+	Workflows     bool  `json:"workflows"`
 }
 
 // Upstream performs repository-scoped operations. Read and write are separate methods so a
 // quarantine seed cannot accidentally publish. Every implementation must bound its responses.
+// Push's workflows flag asks for the workflows:write permission in addition to contents:write.
 type Upstream interface {
 	Refs(context.Context, github.Repo) (map[string]string, error)
 	Seed(context.Context, github.Repo, []string, io.Writer) error
-	Push(context.Context, github.Repo, io.Reader) ([]byte, error)
+	Push(ctx context.Context, repo github.Repo, body io.Reader, workflows bool) ([]byte, error)
 	DefaultBranch(context.Context, github.Repo) (string, error)
+}
+
+// emptyTreeOID is git's well-known empty tree: the diff base for a new branch whose history
+// shares no commit already known to the repository.
+const emptyTreeOID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+// touchesWorkflowFiles reports whether c's push creates or changes a file under
+// .github/workflows/, so the caller knows whether to ask GitHub for the workflows permission in
+// addition to contents:write. It diffs from c.Old when the branch already existed; for a new
+// branch (c.Old is zero) it diffs from the merge-base with the default branch head (base) —
+// commits the repository already has — falling back to the empty tree when the new history
+// shares no ancestor with it. Any error here answers true: asking for a permission the push
+// turns out not to need is safe, refusing one it does need is not.
+func (s *spool) touchesWorkflowFiles(ctx context.Context, l Limits, c commands, base string) bool {
+	from := c.Old
+	if from == zeroOID {
+		from = emptyTreeOID
+		if mb, err := s.git(ctx, l, nil, 0, "merge-base", base, c.New); err == nil {
+			if trimmed := strings.TrimSpace(string(mb)); oidPattern.MatchString(trimmed) {
+				from = trimmed
+			}
+		}
+	}
+	out, err := s.git(ctx, l, nil, l.CommandBytes, "diff", "--name-only", "--no-renames", from, c.New, "--", ".github/workflows/")
+	return err != nil || len(strings.TrimSpace(string(out))) > 0
 }
 
 func (s *spool) validate(ctx context.Context, c commands, repo github.Repo, policy Policy, u Upstream, l Limits, guard func(context.Context) error) (validation, error) {
@@ -292,6 +319,7 @@ func (s *spool) validate(ctx context.Context, c commands, repo github.Repo, poli
 			return v, denial("non_fast_forward")
 		}
 	}
+	v.Workflows = s.touchesWorkflowFiles(ctx, l, c, base)
 	inventory, err := s.git(ctx, l, nil, l.Objects*80, "cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype) %(objectsize)")
 	if err != nil {
 		return v, err

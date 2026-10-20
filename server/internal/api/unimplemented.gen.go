@@ -324,6 +324,11 @@ func (Unimplemented) RespondToQueueItem(context.Context, RespondToQueueItemReque
 	return nil, apierr.NotImplemented
 }
 
+// RestartSession is not implemented yet.
+func (Unimplemented) RestartSession(context.Context, RestartSessionRequestObject) (RestartSessionResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // ResumeWorkspace is not implemented yet.
 func (Unimplemented) ResumeWorkspace(context.Context, ResumeWorkspaceRequestObject) (ResumeWorkspaceResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -386,5 +391,10 @@ func (Unimplemented) UpdateProjectDefaultProvider(context.Context, UpdateProject
 
 // UpdateSchedule is not implemented yet.
 func (Unimplemented) UpdateSchedule(context.Context, UpdateScheduleRequestObject) (UpdateScheduleResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// UploadChatImage is not implemented yet.
+func (Unimplemented) UploadChatImage(context.Context, UploadChatImageRequestObject) (UploadChatImageResponseObject, error) {
 	return nil, apierr.NotImplemented
 }

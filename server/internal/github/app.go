@@ -117,8 +117,8 @@ func NewApp(o Options) (*App, error) {
 	}, nil
 }
 
-// permissionFields sets the one InstallationPermissions field a permission name stands for.
-func permissionFields(p Permissions) (*gh.InstallationPermissions, error) {
+// PermissionFields sets the one InstallationPermissions field a permission name stands for.
+func PermissionFields(p Permissions) (*gh.InstallationPermissions, error) {
 	out := &gh.InstallationPermissions{}
 	for name, level := range p {
 		if level != Read && level != Write {
@@ -134,12 +134,16 @@ func permissionFields(p Permissions) (*gh.InstallationPermissions, error) {
 			out.PullRequests = &l
 		case "issues":
 			out.Issues = &l
+		case "vulnerability_alerts":
+			out.VulnerabilityAlerts = &l
 		case "checks":
 			out.Checks = &l
 		case "statuses":
 			out.Statuses = &l
 		case "administration":
 			out.Administration = &l
+		case "workflows":
+			out.Workflows = &l
 		default:
 			return nil, fmt.Errorf("github: unknown permission %q", name)
 		}
@@ -217,7 +221,7 @@ func (a *App) cachedClient(key string) *gh.Client {
 }
 
 func (a *App) buildClient(ctx context.Context, scope Scope, key string) (*gh.Client, error) {
-	fields, err := permissionFields(scope.Permissions)
+	fields, err := PermissionFields(scope.Permissions)
 	if err != nil {
 		return nil, err
 	}

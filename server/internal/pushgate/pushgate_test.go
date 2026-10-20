@@ -89,7 +89,7 @@ func (u *upstreamSpy) DefaultBranch(ctx context.Context, r github.Repo) (string,
 	u.mark("metadata")
 	return u.Upstream.DefaultBranch(ctx, r)
 }
-func (u *upstreamSpy) Push(ctx context.Context, r github.Repo, b io.Reader) ([]byte, error) {
+func (u *upstreamSpy) Push(ctx context.Context, r github.Repo, b io.Reader, workflows bool) ([]byte, error) {
 	u.mark("push")
 	u.mu.Lock()
 	u.pushes++
@@ -99,7 +99,7 @@ func (u *upstreamSpy) Push(ctx context.Context, r github.Repo, b io.Reader) ([]b
 	if reply != nil {
 		return reply, nil
 	}
-	out, err := u.Upstream.Push(ctx, r, b)
+	out, err := u.Upstream.Push(ctx, r, b, workflows)
 	if err == nil && lost {
 		return nil, errors.New("lost upstream-secret-marker")
 	}
@@ -289,6 +289,26 @@ func (e *env) commit(text string) {
 	e.git(e.work, "add", "file")
 	e.git(e.work, "commit", "-m", text)
 }
+func (e *env) commitPath(path, text string) {
+	e.t.Helper()
+	full := filepath.Join(e.work, path)
+	if err := os.MkdirAll(filepath.Dir(full), 0700); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(text), 0600); err != nil {
+		e.t.Fatal(err)
+	}
+	e.git(e.work, "add", path)
+	e.git(e.work, "commit", "-m", "commit "+path)
+}
+func mintedWorkflowsWrite(mints []githubtest.Mint) bool {
+	for _, m := range mints {
+		if m.Permissions["workflows"] == "write" {
+			return true
+		}
+	}
+	return false
+}
 func (e *env) body(old, new, ref string) []byte {
 	e.t.Helper()
 	revisions := new + "\n"
@@ -400,6 +420,75 @@ func TestRealGitPushThroughGate(t *testing.T) {
 	}
 	if strings.Contains(e.logs.String(), e.token) || strings.Contains(e.logs.String(), "ghs_fake_") {
 		t.Fatal("secret in logs")
+	}
+}
+
+func TestPushWithoutWorkflowFilesKeepsContentsOnlyScope(t *testing.T) {
+	e := newEnv(t)
+	w := e.request(e.body(zeroOID, e.head, "refs/heads/feature/test"), nil)
+	if w.Code != 200 {
+		t.Fatalf("push: %d %s", w.Code, w.Body.String())
+	}
+	if mintedWorkflowsWrite(e.fake.Mints()) {
+		t.Fatal("push with no .github/workflows/ change requested the workflows permission")
+	}
+}
+
+func TestBranchCreationTouchingWorkflowsRequestsWorkflowsPermission(t *testing.T) {
+	e := newEnv(t)
+	e.commitPath(".github/workflows/ci.yml", "jobs: {}")
+	head := e.git(e.work, "rev-parse", "HEAD")
+	w := e.request(e.body(zeroOID, head, "refs/heads/feature/test"), nil)
+	if w.Code != 200 {
+		t.Fatalf("push: %d %s", w.Code, w.Body.String())
+	}
+	if !mintedWorkflowsWrite(e.fake.Mints()) {
+		t.Fatal("new branch introducing a .github/workflows/ file did not request the workflows permission")
+	}
+}
+
+func TestFastForwardTouchingWorkflowsRequestsWorkflowsPermission(t *testing.T) {
+	e := newEnv(t)
+	w := e.request(e.body(zeroOID, e.head, "refs/heads/feature/test"), nil)
+	if w.Code != 200 {
+		t.Fatalf("initial push: %d %s", w.Code, w.Body.String())
+	}
+	if mintedWorkflowsWrite(e.fake.Mints()) {
+		t.Fatal("initial push with no .github/workflows/ change requested the workflows permission")
+	}
+	old := e.head
+	e.commitPath(".github/workflows/ci.yml", "jobs: {}")
+	e.head = e.git(e.work, "rev-parse", "HEAD")
+	w = e.request(e.body(old, e.head, "refs/heads/feature/test"), nil)
+	if w.Code != 200 {
+		t.Fatalf("fast-forward push: %d %s", w.Code, w.Body.String())
+	}
+	if !mintedWorkflowsWrite(e.fake.Mints()) {
+		t.Fatal("fast-forward introducing a .github/workflows/ file did not request the workflows permission")
+	}
+}
+
+// A push creating a branch that merely points at a commit the repository already has — even one
+// whose tree contains a workflow file committed long before this push — introduces no new
+// .github/workflows/ change and must not ask for the broader permission.
+func TestBranchCreationAtKnownDefaultCommitSkipsWorkflowsPermission(t *testing.T) {
+	e := newEnv(t)
+	e.git(e.work, "checkout", "main")
+	e.commitPath(".github/workflows/existing.yml", "jobs: {}")
+	newMain := e.git(e.work, "rev-parse", "HEAD")
+	e.git(e.work, "push", e.bare, "main")
+	e.git(e.work, "checkout", "feature/test")
+	second, token2 := additionalBranch(t, e, "ws2", "feature/other")
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://localhost/oldsj/alpha.git/git-receive-pack", bytes.NewReader(e.body(zeroOID, newMain, "refs/heads/feature/other")))
+	r.Header.Set("Content-Type", "application/x-git-receive-pack-request")
+	r.Header.Set("Authorization", "Bearer "+token2)
+	w := httptest.NewRecorder()
+	second.Handler().ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("push: %d %s", w.Code, w.Body.String())
+	}
+	if mintedWorkflowsWrite(e.fake.Mints()) {
+		t.Fatal("push at an already-known commit requested the workflows permission")
 	}
 }
 

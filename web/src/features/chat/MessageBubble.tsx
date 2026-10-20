@@ -6,6 +6,7 @@ import type { DeliveryNotice as Notice } from '@/lib/delivery';
 import { messageTime } from '@/lib/time';
 import { parseChildReport } from './childReport';
 import { DeliveryNotice } from './DeliveryNotice';
+import { imageDataUrl } from './imageLimits';
 
 export const STOPPED_NOTE = 'This turn was stopped before it finished.';
 
@@ -40,12 +41,18 @@ export function MessageBubble({
   const report = isUser ? parseChildReport(message.content) : null;
   const writer = message.provider ?? agentKind;
   const author = `${isUser ? 'user' : agentLabel(writer)}@${context}$`;
+  // Queued behind the turn in flight: not sent to the agent yet, so the bubble itself must not
+  // look like a delivered message, not just the notice below it.
+  const queued = notice?.state === 'queued';
 
   if (isUser && assignment && !report) {
     return (
       <article
-        aria-label={`Assignment from Mainloop, ${messageTime(message.created_at)}`}
-        className="px-md py-sm border-border w-full border-l-2 bg-transparent"
+        aria-label={`Assignment from Mainloop, ${messageTime(message.created_at)}${queued ? ', queued' : ''}`}
+        className={cn(
+          'px-md py-sm border-border w-full border-l-2 bg-transparent',
+          queued && 'opacity-60'
+        )}
       >
         <details data-testid="assignment-block">
           <summary className="text-muted-foreground min-h-11 cursor-pointer text-xs md:text-sm">
@@ -68,12 +75,13 @@ export function MessageBubble({
 
   return (
     <article
-      aria-label={`${report ? `${report.title} · ${report.outcome}` : isUser ? 'You' : agentLabel(writer)}, ${messageTime(message.created_at)}`}
+      aria-label={`${report ? `${report.title} · ${report.outcome}` : isUser ? 'You' : agentLabel(writer)}, ${messageTime(message.created_at)}${queued ? ', queued' : ''}`}
       data-testid={report ? 'child-report' : undefined}
       className={cn(
         'px-md py-sm w-full border-l-2',
         report ? 'border-term-fg-muted bg-card' : 'border-border',
-        !report && !isUser ? 'bg-card' : 'bg-transparent'
+        !report && !isUser ? 'bg-card' : 'bg-transparent',
+        queued && 'opacity-60'
       )}
     >
       <div className="gap-xs flex flex-col">
@@ -98,6 +106,19 @@ export function MessageBubble({
           <Markdown className="text-foreground text-sm md:text-base">
             {report ? report.body : content}
           </Markdown>
+          {message.images && message.images.length > 0 ? (
+            <div className="gap-xs mt-sm flex flex-wrap" data-testid="message-images">
+              {message.images.map((image) => (
+                <img
+                  key={image.id}
+                  src={imageDataUrl({ mediaType: image.media_type, data: image.data })}
+                  alt=""
+                  className="border-border size-24 border object-cover"
+                  data-testid="message-image"
+                />
+              ))}
+            </div>
+          ) : null}
           {stopped ? (
             <p className="mt-sm text-muted-foreground text-sm" data-testid="turn-stopped-note">
               {STOPPED_NOTE}

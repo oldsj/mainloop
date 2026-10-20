@@ -47,6 +47,35 @@ INSERT INTO session_messages (id, session_id, role, content)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (id) DO NOTHING;
 
+-- An image pasted into the main chat composer, uploaded (unclaimed) ahead of the message that
+-- attaches it.
+-- name: InsertMessageImage :exec
+INSERT INTO message_images (id, session_id, media_type, data, size_bytes)
+VALUES ($1, $2, $3, $4, $5);
+
+-- Claims the given uploads for the message, idempotently: a retry of the same message id matches
+-- rows it already claimed (message_id = the same message), not just unclaimed ones. The caller
+-- compares the returned ids against what it asked for; fewer means some id was unknown, belonged
+-- to another session, or was already claimed by a different message.
+-- name: AttachMessageImages :many
+UPDATE message_images
+SET message_id = sqlc.arg(message_id)::text
+WHERE id = ANY(sqlc.arg(ids)::text[]) AND session_id = sqlc.arg(session_id)
+  AND (message_id IS NULL OR message_id = sqlc.arg(message_id)::text)
+RETURNING id;
+
+-- The images of one message, oldest first, built into the outbound turn alongside its text.
+-- name: ListMessageImagesByMessage :many
+SELECT id, media_type, data FROM message_images
+WHERE message_id = sqlc.arg(message_id)::text
+ORDER BY created_at, id;
+
+-- The images of every message in a conversation, oldest first, grouped by the caller.
+-- name: ListMessageImagesBySession :many
+SELECT id, message_id, media_type, data FROM message_images
+WHERE session_id = sqlc.arg(session_id) AND message_id IS NOT NULL
+ORDER BY created_at, id;
+
 -- A user message carries its delivery's source, so who wrote it covers the whole history, not just
 -- the newest deliveries. Assistant messages have no delivery.
 -- name: ListSessionMessages :many
@@ -165,6 +194,7 @@ LIMIT 1;
 -- name: GetDeliveryContext :one
 SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.updated_at,
        d.kagent_session_id AS sent_kagent_session_id, d.sent_text,
+       d.activity_at, d.activity_kind, d.stalled_at,
        b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id,
        b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
        b.credential_identity,
@@ -585,3 +615,93 @@ WHERE d.id = $1 AND b.session_id = d.session_id AND d.sent_text IS NOT NULL
 -- name: ClearBindingGuidanceVersion :exec
 UPDATE agent_bindings b SET guidance_version = NULL, guidance_delivery_id = NULL, updated_at = now()
 WHERE b.guidance_delivery_id = $1;
+
+-- A restart of a session whose turn cannot be stopped (restart.go). The row is written before the
+-- native delete, and settled in the transaction that fails the turns that were open on the Session.
+-- name: GetSessionRestart :one
+SELECT * FROM session_restarts WHERE id = $1;
+
+-- name: GetOpenSessionRestart :one
+SELECT * FROM session_restarts WHERE session_id = $1 AND state = 'requested';
+
+-- name: InsertSessionRestart :one
+INSERT INTO session_restarts (id, session_id, kagent_session_id)
+VALUES (sqlc.arg(id), sqlc.arg(session_id), sqlc.narg(kagent_session_id))
+RETURNING *;
+
+-- Records one unconfirmed delete. updated_at moves, so the resume sweep waits before it looks again.
+-- name: NoteSessionRestartAttempt :exec
+UPDATE session_restarts SET attempts = attempts + 1, detail = sqlc.narg(detail), updated_at = now()
+WHERE id = sqlc.arg(id) AND state = 'requested';
+
+-- Zero rows when another caller settled it first.
+-- name: FinishSessionRestart :execrows
+UPDATE session_restarts
+SET state = 'done', detail = NULL, failed_message_ids = sqlc.arg(failed_message_ids)::text[], updated_at = now()
+WHERE id = sqlc.arg(id) AND state = 'requested';
+
+-- Requested restarts nobody has touched for a while: a request that was cut off, or a delete that
+-- kagent did not confirm.
+-- name: ListDueSessionRestarts :many
+SELECT * FROM session_restarts
+WHERE state = 'requested' AND updated_at < now() - make_interval(secs => sqlc.arg(idle_seconds)::float8)
+ORDER BY created_at, id
+LIMIT sqlc.arg(limit_count);
+
+-- Forgets the deleted Session so the next message creates a new one under a new request id and
+-- carries the recent conversation again. Fenced on the Session the restart deleted: a binding that
+-- has moved on to a newer Session is left alone.
+-- name: ForgetDeletedKagentSession :execrows
+UPDATE agent_bindings
+SET kagent_session_id = NULL, kagent_request_id = sqlc.arg(new_request_id), standing_hash = NULL,
+    guidance_version = NULL, guidance_delivery_id = NULL,
+    kagent_create_request_id = NULL, kagent_create_agent_namespace = NULL, kagent_create_agent_name = NULL,
+    updated_at = now()
+WHERE session_id = sqlc.arg(session_id) AND kagent_session_id = sqlc.arg(old_session_id)::text;
+
+-- The turns a restart settles: every delivery that was sent, or may have been, to the deleted
+-- Session (or to none). A recorded one has not been sent and is left for the next Session.
+-- name: ListDeliveriesOnKagentSession :many
+SELECT * FROM deliveries
+WHERE session_id = sqlc.arg(session_id) AND state IN ('sending', 'delivered', 'uncertain')
+  AND (kagent_session_id IS NULL OR kagent_session_id = sqlc.arg(kagent_session_id)::text)
+ORDER BY created_at, id;
+
+-- Stalled turns (stall.go). Records what the delivery loop last saw a turn's task do, and clears a
+-- stall. Fenced on the claim like the outcome writes, but it is not an outcome: state,
+-- outcome_version and updated_at stay. at is null for a kind change seen in a snapshot (the task as
+-- it stood), which is not new activity. Returns whether the turn was marked stalled before.
+-- name: NoteDeliveryActivity :one
+WITH old AS (
+    SELECT id, stalled_at FROM deliveries
+    WHERE deliveries.id = sqlc.arg(id) AND deliveries.lease_owner = sqlc.arg(lease_owner)
+      AND deliveries.attempts = sqlc.arg(attempts) AND deliveries.state IN ('sending', 'delivered')
+    FOR UPDATE
+)
+UPDATE deliveries d
+SET activity_at = coalesce(sqlc.narg(at)::timestamptz, d.activity_at),
+    activity_kind = sqlc.arg(kind)::text,
+    stalled_at = CASE WHEN sqlc.narg(at)::timestamptz IS NULL THEN d.stalled_at END
+FROM old
+WHERE d.id = old.id
+RETURNING (old.stalled_at IS NOT NULL)::boolean AS was_stalled, d.session_id;
+
+-- Marks every delivered turn that has been quiet past its allowance: tool_seconds while its last
+-- event left a tool call running, seconds otherwise. A turn parked for the owner is never stalled.
+-- Quiet is counted from the last live event, else from when the turn was marked delivered.
+-- name: MarkStalledTurns :many
+-- now is the caller's clock, so the allowance can be tested without waiting it out.
+UPDATE deliveries d
+SET stalled_at = sqlc.arg(now)::timestamptz
+WHERE d.state = 'delivered' AND d.stalled_at IS NULL
+  AND d.activity_kind IS DISTINCT FROM 'parked'
+  AND coalesce(d.activity_at, d.updated_at) < sqlc.arg(now)::timestamptz - make_interval(secs => CASE
+      WHEN d.activity_kind = 'tool' THEN sqlc.arg(tool_seconds)::float8 ELSE sqlc.arg(seconds)::float8 END)
+RETURNING d.id, d.session_id, (SELECT s.user_id FROM sessions s WHERE s.id = d.session_id)::text AS user_id;
+
+-- The session's stalled turn, if any: the delivered delivery the sweep marked.
+-- name: GetStalledTurn :one
+SELECT id, task_id, activity_at, activity_kind, stalled_at, updated_at FROM deliveries
+WHERE session_id = $1 AND state = 'delivered' AND stalled_at IS NOT NULL
+ORDER BY created_at DESC
+LIMIT 1;

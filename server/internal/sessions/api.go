@@ -43,7 +43,11 @@ func (a *SessionsAPI) SendMessage(ctx context.Context, r api.SendMessageRequestO
 		conv = *r.Body.ConversationId
 	}
 	id := uuid.NewString()
-	sent, err := a.Svc.Send(ctx, id, conv, r.Body.Message)
+	var imageIDs []string
+	if r.Body.ImageIds != nil {
+		imageIDs = *r.Body.ImageIds
+	}
+	sent, err := a.Svc.SendWithImages(ctx, id, conv, r.Body.Message, imageIDs)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return nil, apierr.NotFound("Conversation not found")
@@ -67,6 +71,24 @@ func (a *SessionsAPI) SendMessage(ctx context.Context, r api.SendMessageRequestO
 	return api.SendMessage200JSONResponse(resp), nil
 }
 
+// UploadChatImage implements api.StrictServerInterface. The upload is scoped to the main session
+// and unattached until a POST /chat with its id claims it.
+func (a *SessionsAPI) UploadChatImage(ctx context.Context, r api.UploadChatImageRequestObject) (api.UploadChatImageResponseObject, error) {
+	if r.Body == nil {
+		return nil, apierr.Invalid("the body is required")
+	}
+	ref, err := a.Svc.UploadImage(ctx, string(r.Body.MediaType), r.Body.Data)
+	switch {
+	case errors.Is(err, ErrInvalid):
+		return nil, apierr.Invalid(reason(err, ErrInvalid))
+	case err != nil:
+		return nil, err
+	}
+	return api.UploadChatImage200JSONResponse(api.ChatImageUploadResponse{
+		Id: ref.ID, MediaType: ref.MediaType, SizeBytes: ref.SizeBytes,
+	}), nil
+}
+
 // GetConversation implements api.StrictServerInterface. The only conversation is the main
 // session's; its messages are the mirrored user and assistant messages.
 func (a *SessionsAPI) GetConversation(ctx context.Context, r api.GetConversationRequestObject) (api.GetConversationResponseObject, error) {
@@ -86,9 +108,13 @@ func (a *SessionsAPI) GetConversation(ctx context.Context, r api.GetConversation
 	if err != nil {
 		return nil, err
 	}
+	images, err := a.messageImages(ctx, q, c.ID)
+	if err != nil {
+		return nil, err
+	}
 	msgs := make([]api.Message, 0, len(rows))
 	for _, m := range rows {
-		msgs = append(msgs, toMessage(m, providers[m.ID]))
+		msgs = append(msgs, toMessage(m, providers[m.ID], images[m.ID]))
 	}
 	title := c.Title
 	return api.GetConversation200JSONResponse(api.ConversationResponse{
@@ -253,6 +279,16 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row nativeBind
 			n.Topic = &name
 		}
 	}
+	if st, err := q.GetStalledTurn(ctx, row.SessionID); err == nil {
+		n.StalledTurn = turnStall(row.SessionID, row.Role == dbstate.RoleMain, st)
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	restartable, err := a.Svc.isRestartable(ctx, row.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	n.Restartable = &restartable
 	state, observation, note := a.sessionState(ctx, row)
 	n.SessionState, n.PreparationObservation = state, observation
 	if unknown {
@@ -422,7 +458,8 @@ func (a *SessionsAPI) GetSessionConversation(ctx context.Context, r api.GetSessi
 	}
 	msgs := make([]api.Message, 0, len(rows))
 	for _, m := range rows {
-		msgs = append(msgs, toMessage(m, providers[m.ID]))
+		// A worker session's message never carries images: only the main chat composer attaches them.
+		msgs = append(msgs, toMessage(m, providers[m.ID], nil))
 	}
 	return api.GetSessionConversation200JSONResponse(api.SessionConversationResponse{Messages: msgs, Session: toSession(row, needs)}), nil
 }
@@ -503,6 +540,34 @@ func (a *SessionsAPI) StopTurn(ctx context.Context, r api.StopTurnRequestObject)
 	return api.StopTurn200JSONResponse(api.SessionStopTurnResponse{Status: api.SessionStopTurnResponseStatus(out)}), nil
 }
 
+// RestartSession implements api.StrictServerInterface.
+func (a *SessionsAPI) RestartSession(ctx context.Context, r api.RestartSessionRequestObject) (api.RestartSessionResponseObject, error) {
+	if r.Body == nil {
+		return nil, apierr.Invalid("the body is required")
+	}
+	res, err := a.Svc.Restart(ctx, r.SessionId, r.Body.RequestId.String())
+	var kerr *KagentError
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, apierr.NotFound("Session not found")
+	case errors.Is(err, ErrConflict):
+		return nil, apierr.Conflict(reason(err, ErrConflict))
+	case errors.Is(err, ErrInvalid):
+		return nil, apierr.Invalid(reason(err, ErrInvalid))
+	case errors.As(err, &kerr):
+		return nil, apierr.BadGateway("Could not restart the session: " + safeDetail(kerr.Err.Error()))
+	case err != nil:
+		return nil, err
+	}
+	failed := res.Failed
+	if len(failed) > 100 {
+		failed = failed[:100]
+	}
+	return api.RestartSession200JSONResponse(api.SessionRestartResponse{
+		Status: api.SessionRestartResponseStatus(res.Outcome), FailedMessageIds: failed,
+	}), nil
+}
+
 // CancelSession implements api.StrictServerInterface.
 func (a *SessionsAPI) CancelSession(ctx context.Context, r api.CancelSessionRequestObject) (api.CancelSessionResponseObject, error) {
 	res, err := a.Svc.Cancel(ctx, r.SessionId)
@@ -543,8 +608,10 @@ func conflictResponse(err error) *apierr.Error {
 }
 
 // toMessage maps a stored message. Only a user message has a source, from its delivery; only an
-// assistant message has a provider, looked up by the caller from messageProviders.
-func toMessage(m dbq.ListSessionMessagesRow, provider string) api.Message {
+// assistant message has a provider, looked up by the caller from messageProviders. images is the
+// message's pasted images, looked up by the caller from messageImages; nil for a worker session's
+// message, which never has any.
+func toMessage(m dbq.ListSessionMessagesRow, provider string, images []api.ChatMessageImage) api.Message {
 	msg := api.Message{
 		Id: m.ID, ConversationId: m.SessionID, Role: api.MessageRole(m.Role),
 		Content: m.Content, CreatedAt: m.CreatedAt,
@@ -557,7 +624,29 @@ func toMessage(m dbq.ListSessionMessagesRow, provider string) api.Message {
 		p := api.MessageProvider(provider)
 		msg.Provider = &p
 	}
+	if len(images) > 0 {
+		msg.Images = &images
+	}
 	return msg
+}
+
+// messageImages maps a message id to the images pasted into it, for a conversation's messages in
+// one read. Only the main chat ever has any: a worker session's conversation does not call this.
+func (a *SessionsAPI) messageImages(ctx context.Context, q *dbq.Queries, sessionID string) (map[string][]api.ChatMessageImage, error) {
+	rows, err := q.ListMessageImagesBySession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]api.ChatMessageImage, len(rows))
+	for _, r := range rows {
+		if r.MessageID == nil {
+			continue
+		}
+		out[*r.MessageID] = append(out[*r.MessageID], api.ChatMessageImage{
+			Id: r.ID, MediaType: r.MediaType, Data: r.Data,
+		})
+	}
+	return out, nil
 }
 
 // messageProviders maps a mirrored reply's message id to the provider whose native Session wrote

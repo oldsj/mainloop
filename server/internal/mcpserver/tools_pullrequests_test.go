@@ -116,7 +116,10 @@ func (h *prHarness) seedAgent(t *testing.T, mut func(*authtest.Agent)) authtest.
 func TestBothSurfacesListTheMergeToolsByRoute(t *testing.T) {
 	h := newPRHarness(t)
 	a := h.seedAgent(t, nil)
-	want := []string{"get_pull_request_merge_status", "merge_pull_request", "open_pull_request", "prepare_pull_request_merge", "whoami"}
+	want := []string{
+		"get_issue", "get_pull_request_merge_status", "list_check_runs", "list_dependabot_alerts", "merge_pull_request",
+		"open_pull_request", "prepare_pull_request_merge", "whoami",
+	}
 	if got := h.list(t, mcpserver.PathOrdinary, a.Token); !slices.Equal(got, want) {
 		t.Errorf("/mcp lists %v, want %v", got, want)
 	}

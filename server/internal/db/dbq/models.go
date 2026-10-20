@@ -109,6 +109,9 @@ type Delivery struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	SentText        *string
+	ActivityAt      *time.Time
+	ActivityKind    *string
+	StalledAt       *time.Time
 }
 
 type DevEnvironment struct {
@@ -469,6 +472,16 @@ type MergeResult struct {
 	CreatedAt  time.Time
 }
 
+type MessageImage struct {
+	ID        string
+	SessionID string
+	MessageID *string
+	MediaType string
+	Data      []byte
+	SizeBytes int32
+	CreatedAt time.Time
+}
+
 type PrCreation struct {
 	ID             string
 	IdempotencyKey string
@@ -612,6 +625,18 @@ type SessionMessage struct {
 	Role      string
 	Content   string
 	CreatedAt time.Time
+}
+
+type SessionRestart struct {
+	ID               string
+	SessionID        string
+	KagentSessionID  *string
+	State            dbstate.RestartState
+	Detail           *string
+	FailedMessageIds []string
+	Attempts         int32
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type SweepLease struct {

@@ -13,6 +13,9 @@
 //     always 'problem': it is Mainloop's own recovery work, not yet an owner decision, so it does
 //     not count toward Needs-you (see [Service.Snapshot]).
 //   - merge_proposal: one item per proposal awaiting approval, linked to its canonical HITL ask.
+//   - turn_stalled: one item per stalled turn (no task activity past its allowance) of the main
+//     thread or a standalone session, opened and resolved by [Service.SyncTasks] from the sessions
+//     ledger's stalled_at. A task-owned session is left to the task liveness sweep.
 //   - queue: written by [Open], for questions other slices put to the owner. The owner's answer is
 //     stored on the row (detail.response) for that slice to read; nothing is delivered from here.
 //
@@ -53,6 +56,7 @@ const (
 	SourceTaskDecision   = "task_decision"
 	SourceReconciliation = "task_reconciliation"
 	SourceMerge          = "merge_proposal"
+	SourceStalledTurn    = "turn_stalled"
 	SourceQueue          = "queue"
 )
 
@@ -114,6 +118,7 @@ func (s *Service) SyncTasks(ctx context.Context) error {
 			q.OpenTaskDecisionAttention, q.ResolveStaleTaskDecisions, q.ResolveQueueForFinishedTasks,
 			q.OpenTaskReconciliationAttention, q.ResolveTaskReconciliationAttention,
 			q.OpenMergeProposalAttention, q.ResolveMergeProposalAttention,
+			q.OpenStalledTurnAttention, q.ResolveStalledTurnAttention,
 			q.ResolveFinishedSessionAttention, q.ResolveAttentionHiddenForGood,
 		} {
 			ids, err := step(ctx, s.OwnerID)
@@ -321,6 +326,8 @@ func (s *Service) item(r dbq.AttentionItem) (api.AttentionItem, bool) {
 		out.Id, out.TaskId = "task:"+*r.TaskID, r.TaskID
 	case SourceReconciliation:
 		out.Id, out.TaskId = "reconciliation:"+r.SourceID, r.TaskID
+	case SourceStalledTurn:
+		out.Id = "stalled:" + r.SourceID
 	case SourceMerge:
 		var detail struct {
 			RequestID string `json:"hitl_request_id"`

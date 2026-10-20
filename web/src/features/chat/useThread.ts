@@ -5,6 +5,7 @@ import type { Message, NativeDelivery } from '@/lib/contract';
 import { deliveryNotices } from '@/lib/delivery';
 import { createSendGuard, retryMessage } from '@/lib/messageSend';
 import { clearDraft, NEW_CONVERSATION, sessionDraftKey } from './drafts';
+import type { PendingImage } from './imageLimits';
 import { refusalCode, sendRefusalNotice } from './mainProvider';
 import type { NativeSessionInfo } from './types';
 
@@ -24,6 +25,24 @@ const LOST_REPLY_UNCONFIRMED =
   ' Mainloop could not confirm whether it was recorded. Check the conversation before you send it again.';
 
 const isClientError = (status: number) => status >= 400 && status < 500;
+
+/** A version 4 UUID. getRandomValues also works on the local HTTP preview, where randomUUID does not. */
+export function newRequestId(): string {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = ((b[6] ?? 0) & 0x0f) | 0x40;
+  b[8] = ((b[8] ?? 0) & 0x3f) | 0x80;
+  const h = Array.from(b, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/** The server's reason in an error body (`{"detail": "..."}`), when it has one. */
+function errorDetail(error: unknown): string | null {
+  if (error && typeof error === 'object' && 'detail' in error) {
+    const detail = (error as { detail?: unknown }).detail;
+    if (typeof detail === 'string' && detail) return detail;
+  }
+  return null;
+}
 
 /**
  * The words for a send the backend did not accept. A 4xx refusal shows the server's reason, as does
@@ -156,9 +175,15 @@ export function useThread(source: ThreadSource) {
   const guard = useMemo(() => createSendGuard(setSendPending), []);
   const sequence = useRef(0);
   const mainChat = $api.useMutation('post', '/chat');
+  const uploadImage = $api.useMutation('post', '/chat/images');
   const sessionChat = $api.useMutation('post', '/sessions/{session_id}/message');
   const stopTurn = $api.useMutation('post', '/sessions/{session_id}/stop-turn');
   const [stopError, setStopError] = useState<string | null>(null);
+  const restartSession = $api.useMutation('post', '/sessions/{session_id}/restart');
+  const [restartError, setRestartError] = useState<string | null>(null);
+  // One idempotency key per restart the owner asked for: a retry after a lost reply or a 502 repeats
+  // it, so the server continues the same restart instead of starting another.
+  const restartRequest = useRef<string | null>(null);
 
   const serverMessages = useMemo(() => conversation.data?.messages ?? [], [conversation.data]);
 
@@ -181,13 +206,28 @@ export function useThread(source: ThreadSource) {
 
   /**
    * Posts one message and returns the id the backend recorded it under. The two routes answer
-   * differently: the main thread gives a delivery id, a session gives its message id.
+   * differently: the main thread gives a delivery id, a session gives its message id. Images are
+   * uploaded first, each its own request, so the chat send carries only their ids; only the main
+   * thread ever has any (the worker session route takes no image field).
    */
   const post = useCallback(
-    async (text: string, targetConversation: string | null): Promise<string | null | undefined> => {
+    async (
+      text: string,
+      targetConversation: string | null,
+      images?: PendingImage[]
+    ): Promise<string | null | undefined> => {
       if (isMain) {
+        let imageIds: string[] | undefined;
+        if (images && images.length > 0) {
+          const uploaded = await Promise.all(
+            images.map((image) =>
+              uploadImage.mutateAsync({ body: { media_type: image.mediaType, data: image.data } })
+            )
+          );
+          imageIds = uploaded.map((response) => response.id);
+        }
         const response = await mainChat.mutateAsync({
-          body: { message: text, conversation_id: targetConversation }
+          body: { message: text, conversation_id: targetConversation, image_ids: imageIds }
         });
         // The native backend answers with the delivery id and no message body.
         return response.delivery_message_id ?? response.message?.id;
@@ -198,7 +238,7 @@ export function useThread(source: ThreadSource) {
       });
       return response.message_id;
     },
-    [isMain, mainChat, sessionChat, sessionId]
+    [isMain, mainChat, sessionChat, sessionId, uploadImage]
   );
 
   /**
@@ -282,7 +322,8 @@ export function useThread(source: ThreadSource) {
     async (
       text: string,
       targetConversation: string | null,
-      composer: boolean
+      composer: boolean,
+      images?: PendingImage[]
     ): Promise<boolean> => {
       let accepted = false;
       const entry: Optimistic = {
@@ -291,7 +332,14 @@ export function useThread(source: ThreadSource) {
           conversation_id: targetConversation ?? '',
           role: 'user',
           content: text,
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
+          // Shown at once from what the composer already has in memory, before the upload and the
+          // send both round-trip; the real message replaces this bubble once the conversation lists it.
+          images: images?.map((image, index) => ({
+            id: `pending-image-${index}`,
+            media_type: image.mediaType,
+            data: image.data
+          }))
         }
       };
       setSendError(null);
@@ -310,7 +358,7 @@ export function useThread(source: ThreadSource) {
         return false;
       }
       try {
-        const acceptedId = await post(text, targetConversation);
+        const acceptedId = await post(text, targetConversation, images);
         accepted = true;
         // Only the composer's own text is a draft; a retry must not wipe what the owner is typing.
         if (composer) clearDraft(draftKey);
@@ -355,10 +403,14 @@ export function useThread(source: ThreadSource) {
    * Resolves true when the backend recorded the message.
    */
   const send = useCallback(
-    async (text: string, targetConversation: string | null): Promise<boolean> => {
+    async (
+      text: string,
+      targetConversation: string | null,
+      images?: PendingImage[]
+    ): Promise<boolean> => {
       let accepted = false;
       await guard(async () => {
-        accepted = await submit(text, targetConversation, true);
+        accepted = await submit(text, targetConversation, true, images);
       });
       return accepted;
     },
@@ -409,11 +461,37 @@ export function useThread(source: ThreadSource) {
     stopTurn.mutate(
       { params: { path: { session_id: threadSessionId } } },
       {
-        onError: () => setStopError('Could not stop the turn. Try again.'),
+        onError: (error) =>
+          setStopError(
+            `Could not stop the turn${errorDetail(error) ? ` (${errorDetail(error)})` : '.'} Try again.`
+          ),
         onSettled: () => void refresh().catch(() => undefined)
       }
     );
   }, [threadSessionId, refresh, stopTurn]);
+
+  const restart = useCallback(() => {
+    if (!threadSessionId) return;
+    setRestartError(null);
+    restartRequest.current ??= newRequestId();
+    restartSession.mutate(
+      {
+        params: { path: { session_id: threadSessionId } },
+        body: { request_id: restartRequest.current }
+      },
+      {
+        onSuccess: () => {
+          restartRequest.current = null;
+          setStopError(null);
+        },
+        onError: (error) =>
+          setRestartError(
+            `Could not restart the session${errorDetail(error) ? `: ${errorDetail(error)}` : '.'} Try again.`
+          ),
+        onSettled: () => void refresh().catch(() => undefined)
+      }
+    );
+  }, [threadSessionId, refresh, restartSession]);
 
   // The last poll of the conversation can predate the agent's reply; read it once more when the
   // turn ends.
@@ -459,7 +537,13 @@ export function useThread(source: ThreadSource) {
     retry,
     stop,
     stopping: stopTurn.isPending,
-    stopError
+    stopError,
+    /** The server can restart this thread's native session (main thread or standalone session). */
+    restartable: native?.restartable === true,
+    /** Deletes the native session and fails the open turn; see POST /sessions/{id}/restart. */
+    restart,
+    restarting: restartSession.isPending,
+    restartError
   };
 }
 

@@ -58,6 +58,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/chat/images': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Upload Chat Image
+     * @description Upload an image, scoped to the main session, to attach to the next message sent with POST /chat. Unattached uploads are not shown anywhere until a message claims them.
+     */
+    post: operations['uploadChatImage'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/conversations/{conversation_id}': {
     parameters: {
       query?: never;
@@ -969,6 +989,36 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/sessions/{session_id}/restart': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Restart Session Runtime
+     * @description Recover a session whose turn cannot be stopped: delete its native kagent Session and settle
+     *     the turns that were open on it as ``failed`` (never resent), so the messages queued behind them
+     *     move on at once. The next message creates a new native Session, which carries the recent
+     *     conversation; the old native context is lost. The main thread and standalone native sessions
+     *     can be restarted; a workspace or task-owned session cannot (409).
+     *
+     *     ``request_id`` is the idempotency key: repeating it returns the restart's recorded outcome, or
+     *     continues one that was interrupted, and never deletes a newer Session. ``status`` is
+     *     ``restarted`` when a native Session was deleted, else ``no_native_session``. A delete kagent
+     *     did not confirm is 502 and is retried by repeating the request (a background sweep also
+     *     continues it).
+     */
+    post: operations['restartSession'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/task-operations/{operation_id}': {
     parameters: {
       query?: never;
@@ -1293,6 +1343,55 @@ export interface components {
      */
     CapabilityState: 'proved' | 'partial' | 'unsupported' | 'unknown';
     /**
+     * ChatImageUpload
+     * @description Request model for uploading an image to attach to the next main-chat message.
+     */
+    ChatImageUpload: {
+      /**
+       * Media Type
+       * @description The image's MIME type. Anthropic's Messages API accepts these four formats.
+       * @enum {string}
+       */
+      media_type: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+      /**
+       * Data
+       * Format: byte
+       * @description Base64-encoded image bytes.
+       */
+      data: string;
+    };
+    /**
+     * ChatImageUploadResponse
+     * @description Response model for an uploaded chat image.
+     */
+    ChatImageUploadResponse: {
+      /**
+       * Id
+       * @description The uploaded image's id, attached to a message via ChatRequest.image_ids.
+       */
+      id: string;
+      /** Media Type */
+      media_type: string;
+      /** Size Bytes */
+      size_bytes: number;
+    };
+    /**
+     * ChatMessageImage
+     * @description An image attached to a chat message.
+     */
+    ChatMessageImage: {
+      /** Id */
+      id: string;
+      /** Media Type */
+      media_type: string;
+      /**
+       * Data
+       * Format: byte
+       * @description Base64-encoded image bytes.
+       */
+      data: string;
+    };
+    /**
      * ChatRequest
      * @description Request model for sending a message.
      */
@@ -1307,6 +1406,11 @@ export interface components {
        * @description Existing conversation ID
        */
       conversation_id?: string | null;
+      /**
+       * Image Ids
+       * @description IDs of images uploaded with POST /chat/images (still unattached) to attach to this message, in order. The message may be empty when at least one image is given.
+       */
+      image_ids?: string[];
     };
     /**
      * ChatResponse
@@ -1611,6 +1715,11 @@ export interface components {
        */
       content: string;
       /**
+       * Images
+       * @description Images pasted into this message, if any. Only ever set on a main-chat message.
+       */
+      images?: components['schemas']['ChatMessageImage'][];
+      /**
        * Source
        * @description Who wrote a user message. `mainloop` marks one Mainloop sent on the owner's behalf (a delegated brief, a task report); `user` is the owner's own. Absent on assistant messages.
        * @enum {string}
@@ -1798,6 +1907,14 @@ export interface components {
        * @default false
        */
       turn_in_flight: boolean;
+      /** @description The session's turn, when it is stalled (no task activity past its allowance); null otherwise. */
+      stalled_turn?: components['schemas']['TurnStall'] | null;
+      /**
+       * Restartable
+       * @description Whether POST /sessions/{session_id}/restart applies to this session (the main thread or a standalone native session that has not ended).
+       * @default false
+       */
+      restartable: boolean;
       /**
        * Deliveries
        * @description The newest 20 ledgered deliveries of the session, oldest first (the last item is the newest).
@@ -2851,6 +2968,19 @@ export interface components {
     SessionStopTurnResponse: {
       /** @enum {string} */
       status: 'stopped' | 'finished' | 'no_open_turn';
+    };
+    SessionRestartRequest: {
+      /**
+       * Format: uuid
+       * @description Idempotency key chosen by the caller; repeat it to retry the same restart.
+       */
+      request_id: string;
+    };
+    SessionRestartResponse: {
+      /** @enum {string} */
+      status: 'restarted' | 'no_native_session';
+      /** @description The open turns the restart settled as failed (their messages are not resent). */
+      failed_message_ids: string[];
     };
     SessionArchiveResponse: {
       /** @enum {string} */
@@ -4633,8 +4763,28 @@ export interface components {
       /** @description Whether Mainloop has already asked kagent to delete the runtime's session. */
       native_deleted: boolean;
     };
+    /** @description A delivered turn whose task has shown no activity for longer than its allowance. It may still finish; the next task event clears it. Nothing is replayed: stop or restart the session to recover. */
+    TurnStall: {
+      /** @description The delivery (the user message) whose turn is stalled. */
+      message_id: string;
+      session_id: string;
+      task_id: string | null;
+      /** @description Whether the session is the owner's main thread. */
+      main_thread: boolean;
+      /**
+       * Format: date-time
+       * @description The last task event Mainloop saw, or when the turn was delivered if none.
+       */
+      last_activity_at: string;
+      /** Format: date-time */
+      stalled_at: string;
+      /** @description The last event started a tool call with no result yet, which has the longer allowance. */
+      tool_running: boolean;
+    };
     HealthView: {
       rows: components['schemas']['HealthRow'][];
+      /** @description Delivered turns marked stalled (no task activity past their allowance), oldest stall first. Always sent; absent only from older servers. */
+      stalled_turns?: components['schemas']['TurnStall'][];
       /** @description Requested stops that stayed unconfirmed past the resolver's bound, oldest first. */
       stops: components['schemas']['HealthStop'][];
       hours: number;
@@ -4904,6 +5054,48 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['CodedHTTPError'];
+        };
+      };
+      /** @description Request Entity Too Large */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  uploadChatImage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ChatImageUpload'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ChatImageUploadResponse'];
         };
       };
       /** @description Request Entity Too Large */
@@ -7924,6 +8116,86 @@ export interface operations {
       };
       /** @description Conflict */
       409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  restartSession: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SessionRestartRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SessionRestartResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Request Entity Too Large */
+      413: {
         headers: {
           [name: string]: unknown;
         };

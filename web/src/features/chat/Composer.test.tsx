@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadDraft, saveDraft } from './drafts';
 import { Composer } from './Composer';
+import type { SlashCommandSpec } from './slashCommand';
 
 afterEach(() => sessionStorage.clear());
 
@@ -15,6 +16,16 @@ function setup(props: Partial<React.ComponentProps<typeof Composer>> = {}) {
 }
 
 const input = () => screen.getByTestId('command-input') as HTMLTextAreaElement;
+
+/** A pasted or dropped file clipboard items reference by `getAsFile`. */
+function imageFile(name = 'pixel.png', type = 'image/png', bytes = [1, 2, 3, 4]) {
+  return new File([new Uint8Array(bytes)], name, { type });
+}
+
+/** A fake `DataTransferItem` for a pasted file: jsdom has no real clipboard support. */
+function fileClipboardItem(file: File) {
+  return { kind: 'file', type: file.type, getAsFile: () => file };
+}
 
 describe('Composer', () => {
   it('sends on Enter, trimmed, and clears the box', async () => {
@@ -116,6 +127,130 @@ describe('Composer', () => {
   });
 });
 
+// "move" diverges from "model" at its third letter, so a query can match both, only one, or
+// neither, without one name ever being a prefix of the other.
+const COMMANDS: SlashCommandSpec[] = [
+  { name: 'model', summary: 'Switch the main model provider' },
+  { name: 'move', summary: 'Move the conversation' }
+];
+
+const menu = () => screen.queryByTestId('slash-command-menu');
+const option = (name: string) => screen.getByTestId(`slash-command-option-${name}`);
+
+describe('Composer slash command autosuggest', () => {
+  it('stays closed with no commands registered, even while typing a slash', async () => {
+    setup();
+    await userEvent.type(input(), '/model');
+    expect(menu()).toBeNull();
+  });
+
+  it('opens on a leading slash, listing every command', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/');
+    expect(menu()).not.toBeNull();
+    expect(option('model')).toBeInTheDocument();
+    expect(option('move')).toBeInTheDocument();
+  });
+
+  it('narrows to commands whose name starts with what was typed, case-insensitively', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/Mo');
+    expect(option('model')).toBeInTheDocument();
+    expect(option('move')).toBeInTheDocument();
+  });
+
+  it('narrows to a single match once enough of the name is typed', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/Mod');
+    expect(option('model')).toBeInTheDocument();
+    expect(screen.queryByTestId('slash-command-option-move')).toBeNull();
+  });
+
+  it('closes once the caret moves past the command name into its arguments', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/model more text');
+    expect(menu()).toBeNull();
+  });
+
+  it('closes on ordinary text that does not start with a slash', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), 'hello /model');
+    expect(menu()).toBeNull();
+  });
+
+  it('highlights the first match by default and moves it with Up/Down, wrapping both ways', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/mo');
+    expect(option('model')).toHaveAttribute('aria-selected', 'true');
+    expect(option('move')).toHaveAttribute('aria-selected', 'false');
+
+    await userEvent.keyboard('{ArrowDown}');
+    expect(option('move')).toHaveAttribute('aria-selected', 'true');
+    expect(option('model')).toHaveAttribute('aria-selected', 'false');
+
+    await userEvent.keyboard('{ArrowDown}');
+    expect(option('model')).toHaveAttribute('aria-selected', 'true');
+
+    await userEvent.keyboard('{ArrowUp}');
+    expect(option('move')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('Tab accepts the highlighted command, inserting it with a trailing space and closing the menu', async () => {
+    const { onSend } = setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/mo');
+    await userEvent.keyboard('{ArrowDown}'); // highlight "move"
+    await userEvent.keyboard('{Tab}');
+    expect(input().value).toBe('/move ');
+    expect(menu()).toBeNull();
+    expect(onSend).not.toHaveBeenCalled();
+    // The caret lands right after the inserted space, so typing continues the arguments.
+    await userEvent.type(input(), 'x');
+    expect(input().value).toBe('/move x');
+  });
+
+  it('Enter accepts the highlighted command instead of sending, while the name is not yet exact', async () => {
+    const { onSend } = setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/mo{Enter}');
+    expect(input().value).toBe('/model ');
+    expect(menu()).toBeNull();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('Enter sends once the typed name is already an exact command, instead of re-accepting it', async () => {
+    const { onSend } = setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/model{Enter}');
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('/model'));
+    expect(input().value).toBe('');
+  });
+
+  it('Escape closes the menu without changing the text, and typing more reopens it', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/mo');
+    await userEvent.keyboard('{Escape}');
+    expect(menu()).toBeNull();
+    expect(input().value).toBe('/mo');
+
+    await userEvent.type(input(), 'd');
+    expect(menu()).not.toBeNull();
+  });
+
+  it('accepts a command on a mouse click without losing focus', async () => {
+    setup({ commands: COMMANDS });
+    await userEvent.type(input(), '/mo');
+    await userEvent.click(option('move'));
+    expect(input().value).toBe('/move ');
+    expect(input()).toHaveFocus();
+    expect(menu()).toBeNull();
+  });
+
+  it('leaves ordinary typing and Enter-to-send unaffected when commands are registered', async () => {
+    const { onSend } = setup({ commands: COMMANDS });
+    await userEvent.type(input(), 'just a normal message{Enter}');
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('just a normal message'));
+    expect(input().value).toBe('');
+  });
+});
+
 describe('Composer prefill', () => {
   const PREFILL = 'Start a task in acme/widgets: ';
 
@@ -198,5 +333,102 @@ describe('Composer prefill when the conversation arrives later', () => {
 
     expect(input().value).toBe('typed earlyalready here');
     expect(loadDraft('conv-1')).toBe('typed earlyalready here');
+  });
+});
+
+describe('Composer pasted images', () => {
+  it('shows a thumbnail for a pasted image and attaches it when sent', async () => {
+    const { onSend } = setup({ allowImages: true });
+    const file = imageFile();
+    fireEvent.paste(input(), { clipboardData: { items: [fileClipboardItem(file)] } });
+
+    const thumbnail = await screen.findByTestId('composer-image-thumbnail');
+    expect(thumbnail).toHaveAttribute('src', expect.stringContaining('data:image/png;base64,'));
+    expect(screen.getByTestId('exec-button')).not.toBeDisabled();
+
+    await userEvent.type(input(), 'what is this?');
+    await userEvent.click(screen.getByTestId('exec-button'));
+
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith('what is this?', [
+        { mediaType: 'image/png', data: expect.any(String) }
+      ])
+    );
+    expect(screen.queryByTestId('composer-image-thumbnail')).not.toBeInTheDocument();
+  });
+
+  it('sends an image with no caption', async () => {
+    const { onSend } = setup({ allowImages: true });
+    fireEvent.paste(input(), { clipboardData: { items: [fileClipboardItem(imageFile())] } });
+    await screen.findByTestId('composer-image-thumbnail');
+
+    expect(screen.getByTestId('exec-button')).not.toBeDisabled();
+    await userEvent.click(screen.getByTestId('exec-button'));
+
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith('', [
+        { mediaType: 'image/png', data: expect.any(String) }
+      ])
+    );
+  });
+
+  it('removes a pending image with its remove button, before send', async () => {
+    const { onSend } = setup({ allowImages: true });
+    fireEvent.paste(input(), { clipboardData: { items: [fileClipboardItem(imageFile())] } });
+    await screen.findByTestId('composer-image-thumbnail');
+
+    await userEvent.click(screen.getByTestId('composer-image-remove'));
+    expect(screen.queryByTestId('composer-image-thumbnail')).not.toBeInTheDocument();
+    expect(screen.getByTestId('exec-button')).toBeDisabled();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('ignores a pasted image when the composer does not allow images', () => {
+    setup({ allowImages: false });
+    fireEvent.paste(input(), { clipboardData: { items: [fileClipboardItem(imageFile())] } });
+    expect(screen.queryByTestId('composer-image-thumbnail')).not.toBeInTheDocument();
+  });
+
+  it('refuses an unsupported image format with an inline error', async () => {
+    setup({ allowImages: true });
+    const svg = imageFile('pic.svg', 'image/svg+xml');
+    fireEvent.paste(input(), { clipboardData: { items: [fileClipboardItem(svg)] } });
+
+    await screen.findByTestId('composer-image-error');
+    expect(screen.queryByTestId('composer-image-thumbnail')).not.toBeInTheDocument();
+  });
+
+  it('refuses an image over the size cap with an inline error', async () => {
+    setup({ allowImages: true });
+    const big = imageFile('big.png', 'image/png', new Array(5 * 1024 * 1024 + 1).fill(0));
+    fireEvent.paste(input(), { clipboardData: { items: [fileClipboardItem(big)] } });
+
+    await screen.findByTestId('composer-image-error');
+    expect(screen.queryByTestId('composer-image-thumbnail')).not.toBeInTheDocument();
+  });
+
+  it('attaches a dropped image the same way as a pasted one', async () => {
+    const { onSend } = setup({ allowImages: true });
+    const file = imageFile();
+    fireEvent.drop(screen.getByTestId('input-bar'), { dataTransfer: { files: [file] } });
+
+    await screen.findByTestId('composer-image-thumbnail');
+    await userEvent.click(screen.getByTestId('exec-button'));
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith('', [
+        { mediaType: 'image/png', data: expect.any(String) }
+      ])
+    );
+  });
+
+  it('puts the image back when the send is not accepted', async () => {
+    const { onSend } = setup({ allowImages: true });
+    onSend.mockResolvedValue(false);
+    fireEvent.paste(input(), { clipboardData: { items: [fileClipboardItem(imageFile())] } });
+    await screen.findByTestId('composer-image-thumbnail');
+
+    await userEvent.click(screen.getByTestId('exec-button'));
+    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    expect(await screen.findByTestId('composer-image-thumbnail')).toBeInTheDocument();
   });
 });

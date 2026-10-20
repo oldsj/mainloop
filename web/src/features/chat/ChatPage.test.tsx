@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { delay, http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -184,6 +184,34 @@ describe('sending', () => {
     expect(input().value).toBe('');
     // The recorded message replaces the optimistic one: it appears once.
     await waitFor(() => expect(screen.getAllByText('next step')).toHaveLength(1));
+  });
+
+  it('uploads a pasted image, sends its id, and shows the image once the message lands', async () => {
+    const { state } = setup(existing());
+    await screen.findByText('build it');
+
+    const file = new File([new Uint8Array([1, 2, 3, 4])], 'pixel.png', { type: 'image/png' });
+    fireEvent.paste(input(), {
+      clipboardData: { items: [{ kind: 'file', type: file.type, getAsFile: () => file }] }
+    });
+    await screen.findByTestId('composer-image-thumbnail');
+
+    await userEvent.type(input(), 'what is this?{Enter}');
+
+    await waitFor(() => expect(state.imageUploads).toHaveLength(1));
+    expect(state.imageUploads).toEqual([expect.objectContaining({ media_type: 'image/png' })]);
+    await waitFor(() => expect(state.chatPosts).toHaveLength(1));
+    expect(state.chatPosts).toEqual([
+      expect.objectContaining({ message: 'what is this?', image_ids: [expect.any(String)] })
+    ]);
+
+    // The real, recorded message (echoed back with the image the upload stored) replaces the
+    // optimistic bubble, and still shows the image.
+    await waitFor(() => expect(screen.getAllByTestId('message-image')).toHaveLength(1));
+    expect(screen.getByTestId('message-image')).toHaveAttribute(
+      'src',
+      expect.stringContaining('data:image/png;base64,')
+    );
   });
 
   it('starts the conversation with a null id from an empty thread', async () => {
@@ -472,6 +500,71 @@ describe('sending', () => {
     expect(screen.queryByTestId('send-error')).toBeNull();
     expect(await screen.findByText('one more thing')).toBeInTheDocument();
     expect(input()).toBeEnabled();
+  });
+
+  it('marks a message sent while a turn is in flight as queued, and clears that once it is promoted', async () => {
+    const { state } = setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({ turn_in_flight: true })
+        })
+      })
+    );
+    await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
+
+    // The server records the message and a `queued` delivery row in the same transaction it
+    // answers 202 with, before the turn behind it ends and the row is promoted.
+    server.use(
+      http.post(`${API_URL}/chat`, async ({ request }) => {
+        state.chatPosts.push((await request.json()) as ChatBackendState['chatPosts'][number]);
+        state.messages = [
+          ...state.messages,
+          messageFixture({ id: 'queued-1', content: 'one more thing' })
+        ];
+        recordDelivery(state, deliveryFixture({ message_id: 'queued-1', state: 'queued' }));
+        return HttpResponse.json(
+          {
+            conversation_id: CONVERSATION_ID,
+            message: null,
+            spawned_session_id: null,
+            pending: true,
+            delivery_message_id: 'queued-1',
+            status: 'queued'
+          },
+          { status: 202 }
+        );
+      })
+    );
+
+    await userEvent.type(input(), 'one more thing{Enter}');
+    await waitFor(() => expect(state.chatPosts).toHaveLength(1));
+
+    const bubble = (await screen.findByText('one more thing')).closest('article')!;
+    await waitFor(() =>
+      expect(within(bubble).getByTestId('delivery-notice-label')).toHaveTextContent('Queued')
+    );
+    expect(within(bubble).queryByTestId('delivery-retry')).toBeNull();
+    expect(bubble.className).toMatch(/opacity-60/);
+    // The earlier, already-sent message must never read as queued.
+    expect(screen.getByText('build it').closest('article')!.className).not.toMatch(/opacity-60/);
+
+    // The open turn behind it ends and the backend promotes the queued row, as the reconcile loop
+    // does; the page picks this up on its next poll of the main thread.
+    state.mainThread = {
+      ...state.mainThread,
+      native: {
+        ...state.mainThread.native!,
+        deliveries: state.mainThread.native!.deliveries.map((delivery) =>
+          delivery.message_id === 'queued-1' ? { ...delivery, state: 'recorded' } : delivery
+        )
+      }
+    };
+
+    await waitFor(() => expect(within(bubble).queryByTestId('delivery-notice')).toBeNull(), {
+      timeout: 5000
+    });
+    expect(bubble.className).not.toMatch(/opacity-60/);
   });
 
   it('locks and says so while the backend is unreachable', async () => {
@@ -792,6 +885,100 @@ describe('stopping a turn', () => {
     );
     await userEvent.click(await screen.findByTestId('mt-stop-turn'));
     await waitFor(() => expect(state.stopped).toEqual([MAIN_SESSION_ID]));
+  });
+
+  it('offers a confirmed restart when the stop fails, and sends one request id', async () => {
+    const { state } = setup(
+      existing({
+        failStop: true,
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({
+            turn_in_flight: true,
+            restartable: true,
+            deliveries: [deliveryFixture({ message_id: 'm1', state: 'delivered' })]
+          })
+        })
+      })
+    );
+    expect(screen.queryByTestId('turn-recovery')).toBeNull();
+    await userEvent.click(await screen.findByTestId('mt-stop-turn'));
+    const panel = await screen.findByTestId('turn-recovery');
+    expect(panel).toHaveTextContent('The turn could not be stopped.');
+    await userEvent.click(within(panel).getByTestId('turn-restart'));
+    // The confirmation says the native context is lost; nothing is sent until it is confirmed.
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('native context is lost');
+    expect(state.restarts).toEqual([]);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Restart' }));
+    await waitFor(() => expect(state.restarts).toHaveLength(1));
+    expect(state.restarts[0]?.sessionId).toBe(MAIN_SESSION_ID);
+    expect(state.restarts[0]?.body.request_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
+    // The turn is no longer in flight, so the panel goes.
+    await waitFor(() => expect(screen.queryByTestId('turn-recovery')).toBeNull());
+  });
+
+  it('shows a stalled turn with how long it has been quiet, and offers stop and restart', async () => {
+    const quietSince = new Date(Date.now() - 25 * 60_000 - 5_000).toISOString();
+    const { state } = setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({
+            turn_in_flight: true,
+            restartable: true,
+            stalled_turn: {
+              message_id: 'm1',
+              session_id: MAIN_SESSION_ID,
+              task_id: 't1',
+              main_thread: true,
+              last_activity_at: quietSince,
+              stalled_at: new Date().toISOString(),
+              tool_running: true
+            }
+          })
+        })
+      })
+    );
+    const panel = await screen.findByTestId('turn-recovery');
+    expect(panel).toHaveTextContent(
+      'No activity for 25m while a tool runs. It may still finish. Stop or restart?'
+    );
+    expect(within(panel).getByTestId('turn-restart')).toBeEnabled();
+    await userEvent.click(within(panel).getByTestId('turn-recovery-stop'));
+    await waitFor(() => expect(state.stopped).toEqual([MAIN_SESSION_ID]));
+    // Nothing restarts on its own.
+    expect(state.restarts).toEqual([]);
+  });
+
+  it('shows no stall notice once the turn is no longer stalled', async () => {
+    setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({ turn_in_flight: true, restartable: true, stalled_turn: null })
+        })
+      })
+    );
+    await screen.findByTestId('mt-stop-turn');
+    expect(screen.queryByTestId('turn-recovery')).toBeNull();
+  });
+
+  it('does not offer a restart for a thread the server cannot restart', async () => {
+    setup(
+      existing({
+        failStop: true,
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({ turn_in_flight: true, restartable: false })
+        })
+      })
+    );
+    await userEvent.click(await screen.findByTestId('mt-stop-turn'));
+    await screen.findByText(/Could not stop the turn/);
+    expect(screen.queryByTestId('turn-recovery')).toBeNull();
   });
 });
 

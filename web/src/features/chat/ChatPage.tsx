@@ -7,7 +7,7 @@ import { mainInputLock, providerLabel } from './mainProvider';
 import { MainThreadHeader } from './MainThreadHeader';
 import { resolveModelCommand } from './modelCommand';
 import { SessionRequests } from './SessionRequests';
-import { parseSlashCommand } from './slashCommand';
+import { parseSlashCommand, SLASH_COMMANDS } from './slashCommand';
 import { ThreadBody } from './ThreadBody';
 import { useMainProvider } from './useMainProvider';
 import { MAIN_THREAD, useThread } from './useThread';
@@ -85,8 +85,10 @@ export function ChatPage({
         prefill={prefill}
         onPrefillUsed={onPrefillUsed}
         starters={starters}
+        allowImages
         onSend={interceptSend}
         commandNotice={commandNotice}
+        commands={SLASH_COMMANDS}
         requests={
           <PanelBoundary name="Requests">
             {hitlId ? (

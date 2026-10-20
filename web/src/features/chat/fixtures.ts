@@ -17,6 +17,7 @@ export function messageFixture(overrides: Partial<ChatMessage> = {}): ChatMessag
     role: 'user',
     content: 'hello',
     created_at: '2026-01-01T10:00:00Z',
+    images: undefined,
     ...overrides
   };
 }
@@ -46,6 +47,7 @@ export function nativeFixture(overrides: Partial<NativeSessionInfo> = {}): Nativ
     model: 'claude-sonnet-5-5',
     turns: 1,
     turn_in_flight: false,
+    restartable: false,
     deliveries: [],
     note: null,
     ...overrides

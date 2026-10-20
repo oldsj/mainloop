@@ -48,10 +48,18 @@ export interface ChatBackendState {
   hitlIds: string[];
   /** Every `POST /chat` body the backend received, in order. */
   chatPosts: Schemas['ChatRequest'][];
+  /** Every `POST /chat/images` body the backend received, in order. */
+  imageUploads: Schemas['ChatImageUpload'][];
+  /** Uploaded images, by id, available to a `POST /chat` that names them in `image_ids`. */
+  uploadedImages: Record<string, Schemas['ChatMessageImage']>;
   /** Every `POST /sessions/{id}/message` body the backend received, by session, in order. */
   sessionPosts: Record<string, Schemas['SessionMessageRequest'][]>;
   /** Every session id that got a stop-turn POST. */
   stopped: string[];
+  /** Stop-turn answers 502, as a runtime that never confirms a cancel does. */
+  failStop: boolean;
+  /** Every `POST /sessions/{id}/restart` the backend received, in order. */
+  restarts: { sessionId: string; body: Schemas['SessionRestartRequest'] }[];
   /** How many times `GET /main-thread` was read. */
   mainThreadReads: number;
   /** How many times `GET /main-thread/provider` was read, failed reads included. */
@@ -129,8 +137,12 @@ export function createChatBackend(
     messages: [],
     hitlIds: [],
     chatPosts: [],
+    imageUploads: [],
+    uploadedImages: {},
     sessionPosts: {},
     stopped: [],
+    failStop: false,
+    restarts: [],
     mainThreadReads: 0,
     providerReads: 0,
     rejectNextChat: null,
@@ -308,6 +320,21 @@ export function createChatBackend(
       };
       return HttpResponse.json(body);
     }),
+    http.post(url('/chat/images'), async ({ request }) => {
+      const body = (await request.json()) as Schemas['ChatImageUpload'];
+      state.imageUploads.push(body);
+      const id = `img-${++counter}`;
+      state.uploadedImages = {
+        ...state.uploadedImages,
+        [id]: { id, media_type: body.media_type, data: body.data }
+      };
+      const response: Schemas['ChatImageUploadResponse'] = {
+        id,
+        media_type: body.media_type,
+        size_bytes: Math.ceil((body.data.length * 3) / 4)
+      };
+      return HttpResponse.json(response);
+    }),
     http.post(url('/chat'), async ({ request }) => {
       const body = (await request.json()) as Schemas['ChatRequest'];
       state.chatPosts.push(body);
@@ -322,11 +349,15 @@ export function createChatBackend(
       const lost = takeLostSend();
       if (lost === 'unrecorded') return HttpResponse.error();
       const conversationId = state.mainThread.conversation_id ?? CONVERSATION_ID;
+      const images = body.image_ids
+        ?.map((imageId) => state.uploadedImages[imageId])
+        .filter((image): image is Schemas['ChatMessageImage'] => image !== undefined);
       const message = messageFixture({
         id: `sent-${++counter}`,
         conversation_id: conversationId,
         content: body.message,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        images: images && images.length > 0 ? images : undefined
       });
       state.messages = [...state.messages, message];
       // Native answer: the message is recorded and the turn starts; the reply comes later.
@@ -391,8 +422,35 @@ export function createChatBackend(
     http.post(url('/sessions/:sessionId/stop-turn'), async ({ params }) => {
       state.stopped.push(params.sessionId as string);
       await waitHeld('stop-turn');
+      if (state.failStop)
+        return HttpResponse.json(
+          { detail: 'Could not stop the turn: A2A CancelTask outcome unknown (timeout)' },
+          { status: 502 }
+        );
       const body: Schemas['SessionStopTurnResponse'] = { status: 'stopped' };
       return HttpResponse.json(body);
+    }),
+    http.post(url('/sessions/:sessionId/restart'), async ({ params, request }) => {
+      const sessionId = params.sessionId as string;
+      const body = (await request.json()) as Schemas['SessionRestartRequest'];
+      state.restarts = [...state.restarts, { sessionId, body }];
+      // The open turn fails and nothing is in flight any more.
+      const fail = (native: NativeSessionInfo): NativeSessionInfo => ({
+        ...native,
+        turn_in_flight: false,
+        deliveries: native.deliveries.map((delivery) =>
+          ['recorded', 'sending', 'delivered'].includes(delivery.state)
+            ? { ...delivery, state: 'failed', detail: 'the native session was restarted' }
+            : delivery
+        )
+      });
+      if (sessionId === MAIN_SESSION_ID && state.mainThread.native)
+        state.mainThread = { ...state.mainThread, native: fail(state.mainThread.native) };
+      const response: Schemas['SessionRestartResponse'] = {
+        status: 'restarted',
+        failed_message_ids: []
+      };
+      return HttpResponse.json(response);
     }),
     http.get(url('/sessions/:sessionId/hitl'), ({ params }) =>
       HttpResponse.json(params.sessionId === MAIN_SESSION_ID ? state.hitlIds : [])

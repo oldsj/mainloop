@@ -441,6 +441,25 @@ func TestCredentialsAreNeverLogged(t *testing.T) {
 	}
 }
 
+func TestPermissionFieldsMapsWorkflows(t *testing.T) {
+	fields, err := github.PermissionFields(github.Permissions{"contents": github.Write, "workflows": github.Write})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fields.GetContents() != "write" || fields.GetWorkflows() != "write" {
+		t.Fatalf("permission fields: %+v", fields)
+	}
+}
+
+func TestPermissionFieldsRejectsUnknownNameOrLevel(t *testing.T) {
+	if _, err := github.PermissionFields(github.Permissions{"nonsense": github.Write}); err == nil {
+		t.Fatal("unknown permission name accepted")
+	}
+	if _, err := github.PermissionFields(github.Permissions{"contents": "admin"}); err == nil {
+		t.Fatal("unknown permission level accepted")
+	}
+}
+
 func TestNewAppRejectsBadSettings(t *testing.T) {
 	good := githubtest.PrivateKey()
 	for name, o := range map[string]github.Options{

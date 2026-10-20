@@ -329,6 +329,21 @@ function AttentionEntry({ item }: { item: AttentionItem }) {
         >
           {item.kind === 'problem' ? 'Review task evidence' : 'Review task and decide'}
         </Link>
+      ) : item.href === '/' ? (
+        <Link
+          to="/"
+          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'self-start')}
+        >
+          Open the main thread
+        </Link>
+      ) : item.href?.startsWith('/sessions/') ? (
+        <Link
+          to="/sessions/$id"
+          params={{ id: item.href.slice('/sessions/'.length) }}
+          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'self-start')}
+        >
+          Open the session
+        </Link>
       ) : null}
     </div>
   );

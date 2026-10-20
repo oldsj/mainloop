@@ -17,3 +17,27 @@ const (
 	DeliveryCancelled DeliveryState = "cancelled"
 	DeliveryUncertain DeliveryState = "uncertain"
 )
+
+// RestartState is session_restarts.state: requested until the native Session is confirmed gone and
+// the turns on it are settled, then done.
+type RestartState string
+
+// Restart states.
+const (
+	RestartRequested RestartState = "requested"
+	RestartDone      RestartState = "done"
+)
+
+// ActivityKind is deliveries.activity_kind: what the last task event the delivery loop saw left the
+// turn doing. It decides how long the turn may stay quiet before it reads as stalled.
+type ActivityKind string
+
+// Activity kinds.
+const (
+	// ActivityEvent is thinking or writing.
+	ActivityEvent ActivityKind = "event"
+	// ActivityTool is a tool call that started and has no result yet.
+	ActivityTool ActivityKind = "tool"
+	// ActivityParked is a task waiting for the owner's input or auth: quiet, but not stalled.
+	ActivityParked ActivityKind = "parked"
+)

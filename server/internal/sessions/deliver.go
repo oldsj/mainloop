@@ -145,6 +145,8 @@ type turn struct {
 	taskID string
 	// uncertainSince is when the delivery became uncertain.
 	uncertainSince time.Time
+	// act is what the task has been seen doing, for the stall watch (stall.go).
+	act activity
 }
 
 func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outcome, error) {
@@ -158,6 +160,14 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 		return reconcile.Retry(), fmt.Errorf("load delivery: %w", err)
 	}
 	t := &turn{s: s, c: c, d: d, cur: d.State, uncertainSince: d.UpdatedAt}
+	if d.ActivityKind != nil {
+		t.act.kind = dbstate.ActivityKind(*d.ActivityKind)
+	}
+	t.act.stalled = d.StalledAt != nil
+	t.act.at = d.UpdatedAt
+	if d.ActivityAt != nil {
+		t.act.at = *d.ActivityAt
+	}
 	if d.TaskID != nil {
 		t.taskID = *d.TaskID
 	}
@@ -521,7 +531,11 @@ func changing(s *kagentapi.Session) bool {
 
 // send delivers a recorded message for the first time.
 func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
-	if t.d.Content == "" {
+	images, err := t.images(ctx)
+	if err != nil {
+		return reconcile.Retry(), err
+	}
+	if t.d.Content == "" && len(images) == 0 {
 		return t.settle(ctx, dbstate.DeliveryFailed, "the message text is missing", nil, false)
 	}
 	ksid, err := t.ensureKagentSession(ctx)
@@ -593,7 +607,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 	var sendErr error
 	t.s.Progress.Begin(t.progressRef())
 	for ev, err := range t.s.Kagent.SendMessage(ctx, t.agent, kagent.SendParams{
-		Text: text, MessageID: t.c.ID, ContextID: ksid,
+		Text: text, MessageID: t.c.ID, ContextID: ksid, Images: images,
 	}) {
 		if err != nil {
 			sendErr = err
@@ -605,6 +619,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 			}
 		}
 		t.s.Progress.Observe(t.progressRef(), ev)
+		t.noteActivity(ctx, ev, true)
 	}
 
 	switch {
@@ -634,6 +649,23 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 // send lock also serializes cancellation with admission. A crash after commit is observed, never
 // replayed, by the next delivery claimer. It returns the text to send, frozen on the row in the same
 // transaction when it differs from the message (see frozenText).
+// images loads the message's pasted images, oldest first, to build into the turn's multimodal
+// parts alongside its text. A worker session's message never has any.
+func (t *turn) images(ctx context.Context) ([]kagent.ImageAttachment, error) {
+	rows, err := dbq.New(t.s.Pool).ListMessageImagesByMessage(ctx, t.c.ID)
+	if err != nil {
+		return nil, fmt.Errorf("load message images: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	images := make([]kagent.ImageAttachment, len(rows))
+	for i, r := range rows {
+		images[i] = kagent.ImageAttachment{Data: r.Data, MediaType: r.MediaType}
+	}
+	return images, nil
+}
+
 func (t *turn) decideSend(ctx context.Context, ksid string) (string, error) {
 	text := t.d.Content
 	err := db.InTx(ctx, t.s.Pool, func(tx pgx.Tx) error {
@@ -773,10 +805,16 @@ func (t *turn) observe(ctx context.Context) (reconcile.Outcome, error) {
 		t.s.log().WarnContext(ctx, "read task failed", "message_id", t.c.ID, "error", err)
 		return t.lookAgainLater(ctx, t.s.opts().UncertainRecheck)
 	case !found:
+		if t.s.kagentSessionGone(ctx, ksid) {
+			return t.settle(ctx, dbstate.DeliveryFailed, sessionGoneDetail, nil, false)
+		}
 		return t.undecided(ctx, "no task shows this message; it is looked up, not sent again")
 	}
 	return t.adopt(ctx, task)
 }
+
+// sessionGoneDetail is the reason of a turn whose kagent Session kagent no longer has.
+const sessionGoneDetail = "the kagent session no longer exists, so this turn cannot finish; it was not sent again"
 
 // refresh reads the delivery's task and carries on from there.
 func (t *turn) refresh(ctx context.Context) (reconcile.Outcome, error) {
@@ -786,6 +824,12 @@ func (t *turn) refresh(ctx context.Context) (reconcile.Outcome, error) {
 	case ctx.Err() != nil:
 		return reconcile.Retry(), ctx.Err()
 	case errors.As(err, &gone):
+		if t.s.kagentSessionGone(ctx, t.ksid) {
+			// The task and its Session are both gone (deleted out of band, or the runtime lost them):
+			// nothing can still be running it, so the turn fails now instead of holding the queue for
+			// the uncertain hold. It is not sent again.
+			return t.settle(ctx, dbstate.DeliveryFailed, sessionGoneDetail, nil, false)
+		}
 		if t.cur != dbstate.DeliveryUncertain {
 			if err := t.markUncertain(ctx, "the task no longer exists in kagent; the message is not sent again"); err != nil {
 				return reconcile.Retry(), err
@@ -905,6 +949,7 @@ func (t *turn) advance(ctx context.Context, task *a2a.Task, follow bool) (reconc
 		// the observer to list this session's tasks now, so the owner sees the request at once instead
 		// of after its scan period. The observer adopts nothing for auth-required, so that one is not hinted.
 		t.s.Progress.Observe(t.progressRef(), task)
+		t.noteActivity(ctx, task, false)
 		if st == "input_required" {
 			t.hintHITL(ctx, task)
 		}
@@ -914,11 +959,17 @@ func (t *turn) advance(ctx context.Context, task *a2a.Task, follow bool) (reconc
 		return reconcile.RetryAfter(t.s.opts().FollowPoll), nil
 	}
 	t.s.Progress.Begin(t.progressRef())
+	// The first event of a subscription is the task as it stands: it shows what the task is doing,
+	// but it is no sign of new activity, so a resubscribe to a silent task does not reset its stall
+	// clock.
+	first := true
 	for ev, err := range t.s.Kagent.SubscribeToTask(ctx, t.agent, string(task.ID)) {
 		if err != nil || endsTask(ev) {
 			break
 		}
 		t.s.Progress.Observe(t.progressRef(), ev)
+		t.noteActivity(ctx, ev, !first)
+		first = false
 	}
 	if ctx.Err() != nil {
 		return reconcile.Retry(), ctx.Err()

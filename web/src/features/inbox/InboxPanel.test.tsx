@@ -165,6 +165,37 @@ describe('Needs you', () => {
     expect(await screen.findByText('Nothing needs you')).toBeInTheDocument();
     expect(screen.queryByText('Recover stopped child')).not.toBeInTheDocument();
   });
+
+  it('links a stalled turn to its thread', async () => {
+    const main = attentionItem(queueItem(), {
+      id: 'stalled:msg-1',
+      kind: 'owner_decision',
+      reason_code: 'stalled',
+      queue_item: null,
+      task_id: null,
+      href: '/',
+      title: 'Main thread'
+    });
+    const other = attentionItem(queueItem(), {
+      id: 'stalled:msg-2',
+      kind: 'owner_decision',
+      reason_code: 'stalled',
+      queue_item: null,
+      task_id: null,
+      href: '/sessions/s-2',
+      title: 'Fix the thing'
+    });
+    server.use(attentionRead(() => HttpResponse.json(attentionSnapshot([main, other]))));
+    renderInbox();
+    expect(await screen.findByRole('link', { name: 'Open the main thread' })).toHaveAttribute(
+      'href',
+      '/'
+    );
+    expect(screen.getByRole('link', { name: 'Open the session' })).toHaveAttribute(
+      'href',
+      '/sessions/s-2'
+    );
+  });
 });
 
 describe('Problems', () => {

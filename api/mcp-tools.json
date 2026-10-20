@@ -195,6 +195,62 @@
       }
     },
     {
+      "name": "get_issue",
+      "description": "Read one GitHub issue of the bound project's repository: title, body, state and labels. Refuses an issue number that names a pull request instead.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "issue_number": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["project_id", "issue_number"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_dependabot_alerts",
+      "description": "List open Dependabot security alerts for the bound project's repository.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["project_id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_check_runs",
+      "description": "List the GitHub Actions check runs at a pull request's current head commit, for the bound project's repository: each run's name, status, conclusion, timing and its own short output summary. Use this to see which checks failed and why after merge_pull_request reports checks_failed; it cannot rerun, cancel or trigger a check, and does not fetch raw CI logs.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "pr_number": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["project_id", "pr_number"],
+        "type": "object"
+      }
+    },
+    {
       "name": "task_get",
       "description": "Read a scoped task and its stored projections without a native turn.",
       "input_schema": {
@@ -636,6 +692,9 @@
       "ordinary": [
         "decide",
         "delegate",
+        "get_issue",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "note",
         "open_pull_request",
         "pending_add",
@@ -664,6 +723,9 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "get_issue",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "note",
         "open_pull_request",
         "pending_add",
@@ -688,7 +750,10 @@
       "ordinary": [
         "decide",
         "delegate",
+        "get_issue",
         "get_pull_request_merge_status",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "merge_pull_request",
         "note",
         "open_pull_request",
@@ -719,7 +784,10 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "get_issue",
         "get_pull_request_merge_status",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "merge_pull_request",
         "note",
         "open_pull_request",
@@ -817,6 +885,9 @@
       "devloop_enabled": false,
       "ordinary": [
         "delegate",
+        "get_issue",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "open_pull_request",
         "report",
         "task_cancel",
@@ -840,6 +911,9 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "get_issue",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "open_pull_request",
         "report",
         "task_cancel",
@@ -859,7 +933,10 @@
       "devloop_enabled": false,
       "ordinary": [
         "delegate",
+        "get_issue",
         "get_pull_request_merge_status",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",
@@ -885,7 +962,10 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "get_issue",
         "get_pull_request_merge_status",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",
@@ -946,6 +1026,9 @@
       "merge_tools_enabled": false,
       "devloop_enabled": false,
       "ordinary": [
+        "get_issue",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "open_pull_request",
         "report",
         "task_get",
@@ -967,6 +1050,9 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "get_issue",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "open_pull_request",
         "report",
         "task_get",
@@ -984,7 +1070,10 @@
       "merge_tools_enabled": true,
       "devloop_enabled": false,
       "ordinary": [
+        "get_issue",
         "get_pull_request_merge_status",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",
@@ -1008,7 +1097,10 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "get_issue",
         "get_pull_request_merge_status",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",
@@ -1027,7 +1119,13 @@
       "merge_status_only": false,
       "merge_tools_enabled": false,
       "devloop_enabled": false,
-      "ordinary": ["open_pull_request", "whoami"],
+      "ordinary": [
+        "get_issue",
+        "list_check_runs",
+        "list_dependabot_alerts",
+        "open_pull_request",
+        "whoami"
+      ],
       "approval": []
     },
     {
@@ -1042,6 +1140,9 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "get_issue",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "open_pull_request",
         "whoami"
       ],
@@ -1055,7 +1156,10 @@
       "merge_tools_enabled": true,
       "devloop_enabled": false,
       "ordinary": [
+        "get_issue",
         "get_pull_request_merge_status",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",
@@ -1075,7 +1179,10 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "get_issue",
         "get_pull_request_merge_status",
+        "list_check_runs",
+        "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",

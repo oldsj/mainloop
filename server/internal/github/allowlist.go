@@ -111,6 +111,9 @@ var rules = []rule{
 	// One commit by branch, tag or SHA (CommitSHA). It follows the commit sub-resources above so
 	// that they keep their own permissions.
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/commits/**", kindRepo, Permissions{"contents": Read}),
+	// Issue and Dependabot alert reads (issues.go, dependabot.go).
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/issues/*", kindRepo, Permissions{"issues": Read}),
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/dependabot/alerts", kindRepo, Permissions{"vulnerability_alerts": Read}),
 }
 
 // Scope is what one client may touch: a single repository and the permissions of its token.

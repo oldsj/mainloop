@@ -157,6 +157,10 @@ type Repository struct {
 	Compares map[string]Compare
 	// MergeStatus, when set, is the status a merge request answers instead of merging.
 	MergeStatus int
+	// IssueList are the repository's issues, read by number (issues.go in the parent package).
+	IssueList []Issue
+	// DependabotAlerts are the repository's open Dependabot alerts.
+	DependabotAlerts []DependabotAlert
 }
 
 // Request is one request the fake received.
@@ -464,6 +468,10 @@ func need(method string, segs []string) map[string]string {
 		return read("contents")
 	case method == http.MethodGet && len(rest) == 3 && rest[0] == "rules" && rest[1] == "branches":
 		return read("metadata")
+	case method == http.MethodGet && len(rest) == 2 && rest[0] == "issues":
+		return read("issues")
+	case method == http.MethodGet && len(rest) == 2 && rest[0] == "dependabot" && rest[1] == "alerts":
+		return read("vulnerability_alerts")
 	}
 	return nil
 }
@@ -556,6 +564,10 @@ func (s *Server) repoCall(w http.ResponseWriter, r *http.Request, segs []string)
 		s.ruleCall(w, r, repo)
 	case rest[0] == "compare" && len(rest) == 2:
 		s.compareCall(w, r, repo, rest[1])
+	case rest[0] == "issues" && len(rest) == 2:
+		s.issueCall(w, repo, rest[1])
+	case rest[0] == "dependabot" && len(rest) == 2 && rest[1] == "alerts":
+		s.dependabotCall(w, r, repo)
 	}
 }
 

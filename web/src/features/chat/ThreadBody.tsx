@@ -3,6 +3,8 @@ import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Composer } from './Composer';
 import { assignmentIds } from './assignments';
 import { MessageList } from './MessageList';
+import type { SlashCommandSpec } from './slashCommand';
+import { TurnRecovery } from './TurnRecovery';
 import { useLiveTurn } from './useLiveTurn';
 import type { ThreadView } from './useThread';
 
@@ -24,6 +26,8 @@ export interface ThreadBodyProps {
   requests?: ReactNode;
   /** Shown in the empty state of a loaded thread. */
   starters?: ReactNode;
+  /** The composer accepts a pasted or dropped image. Only the main thread sets this. */
+  allowImages?: boolean;
   /**
    * Intercepts a composer send before the thread's own `send`, for a local command such as
    * `/model` that must not become a chat message. Returning null defers to the thread's `send`.
@@ -31,6 +35,8 @@ export interface ThreadBodyProps {
   onSend?: (text: string) => Promise<boolean> | null;
   /** The last local command's output, shown above the composer until the next send. */
   commandNotice?: string | null;
+  /** Slash commands the composer's autosuggest dropdown offers. Omitted where there are none. */
+  commands?: readonly SlashCommandSpec[];
 }
 
 /** The conversation timeline, the send and stop errors, and the composer, for any thread. */
@@ -44,8 +50,10 @@ export function ThreadBody({
   onPrefillUsed,
   requests,
   starters,
+  allowImages = false,
   onSend,
-  commandNotice = null
+  commandNotice = null,
+  commands
 }: ThreadBodyProps) {
   const live = useLiveTurn(thread.sessionId, thread.busy, thread.messages);
   return (
@@ -102,6 +110,7 @@ export function ThreadBody({
           {thread.stopError}
         </p>
       ) : null}
+      <TurnRecovery thread={thread} offline={offline} />
 
       {closedReason ? (
         <p className="text-muted-foreground px-md py-xs shrink-0 text-sm" role="status">
@@ -128,7 +137,11 @@ export function ThreadBody({
         closedPlaceholder={closedPlaceholder}
         prefill={prefill}
         onPrefillUsed={onPrefillUsed}
-        onSend={(text) => onSend?.(text) ?? thread.send(text, thread.conversationId)}
+        onSend={(text, images) =>
+          onSend?.(text) ?? thread.send(text, thread.conversationId, images)
+        }
+        allowImages={allowImages}
+        commands={commands}
       />
     </>
   );

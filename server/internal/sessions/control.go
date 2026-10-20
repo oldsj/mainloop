@@ -773,7 +773,7 @@ type NewSession struct {
 // its first message, in one transaction. The delivery loop sends the prompt and creates the kagent
 // Session. A provider that is unknown or disabled is ErrInvalid.
 func (s *Service) Create(ctx context.Context, n NewSession) (string, error) {
-	prompt, err := checkText(uuid.NewString(), n.Prompt)
+	prompt, err := checkTextOrImages(uuid.NewString(), n.Prompt, 0)
 	if err != nil {
 		return "", err
 	}

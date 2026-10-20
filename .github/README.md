@@ -49,37 +49,28 @@ distinct from the application images below.
 
 ## Workspace cache image
 
-[Workspace cache image](workflows/workspace-cache-image.yml) runs on every push to
-`main` and manually (`workflow_dispatch`, `main` only). It has no pull-request
-trigger and uses only `GITHUB_TOKEN` with `packages: write`.
+The workspace cache image (`images/workspace-cache`) is no longer built by GitHub Actions.
+It is built in the cluster that runs the workspaces, by an Argo Workflows CronWorkflow on
+BuildKit, and published to the cluster's own OCI registry. The workflow and the BuildKit
+service live in the infrastructure repository (`k8s/apps/ci`, `k8s/apps/buildkit`).
+Workspace nodes then pull the image over the LAN instead of from ghcr, which was too slow
+from the cluster to start workspaces on a new digest (#274).
 
-One job (45 minutes) on `ubuntu-24.04-arm` builds `images/workspace-cache/Dockerfile`
-natively for `linux/arm64`. The base is the `ghcr.io/oldsj/mainloop-dev` index
-digest of the newest commit that changed the dev image paths (the same paths as
-[Mainloop dev image](workflows/dev-image.yml)), never `latest`. The job waits up to 15
-minutes for that commit's tag and fails if it does not appear. The build clones `main` at the merge commit into `/data/workspace` so
-Go's VCS stamping matches a session clone, then warms the Go build cache. Layer 1
-(Go modules, pnpm store) depends only on the lockfiles and has normalized file times.
-Only the dependency stage is exported to the Actions build cache (its own scope), so the
-per-commit layers do not use up the repository's cache budget. With that cache warm,
-the unchanged step is not re-run and the layers are identical across merges. Rebuilt from scratch, the Go module layer is still
-identical but the two pnpm layers differ (pnpm writes its own timestamps), so nodes
-pull them once after a cache eviction or a lockfile change. Layer 2 (Go build cache) changes per commit
-and keeps current file times, because Go trims cache entries older than about five
-days.
+Every 30 minutes the workflow clones `main` and builds the dev image
+(`.devcontainer/Dockerfile`) when its inputs change, then the cache image when its inputs
+(`images/workspace-cache/**`, `server/go.mod`, `server/go.sum`, the pnpm manifests and
+the dev image digest) or the UTC date change, so it rebuilds once a day otherwise. Builds
+run natively on an arm64 node and push zstd-compressed OCI layers, which a node unpacks
+several times faster than gzip.
 
-The job pushes `ghcr.io/oldsj/mainloop-dev:cache-<full SHA>` labelled with the source
-SHA and base digest. A smoke step runs the image by digest: a fresh clone at the SHA
-must build with zero compiles (`go build` and test binaries) and install the pnpm
-workspace offline, and each of `GOMODCACHE`, `GOCACHE`, `npm_config_store_dir` and
-`npm_config_virtual_store_dir` must point under `/opt/cache`. Only then does `cache-main` move, and only if the commit is still
-the head of `main`. Runs for the same ref queue instead of cancelling, so a burst of
-merges cannot starve `cache-main`; a run for an older commit leaves the tag alone.
+A smoke step runs the new image by digest on the workspace node: a fresh clone at the
+commit must build with zero compiles (`go build` and test binaries) and install the pnpm
+workspace offline, with each of `GOMODCACHE`, `GOCACHE`, `npm_config_store_dir` and
+`npm_config_virtual_store_dir` under `/opt/cache`. Only then does `cache-main` move, and
+only if the commit is still the head of `main`. Because the smoke step runs on the
+workspace node, the node already holds the image when environments start following it.
 
-The tags are not pruned yet. Follow-up: a scheduled job that keeps the newest N
-`cache-<sha>` versions and any version a tag or a registered environment still
-references, deleting the rest through the GHCR package API. A kagent template per
-digest also accumulates until its own retention exists.
+The tags (`cache-<sha>`, one per build) are not pruned yet.
 
 ## Production application images
 

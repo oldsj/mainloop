@@ -244,6 +244,13 @@ func (s *Server) AddTask(t *a2a.Task) {
 	s.tasks[t.ID] = t
 }
 
+// DropTask forgets a task, so GetTask answers task not found: a runtime that lost it.
+func (s *Server) DropTask(id a2a.TaskID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.tasks, id)
+}
+
 // Requests returns the requests received so far, in order.
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
