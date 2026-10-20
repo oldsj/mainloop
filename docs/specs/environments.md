@@ -114,8 +114,8 @@ version keep it, which is also the rollback: select the older version, since the
 pass would override a manual default change. Environments without the flag are never
 changed automatically.
 
-The intended use is a warm workspace image: CI publishes `cache-main` when a merge to
-`main` changes the image's inputs, and once a day otherwise (see `.github/README.md`),
+The intended use is a warm workspace image: an in-cluster build publishes `cache-main`
+when `main` changes the image's inputs, and once a day otherwise (see `.github/README.md`),
 and the project's environment follows it.
 The image carries the Go build cache, Go modules and pnpm store for that commit under
 `/opt/cache`, so a new session's first build compiles little or nothing.
