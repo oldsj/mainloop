@@ -19,13 +19,13 @@ import (
 //	SendNotAccepted  kagent refused the send and said retrying the same message is safe.
 //	OutcomeUnknown   it may have been accepted and the answer was lost. Never send again;
 //	                 observe with GetTask or ListTasks instead.
-//	TaskNotFound     kagent has no such task.
-//	SessionError     a SessionService or AgentService call failed with a definite status.
+//	TaskNotFound     kagent has no such task, or no such Session: definite, never retried blindly.
+//	SessionError     a SessionService, AgentService or CheckpointService call failed with a definite status.
 //	ConfigError      kagent refused our credentials, or we cannot read them.
 //
-// Anything else from the A2A endpoint is an *A2AError, or a *ProtocolError when the reply is not a
-// JSON-RPC envelope at all. A ProtocolError says nothing about delivery: treat it as uncertain,
-// the same as OutcomeUnknown, never as not sent.
+// Anything else from the A2A endpoint is an *A2AError, or a *ProtocolError when the reply is
+// neither a JSON-RPC envelope nor a bare HTTP 404 (which means TaskNotFound). A ProtocolError says
+// nothing about delivery: treat it as uncertain, the same as OutcomeUnknown, never as not sent.
 
 const (
 	a2aErrorDomain  = "a2a-protocol.org"
@@ -124,7 +124,9 @@ type SendNotAccepted struct{ A2AError }
 // Unwrap lets errors.As find the embedded *A2AError.
 func (e *SendNotAccepted) Unwrap() error { return &e.A2AError }
 
-// TaskNotFound means kagent has no such task.
+// TaskNotFound means kagent has no such task, or the Session it would have run on is gone: a bare
+// HTTP 404 with no JSON-RPC envelope (see parseEnvelope) means the same thing as the JSON-RPC
+// reasonNoTask reply.
 type TaskNotFound struct{ A2AError }
 
 // Unwrap lets errors.As find the embedded *A2AError.

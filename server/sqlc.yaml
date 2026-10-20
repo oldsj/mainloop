@@ -208,6 +208,29 @@ sql:
                 import: github.com/oldsj/mainloop/server/internal/db/dbstate,
                 type: DevloopOperationState
               }
+          - column: session_checkpoints.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: CheckpointState
+              }
+          - column: session_checkpoints.failure_reason
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: FailureReason,
+                pointer: true
+              }
+          - column: checkpoint_forks.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: ForkState }
+          - column: checkpoint_forks.failure_reason
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: FailureReason,
+                pointer: true
+              }
           - db_type: jsonb
             go_type: { import: encoding/json, type: RawMessage }
           - db_type: jsonb

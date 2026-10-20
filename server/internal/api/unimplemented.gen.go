@@ -49,6 +49,11 @@ func (Unimplemented) CreateSession(context.Context, CreateSessionRequestObject) 
 	return nil, apierr.NotImplemented
 }
 
+// CreateSessionCheckpoint is not implemented yet.
+func (Unimplemented) CreateSessionCheckpoint(context.Context, CreateSessionCheckpointRequestObject) (CreateSessionCheckpointResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // CreateTask is not implemented yet.
 func (Unimplemented) CreateTask(context.Context, CreateTaskRequestObject) (CreateTaskResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -56,6 +61,11 @@ func (Unimplemented) CreateTask(context.Context, CreateTaskRequestObject) (Creat
 
 // CreateWorkspace is not implemented yet.
 func (Unimplemented) CreateWorkspace(context.Context, CreateWorkspaceRequestObject) (CreateWorkspaceResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// DeleteCheckpoint is not implemented yet.
+func (Unimplemented) DeleteCheckpoint(context.Context, DeleteCheckpointRequestObject) (DeleteCheckpointResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 
@@ -74,8 +84,18 @@ func (Unimplemented) DismissQueueDiagnostic(context.Context, DismissQueueDiagnos
 	return nil, apierr.NotImplemented
 }
 
+// ForkCheckpoint is not implemented yet.
+func (Unimplemented) ForkCheckpoint(context.Context, ForkCheckpointRequestObject) (ForkCheckpointResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetAttention is not implemented yet.
 func (Unimplemented) GetAttention(context.Context, GetAttentionRequestObject) (GetAttentionResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// GetCheckpoint is not implemented yet.
+func (Unimplemented) GetCheckpoint(context.Context, GetCheckpointRequestObject) (GetCheckpointResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 
@@ -251,6 +271,11 @@ func (Unimplemented) ListScheduleExecutions(context.Context, ListScheduleExecuti
 
 // ListSchedules is not implemented yet.
 func (Unimplemented) ListSchedules(context.Context, ListSchedulesRequestObject) (ListSchedulesResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// ListSessionCheckpoints is not implemented yet.
+func (Unimplemented) ListSessionCheckpoints(context.Context, ListSessionCheckpointsRequestObject) (ListSessionCheckpointsResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

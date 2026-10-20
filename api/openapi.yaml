@@ -2899,6 +2899,269 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+  /sessions/{session_id}/checkpoints:
+    get:
+      tags:
+        - checkpoints
+      summary: List Session Checkpoints
+      description: |-
+        **Experimental, owner-only.** List a session's checkpoints, read live from kagent's
+        CheckpointService. A session with no native session yet has none. See
+        docs/specs/warm-state.md.
+      operationId: listSessionCheckpoints
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Checkpoint'
+                title: Response List Session Checkpoints
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+    post:
+      tags:
+        - checkpoints
+      summary: Create Session Checkpoint
+      description: |-
+        **Experimental, owner-only.** Checkpoint the session's native kagent Session at its latest
+        terminal turn. Refuses (409) while a turn is in flight, or before the session has ever
+        completed one. `request_id` is the idempotency key: repeating it returns the recorded
+        outcome, or continues an interrupted attempt. See docs/specs/warm-state.md.
+      operationId: createSessionCheckpoint
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckpointCreateRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Checkpoint'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+  /checkpoints/{checkpoint_id}:
+    get:
+      tags:
+        - checkpoints
+      summary: Get Checkpoint
+      description: "**Experimental, owner-only.** Read one checkpoint, scoped to the owner's own session. See docs/specs/warm-state.md."
+      operationId: getCheckpoint
+      parameters:
+        - name: checkpoint_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Checkpoint Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Checkpoint'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+    delete:
+      tags:
+        - checkpoints
+      summary: Delete Checkpoint
+      description: |-
+        **Experimental, owner-only.** Delete a checkpoint, scoped to the owner's own session. One
+        that is already gone is not an error. See docs/specs/warm-state.md.
+      operationId: deleteCheckpoint
+      parameters:
+        - name: checkpoint_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Checkpoint Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOk'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+  /checkpoints/{checkpoint_id}/fork:
+    post:
+      tags:
+        - checkpoints
+      summary: Fork Checkpoint
+      description: |-
+        **Experimental, owner-only.** Fork a checkpoint into a new session bound to the forked
+        kagent Session, with the same project, provider profile and Agent as the checkpoint's
+        source session, and `parent_session_id` set to it. `request_id` is the idempotency key:
+        repeating it returns the recorded outcome, or continues an interrupted attempt (the
+        returned `accepted_at`/`ready_at` fill in as the fork proceeds, so repeating the request is
+        how time-to-running is read back). See docs/specs/warm-state.md.
+      operationId: forkCheckpoint
+      parameters:
+        - name: checkpoint_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Checkpoint Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckpointForkRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckpointForkResponse'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
   /task-operations/{operation_id}:
     get:
       tags:
@@ -6091,6 +6354,101 @@ components:
         - waiting_on_user
       title: SessionStatus
       description: Status of a session.
+    CheckpointState:
+      type: string
+      enum:
+        - creating
+        - ready
+        - failed
+        - deleting
+        - unspecified
+      title: CheckpointState
+      description: kagent's CheckpointService state for a checkpoint, read live.
+    Checkpoint:
+      type: object
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+          description: The kagent Session (not the Mainloop session id) the checkpoint belongs to.
+        head_task_id:
+          type: string
+          description: The terminal task the checkpoint was taken at.
+        name:
+          type: string
+        state:
+          $ref: '#/components/schemas/CheckpointState'
+      required:
+        - id
+        - session_id
+        - head_task_id
+        - name
+        - state
+      additionalProperties: false
+    CheckpointCreateRequest:
+      type: object
+      properties:
+        request_id:
+          type: string
+          format: uuid
+          description: Idempotency key chosen by the caller; repeat it to retry the same checkpoint.
+      required:
+        - request_id
+      additionalProperties: false
+    CheckpointForkRequest:
+      type: object
+      properties:
+        request_id:
+          type: string
+          format: uuid
+          description: Idempotency key chosen by the caller; repeat it to retry or poll the same fork.
+        fresh_conversation:
+          type: boolean
+          default: false
+          description: >-
+            Keep the forked runtime's workspace and caches but start with no A2A history and no
+            native agent conversation. False (the default) keeps the full conversation up to the
+            checkpoint.
+        title:
+          type: string
+          description: Title for the forked session; defaults to "Fork of <source title>".
+      required:
+        - request_id
+      additionalProperties: false
+    CheckpointForkResponse:
+      type: object
+      properties:
+        new_session_id:
+          type: string
+          description: Empty until kagent's ForkSession is confirmed (accepted_at set).
+        checkpoint_id:
+          type: string
+        requested_at:
+          type: string
+          format: date-time
+          description: When this fork's intent was recorded.
+        accepted_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          description: When kagent's ForkSession confirmed the forked Session.
+        ready_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          description: >-
+            When the forked runtime was observed READY: time-to-running is ready_at minus
+            requested_at. Null until observed; repeat the request to read it once it fills in.
+      required:
+        - new_session_id
+        - checkpoint_id
+        - requested_at
+        - accepted_at
+        - ready_at
+      additionalProperties: false
     TaskAction:
       properties:
         request_id:
