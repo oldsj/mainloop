@@ -390,14 +390,7 @@ func TestCreateWithAnEnvironmentRefusesAnUnpinnableRef(t *testing.T) {
 }
 
 // TestSetupDigestsMatchTheKagentPin fails when the vendored kagent API moves to another commit
-// without the setup digests being re-read there. It is expected to fail as of the Connect-client
-// generation task that moved third_party/kagentproto/SOURCE to
-// a1164013675c2ad49ec4cc2b6b12d3dfa4a456d6: that task had no checkout of the oldsj/kagent fork to
-// read go/harness/runtime/workspace/preparation_test.go at the new commit (the file this test's own
-// failure message points at), so setupDigests and setupDigestsSource below are left at the old
-// commit rather than guessed. Owner follow-up needed before relying on PrepareSessionWorkspace
-// against a controller running the new revision: every preparation would otherwise send a stale
-// setup_digest and be refused.
+// without the setup digests being re-read there.
 func TestSetupDigestsMatchTheKagentPin(t *testing.T) {
 	raw, err := os.ReadFile("../../third_party/kagentproto/SOURCE")
 	if err != nil {

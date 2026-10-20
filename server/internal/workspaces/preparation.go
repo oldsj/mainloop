@@ -47,7 +47,11 @@ const (
 // text, and a mismatch makes the controller refuse every preparation. TestSetupDigestsMatchTheKagentPin
 // fails when third_party/kagentproto/SOURCE moves off this commit: re-read the digests at the new
 // commit, update both, and keep the harness image pins in step.
-const setupDigestsSource = "ce402bf76151bf9492e5dda53f310547794c3190"
+//
+// Re-verified 2026-10-20 at a1164013675c2ad49ec4cc2b6b12d3dfa4a456d6: go/harness/runtime/workspace/
+// preparation.go and preparation_test.go are byte-identical to this commit, and the digests below
+// are unchanged.
+const setupDigestsSource = "a1164013675c2ad49ec4cc2b6b12d3dfa4a456d6"
 
 var setupDigests = map[string]string{
 	profileSupervisor: "c9b2c5bf815f6b0dd45ee11f02e343ab6a25d4ce39c93663e6feb25281cb87f6",
