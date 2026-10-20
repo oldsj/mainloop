@@ -67,7 +67,7 @@ make dev-live-purge       # delete the namespace and the *-dev agents (typed con
 
 ## Verification
 
-Run the smallest checks that establish confidence for the changed area, then expand when risk warrants it. These match the CI jobs in `.github/workflows/`.
+Run the smallest checks that establish confidence for the changed area, then expand when risk warrants it. In a task workspace, leave the full suite, `-race`, and the full Vitest run to CI: run only the packages and test files you changed.
 
 ```bash
 # Repository lint and format (trunk; changed files against origin/main)
@@ -75,9 +75,10 @@ make lint
 make fmt                  # applies fixes, then rechecks
 make lint-all             # whole repository; slow
 
-# Server (run from server/). Database tests need MAINLOOP_TEST_DATABASE_URL, a
-# disposable PostgreSQL 16 server; they skip without it, and CI always sets it.
-go test -race ./...
+# Server (run from server/). For the package(s) you changed; add -race only when the
+# change touches concurrency. Database tests need MAINLOOP_TEST_DATABASE_URL, a disposable
+# PostgreSQL 16 server; they skip without it.
+go test ./internal/<pkg>/...
 golangci-lint run ./...
 go generate ./... && git status --short    # generated code must not change
 
@@ -89,12 +90,18 @@ pnpm install --frozen-lockfile --filter web...
 cd web
 node_modules/.bin/tsc -b
 node_modules/.bin/eslint .
-node_modules/.bin/vitest run
+node_modules/.bin/vitest run <changed test files>
 node_modules/.bin/vite build
 pnpm build:design && pnpm check:design    # CI also installs Chromium first
 ```
 
 `web/` has a Playwright config and an `e2e` script, but no CI job runs it. Run browser tests only when a task asks for them, and only against a known target.
+
+CI (`.github/workflows/go.yml`) runs the checks above at full breadth on every PR push and again on
+merge: lint, the full `go test -race ./...` (sharded into two jobs so neither runs close to its
+timeout), `go generate`/`go mod tidy` drift, the MCP contract check, and the prod image build.
+`go-nightly.yml` reruns the full suite with `-race -count=1` once a day as a backstop against a
+stale cached result between PRs.
 
 ## Building in a Mainloop workspace
 

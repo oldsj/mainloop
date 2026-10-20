@@ -1,0 +1,52 @@
+name: Go nightly
+
+# Backstop for the sharded, cached PR race job (see go.yml): a full, uncached run of every
+# package, once a day, so a bad cached result cannot hide for long between PRs.
+on:
+  schedule:
+    - cron: 17 7 * * *
+  workflow_dispatch: {}
+
+concurrency:
+  group: go-nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: server
+
+jobs:
+  test:
+    name: go test -race -count=1 ./...
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mainloop
+          # trunk-ignore(checkov/CKV_SECRET_6): fixed, throwaway password for this job's local Postgres container only
+          POSTGRES_PASSWORD: mainloop-ci-test
+          POSTGRES_DB: postgres
+          POSTGRES_INITDB_ARGS: --no-sync
+        ports:
+          - 5432:5432
+        options: >-
+          --tmpfs /var/lib/postgresql/data:rw,size=2g
+          --health-cmd "pg_isready -U mainloop -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # trunk-ignore(checkov/CKV_SECRET_4): same fixed throwaway password as above, not a real credential
+      MAINLOOP_TEST_DATABASE_URL: postgresql://mainloop:mainloop-ci-test@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - run: go test -race -count=1 ./...

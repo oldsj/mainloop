@@ -25,8 +25,7 @@ ENV GOMODCACHE=/opt/cache/go-mod \
     GOCACHE=/opt/cache/go-build \
     npm_config_store_dir=/opt/cache/pnpm-store \
     npm_config_virtual_store_dir=/opt/cache/pnpm-virtual \
-    npm_config_package_import_method=copy \
-    CI=true
+    npm_config_package_import_method=copy
 WORKDIR /data/workspace
 
 FROM prep AS deps
