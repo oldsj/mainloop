@@ -19,6 +19,7 @@ import {
 import type { ProjectRow } from '@/features/projects/model';
 import type { ScheduleView } from '@/features/schedules/model';
 import { sessionTone, workspaceTone, type WorkspaceBadgeFields } from '@/features/sessions/model';
+import { hasAvailableAction } from '@/features/tasks/cache';
 import type { Session, TaskView } from '@/lib/contract';
 import { childrenOf, currentAttempt, statusTone, type Tone } from '@/lib/taskState';
 import { isCurrent } from '@/lib/sessionStatus';
@@ -344,8 +345,10 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
     if (item.task_id) attentionTasks.add(item.task_id);
   }
 
-  // Needs you: owner actions first, then failed or blocked tasks that no action already names.
-  // A task that has an owner action is listed here only, never also under Working.
+  // Needs you: owner actions first, then a blocked task (not a problem) that no action already
+  // names. A failed or blocked task with nothing the owner can do about it (every action
+  // unavailable) is not an owner decision either: workGroup leaves it out of both groups below, so
+  // it falls through to Finished recently or its project instead of piling up here forever.
   const needs = needsYouItems(source.attention).map((item) => attentionNode(item, 'needs'));
   // Problems: Mainloop's own recovery work first, then blocked tasks no problem item already names.
   // Kept apart from Needs you: a problem is not an owner decision, so it never shows there.
@@ -365,7 +368,12 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
     if (group === 'problem' && !named) {
       problems.push(taskNode(view, source, 'problems'));
     }
-    const finished = view.task.status === 'completed' || view.task.status === 'cancelled';
+    // A failed task joins completed/cancelled ones here once it has nothing left for the owner to
+    // do: same recency window, same fallback to its project once that window passes.
+    const finished =
+      view.task.status === 'completed' ||
+      view.task.status === 'cancelled' ||
+      (view.task.status === 'failed' && !hasAvailableAction(view));
     if (finished && Date.parse(view.task.updated_at) >= finishedSince && !nested) {
       groups.finished.push(view);
     }

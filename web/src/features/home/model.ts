@@ -5,7 +5,7 @@
  */
 import type { TaskView } from '@/lib/contract';
 import { statusLabel, reasonLabel } from '@/lib/taskState';
-import { needsOwner } from '@/features/tasks/cache';
+import { hasAvailableAction, needsOwner } from '@/features/tasks/cache';
 
 export type WorkGroup = 'needs-you' | 'working' | 'blocked' | 'problem' | 'finished';
 
@@ -26,13 +26,17 @@ const time = (iso: string): number => Date.parse(iso);
 /**
  * The group a task sits in. Precedence runs top down, so a failed task waiting on the owner counts
  * as needing them. A running, queued or waiting task is current work, never idle. Finished tasks
- * appear only when they finished after the owner's last visit.
+ * appear only when they finished after the owner's last visit. A failed task with no available
+ * action (every one of retry/reassign/cancel refused) is not an owner decision: there is nothing
+ * left to do about it, so it gets no group here and falls back to wherever else it is listed (its
+ * project, or Finished recently within the window).
  */
 export function workGroup(view: TaskView, lastVisit: number | null): WorkGroup | null {
   if (needsOwner(view)) return 'needs-you';
   const { status, reason } = view.task;
   if (status === 'blocked' && reason != null && PROBLEM_REASONS.has(reason)) return 'problem';
-  if (status === 'failed' || status === 'blocked') return 'blocked';
+  if (status === 'failed') return hasAvailableAction(view) ? 'blocked' : null;
+  if (status === 'blocked') return 'blocked';
   if (status === 'queued' || status === 'running' || status === 'waiting') return 'working';
   if (
     (status === 'completed' || status === 'cancelled') &&

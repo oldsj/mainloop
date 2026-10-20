@@ -51,6 +51,20 @@ describe('workGroup', () => {
     expect(workGroup(view({ status: 'blocked' }), LAST_VISIT)).toBe('blocked');
   });
 
+  it('gives a failed task with nothing left to do no group at all', () => {
+    const stuck = view(
+      { status: 'failed' },
+      {
+        actions: {
+          retry: { available: false, reason: 'handoff_unavailable' },
+          reassign: { available: false, reason: 'handoff_unavailable' },
+          cancel: { available: false, reason: 'cancel_unavailable' }
+        }
+      }
+    );
+    expect(workGroup(stuck, LAST_VISIT)).toBeNull();
+  });
+
   it('puts a blocked task stuck on Mainloop’s own recovery work in Problems, not Needs you', () => {
     const reasons = ['session_lost', 'stalled', 'runtime_limit', 'reconciliation'] as const;
     for (const reason of reasons) {

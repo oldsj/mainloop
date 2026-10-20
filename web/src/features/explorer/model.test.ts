@@ -121,6 +121,55 @@ describe('problems', () => {
   });
 });
 
+const NO_ACTIONS = {
+  retry: { available: false, reason: 'handoff_unavailable' },
+  reassign: { available: false, reason: 'handoff_unavailable' },
+  cancel: { available: false, reason: 'cancel_unavailable' }
+} as const;
+
+describe('failed tasks', () => {
+  it('leaves a failed task with nothing left to do out of Needs you', () => {
+    const stuck = view({ id: 'stuck', status: 'failed' }, { actions: NO_ACTIONS });
+    const nodes = buildExplorer(source({ tasks: [stuck] }));
+    expect(needsCount(nodes)).toBe(0);
+  });
+
+  it('keeps a failed task with an available action in Needs you', () => {
+    const actionable = view(
+      { id: 'actionable', status: 'failed' },
+      { actions: { ...NO_ACTIONS, cancel: { available: true, reason: null } } }
+    );
+    const nodes = buildExplorer(source({ tasks: [actionable] }));
+    expect(needsCount(nodes)).toBe(1);
+  });
+
+  it('lists a failed task with nothing left to do under Finished recently, within the window', () => {
+    const now = Date.parse('2026-01-10T12:00:00Z');
+    const stuck = view(
+      { id: 'stuck', status: 'failed', updated_at: '2026-01-09T12:00:00Z' },
+      { actions: NO_ACTIONS }
+    );
+    const nodes = buildExplorer(source({ tasks: [stuck], now }));
+    const finished = nodes.find((node) => node.id === 'finished');
+    expect(finished?.children.map((node) => node.target)).toEqual([{ to: 'task', id: 'stuck' }]);
+  });
+
+  it('drops a failed task with nothing left to do once it falls outside the finished window', () => {
+    const now = Date.parse('2026-01-10T12:00:00Z');
+    const old = view(
+      {
+        id: 'old',
+        status: 'failed',
+        updated_at: new Date(now - FINISHED_WINDOW_MS - 1).toISOString()
+      },
+      { actions: NO_ACTIONS }
+    );
+    const nodes = buildExplorer(source({ tasks: [old], now }));
+    expect(needsCount(nodes)).toBe(0);
+    expect(nodes.find((node) => node.id === 'finished')?.count).toBe(0);
+  });
+});
+
 describe('mainloop state', () => {
   it.each([
     [1, 0, 'Waiting on you', 'attention'],
