@@ -64,7 +64,7 @@ func (u *localPushUpstream) Seed(ctx context.Context, _ github.Repo, wants []str
 	return cmd.Run()
 }
 
-func (u *localPushUpstream) Push(ctx context.Context, _ github.Repo, body io.Reader) ([]byte, error) {
+func (u *localPushUpstream) Push(ctx context.Context, _ github.Repo, body io.Reader, _ bool) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", "receive-pack", "--stateless-rpc", u.bare)
 	cmd.Stdin = body
 	return cmd.Output()

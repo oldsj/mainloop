@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,8 +20,9 @@ import (
 )
 
 // GitHubUpstream reuses G11a for read-only seeds. The receive port uses the same App libraries
-// and endpoint allowlist, with an independent repository-scoped contents:write token. Tokens
-// never leave this adapter; even successful raw receive replies are replaced by a local report.
+// and endpoint allowlist, with an independent repository-scoped write token: contents:write,
+// plus workflows:write when the push touches .github/workflows/. Tokens never leave this
+// adapter; even successful raw receive replies are replaced by a local report.
 type GitHubUpstream struct {
 	read    *github.App
 	options github.Options
@@ -105,7 +107,7 @@ func (u *GitHubUpstream) Seed(ctx context.Context, repo github.Repo, wants []str
 }
 
 func (u *GitHubUpstream) DefaultBranch(ctx context.Context, repo github.Repo) (string, error) {
-	tr, err := u.tokenTransport(ctx, repo, "metadata", "read")
+	tr, err := u.tokenTransport(ctx, repo, github.Permissions{"metadata": github.Read})
 	if err != nil {
 		return "", denial("metadata_unavailable")
 	}
@@ -120,12 +122,12 @@ func (u *GitHubUpstream) DefaultBranch(ctx context.Context, repo github.Repo) (s
 	return r.GetDefaultBranch(), nil
 }
 
-func (u *GitHubUpstream) tokenTransport(ctx context.Context, repo github.Repo, permission, level string) (*ghinstallation.Transport, error) {
+func (u *GitHubUpstream) tokenTransport(ctx context.Context, repo github.Repo, perms github.Permissions) (*ghinstallation.Transport, error) {
 	// Lookup/mint runs without a database transaction. Serializing construction here only shares
 	// the token cache; branch admission belongs to PostgreSQL.
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	name := strings.ToLower(repo.FullName()) + "|" + permission + "=" + level
+	name := strings.ToLower(repo.FullName()) + "|" + permKey(perms)
 	if t := u.writers[name]; t != nil {
 		return t, nil
 	}
@@ -141,7 +143,7 @@ func (u *GitHubUpstream) tokenTransport(ctx context.Context, repo github.Repo, p
 	if next == nil {
 		next = http.DefaultTransport.(*http.Transport).Clone()
 	}
-	allow := &github.Allowlist{Base: u.base, Scope: github.Scope{Repo: repo, Permissions: github.Permissions{permission: level}}, Next: apiTransport{next}}
+	allow := &github.Allowlist{Base: u.base, Scope: github.Scope{Repo: repo, Permissions: perms}, Next: apiTransport{next}}
 	at := ghinstallation.NewAppsTransportFromPrivateKey(allow, id, key)
 	at.BaseURL = strings.TrimSuffix(u.base.String(), "/")
 	client, err := gh.NewClient(gh.WithHTTPClient(&http.Client{Transport: at, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}), gh.WithURLs(ptr(u.base.String()), ptr(u.base.String())))
@@ -155,20 +157,37 @@ func (u *GitHubUpstream) tokenTransport(ctx context.Context, repo github.Repo, p
 	allow.BindInstallation(inst.GetID())
 	tr := ghinstallation.NewFromAppsTransport(at, inst.GetID())
 	tr.BaseURL = at.BaseURL
-	perms := &gh.InstallationPermissions{}
-	if permission == "contents" {
-		perms.Contents = ptr(level)
-	} else {
-		perms.Metadata = ptr(level)
+	fields, err := github.PermissionFields(perms)
+	if err != nil {
+		return nil, err
 	}
-	tr.InstallationTokenOptions = &gh.InstallationTokenOptions{Repositories: []string{repo.Name}, Permissions: perms}
+	tr.InstallationTokenOptions = &gh.InstallationTokenOptions{Repositories: []string{repo.Name}, Permissions: fields}
 	u.writers[name] = tr
 	return tr, nil
 }
+
+// permKey orders perms so an equal permission set shares one cached token transport regardless
+// of map iteration order.
+func permKey(p github.Permissions) string {
+	names := make([]string, 0, len(p))
+	for name, level := range p {
+		names = append(names, name+"="+level)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ",")
+}
 func ptr[T any](v T) *T { return &v }
 
-func (u *GitHubUpstream) Push(ctx context.Context, repo github.Repo, body io.Reader) ([]byte, error) {
-	tr, err := u.tokenTransport(ctx, repo, "contents", "write")
+// Push sends body as one git-receive-pack request with a repository-scoped contents:write
+// installation token. workflows additionally requests workflows:write, the permission GitHub
+// requires to create or modify a file under .github/workflows/; a push that does not touch that
+// directory keeps the narrower contents-only scope.
+func (u *GitHubUpstream) Push(ctx context.Context, repo github.Repo, body io.Reader, workflows bool) ([]byte, error) {
+	perms := github.Permissions{"contents": github.Write}
+	if workflows {
+		perms["workflows"] = github.Write
+	}
+	tr, err := u.tokenTransport(ctx, repo, perms)
 	if err != nil {
 		return nil, err
 	}

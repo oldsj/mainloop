@@ -206,7 +206,7 @@ func (s *Service) receive(ctx context.Context, c capability, a authority, cmd co
 	// have independent finite deadlines, and this handler waits for both before returning.
 	dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), l.Timeout)
 	defer dcancel()
-	data, err := s.Upstream.Push(dctx, repo, sp.body)
+	data, err := s.Upstream.Push(dctx, repo, sp.body, facts.Workflows)
 	if err != nil {
 		return nil, denial("publication_unknown")
 	}

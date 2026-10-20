@@ -264,7 +264,7 @@ func (a *App) gitTransport(ctx context.Context, repo Repo) (*ghinstallation.Tran
 		if tr != nil {
 			return tr, nil
 		}
-		fields, err := permissionFields(scope.Permissions)
+		fields, err := PermissionFields(scope.Permissions)
 		if err != nil {
 			return nil, err
 		}
