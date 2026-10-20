@@ -112,11 +112,24 @@ func inheritBuiltinModelAndEffort(operator, builtin config.ProviderProfile) conf
 
 // claudeModels and codexModels are the built-in Claude and Codex profiles' /model listings. An
 // operator profile sets its own in PROVIDER_PROFILES; these are Mainloop's defaults only.
+//
+// Sourcing note: this task's sandbox cannot reach the oldsj/kagent fork (GitHub) or Anthropic's/
+// OpenAI's own docs (platform.claude.com, code.claude.com, developers.openai.com all returned
+// 403), so the runtime Dockerfiles for the claude-runtime and codex-runtime images pinning Claude
+// Code 2.1.260 and Codex 0.148.0 could not be inspected directly. The lists below reflect
+// Anthropic's and OpenAI's published model catalogs as corroborated across multiple independent
+// sources found via web search: Claude's current family is Opus 5.5 (claude-opus-5-5), Sonnet 5.5
+// (claude-sonnet-5-5), Haiku 5.5 (claude-haiku-5-5) and Fable 5.1 (claude-fable-5-1, unchanged);
+// Codex's is still gpt-5.1-codex and gpt-5.1-codex-mini, as the 0.148.0 release notes (Aug 18,
+// 2026: /export, session forking, Bedrock provider support) list no model-catalog change. Several
+// sources place Opus 5.5's "default on Pro/Team Standard" switch in a later Claude Code release
+// than 2.1.260, so the CLI's own live default for that pinned version could not be confirmed;
+// per the task, the default stays with the Sonnet family rather than moving to Opus.
 var (
 	claudeModels = []config.ProviderModel{
-		{ID: "claude-sonnet-5", Label: "Sonnet 5"},
-		{ID: "claude-opus-5", Label: "Opus 5"},
-		{ID: "claude-haiku-4-5-20251001", Label: "Haiku 4.5"},
+		{ID: "claude-sonnet-5-5", Label: "Sonnet 5.5"},
+		{ID: "claude-opus-5-5", Label: "Opus 5.5"},
+		{ID: "claude-haiku-5-5", Label: "Haiku 5.5"},
 		{ID: "claude-fable-5-1", Label: "Fable 5.1"},
 	}
 	claudeEffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
