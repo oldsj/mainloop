@@ -20,7 +20,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/gittransport"
-	ka "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 type admissionBody struct {

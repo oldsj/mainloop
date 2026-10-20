@@ -11,7 +11,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 const (

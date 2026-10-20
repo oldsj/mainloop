@@ -16,7 +16,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/pushgate"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
-	ka "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 // GitPush supplies metadata and enrollment after a creation-time reference is reserved. The

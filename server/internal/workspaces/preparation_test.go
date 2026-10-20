@@ -17,7 +17,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/sessions"
-	ka "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 const prepSHA = "0123456789abcdef0123456789abcdef01234567"
@@ -390,9 +390,16 @@ func TestCreateWithAnEnvironmentRefusesAnUnpinnableRef(t *testing.T) {
 }
 
 // TestSetupDigestsMatchTheKagentPin fails when the vendored kagent API moves to another commit
-// without the setup digests being re-read there.
+// without the setup digests being re-read there. It is expected to fail as of the Connect-client
+// generation task that moved third_party/kagentproto/SOURCE to
+// a1164013675c2ad49ec4cc2b6b12d3dfa4a456d6: that task had no checkout of the oldsj/kagent fork to
+// read go/harness/runtime/workspace/preparation_test.go at the new commit (the file this test's own
+// failure message points at), so setupDigests and setupDigestsSource below are left at the old
+// commit rather than guessed. Owner follow-up needed before relying on PrepareSessionWorkspace
+// against a controller running the new revision: every preparation would otherwise send a stale
+// setup_digest and be refused.
 func TestSetupDigestsMatchTheKagentPin(t *testing.T) {
-	raw, err := os.ReadFile("../../third_party/kagentapi/SOURCE")
+	raw, err := os.ReadFile("../../third_party/kagentproto/SOURCE")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +410,7 @@ func TestSetupDigestsMatchTheKagentPin(t *testing.T) {
 		}
 	}
 	if commit != setupDigestsSource {
-		t.Fatalf("third_party/kagentapi/SOURCE pins kagent %s but the setup digests in preparation.go were read at %s. "+
+		t.Fatalf("third_party/kagentproto/SOURCE pins kagent %s but the setup digests in preparation.go were read at %s. "+
 			"Read the supervisor, child and agent digests in go/harness/runtime/workspace/preparation_test.go at the new commit, "+
 			"update setupDigests and setupDigestsSource, and keep the controller and harness image pins in step.", commit, setupDigestsSource)
 	}

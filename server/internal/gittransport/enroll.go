@@ -22,7 +22,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/k8ssecrets"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 // Errors an enrollment can end with. The first three mean "try again later" or "it is over"; none

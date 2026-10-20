@@ -31,7 +31,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/k8ssecrets"
 	"github.com/oldsj/mainloop/server/internal/k8ssecrets/secretstest"
 	"github.com/oldsj/mainloop/server/internal/testdb"
-	ka "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }

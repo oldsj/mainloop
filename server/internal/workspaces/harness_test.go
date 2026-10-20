@@ -21,7 +21,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/testdb"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }

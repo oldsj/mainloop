@@ -10,7 +10,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/kagent"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 func (h *harness) backdate(id string) {

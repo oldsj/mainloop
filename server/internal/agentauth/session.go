@@ -7,7 +7,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/k8ssecrets"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 // authorizationHeader is the header the MCP bearer travels in. kagent compares session credential

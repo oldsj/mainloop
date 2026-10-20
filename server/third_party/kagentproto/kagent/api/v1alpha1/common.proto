@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package kagent.api.v1alpha1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1;apiv1alpha1";
+
+message StructuredObject {
+  string api_version = 1;
+  string kind = 2;
+  google.protobuf.Struct value = 3;
+}
+
+message ResourceReference {
+  string namespace = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+  }];
+  string name = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 253
+    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+  }];
+}
+
+message PageRequest {
+  int32 limit = 1 [(buf.validate.field).int32 = {
+    gte: 0
+    lte: 100
+  }];
+  string page_token = 2;
+}
+
+message PageResponse {
+  string next_page_token = 1;
+}
+
+// Workspace asks the runtime to check out a Git repository before the first turn.
+// The repository host must be one of the Agent's Git origins; the runtime never
+// receives credentials, since the egress gateway injects them.
+message Workspace {
+  // HTTPS repository URL without credentials, for example
+  // https://github.com/owner/name.
+  string repo = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 2048
+    uri: true
+  }];
+  // Branch, tag, or commit to check out. Empty uses the repository default branch.
+  string ref = 2 [(buf.validate.field).string = {
+    max_len: 255
+    pattern: "^(?:$|[A-Za-z0-9_][A-Za-z0-9._/-]*)$"
+  }];
+  // Local branch to create or switch to after checking out ref. Empty stays on ref.
+  string branch = 3 [(buf.validate.field).string = {
+    max_len: 255
+    pattern: "^(?:$|[A-Za-z0-9_][A-Za-z0-9._/-]*)$"
+  }];
+  // Shallow clone depth. Zero uses the server default.
+  int32 depth = 4 [(buf.validate.field).int32 = {
+    gte: 0
+    lte: 1000
+  }];
+}

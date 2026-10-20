@@ -8,7 +8,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/pushgate"
-	ka "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 // proxyReferences counts the read and push Git proxy references on a Session create.

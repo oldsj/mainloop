@@ -15,7 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/gitref"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
-	ka "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 // Workspace preparation. kagent admits no message to a Session that has a workspace and a
@@ -45,7 +45,7 @@ const (
 // setupDigestsSource is the oldsj/kagent commit the digests below were read at
 // (go/harness/runtime/workspace/preparation_test.go). A digest hashes kagent's standing-context
 // text, and a mismatch makes the controller refuse every preparation. TestSetupDigestsMatchTheKagentPin
-// fails when third_party/kagentapi/SOURCE moves off this commit: re-read the digests at the new
+// fails when third_party/kagentproto/SOURCE moves off this commit: re-read the digests at the new
 // commit, update both, and keep the harness image pins in step.
 const setupDigestsSource = "ce402bf76151bf9492e5dda53f310547794c3190"
 

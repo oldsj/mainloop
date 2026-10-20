@@ -3,8 +3,10 @@ module github.com/oldsj/mainloop/server
 go 1.27.2
 
 tool (
+	connectrpc.com/connect/cmd/protoc-gen-connect-go
 	github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 	github.com/sqlc-dev/sqlc/cmd/sqlc
+	google.golang.org/protobuf/cmd/protoc-gen-go
 )
 
 require (
@@ -12,6 +14,7 @@ require (
 	connectrpc.com/connect v1.20.0
 	github.com/a2aproject/a2a-go/v2 v2.6.0
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0
+	github.com/bufbuild/protocompile v0.14.1
 	github.com/caarlos0/env/v11 v11.4.1
 	github.com/getkin/kin-openapi v0.149.0
 	github.com/golang-jwt/jwt/v4 v4.5.2

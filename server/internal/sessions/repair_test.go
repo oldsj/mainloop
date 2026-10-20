@@ -19,7 +19,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
 	"github.com/oldsj/mainloop/server/internal/sessions"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 func (e *env) native() *api.NativeSessionInfo {
