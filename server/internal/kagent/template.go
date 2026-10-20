@@ -6,7 +6,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/structpb"
 
-	api "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 // ErrNoTemplate means an Agent has no named template reference: it carries an inline template, both

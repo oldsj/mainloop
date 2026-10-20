@@ -6,7 +6,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	api "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 // kagenttest's fake SessionService always stamps a fresh updated_at on create, so it cannot

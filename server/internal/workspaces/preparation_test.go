@@ -17,7 +17,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/sessions"
-	ka "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 const prepSHA = "0123456789abcdef0123456789abcdef01234567"
@@ -392,7 +392,7 @@ func TestCreateWithAnEnvironmentRefusesAnUnpinnableRef(t *testing.T) {
 // TestSetupDigestsMatchTheKagentPin fails when the vendored kagent API moves to another commit
 // without the setup digests being re-read there.
 func TestSetupDigestsMatchTheKagentPin(t *testing.T) {
-	raw, err := os.ReadFile("../../third_party/kagentapi/SOURCE")
+	raw, err := os.ReadFile("../../third_party/kagentproto/SOURCE")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +403,7 @@ func TestSetupDigestsMatchTheKagentPin(t *testing.T) {
 		}
 	}
 	if commit != setupDigestsSource {
-		t.Fatalf("third_party/kagentapi/SOURCE pins kagent %s but the setup digests in preparation.go were read at %s. "+
+		t.Fatalf("third_party/kagentproto/SOURCE pins kagent %s but the setup digests in preparation.go were read at %s. "+
 			"Read the supervisor, child and agent digests in go/harness/runtime/workspace/preparation_test.go at the new commit, "+
 			"update setupDigests and setupDigestsSource, and keep the controller and harness image pins in step.", commit, setupDigestsSource)
 	}

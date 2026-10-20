@@ -1,0 +1,325 @@
+syntax = "proto3";
+
+package kagent.api.v1alpha1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "kagent/api/v1alpha1/common.proto";
+import "kagent/api/v1alpha1/runtime.proto";
+
+option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1;apiv1alpha1";
+
+// Lifecycle mutations execute inline. After a retryable error, repeat the same
+// mutation; CreateSession retries must keep the same request_id and input.
+// GetSession only observes state. A timeout does not roll back runtime effects.
+// Pending issued work blocks conflicting lifecycle, task, and checkpoint work
+// until a client retry completes it. Automatic idle suspension is independent.
+service SessionService {
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  rpc PrepareSessionWorkspace(PrepareSessionWorkspaceRequest) returns (PrepareSessionWorkspaceResponse);
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc UpdateSessionName(UpdateSessionNameRequest) returns (UpdateSessionNameResponse);
+  rpc SuspendSession(SuspendSessionRequest) returns (SuspendSessionResponse);
+  rpc ResumeSession(ResumeSessionRequest) returns (ResumeSessionResponse);
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
+  rpc CreateSessionShare(CreateSessionShareRequest) returns (CreateSessionShareResponse);
+  rpc ListSessionShares(ListSessionSharesRequest) returns (ListSessionSharesResponse);
+  rpc RevokeSessionShare(RevokeSessionShareRequest) returns (RevokeSessionShareResponse);
+}
+
+enum SessionSharePermission {
+  SESSION_SHARE_PERMISSION_UNSPECIFIED = 0;
+  // Allows A2A get, list, and subscribe operations.
+  SESSION_SHARE_PERMISSION_READ_ONLY = 1;
+  // Also allows A2A send and cancel operations.
+  SESSION_SHARE_PERMISSION_READ_WRITE = 2;
+}
+
+message Failure {
+  string reason = 1;
+  string message = 2;
+}
+
+message Session {
+  string id = 1;
+  string creator = 2;
+  reserved 3, 4;
+  reserved "harness", "agent_template";
+  ResourceReference agent = 15;
+  string prepared_revision = 5;
+  string a2a_authority = 6;
+  RuntimeState state = 7;
+  RuntimeOperation operation = 8;
+  Failure failure = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+  reserved 12;
+  reserved "labels";
+  // Reader-supplied display name for the conversation. Empty means unnamed,
+  // which is the state every session created before this field existed is in.
+  string name = 13;
+  // Output only. A2A conversation ID, equal to this session's ID.
+  // Forks receive a new conversation ID and new task IDs.
+  string context_id = 14;
+  // Git checkout the runtime establishes before the first turn. Unset means
+  // the Session starts with an empty workspace.
+  Workspace workspace = 16;
+  // Secret references only; forks do not inherit these bindings.
+  repeated SessionCredential credentials = 17;
+  DevelopmentEnvironment development_environment = 18;
+  // Output only. Operator-resolved payload pinned at creation.
+  RuntimeComposition runtime_composition = 19;
+  // Output only. Present only on authorized GetSession for a freshly observed
+  // current active runtime. Never a creation, resume, or fork input.
+  RuntimeAssociation runtime_association = 20;
+  // Output only, historical preparation evidence. GET never refreshes it.
+  WorkspacePreparationReceipt workspace_preparation = 21;
+  // Output only. Set on a fork created with a fresh conversation: its restored
+  // data keeps the workspace, but the runtime discards native conversation state.
+  bool fresh_conversation = 22;
+}
+
+// Output only. A bounded observation, not an atomic cross-system grant.
+// The durable generation must remain active around a fresh lookup of the exact
+// running Actor, and the Session must remain READY with no pending operation.
+// Dispatchers must recheck with their normal fencing/locks before runtime work.
+// Absence means no current active association was verified by this read.
+message RuntimeAssociation {
+  string generation_id = 1;
+  string atespace = 2;
+  string actor_name = 3;
+  string actor_uid = 4;
+  string phase = 5;
+  bool current_active = 6;
+}
+
+// SecretKeyReference identifies a key in the Agent's namespace. The value is
+// the complete HTTP header value, including any authorization scheme prefix.
+message SecretKeyReference {
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 253
+    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+  }];
+  string key = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 253
+    pattern: "^[A-Za-z0-9._-]+$"
+  }];
+}
+
+// SessionCredential binds a same-namespace Secret to an existing egress origin.
+// Injection must be supported by the gateway dataplane for the origin's protocol.
+// Stock agentgateway supports HTTP injection; stock Envoy skips it.
+message SessionCredential {
+  string origin = 1 [(buf.validate.field).string = {
+    max_len: 2048
+    pattern: "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$"
+  }];
+  // Header names are case-insensitive and canonicalized to lowercase.
+  string header = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 256
+    pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+  }];
+  SecretKeyReference secret_ref = 3 [(buf.validate.field).required = true];
+}
+
+// Trusted controller selection; runtime payloads are operator-owned.
+message DevelopmentEnvironment {
+  string image = 1 [(buf.validate.field).string = {
+    max_len: 512
+    pattern: "^[A-Za-z0-9][A-Za-z0-9./_:-]*@sha256:[a-f0-9]{64}$"
+  }];
+  string platform = 2 [(buf.validate.field).string.in = "linux/amd64", (buf.validate.field).string.in = "linux/arm64"];
+  string policy_identity = 3 [(buf.validate.field).string = {min_len: 1, max_len: 256}];
+}
+
+// Output only. Immutable inputs retained with the native Session.
+message RuntimeComposition {
+  string payload_image = 1;
+  string provider = 2;
+  uint32 schema = 3;
+  string cli_version = 4;
+}
+
+message CreateSessionRequest {
+  reserved 1, 2;
+  reserved "harness", "agent_template";
+  ResourceReference agent = 5 [(buf.validate.field).required = true];
+  string request_id = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 128
+  }];
+  // Optional display name. Empty means unnamed.
+  string name = 4 [(buf.validate.field).string = {
+    max_len: 200
+    pattern: "^(?:$|[^\\p{Z}\\p{Cc}](?:[^\\p{Cc}]*[^\\p{Z}\\p{Cc}])?)$"
+  }];
+  // Optional Git checkout to establish before the first turn. Its host must be
+  // one of the Agent's Git origins.
+  Workspace workspace = 6;
+  // Per-session headers for origins already allowed by the Agent revision.
+  repeated SessionCredential credentials = 7 [(buf.validate.field).repeated.max_items = 4];
+  DevelopmentEnvironment development_environment = 8;
+}
+
+message CreateSessionResponse {
+  Session session = 1;
+}
+
+message GetSessionRequest {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+}
+
+message GetSessionResponse {
+  Session session = 1;
+}
+
+message ListSessionsRequest {
+  reserved 1;
+  reserved "match_labels";
+  // Includes sessions created by other users when authorized.
+  bool all_creators = 2;
+  PageRequest page = 3;
+  reserved 4, 5;
+  reserved "agent_template", "harness";
+  // Filters by the Agent that produced each session's pinned revision.
+  ResourceReference agent = 6;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+  PageResponse page = 2;
+}
+
+message UpdateSessionNameRequest {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+  // The new display name. Empty clears the name, returning the conversation to
+  // being identified by its id.
+  string name = 2 [(buf.validate.field).string = {
+    max_len: 200
+    pattern: "^(?:$|[^\\p{Z}\\p{Cc}](?:[^\\p{Cc}]*[^\\p{Z}\\p{Cc}])?)$"
+  }];
+}
+
+message UpdateSessionNameResponse {
+  Session session = 1;
+}
+
+message SuspendSessionRequest {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+}
+
+message SuspendSessionResponse {
+  Session session = 1;
+}
+
+message ResumeSessionRequest {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+}
+
+message ResumeSessionResponse {
+  Session session = 1;
+}
+
+message DeleteSessionRequest {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+}
+
+message DeleteSessionResponse {
+  Session session = 1;
+}
+
+message SessionShare {
+  string id = 1;
+  string session_id = 2;
+  SessionSharePermission permission = 3;
+  google.protobuf.Timestamp created_at = 4;
+  // When the share's token stops granting access. Unset means never.
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+message CreateSessionShareRequest {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+  SessionSharePermission permission = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: 0
+  }];
+  // How long the share's token grants access, from its creation. Unset takes the
+  // controller's maximum share lifetime; without one, the share grants access
+  // until it is revoked or the session deleted.
+  google.protobuf.Duration ttl = 3 [(buf.validate.field).duration.gt = {}];
+}
+
+message CreateSessionShareResponse {
+  SessionShare share = 1;
+  // Returned only when the share is created.
+  string token = 2;
+}
+
+message ListSessionSharesRequest {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+  PageRequest page = 2;
+}
+
+message ListSessionSharesResponse {
+  repeated SessionShare shares = 1;
+  PageResponse page = 2;
+}
+
+message RevokeSessionShareRequest {
+  string share_id = 1 [(buf.validate.field).string.uuid = true];
+}
+
+message RevokeSessionShareResponse {}
+
+// A fixed model-free action over the original owned Create tuple. Repeating a
+// completed action requests a new read-only challenge; uncertain setup never reissues.
+message PrepareSessionWorkspaceRequest {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+  string action_id = 2 [(buf.validate.field).string = {min_len: 1, max_len: 128, pattern: "^[A-Za-z0-9:._-]+$"}];
+  string create_request_id = 3 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  string generation_id = 4 [(buf.validate.field).string.uuid = true];
+  string actor_uid = 5 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  string prepared_revision = 6 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  Workspace workspace = 7 [(buf.validate.field).required = true];
+  DevelopmentEnvironment development_environment = 8 [(buf.validate.field).required = true];
+  RuntimeComposition runtime_composition = 9 [(buf.validate.field).required = true];
+  string setup_profile = 10 [(buf.validate.field).string.in = "supervisor", (buf.validate.field).string.in = "child", (buf.validate.field).string.in = "agent"];
+  string setup_digest = 11 [(buf.validate.field).string = {pattern: "^[a-f0-9]{64}$"}];
+  option (buf.validate.message).cel = {
+    id: "preparation.exact_checkout"
+    message: "preparation requires a full commit SHA and named branch"
+    expression: "this.workspace.ref.matches('^[a-f0-9]{40}$') && this.workspace.branch != ''"
+  };
+}
+
+message PrepareSessionWorkspaceResponse {
+  WorkspacePreparationReceipt receipt = 1;
+}
+
+// Bounded output-only original-action evidence. A pending/uncertain classification
+// or historical=true cannot authorize current native work.
+message WorkspacePreparationReceipt {
+  PrepareSessionWorkspaceRequest original = 1;
+  string request_digest = 2;
+  string execution_id = 3;
+  string context_id = 4;
+  string atespace = 5;
+  string actor_name = 6;
+  string classification = 7;
+  string challenge_id = 8;
+  uint64 observation_sequence = 9;
+  string head = 10;
+  string branch = 11;
+  string transport_digest = 12;
+  string config_digest = 13;
+  string mcp_digest = 14;
+  string native_hook = 15;
+  google.protobuf.Timestamp effect_observed_at = 16;
+  google.protobuf.Timestamp observed_at = 17;
+  bool historical = 18;
+}

@@ -1,0 +1,23 @@
+repo: oldsj/kagent
+commit: a1164013675c2ad49ec4cc2b6b12d3dfa4a456d6
+paths: proto/kagent/api/v1alpha1/{common.proto,runtime.proto,sessions.proto,agents.proto,scheduled_runs.proto,checkpoints.proto}
+notes: |
+  Proto source copied verbatim (service definitions included; the previous
+  server/third_party/kagentapi vendored message-only .pb.go files, with no RPCs).
+  Go and Connect clients are generated from these by `go generate ./...`, driven by
+  server/tools/kagentproto (protocompile + protoc-gen-go + protoc-gen-connect-go; no
+  buf CLI, since buf.yaml's module deps need BSR access this tree does not have).
+
+  TestSourcePinnedToDeployedRevision (in this package) fails if the commit above
+  stops matching the sourceRevision that oldsj/infrastructure's
+  k8s/apps/kagent/source-lock.yaml points controller-runtime at. Update both
+  together.
+
+  To refresh by hand from a fork checkout:
+    commit=<new commit>
+    fork=~/dev/kagent   # or wherever the oldsj/kagent fork is checked out
+    dest=server/third_party/kagentproto/kagent/api/v1alpha1
+    for f in common runtime sessions agents scheduled_runs checkpoints; do
+      git -C "$fork" show "$commit:proto/kagent/api/v1alpha1/$f.proto" >"$dest/$f.proto"
+    done
+  then update the commit above and run `go generate ./...` from server/.

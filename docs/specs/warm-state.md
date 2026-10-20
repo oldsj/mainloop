@@ -37,6 +37,19 @@ reached rather than improvise around it. This section records both.
   `oldsj/kagent` fork (`$KAGENT_FORK`, default `~/dev/kagent`) to run `git show` against a chosen
   commit. No such checkout exists in this workspace, so a newer kagent commit that might add a
   fork RPC could not be checked from here.
+
+  **Update, same day, a later task on this branch:** the paths and tool above no longer exist.
+  `server/third_party/kagentapi` and `scripts/sync-kagent-api.sh` were replaced by
+  `server/third_party/kagentproto` (full `.proto` sources, generated Go and Connect clients, see
+  its `SOURCE`), pinned to `oldsj/kagent` commit `a1164013675c2ad49ec4cc2b6b12d3dfa4a456d6`. That
+  vendored set does include `checkpoints.proto`'s `CheckpointService`, with a `ForkSession` RPC —
+  so "the RPC that would create one is not in this vendored slice" above no longer holds. Nothing
+  reachable from this workspace could prove `ForkSession` live (same reasons as below), and
+  `server/internal/kagent/client.go` still wires no behavior for `CheckpointService`: that PR
+  generated the client only, deliberately out of scope for wiring it up. The next task that does
+  should repeat the measurement below against `ForkSession` before relying on this document's
+  "not reachable" conclusion.
+
 - The GitHub API is unreachable from this workspace (see `AGENTS.md`), so kagent's own
   `docs/architecture/runtime-and-lifecycle.md`, referenced by issue #288, could not be read either,
   to confirm how a Data-checkpoint fork is invoked or what it preserves.
@@ -77,8 +90,9 @@ soon.
 | Cold workspace on the toolchain image only (first `go build`, first `pnpm install`)             | —                                     | **Unknown.** Would need a toolchain-only environment registered and a workspace created from it; out of this task's reach (no environment-management tool is on this task's MCP surface, and creating one against `mainloop-dev` was not attempted since it would not answer the fork question this task was scoped to). |
 | `dev_status` round trip                                                                         | succeeded, 3 pods, 0–12 restarts each | **Measured**, via `mcp__mainloop__dev_status`, this session, 2026-10-20. Confirms the tool surface, not a timing fact about warm state.                                                                                                                                                                                  |
 
-If a later task gets a path to kagent's fork RPC (vendored into `kagentapi` and wired into
-`server/internal/kagent`) or to kagent's own lifecycle docs, repeat this measurement before
+If a later task gets a path to kagent's fork RPC, now vendored as `CheckpointService.ForkSession`
+in `server/third_party/kagentproto` (see the update above) but not yet wired into
+`server/internal/kagent`, or to kagent's own lifecycle docs, repeat this measurement before
 committing to seed-fork as the mechanism. Until then, this spec treats fork as unproven.
 
 ## Mechanism: cache archive now, seed fork later if it measures well

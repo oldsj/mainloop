@@ -9,7 +9,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	api "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 // errAmbiguousWire marks a reply whose raw wire repeats a field that must appear once. Protobuf

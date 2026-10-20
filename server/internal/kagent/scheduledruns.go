@@ -6,41 +6,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	api "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
-
-type scheduledRunClients struct {
-	create    *connect.Client[api.CreateScheduledRunRequest, api.CreateScheduledRunResponse]
-	get       *connect.Client[api.GetScheduledRunRequest, api.GetScheduledRunResponse]
-	list      *connect.Client[api.ListScheduledRunsRequest, api.ListScheduledRunsResponse]
-	update    *connect.Client[api.UpdateScheduledRunRequest, api.UpdateScheduledRunResponse]
-	del       *connect.Client[api.DeleteScheduledRunRequest, api.DeleteScheduledRunResponse]
-	trigger   *connect.Client[api.TriggerScheduledRunRequest, api.TriggerScheduledRunResponse]
-	getExec   *connect.Client[api.GetScheduledRunExecutionRequest, api.GetScheduledRunExecutionResponse]
-	listExecs *connect.Client[api.ListScheduledRunExecutionsRequest, api.ListScheduledRunExecutionsResponse]
-}
-
-func newScheduledRunClients(h connect.HTTPClient, base string) scheduledRunClients {
-	opt := connect.WithGRPCWeb()
-	return scheduledRunClients{
-		create: connect.NewClient[api.CreateScheduledRunRequest, api.CreateScheduledRunResponse](
-			h, base+ProcCreateScheduledRun, opt),
-		get: connect.NewClient[api.GetScheduledRunRequest, api.GetScheduledRunResponse](
-			h, base+ProcGetScheduledRun, opt),
-		list: connect.NewClient[api.ListScheduledRunsRequest, api.ListScheduledRunsResponse](
-			h, base+ProcListScheduledRuns, opt),
-		update: connect.NewClient[api.UpdateScheduledRunRequest, api.UpdateScheduledRunResponse](
-			h, base+ProcUpdateScheduledRun, opt),
-		del: connect.NewClient[api.DeleteScheduledRunRequest, api.DeleteScheduledRunResponse](
-			h, base+ProcDeleteScheduledRun, opt),
-		trigger: connect.NewClient[api.TriggerScheduledRunRequest, api.TriggerScheduledRunResponse](
-			h, base+ProcTriggerScheduledRun, opt),
-		getExec: connect.NewClient[api.GetScheduledRunExecutionRequest, api.GetScheduledRunExecutionResponse](
-			h, base+ProcGetScheduledRunExecution, opt),
-		listExecs: connect.NewClient[api.ListScheduledRunExecutionsRequest, api.ListScheduledRunExecutionsResponse](
-			h, base+ProcListScheduledRunExecutions, opt),
-	}
-}
 
 // Schedule failures that callers tell apart come back as a *SessionError with these codes:
 //
@@ -63,7 +30,7 @@ func scheduleOf(op, id string, s *api.ScheduledRun) (*api.ScheduledRun, error) {
 // AlreadyExists. The reply must echo the create contract, or the outcome is unknown.
 func (c *Client) CreateScheduledRun(ctx context.Context, req *api.CreateScheduledRunRequest) (*api.ScheduledRun, error) {
 	const op = "ScheduledRunService CreateScheduledRun"
-	resp, err := unary(ctx, c, op, c.scheduleCl.create, req)
+	resp, err := unary(ctx, c, op, c.scheduleCl.CreateScheduledRun, req)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +49,7 @@ func (c *Client) GetScheduledRun(ctx context.Context, id string) (*api.Scheduled
 	if id == "" {
 		return nil, emptyArg(op, "schedule id")
 	}
-	resp, err := unary(ctx, c, op, c.scheduleCl.get, &api.GetScheduledRunRequest{ScheduledRunId: id})
+	resp, err := unary(ctx, c, op, c.scheduleCl.GetScheduledRun, &api.GetScheduledRunRequest{ScheduledRunId: id})
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +63,7 @@ func (c *Client) ListScheduledRunsPage(
 ) (schedules []*api.ScheduledRun, next string, err error) {
 	const op = "ScheduledRunService ListScheduledRuns"
 	limit = min(max(limit, 1), maxPageSize)
-	resp, err := unary(ctx, c, op, c.scheduleCl.list, &api.ListScheduledRunsRequest{
+	resp, err := unary(ctx, c, op, c.scheduleCl.ListScheduledRuns, &api.ListScheduledRunsRequest{
 		Page: &api.PageRequest{Limit: int32(limit), PageToken: token}, //nolint:gosec // limit is 1..100
 	})
 	if err != nil {
@@ -127,7 +94,7 @@ func (c *Client) UpdateScheduledRun(
 	if id == "" {
 		return nil, emptyArg(op, "schedule id")
 	}
-	resp, err := unary(ctx, c, op, c.scheduleCl.update, &api.UpdateScheduledRunRequest{
+	resp, err := unary(ctx, c, op, c.scheduleCl.UpdateScheduledRun, &api.UpdateScheduledRunRequest{
 		ScheduledRunId: id, Etag: etag, Config: config,
 	})
 	if err != nil {
@@ -148,7 +115,7 @@ func (c *Client) DeleteScheduledRun(ctx context.Context, id string) (*api.Schedu
 	if id == "" {
 		return nil, emptyArg(op, "schedule id")
 	}
-	resp, err := unary(ctx, c, op, c.scheduleCl.del, &api.DeleteScheduledRunRequest{ScheduledRunId: id})
+	resp, err := unary(ctx, c, op, c.scheduleCl.DeleteScheduledRun, &api.DeleteScheduledRunRequest{ScheduledRunId: id})
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +136,7 @@ func (c *Client) TriggerScheduledRun(ctx context.Context, id, requestID string) 
 	if requestID == "" {
 		return nil, emptyArg(op, "request id")
 	}
-	resp, err := unary(ctx, c, op, c.scheduleCl.trigger, &api.TriggerScheduledRunRequest{
+	resp, err := unary(ctx, c, op, c.scheduleCl.TriggerScheduledRun, &api.TriggerScheduledRunRequest{
 		ScheduledRunId: id, RequestId: requestID,
 	})
 	if err != nil {
@@ -188,7 +155,7 @@ func (c *Client) GetScheduledRunExecution(ctx context.Context, id string) (*api.
 	if id == "" {
 		return nil, emptyArg(op, "execution id")
 	}
-	resp, err := unary(ctx, c, op, c.scheduleCl.getExec, &api.GetScheduledRunExecutionRequest{ExecutionId: id})
+	resp, err := unary(ctx, c, op, c.scheduleCl.GetScheduledRunExecution, &api.GetScheduledRunExecutionRequest{ExecutionId: id})
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +176,7 @@ func (c *Client) ListScheduledRunExecutionsPage(
 		return nil, "", emptyArg(op, "schedule id")
 	}
 	limit = min(max(limit, 1), maxPageSize)
-	resp, err := unary(ctx, c, op, c.scheduleCl.listExecs, &api.ListScheduledRunExecutionsRequest{
+	resp, err := unary(ctx, c, op, c.scheduleCl.ListScheduledRunExecutions, &api.ListScheduledRunExecutionsRequest{
 		ScheduledRunId: scheduleID,
 		Page:           &api.PageRequest{Limit: int32(limit), PageToken: token}, //nolint:gosec // limit is 1..100
 	})

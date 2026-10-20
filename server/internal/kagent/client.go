@@ -16,32 +16,30 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/oldsj/mainloop/server/internal/config"
-	api "github.com/oldsj/mainloop/server/third_party/kagentapi"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	apiconnect "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1/apiv1alpha1connect"
 )
 
-// Procedure names, exactly as the fork's service definitions spell them.
+// Procedure names, generated from the fork's own service definitions (see third_party/kagentproto).
+// Exported so kagenttest and its callers can key faults and request counts off the exact wire path.
 const (
-	sessionService      = "/kagent.api.v1alpha1.SessionService/"
-	agentService        = "/kagent.api.v1alpha1.AgentService/"
-	scheduledRunService = "/kagent.api.v1alpha1.ScheduledRunService/"
+	ProcCreateSession           = apiconnect.SessionServiceCreateSessionProcedure
+	ProcPrepareSessionWorkspace = apiconnect.SessionServicePrepareSessionWorkspaceProcedure
+	ProcGetSession              = apiconnect.SessionServiceGetSessionProcedure
+	ProcListSessions            = apiconnect.SessionServiceListSessionsProcedure
+	ProcSuspendSession          = apiconnect.SessionServiceSuspendSessionProcedure
+	ProcResumeSession           = apiconnect.SessionServiceResumeSessionProcedure
+	ProcDeleteSession           = apiconnect.SessionServiceDeleteSessionProcedure
+	ProcGetAgent                = apiconnect.AgentServiceGetAgentProcedure
 
-	ProcCreateSession           = sessionService + "CreateSession"
-	ProcPrepareSessionWorkspace = sessionService + "PrepareSessionWorkspace"
-	ProcGetSession              = sessionService + "GetSession"
-	ProcListSessions            = sessionService + "ListSessions"
-	ProcSuspendSession          = sessionService + "SuspendSession"
-	ProcResumeSession           = sessionService + "ResumeSession"
-	ProcDeleteSession           = sessionService + "DeleteSession"
-	ProcGetAgent                = agentService + "GetAgent"
-
-	ProcCreateScheduledRun         = scheduledRunService + "CreateScheduledRun"
-	ProcGetScheduledRun            = scheduledRunService + "GetScheduledRun"
-	ProcListScheduledRuns          = scheduledRunService + "ListScheduledRuns"
-	ProcUpdateScheduledRun         = scheduledRunService + "UpdateScheduledRun"
-	ProcDeleteScheduledRun         = scheduledRunService + "DeleteScheduledRun"
-	ProcTriggerScheduledRun        = scheduledRunService + "TriggerScheduledRun"
-	ProcGetScheduledRunExecution   = scheduledRunService + "GetScheduledRunExecution"
-	ProcListScheduledRunExecutions = scheduledRunService + "ListScheduledRunExecutions"
+	ProcCreateScheduledRun         = apiconnect.ScheduledRunServiceCreateScheduledRunProcedure
+	ProcGetScheduledRun            = apiconnect.ScheduledRunServiceGetScheduledRunProcedure
+	ProcListScheduledRuns          = apiconnect.ScheduledRunServiceListScheduledRunsProcedure
+	ProcUpdateScheduledRun         = apiconnect.ScheduledRunServiceUpdateScheduledRunProcedure
+	ProcDeleteScheduledRun         = apiconnect.ScheduledRunServiceDeleteScheduledRunProcedure
+	ProcTriggerScheduledRun        = apiconnect.ScheduledRunServiceTriggerScheduledRunProcedure
+	ProcGetScheduledRunExecution   = apiconnect.ScheduledRunServiceGetScheduledRunExecutionProcedure
+	ProcListScheduledRunExecutions = apiconnect.ScheduledRunServiceListScheduledRunExecutionsProcedure
 )
 
 const (
@@ -101,9 +99,9 @@ func (a AgentRef) proto() *api.ResourceReference {
 type Client struct {
 	base       string
 	http       *http.Client
-	sessionCl  sessionClients
-	agentGet   *connect.Client[api.GetAgentRequest, api.GetAgentResponse]
-	scheduleCl scheduledRunClients
+	sessionCl  apiconnect.SessionServiceClient
+	agentCl    apiconnect.AgentServiceClient
+	scheduleCl apiconnect.ScheduledRunServiceClient
 	reqTimeout time.Duration
 	idle       time.Duration
 	budget     time.Duration
@@ -156,10 +154,9 @@ func New(cfg Config) (*Client, error) {
 	if c.now == nil {
 		c.now = time.Now
 	}
-	c.sessionCl = newSessionClients(doer{c.http}, base)
-	c.scheduleCl = newScheduledRunClients(doer{c.http}, base)
-	c.agentGet = connect.NewClient[api.GetAgentRequest, api.GetAgentResponse](
-		doer{c.http}, base+ProcGetAgent, connect.WithGRPCWeb())
+	c.sessionCl = apiconnect.NewSessionServiceClient(doer{c.http}, base, connect.WithGRPCWeb(), withStrictSessions())
+	c.scheduleCl = apiconnect.NewScheduledRunServiceClient(doer{c.http}, base, connect.WithGRPCWeb())
+	c.agentCl = apiconnect.NewAgentServiceClient(doer{c.http}, base, connect.WithGRPCWeb())
 	return c, nil
 }
 
@@ -183,11 +180,12 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 
 // unary runs one unary call under the request timeout and classifies its failure.
 func unary[Req, Res any](
-	ctx context.Context, c *Client, op string, cl *connect.Client[Req, Res], req *Req,
+	ctx context.Context, c *Client, op string,
+	call func(context.Context, *connect.Request[Req]) (*connect.Response[Res], error), req *Req,
 ) (*Res, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.reqTimeout)
 	defer cancel()
-	resp, err := cl.CallUnary(ctx, connect.NewRequest(req))
+	resp, err := call(ctx, connect.NewRequest(req))
 	if err != nil {
 		return nil, classifyConnect(op, err)
 	}
@@ -202,7 +200,7 @@ func (c *Client) GetAgent(ctx context.Context, ref AgentRef) (*api.Agent, error)
 	if ref.Namespace == "" || ref.Name == "" {
 		return nil, emptyArg("AgentService GetAgent", "agent namespace and name")
 	}
-	resp, err := unary(ctx, c, "AgentService GetAgent", c.agentGet, &api.GetAgentRequest{Ref: ref.proto()})
+	resp, err := unary(ctx, c, "AgentService GetAgent", c.agentCl.GetAgent, &api.GetAgentRequest{Ref: ref.proto()})
 	if err != nil {
 		return nil, err
 	}
