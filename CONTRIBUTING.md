@@ -96,7 +96,8 @@ See [`server/README.md`](server/README.md) for the other subcommands (`serve-mcp
 
 ## Verification
 
-Run the checks for the area you changed. They match the CI jobs in `.github/workflows/`.
+Run the checks for the area you changed: the package(s) you touched in `server/`, the test files
+you touched in `web/`. Leave the full suite, `-race`, and the full Vitest run to CI.
 
 ```bash
 # Repository lint and format (trunk; changed files against origin/main)
@@ -104,7 +105,8 @@ make lint
 make fmt
 
 # Server (from server/). Set MAINLOOP_TEST_DATABASE_URL to a disposable PostgreSQL 16 server.
-go test -race ./...
+# Add -race only when the change touches concurrency.
+go test ./internal/<pkg>/...
 golangci-lint run ./...
 go generate ./... && git status --short   # generated code must not change
 
@@ -116,11 +118,15 @@ pnpm install --frozen-lockfile --filter web...
 cd web
 node_modules/.bin/tsc -b
 node_modules/.bin/eslint .
-node_modules/.bin/vitest run
+node_modules/.bin/vitest run <changed test files>
 node_modules/.bin/vite build
 ```
 
-Database tests skip when `MAINLOOP_TEST_DATABASE_URL` is unset. CI always sets it, using a PostgreSQL 16 service.
+Database tests skip when `MAINLOOP_TEST_DATABASE_URL` is unset.
+
+CI (`.github/workflows/go.yml`) runs the full `go test -race ./...`, sharded into two jobs, on
+every PR push and again on merge, using a PostgreSQL 16 service; `go-nightly.yml` reruns the full
+suite with `-race -count=1` once a day as a cache backstop.
 
 ## Pull Request Guidelines
 
