@@ -6,6 +6,11 @@ schema upgrade have offline qualification; cleanup remains uninstalled. Live ret
 remain unavailable until runtime fencing, preview closure and exact readiness are
 qualified. No automatic provider fallback occurs.
 
+Automatic recovery of a stuck runtime (retrying or reassigning a `blocked` attempt on Mainloop's
+own initiative, before asking the owner) depends on this handoff stack and is deferred until it is
+installed; see [inbox](inbox.md#reconciliation-and-merge-attention-a1) for the Problems
+classification this leaves a `task_reconciliation` item in meanwhile.
+
 A retry keeps the selected provider; explicit reassignment chooses the target.
 Both create a fresh attempt, native history and grant, preserving the task,
 feature branch, environment and caller instructions. Request IDs bind to the

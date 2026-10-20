@@ -713,6 +713,43 @@ describe('owner actions', () => {
   });
 });
 
+describe('owner decision banner', () => {
+  it('leads with the one-line ask and the actions, with the rest collapsed behind Task details', async () => {
+    const page = view({
+      status: 'blocked',
+      reason: 'owner_decision',
+      owner_decision: {
+        attempt_id: 'attempt-1',
+        report_id: 'report-1',
+        action: 'Pick a region: eu or us?'
+      }
+    });
+    server.use(...serveTaskPage(taskScreen(page)));
+    renderTasks('/tasks/task-1');
+
+    expect(await screen.findByTestId('task-owner-ask')).toHaveTextContent(
+      'Pick a region: eu or us?'
+    );
+    // The action that answers the ask (Cancel; retry/reassign stay hidden by the handoff note)
+    // renders right away, not after a page of facts and history.
+    expect(screen.getByTestId('task-action-cancel')).toBeInTheDocument();
+    // Everything else sits behind a collapsed disclosure.
+    const details = screen.getByText('Task details').closest('details');
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute('open');
+    expect(within(details as HTMLElement).getByTestId('task-provider')).toBeInTheDocument();
+  });
+
+  it('keeps the plain layout, with no banner or collapsed details, without an owner decision', async () => {
+    server.use(...serveTaskPage(taskScreen(view())));
+    renderTasks('/tasks/task-1');
+
+    await screen.findByTestId('task-provider');
+    expect(screen.queryByTestId('task-owner-ask')).not.toBeInTheDocument();
+    expect(screen.queryByText('Task details')).not.toBeInTheDocument();
+  });
+});
+
 describe('the held view survives older and malformed reads', () => {
   /** Waits until no read is in flight, so a read an SSE event started has settled before it asserts. */
   async function settle(queryClient: QueryClient) {

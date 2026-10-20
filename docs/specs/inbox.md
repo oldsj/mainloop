@@ -9,6 +9,16 @@ cards, and tasks explicitly blocked on an owner decision. Each item states what 
 links to its canonical input card or task. Idle sessions, CI waits, publication updates and
 ordinary reconciliation do not imply owner attention. An empty inbox says **Nothing needs you**.
 
+Needs you holds only items with a real owner decision (kind `approval`, `question` or
+`owner_decision`). A stall, an unresolved runtime stop, or any other `task_reconciliation` item is
+Mainloop's own recovery work, not yet a decision: it opens with kind `problem` instead, is left out
+of the `count` the Needs-you badge shows, and is listed in the separate **Problems** view
+(`GET /attention`'s `items` still carries it; the explorer's Problems group and the Inbox's
+Problems tab are both filtered reads of the same snapshot). A problem escalates into a real
+`owner_decision` item only once automatic recovery has failed and a concrete choice exists; that
+escalation is not built (see [task-handoff](task-handoff.md) for the retry/reassign work it
+depends on).
+
 An unresolved owner decision is stored separately from native input status. If a session also
 asks a native question or permission, both requests remain visible; settling the native
 request alone cannot hide the owner decision. Attention reads include every eligible pending
@@ -107,12 +117,14 @@ poll tests against MSW fakes. Nothing here is live-proven.
 
 History before `e776537` describes the retired Python backend. Where other text on this page differs from the Go status, the Go status is current.
 
-- **Implemented:** the **Needs you** list from `GET /attention`. A HITL row shows the shared request card from `features/hitl`. A request this browser answered stays as a card with its receipt, in the same place in the list, until reload, even after the server stops listing it. Focus stays on that card. Other queue rows show option buttons, a free-text reply for open questions and plan reviews, a folded plan, and a **View PR** link only for `https` URLs. A row without a queue item links to its task. The empty state says **Nothing needs you**.
+- **Implemented:** the **Needs you** list from `GET /attention`, filtered to real owner decisions (kind != `problem`). A HITL row shows the shared request card from `features/hitl`. A request this browser answered stays as a card with its receipt, in the same place in the list, until reload, even after the server stops listing it. Focus stays on that card. Other queue rows show option buttons, a free-text reply for open questions and plan reviews, a folded plan, and a **View PR** link only for `https` URLs. A row without a queue item links to its task. The empty state says **Nothing needs you**.
+- **Implemented:** the **Problems** list, the same `GET /attention` read filtered the other way (kind == `problem`): a stall or an unresolved runtime stop, with a plain-language explanation and a **Review task evidence** link, never a decision's buttons. The empty state says **Nothing here**.
 - **Implemented:** the **Activity** view from `GET /activity`, read only while it is open. Provider reports keep the server's `unverified` label and link to their task.
 - **Implemented:** **Dismiss notice** on an Activity row the server marks `dismissible` (an input notice with no structured request reference), through `POST /queue/{id}/dismiss` with the row's `queue_item_id`. The client does not copy the rule. The row leaves Activity at once. A refusal, including a `409`, restores the row and shows the server's reason above the list. That reason clears once the re-read removes the row. Both Needs you and Activity re-read once the request settles, so the owner sees the current state.
-- **Implemented:** the count covers unresolved attention only and reads `99+` above 99. Attention polls only while the page is visible, one read at a time, on the shared cadence and deadline. `inbox:updated` refreshes attention and activity.
-- **Implemented:** there is no Inbox tab and no inbox badge. The count is on the explorer's **Needs you** group (the Explorer tab on the phone, the side bar or its collapsed rail on desktop), and the Explorer tab's accessible name includes it. The explorer reads attention, so it keeps polling while the chat or another page is open.
-- **Implemented:** the answer view at `/inbox` (`?show=activity` for Activity, `?item=<request or queue item id>` for one row). It replaces the chat in the centre column. The explorer's **Needs you** group and each of its rows, the waiting row under **Since you were here**, a task's **Open Inbox** link and an old `/?tab=inbox` link open it. The chosen row is brought to the top of the view and marked, and it is brought back to the top while its card fills in, until the owner scrolls, taps or types. The view's header (the back link, **Needs you** and **Activity**) stays at the top while the list scrolls. The view has one scroll: the page's own.
+- **Implemented:** the count covers unresolved, real-decision attention only (never a problem) and reads `99+` above 99. Attention polls only while the page is visible, one read at a time, on the shared cadence and deadline. `inbox:updated` refreshes attention and activity.
+- **Implemented:** there is no Inbox tab and no inbox badge. The count is on the explorer's **Needs you** group (the Explorer tab on the phone, the side bar or its collapsed rail on desktop), and the Explorer tab's accessible name includes it. A separate **Problems** group sits just below it, counting only problems, muted rather than attention-coloured. The explorer reads attention, so it keeps polling while the chat or another page is open.
+- **Implemented:** the answer view at `/inbox` (`?show=activity` for Activity, `?show=problems` for Problems, `?item=<request or queue item id>` for one row). It replaces the chat in the centre column. The explorer's **Needs you** and **Problems** groups and each of their rows, the waiting row under **Since you were here**, a task's **Open Inbox** link and an old `/?tab=inbox` link open it. The chosen row is brought to the top of the view and marked, and it is brought back to the top while its card fills in, until the owner scrolls, taps or types. The view's header (the back link, **Needs you**, **Problems** and **Activity**) stays at the top while the list scrolls. The view has one scroll: the page's own.
+- **Implemented:** a task page whose current attempt holds an open `owner_decision` leads with the ask (the report's `owner_action`, `Task.owner_decision.action`) and the actions that answer it (`features/tasks/TaskActions`), before the task's facts and history, which sit behind a collapsed **Task details** disclosure. A task with no open owner decision keeps the plain, uncollapsed layout.
 - **Implemented:** text on a card grows with the page instead of scrolling inside the card. Tool arguments and a captured PR description longer than 12 lines or 1,200 characters show their start and a **Show all** toggle; request data and a plan are already folded behind their own toggles and show whole when opened.
 - **Implemented:** after **Send response**, the card keeps a receipt line built from the response this browser sent, such as "Approved Bash, rejected Edit · 6:20 PM". The time is when this browser sent it, since the server receipt has none. Focus moves to the receipt once it is recorded. While the send is in flight, and when it is uncertain, focus stays on the card heading, never on the page body.
 - **Implemented:** the session page (`features/sessions/SessionChatSlot`) shows the session's pending requests as cards at the end of the conversation, in the same scroll as the messages. Its state reads **needs you** while a request is pending, in place of working, ready or idle. Failed and unconfirmed delivery still show as such.
@@ -219,6 +231,10 @@ PostgreSQL. Nothing here has run against a live cluster.
   on its current, unfinished attempt, and resolves it when the decision clears, the attempt is
   replaced or the task finishes. A new ask from the same task is a new item; an answered one is
   never reopened.
+- **Kind.** `approval`, `question` and `owner_decision` are real owner decisions; `problem` is
+  Mainloop's own recovery work (every `task_reconciliation` item; see A1 below), with no decision
+  yet for the owner. `AttentionSnapshot.count` counts only the former, so a problem never raises
+  the Needs-you badge even while it stays open and listed.
 - **Visibility.** One rule (the `attention_visible` view) decides which open items the owner
   sees; the list, `count`, the unread count and `needs_owner` all read it. An item is hidden when
   its session is archived or finished, when a HITL request already has a live answer (recorded,
@@ -263,9 +279,13 @@ PostgreSQL. Nothing here has run against a live cluster.
 Implemented in the Go server with scratch PostgreSQL and fake-runtime tests; no deployed proof.
 
 - The attention sweep opens one `task_reconciliation` item per task (`reconciliation:<task id>`)
-  for `blocked/reconciliation`, or for any attempt carrying `runtime-stop-unresolved` evidence
-  whose durable stop state is not `confirmed`, as long as the task itself is not yet final. Its
-  closed `reason_code` is `reconciliation` or `runtime_stop_unresolved`, with the unresolved stop
+  for `blocked/reconciliation`, `blocked/session_lost`, `blocked/stalled`, `blocked/runtime_limit`,
+  or for any attempt carrying `runtime-stop-unresolved` evidence whose durable stop state is not
+  `confirmed`, as long as the task itself is not yet final. Its kind is always `problem`: none of
+  these is an owner decision on its own, so none counts toward Needs-you or shows attention
+  yellow; escalating one into a real decision needs automatic recovery to fail first, which is not
+  built (see [task-handoff](task-handoff.md)). Its closed `reason_code` is `reconciliation`,
+  `session_lost`, `stalled`, `runtime_limit` or `runtime_stop_unresolved`, with the unresolved stop
   taking precedence. The item resolves, and is never (re)opened, the moment the task reaches
   `completed`, `failed` or `cancelled`, even while its stop remains unresolved: the task is over, so
   there is no decision left for the owner, whatever claim or capacity the attempt still holds behind

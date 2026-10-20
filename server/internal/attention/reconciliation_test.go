@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/oldsj/mainloop/server/internal/api"
 )
 
 func TestReconciliationAttentionTransitionsAndIdempotency(t *testing.T) {
@@ -20,11 +22,21 @@ func TestReconciliationAttentionTransitionsAndIdempotency(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if snap.Count != want {
-			t.Fatalf("count = %d, want %d: %+v", snap.Count, want, snap.Items)
+		// A reconciliation item is Mainloop's own recovery work, not an owner decision: it is
+		// listed, but never counted as a Needs-you decision.
+		if snap.Count != 0 {
+			t.Fatalf("count = %d, want 0 (a reconciliation item is not an owner decision): %+v", snap.Count, snap.Items)
 		}
-		if want > 0 && (snap.Items[0].Id != "reconciliation:t1" || snap.Items[0].ReasonCode == nil || string(*snap.Items[0].ReasonCode) != reason) {
-			t.Fatalf("item %+v", snap.Items[0])
+		if want == 0 {
+			if len(snap.Items) != 0 {
+				t.Fatalf("items = %+v, want none", snap.Items)
+			}
+			return
+		}
+		if len(snap.Items) != want || snap.Items[0].Id != "reconciliation:t1" ||
+			snap.Items[0].Kind != api.AttentionItemKindProblem ||
+			snap.Items[0].ReasonCode == nil || string(*snap.Items[0].ReasonCode) != reason {
+			t.Fatalf("items = %+v, want %d problem item with reason %q", snap.Items, want, reason)
 		}
 	}
 	unchanged := func(want int, reason string) {
@@ -84,7 +96,7 @@ func TestUnresolvedStopSurvivesEndedSessionAndReplacement(t *testing.T) {
 			t.Fatal(err)
 		}
 		snap, err := e.svc.Snapshot(ctx)
-		if err != nil || snap.Count != 1 {
+		if err != nil || len(snap.Items) != 1 || snap.Count != 0 {
 			t.Fatalf("unresolved stop hidden: %+v %v", snap, err)
 		}
 	}
@@ -93,7 +105,7 @@ func TestUnresolvedStopSurvivesEndedSessionAndReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	snap, err := e.svc.Snapshot(ctx)
-	if err != nil || snap.Count != 0 {
+	if err != nil || len(snap.Items) != 0 || snap.Count != 0 {
 		t.Fatalf("confirmed stop still visible: %+v %v", snap, err)
 	}
 }
@@ -132,7 +144,9 @@ func TestReconciliationDoesNotReachTheOwnerForAFinalTaskWithAnUnresolvedStop(t *
 		t.Run(status, func(t *testing.T) {
 			e := newEnv(t)
 			ctx := context.Background()
-			count := func() int {
+			// The item is Mainloop's own recovery work, not an owner decision, so Snapshot.Count
+			// never counts it; open() reports whether it is listed at all.
+			open := func() int {
 				t.Helper()
 				if err := e.svc.SyncTasks(ctx); err != nil {
 					t.Fatal(err)
@@ -141,25 +155,28 @@ func TestReconciliationDoesNotReachTheOwnerForAFinalTaskWithAnUnresolvedStop(t *
 				if err != nil {
 					t.Fatal(err)
 				}
-				return snap.Count
+				if snap.Count != 0 {
+					t.Fatalf("count = %d, want 0 (a reconciliation item is not an owner decision)", snap.Count)
+				}
+				return len(snap.Items)
 			}
 			e.blockedTask(t, "t1", "", "r1")
 			e.exec(t, `UPDATE tasks SET reason = 'reconciliation' WHERE id = 't1'`)
 			e.exec(t, `UPDATE task_attempts SET state = 'draining', stop_state = 'unresolved', evidence_refs = ARRAY['runtime-stop-unresolved'] WHERE task_id = 't1'`)
-			if n := count(); n != 1 {
-				t.Fatalf("an open task blocked on an unresolved stop must reach the owner, count = %d", n)
+			if n := open(); n != 1 {
+				t.Fatalf("an open task blocked on an unresolved stop must stay listed, items = %d", n)
 			}
 			// The owner cancels it (or it ends otherwise) while the stop is still unresolved: the card
 			// that was open resolves, and stays resolved for as long as the stop does.
 			e.exec(t, `UPDATE tasks SET status = $1, reason = NULL WHERE id = 't1'`, status)
 			for range 3 {
-				if n := count(); n != 0 {
-					t.Fatalf("a %s task's unresolved stop must not reach the owner, count = %d", status, n)
+				if n := open(); n != 0 {
+					t.Fatalf("a %s task's unresolved stop must not stay listed, items = %d", status, n)
 				}
 			}
-			var open int
-			if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM attention_items WHERE source_kind = 'task_reconciliation' AND state = 'open'`).Scan(&open); err != nil || open != 0 {
-				t.Fatalf("open task_reconciliation rows = %d: %v", open, err)
+			var openRows int
+			if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM attention_items WHERE source_kind = 'task_reconciliation' AND state = 'open'`).Scan(&openRows); err != nil || openRows != 0 {
+				t.Fatalf("open task_reconciliation rows = %d: %v", openRows, err)
 			}
 		})
 	}
@@ -174,7 +191,7 @@ func TestReconciliationBlockWithoutAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	snap, err := e.svc.Snapshot(ctx)
-	if err != nil || snap.Count != 1 {
+	if err != nil || len(snap.Items) != 1 || snap.Count != 0 {
 		t.Fatalf("snapshot %+v %v", snap, err)
 	}
 	e.exec(t, `UPDATE tasks SET status = 'failed', reason = NULL WHERE id = 't1'`)

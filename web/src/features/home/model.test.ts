@@ -51,6 +51,17 @@ describe('workGroup', () => {
     expect(workGroup(view({ status: 'blocked' }), LAST_VISIT)).toBe('blocked');
   });
 
+  it('puts a blocked task stuck on Mainloop’s own recovery work in Problems, not Needs you', () => {
+    const reasons = ['session_lost', 'stalled', 'runtime_limit', 'reconciliation'] as const;
+    for (const reason of reasons) {
+      expect(workGroup(view({ status: 'blocked', reason }), LAST_VISIT)).toBe('problem');
+    }
+    // A real owner decision stays a decision, never a problem.
+    expect(workGroup(view({ status: 'blocked', reason: 'owner_decision' }), LAST_VISIT)).toBe(
+      'needs-you'
+    );
+  });
+
   it('shows a finished task only when it finished after the last visit', () => {
     const recent = view({ status: 'completed', updated_at: at(10) });
     const old = view({ status: 'completed', updated_at: at(600) });

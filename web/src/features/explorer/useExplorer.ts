@@ -68,6 +68,9 @@ export function useOpenTarget() {
       case 'needs':
         void navigate({ to: '/inbox', search: { item: target.item } });
         return;
+      case 'problems':
+        void navigate({ to: '/inbox', search: { show: 'problems', item: target.item } });
+        return;
       case 'task':
         void navigate({ to: '/tasks/$id', params: { id: target.id }, search: {} });
         return;

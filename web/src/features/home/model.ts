@@ -7,7 +7,13 @@ import type { TaskView } from '@/lib/contract';
 import { statusLabel, reasonLabel } from '@/lib/taskState';
 import { needsOwner } from '@/features/tasks/cache';
 
-export type WorkGroup = 'needs-you' | 'working' | 'blocked' | 'finished';
+export type WorkGroup = 'needs-you' | 'working' | 'blocked' | 'problem' | 'finished';
+
+/**
+ * Blocked reasons that are Mainloop's own recovery work, not an owner decision: the task is not
+ * asking the owner anything yet, so it belongs with Problems, not Needs you.
+ */
+const PROBLEM_REASONS = new Set(['session_lost', 'stalled', 'runtime_limit', 'reconciliation']);
 
 export interface SinceCounts {
   merged: TaskView[];
@@ -24,7 +30,8 @@ const time = (iso: string): number => Date.parse(iso);
  */
 export function workGroup(view: TaskView, lastVisit: number | null): WorkGroup | null {
   if (needsOwner(view)) return 'needs-you';
-  const { status } = view.task;
+  const { status, reason } = view.task;
+  if (status === 'blocked' && reason != null && PROBLEM_REASONS.has(reason)) return 'problem';
   if (status === 'failed' || status === 'blocked') return 'blocked';
   if (status === 'queued' || status === 'running' || status === 'waiting') return 'working';
   if (

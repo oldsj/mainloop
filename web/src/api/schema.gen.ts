@@ -1245,7 +1245,7 @@ export interface components {
        * Kind
        * @enum {string}
        */
-      kind: 'approval' | 'question' | 'owner_decision';
+      kind: 'approval' | 'question' | 'owner_decision' | 'problem';
       /** Title */
       title: string;
       /** Needed */

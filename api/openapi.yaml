@@ -3601,11 +3601,14 @@ components:
           type: string
           title: Id
         kind:
+          # approval, question and owner_decision are real owner decisions; problem is Mainloop's own
+          # recovery work (a stall, an unconfirmed stop) with no decision yet for the owner to make.
           type: string
           enum:
             - approval
             - question
             - owner_decision
+            - problem
           title: Kind
         title:
           type: string
@@ -3651,6 +3654,8 @@ components:
           type: array
           title: Items
         count:
+          # open, visible items that are a real owner decision (kind != problem); a problem item is
+          # not counted here, even while it is open and listed in items
           type: integer
           title: Count
           default: 0

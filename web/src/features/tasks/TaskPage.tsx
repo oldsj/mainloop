@@ -136,20 +136,68 @@ export function TaskPage({ id }: { id: string }) {
         </p>
       ) : null}
 
-      <TaskFacts
-        view={view}
-        onRefresh={() => void detail.refetch()}
-        refreshing={detail.isFetching}
-      />
-      <TaskActions
-        view={view}
-        tracker={tracker}
-        profiles={providers.data}
-        profilesError={providers.error}
-        offline={offline}
-      />
-      <TaskHistory view={view} childTasks={childTasks} />
+      {view.task.owner_decision ? (
+        <>
+          <OwnerAskBanner action={view.task.owner_decision.action} />
+          <TaskActions
+            view={view}
+            tracker={tracker}
+            profiles={providers.data}
+            profilesError={providers.error}
+            offline={offline}
+          />
+          <details className="border-border border-b">
+            <summary className="p-md text-muted-foreground min-h-11 cursor-pointer text-sm font-medium">
+              Task details
+            </summary>
+            <TaskFacts
+              view={view}
+              onRefresh={() => void detail.refetch()}
+              refreshing={detail.isFetching}
+            />
+            <TaskHistory view={view} childTasks={childTasks} />
+          </details>
+        </>
+      ) : (
+        <>
+          <TaskFacts
+            view={view}
+            onRefresh={() => void detail.refetch()}
+            refreshing={detail.isFetching}
+          />
+          <TaskActions
+            view={view}
+            tracker={tracker}
+            profiles={providers.data}
+            profilesError={providers.error}
+            offline={offline}
+          />
+          <TaskHistory view={view} childTasks={childTasks} />
+        </>
+      )}
     </article>
+  );
+}
+
+/**
+ * The one-line ask for a real owner decision: the agent's own `owner_action` text, leading the
+ * page, immediately above the actions that answer it. Everything else about the task sits behind
+ * the collapsed "Task details" disclosure below.
+ */
+function OwnerAskBanner({ action }: { action: string }) {
+  return (
+    <section
+      aria-labelledby="owner-ask-heading"
+      className="gap-xs p-md border-term-yellow/50 bg-term-yellow/5 flex flex-col border-b"
+    >
+      <h2
+        id="owner-ask-heading"
+        data-testid="task-owner-ask"
+        className="text-sm font-medium break-words"
+      >
+        {action}
+      </h2>
+    </section>
   );
 }
 
