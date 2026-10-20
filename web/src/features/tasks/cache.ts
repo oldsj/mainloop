@@ -117,3 +117,12 @@ export function needsOwner(view: TaskView): boolean {
 export function tasksNeedingOwner(views: TaskView[]): TaskView[] {
   return views.filter(needsOwner);
 }
+
+/**
+ * Whether the server reports any owner action (retry, reassign, cancel) as available right now.
+ * A terminal task with every action unavailable (cancel_unavailable, handoff_unavailable) has
+ * nothing left for the owner to do about it, decision or otherwise.
+ */
+export function hasAvailableAction(view: TaskView): boolean {
+  return Object.values(view.actions).some((action) => action.available);
+}

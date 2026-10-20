@@ -6,13 +6,14 @@ import { cn } from '@/components/ui/cn';
 import { InboxPanel } from '@/features/inbox/InboxPanel';
 import { useShellView } from '@/shell/view';
 
-// `show` picks Needs you or Activity; `item` names the Needs-you row to bring into view, by its
-// approval request id or queue item id (what the explorer and a task's pending approvals carry).
+// `show` picks Needs you, Problems or Activity; `item` names the Needs-you row to bring into view,
+// by its approval request id or queue item id (what the explorer and a task's pending approvals
+// carry).
 export const Route = createFileRoute('/inbox')({
   validateSearch: (search) =>
     z
       .object({
-        show: z.enum(['needs', 'activity']).optional().catch(undefined),
+        show: z.enum(['needs', 'problems', 'activity']).optional().catch(undefined),
         item: z.string().optional().catch(undefined)
       })
       .parse(search),

@@ -11,6 +11,8 @@ import {
   attentionItems,
   attentionKey,
   messageOf,
+  needsYouItems,
+  problemItems,
   taskIdOf
 } from './model';
 import { QueueCard } from './QueueCard';
@@ -22,13 +24,14 @@ const SETTLE_MS = 3000;
 const STOP_EVENTS = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
 
 /**
- * Needs you: what the owner must answer or decide now, in the order the server sent it. The row
- * whose key is `selected` (an approval request id or a queue item id) is scrolled into view once
- * it is listed.
+ * Needs you: what the owner must answer or decide now, in the order the server sent it. A problem
+ * (a stall, an unconfirmed stop) is Mainloop's own recovery work, not a decision, so it is left out
+ * here; see `ProblemList`. The row whose key is `selected` (an approval request id or a queue item
+ * id) is scrolled into view once it is listed.
  */
 export function AttentionList({ selected }: { selected?: string }) {
   const attention = useAttention();
-  const items = attentionItems(attention.data);
+  const items = needsYouItems(attentionItems(attention.data));
 
   // Brings the selected row to the top when it is first listed. Cards fill in after that, the selected
   // one and those above it, so the row is brought back to the top while the list grows, until the owner
@@ -71,6 +74,50 @@ export function AttentionList({ selected }: { selected?: string }) {
     <div className="flex flex-col">
       {failure}
       <AttentionRows items={items} refreshFailed={attention.isError} selected={selected} />
+    </div>
+  );
+}
+
+/**
+ * Problems: what Mainloop is handling on its own (a stall, an unconfirmed stop), with no decision
+ * yet for the owner to make. It shares its data and rows with `AttentionList`, filtered the other
+ * way; nothing here is answerable, so there is no selected-row scroll.
+ */
+export function ProblemList() {
+  const attention = useAttention();
+  const items = problemItems(attentionItems(attention.data));
+
+  const failure = attention.isError ? (
+    <div className="p-md" data-testid="inbox-error">
+      <ErrorRecovery
+        title="Could not check what Mainloop is handling."
+        message={messageOf(attention.error)}
+        onRetry={() => void attention.refetch()}
+        pending={attention.isFetching}
+      />
+    </div>
+  ) : null;
+
+  if (attention.isError && !attention.data) return failure;
+
+  if (attention.isPending) {
+    return (
+      <p role="status" className="text-muted-foreground p-md text-sm">
+        Checking what Mainloop is handling…
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col">
+      {failure}
+      <AttentionRows
+        items={items}
+        refreshFailed={attention.isError}
+        ariaLabel="Problems"
+        emptyTitle="Nothing here"
+        emptyBody="Mainloop is handling everything on its own right now."
+      />
     </div>
   );
 }
@@ -127,13 +174,19 @@ function rowOf(item: AttentionItem): Row {
 export function AttentionRows({
   items,
   refreshFailed = false,
-  selected
+  selected,
+  ariaLabel = 'Needs you',
+  emptyTitle = 'Nothing needs you',
+  emptyBody = 'Approvals, questions and decisions appear here.'
 }: {
   items: AttentionItem[];
   /** The key of the row the owner came to answer. It is marked, so it stands out among the rest. */
   selected?: string;
   /** The last refresh failed: no rows then means unknown, so the empty state is not shown. */
   refreshFailed?: boolean;
+  ariaLabel?: string;
+  emptyTitle?: string;
+  emptyBody?: string;
 }) {
   const answered = useAnswered();
   const [shown, setShown] = useState<Row[]>([]);
@@ -146,16 +199,14 @@ export function AttentionRows({
     if (refreshFailed) return null;
     return (
       <div className="p-md text-sm">
-        <p className="font-medium">Nothing needs you</p>
-        <p className="text-muted-foreground mt-xs">
-          Approvals, questions and decisions appear here.
-        </p>
+        <p className="font-medium">{emptyTitle}</p>
+        <p className="text-muted-foreground mt-xs">{emptyBody}</p>
       </div>
     );
   }
 
   return (
-    <ul aria-label="Needs you" className="flex flex-col">
+    <ul aria-label={ariaLabel} className="flex flex-col">
       {rows.map((row) => (
         <NeedsRow key={row.key} row={row} selected={selected} />
       ))}
@@ -253,6 +304,13 @@ function NeedsRow({ row, selected }: { row: Row; selected?: string }) {
   );
 }
 
+/**
+ * A bare item, with no live request or queue question to render as its own card: `item.needed` is
+ * the one-line ask (an owner decision's `owner_action`, or a problem's plain-language explanation),
+ * followed by the one action available for it. A problem has nothing to decide, so it only offers
+ * to review the evidence; an owner decision says so, so the link reads as the next step the ask
+ * calls for.
+ */
 function AttentionEntry({ item }: { item: AttentionItem }) {
   const queue = item.queue_item;
 
@@ -269,9 +327,7 @@ function AttentionEntry({ item }: { item: AttentionItem }) {
           params={{ id: taskId }}
           className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'self-start')}
         >
-          {item.reason_code === 'reconciliation' || item.reason_code === 'runtime_stop_unresolved'
-            ? 'Review task evidence'
-            : 'Review task and decide'}
+          {item.kind === 'problem' ? 'Review task evidence' : 'Review task and decide'}
         </Link>
       ) : item.href === '/' ? (
         <Link

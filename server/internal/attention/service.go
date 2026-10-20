@@ -9,7 +9,9 @@
 //     asks for the owner's decision and resolves it when the decision clears, the attempt is
 //     replaced or the task finishes.
 //   - task_reconciliation: one item per blocked task or unconfirmed runtime stop, including stops
-//     still held by final tasks or older attempts. Confirmation clears the stop's need.
+//     still held by final tasks or older attempts. Confirmation clears the stop's need. Its kind is
+//     always 'problem': it is Mainloop's own recovery work, not yet an owner decision, so it does
+//     not count toward Needs-you (see [Service.Snapshot]).
 //   - merge_proposal: one item per proposal awaiting approval, linked to its canonical HITL ask.
 //   - turn_stalled: one item per stalled turn (no task activity past its allowance) of the main
 //     thread or a standalone session, opened and resolved by [Service.SyncTasks] from the sessions
@@ -250,12 +252,15 @@ func (s *Service) NeedsOwner(ctx context.Context, sessionID string) bool {
 	return ok
 }
 
-// Snapshot is the Needs-you view: the open items, their count, and the owner's session list. The
-// sessions are every unfinished session plus the newest finished ones (ListSessionRows), each with
-// its own needs_owner; a session reads waiting_on_user only while a native input request waits on it.
-// Items, sessions and the sessions needing the owner come from one read-only transaction, so they
-// agree. Every session behind a visible item is unarchived and unfinished, so the session list
-// already holds it, apart from the owner's main thread, which is not a session of the list.
+// Snapshot is the Needs-you view: the open items, their count, and the owner's session list. Items
+// lists every open, visible item, including a 'problem' one (Mainloop's own recovery work); Count
+// is only the items that are a real owner decision (kind != problem), since a problem has no
+// decision yet for the owner to make. The sessions are every unfinished session plus the newest
+// finished ones (ListSessionRows), each with its own needs_owner; a session reads waiting_on_user
+// only while a native input request waits on it. Items, sessions and the sessions needing the owner
+// come from one read-only transaction, so they agree. Every session behind a visible item is
+// unarchived and unfinished, so the session list already holds it, apart from the owner's main
+// thread, which is not a session of the list.
 func (s *Service) Snapshot(ctx context.Context) (api.AttentionSnapshot, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
@@ -279,9 +284,11 @@ func (s *Service) Snapshot(ctx context.Context) (api.AttentionSnapshot, error) {
 	for _, r := range rows {
 		if item, ok := s.item(r); ok {
 			snap.Items = append(snap.Items, item)
+			if item.Kind != api.AttentionItemKindProblem {
+				snap.Count++
+			}
 		}
 	}
-	snap.Count = len(snap.Items)
 	waiting := make(map[string]bool, len(needing)) // session id -> behind a native input request
 	for _, n := range needing {
 		waiting[n.SessionID] = n.WaitingOnInput

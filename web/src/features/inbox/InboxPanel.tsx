@@ -1,18 +1,19 @@
 import { useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { ActivityList } from './ActivityList';
-import { AttentionList } from './AttentionList';
-import { badgeText, unresolvedCount } from './model';
+import { AttentionList, ProblemList } from './AttentionList';
+import { attentionItems, badgeText, problemItems, unresolvedCount } from './model';
 import { useAttentionPoll } from './poll';
 import { useAttention } from './queries';
 
-export type InboxView = 'needs' | 'activity';
+export type InboxView = 'needs' | 'problems' | 'activity';
 
 /**
- * The inbox: Needs you (the owner's open actions) and Activity (the recent log). Attention is
- * polled while this panel is mounted, and SSE `inbox:updated` refreshes it sooner. The `/inbox`
- * route drives `view` from the URL; without `onView` the panel keeps the view itself. `selected`
- * names the Needs-you row to bring into view, and `back` sits before the heading.
+ * The inbox: Needs you (the owner's open decisions), Problems (what Mainloop is handling on its
+ * own) and Activity (the recent log). Attention is polled while this panel is mounted, and SSE
+ * `inbox:updated` refreshes it sooner. The `/inbox` route drives `view` from the URL; without
+ * `onView` the panel keeps the view itself. `selected` names the Needs-you row to bring into view,
+ * and `back` sits before the heading.
  */
 export function InboxPanel({
   view: shown,
@@ -31,6 +32,7 @@ export function InboxPanel({
   const attention = useAttention();
   useAttentionPoll();
   const count = badgeText(unresolvedCount(attention.data));
+  const problemCount = badgeText(problemItems(attentionItems(attention.data)).length);
 
   return (
     <section aria-labelledby="inbox-heading" className="flex flex-col">
@@ -53,6 +55,15 @@ export function InboxPanel({
             {count ? <span className="ml-xs tabular-nums">{count}</span> : null}
           </Button>
           <Button
+            variant={view === 'problems' ? 'outline' : 'ghost'}
+            size="sm"
+            aria-pressed={view === 'problems'}
+            onClick={() => show('problems')}
+          >
+            Problems
+            {problemCount ? <span className="ml-xs tabular-nums">{problemCount}</span> : null}
+          </Button>
+          <Button
             variant={view === 'activity' ? 'outline' : 'ghost'}
             size="sm"
             aria-pressed={view === 'activity'}
@@ -63,7 +74,13 @@ export function InboxPanel({
         </div>
       </div>
 
-      {view === 'needs' ? <AttentionList selected={selected} /> : <ActivityList />}
+      {view === 'needs' ? (
+        <AttentionList selected={selected} />
+      ) : view === 'problems' ? (
+        <ProblemList />
+      ) : (
+        <ActivityList />
+      )}
     </section>
   );
 }

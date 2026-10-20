@@ -12,7 +12,7 @@ export type AttentionSnapshot = Schemas['AttentionSnapshot'];
 export type ActivityItem = Schemas['ActivityItem'];
 export type QueueItem = Schemas['QueueItem'];
 
-const ATTENTION_KINDS: readonly string[] = ['approval', 'question', 'owner_decision'];
+const ATTENTION_KINDS: readonly string[] = ['approval', 'question', 'owner_decision', 'problem'];
 const TASK_PATH = /^\/tasks\/([^/?#]+)$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -69,6 +69,19 @@ function isActivityItem(value: unknown): value is ActivityItem {
 export function attentionItems(snapshot: AttentionSnapshot | undefined): AttentionItem[] {
   const items: unknown = snapshot?.items;
   return Array.isArray(items) ? items.filter(isAttentionItem) : [];
+}
+
+/**
+ * Needs you: items with a real owner decision. A problem (a stall, an unconfirmed stop) is
+ * Mainloop's own recovery work, not a decision, so it is left out here; see `problemItems`.
+ */
+export function needsYouItems(items: AttentionItem[]): AttentionItem[] {
+  return items.filter((item) => item.kind !== 'problem');
+}
+
+/** Problems: what Mainloop is handling on its own, with no decision yet for the owner to make. */
+export function problemItems(items: AttentionItem[]): AttentionItem[] {
+  return items.filter((item) => item.kind === 'problem');
 }
 
 /** The server's count of unresolved owner actions. It is the badge number; Activity is not in it. */

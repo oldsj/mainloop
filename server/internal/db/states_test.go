@@ -114,7 +114,8 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.HITLRecorded), string(dbstate.HITLSending), string(dbstate.HITLAccepted),
 			string(dbstate.HITLUncertain), string(dbstate.HITLRejectedTransport))},
 		{"attention_items", "kind", strs(
-			string(dbstate.AttentionApproval), string(dbstate.AttentionQuestion), string(dbstate.AttentionOwnerDecision))},
+			string(dbstate.AttentionApproval), string(dbstate.AttentionQuestion), string(dbstate.AttentionOwnerDecision),
+			string(dbstate.AttentionProblem))},
 		{"attention_items", "state", strs(
 			string(dbstate.AttentionOpen), string(dbstate.AttentionResolved), string(dbstate.AttentionDismissed))},
 		{"git_enrollments", "state", strs(

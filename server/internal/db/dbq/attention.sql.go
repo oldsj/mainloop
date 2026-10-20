@@ -359,7 +359,7 @@ const openMergeProposalAttention = `-- name: OpenMergeProposalAttention :many
 INSERT INTO attention_items AS a (id, owner_id, kind, source_kind, source_id, session_id, title, needed, href, reason_code, detail)
 SELECT DISTINCT ON (p.id) 'attn_merge_' || p.id, p.owner_id, 'approval', 'merge_proposal', p.id, r.session_id,
        coalesce(p.presentation->>'title', 'Merge proposal'),
-       'Approve merge of ' || c.repository || ' #' || c.pr_number::text,
+       'Approve merging ' || c.repository || ' #' || c.pr_number::text || '?',
        '/sessions/' || r.session_id || '?hitl=' || r.id, 'merge_approval',
        jsonb_build_object('hitl_request_id', r.id)
 FROM hitl_merge_tools m
@@ -504,7 +504,7 @@ func (q *Queries) OpenTaskDecisionAttention(ctx context.Context, ownerID string)
 
 const openTaskReconciliationAttention = `-- name: OpenTaskReconciliationAttention :many
 INSERT INTO attention_items AS a (id, owner_id, kind, source_kind, source_id, task_id, title, needed, href, reason_code)
-SELECT 'attn_reconciliation_' || n.task_id, n.owner_id, 'owner_decision', 'task_reconciliation', n.task_id,
+SELECT 'attn_reconciliation_' || n.task_id, n.owner_id, 'problem', 'task_reconciliation', n.task_id,
        n.task_id, n.title,
        CASE n.reason_code
            WHEN 'runtime_stop_unresolved' THEN 'Runtime stop remains unconfirmed; reconcile the held claim and capacity.'
@@ -519,8 +519,8 @@ WHERE n.owner_id = $1 AND t.status NOT IN ('completed', 'failed', 'cancelled')
 ON CONFLICT (source_kind, source_id) DO UPDATE
 SET state = 'open', resolved_at = NULL, updated_at = now(),
     read_at = CASE WHEN a.state <> 'open' THEN NULL ELSE a.read_at END,
-    title = EXCLUDED.title, needed = EXCLUDED.needed, reason_code = EXCLUDED.reason_code
-WHERE a.state <> 'open' OR (a.title, a.needed, a.reason_code) IS DISTINCT FROM (EXCLUDED.title, EXCLUDED.needed, EXCLUDED.reason_code)
+    kind = EXCLUDED.kind, title = EXCLUDED.title, needed = EXCLUDED.needed, reason_code = EXCLUDED.reason_code
+WHERE a.state <> 'open' OR (a.kind, a.title, a.needed, a.reason_code) IS DISTINCT FROM (EXCLUDED.kind, EXCLUDED.title, EXCLUDED.needed, EXCLUDED.reason_code)
 RETURNING id
 `
 
@@ -532,6 +532,11 @@ RETURNING id
 // owner cannot act on, so it is logged, never put in front of the owner. An unresolved stop on a
 // task that is still open does open the card, since the task is blocked on it; see
 // ResolveTaskReconciliationAttention for the matching half of this rule.
+//
+// Every reason here is Mainloop's own recovery work, not an owner decision: the owner has no
+// concrete choice until automatic recovery fails, and that recovery is not built yet
+// (docs/specs/task-handoff.md tracks it). The item's kind is 'problem', so it does not count toward
+// Needs-you; it stays listed, so the owner can still see what Mainloop is handling and why.
 func (q *Queries) OpenTaskReconciliationAttention(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, openTaskReconciliationAttention, ownerID)
 	if err != nil {

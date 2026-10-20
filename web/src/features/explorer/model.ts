@@ -3,7 +3,12 @@
  * it leads and what "Ask Mainloop" prefills. Pure, so the rules test without a QueryClient. Every
  * fact comes from the existing reads; nothing here decides what a task or session is allowed to do.
  */
-import { attentionKey, type AttentionItem } from '@/features/inbox/model';
+import {
+  attentionKey,
+  needsYouItems,
+  problemItems,
+  type AttentionItem
+} from '@/features/inbox/model';
 import {
   countText,
   sinceCounts,
@@ -14,6 +19,7 @@ import {
 import type { ProjectRow } from '@/features/projects/model';
 import type { ScheduleView } from '@/features/schedules/model';
 import { sessionTone, workspaceTone, type WorkspaceBadgeFields } from '@/features/sessions/model';
+import { hasAvailableAction } from '@/features/tasks/cache';
 import type { Session, TaskView } from '@/lib/contract';
 import { childrenOf, currentAttempt, statusTone, type Tone } from '@/lib/taskState';
 import { isCurrent } from '@/lib/sessionStatus';
@@ -22,6 +28,7 @@ import { isCurrent } from '@/lib/sessionStatus';
 export type Target =
   | { to: 'chat' }
   | { to: 'needs'; item?: string }
+  | { to: 'problems'; item?: string }
   | { to: 'task'; id: string }
   | { to: 'session'; id: string }
   | { to: 'workspace'; id: string }
@@ -133,8 +140,10 @@ function childBucket(
 
 /** "3/5 done · 1 running · 1 blocked · 1 waiting on you", each part left out when it is zero. */
 function childProgressText(childTasks: TaskView[], attention: AttentionItem[]): string {
+  // A problem item is Mainloop's own recovery work, not an owner decision, so a child behind one
+  // reads as blocked, not waiting on the owner.
   const attentionTaskIds = new Set(
-    attention.flatMap((item) => (item.task_id ? [item.task_id] : []))
+    needsYouItems(attention).flatMap((item) => (item.task_id ? [item.task_id] : []))
   );
   const counts = { done: 0, running: 0, blocked: 0, waiting: 0 };
   for (const child of childTasks) counts[childBucket(child, attentionTaskIds)]++;
@@ -166,7 +175,7 @@ function parentDetail(view: TaskView, childTasks: TaskView[], source: ExplorerSo
 export function taskNode(view: TaskView, source: ExplorerSource, parent: string): ExplorerNode {
   const { task } = view;
   const id = `${parent}/task:${task.id}`;
-  const needsYou = workGroup(view, null) === 'needs-you';
+  const group = workGroup(view, null);
   const target: Target = { to: 'task', id: task.id };
   const title = task.title.trim();
   const label = title || briefSnippet(task.brief, 60) || FALLBACK_TITLE;
@@ -179,7 +188,10 @@ export function taskNode(view: TaskView, source: ExplorerSource, parent: string)
     // A task with no title already shows its brief as the label, so the snippet would repeat it.
     summary: title ? briefSnippet(task.brief) : undefined,
     tag: project?.full_name,
-    tone: needsYou ? 'attention' : statusTone(task.status),
+    // A problem is Mainloop's own recovery work, not an owner decision, so it reads muted, never
+    // the attention yellow a real decision gets.
+    tone:
+      group === 'needs-you' ? 'attention' : group === 'problem' ? 'muted' : statusTone(task.status),
     target,
     ask: askPrefill({ label }, target),
     children: taskChildren(view, source, id, childTasks)
@@ -240,6 +252,23 @@ function attentionNode(item: AttentionItem, parent: string): ExplorerNode {
     ask: item.task_id
       ? `About ${KIND[item.kind] ?? 'request'} ${item.title} (task ${shortId(item.task_id)}): `
       : `About ${KIND[item.kind] ?? 'request'} ${item.title}: `,
+    children: []
+  };
+}
+
+/**
+ * A problem: Mainloop's own recovery work (a stall, an unconfirmed stop), with no decision yet for
+ * the owner. It opens the Problems view, not Needs you, and reads muted rather than attention, so
+ * only a real owner decision shows yellow.
+ */
+function problemNode(item: AttentionItem, parent: string): ExplorerNode {
+  const target: Target = { to: 'problems', item: attentionKey(item) };
+  return {
+    id: `${parent}/problem:${item.id}`,
+    label: item.title,
+    detail: item.needed,
+    tone: 'muted',
+    target,
     children: []
   };
 }
@@ -307,6 +336,7 @@ export function mainloopState(needs: number, working: number): { label: string; 
 export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
   const groups = {
     needs: [] as ExplorerNode[],
+    problems: [] as ExplorerNode[],
     working: [] as TaskView[],
     finished: [] as TaskView[]
   };
@@ -315,9 +345,14 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
     if (item.task_id) attentionTasks.add(item.task_id);
   }
 
-  // Needs you: owner actions first, then failed or blocked tasks that no action already names.
-  // A task that has an owner action is listed here only, never also under Working.
-  const needs = source.attention.map((item) => attentionNode(item, 'needs'));
+  // Needs you: owner actions first, then a blocked task (not a problem) that no action already
+  // names. A failed or blocked task with nothing the owner can do about it (every action
+  // unavailable) is not an owner decision either: workGroup leaves it out of both groups below, so
+  // it falls through to Finished recently or its project instead of piling up here forever.
+  const needs = needsYouItems(source.attention).map((item) => attentionNode(item, 'needs'));
+  // Problems: Mainloop's own recovery work first, then blocked tasks no problem item already names.
+  // Kept apart from Needs you: a problem is not an owner decision, so it never shows there.
+  const problems = problemItems(source.attention).map((item) => problemNode(item, 'problems'));
   const now = source.now ?? Date.now();
   const finishedSince = now - FINISHED_WINDOW_MS;
   for (const view of [...source.tasks].sort(byUpdatedDesc)) {
@@ -330,12 +365,21 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
     if ((group === 'needs-you' || group === 'blocked') && !named) {
       needs.push(taskNode(view, source, 'needs'));
     }
-    const finished = view.task.status === 'completed' || view.task.status === 'cancelled';
+    if (group === 'problem' && !named) {
+      problems.push(taskNode(view, source, 'problems'));
+    }
+    // A failed task joins completed/cancelled ones here once it has nothing left for the owner to
+    // do: same recency window, same fallback to its project once that window passes.
+    const finished =
+      view.task.status === 'completed' ||
+      view.task.status === 'cancelled' ||
+      (view.task.status === 'failed' && !hasAvailableAction(view));
     if (finished && Date.parse(view.task.updated_at) >= finishedSince && !nested) {
       groups.finished.push(view);
     }
   }
   groups.needs = needs;
+  groups.problems = problems;
 
   const live = source.sessions.filter((session) => isCurrent(session));
   const mainloop = mainloopState(needs.length, groups.working.length);
@@ -387,6 +431,14 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
       target: { to: 'needs' },
       tone: needs.length > 0 ? 'attention' : undefined,
       children: needs.length > 0 ? needs : [note('needs/none', 'Nothing needs you')]
+    },
+    {
+      id: 'problems',
+      label: 'Problems',
+      count: problems.length,
+      target: { to: 'problems' },
+      children:
+        problems.length > 0 ? problems : [note('problems/none', 'Nothing Mainloop is handling')]
     },
     ...sinceNode(source),
     {

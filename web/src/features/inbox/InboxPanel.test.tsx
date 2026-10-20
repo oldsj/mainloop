@@ -15,6 +15,7 @@ import {
   attentionSnapshot,
   hitlAttentionItem,
   noticeRow,
+  problemAttentionItem,
   queueItem
 } from './test/fixtures';
 import {
@@ -152,20 +153,17 @@ describe('Needs you', () => {
     );
   });
 
-  it('links an unresolved runtime stop to task evidence', async () => {
-    const row = attentionItem(queueItem(), {
+  it('keeps a problem (an unresolved runtime stop) out of Needs you', async () => {
+    const row = problemAttentionItem({
       id: 'reconciliation:task-9',
       reason_code: 'runtime_stop_unresolved',
-      queue_item: null,
       task_id: 'task-9',
       title: 'Recover stopped child'
     });
     server.use(attentionRead(() => HttpResponse.json(attentionSnapshot([row]))));
     renderInbox();
-    expect(await screen.findByRole('link', { name: 'Review task evidence' })).toHaveAttribute(
-      'href',
-      '/tasks/task-9'
-    );
+    expect(await screen.findByText('Nothing needs you')).toBeInTheDocument();
+    expect(screen.queryByText('Recover stopped child')).not.toBeInTheDocument();
   });
 
   it('links a stalled turn to its thread', async () => {
@@ -198,7 +196,40 @@ describe('Needs you', () => {
       '/sessions/s-2'
     );
   });
+});
 
+describe('Problems', () => {
+  it('links an unresolved runtime stop to task evidence, not a decision', async () => {
+    const user = userEvent.setup();
+    const row = problemAttentionItem({
+      id: 'reconciliation:task-9',
+      reason_code: 'runtime_stop_unresolved',
+      task_id: 'task-9',
+      title: 'Recover stopped child'
+    });
+    server.use(attentionRead(() => HttpResponse.json(attentionSnapshot([row]))));
+    renderInbox();
+    await screen.findByText('Nothing needs you');
+    // The tab carries a "1" badge for the one problem, so its accessible name is "Problems1".
+    await user.click(screen.getByRole('button', { name: /^Problems/ }));
+    expect(await screen.findByText('Recover stopped child')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review task evidence' })).toHaveAttribute(
+      'href',
+      '/tasks/task-9'
+    );
+  });
+
+  it('shows the empty state when Mainloop is handling nothing', async () => {
+    const user = userEvent.setup();
+    server.use(attentionRead(() => HttpResponse.json(attentionSnapshot([]))));
+    renderInbox();
+    await screen.findByText('Nothing needs you');
+    await user.click(screen.getByRole('button', { name: 'Problems' }));
+    expect(await screen.findByText('Nothing here')).toBeInTheDocument();
+  });
+});
+
+describe('Needs you refresh and selection', () => {
   it('shows an error with retry when the first read fails, then recovers', async () => {
     const user = userEvent.setup();
     let reads = 0;

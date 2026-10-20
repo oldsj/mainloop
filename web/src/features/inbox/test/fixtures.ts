@@ -43,6 +43,25 @@ export function attentionItem(
   };
 }
 
+/**
+ * A Problems row: Mainloop's own recovery work (a stall, an unconfirmed stop), with no queue item
+ * and no decision for the owner. Never counted in `attentionSnapshot`'s default count.
+ */
+export function problemAttentionItem(overrides: Partial<AttentionItem> = {}): AttentionItem {
+  return {
+    id: 'reconciliation:task-1',
+    kind: 'problem',
+    reason_code: 'stalled',
+    title: 'Ship it',
+    needed: "The task's session has shown no activity for a while; it may be stuck.",
+    href: '/tasks/task-1',
+    session_ids: [],
+    task_id: 'task-1',
+    queue_item: null,
+    ...overrides
+  };
+}
+
 /** A Needs-you row for a live HITL request. */
 export function hitlAttentionItem(
   requestId: string,
@@ -67,7 +86,14 @@ export function hitlAttentionItem(
   };
 }
 
-export function attentionSnapshot(items: AttentionItem[], count = items.length): AttentionSnapshot {
+/**
+ * `count` defaults to the real owner decisions (kind != 'problem'), matching the server: a problem
+ * is listed but never counted. Pass `count` explicitly to simulate a server that disagrees.
+ */
+export function attentionSnapshot(
+  items: AttentionItem[],
+  count = items.filter((item) => item.kind !== 'problem').length
+): AttentionSnapshot {
   return { items, count, sessions: [] };
 }
 

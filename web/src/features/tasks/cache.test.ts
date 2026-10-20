@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { attempt, projection, view } from '@/test/fixtures/tasks';
 import {
+  hasAvailableAction,
   isTaskView,
   mergeTaskCache,
   mergeTaskListCache,
@@ -174,5 +175,34 @@ describe('tasksNeedingOwner', () => {
       { projection: projection({ pr_state: 'open', ci_state: 'success' }) }
     );
     expect(tasksNeedingOwner([running])).toEqual([]);
+  });
+});
+
+describe('hasAvailableAction', () => {
+  it('is true by default, since the fixture offers reassign and cancel', () => {
+    expect(hasAvailableAction(view())).toBe(true);
+  });
+
+  it('is false once every action is refused', () => {
+    const stuck = view(
+      {},
+      {
+        actions: {
+          retry: { available: false, reason: 'handoff_unavailable' },
+          reassign: { available: false, reason: 'handoff_unavailable' },
+          cancel: { available: false, reason: 'cancel_unavailable' }
+        }
+      }
+    );
+    expect(hasAvailableAction(stuck)).toBe(false);
+  });
+
+  it('is true when only one action is available', () => {
+    const resumable = view({}, { actions: { cancel: { available: true, reason: null } } });
+    expect(hasAvailableAction(resumable)).toBe(true);
+  });
+
+  it('is false with no actions reported at all', () => {
+    expect(hasAvailableAction(view({}, { actions: {} }))).toBe(false);
   });
 });

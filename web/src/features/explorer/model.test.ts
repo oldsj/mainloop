@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { attentionItem, hitlAttentionItem, queueItem } from '@/features/inbox/test/fixtures';
+import {
+  attentionItem,
+  hitlAttentionItem,
+  problemAttentionItem,
+  queueItem
+} from '@/features/inbox/test/fixtures';
 import { keepValid, projectRowSchema } from '@/features/projects/model';
 import { project } from '@/features/projects/test/fixtures';
 import { schedule } from '@/features/schedules/test/fixtures';
@@ -40,6 +45,7 @@ describe('explorer order and defaults', () => {
     expect(topLevel(buildExplorer(EMPTY))).toEqual([
       'mainloop',
       'needs',
+      'problems',
       'working',
       'projects',
       'schedules',
@@ -82,6 +88,85 @@ describe('needs you', () => {
 
   it('reports the Explorer tab count as zero with nothing waiting', () => {
     expect(needsCount(buildExplorer(EMPTY))).toBe(0);
+  });
+});
+
+describe('problems', () => {
+  it('counts a problem item and a blocked-on-recovery task once each, apart from Needs you', () => {
+    const attention = [problemAttentionItem({ id: 'reconciliation:task-p', task_id: 'task-p' })];
+    const tasks = [view({ id: 'task-stalled', status: 'blocked', reason: 'stalled' })];
+    const nodes = buildExplorer(source({ attention, tasks }));
+    const problems = nodes.find((node) => node.id === 'problems');
+    expect(problems?.count).toBe(2);
+    expect(needsCount(nodes)).toBe(0);
+  });
+
+  it('does not repeat a task that a problem item already names', () => {
+    const tasks = [view({ id: 'task-p', status: 'blocked', reason: 'stalled' })];
+    const attention = [problemAttentionItem({ id: 'reconciliation:task-p', task_id: 'task-p' })];
+    const nodes = buildExplorer(source({ attention, tasks }));
+    expect(nodes.find((node) => node.id === 'problems')?.count).toBe(1);
+  });
+
+  it('reads muted, not the attention yellow a real decision gets', () => {
+    const attention = [problemAttentionItem({ id: 'reconciliation:task-p', task_id: 'task-p' })];
+    const nodes = buildExplorer(source({ attention, tasks: [] }));
+    const row = nodes.find((node) => node.id === 'problems')?.children[0];
+    expect(row?.tone).toBe('muted');
+  });
+
+  it('is empty, apart from Needs you, with nothing for Mainloop to handle', () => {
+    const nodes = buildExplorer(EMPTY);
+    expect(nodes.find((node) => node.id === 'problems')?.count).toBe(0);
+  });
+});
+
+const NO_ACTIONS = {
+  retry: { available: false, reason: 'handoff_unavailable' },
+  reassign: { available: false, reason: 'handoff_unavailable' },
+  cancel: { available: false, reason: 'cancel_unavailable' }
+} as const;
+
+describe('failed tasks', () => {
+  it('leaves a failed task with nothing left to do out of Needs you', () => {
+    const stuck = view({ id: 'stuck', status: 'failed' }, { actions: NO_ACTIONS });
+    const nodes = buildExplorer(source({ tasks: [stuck] }));
+    expect(needsCount(nodes)).toBe(0);
+  });
+
+  it('keeps a failed task with an available action in Needs you', () => {
+    const actionable = view(
+      { id: 'actionable', status: 'failed' },
+      { actions: { ...NO_ACTIONS, cancel: { available: true, reason: null } } }
+    );
+    const nodes = buildExplorer(source({ tasks: [actionable] }));
+    expect(needsCount(nodes)).toBe(1);
+  });
+
+  it('lists a failed task with nothing left to do under Finished recently, within the window', () => {
+    const now = Date.parse('2026-01-10T12:00:00Z');
+    const stuck = view(
+      { id: 'stuck', status: 'failed', updated_at: '2026-01-09T12:00:00Z' },
+      { actions: NO_ACTIONS }
+    );
+    const nodes = buildExplorer(source({ tasks: [stuck], now }));
+    const finished = nodes.find((node) => node.id === 'finished');
+    expect(finished?.children.map((node) => node.target)).toEqual([{ to: 'task', id: 'stuck' }]);
+  });
+
+  it('drops a failed task with nothing left to do once it falls outside the finished window', () => {
+    const now = Date.parse('2026-01-10T12:00:00Z');
+    const old = view(
+      {
+        id: 'old',
+        status: 'failed',
+        updated_at: new Date(now - FINISHED_WINDOW_MS - 1).toISOString()
+      },
+      { actions: NO_ACTIONS }
+    );
+    const nodes = buildExplorer(source({ tasks: [old], now }));
+    expect(needsCount(nodes)).toBe(0);
+    expect(nodes.find((node) => node.id === 'finished')?.count).toBe(0);
   });
 });
 
@@ -466,7 +551,7 @@ describe('since you were here', () => {
   it('sits after Needs you, expanded, and each row opens the latest task it counts', () => {
     const failed = view({ id: 'f-1', status: 'failed', title: 'Fix CI flake' });
     const nodes = buildExplorer(source({ tasks: [failed], lastVisit }));
-    expect(topLevel(nodes).slice(0, 3)).toEqual(['mainloop', 'needs', 'since']);
+    expect(topLevel(nodes).slice(0, 4)).toEqual(['mainloop', 'needs', 'problems', 'since']);
     expect(isExpanded(DEFAULT_PREFS, 'since')).toBe(true);
     const since = nodes.find((node) => node.id === 'since');
     expect(since?.count).toBe(1);
