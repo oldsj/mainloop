@@ -49,6 +49,7 @@ reached rather than improvise around it. This section records both.
   generated the client only, deliberately out of scope for wiring it up. The next task that does
   should repeat the measurement below against `ForkSession` before relying on this document's
   "not reachable" conclusion.
+
 - The GitHub API is unreachable from this workspace (see `AGENTS.md`), so kagent's own
   `docs/architecture/runtime-and-lifecycle.md`, referenced by issue #288, could not be read either,
   to confirm how a Data-checkpoint fork is invoked or what it preserves.
