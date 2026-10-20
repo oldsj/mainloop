@@ -70,7 +70,6 @@ func runCredentialCleanup(t *testing.T, h *harness, a *authtest.Env) {
 }
 
 func TestReviewPublishedAuthorityRevocation(t *testing.T) {
-	t.Parallel()
 	for _, kind := range []string{"archive", "delete intent", "attempt change", "generation change"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newHarness(t, nil)
@@ -142,7 +141,6 @@ func TestReviewPublishedAuthorityRevocation(t *testing.T) {
 }
 
 func TestReviewRevocationDuringSecretIO(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	w, a, _ := queuedPushWorkspace(t, h, "feature/test", true)
 	createPushSession(t, h)
@@ -170,7 +168,6 @@ func TestReviewRevocationDuringSecretIO(t *testing.T) {
 }
 
 func TestReviewPartialGrantReleaseAndDeletion(t *testing.T) {
-	t.Parallel()
 	for _, kind := range []string{"expired", "failed runtime", "abandoned task", "delete"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newHarness(t, nil)
@@ -237,8 +234,6 @@ func TestReviewPartialGrantReleaseAndDeletion(t *testing.T) {
 }
 
 func TestReviewWorkspaceCanPushAfterDeletionIntent(t *testing.T) {
-	// Not parallel: pushAfterDeletionIntent pushes through pushgate's real disk budget; see the
-	// comment in TestWorkspaceHeldCredentialPushesThroughGate (gitpush_test.go).
 	t.Run("delayed native delete", func(t *testing.T) { pushAfterDeletionIntent(t, false) })
 	t.Run("failed native delete", func(t *testing.T) { pushAfterDeletionIntent(t, true) })
 }
@@ -349,7 +344,6 @@ func pushAfterDeletionIntent(t *testing.T, nativeDeleteFails bool) {
 // then dies before the enrollment fence, the grant and credential stay published behind a revoked
 // reservation; the release sweep must still settle them and remove the Secret.
 func TestReviewLatePlanAfterDeleteIntent(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	w, a, u := queuedPushWorkspace(t, h, "feature/test", true)
 	createPushSession(t, h)

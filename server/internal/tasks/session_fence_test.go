@@ -21,7 +21,6 @@ import (
 // Port of G8b review-4 P2-7: a completed activity status cannot restore a stopped writer's
 // authority after generation two starts. The completed status is seeded, as in the probe.
 func TestReview4CompletedSessionCannotRestartAfterFencing(t *testing.T) {
-	t.Parallel()
 	r, _, sup, child, attempt, session := stopProbeProvision(t)
 	f := kagenttest.New()
 	f.AddAgent("kagent", "agent")
@@ -71,7 +70,6 @@ func TestReview4CompletedSessionCannotRestartAfterFencing(t *testing.T) {
 }
 
 func TestStoppedTaskSessionDoesNotDispatchRecordedMessage(t *testing.T) {
-	t.Parallel()
 	for _, stage := range []string{"requested", "unresolved", "confirmed", "settled"} {
 		t.Run(stage, func(t *testing.T) {
 			r, _, _, _, attempt, session := stopProbeProvision(t)
@@ -137,7 +135,6 @@ func (c *stopDuringPreparationClient) GetSession(ctx context.Context, id string)
 }
 
 func TestTaskStopDuringPreparationPreventsDispatch(t *testing.T) {
-	t.Parallel()
 	r, _, _, _, attempt, session := stopProbeProvision(t)
 	f := kagenttest.New()
 	f.AddAgent("kagent", "agent")

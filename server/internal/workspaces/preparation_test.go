@@ -86,7 +86,6 @@ func lastPrepare(t *testing.T, h *harness) *ka.PrepareSessionWorkspaceRequest {
 }
 
 func TestPreparationConfirmsOnceWithTheAgentProfile(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	r := preparedWorkspace(t, h)
 	if got := prepareOnce(t, h, r.ID); got != dbstate.PreparationConfirmed {
@@ -104,7 +103,6 @@ func TestPreparationConfirmsOnceWithTheAgentProfile(t *testing.T) {
 }
 
 func TestPreparationUsesTheAttemptRole(t *testing.T) {
-	t.Parallel()
 	for _, role := range []string{"supervisor", "child"} {
 		t.Run(role, func(t *testing.T) {
 			h := newHarness(t, nil)
@@ -132,7 +130,6 @@ func TestPreparationUsesTheAttemptRole(t *testing.T) {
 }
 
 func TestPreparationWakesAnIdleSessionBeforeAsking(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.fake.IdleActors = true
 	r := preparedWorkspace(t, h)
@@ -151,7 +148,6 @@ func TestPreparationWakesAnIdleSessionBeforeAsking(t *testing.T) {
 // each with header and key spelled "authorization"; otherwise it refuses every pass with "Current
 // prepared runtime identity is unavailable" and the preparation can never be confirmed.
 func TestPreparationOfASessionWithBothGitReferencesIsNotRefusedAsAnUnavailableIdentity(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	r := preparedWorkspace(t, h)
 	var read, push int
@@ -172,7 +168,6 @@ func TestPreparationOfASessionWithBothGitReferencesIsNotRefusedAsAnUnavailableId
 }
 
 func TestPreparationWaitsForAPendingReceiptWithoutAskingAgain(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.fake.PrepareClassification = "pending"
 	r := preparedWorkspace(t, h)
@@ -201,7 +196,6 @@ func TestPreparationWaitsForAPendingReceiptWithoutAskingAgain(t *testing.T) {
 }
 
 func TestPreparationFailsForADefiniteFailureAndAMovingRef(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.fake.PrepareClassification = "definite-failure"
 	r := preparedWorkspace(t, h)
@@ -251,7 +245,6 @@ func selectEnvironment(h *harness) {
 }
 
 func TestCreateWithAnEnvironmentPinsTheCheckoutToACommit(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	refs := &fakeRefs{sha: prepSHA}
 	h.svc.Refs = refs
@@ -283,7 +276,6 @@ func TestCreateWithAnEnvironmentPinsTheCheckoutToACommit(t *testing.T) {
 }
 
 func TestPreparationRetriesAreSpacedAndAlreadyExistsIsFinal(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	r := preparedWorkspace(t, h)
 	h.fake.FailNext(kagent.ProcPrepareSessionWorkspace, grpcFault(connect.CodeUnavailable))
@@ -297,7 +289,6 @@ func TestPreparationRetriesAreSpacedAndAlreadyExistsIsFinal(t *testing.T) {
 }
 
 func TestPreparationFailsAtOnceOnAHistoricalReceipt(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.fake.PrepareClassification = "pending"
 	r := preparedWorkspace(t, h)
@@ -317,10 +308,7 @@ func TestPreparationFailsAtOnceOnAHistoricalReceipt(t *testing.T) {
 }
 
 func TestPreparationWindowIsCheckedAfterReadingTheReceipt(t *testing.T) {
-	t.Parallel(
 	// Confirmed by kagent after the window: still counts.
-	)
-
 	h := newHarness(t, nil)
 	h.fake.PrepareClassification = "pending"
 	r := preparedWorkspace(t, h)
@@ -353,7 +341,6 @@ func TestPreparationWindowIsCheckedAfterReadingTheReceipt(t *testing.T) {
 }
 
 func TestCreateRetryReusesTheStoredCommitAndAnOutageIsRetryable(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	refs := &fakeRefs{sha: prepSHA}
 	h.svc.Refs = refs
@@ -384,7 +371,6 @@ func TestCreateRetryReusesTheStoredCommitAndAnOutageIsRetryable(t *testing.T) {
 }
 
 func TestCreateWithAnEnvironmentRefusesAnUnpinnableRef(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	if _, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("first")}); err != nil {
 		t.Fatal(err)
@@ -406,7 +392,6 @@ func TestCreateWithAnEnvironmentRefusesAnUnpinnableRef(t *testing.T) {
 // TestSetupDigestsMatchTheKagentPin fails when the vendored kagent API moves to another commit
 // without the setup digests being re-read there.
 func TestSetupDigestsMatchTheKagentPin(t *testing.T) {
-	t.Parallel()
 	raw, err := os.ReadFile("../../third_party/kagentapi/SOURCE")
 	if err != nil {
 		t.Fatal(err)
@@ -460,7 +445,6 @@ func (h *harness) runPreparation() {
 }
 
 func TestABriefWaitsForPreparationAndIsSentOnceItIsConfirmed(t *testing.T) {
-	t.Parallel()
 	h, ss, w := gatedWorkspace(t)
 	id := newID()
 	if _, err := ss.SendTo(bg, w.WorkspaceId, id, "brief"); err != nil {
@@ -479,7 +463,6 @@ func TestABriefWaitsForPreparationAndIsSentOnceItIsConfirmed(t *testing.T) {
 }
 
 func TestABriefForAWorkspaceWhosePreparationFailedSettlesWithTheDetail(t *testing.T) {
-	t.Parallel()
 	h, ss, w := gatedWorkspace(t)
 	id := newID()
 	if _, err := ss.SendTo(bg, w.WorkspaceId, id, "brief"); err != nil {

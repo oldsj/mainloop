@@ -46,8 +46,6 @@ func metadataSweepFor(h *harness, branch string) func(context.Context) error {
 // default is unknown. It waits, the metadata sweep fills the default, the retried create reserves
 // the push reference, and the workspace pushes through the gate.
 func TestTaskWorkspaceCreatedBeforeProjectMetadataGainsPushAuthority(t *testing.T) {
-	// Not parallel: pushes through pushgate's real disk budget; see the comment in
-	// TestWorkspaceHeldCredentialPushesThroughGate (gitpush_test.go).
 	h := newHarness(t, nil)
 	w, a, u := queuedPushWorkspaceWithDefault(t, h, "feature/test", true, "")
 	f := newPushFixture(t, h, w, u)
@@ -88,7 +86,6 @@ func TestTaskWorkspaceCreatedBeforeProjectMetadataGainsPushAuthority(t *testing.
 // A permanently failing GitHub does not hold the create forever: it gives up at the retry window
 // with the reason recorded, and no push decision is frozen on the way.
 func TestTaskWorkspaceWaitForProjectDefaultIsBounded(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	w, _, _ := queuedPushWorkspaceWithDefault(t, h, "feature/test", true, "")
 	createPushSession(t, h)
@@ -107,7 +104,6 @@ func TestTaskWorkspaceWaitForProjectDefaultIsBounded(t *testing.T) {
 // default yet is created at once, read-only, as before: it holds the push reference kagent
 // requires but reserves nothing.
 func TestStandaloneWorkspaceDoesNotWaitForProjectDefault(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	w, _, _ := queuedPushWorkspaceWithDefault(t, h, "feature/test", false, "")
 	createPushSession(t, h)

@@ -11,7 +11,6 @@ import (
 )
 
 func TestARepeatedCreateWithTheSameRequestIDReturnsTheSameWorkspace(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.run()
 	id := newID()
@@ -42,7 +41,6 @@ func TestARepeatedCreateWithTheSameRequestIDReturnsTheSameWorkspace(t *testing.T
 }
 
 func TestARepeatThatArrivesWhileTheCreateIsInFlightWaitsForIt(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	id := newID()
 	body := api.CreateWorkspaceRequest{Repo: ptr("oldsj/mainloop")}
@@ -67,7 +65,6 @@ func TestARepeatThatArrivesWhileTheCreateIsInFlightWaitsForIt(t *testing.T) {
 }
 
 func TestConcurrentCreatesWithOneRequestIDMakeOneWorkspace(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.run()
 	id := newID()
@@ -101,7 +98,6 @@ func TestConcurrentCreatesWithOneRequestIDMakeOneWorkspace(t *testing.T) {
 }
 
 func TestDifferentRequestIDsMakeDifferentWorkspaces(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.run()
 	body := api.CreateWorkspaceRequest{Repo: ptr("oldsj/mainloop")}
@@ -119,7 +115,6 @@ func TestDifferentRequestIDsMakeDifferentWorkspaces(t *testing.T) {
 }
 
 func TestARequestIDMustBeAUUIDAndLookupMissesAreNotFound(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	var inv *InvalidError
 	if _, err := h.svc.CreateWithRequestID(bg, "not-a-uuid", api.CreateWorkspaceRequest{Repo: ptr("oldsj/mainloop")}); !errors.As(err, &inv) {

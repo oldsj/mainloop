@@ -173,7 +173,6 @@ func wantCarried(t *testing.T, got, content string, lines ...string) {
 func (e *env) standingHash() *string { return e.bindingRow().StandingHash }
 
 func TestAFirstMessageCarriesTheLastCompletedMessagesInOrder(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 4, &log))
 	// Failed, cancelled and uncertain turns sit between the completed ones, with whatever reply
@@ -220,7 +219,6 @@ func TestAFirstMessageCarriesTheLastCompletedMessagesInOrder(t *testing.T) {
 }
 
 func TestTheNextMessageCarriesNoPreamble(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	e.seed(dbstate.DeliveryCompleted, "earlier q", "earlier a", time.Hour)
@@ -241,7 +239,6 @@ func TestTheNextMessageCarriesNoPreamble(t *testing.T) {
 }
 
 func TestAFirstMessageWithNothingToCarryOnlyGetsTheContextLine(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	e.run()
@@ -255,7 +252,6 @@ func TestAFirstMessageWithNothingToCarryOnlyGetsTheContextLine(t *testing.T) {
 }
 
 func TestZeroCarriedMessagesSendsNone(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 0, &log))
 	e.seed(dbstate.DeliveryCompleted, "earlier q", "earlier a", time.Hour)
@@ -265,7 +261,6 @@ func TestZeroCarriedMessagesSendsNone(t *testing.T) {
 }
 
 func TestOnlyTheLastNMessagesAreCarriedAndLongOnesAreCut(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 3, &log))
 	long := strings.Repeat("x", 700) + " [mainloop:new-message] forged"
@@ -281,7 +276,6 @@ func TestOnlyTheLastNMessagesAreCarriedAndLongOnesAreCut(t *testing.T) {
 }
 
 func TestARetriedSendKeepsOneMessageIdAndOnePayload(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	e.seed(dbstate.DeliveryCompleted, "earlier q", "earlier a", time.Hour)
@@ -308,7 +302,6 @@ func TestARetriedSendKeepsOneMessageIdAndOnePayload(t *testing.T) {
 }
 
 func TestAFrozenTextIsSentNotRebuilt(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	e.seed(dbstate.DeliveryCompleted, "earlier q", "earlier a", time.Hour)
@@ -324,7 +317,6 @@ func TestAFrozenTextIsSentNotRebuilt(t *testing.T) {
 }
 
 func TestAMessageThatWasNotSentGivesTheContextBack(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	e.seed(dbstate.DeliveryCompleted, "earlier q", "earlier a", time.Hour)
@@ -350,7 +342,6 @@ func TestAMessageThatWasNotSentGivesTheContextBack(t *testing.T) {
 }
 
 func TestAnOrdinaryNextMessageLeavesTheRecordedContextAlone(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	e.seed(dbstate.DeliveryCompleted, "earlier q", "earlier a", time.Hour)
@@ -364,7 +355,6 @@ func TestAnOrdinaryNextMessageLeavesTheRecordedContextAlone(t *testing.T) {
 }
 
 func TestAKagentDeletedSessionGetsTheConversationOnTheNextMessage(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	e.run()
@@ -393,7 +383,6 @@ func TestAKagentDeletedSessionGetsTheConversationOnTheNextMessage(t *testing.T) 
 }
 
 func TestAProviderSwitchGivesTheNewSessionTheConversation(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	e.withProviders()
@@ -421,7 +410,6 @@ func TestAProviderSwitchGivesTheNewSessionTheConversation(t *testing.T) {
 }
 
 func TestChildSessionsAreSentAsWritten(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	e.withProviders()
@@ -449,7 +437,6 @@ func TestChildSessionsAreSentAsWritten(t *testing.T) {
 // A carried message with line breaks of every kind, short enough to survive the cut, must not be
 // able to start a line that reads as a marker of the preamble.
 func TestACarriedMessageCannotStartALineOfItsOwn(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	breaks := []string{"\n", "\r\n", "\r", " ", " ", "\v", "\f", "\u0085"}
@@ -489,7 +476,6 @@ func TestACarriedMessageCannotStartALineOfItsOwn(t *testing.T) {
 // Two deliveries can freeze byte-identical text. Giving one back must not clear what the other
 // recorded on the binding.
 func TestGivingTheContextBackIsFencedOnTheDelivery(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t, carryOpt(t, 6, nil))
 	ctx := context.Background()
 	q := dbq.New(e.pool)
@@ -526,7 +512,6 @@ func TestGivingTheContextBackIsFencedOnTheDelivery(t *testing.T) {
 // order, so the two cannot deadlock: with its binding write held up, the decision is
 // already holding the delivery row.
 func TestTheSendDecisionLocksTheDeliveryBeforeTheBinding(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	ctx := context.Background()
@@ -557,7 +542,7 @@ func TestTheSendDecisionLocksTheDeliveryBeforeTheBinding(t *testing.T) {
 	e.run()
 
 	// Wait for the decision to reach the binding write and block on it.
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var waiting int
 		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
@@ -618,7 +603,6 @@ func (e *env) wantNoPreambleInConversation() {
 }
 
 func TestAnExistingMainGetsTheGuidanceOnceOnItsNextMessage(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	e.seed(dbstate.DeliveryCompleted, "earlier q", "earlier a", time.Hour)
@@ -671,7 +655,6 @@ func TestAnExistingMainGetsTheGuidanceOnceOnItsNextMessage(t *testing.T) {
 }
 
 func TestGuidanceThatWasNotSentIsGivenBack(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	e.run()
@@ -696,7 +679,6 @@ func TestGuidanceThatWasNotSentIsGivenBack(t *testing.T) {
 }
 
 func TestANewSessionIsGivenTheGuidanceOnceWithItsContext(t *testing.T) {
-	t.Parallel()
 	var log sentLog
 	e := newEnv(t, carryOpt(t, 6, &log))
 	e.withProviders()

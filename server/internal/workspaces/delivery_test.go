@@ -68,7 +68,6 @@ func (h *harness) runtimeSessionState(id string) string {
 
 // Mined: test_suspended_session_is_resumed_before_the_turn.
 func TestAMessageForASuspendedWorkspaceResumesItFirstAndIsSentOnce(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	ss := h.ledger()
 	w := h.running()
@@ -98,7 +97,6 @@ func TestAMessageForASuspendedWorkspaceResumesItFirstAndIsSentOnce(t *testing.T)
 
 // Mined: test_a_message_arriving_during_suspend_waits_then_resumes_before_sending.
 func TestAMessageDuringAnOpenSuspendWaitsForItThenResumes(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	ss := h.ledger()
 	w := h.running()
@@ -128,7 +126,6 @@ func TestAMessageDuringAnOpenSuspendWaitsForItThenResumes(t *testing.T) {
 
 // Mined: test_an_active_turn_is_left_alone.
 func TestIdleSuspendLeavesASessionWithAnOpenTurn(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	ss := h.ledger()
 	w := h.running()
@@ -152,7 +149,6 @@ func TestIdleSuspendLeavesASessionWithAnOpenTurn(t *testing.T) {
 }
 
 func TestHasOpenAndLastActivity(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	ss := h.ledger()
 	w := h.running()
@@ -207,7 +203,6 @@ func (w *skipFirstWake) Wake(ctx context.Context, id string) error {
 // A workspace's Session is never resumed outside its operation ledger, even when the delivery finds
 // it suspended right after a wake: it wakes the workspace again.
 func TestADeliveryThatFindsTheWorkspaceSuspendedAfterWakeWakesAgain(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	ss := h.ledger()
 	w := h.running()
@@ -241,7 +236,6 @@ func TestADeliveryThatFindsTheWorkspaceSuspendedAfterWakeWakesAgain(t *testing.T
 // A delivery waiting for a workspace that never gets its Session gives up after the hold instead of
 // holding the turn open for ever.
 func TestADeliveryForAWorkspaceWithoutASessionGivesUp(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	ss := h.ledger()
 	w := h.running()

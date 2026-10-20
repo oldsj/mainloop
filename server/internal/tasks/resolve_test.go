@@ -33,7 +33,6 @@ func (r *rig) held(attempt string) (slot, claim int) {
 }
 
 func TestUnconfirmedStopKeepsTheSlotUntilResolved(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.ses.agent = "unknown"
 	r.svc.StopObserver = r.stops
@@ -88,7 +87,6 @@ func TestUnconfirmedStopKeepsTheSlotUntilResolved(t *testing.T) {
 
 // The reviewer's probe: an unconfirmed stop must not wedge the branch or the parent for good.
 func TestProbeUnconfirmedStopWedges(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.ses.agent = "unknown"
 	r.svc.StopObserver = r.stops
@@ -131,7 +129,6 @@ func TestProbeUnconfirmedStopWedges(t *testing.T) {
 }
 
 func TestUnresolvedStopIsRaisedAfterTheBound(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.ses.agent = "unknown"
 	r.svc.StopObserver = r.stops
@@ -165,7 +162,6 @@ func TestUnresolvedStopIsRaisedAfterTheBound(t *testing.T) {
 }
 
 func TestFailedFirstBriefIsSentAgainThenBlocksTheTask(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()
@@ -215,7 +211,6 @@ func TestFailedFirstBriefIsSentAgainThenBlocksTheTask(t *testing.T) {
 }
 
 func TestPermanentWorkspaceErrorsAbortProvisioning(t *testing.T) {
-	t.Parallel()
 	for name, err := range map[string]error{
 		"invalid":         &workspaces.InvalidError{Msg: "depth must be between 0 and 1000"},
 		"unknown project": workspaces.ErrProjectNotFound,
@@ -241,7 +236,6 @@ func TestPermanentWorkspaceErrorsAbortProvisioning(t *testing.T) {
 }
 
 func TestAbortRacingCancelEndsTheTaskCancelled(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()
@@ -272,7 +266,6 @@ func TestAbortRacingCancelEndsTheTaskCancelled(t *testing.T) {
 // The owner presses stop on the parent's turn: the ledger row ends cancelled. That is an owner act,
 // so the report is not sent over it, and the child is not blocked for it.
 func TestStoppedParentTurnEndsTheDeliveryWithoutBlockingTheChild(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	_, supSession, child, kid := r.reportingChild()
 	if _, err := r.svc.Report(context.Background(), kid, report(kid, "r1", dbstate.OutcomeProgress)); err != nil {
@@ -300,7 +293,6 @@ func TestStoppedParentTurnEndsTheDeliveryWithoutBlockingTheChild(t *testing.T) {
 
 // The owner presses stop on the child's first turn and steers it: the brief is not sent again.
 func TestOwnerStopOfTheBriefTurnLeavesTheAttempt(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()
@@ -332,7 +324,6 @@ func TestOwnerStopOfTheBriefTurnLeavesTheAttempt(t *testing.T) {
 // A failed brief to a session that has ended gives up with evidence and a block; a busy or not yet
 // ready session is tried again.
 func TestBriefToAnEndedSessionGivesUp(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()
@@ -359,7 +350,6 @@ func TestBriefToAnEndedSessionGivesUp(t *testing.T) {
 }
 
 func TestBriefToANotReadySessionIsTriedAgain(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()
@@ -387,7 +377,6 @@ func TestBriefToANotReadySessionIsTriedAgain(t *testing.T) {
 // A create that fails in a way with no type (a database or transport error) is tried again only
 // within the provisioning window.
 func TestUntypedCreateErrorsAbortAfterTheWindow(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()

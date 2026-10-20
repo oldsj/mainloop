@@ -16,7 +16,6 @@ import (
 )
 
 func TestCancelStopsTasksOnCurrentAndPreviousNativeContexts(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first")
@@ -62,7 +61,6 @@ func (k *blockedTaskList) ListTasks(ctx context.Context, agent kagent.AgentRef, 
 }
 
 func TestCancelCommitsBeforeNativeIOAndConcurrentCancelDoesNotReplay(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first")
@@ -115,7 +113,6 @@ func TestCancelCommitsBeforeNativeIOAndConcurrentCancelDoesNotReplay(t *testing.
 }
 
 func TestCancelAnUnresolvedSendRemainsUnknown(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first")

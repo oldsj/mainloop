@@ -62,7 +62,7 @@ func parkAnAsk(t *testing.T, p *parkEnv) (requestID, deliveryID string) {
 // a pass in flight (one that returns after the update writes its own delay over it).
 func pushOut(t *testing.T, pool *pgxpool.Pool, id string) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for stable := 0; stable < 10; {
 		if time.Now().After(deadline) {
 			t.Fatal("could not hold the delivery's next attempt an hour away")
@@ -111,7 +111,6 @@ func toolApproval(t *testing.T, id string) api.HITLDecisionInput_Response {
 // period. When kagent takes the answer, the delivery is woken, reads the task parked on its next
 // ask, and the hint shows that ask within a sweep.
 func TestAnAcceptedAnswerWakesTheTurnSoTheNextAskAppearsAtOnce(t *testing.T) {
-	t.Parallel()
 	p := newParkEnv(t, time.Hour, true, func(k hitl.Kagent, srv *kagenttest.Server) hitl.Kagent {
 		return &acceptingAnswer{Kagent: k, srv: srv, next: func(task *a2a.Task) {
 			next := parkedTask(string(task.ID), task.ContextID, "ask-2", a2a.TaskStateInputRequired)
@@ -135,7 +134,6 @@ func TestAnAcceptedAnswerWakesTheTurnSoTheNextAskAppearsAtOnce(t *testing.T) {
 // The turn's final reply after an answer is mirrored to the conversation when kagent takes the
 // answer, not after the parked backoff.
 func TestAnAcceptedAnswerMirrorsTheFinalReplyWithoutWaitingForTheParkedBackoff(t *testing.T) {
-	t.Parallel()
 	p := newParkEnv(t, time.Hour, true, func(k hitl.Kagent, srv *kagenttest.Server) hitl.Kagent {
 		return &acceptingAnswer{Kagent: k, srv: srv, next: func(task *a2a.Task) {
 			task.Status = a2a.TaskStatus{State: a2a.TaskStateCompleted}
@@ -156,7 +154,6 @@ func TestAnAcceptedAnswerMirrorsTheFinalReplyWithoutWaitingForTheParkedBackoff(t
 
 // WakeTurn makes only the delivery that follows that task due, and notifies the delivery loop.
 func TestWakeTurnMakesOnlyThatTasksDeliveryDueAndNotifies(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	first := e.send("one")

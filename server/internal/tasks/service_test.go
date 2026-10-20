@@ -159,7 +159,6 @@ func (e *env) agent(role dbstate.BindingRole, binding string) tasks.Principal {
 }
 
 func TestCreateRecordsTaskAndOperation(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	op, err := e.create(e.own, tasks.CreateInput{Title: "Plan", Brief: "Do it", ProjectID: "p1", TopicID: "tp1"})
 	if err != nil {
@@ -193,7 +192,6 @@ func TestCreateRecordsTaskAndOperation(t *testing.T) {
 }
 
 func TestCreateIsIdempotent(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	in := tasks.CreateInput{RequestID: "r1", ProjectID: "p1"}
 	first, err := e.create(e.own, in)
@@ -220,7 +218,6 @@ func TestCreateIsIdempotent(t *testing.T) {
 }
 
 func TestCreateValidation(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	for name, tc := range map[string]struct {
 		in     tasks.CreateInput
@@ -283,7 +280,6 @@ func TestCreateValidation(t *testing.T) {
 }
 
 func TestProviderSelection(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	id := e.mustCreate(e.own, tasks.CreateInput{ProviderProfileID: "codex"})
 	tk := e.view(e.own, id).Task
@@ -302,7 +298,6 @@ func TestProviderSelection(t *testing.T) {
 }
 
 func TestSupervisorCreatesChildren(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	root := e.mustCreate(e.own, tasks.CreateInput{ProjectID: "p1", TopicID: "tp1", ProviderProfileID: "codex"})
 	e.attempt(root, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
@@ -330,7 +325,6 @@ func TestSupervisorCreatesChildren(t *testing.T) {
 }
 
 func TestVisibility(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	root := e.mustCreate(e.own, tasks.CreateInput{})
 	other := e.mustCreate(e.own, tasks.CreateInput{})
@@ -398,7 +392,6 @@ func action(id string, v api.TaskView, req string) tasks.ActionInput {
 }
 
 func TestCancelWithoutAttemptCompletes(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	id := e.mustCreate(e.own, tasks.CreateInput{})
 	in := action(id, e.view(e.own, id), "c1")
@@ -437,7 +430,6 @@ func TestCancelWithoutAttemptCompletes(t *testing.T) {
 }
 
 func TestCancelWithAttemptWaits(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	id := e.mustCreate(e.own, tasks.CreateInput{})
 	att := e.attempt(id, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
@@ -457,7 +449,6 @@ func TestCancelWithAttemptWaits(t *testing.T) {
 }
 
 func TestActionsRefuseStaleViews(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	id := e.mustCreate(e.own, tasks.CreateInput{})
 	v := e.view(e.own, id)
@@ -477,7 +468,6 @@ func TestActionsRefuseStaleViews(t *testing.T) {
 }
 
 func TestRetryAndReassignAreBlocked(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	id := e.codeTask()
 	for _, kind := range []string{"retry", "reassign"} {
@@ -526,7 +516,6 @@ func report(p tasks.Principal, req string, outcome dbstate.ReportOutcome) tasks.
 }
 
 func TestReportMovesTheTask(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	id := e.codeTask()
 	att := e.attempt(id, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
@@ -611,7 +600,6 @@ func TestReportMovesTheTask(t *testing.T) {
 // recovers the task to running the same way answering an owner_decision does. runtime_limit does
 // not recover this way: it fires regardless of activity, and a report alone must not clear it.
 func TestProgressReportRecoversLivenessBlocksButNotRuntimeLimit(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	for i, reason := range []string{"session_lost", "stalled", "runtime_limit"} {
 		binding := fmt.Sprintf("sup-liveness-%d", i)
@@ -634,7 +622,6 @@ func TestProgressReportRecoversLivenessBlocksButNotRuntimeLimit(t *testing.T) {
 }
 
 func TestReportIsIdempotent(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	id := e.codeTask()
 	e.attempt(id, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
@@ -662,7 +649,6 @@ func TestReportIsIdempotent(t *testing.T) {
 }
 
 func TestReportScopeAndRules(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	id := e.codeTask()
@@ -714,7 +700,6 @@ func TestReportScopeAndRules(t *testing.T) {
 }
 
 func TestReportDeliveries(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	root := e.mustCreate(e.own, tasks.CreateInput{})
 	e.attempt(root, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
@@ -752,7 +737,6 @@ func TestReportDeliveries(t *testing.T) {
 }
 
 func TestAuthRefusesStaleAttempts(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	id := e.mustCreate(e.own, tasks.CreateInput{})
@@ -786,7 +770,6 @@ func TestAuthRefusesStaleAttempts(t *testing.T) {
 }
 
 func TestAuthMergeStatusOnly(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	root := e.mustCreate(e.own, tasks.CreateInput{ProjectID: "p1"})
@@ -826,7 +809,6 @@ func TestAuthMergeStatusOnly(t *testing.T) {
 }
 
 func TestAuthRefusesCreatingAttempts(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	id := e.mustCreate(e.own, tasks.CreateInput{})
 	e.attempt(id, dbstate.AttemptSupervisor, dbstate.AttemptCreating, "sup-1")
@@ -837,7 +819,6 @@ func TestAuthRefusesCreatingAttempts(t *testing.T) {
 
 // A child is let in only while its parent is running an active attempt of its own.
 func TestAuthChecksTheParent(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	root := e.mustCreate(e.own, tasks.CreateInput{})
@@ -873,7 +854,6 @@ func TestAuthChecksTheParent(t *testing.T) {
 
 // The principal was resolved before the attempt was drained: the write checks again.
 func TestWritesRecheckTheAttempt(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	root := e.mustCreate(e.own, tasks.CreateInput{})
@@ -906,7 +886,6 @@ func TestWritesRecheckTheAttempt(t *testing.T) {
 // task:updated is written in the transaction of the change: a failure to publish rolls the
 // change back, and a rolled-back change publishes nothing.
 func TestTaskUpdatedSharesTheTransaction(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	id := e.mustCreate(e.own, tasks.CreateInput{})
 	var payload string
@@ -951,7 +930,6 @@ func contains(s, sub string) bool {
 
 // Two cancels at one expected version: one wins, the other sees a stale version.
 func TestConcurrentCancels(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	id := e.mustCreate(e.own, tasks.CreateInput{})
@@ -988,7 +966,6 @@ func TestConcurrentCancels(t *testing.T) {
 // A cancel racing a report: whichever commits first wins, the other is refused, and the version
 // advances once per winner.
 func TestCancelRacesReport(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	id := e.codeTask()
@@ -1026,7 +1003,6 @@ func TestCancelRacesReport(t *testing.T) {
 // A binding is let in only for the attempt it belongs to: the grant its task's mode issues, one
 // runtime id, and a session in the task's project.
 func TestAuthChecksTheAttemptScope(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	refused := func(name string, role dbstate.BindingRole, grant dbstate.MCPGrantKind, binding string) {

@@ -43,7 +43,6 @@ func (h *harness) baseBranch(id string) string {
 // A workspace requested by repository creates its project through the project service, the one
 // way a project is made, and takes the project's default branch as its base.
 func TestWorkspaceFromARepoImportsThroughTheProjectService(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.run()
 	spy := &importSpy{h: h, defaultBranch: "trunk"}
@@ -63,7 +62,6 @@ func TestWorkspaceFromARepoImportsThroughTheProjectService(t *testing.T) {
 // With no importer configured the workspace service still imports through a project service, and
 // a project with no default branch yet gives an empty base: the remote's default, not "main".
 func TestEmptyRefLeavesBaseBranchEmpty(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.run()
 	w, err := h.create(api.CreateWorkspaceRequest{Repo: ptr("oldsj/mainloop")})
@@ -90,7 +88,6 @@ func TestEmptyRefLeavesBaseBranchEmpty(t *testing.T) {
 }
 
 func TestInvalidRepoIsStillInvalid(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	_, err := h.create(api.CreateWorkspaceRequest{Repo: ptr("https://gitlab.com/a/b")})
 	var inv *InvalidError

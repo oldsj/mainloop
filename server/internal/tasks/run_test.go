@@ -508,7 +508,7 @@ func (r *rig) sweep(s reconcile.Sweep) {
 // eventually polls until cond holds.
 func (r *rig) eventually(what string, cond func() bool) {
 	r.t.Helper()
-	deadline := time.Now().Add(45 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return

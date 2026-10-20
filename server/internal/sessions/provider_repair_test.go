@@ -78,7 +78,6 @@ func (e *env) liveSessionsOn(name string) (n int) {
 // ---- the target Agent preflight -----------------------------------------------------------------
 
 func TestAMissingOrUnpreparedTargetAgentIsRefusedBeforeAnythingChanges(t *testing.T) {
-	t.Parallel()
 	for name, breakAgent := range map[string]func(e *env){
 		"missing":      func(e *env) { e.srv.RemoveAgent(agent.Namespace, codexAgentName) },
 		"not prepared": func(e *env) { e.srv.AddAgentNotReady(agent.Namespace, codexAgentName) },
@@ -116,7 +115,6 @@ func TestAMissingOrUnpreparedTargetAgentIsRefusedBeforeAnythingChanges(t *testin
 // it reserves the request id (see createRejectedBeforeReservation), so nothing was created and the
 // failure is recoverable: the owner can switch back.
 func TestAnAgentRemovedBetweenThePreflightAndTheCreateEndsRecoverable(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	stop, _ := e.warm()
 	stop()
@@ -137,7 +135,6 @@ func TestAnAgentRemovedBetweenThePreflightAndTheCreateEndsRecoverable(t *testing
 
 // With the Agent back, a repeat recovers the original create contract: same request id, same identity.
 func TestARecoverableFailureRecoversTheOriginalContractOnceTheAgentIsBack(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	stop, _ := e.warm()
 	stop()
@@ -162,7 +159,6 @@ func TestARecoverableFailureRecoversTheOriginalContractOnceTheAgentIsBack(t *tes
 // ---- 409 codes ----------------------------------------------------------------------------------
 
 func TestEveryProviderConflictCarriesAStableCode(t *testing.T) {
-	t.Parallel()
 	t.Run("busy", func(t *testing.T) {
 		e := providerEnv(t)
 		e.send("waiting")
@@ -220,7 +216,6 @@ func TestEveryProviderConflictCarriesAStableCode(t *testing.T) {
 // ---- no history for a main that never started --------------------------------------------------
 
 func TestANeverStartedMainWritesNoHistoryButAnAbandonedTargetIsRecorded(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	e.mustSelect("codex", false) // never started
 	if h := e.historyRows(); len(h) != 0 {
@@ -237,7 +232,6 @@ func TestANeverStartedMainWritesNoHistoryButAnAbandonedTargetIsRecorded(t *testi
 // The create landed and its reply was lost. The repeated PUT replays the frozen request id, kagent
 // returns the Session that exists, and the main binds it: no second Session.
 func TestACreateThatLandedWithItsReplyLostIsBoundByTheRepeat(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	crashAfterIntent(t, e, "codex")
 	row := e.bindingRow()
@@ -260,7 +254,6 @@ func TestACreateThatLandedWithItsReplyLostIsBoundByTheRepeat(t *testing.T) {
 // The old Session was suspended and the process died before the intent committed. Nothing durable
 // moved, the main is still on its old provider, and a repeat finishes the switch.
 func TestACrashAfterTheSuspendAndBeforeTheIntentLeavesTheOldProviderAndARepeatRecovers(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	stop, claudeKsid := e.warm()
 	stop()
@@ -288,7 +281,6 @@ func TestACrashAfterTheSuspendAndBeforeTheIntentLeavesTheOldProviderAndARepeatRe
 }
 
 func TestConcurrentPUTsOfOneProviderCreateOneSession(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	stop, _ := e.warm()
 	stop()
@@ -311,7 +303,6 @@ func TestConcurrentPUTsOfOneProviderCreateOneSession(t *testing.T) {
 }
 
 func TestConcurrentPUTsOfDifferentProvidersLeaveOneConsistentMain(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	stop, _ := e.warm()
 	stop()
@@ -338,7 +329,6 @@ func TestConcurrentPUTsOfDifferentProvidersLeaveOneConsistentMain(t *testing.T) 
 // ---- credentials per native identity ------------------------------------------------------------
 
 func TestEachNativeIdentityHasItsOwnSecretAndTheSwitchDoesNotWaitForCleanup(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	a := e.withCredentials()
 	stop, _ := e.warm()
@@ -407,7 +397,6 @@ func TestEachNativeIdentityHasItsOwnSecretAndTheSwitchDoesNotWaitForCleanup(t *t
 // Session exists. The target is not recoverable, the other provider cannot take over while the replay
 // stays undecodable, and a repeat binds the Session that committed.
 func TestATruncatedCreateReplyIsNeitherAbsentNorAbandoned(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	stop, claudeKsid := e.warm()
 	stop()

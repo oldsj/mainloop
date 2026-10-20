@@ -20,7 +20,7 @@ import (
 
 func (e *env) waitFor(what string, cond func() bool) {
 	e.t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for !cond() {
 		if time.Now().After(deadline) {
 			e.t.Fatalf("timed out: %s", what)
@@ -43,7 +43,6 @@ func (e *env) bindingKsid(id string) string {
 // replay whose credentials differ (AlreadyExists), which would leave the binding unresolved and the
 // landed Session alive for ever.
 func TestAMainCreateReplayCarriesTheCreatesCredential(t *testing.T) {
-	t.Parallel()
 	e, k := newFlakyEnv(t)
 	e.withCredentials()
 	ctx := context.Background()
@@ -92,7 +91,6 @@ func TestAMainCreateReplayCarriesTheCreatesCredential(t *testing.T) {
 // kagent answers a replay with AlreadyExists when its contract differs. That is not retryable, and
 // the Session it names is left to the orphan sweep: the create counts as resolved.
 func TestAnAlreadyExistsReplayCountsAsResolved(t *testing.T) {
-	t.Parallel()
 	e, k := newFlakyEnv(t)
 	sid, _ := e.failedCreateThenCancelAndArchive(k)
 	k.down.Store(false)
@@ -132,7 +130,6 @@ func (g *gated) CreateSession(ctx context.Context, r *kagentapi.CreateSessionReq
 // session. The sweep rotates the binding's request id first, so the new delivery creates its own
 // Session and the sweep deletes only the one its replay returned.
 func TestAMessageDuringTheResolveSweepKeepsItsSession(t *testing.T) {
-	t.Parallel()
 	e, k := newFlakyEnv(t)
 	ctx := context.Background()
 	k.down.Store(true)
@@ -188,7 +185,6 @@ func TestAMessageDuringTheResolveSweepKeepsItsSession(t *testing.T) {
 // Waiting for an old credential's cleanup takes many claims. They are not create failures: one 503
 // afterwards is retried, not final.
 func TestWaitingForCredentialCleanupDoesNotUseTheCreateBudget(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	a := e.withCredentials()
 	k := &flaky{Kagent: e.svc.Kagent}
@@ -226,7 +222,6 @@ func TestWaitingForCredentialCleanupDoesNotUseTheCreateBudget(t *testing.T) {
 // The replay names the Agent stored on the binding when the create was requested, so it still
 // finds (and deletes) the create's Session after the provider configuration has changed.
 func TestAReplayNamesTheAgentTheCreateNamed(t *testing.T) {
-	t.Parallel()
 	e, k := newFlakyEnv(t)
 	sid, _ := e.failedCreateThenCancelAndArchive(k)
 	k.down.Store(false)

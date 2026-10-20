@@ -38,7 +38,6 @@ func gitReadRefs(creds []*kagentapi.SessionCredential) (refs []*kagentapi.Sessio
 }
 
 func TestAWorkspaceIsEnrolledForGitReadAndItsSessionCarriesTheReference(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	a := h.withGitRead()
 	w := h.running()
@@ -74,7 +73,6 @@ func TestAWorkspaceIsEnrolledForGitReadAndItsSessionCarriesTheReference(t *testi
 // A delete that replays an unrecorded create sends the credential set the create carries, and
 // issues nothing.
 func TestADeleteReplayCarriesTheGitReadReferenceAndIssuesNothing(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, slow)
 	a := h.withGitRead()
 	h.run()
@@ -109,7 +107,6 @@ func TestADeleteReplayCarriesTheGitReadReferenceAndIssuesNothing(t *testing.T) {
 // The replay's credential set is the original's byte for byte: kagent answers it with the same
 // Session. A different set (the git reference missing) is refused.
 func TestAReplayOfASuccessfulCreateCarriesTheIdenticalCredentialSet(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.withGitRead()
 	w := h.running()
@@ -150,7 +147,6 @@ func TestAReplayOfASuccessfulCreateCarriesTheIdenticalCredentialSet(t *testing.T
 }
 
 func TestDeletingAWorkspaceRevokesItsGitReadCredential(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.withGitRead()
 	h.run()
@@ -170,7 +166,6 @@ func TestDeletingAWorkspaceRevokesItsGitReadCredential(t *testing.T) {
 }
 
 func TestWithoutGitReadWorkspacesAreUnchanged(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.withCredentials()
 	w := h.running()
@@ -191,7 +186,6 @@ func TestWithoutGitReadWorkspacesAreUnchanged(t *testing.T) {
 // Only a GitHub repository can be served; one that is not gets no enrollment and no reference, on
 // the create and on its replay alike.
 func TestAWorkspaceOutsideGitHubGetsNoGitReadReference(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.withGitRead()
 	w, err := h.create(api.CreateWorkspaceRequest{})

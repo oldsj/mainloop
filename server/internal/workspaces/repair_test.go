@@ -18,7 +18,6 @@ import (
 // A refusal that lands after Create already returned keeps the rows (an earlier attempt's outcome
 // is unknown), and a later delete must not be stuck behind the same refusal.
 func TestDeleteAfterALateRefusalPurgesTheRows(t *testing.T) {
-	t.Parallel()
 	for name, fault := range map[string]kagenttest.Fault{
 		"permanent":  grpcFault(connect.CodeInvalidArgument),
 		"deleted-id": failedPrecondition("request_id belongs to a deleted Session"),
@@ -62,7 +61,6 @@ func failedPrecondition(message string) kagenttest.Fault {
 // kagent answers FAILED_PRECONDITION for an Agent that is not ready yet as well as for a deleted
 // request id; only the second is permanent, so the first must keep retrying.
 func TestNotReadyFailedPreconditionRetries(t *testing.T) {
-	t.Parallel()
 	for _, message := range []string{
 		"Agent does not have a ready prepared revision",
 		"golden preparation failed",
@@ -91,7 +89,6 @@ func TestNotReadyFailedPreconditionRetries(t *testing.T) {
 }
 
 func TestFailedPreconditionClassification(t *testing.T) {
-	t.Parallel()
 	deleted := &kagent.SessionError{Op: "CreateSession", Code: connect.CodeFailedPrecondition, Detail: "request_id belongs to a deleted Session"}
 	if perm, _ := classify(deleted); !perm {
 		t.Fatal("a deleted request id must be permanent")
@@ -105,7 +102,6 @@ func TestFailedPreconditionClassification(t *testing.T) {
 // A Refresh that lands between the refusal being recorded and Create dropping the rows adds a
 // create that may already have been sent; the drop must leave it alone.
 func TestDropRejectedLeavesAWorkspaceWithANewerOperation(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, slow)
 	h.fake.FailNext(kagent.ProcCreateSession, kagenttest.Fault{Drop: true})
 	stop := h.run()
@@ -147,7 +143,6 @@ func TestDropRejectedLeavesAWorkspaceWithANewerOperation(t *testing.T) {
 
 // A refusal of the very first request drops the rows and says so on the event stream.
 func TestFirstAttemptRefusalDropsTheRowsAndPublishes(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.run()
 	before := h.events()
@@ -164,7 +159,6 @@ func TestFirstAttemptRefusalDropsTheRowsAndPublishes(t *testing.T) {
 }
 
 func TestScheduledOrphanSweepLogsWhenBlocked(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, map[string]string{"WORKSPACE_OPERATION_WAIT_SECONDS": "0.1"})
 	h.strayOn(h.cfg.Kagent.Namespace, h.cfg.Kagent.WorkspaceClaudeAgent, "stray-1")
 	if _, err := h.create(api.CreateWorkspaceRequest{}); err != nil {
@@ -182,7 +176,6 @@ func TestScheduledOrphanSweepLogsWhenBlocked(t *testing.T) {
 
 // Interim: without the delivery ledger a running turn is invisible, so idle suspend stays off.
 func TestIdleSweepIsOffWithoutADeliveryLedger(t *testing.T) {
-	t.Parallel()
 	names := func(h *harness) map[string]bool {
 		out := map[string]bool{}
 		for _, sw := range h.svc.sweeps() {
@@ -206,7 +199,6 @@ func TestIdleSweepIsOffWithoutADeliveryLedger(t *testing.T) {
 
 // A session kagent cannot suspend marks the workspace, so later passes do not queue it again.
 func TestIdleSuspendOfAFailedSessionDoesNotChurn(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	w := h.running()
 	h.backdate(w.WorkspaceId)
@@ -230,7 +222,6 @@ func TestIdleSuspendOfAFailedSessionDoesNotChurn(t *testing.T) {
 }
 
 func TestIdleSuspendOfAVanishedSessionDoesNotChurn(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	w := h.running()
 	h.backdate(w.WorkspaceId)
@@ -250,7 +241,6 @@ func TestIdleSuspendOfAVanishedSessionDoesNotChurn(t *testing.T) {
 // The agent is fixed when the workspace is made: a config change between attempts neither changes
 // the replayed request nor hides the Session from the orphan sweep.
 func TestAgentIsStoredWithTheWorkspace(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, slow)
 	w, err := h.create(api.CreateWorkspaceRequest{}) // no runner
 	if err != nil {
@@ -273,7 +263,6 @@ func TestAgentIsStoredWithTheWorkspace(t *testing.T) {
 
 // A create reply without a Session id is not a binding.
 func TestDeleteReplayWithoutASessionIDIsNotConfirmed(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, map[string]string{"WORKSPACE_OPERATION_WAIT_SECONDS": "0.1"})
 	h.fake.TamperSession = func(proc string, s *kagentapi.Session) {
 		if proc == kagent.ProcCreateSession {
@@ -298,7 +287,6 @@ func TestDeleteReplayWithoutASessionIDIsNotConfirmed(t *testing.T) {
 // kagent refused with AlreadyExists purges without finding the Session), so the orphan sweep still
 // reclaims a Session left on it.
 func TestAPurgedWorkspacesAgentIsStillSweptForOrphans(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, slow)
 	w, err := h.create(api.CreateWorkspaceRequest{}) // no runner
 	if err != nil {

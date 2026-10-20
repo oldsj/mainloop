@@ -18,7 +18,7 @@ import (
 func waitForBlockedQuery(t *testing.T, pool *pgxpool.Pool, like string) {
 	t.Helper()
 	ctx := context.Background()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var n int
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
@@ -39,7 +39,7 @@ func waitForBlockedQuery(t *testing.T, pool *pgxpool.Pool, like string) {
 // if the code under test is wrong, finish instead. It reports whether the operation finished first, and its result if so.
 func waitForBlockedOrDone(t *testing.T, pool *pgxpool.Pool, like string, done <-chan error) (finished bool, err error) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		select {
 		case doneErr := <-done:
@@ -69,7 +69,6 @@ func waitForBlockedOrDone(t *testing.T, pool *pgxpool.Pool, like string, done <-
 // reconcile table, both exclude 'queued'). Fails on main: the stop races ahead of the paused send
 // and the new message never leaves 'queued'.
 func TestASendRacingTurnCompletionIsPromotedNotStuckQueued(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	ctx := context.Background()
@@ -138,7 +137,6 @@ func TestASendRacingTurnCompletionIsPromotedNotStuckQueued(t *testing.T) {
 // waiting their turn. Fails on main: the new send is recorded instead of queued, and the backlog
 // stays behind it forever.
 func TestSendQueuesBehindAnExistingBacklogOnceTheBlockingHoldHasExpired(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	oldID := e.send("one") // the open turn everything else queues behind
@@ -178,7 +176,6 @@ func TestSendQueuesBehindAnExistingBacklogOnceTheBlockingHoldHasExpired(t *testi
 // still inside its own hold -- a turn that may still be running. Fails on main: the backlog is
 // released while the newer turn is still held.
 func TestSettlingAnOlderDeliveryHonorsANewerUncertainHold(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 
@@ -237,7 +234,6 @@ func TestSettlingAnOlderDeliveryHonorsANewerUncertainHold(t *testing.T) {
 // it goes). This writes that stranded state directly, as a crash between the admission decision
 // and the promotion would leave it, rather than racing to reach it.
 func TestPromoteStrandedQueuedSweepReleasesABacklogNothingIsBlocking(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	oldID := e.send("one")

@@ -15,7 +15,6 @@ import (
 // runs both CI workflows), so changing the header here fails the web's parser test until the fixture
 // and the parser follow.
 func TestReportTextMatchesTheFixtureTheWebParses(t *testing.T) {
-	t.Parallel()
 	raw, err := os.ReadFile("../../../web/src/features/chat/testdata/report_texts.json")
 	if err != nil {
 		t.Fatal(err)

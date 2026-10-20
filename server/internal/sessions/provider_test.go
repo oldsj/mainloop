@@ -130,7 +130,6 @@ func (e *env) refused(what string, before dbq.GetMainBindingRow) {
 // ---- first use ----------------------------------------------------------------------------------
 
 func TestFirstUseStartsOnTheConfiguredProvider(t *testing.T) {
-	t.Parallel()
 	for _, tc := range []struct {
 		name, setting, kind, agent string
 	}{
@@ -161,7 +160,6 @@ func TestFirstUseStartsOnTheConfiguredProvider(t *testing.T) {
 }
 
 func TestFirstUseWithoutARegistryUsesTheConfiguredAgents(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.svc.MainCodexAgent = kagent.AgentRef{Namespace: agent.Namespace, Name: codexAgentName}
 	e.svc.MainProvider = "codex"
@@ -176,7 +174,6 @@ func TestFirstUseWithoutARegistryUsesTheConfiguredAgents(t *testing.T) {
 // ---- the idle rule ------------------------------------------------------------------------------
 
 func TestASwitchIsRefusedUnlessTheMainIsIdle(t *testing.T) {
-	t.Parallel()
 	t.Run("recorded", func(t *testing.T) {
 		e := providerEnv(t)
 		e.send("waiting") // no delivery loop: the message stays recorded
@@ -244,7 +241,6 @@ func TestASwitchIsRefusedUnlessTheMainIsIdle(t *testing.T) {
 // ---- a successful switch ------------------------------------------------------------------------
 
 func TestASwitchSuspendsTheOldSessionRevokesItsCredentialAndKeepsTheConversation(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	a := e.withCredentials()
 	cleanup := runCredentialCleanup(t, e, a)
@@ -318,7 +314,6 @@ func TestASwitchSuspendsTheOldSessionRevokesItsCredentialAndKeepsTheConversation
 }
 
 func TestASwitchBeforeTheFirstMessageNeedsNoOldSession(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	st := e.mustSelect("codex", false)
 	if st.Status != "ready" || st.Desired != "codex" {
@@ -334,7 +329,6 @@ func TestASwitchBeforeTheFirstMessageNeedsNoOldSession(t *testing.T) {
 }
 
 func TestSwitchingBackStartsAFreshClaudeSession(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	stop, claude1 := e.warm()
 	stop()
@@ -351,7 +345,6 @@ func TestSwitchingBackStartsAFreshClaudeSession(t *testing.T) {
 // ---- repeats ------------------------------------------------------------------------------------
 
 func TestRepeatingTheSamePUTChangesNothing(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	stop, _ := e.warm()
 	stop()
@@ -370,7 +363,6 @@ func TestRepeatingTheSamePUTChangesNothing(t *testing.T) {
 }
 
 func TestAnInvalidProviderIsRefused(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	if _, err := e.selectProvider("gemini", false); !errors.Is(err, sessions.ErrInvalid) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
@@ -382,7 +374,6 @@ func TestAnInvalidProviderIsRefused(t *testing.T) {
 }
 
 func TestBothProvidersCannotShareOneAgent(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "KAGENT_MAIN_CODEX_AGENT": "mainloop-main"})
 	if err != nil {
@@ -414,7 +405,6 @@ func crashAfterIntent(t *testing.T, e *env, provider string) (before dbq.GetMain
 }
 
 func TestACrashAfterTheIntentCommitsRecoversTheSameContract(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	stop, claudeKsid := e.warm()
 	stop()
@@ -450,7 +440,6 @@ func TestACrashAfterTheIntentCommitsRecoversTheSameContract(t *testing.T) {
 }
 
 func TestADifferentProviderCannotReplaceAnUnresolvedSelection(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	crashAfterIntent(t, e, "codex")
 	before := e.bindingRow()
@@ -473,7 +462,6 @@ func TestADifferentProviderCannotReplaceAnUnresolvedSelection(t *testing.T) {
 }
 
 func TestChatIsRefusedWhilePendingAndAReportWaitsThenDrains(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	stop, _ := e.warm()
 	stop()
@@ -522,7 +510,6 @@ func (e *env) deliveriesFor(id string) (n int) {
 }
 
 func TestACatalogChangeDoesNotMoveAPinnedContract(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	crashAfterIntent(t, e, "codex")
 	// The operator now names another Codex main Agent. The pending contract keeps the first one.
@@ -581,7 +568,6 @@ func pendingWithASession(t *testing.T, e *env) (ksid string) {
 }
 
 func TestAnAbsentTargetIsRecoverableAndRestartFailedAdmitsAFreshIdentity(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	stop, claudeKsid := e.warm()
 	stop()
@@ -631,7 +617,6 @@ func TestAnAbsentTargetIsRecoverableAndRestartFailedAdmitsAFreshIdentity(t *test
 }
 
 func TestARecoverableTargetCanBeReplacedByAnotherProvider(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	stop, _ := e.warm()
 	stop()
@@ -649,7 +634,6 @@ func TestARecoverableTargetCanBeReplacedByAnotherProvider(t *testing.T) {
 }
 
 func TestATargetCreateThatKagentDeletedIsRecoverable(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	crashAfterIntent(t, e, "codex")
 	row := e.bindingRow()
@@ -676,7 +660,6 @@ func TestATargetCreateThatKagentDeletedIsRecoverable(t *testing.T) {
 }
 
 func TestAFailedCreateIsRecordedBoundedAndNotRetried(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	code := connect.CodeUnavailable
 	e.srv.FailNext(kagent.ProcCreateSession, kagenttest.Fault{GRPC: &code, Message: strings.Repeat("x", 2000) + " Bearer abcdefghijklmnop"})
@@ -700,7 +683,6 @@ func TestAFailedCreateIsRecordedBoundedAndNotRetried(t *testing.T) {
 // ---- the owner slot -----------------------------------------------------------------------------
 
 func TestConcurrentFirstUseSharesOneMain(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	ids := e.ensureConcurrently(8)
 	for _, id := range ids {
@@ -714,7 +696,6 @@ func TestConcurrentFirstUseSharesOneMain(t *testing.T) {
 }
 
 func TestAMainThatLostCoordinationAuthorityIsReplacedOnceAndItsCredentialRevoked(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	a := e.withCredentials()
 	ctx := context.Background()
@@ -794,7 +775,6 @@ func runCredentialCleanup(t *testing.T, e *env, a *authtest.Env) (stop func()) {
 }
 
 func TestAProviderStateIsOnTheMainThreadView(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	stop, _ := e.warm()
 	stop()
@@ -817,7 +797,6 @@ func TestAProviderStateIsOnTheMainThreadView(t *testing.T) {
 // A reply keeps the label of the provider that actually wrote it, not whatever the main is bound to
 // by the time the conversation is read: a switch must not relabel history.
 func TestAnAssistantReplyCarriesTheProviderThatWroteItAcrossASwitch(t *testing.T) {
-	t.Parallel()
 	e := providerEnv(t)
 	stop, _ := e.warm() // completes "one" on Claude, the first-use default
 	defer stop()

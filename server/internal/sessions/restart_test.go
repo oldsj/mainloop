@@ -42,7 +42,6 @@ func (e *env) restartState(id string) string {
 // (not uncertain, so nothing holds the queue) and the queued message runs on a new Session that
 // carries the standing context again.
 func TestRestartRecoversAMainTurnThatCannotBeStopped(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	_, oldKsid := e.warm()
 	main := e.mainID()
@@ -111,7 +110,6 @@ func TestRestartRecoversAMainTurnThatCannotBeStopped(t *testing.T) {
 // A delete kagent does not confirm leaves the turn as it was and the intent requested; repeating
 // the same request finishes it, and the resume sweep would too.
 func TestRestartWhoseDeleteIsUnconfirmedIsContinuedByARepeat(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first")
@@ -150,7 +148,6 @@ func TestRestartWhoseDeleteIsUnconfirmedIsContinuedByARepeat(t *testing.T) {
 // The sweep finishes a restart whose request was cut off after the intent committed. It reads kagent
 // first: a Session already gone is not deleted again.
 func TestRestartSweepFinishesAnInterruptedRestart(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first")
@@ -181,7 +178,6 @@ func TestRestartSweepFinishesAnInterruptedRestart(t *testing.T) {
 }
 
 func TestRestartIsRefusedForAnEndedSessionOrABadRequestID(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first")
@@ -215,7 +211,6 @@ func TestRestartIsRefusedForAnEndedSessionOrABadRequestID(t *testing.T) {
 // A turn whose task and Session kagent no longer has (deleted out of band, as the owner's manual
 // recovery did) fails at once, instead of becoming uncertain and holding the queue for the hold.
 func TestATurnWhoseNativeSessionIsGoneFailsAtOnce(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first")

@@ -19,10 +19,6 @@ import (
 
 // stallEnv is an env whose stall watch runs on a clock the test moves: StallAfter 10 minutes, and
 // an hour while a tool runs.
-// stallEnv's tests stay serial (no t.Parallel): they combine a skewed clock with scripted
-// kagent.Pause real-time delays, then poll for the stall to clear once the delayed event lands.
-// Under the scheduling pressure of many sibling tests that delayed goroutine itself can start
-// late enough to make the poll time out, independent of how generous the poll's own deadline is.
 func stallEnv(t *testing.T) (*env, *atomic.Int64) {
 	t.Helper()
 	e := newEnv(t, func(o *sessions.Options, _ *kagent.Config) {
@@ -51,7 +47,7 @@ func (e *env) stallRow(id string) stallRow {
 
 func (e *env) waitStall(id, what string, ok func(stallRow) bool) stallRow {
 	e.t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		r := e.stallRow(id)
 		if ok(r) {
@@ -100,7 +96,6 @@ func working(id string) *a2a.Task {
 // A turn that goes quiet past its allowance is marked stalled, shown on the thread and raised in the
 // owner's attention; the next task event clears all of it. Nothing about the delivery changes.
 func TestATurnStallsAfterItsAllowanceAndTheNextEventClearsIt(t *testing.T) {
-	// Not parallel: see the comment on stallEnv.
 	e, skew := stallEnv(t)
 	task := working("t-quiet")
 	e.srv.AddTask(task)
@@ -166,7 +161,6 @@ func TestATurnStallsAfterItsAllowanceAndTheNextEventClearsIt(t *testing.T) {
 // A tool call that started and has no result yet gets the longer allowance: a long web search or
 // build is not a stall until that allowance passes too.
 func TestNoFalseStallWhileAToolRunsWithinItsAllowance(t *testing.T) {
-	// Not parallel: see the comment on stallEnv.
 	e, skew := stallEnv(t)
 	task := working("t-live")
 	e.srv.AddTask(task)
@@ -198,7 +192,6 @@ func TestNoFalseStallWhileAToolRunsWithinItsAllowance(t *testing.T) {
 
 // A task parked for the owner's answer is quiet by design and never stalls.
 func TestAParkedTurnNeverStalls(t *testing.T) {
-	// Not parallel: see the comment on stallEnv.
 	e, skew := stallEnv(t)
 	parked := &a2a.Task{ID: "t-ask", ContextID: "ctx", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}
 	e.srv.AddTask(parked)

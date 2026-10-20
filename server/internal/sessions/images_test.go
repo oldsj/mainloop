@@ -29,7 +29,6 @@ func pixelPNG(t *testing.T) []byte {
 }
 
 func TestUploadImageValidatesFormatAndSize(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	png := pixelPNG(t)
@@ -55,7 +54,6 @@ func TestUploadImageValidatesFormatAndSize(t *testing.T) {
 }
 
 func TestSendWithImagesAttachesTheUploadToTheMessage(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	png := pixelPNG(t)
@@ -80,7 +78,6 @@ func TestSendWithImagesAttachesTheUploadToTheMessage(t *testing.T) {
 }
 
 func TestSendWithImagesAllowsEmptyTextWhenAnImageIsGiven(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	ref, err := e.svc.UploadImage(ctx, "image/jpeg", pixelPNG(t))
@@ -97,7 +94,6 @@ func TestSendWithImagesAllowsEmptyTextWhenAnImageIsGiven(t *testing.T) {
 }
 
 func TestSendWithImagesRejectsAnUnknownOrAlreadyClaimedImageID(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 
@@ -119,7 +115,6 @@ func TestSendWithImagesRejectsAnUnknownOrAlreadyClaimedImageID(t *testing.T) {
 }
 
 func TestSendWithImagesRejectsTooManyImages(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	ids := make([]string, sessions.MaxImagesPerMessage+1)
@@ -139,7 +134,6 @@ func TestSendWithImagesRejectsTooManyImages(t *testing.T) {
 // kagent server: a message with no text but a pasted image must not be settled as failed with
 // "the message text is missing", now that an image alone is enough to send a turn.
 func TestAnImageOnlyMessageIsDeliveredSuccessfully(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	ctx := context.Background()
@@ -158,7 +152,6 @@ func TestAnImageOnlyMessageIsDeliveredSuccessfully(t *testing.T) {
 }
 
 func TestSendWithImagesIsIdempotentPerMessageID(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	ref, err := e.svc.UploadImage(ctx, "image/png", pixelPNG(t))
@@ -194,7 +187,6 @@ func TestSendWithImagesIsIdempotentPerMessageID(t *testing.T) {
 // worker session's conversation (GetSessionConversation) is untouched by this feature and is not
 // exercised here.
 func TestUploadThenSendOverHTTPShapeShowsTheImageInTheConversation(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	a := e.API()
 	ctx := context.Background()
@@ -240,7 +232,6 @@ func TestUploadThenSendOverHTTPShapeShowsTheImageInTheConversation(t *testing.T)
 // TestUploadChatImageRejectsAnUnsupportedFormatOverHTTPShape checks the handler maps the
 // service's format rejection to a 422, the contract's validation-error status.
 func TestUploadChatImageRejectsAnUnsupportedFormatOverHTTPShape(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	a := e.API()
 	_, err := a.UploadChatImage(context.Background(), api.UploadChatImageRequestObject{
@@ -252,7 +243,6 @@ func TestUploadChatImageRejectsAnUnsupportedFormatOverHTTPShape(t *testing.T) {
 }
 
 func TestSendToValidatesTextTheSameWayAfterTheSharedRefactor(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	if _, err := e.svc.SendTo(ctx, "no-such-session", uuid.NewString(), "   "); !errors.Is(err, sessions.ErrInvalid) {

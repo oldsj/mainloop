@@ -11,7 +11,6 @@ import (
 // publication_reason reflect the same stored policy the push gate itself would check, not a
 // hardcoded read-only stub.
 func TestPublicationModeFollowsStoredPolicyAndGrant(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	w := h.running()
 	row := h.row(w.WorkspaceId)

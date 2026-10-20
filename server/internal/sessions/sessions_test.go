@@ -107,7 +107,7 @@ func (e *env) delivery(id string) dbq.Delivery {
 func (e *env) waitState(id string, want dbstate.DeliveryState) dbq.Delivery {
 	e.t.Helper()
 	var d dbq.Delivery
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		d = e.delivery(id)
 		if d.State == want {
@@ -192,7 +192,6 @@ func completedTask(taskID, contextID, messageID, reply string) *a2a.Task {
 // ---- send ---------------------------------------------------------------------------------------
 
 func TestSendIsRecordedOncePerMessageID(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	id := uuid.NewString()
@@ -217,7 +216,6 @@ func TestSendIsRecordedOncePerMessageID(t *testing.T) {
 }
 
 func TestSendIsQueuedWhileATurnIsOpen(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	e.send("one")
@@ -246,7 +244,6 @@ func TestSendIsQueuedWhileATurnIsOpen(t *testing.T) {
 }
 
 func TestSendValidation(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	for name, c := range map[string]struct {
@@ -267,7 +264,6 @@ func TestSendValidation(t *testing.T) {
 // ---- delivery -----------------------------------------------------------------------------------
 
 func TestReplyIsMirroredAndAnnouncedWithTheSettle(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	id := e.send("hello there")
@@ -298,7 +294,6 @@ func TestReplyIsMirroredAndAnnouncedWithTheSettle(t *testing.T) {
 }
 
 func TestKagentSeesTheLedgerMessageID(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	id := e.send("hi")
@@ -316,7 +311,6 @@ func TestKagentSeesTheLedgerMessageID(t *testing.T) {
 }
 
 func TestNotAcceptedIsRetriedWithTheSameMessageID(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.srv.FailNext("SendStreamingMessage", kagenttest.Fault{RPC: kagenttest.NotAccepted(10)})
 	e.srv.FailNext("SendStreamingMessage", kagenttest.Fault{RPC: kagenttest.NotAccepted(10)})
@@ -334,7 +328,6 @@ func TestNotAcceptedIsRetriedWithTheSameMessageID(t *testing.T) {
 }
 
 func TestRefusalsEndInFailedAndTheOwnerMaySendAgain(t *testing.T) {
-	t.Parallel()
 	t.Run("not accepted past the budget is not sent", func(t *testing.T) {
 		e := newEnv(t, func(_ *sessions.Options, k *kagent.Config) { k.SendRetryBudget = 40 * time.Millisecond })
 		for range 8 {
@@ -383,7 +376,6 @@ func TestRefusalsEndInFailedAndTheOwnerMaySendAgain(t *testing.T) {
 }
 
 func TestADroppedStreamBecomesUncertainAndIsResolvedByLookup(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.srv.Script(kagenttest.Drop{})
 	e.run()
@@ -425,7 +417,6 @@ func TestADroppedStreamBecomesUncertainAndIsResolvedByLookup(t *testing.T) {
 }
 
 func TestAnUncertainDeliveryNobodyCanFindIsFailedAfterTheHoldWithoutAResend(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t, func(o *sessions.Options, _ *kagent.Config) { o.UncertainHold = 250 * time.Millisecond })
 	e.srv.Script(kagenttest.Drop{})
 	e.run()
@@ -443,7 +434,6 @@ func TestAnUncertainDeliveryNobodyCanFindIsFailedAfterTheHoldWithoutAResend(t *t
 }
 
 func TestAStreamThatEndsWithoutATaskIsUncertainNotFailed(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.srv.Script(kagenttest.Comment{})
 	e.run()
@@ -473,7 +463,6 @@ func (e *env) leftBehind(state dbstate.DeliveryState, taskID, text string) strin
 }
 
 func TestARecordedRowLeftByACrashIsSentOnce(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	id := e.leftBehind(dbstate.DeliveryRecorded, "", "hello")
 	e.run()
@@ -484,7 +473,6 @@ func TestARecordedRowLeftByACrashIsSentOnce(t *testing.T) {
 }
 
 func TestASendingRowLeftByACrashIsLookedUpNotResent(t *testing.T) {
-	t.Parallel()
 	t.Run("kagent has the task", func(t *testing.T) {
 		e := newEnv(t)
 		// The kagent session exists, as it does once a send has started.
@@ -520,7 +508,6 @@ func TestASendingRowLeftByACrashIsLookedUpNotResent(t *testing.T) {
 }
 
 func TestADeliveredRowLeftByACrashIsFollowedToTheEnd(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	first := e.send("warm up")
 	stop := e.run()
@@ -539,7 +526,6 @@ func TestADeliveredRowLeftByACrashIsFollowedToTheEnd(t *testing.T) {
 }
 
 func TestARunnerStoppedMidTurnIsReplacedByOneThatFinishesIt(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	running := &a2a.Task{ID: "t-1", ContextID: "ctx", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}
 	e.srv.Script(kagenttest.Emit{Event: running}, kagenttest.Hang{})
@@ -563,12 +549,11 @@ func TestARunnerStoppedMidTurnIsReplacedByOneThatFinishesIt(t *testing.T) {
 }
 
 func TestAnInterruptedSendIsNotResentByTheNextRunner(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.srv.Script(kagenttest.Hang{}) // the request is out, nothing comes back
 	stop := e.run()
 	id := e.send("hi")
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for e.delivery(id).State != dbstate.DeliverySending && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -586,7 +571,6 @@ func TestAnInterruptedSendIsNotResentByTheNextRunner(t *testing.T) {
 }
 
 func TestTwoRunnersDeliverEachMessageOnce(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.run()
@@ -599,7 +583,6 @@ func TestTwoRunnersDeliverEachMessageOnce(t *testing.T) {
 }
 
 func TestThePartialUniqueIndexAllowsOneOpenTurnPerSession(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	first := e.send("one")
@@ -621,7 +604,6 @@ func TestThePartialUniqueIndexAllowsOneOpenTurnPerSession(t *testing.T) {
 }
 
 func TestEnsureMainIsIdempotentAndConcurrencySafe(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	var wg sync.WaitGroup
 	ids := make(chan string, 8)
@@ -651,7 +633,6 @@ func TestEnsureMainIsIdempotentAndConcurrencySafe(t *testing.T) {
 }
 
 func TestOptionsFromSettings(t *testing.T) {
-	t.Parallel()
 	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "x.test"})
 	if err != nil {
 		t.Fatal(err)
@@ -673,7 +654,6 @@ func TestOptionsFromSettings(t *testing.T) {
 }
 
 func TestUnauthorizedIsNotSent(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.srv.FailNext("SendStreamingMessage", kagenttest.Fault{RPC: kagenttest.Unauthorized()})
 	e.run()
@@ -686,7 +666,6 @@ func TestUnauthorizedIsNotSent(t *testing.T) {
 
 // A claimer that lost its lease cannot change the row, whatever it tries.
 func TestFencedWritesFromAStaleClaimMatchNothing(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	id := e.send("hi")

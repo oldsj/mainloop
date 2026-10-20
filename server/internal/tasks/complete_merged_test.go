@@ -51,7 +51,6 @@ func (r *rig) reportedCode(branch string) (id, attempt, binding string) {
 // A code task whose own PR the merge service merged completes, and its attempt then settles: the
 // runtime is told to stop, the branch claim and the capacity slot are released.
 func TestMergedPRCompletesTheCodeTaskAndFreesItsAttempt(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	id, attempt, binding := r.reportedCode("feat")
 	r.merged("m1", binding, 7)
@@ -117,7 +116,6 @@ func TestMergedPRCompletesTheCodeTaskAndFreesItsAttempt(t *testing.T) {
 // Only the merge service's settlement of the task's own PR completes it. Anything else leaves the
 // task waiting, while the projection still shows what GitHub shows.
 func TestMergedPRWithoutTheMergeServicesSettlementDoesNotComplete(t *testing.T) {
-	t.Parallel()
 	for name, setup := range map[string]func(r *rig, binding string){
 		"no candidate: merged by someone else": func(r *rig, _ string) {},
 		"another session's candidate":          func(r *rig, _ string) { r.merged("m1", "someone-else", 7) },
@@ -169,7 +167,6 @@ func TestMergedPRWithoutTheMergeServicesSettlementDoesNotComplete(t *testing.T) 
 
 // The projection shows a merge by anyone as merged, and says nothing for a PR that is not.
 func TestProjectionDerivesMergeStateFromTheObservedPR(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	for state, want := range map[string]string{"merged": "merged", "open": "", "closed": ""} {
@@ -190,7 +187,6 @@ func TestProjectionDerivesMergeStateFromTheObservedPR(t *testing.T) {
 // A task that has not reported completed is not completed by a merge: the agent that merged is
 // still working, and stopping it would lose the report.
 func TestMergedPRDoesNotCompleteARunningTask(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()

@@ -6,7 +6,6 @@ import (
 )
 
 func TestSafeDetailRedactsCredentials(t *testing.T) {
-	t.Parallel()
 	jwt := "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc_def-ghi"
 	cases := map[string]string{
 		"header":     "request failed Authorization: Basic dXNlcjpwYXNz now",
@@ -34,7 +33,6 @@ func TestSafeDetailRedactsCredentials(t *testing.T) {
 }
 
 func TestSafeDetailCollapsesAndBounds(t *testing.T) {
-	t.Parallel()
 	if got := safeDetail("  a\n\tb   c  "); got != "a b c" {
 		t.Errorf("%q", got)
 	}
@@ -51,7 +49,6 @@ func TestSafeDetailCollapsesAndBounds(t *testing.T) {
 }
 
 func TestSafeDetailLeavesNoStrayBracket(t *testing.T) {
-	t.Parallel()
 	for in, want := range map[string]string{
 		`{"authorization":[abc123]}`:        `{"authorization":[redacted]}`,
 		`{"password": ["a b", "c"], "x":1}`: `{"password": [redacted], "x":1}`,
@@ -64,7 +61,6 @@ func TestSafeDetailLeavesNoStrayBracket(t *testing.T) {
 }
 
 func TestSafeDetailRedactsCookiesAndPrivateKeys(t *testing.T) {
-	t.Parallel()
 	cases := map[string][]string{
 		"cookie":     {"proxy said Cookie: session=abc123def; theme=dark; path=/ then failed", "abc123def", "theme=dark"},
 		"set-cookie": {"Set-Cookie: sid=zzTopSecret; Path=/; HttpOnly rejected", "zzTopSecret"},

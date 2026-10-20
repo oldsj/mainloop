@@ -57,7 +57,6 @@ func (e *env) bindingRow() dbq.GetMainBindingRow {
 // ---- P1-1: the order of the deliveries ------------------------------------------------------------
 
 func TestDeliveriesAreListedOldestFirst(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	first := e.send("one")
@@ -71,7 +70,6 @@ func TestDeliveriesAreListedOldestFirst(t *testing.T) {
 }
 
 func TestOnlyTheNewestTwentyDeliveriesAreShownOldestFirst(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	m, err := e.svc.EnsureMain(context.Background())
 	if err != nil {
@@ -98,7 +96,6 @@ func TestOnlyTheNewestTwentyDeliveriesAreShownOldestFirst(t *testing.T) {
 // ---- P2-1: an uncertain delivery is in flight only while it blocks a send -------------------------
 
 func TestAnUncertainDeliveryIsInFlightOnlyInsideTheHold(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t) // the hold is 30 minutes
 	id := e.send("hi")
 	ctx := context.Background()
@@ -130,7 +127,6 @@ func TestAnUncertainDeliveryIsInFlightOnlyInsideTheHold(t *testing.T) {
 // ---- P2-2: every settle publishes ------------------------------------------------------------------
 
 func TestAFailedTaskMirrorsWhatItProducedAndPublishes(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	failed := &a2a.Task{
 		ID: "t-part", ContextID: "ctx",
@@ -161,7 +157,6 @@ func TestAFailedTaskMirrorsWhatItProducedAndPublishes(t *testing.T) {
 }
 
 func TestAStoppedTurnPublishes(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	stopped := &a2a.Task{ID: "t-stop", ContextID: "ctx", Status: a2a.TaskStatus{State: a2a.TaskStateCanceled}}
 	e.srv.Script(kagenttest.Emit{Event: stopped})
@@ -181,7 +176,6 @@ func TestAStoppedTurnPublishes(t *testing.T) {
 // ---- P2-3: parked tasks are read less and less often ----------------------------------------------
 
 func TestAParkedTaskIsReadWithBackoff(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t, func(o *sessions.Options, _ *kagent.Config) { o.ParkedMax = 160 * time.Millisecond })
 	parked := &a2a.Task{ID: "t-park", ContextID: "ctx", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}
 	e.srv.Script(kagenttest.Emit{Event: parked})
@@ -203,7 +197,6 @@ func TestAParkedTaskIsReadWithBackoff(t *testing.T) {
 // ---- P2-4: the kagent Session is made usable before a send ----------------------------------------
 
 func TestASuspendedSessionIsResumedBeforeTheNextSend(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
@@ -221,7 +214,6 @@ func TestASuspendedSessionIsResumedBeforeTheNextSend(t *testing.T) {
 }
 
 func TestASessionStillStartingIsWaitedFor(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t, func(o *sessions.Options, _ *kagent.Config) { o.ReadyWait = 5 * time.Second })
 	var gets atomic.Int32
 	e.srv.TamperSession = func(proc string, s *kagentapi.Session) {
@@ -241,7 +233,6 @@ func TestASessionStillStartingIsWaitedFor(t *testing.T) {
 }
 
 func TestASessionThatNeverGetsReadyIsNotSentTo(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t, func(o *sessions.Options, _ *kagent.Config) { o.ReadyWait = 150 * time.Millisecond })
 	e.srv.TamperSession = func(proc string, s *kagentapi.Session) {
 		if proc == kagent.ProcCreateSession || proc == kagent.ProcGetSession {
@@ -250,7 +241,7 @@ func TestASessionThatNeverGetsReadyIsNotSentTo(t *testing.T) {
 	}
 	e.run()
 	id := e.send("hi")
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for e.srv.Count(kagent.ProcGetSession) < 2 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -263,7 +254,6 @@ func TestASessionThatNeverGetsReadyIsNotSentTo(t *testing.T) {
 }
 
 func TestASessionKagentNoLongerHasIsReplaced(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
@@ -286,7 +276,6 @@ func TestASessionKagentNoLongerHasIsReplaced(t *testing.T) {
 }
 
 func TestBindingWritesFromAStaleClaimMatchNothing(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	id := e.leftBehind(dbstate.DeliveryRecorded, "", "hi")
 	q := dbq.New(e.pool)
@@ -310,7 +299,6 @@ func ptr[T any](v T) *T { return &v }
 // ---- P2-5: the main session cannot be archived -----------------------------------------------------
 
 func TestTheMainSessionCannotBeArchived(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	m, err := e.svc.EnsureMain(context.Background())
 	if err != nil {
@@ -333,7 +321,6 @@ func TestTheMainSessionCannotBeArchived(t *testing.T) {
 // ---- P3-1, P3-2 ------------------------------------------------------------------------------------
 
 func TestADeliveryWhoseBindingIsGoneFailsInsteadOfLooping(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	id := e.send("hi")
 	if _, err := e.pool.Exec(context.Background(), `DELETE FROM agent_bindings`); err != nil {
@@ -347,7 +334,6 @@ func TestADeliveryWhoseBindingIsGoneFailsInsteadOfLooping(t *testing.T) {
 }
 
 func TestSendRefusesAMessageIDAnotherMessageUses(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	m, err := e.svc.EnsureMain(context.Background())
 	if err != nil {

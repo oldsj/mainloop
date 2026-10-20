@@ -19,7 +19,6 @@ import (
 // ---- G6a re-review N-P2-1: a create that hits a deleted request id ---------------------------------------
 
 func TestACreateThatHitsADeletedRequestIdGetsANewSession(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
@@ -57,7 +56,6 @@ func TestACreateThatHitsADeletedRequestIdGetsANewSession(t *testing.T) {
 // ---- P3-1: the Session id is stored on the delivery when it moves to sending ------------------------------
 
 func TestTheSessionAMessageWasSentToIsStoredOnItsDelivery(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	id := e.send("one")
@@ -68,7 +66,6 @@ func TestTheSessionAMessageWasSentToIsStoredOnItsDelivery(t *testing.T) {
 }
 
 func TestAnInterruptedSendIsLookedUpInTheSessionItWasSentTo(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	first := e.send("warm up")
 	stop := e.run()
@@ -98,7 +95,6 @@ func TestAnInterruptedSendIsLookedUpInTheSessionItWasSentTo(t *testing.T) {
 // ---- P3-2: READY with an operation in progress is not settled ---------------------------------------------
 
 func TestAReadySessionWithAnOperationInProgressIsWaitedFor(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t, func(o *sessions.Options, _ *kagent.Config) { o.ReadyWait = 5 * time.Second })
 	var gets atomic.Int32
 	e.srv.TamperSession = func(proc string, s *kagentapi.Session) {
@@ -116,7 +112,6 @@ func TestAReadySessionWithAnOperationInProgressIsWaitedFor(t *testing.T) {
 }
 
 func TestASessionThatIsAlwaysChangingIsNotSentTo(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t, func(o *sessions.Options, _ *kagent.Config) { o.ReadyWait = 150 * time.Millisecond })
 	e.srv.TamperSession = func(proc string, s *kagentapi.Session) {
 		if proc == kagent.ProcCreateSession || proc == kagent.ProcGetSession {
@@ -126,7 +121,7 @@ func TestASessionThatIsAlwaysChangingIsNotSentTo(t *testing.T) {
 	}
 	e.run()
 	id := e.send("hi")
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for e.srv.Count(kagent.ProcGetSession) < 2 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -141,7 +136,6 @@ func TestASessionThatIsAlwaysChangingIsNotSentTo(t *testing.T) {
 // ---- P3-3: the end of an uncertain delivery's hold is announced while lookups fail ------------------------
 
 func TestTheEndOfTheHoldIsAnnouncedOnceWhileLookupsFail(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t, func(o *sessions.Options, _ *kagent.Config) { o.UncertainHold = 400 * time.Millisecond })
 	e.srv.Script(kagenttest.Drop{})
 	for range 400 {
@@ -151,7 +145,7 @@ func TestTheEndOfTheHoldIsAnnouncedOnceWhileLookupsFail(t *testing.T) {
 	id := e.send("hi")
 	e.waitState(id, dbstate.DeliveryUncertain)
 
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	var detail string
 	for time.Now().Before(deadline) {
 		detail = deref(e.delivery(id).Detail)
@@ -183,7 +177,6 @@ func containsHold(detail string) bool {
 // ---- P3-5: follow-error backoff ----------------------------------------------------------------------------
 
 func TestErrorDelayBacksOffFromFollowPollToTheRecheckDelay(t *testing.T) {
-	t.Parallel()
 	o := sessions.Options{FollowPoll: 100 * time.Millisecond, UncertainRecheck: 800 * time.Millisecond, ParkedMax: 5 * time.Second}
 	for _, tt := range []struct {
 		attempts int
@@ -206,7 +199,6 @@ func TestErrorDelayBacksOffFromFollowPollToTheRecheckDelay(t *testing.T) {
 }
 
 func TestAFailingTaskReadIsRetriedLessAndLess(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t, func(o *sessions.Options, _ *kagent.Config) {
 		o.FollowPoll, o.UncertainRecheck = 20*time.Millisecond, 400*time.Millisecond
 	})
@@ -237,7 +229,6 @@ func TestAFailingTaskReadIsRetriedLessAndLess(t *testing.T) {
 // own an unrecorded one, so the orphan sweep's safety count ignores it until the create has been
 // requested (the request id is recorded before the call). A claim alone does not count.
 func TestUnresolvedBindingsIgnoreTheMainBindingBeforeItsFirstSession(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.send("hello") // records the main binding and a delivery; no loop runs
 	q := dbq.New(e.pool)

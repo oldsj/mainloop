@@ -79,7 +79,6 @@ func (p *prep) readRaw(t *testing.T, body []byte) *api.NativeSessionInfo {
 // holds a complete pending receipt; the second holds a receipt that says only "confirmed". Merged,
 // they would read as a confirmed receipt with the first one's revision, challenge and timestamps.
 func TestASplitSessionEnvelopeDoesNotInventAReceipt(t *testing.T) {
-	t.Parallel()
 	p := newPrep(t)
 	ksid := p.e.bindingKsid(p.sid)
 	first := &kagentapi.Session{

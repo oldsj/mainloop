@@ -11,7 +11,6 @@ import (
 // A session reads needs_owner exactly when the attention visibility rule says it has a visible
 // item: on the list (one batched read), on the detail and on the conversation.
 func TestSessionsReportNeedsOwnerFromTheAttentionRule(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	ctx := context.Background()

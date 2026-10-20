@@ -34,7 +34,6 @@ func (r *rig) updates(id string) int {
 }
 
 func TestProjectionStoresAndPublishes(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	base := r.updates(id)
@@ -68,7 +67,6 @@ func TestProjectionStoresAndPublishes(t *testing.T) {
 }
 
 func TestProjectionCIMustMatchTheHead(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	r.obs.set(tasks.Observation{
@@ -100,7 +98,6 @@ func TestProjectionCIMustMatchTheHead(t *testing.T) {
 }
 
 func TestProjectionIgnoresAnotherBranchOrRepo(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	for _, o := range []tasks.Observation{
@@ -123,7 +120,6 @@ func environmentJSON(version string) string {
 // the environment version of its current attempt, not an attempt with no recorded environment
 // and not a superseded one left behind by a retry.
 func TestProjectionEnvironmentVersionFollowsCurrentAttempt(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	id := r.mustCreate(r.own, tasks.CreateInput{ProjectID: "p1"})
 	if got := r.view(r.own, id).Projection.EnvironmentVersionId; got != nil {
@@ -151,7 +147,6 @@ func TestProjectionEnvironmentVersionFollowsCurrentAttempt(t *testing.T) {
 }
 
 func TestProjectionErrorsDegradeToUnknownAndNeverComplete(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	r.obs.set(tasks.Observation{PRNumber: 7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "a", PRState: "merged", CIState: "success", CIHeadSHA: "a"}, nil)
@@ -174,7 +169,6 @@ func TestProjectionErrorsDegradeToUnknownAndNeverComplete(t *testing.T) {
 }
 
 func TestProjectionSkipsFinalTasksAndTasksWithoutAttempts(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	done := r.projected()
 	r.setStatus(done, "completed", "")
@@ -190,7 +184,6 @@ func TestProjectionSkipsFinalTasksAndTasksWithoutAttempts(t *testing.T) {
 }
 
 func TestProjectionRacesAFinishingTask(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	r.obs.set(tasks.Observation{PRNumber: 7, PRHeadRef: "feature", PRRepo: "o/p1", PRState: "open"}, nil)

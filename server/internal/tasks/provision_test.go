@@ -28,7 +28,6 @@ func (r *rig) supervisor() (root string, sup tasks.Principal) {
 }
 
 func TestDelegateProvisionsAndReports(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.run()
 	root, sup := r.supervisor()
@@ -110,7 +109,6 @@ func TestDelegateProvisionsAndReports(t *testing.T) {
 }
 
 func TestProvisionReplaysWithoutASecondWorkspace(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	root := r.mustCreate(r.own, tasks.CreateInput{ProjectID: "p1"})
 	stop := r.run()
@@ -136,7 +134,6 @@ func TestProvisionReplaysWithoutASecondWorkspace(t *testing.T) {
 }
 
 func TestBriefIsNotSentTwice(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	root := r.mustCreate(r.own, tasks.CreateInput{ProjectID: "p1"})
 	r.run()
@@ -157,7 +154,6 @@ func TestBriefIsNotSentTwice(t *testing.T) {
 }
 
 func TestLeaseLossReplaysEachStep(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	root := r.mustCreate(r.own, tasks.CreateInput{ProjectID: "p1"})
 	// Run the loop long enough for each step, then stop it and look at the rows as a crash leaves
@@ -182,7 +178,6 @@ func TestLeaseLossReplaysEachStep(t *testing.T) {
 }
 
 func TestCancelMidProvisionLeavesNothing(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.ws.unready = true // the workspace never gets its kagent Session: the attempt stays creating
 	stop := r.run()
@@ -231,7 +226,6 @@ func TestCancelMidProvisionLeavesNothing(t *testing.T) {
 }
 
 func TestCancelBeforeProvisioningCreatesNothing(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	id := r.mustCreate(r.own, tasks.CreateInput{})
 	op, err := r.svc.Cancel(context.Background(), r.own, action(id, r.view(r.own, id), "c1"))
@@ -250,7 +244,6 @@ func TestCancelBeforeProvisioningCreatesNothing(t *testing.T) {
 }
 
 func TestCancelledByTheParentBeforeProvisioning(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	root := r.mustCreate(r.own, tasks.CreateInput{ProjectID: "p1"})
 	r.attempt(root, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
@@ -270,7 +263,6 @@ func TestCancelledByTheParentBeforeProvisioning(t *testing.T) {
 }
 
 func TestCapacityRefusals(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.svc.Limits.MaxChildrenPerParent, r.svc.Limits.MaxChildrenGlobal = 2, 3
 	mk := func(binding string) (string, tasks.Principal) {
@@ -307,7 +299,6 @@ func TestCapacityRefusals(t *testing.T) {
 }
 
 func TestWriterClaimsGoUpByOne(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	stop := r.run()
 	_, sup := r.supervisor()
@@ -340,7 +331,6 @@ func TestWriterClaimsGoUpByOne(t *testing.T) {
 }
 
 func TestBranchWaitEndsInFailure(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.svc.Limits.ProvisionWindow = time.Millisecond
 	r.run()
@@ -355,7 +345,6 @@ func TestBranchWaitEndsInFailure(t *testing.T) {
 }
 
 func TestRejectedWorkspaceAbortsProvisioning(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()
@@ -385,7 +374,6 @@ func TestRejectedWorkspaceAbortsProvisioning(t *testing.T) {
 }
 
 func TestSlowWorkspaceSessionAborts(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()
@@ -405,7 +393,6 @@ func TestSlowWorkspaceSessionAborts(t *testing.T) {
 // create response carrying a terminal-sounding reason for a hiccup the reconcile loop's own retry
 // resolves a moment later: the caller must not need to poll task_get to learn that it worked.
 func TestCreateResponseStaysHonestThroughATransientProvisioningRetry(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()
@@ -432,7 +419,6 @@ func TestCreateResponseStaysHonestThroughATransientProvisioningRetry(t *testing.
 // way (nothing attempted yet), and the genuine failure appears only once retries are exhausted, in
 // the operation the caller polls, not retrofitted into the original response.
 func TestCreateResponseStaysHonestWhenProvisioningExhausts(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()
@@ -457,7 +443,6 @@ func TestCreateResponseStaysHonestWhenProvisioningExhausts(t *testing.T) {
 }
 
 func TestCancelledSupervisorCancelsChildren(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.run()
 	root, sup := r.supervisor()

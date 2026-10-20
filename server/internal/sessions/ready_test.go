@@ -13,7 +13,6 @@ import (
 )
 
 func TestReadySessionResumesASuspendedSession(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
@@ -45,7 +44,6 @@ func (w *wakeFake) Wake(context.Context, string) error {
 }
 
 func TestReadySessionWakesTheWorkspaceBehindASuspendedSession(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
@@ -72,7 +70,6 @@ func TestReadySessionWakesTheWorkspaceBehindASuspendedSession(t *testing.T) {
 }
 
 func TestReadySessionFailsWhenTheWorkspaceStaysAsleep(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t, func(o *sessions.Options, _ *kagent.Config) { o.ReadyWait = 100 * time.Millisecond })
 	e.run()
 	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
@@ -93,7 +90,6 @@ func TestReadySessionFailsWhenTheWorkspaceStaysAsleep(t *testing.T) {
 // kagent admits nothing to a prepared-workspace Session until it confirms the preparation, and
 // words the refusal as a bad reply; a send waits for it, and a failed preparation is final.
 func TestReadySessionWaitsForWorkspacePreparation(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.waitState(e.send("one"), dbstate.DeliveryCompleted)

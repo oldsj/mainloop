@@ -26,7 +26,6 @@ func (k *storedReferenceStops) ListTasks(ctx context.Context, agent kagent.Agent
 }
 
 func TestReviewS2G8bResolverNeedsStoredReference(t *testing.T) {
-	t.Parallel()
 	for _, kind := range []string{"scheduled", "claude"} {
 		t.Run(kind, func(t *testing.T) {
 			r := newRig(t)
@@ -231,7 +230,6 @@ func mustStopped(t *testing.T, obs *tasks.KagentStops, session string, want bool
 // A message that was sent and that no task carries yet may still land: the observer holds it as
 // possibly running until the sessions ledger's hold has passed.
 func TestKagentStopsSentWithNoTaskInsideTheHoldIsNotStopped(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	k := &fakeKagent{}
 	obs, _, _, attempt, session := r.kagentStops(k)
@@ -245,7 +243,6 @@ func TestKagentStopsSentWithNoTaskInsideTheHoldIsNotStopped(t *testing.T) {
 }
 
 func TestKagentStopsCancelsALandedTaskThenSeesItStopped(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	k := &fakeKagent{}
 	obs, _, _, attempt, session := r.kagentStops(k)
@@ -259,7 +256,6 @@ func TestKagentStopsCancelsALandedTaskThenSeesItStopped(t *testing.T) {
 }
 
 func TestKagentStopsLandedTaskRecordedOnTheRow(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	k := &fakeKagent{}
 	obs, _, _, attempt, session := r.kagentStops(k)
@@ -275,7 +271,6 @@ func TestKagentStopsLandedTaskRecordedOnTheRow(t *testing.T) {
 }
 
 func TestKagentStopsNeverSentIsStopped(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	k := &fakeKagent{}
 	obs, _, _, attempt, session := r.kagentStops(k)
@@ -291,7 +286,6 @@ func TestKagentStopsNeverSentIsStopped(t *testing.T) {
 }
 
 func TestKagentStopsPastTheHoldIsStopped(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	k := &fakeKagent{}
 	obs, _, _, attempt, session := r.kagentStops(k)
@@ -306,7 +300,6 @@ func TestKagentStopsPastTheHoldIsStopped(t *testing.T) {
 // a cancel of such an attempt would retry ListTasks/FindTaskForMessage against a session that will
 // never reappear and never settle; with it, Stopped answers at once and asks kagent nothing else.
 func TestStoppedTreatsAForgottenSessionAsStoppedWithoutAskingForItsTasks(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	k := &fakeKagent{}
 	obs, _, _, attempt, session := r.kagentStops(k)
@@ -326,7 +319,6 @@ func TestStoppedTreatsAForgottenSessionAsStoppedWithoutAskingForItsTasks(t *test
 // A terminal runtime state (failed, or on the way out) is also stopped at once: nothing in a
 // session that can never run again is still running, whatever it last reported.
 func TestStoppedTreatsATerminalRuntimeStateAsStopped(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	k := &fakeKagent{}
 	obs, _, _, attempt, session := r.kagentStops(k)
@@ -356,7 +348,6 @@ func (d *deletingLiveness) ObserveLiveness(context.Context, string) (kagent.Sess
 // deleted) is: it may still carry a task kagent can list, so the observer goes through the normal
 // path and cancels it, exactly as it would with no Liveness check at all.
 func TestStoppedTreatsADeletingRuntimeStateLikeTheNormalPath(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	k := &fakeKagent{}
 	obs, _, _, attempt, session := r.kagentStops(k)
@@ -374,7 +365,6 @@ func TestStoppedTreatsADeletingRuntimeStateLikeTheNormalPath(t *testing.T) {
 // The observer cannot see a task, so the stop stays unconfirmed, the attempt keeps its branch claim
 // and capacity slot, and only when the message lands and is stopped are they released.
 func TestInFlightSendKeepsTheClaimUntilItsTurnIsStopped(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.ses.agent = "unknown"
 	k := &fakeKagent{}
@@ -433,7 +423,6 @@ func TestInFlightSendKeepsTheClaimUntilItsTurnIsStopped(t *testing.T) {
 // Cancelling a supervisor reaches its children at once, in the cancel's own transaction, even while
 // the supervisor's stop stays unconfirmed.
 func TestCancelledSupervisorCancelsChildrenWhileItsStopIsUnresolved(t *testing.T) {
-	t.Parallel()
 	r := newRig(t)
 	r.ses.agent = "unknown"
 	ss := &sessionStops{m: map[string]bool{}}

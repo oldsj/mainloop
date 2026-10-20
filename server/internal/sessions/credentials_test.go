@@ -48,7 +48,6 @@ func (e *env) grantNative(a *authtest.Env, id string) dbq.Credential {
 }
 
 func TestTheMainThreadIsCreatedWithItsMCPCredential(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	a := e.withCredentials()
 	e.run()
@@ -80,7 +79,6 @@ func TestTheMainThreadIsCreatedWithItsMCPCredential(t *testing.T) {
 }
 
 func TestANativeSessionCarriesNoMCPCredential(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	e.withCredentials()
@@ -98,7 +96,6 @@ func TestANativeSessionCarriesNoMCPCredential(t *testing.T) {
 
 // Outside a cluster there is no Secret store: sessions still work, without an MCP credential.
 func TestWithoutAKubernetesStoreTheMainThreadStillWorks(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.svc.Credentials = agentauth.NewCredentials(e.pool, agentauth.Unconfigured{}, authtest.Key, "mainloop", nil)
 	e.svc.MCPOrigin = mcpOrigin
@@ -117,7 +114,6 @@ func TestWithoutAKubernetesStoreTheMainThreadStillWorks(t *testing.T) {
 // A previous credential whose Secret is still being deleted holds the name: the first message waits
 // for it, however long, without being failed, and goes out once the name is free.
 func TestACreateWaitsForTheOldSecretToBeDeletedWithoutFailing(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	a := e.withCredentials()
 	ctx := context.Background()
@@ -155,7 +151,6 @@ func TestACreateWaitsForTheOldSecretToBeDeletedWithoutFailing(t *testing.T) {
 }
 
 func TestCancelRevokesTheSessionsCredentialWithTheStatusChange(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	a := e.withCredentials()
@@ -170,7 +165,6 @@ func TestCancelRevokesTheSessionsCredentialWithTheStatusChange(t *testing.T) {
 }
 
 func TestArchiveRevokesTheSessionsCredentialWithTheArchive(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	a := e.withCredentials()
@@ -191,7 +185,6 @@ func TestArchiveRevokesTheSessionsCredentialWithTheArchive(t *testing.T) {
 
 // An archive that is refused (the session is still live) leaves the credential alone.
 func TestRefusedArchiveKeepsTheCredential(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	a := e.withCredentials()

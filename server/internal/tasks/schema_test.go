@@ -21,7 +21,6 @@ func (e *env) refused(want, sql string, args ...any) {
 // The status × reason table in internal/tasks is the table in the tasks_status_reason CHECK:
 // every pair the machine allows is stored, and every pair it refuses is refused by the database.
 func TestStatusReasonTableMatchesTheDatabase(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	statuses := []dbstate.TaskStatus{dbstate.TaskQueued, dbstate.TaskRunning, dbstate.TaskWaiting, dbstate.TaskBlocked,
 		dbstate.TaskCompleted, dbstate.TaskFailed, dbstate.TaskCancelled}
@@ -45,7 +44,6 @@ func TestStatusReasonTableMatchesTheDatabase(t *testing.T) {
 }
 
 func TestTaskIdentityAndVersionAreProtected(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	root := e.mustCreate(e.own, tasks.CreateInput{ProjectID: "p1"})
 	e.attempt(root, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
@@ -65,7 +63,6 @@ func TestTaskIdentityAndVersionAreProtected(t *testing.T) {
 }
 
 func TestTaskHierarchyAndOwnership(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	other := func(sql string, args ...any) { e.refused("", sql, args...) }
 	// A project or topic of another owner cannot be attached.
@@ -90,7 +87,6 @@ func TestTaskHierarchyAndOwnership(t *testing.T) {
 }
 
 func TestAttemptInvariants(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	root := e.mustCreate(e.own, tasks.CreateInput{})
 	att := e.attempt(root, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
@@ -135,7 +131,6 @@ func TestAttemptInvariants(t *testing.T) {
 }
 
 func TestImmutableRecords(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	id := e.mustCreate(e.own, tasks.CreateInput{})
 	att := e.attempt(id, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
@@ -163,7 +158,6 @@ func TestImmutableRecords(t *testing.T) {
 }
 
 func TestWriterGenerationOnlyMovesUpByOne(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	id := e.mustCreate(e.own, tasks.CreateInput{})
 	a1 := e.attempt(id, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")

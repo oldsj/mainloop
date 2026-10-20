@@ -10,7 +10,6 @@ import (
 )
 
 func TestStandaloneCompletedSessionAcceptsFollowup(t *testing.T) {
-	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	sid := e.newSession("first turn")

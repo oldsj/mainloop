@@ -40,7 +40,6 @@ func (h *harness) due() {
 
 // Mined from backend/tests/runtime/test_workspaces.py: test_create_sends_the_workspace.
 func TestCreateBindsOneSessionAndPublishes(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	w := h.running()
 	ss := h.sessions()
@@ -74,7 +73,6 @@ func TestCreateBindsOneSessionAndPublishes(t *testing.T) {
 // The first attempt reached kagent and its reply was lost with the process; the replacement
 // runner must get that Session back, not make a second.
 func TestCrashMidCreateResumesWithoutSecondSession(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, map[string]string{"WORKSPACE_OPERATION_WAIT_SECONDS": "0.1"})
 	w, err := h.create(api.CreateWorkspaceRequest{}) // no runner: the op stays queued
 	if err != nil || w.ObservedState != api.WorkspaceObservedStateResuming {
@@ -100,9 +98,6 @@ func TestCrashMidCreateResumesWithoutSecondSession(t *testing.T) {
 // Mined: test_an_unknown_create_outcome_keeps_the_rows_for_refresh,
 // test_unavailable_then_success_runs_without_a_manual_refresh.
 func TestUnknownOutcomeIsRetriedByARestartedRunner(t *testing.T) {
-	// Not parallel: asserts on the workspace view returned by the create call, racing the
-	// background op loop's first poll of the row it just inserted. Scheduling delay from
-	// sibling tests can let that poll run first and change the observed detail text.
 	h := newHarness(t, map[string]string{
 		"WORKSPACE_CREATE_RETRY_INITIAL_SECONDS": "0.5", "WORKSPACE_CREATE_RETRY_MAX_SECONDS": "0.5",
 		"WORKSPACE_OPERATION_WAIT_SECONDS": "0.1",
@@ -133,7 +128,6 @@ func TestUnknownOutcomeIsRetriedByARestartedRunner(t *testing.T) {
 
 // Mined: test_backoff_doubles_to_the_cap.
 func TestBackoffDoublesToTheCap(t *testing.T) {
-	t.Parallel()
 	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "mainloop.test", "MAINLOOP_API_HOSTS": "api.test"})
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +151,6 @@ func TestBackoffDoublesToTheCap(t *testing.T) {
 // Mined: test_retries_give_up_after_the_window_and_refresh_restarts_them,
 // test_a_failed_manual_refresh_after_a_stop_rearms_retries.
 func TestRetriesGiveUpAfterTheWindowAndRefreshRestartsThem(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, slow)
 	h.run()
 	h.fake.FailNext(kagent.ProcCreateSession, kagenttest.Fault{Drop: true})
@@ -197,7 +190,6 @@ func TestRetriesGiveUpAfterTheWindowAndRefreshRestartsThem(t *testing.T) {
 
 // Mined: test_a_permanent_error_stops_without_retrying, test_a_rejected_first_create_still_removes_the_rows.
 func TestPermanentErrorRemovesTheRows(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	h.run()
 	h.fake.FailNext(kagent.ProcCreateSession, grpcFault(connect.CodeInvalidArgument))
@@ -213,7 +205,6 @@ func TestPermanentErrorRemovesTheRows(t *testing.T) {
 
 // Mined: test_a_retry_racing_a_manual_refresh_creates_one_session.
 func TestRefreshRacingTheLoopCreatesOneSession(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, slow)
 	h.run()
 	h.fake.FailNext(kagent.ProcCreateSession, kagenttest.Fault{Drop: true})
@@ -234,7 +225,6 @@ func TestRefreshRacingTheLoopCreatesOneSession(t *testing.T) {
 }
 
 func TestSuspendResumeAndEvents(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	w := h.running()
 	h.run()
@@ -266,7 +256,6 @@ func TestSuspendResumeAndEvents(t *testing.T) {
 
 // Mined: test_suspend_refuses_while_a_turn_is_sending_or_delivered_or_queued.
 func TestSuspendRefusesWhileATurnIsOpen(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	w := h.running()
 	h.run()
@@ -286,7 +275,6 @@ func TestSuspendRefusesWhileATurnIsOpen(t *testing.T) {
 }
 
 func TestAnotherOperationOpenIsBusy(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, map[string]string{"WORKSPACE_OPERATION_WAIT_SECONDS": "0.1"})
 	w, err := h.create(api.CreateWorkspaceRequest{}) // create stays queued: no runner
 	if err != nil {
@@ -300,7 +288,6 @@ func TestAnotherOperationOpenIsBusy(t *testing.T) {
 // Mined: test_workspace_delete_removes_rows_only_after_kagent_confirms,
 // test_an_unconfirmed_archive_delete_is_retried_by_the_reconcile_pass.
 func TestDeleteKeepsRowsUntilKagentConfirms(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, slow)
 	w := h.running()
 	h.run()
@@ -316,7 +303,6 @@ func TestDeleteKeepsRowsUntilKagentConfirms(t *testing.T) {
 
 // Mined: test_workspace_delete_with_kagent_unreachable_keeps_rows.
 func TestDeleteWithKagentUnreachableKeepsRows(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, slow)
 	w := h.running()
 	h.run()
@@ -338,7 +324,6 @@ func TestDeleteWithKagentUnreachableKeepsRows(t *testing.T) {
 
 // Mined: test_workspace_delete_refuses_while_a_turn_is_open.
 func TestDeleteRefusesWhileATurnIsOpen(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	w := h.running()
 	h.run()
@@ -352,7 +337,6 @@ func TestDeleteRefusesWhileATurnIsOpen(t *testing.T) {
 // Mined: test_archive_with_nothing_created_has_nothing_to_delete: a workspace whose create was
 // never sent is removed without calling kagent.
 func TestDeleteBeforeAnyCreateAttempt(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, map[string]string{"WORKSPACE_OPERATION_WAIT_SECONDS": "0.1"})
 	w, err := h.create(api.CreateWorkspaceRequest{})
 	if err != nil {
@@ -375,7 +359,6 @@ func TestDeleteBeforeAnyCreateAttempt(t *testing.T) {
 
 // Mined: test_delete_of_an_unknown_create_resolves_it_and_deletes_the_session.
 func TestDeleteOfAnUnknownCreateDeletesTheSession(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, map[string]string{"WORKSPACE_OPERATION_WAIT_SECONDS": "0.1"})
 	w, err := h.create(api.CreateWorkspaceRequest{})
 	if err != nil {
@@ -398,7 +381,6 @@ func TestDeleteOfAnUnknownCreateDeletesTheSession(t *testing.T) {
 // Mined: test_a_resume_restarts_the_debounce_but_a_ready_session_is_not_resumed,
 // test_a_refused_resume_is_a_conflict.
 func TestResumeRefusedForAFailedSession(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	w := h.running()
 	h.run()
@@ -417,7 +399,6 @@ func cmpOr(a, b string) string {
 }
 
 func TestStateMapping(t *testing.T) {
-	t.Parallel()
 	S, O := kagentapi.RuntimeState_value, kagentapi.RuntimeOperation_value
 	cases := []struct {
 		state, op string
@@ -452,7 +433,6 @@ func TestStateMapping(t *testing.T) {
 
 // Mined: test_unreachable_kagent_is_unknown_not_an_error, test_a_session_kagent_no_longer_has_is_unknown.
 func TestKagentDownShowsUnknown(t *testing.T) {
-	t.Parallel()
 	h := newHarness(t, nil)
 	w := h.running()
 	h.fake.FailNext(kagent.ProcGetSession, kagenttest.Fault{Drop: true})
