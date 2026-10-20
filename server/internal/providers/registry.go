@@ -57,8 +57,10 @@ func (e resolveError) Unwrap() error { return e.kind }
 
 // NewRegistry builds the registry from the built-in profiles and the operator's
 // PROVIDER_PROFILES. An operator profile replaces the built-in profile with the same ID and
-// otherwise is added. Any malformed profile, including a built-in one made from a bad KAGENT_*
-// setting, or any duplicate ID or alias, is an error.
+// otherwise is added. A replacing profile with the same native_provider as the built-in inherits
+// the built-in's Models, DefaultModel, EffortLevels and DefaultEffort for any of those it leaves
+// empty; it keeps its own values for any it sets. Any malformed profile, including a built-in one
+// made from a bad KAGENT_* setting, or any duplicate ID or alias, is an error.
 func NewRegistry(k config.Kagent) (*Registry, error) {
 	profiles := builtins(k)
 	index := map[string]int{}
@@ -67,7 +69,7 @@ func NewRegistry(k config.Kagent) (*Registry, error) {
 	}
 	for _, p := range k.ProviderProfiles {
 		if i, ok := index[p.ID]; ok {
-			profiles[i] = p
+			profiles[i] = inheritBuiltinModelAndEffort(p, profiles[i])
 			continue
 		}
 		index[p.ID] = len(profiles)
@@ -86,6 +88,26 @@ func NewRegistry(k config.Kagent) (*Registry, error) {
 		}
 	}
 	return r, nil
+}
+
+// inheritBuiltinModelAndEffort fills an operator profile's empty Models/DefaultModel and
+// EffortLevels/DefaultEffort from the built-in profile it replaces, when both name the same
+// native_provider. A profile that sets either pair explicitly keeps its own values: validation
+// already requires DefaultModel/DefaultEffort to be empty whenever Models/EffortLevels is, so
+// "empty" here only matches an operator profile that left the pair unset.
+func inheritBuiltinModelAndEffort(operator, builtin config.ProviderProfile) config.ProviderProfile {
+	if operator.NativeProvider != builtin.NativeProvider {
+		return operator
+	}
+	if len(operator.Models) == 0 {
+		operator.Models = builtin.Models
+		operator.DefaultModel = builtin.DefaultModel
+	}
+	if len(operator.EffortLevels) == 0 {
+		operator.EffortLevels = builtin.EffortLevels
+		operator.DefaultEffort = builtin.DefaultEffort
+	}
+	return operator
 }
 
 // claudeModels and codexModels are the built-in Claude and Codex profiles' /model listings. An

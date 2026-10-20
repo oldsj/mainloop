@@ -20,7 +20,13 @@ Claude profile lists Sonnet 5, Opus 5, Haiku 4.5 and Fable 5.1, defaulting to So
 models defaulting to the first, and effort `minimal`/`low`/`medium`/`high`, defaulting to `medium`.
 An operator profile sets its own `models` and `effort_levels` in `PROVIDER_PROFILES`, or leaves them
 empty: `/model` still accepts a model by name against an empty list (kagent is the real gate on
-whether it exists), but `/effort` has nothing to offer or accept.
+whether it exists), but `/effort` has nothing to offer or accept. The one exception is a profile
+that replaces a built-in `claude` or `codex` profile without changing its `native_provider`: if it
+leaves `models`/`default_model` or `effort_levels`/`default_effort` empty, it inherits that pair
+from the built-in profile it replaces, so an operator who overrides only `agents` and
+`capabilities` (the common case: naming a different kagent Agent) does not lose `/model` and
+`/effort`. Setting either pair explicitly still wins over the built-in. A profile that changes
+`native_provider`, or that is not replacing a built-in ID, never inherits.
 
 `PROVIDER_PROFILES` is a validated JSON list replacing matching explicit default IDs or adding
 Claude/Codex profiles. IDs/aliases must be unique. Reserved `claude` and `codex` IDs cannot be
