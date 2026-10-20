@@ -29,6 +29,7 @@ func (h *harness) credentialRows(id string) []dbq.Credential {
 }
 
 func TestAWorkspaceSessionIsCreatedWithItsMCPCredential(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	a := h.withCredentials()
 	w := h.running()
@@ -58,6 +59,7 @@ func TestAWorkspaceSessionIsCreatedWithItsMCPCredential(t *testing.T) {
 }
 
 func TestAWorkspaceStillCreatesWithoutAKubernetesStore(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	h.svc.Credentials = agentauth.NewCredentials(h.svc.Pool, agentauth.Unconfigured{}, authtest.Key, "mainloop", nil)
 	w := h.running()
@@ -70,6 +72,7 @@ func TestAWorkspaceStillCreatesWithoutAKubernetesStore(t *testing.T) {
 }
 
 func TestDeletingAWorkspaceRevokesItsCredentialWithThePurge(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	h.withCredentials()
 	h.run()
@@ -88,6 +91,7 @@ func TestDeletingAWorkspaceRevokesItsCredentialWithThePurge(t *testing.T) {
 
 // The create that dropRejected removes had already published a credential; it goes with the rows.
 func TestDropRejectedRevokesTheCredential(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, slow)
 	h.withCredentials()
 	h.fake.FailNext(kagent.ProcCreateSession, kagenttest.Fault{Drop: true})
@@ -115,6 +119,7 @@ func TestDropRejectedRevokesTheCredential(t *testing.T) {
 // A delete that replays the create to find a Session it never saw sends the same credential
 // reference and issues nothing new.
 func TestADeleteReplayReusesTheCredentialReference(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, slow)
 	h.withCredentials()
 	h.run()
@@ -149,6 +154,7 @@ func TestADeleteReplayReusesTheCredentialReference(t *testing.T) {
 }
 
 func TestClassifyCredentialErrors(t *testing.T) {
+	t.Parallel()
 	for name, tt := range map[string]struct {
 		err  error
 		perm bool

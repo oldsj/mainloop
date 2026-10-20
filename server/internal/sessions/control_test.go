@@ -118,6 +118,7 @@ func (e *env) openTurn(sessionID, text string) (messageID string) {
 // ---- create, list, get, conversation, native --------------------------------------------------------
 
 func TestACreatedSessionSendsItsPromptAndShowsOnEveryRoute(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	a := e.API()
@@ -192,6 +193,7 @@ func TestACreatedSessionSendsItsPromptAndShowsOnEveryRoute(t *testing.T) {
 }
 
 func TestSessionRoutesRefuseWhatIsNotTheOwners(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	a := e.API()
@@ -235,6 +237,7 @@ func TestSessionRoutesRefuseWhatIsNotTheOwners(t *testing.T) {
 // ---- message: one open turn, ended and archived sessions ---------------------------------------------
 
 func TestOneOpenTurnPerSessionQueuesMessagesAndDeliversThemInOrderOnceTheTurnEnds(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	a := e.API()
@@ -302,6 +305,7 @@ func TestOneOpenTurnPerSessionQueuesMessagesAndDeliversThemInOrderOnceTheTurnEnd
 }
 
 func TestAMessageToAnIdleSessionIsSentOnce(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	ctx := context.Background()
@@ -324,6 +328,7 @@ func TestAMessageToAnIdleSessionIsSentOnce(t *testing.T) {
 }
 
 func TestACancelledOrArchivedSessionTakesNoMessage(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	a := e.API()
@@ -353,6 +358,7 @@ func TestACancelledOrArchivedSessionTakesNoMessage(t *testing.T) {
 // ---- stop-turn ------------------------------------------------------------------------------------------
 
 func TestStopTurnCancelsTheTaskAndEndsTheTurnWithItsPartialReply(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	ctx := context.Background()
@@ -400,6 +406,7 @@ func TestStopTurnCancelsTheTaskAndEndsTheTurnWithItsPartialReply(t *testing.T) {
 }
 
 func TestStopTurnWithNothingOpen(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first")
@@ -416,6 +423,7 @@ func TestStopTurnWithNothingOpen(t *testing.T) {
 }
 
 func TestStopTurnWhenKagentFailsLeavesTheTurnOpen(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	ctx := context.Background()
@@ -441,6 +449,7 @@ func TestStopTurnWhenKagentFailsLeavesTheTurnOpen(t *testing.T) {
 }
 
 func TestStopTurnIsRefusedWhileKagentHasNoTaskOrKeepsRunningIt(t *testing.T) {
+	t.Parallel()
 	t.Run("no task yet", func(t *testing.T) {
 		e := newEnv(t)
 		e.withProviders()
@@ -485,6 +494,7 @@ func TestStopTurnIsRefusedWhileKagentHasNoTaskOrKeepsRunningIt(t *testing.T) {
 }
 
 func TestStopTurnForATurnThatFinishedRecordsItAsFinished(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	ctx := context.Background()
@@ -517,6 +527,7 @@ func TestStopTurnForATurnThatFinishedRecordsItAsFinished(t *testing.T) {
 }
 
 func TestStopTurnForAMessageNeverSentIsCancelledWithoutACall(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first") // no delivery loop: the prompt stays recorded
@@ -543,6 +554,7 @@ func TestStopTurnForAMessageNeverSentIsCancelledWithoutACall(t *testing.T) {
 // ---- cancel and archive ------------------------------------------------------------------------------------
 
 func TestCancelEndsTheSessionAndStopsItsTask(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	a := e.API()
@@ -578,6 +590,7 @@ func TestCancelEndsTheSessionAndStopsItsTask(t *testing.T) {
 }
 
 func TestCancelReportsUnknownWhenKagentDoesNotConfirm(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	ctx := context.Background()
@@ -602,6 +615,7 @@ func TestCancelReportsUnknownWhenKagentDoesNotConfirm(t *testing.T) {
 }
 
 func TestCancelOfASessionWithNothingRunning(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first")
@@ -618,6 +632,7 @@ func TestCancelOfASessionWithNothingRunning(t *testing.T) {
 }
 
 func TestCancelOfAMessageNeverSentSendsNothing(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first")
@@ -635,6 +650,7 @@ func TestCancelOfAMessageNeverSentSendsNothing(t *testing.T) {
 }
 
 func TestTheMainThreadCannotBeCancelled(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	m, err := e.svc.EnsureMain(context.Background())
 	if err != nil {
@@ -649,6 +665,7 @@ func TestTheMainThreadCannotBeCancelled(t *testing.T) {
 }
 
 func TestArchiveClearsAFinishedSessionOnly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	a := e.API()
@@ -685,6 +702,7 @@ func TestArchiveClearsAFinishedSessionOnly(t *testing.T) {
 }
 
 func TestArchiveRefusesTheMainSessionOverHTTPShape(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	m, err := e.svc.EnsureMain(context.Background())
 	if err != nil {

@@ -59,7 +59,7 @@ func (e *env) failedCreateThenCancelAndArchive(k *flaky) (sessionID, requestID s
 	k.down.Store(true)
 	sessionID = e.newSession("do it")
 	e.run()
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for !e.createRequested(sessionID) || k.creates.Load() < 1 {
 		if time.Now().After(deadline) {
 			e.t.Fatal("the create was never attempted")
@@ -98,6 +98,7 @@ func newFlakyEnv(t *testing.T) (*env, *flaky) {
 // create is settled it counts as unresolved (kagent may hold a Session for it), and it must not
 // count for ever.
 func TestACancelledSessionWithAFailedCreateIsSettledByReplay(t *testing.T) {
+	t.Parallel()
 	t.Run("kagent has no Session for it", func(t *testing.T) {
 		e, k := newFlakyEnv(t)
 		sid, _ := e.failedCreateThenCancelAndArchive(k)
@@ -169,7 +170,7 @@ func TestACancelledSessionWithAFailedCreateIsSettledByReplay(t *testing.T) {
 		e, k := newFlakyEnv(t)
 		k.down.Store(true)
 		sid := e.newSession("do it")
-		deadline := time.Now().Add(15 * time.Second)
+		deadline := time.Now().Add(30 * time.Second)
 		stop := e.run()
 		defer stop()
 		// The durable marker precedes the native call. Wait for that first call as well, so its
@@ -195,6 +196,7 @@ func TestACancelledSessionWithAFailedCreateIsSettledByReplay(t *testing.T) {
 
 // A session whose create was never requested owns no kagent Session, so it never blocks the sweep.
 func TestASessionThatNeverSentACreateIsNotUnresolved(t *testing.T) {
+	t.Parallel()
 	t.Run("cancelled before any send", func(t *testing.T) {
 		e := newEnv(t)
 		e.withProviders()
@@ -242,6 +244,7 @@ func TestASessionThatNeverSentACreateIsNotUnresolved(t *testing.T) {
 
 // A create that returned a Session stops counting once the Session id is stored.
 func TestACreateThatReturnedASessionIsNotUnresolved(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("go")

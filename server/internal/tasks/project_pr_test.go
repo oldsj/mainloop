@@ -44,6 +44,7 @@ func (r *rig) prNumber(id string) int {
 }
 
 func TestProjectionLinksThePRTheAttemptCreated(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	// Someone else's PR on the branch is open and has a higher number; the attempt's own is lower.
@@ -56,6 +57,7 @@ func TestProjectionLinksThePRTheAttemptCreated(t *testing.T) {
 }
 
 func TestProjectionTakesTheNewestCreation(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	r.obs.branch = []tasks.Observation{branchPR(4, "closed"), branchPR(6, "open")}
@@ -68,6 +70,7 @@ func TestProjectionTakesTheNewestCreation(t *testing.T) {
 }
 
 func TestProjectionWithoutACreationPicksAsBefore(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	r.obs.branch = []tasks.Observation{branchPR(4, "closed"), branchPR(9, "open"), branchPR(12, "closed")}
@@ -78,6 +81,7 @@ func TestProjectionWithoutACreationPicksAsBefore(t *testing.T) {
 }
 
 func TestProjectionIgnoresCreationsThatAreNotTheAttempts(t *testing.T) {
+	t.Parallel()
 	for name, setup := range map[string]func(r *rig){
 		"another session": func(r *rig) { r.created("c1", "someone-else", 4, "2026-01-01") },
 		"no session":      func(r *rig) { r.created("c1", "", 4, "2026-01-01") },
@@ -112,6 +116,7 @@ func TestProjectionIgnoresCreationsThatAreNotTheAttempts(t *testing.T) {
 }
 
 func TestProjectionReportsTheCreatedPRClosedOrMissing(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	// The attempt's PR was closed and another is open: the closed one is reported, not swapped.
@@ -130,6 +135,7 @@ func TestProjectionReportsTheCreatedPRClosedOrMissing(t *testing.T) {
 }
 
 func TestProjectionNewAttemptDoesNotInheritThePreviousAttemptsPR(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	r.obs.branch = []tasks.Observation{branchPR(4, "open"), branchPR(9, "open")}

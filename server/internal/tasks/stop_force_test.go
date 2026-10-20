@@ -193,6 +193,7 @@ func (s *stuck) nativeDeleted() (attempt, binding bool) {
 // suspended and the suspended session counts as stopped. This is the narrow case: the turn is no
 // longer working (here it waits for input), so kagent lets the suspend through.
 func TestStopOfARuntimeWithNoOpenTurnIsSuspendedAfterTheDefaultGrace(t *testing.T) {
+	t.Parallel()
 	s := stuckStop(t)
 	s.k.land(a2a.TaskStateInputRequired)
 	s.cancelAndWait(t)
@@ -225,6 +226,7 @@ func TestStopOfARuntimeWithNoOpenTurnIsSuspendedAfterTheDefaultGrace(t *testing.
 // the native session is deleted, with its workspace and any unpushed work. Delete is not tried
 // earlier, and the refused suspend does not release anything.
 func TestStopDeletesTheNativeSessionOfAWorkingTurnThatSuspendCannotEnd(t *testing.T) {
+	t.Parallel()
 	s := stuckStop(t) // the turn is working, so suspend is refused
 	s.native.afterDelete = kagent.SessionLiveness{Exists: true, Terminal: true, Deleting: true}
 	s.cancelAndWait(t)
@@ -256,6 +258,7 @@ func TestStopDeletesTheNativeSessionOfAWorkingTurnThatSuspendCannotEnd(t *testin
 // A cancel that lands just before the grace ends settles the stop; the runtime is neither suspended
 // nor deleted.
 func TestStopSettledByCancelJustBeforeTheGraceIsNotForced(t *testing.T) {
+	t.Parallel()
 	s := stuckStop(t)
 	s.cancelAndWait(t)
 
@@ -271,6 +274,7 @@ func TestStopSettledByCancelJustBeforeTheGraceIsNotForced(t *testing.T) {
 
 // A runtime that is already suspended is stopped: nothing is cancelled, suspended or deleted.
 func TestStopOfAnAlreadySuspendedRuntimeForcesNothing(t *testing.T) {
+	t.Parallel()
 	s := stuckStop(t)
 	s.native.set(kagent.SessionLiveness{Exists: true, Suspended: true})
 	s.cancelAndWait(t)
@@ -284,6 +288,7 @@ func TestStopOfAnAlreadySuspendedRuntimeForcesNothing(t *testing.T) {
 // A failed delete is not a stop: the claim and capacity stay held, no delete is recorded, and a
 // later look deletes again.
 func TestStopKeepsTheClaimWhenTheNativeDeleteFails(t *testing.T) {
+	t.Parallel()
 	s := stuckStop(t)
 	s.native.setDeleteErr(errors.New("injected delete failure"))
 	s.cancelAndWait(t)
@@ -305,6 +310,7 @@ func TestStopKeepsTheClaimWhenTheNativeDeleteFails(t *testing.T) {
 // stop is listed as unresolved, which is what the orchestration health page shows, and a later
 // delete still settles it.
 func TestStopWhoseDeleteIsRefusedIsListedUnresolved(t *testing.T) {
+	t.Parallel()
 	s := stuckStop(t)
 	s.r.svc.Limits.ResolveBound = 3
 	s.native.setDeleteErr(&kagent.SessionError{Op: "SessionService DeleteSession", Code: connect.CodeAborted, Wire: true})
@@ -343,6 +349,7 @@ func TestStopWhoseDeleteIsRefusedIsListedUnresolved(t *testing.T) {
 
 // A session kagent already lost is stopped without suspending or deleting anything.
 func TestStopOfAnAlreadyGoneRuntimeForcesNothing(t *testing.T) {
+	t.Parallel()
 	s := stuckStop(t)
 	s.native.set(kagent.SessionLiveness{})
 	s.cancelAndWait(t)

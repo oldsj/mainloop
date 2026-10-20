@@ -14,6 +14,7 @@ import (
 )
 
 func TestProductionObserverWiringProjectsAndPublishes(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	f := githubtest.New(t)
@@ -54,6 +55,7 @@ func TestProductionObserverWiringProjectsAndPublishes(t *testing.T) {
 }
 
 func TestReviewCollectionTimeSurvivesPersistenceDelay(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"changed", "unchanged"} {
 		t.Run(path, func(t *testing.T) {
 			r := newRig(t)

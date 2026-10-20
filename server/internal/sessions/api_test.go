@@ -29,6 +29,7 @@ func (e *env) counts() (sessions, bindings, deliveries, messages int) {
 }
 
 func TestGetsAreReadsOnly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	a := e.API()
 	ctx := context.Background()
@@ -59,6 +60,7 @@ func TestGetsAreReadsOnly(t *testing.T) {
 }
 
 func TestMainThreadShowsTheNativeSessionAndItsLedger(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	a := e.API()
 	ctx := context.Background()
@@ -100,6 +102,7 @@ func TestMainThreadShowsTheNativeSessionAndItsLedger(t *testing.T) {
 }
 
 func TestMainThreadSaysSoWhenADeliveryIsUnknown(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.srv.Script(kagenttest.Drop{})
 	e.run()
@@ -116,6 +119,7 @@ func TestMainThreadSaysSoWhenADeliveryIsUnknown(t *testing.T) {
 }
 
 func TestSendMessageStatuses(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	a := e.API()
 	ctx := context.Background()
@@ -153,6 +157,7 @@ func TestSendMessageStatuses(t *testing.T) {
 // A message carries who wrote it, so a brief stays marked after the ledger (which shows only the
 // newest deliveries) has moved past it.
 func TestAMessageSaysWhoSentItForTheWholeHistory(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	e.run()
@@ -213,6 +218,7 @@ func TestAMessageSaysWhoSentItForTheWholeHistory(t *testing.T) {
 // The same holds for a session's own conversation, and for the source the delegated brief and
 // task reports are sent with.
 func TestASessionConversationMarksMessagesMainloopSent(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	e.withProviders()
@@ -246,6 +252,7 @@ func TestASessionConversationMarksMessagesMainloopSent(t *testing.T) {
 
 // The contract's Message.source has two values; the column refuses any other.
 func TestADeliveryRefusesASourceTheContractDoesNotName(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first")

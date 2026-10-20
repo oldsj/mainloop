@@ -13,6 +13,7 @@ import (
 
 // Cancel tells open clients about every turn it ends, as a settle does.
 func TestCancelPublishesAnEndedEventPerClosedDelivery(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first")
@@ -36,6 +37,7 @@ func TestCancelPublishesAnEndedEventPerClosedDelivery(t *testing.T) {
 // A cancel that finds the session finished meanwhile rolls back: nothing is published and the
 // deliveries are left as they are.
 func TestCancelOfAFinishedSessionPublishesNothing(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first")
@@ -57,6 +59,7 @@ func TestCancelOfAFinishedSessionPublishesNothing(t *testing.T) {
 // Mined from the reviewer's TestProbeCancelVersusSettleLockOrder: a settle holds the delivery row
 // and then locks the session row; Cancel must take them in the same order or Postgres aborts one.
 func TestCancelVersusSettleLockOrder(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	id := e.newSession("first")
@@ -107,6 +110,7 @@ func TestCancelVersusSettleLockOrder(t *testing.T) {
 // Mined from TestProbeStopBehindAnOldUncertainDelivery: an uncertain row past its hold no longer
 // blocks sends, so a newer turn may be running behind it. Stop must still reach that turn.
 func TestStopReachesATurnBehindAnOldUncertainDelivery(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withProviders()
 	ctx := context.Background()

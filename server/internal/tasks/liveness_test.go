@@ -45,6 +45,7 @@ func (r *rig) liveTask(kagentSessionID string) (taskID, bindingID string) {
 }
 
 func TestLivenessBlocksATaskWhoseSessionIsGone(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, _ := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{}) // Exists: false, kagent has no record of it
@@ -58,6 +59,7 @@ func TestLivenessBlocksATaskWhoseSessionIsGone(t *testing.T) {
 }
 
 func TestLivenessBlocksATaskWhoseSessionIsTerminal(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, _ := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{Exists: true, Terminal: true})
@@ -73,6 +75,7 @@ func TestLivenessBlocksATaskWhoseSessionIsTerminal(t *testing.T) {
 // Review P0: the sweep must resolve the binding's kagent_session_id and ask kagent about that, not
 // about Mainloop's own binding id, which kagent never issued and would answer NotFound for.
 func TestLivenessAsksKagentForTheResolvedSessionIdNotTheBindingId(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, bindingID := r.liveTask("ks-1")
 	r.live.set(bindingID, kagent.SessionLiveness{}) // wrong key: answers gone if asked by binding id
@@ -86,6 +89,7 @@ func TestLivenessAsksKagentForTheResolvedSessionIdNotTheBindingId(t *testing.T) 
 // Review P0: a coordination attempt has no kagent session until its brief is delivered. That must
 // not read as lost.
 func TestLivenessSkipsAnAttemptWithNoKagentSessionYet(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, _ := r.liveTask("") // no kagent_session_id yet
 	r.sweep(r.svc.LivenessSweep())
@@ -98,6 +102,7 @@ func TestLivenessSkipsAnAttemptWithNoKagentSessionYet(t *testing.T) {
 }
 
 func TestLivenessBlocksAStalledTask(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, bindingID := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
@@ -151,6 +156,7 @@ func harnessTurn(start time.Time, n, extra int) []*a2a.Task {
 }
 
 func TestLivenessBlocksAWorkingTurnThatRecordsNothingNew(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, _ := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
@@ -181,6 +187,7 @@ func TestLivenessBlocksAWorkingTurnThatRecordsNothingNew(t *testing.T) {
 }
 
 func TestLivenessKeepsAWorkingTurnThatKeepsRecordingProgress(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, _ := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
@@ -202,6 +209,7 @@ func TestLivenessKeepsAWorkingTurnThatKeepsRecordingProgress(t *testing.T) {
 // fingerprint must follow them. One new tool artifact every ten minutes for three hours is a busy
 // turn, never a stalled one.
 func TestReviewHealthyHarnessTurnIsNotStalled(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, _ := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
@@ -220,6 +228,7 @@ func TestReviewHealthyHarnessTurnIsNotStalled(t *testing.T) {
 
 // Streamed text appends parts to the artifact the turn already has, adding no new artifact.
 func TestLivenessKeepsAHarnessTurnThatOnlyStreamsMoreText(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, _ := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
@@ -237,6 +246,7 @@ func TestLivenessKeepsAHarnessTurnThatOnlyStreamsMoreText(t *testing.T) {
 
 // A turn that records no artifact either is as stuck as one that records nothing at all.
 func TestLivenessBlocksAHarnessTurnWhoseArtifactsStopGrowing(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, _ := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
@@ -260,6 +270,7 @@ func TestLivenessBlocksAHarnessTurnWhoseArtifactsStopGrowing(t *testing.T) {
 // Review P1: a progress report is proof of life. When the sweep was wrong and a report recovers the
 // task, the next sweep must not block it again over the same old fingerprint.
 func TestReviewReportAfterFalseStallIsNotBlockedAgainNextSweep(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, binding := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
@@ -298,6 +309,7 @@ func TestReviewReportAfterFalseStallIsNotBlockedAgainNextSweep(t *testing.T) {
 }
 
 func TestLivenessRecordsTheProgressItSaw(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, _ := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
@@ -331,6 +343,7 @@ func TestLivenessRecordsTheProgressItSaw(t *testing.T) {
 // P2: an agent waiting on the owner (input-required or auth-required) is not stalled either — it
 // is blocked on a reply, not idle — though the runtime bound still applies regardless of activity.
 func TestLivenessWaitingOnTheOwnerResetsTheStallClock(t *testing.T) {
+	t.Parallel()
 	for _, state := range []a2a.TaskState{a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired} {
 		t.Run(string(state), func(t *testing.T) {
 			r := newRig(t)
@@ -348,6 +361,7 @@ func TestLivenessWaitingOnTheOwnerResetsTheStallClock(t *testing.T) {
 }
 
 func TestLivenessBlocksATaskPastItsRuntimeBound(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, bindingID := r.liveTask("ks-1")
 	r.exec(`UPDATE task_attempts SET created_at = now() - interval '7 hours' WHERE task_id = $1`, id)
@@ -367,6 +381,7 @@ func TestLivenessBlocksATaskPastItsRuntimeBound(t *testing.T) {
 // reaches the task first — completing it, or blocking it on an owner question — that report owns
 // the task, and the liveness signal that raced it must be dropped, not overwrite it.
 func TestLivenessRaceWithACompletingReportLeavesTheTaskAlone(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, _ := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{}) // would otherwise block it session_lost
@@ -385,6 +400,7 @@ func TestLivenessRaceWithACompletingReportLeavesTheTaskAlone(t *testing.T) {
 // Once a task is blocked, the sweep's own query stops selecting it: looking again costs nothing and
 // changes nothing.
 func TestLivenessSweepLeavesABlockedTaskAlone(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{})
@@ -437,6 +453,7 @@ func (r *rig) readsFailing(inState bool) {
 // Review P2: a task read that fails used to leave the attempt untouched by every bound, the runtime
 // limit included, so a conversation too big to read was never bounded at all.
 func TestLivenessAFailedTaskReadStillAppliesTheRuntimeBound(t *testing.T) {
+	t.Parallel()
 	for name, inState := range map[string]bool{"plain list": false, "list with artifacts": true} {
 		t.Run(name, func(t *testing.T) {
 			r := newRig(t)
@@ -455,6 +472,7 @@ func TestLivenessAFailedTaskReadStillAppliesTheRuntimeBound(t *testing.T) {
 
 // The same bound holds for an attempt that has no kagent session to read.
 func TestLivenessAnAttemptWithNoKagentSessionIsStillBoundedByRuntime(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, _ := r.liveTask("")
 	r.setClock(time.Now().Add(7 * time.Hour))
@@ -468,6 +486,7 @@ func TestLivenessAnAttemptWithNoKagentSessionIsStillBoundedByRuntime(t *testing.
 // attempt as unjudged as a silent one, and it is blocked as stalled; a read that works in between
 // starts the count over.
 func TestLivenessReadsThatKeepFailingBlockTheTaskAsStalled(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, _ := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
@@ -506,6 +525,7 @@ func TestLivenessReadsThatKeepFailingBlockTheTaskAsStalled(t *testing.T) {
 // change has any use for them. Finished tasks are listed without; a conversation with no unfinished
 // task reads no artifacts at all.
 func TestLivenessReadsArtifactsOnlyForUnfinishedTasks(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
@@ -529,6 +549,7 @@ func TestLivenessReadsArtifactsOnlyForUnfinishedTasks(t *testing.T) {
 // the next sweep must not block it again over the failure that began before the report. The window
 // counts from the report, as the stall clock does.
 func TestReportAfterReadFailureStallIsNotBlockedAgainNextSweep(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id, binding := r.liveTask("ks-1")
 	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})

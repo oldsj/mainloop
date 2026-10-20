@@ -9,6 +9,7 @@ import (
 )
 
 func TestProjectionReadMasksUnfreshCI(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	for _, state := range []string{"success", "pending", "failure"} {
@@ -48,6 +49,7 @@ func TestProjectionReadMasksUnfreshCI(t *testing.T) {
 }
 
 func TestProjectionUnchangedObservationRefreshesFreshness(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	r.obs.set(tasks.Observation{
@@ -68,6 +70,7 @@ func TestProjectionUnchangedObservationRefreshesFreshness(t *testing.T) {
 }
 
 func TestProjectionPersistsObservationTime(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, wantCI string
 		age          time.Duration

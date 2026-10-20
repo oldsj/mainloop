@@ -57,6 +57,7 @@ func landedUnrecorded(t *testing.T, gitOn bool) (*harness, *authtest.Env, api.Wo
 // The credential set a create carries is frozen with the workspace, so a restart that changes
 // whether git read is configured cannot turn the retry into a request kagent refuses.
 func TestAnUncertainCreateKeepsItsCredentialSetWhenGitReadConfigurationChanges(t *testing.T) {
+	t.Parallel()
 	for name, gitOn := range map[string]bool{"on-to-off": true, "off-to-on": false} {
 		t.Run(name, func(t *testing.T) {
 			h, a, w, flip := landedUnrecorded(t, gitOn)
@@ -113,6 +114,7 @@ func TestAnUncertainCreateKeepsItsCredentialSetWhenGitReadConfigurationChanges(t
 // The cleanup replay of an uncertain create sends the frozen credential set too, so kagent finds
 // the Session and the delete removes it, whatever the configuration became.
 func TestADeleteReplayKeepsTheCreatesCredentialSetWhenGitReadConfigurationChanges(t *testing.T) {
+	t.Parallel()
 	for name, gitOn := range map[string]bool{"on-to-off": true, "off-to-on": false} {
 		t.Run(name, func(t *testing.T) {
 			h, _, w, flip := landedUnrecorded(t, gitOn)
@@ -156,6 +158,7 @@ func credentialsEqual(a, b []*kagentapi.SessionCredential) bool {
 // A workspace that gets no git read says so on its row, and the decision does not change when the
 // capability is configured later.
 func TestAWorkspaceWithoutGitReadFreezesThatDecision(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	a := h.withCredentials()
 	w := h.running()

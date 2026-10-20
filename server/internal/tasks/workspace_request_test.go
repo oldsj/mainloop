@@ -69,6 +69,7 @@ func assertOwnerWorkspaceUntouched(r *rig, id string) {
 // G8b P2-1 adopt probe: a failed create followed by replay must create the task's own workspace,
 // even when the owner made one on the same project/branch during the provisioning window.
 func TestProbeReplayAdoptsOwnerWorkspace(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()
@@ -98,6 +99,7 @@ func TestProbeReplayAdoptsOwnerWorkspace(t *testing.T) {
 // G8b P2-1 delete probe: a cancel while nothing has committed must leave the owner's workspace
 // alone and keep resolving the task's own create until the held call has definitively failed.
 func TestProbeCancelDeletesOwnerWorkspace(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()
@@ -132,6 +134,7 @@ func TestProbeCancelDeletesOwnerWorkspace(t *testing.T) {
 // G8b P2-2: create commits only after cancel has finished. Exercise the live return path and a
 // lost reply after commit, where only a restarted service's settle sweep can find the workspace.
 func TestProbeCancelRacesWorkspaceCreate(t *testing.T) {
+	t.Parallel()
 	for _, lostReply := range []bool{false, true} {
 		name := "returned"
 		if lostReply {
@@ -223,6 +226,7 @@ func TestProbeCancelRacesWorkspaceCreate(t *testing.T) {
 // deletes that first workspace, then the old call arrives after deletion. Deleting once must not
 // stop cleanup while another reservation can still commit under the same request ID.
 func TestCancelledCreateCleansLateReplayAfterFirstWorkspaceDeleted(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	r.ws.unready = true
 	r.run()

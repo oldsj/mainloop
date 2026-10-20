@@ -42,6 +42,7 @@ func (e *env) orphans(c *kagent.Client) workspaces.OrphanReport {
 // on the pinned Agent and binds the Session that landed. Nothing is created on the renamed Agent and
 // nothing leaks.
 func TestAConfigChangeBetweenALostReplyAndTheNextSendBindsTheSessionThatLanded(t *testing.T) {
+	t.Parallel()
 	e, k := newFlakyEnv(t)
 	// The old Agent is not one of the provider Agents, so only the record of the create knows it.
 	e.renameAgent("main-old")
@@ -90,6 +91,7 @@ func TestAConfigChangeBetweenALostReplyAndTheNextSendBindsTheSessionThatLanded(t
 // drops the Session out of band. The replacement made inside the next delivery's turn stays on the
 // pinned Agent.
 func TestAReplacementSessionInTheTurnStaysOnThePinnedAgent(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	stop := e.run()
@@ -120,6 +122,7 @@ func TestAReplacementSessionInTheTurnStaysOnThePinnedAgent(t *testing.T) {
 // reserved anything (the Agent named by a typo in the configuration is not prepared), the pin is
 // dropped, so the corrected configuration is used by the next create.
 func TestATypoInTheMainAgentIsNotPinnedOnceTheCreateIsRefused(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.svc.Agent = kagent.AgentRef{Namespace: agent.Namespace, Name: "mainloop-mian"} // no such Agent
 	stop := e.run()

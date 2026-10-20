@@ -37,6 +37,7 @@ func seedWorkspaceCleanup(r *rig, i, inflight int, age string) (taskID, attempt,
 // More than two full batches of unresolved reservations cannot keep newer cleanup or
 // the runtime stop resolver from making progress. Ported from the T1 review probe.
 func TestReviewT1UnresolvedCleanupDoesNotStarveLateWorkspace(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	const stuck = 125
 	for i := range stuck {
@@ -88,6 +89,7 @@ func TestReviewT1UnresolvedCleanupDoesNotStarveLateWorkspace(t *testing.T) {
 }
 
 func TestUnresolvedWorkspaceCleanupResumesAfterCreateReturns(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	taskID, attempt, key := seedWorkspaceCleanup(r, 0, 1, "2 hours")
 	r.sweep(r.svc.SettleSweep())
@@ -132,6 +134,7 @@ func TestUnresolvedWorkspaceCleanupResumesAfterCreateReturns(t *testing.T) {
 }
 
 func TestWorkspaceCleanupBackoffPreservesUncertainReservations(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	_, attempt, key := seedWorkspaceCleanup(r, 0, 1, "2 hours")
 	// Simulate scheduled time passing without sleeping; absence is never proof of completion.

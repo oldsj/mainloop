@@ -9,6 +9,7 @@ import (
 )
 
 func TestResolveAgentPrefersTheExplicitReferenceThenMainThenTheProvider(t *testing.T) {
+	t.Parallel()
 	main := kagent.AgentRef{Namespace: "kagent", Name: "main"}
 	s := &sessions.Service{Agent: main}
 	ns, name, kind := "kagent", "claude-ws", "claude"
@@ -32,6 +33,7 @@ func TestResolveAgentPrefersTheExplicitReferenceThenMainThenTheProvider(t *testi
 }
 
 func TestResolveAgentAcceptsStoredReferenceWithoutAProvider(t *testing.T) {
+	t.Parallel()
 	s := &sessions.Service{Agent: kagent.AgentRef{Namespace: "kagent", Name: "main"}}
 	ns, name, kind := "scheduled", "unnamed-agent", "scheduled"
 	for _, role := range []dbstate.BindingRole{dbstate.RoleAgent, dbstate.RoleMain} {

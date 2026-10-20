@@ -8,6 +8,7 @@ import (
 )
 
 func TestTransitionsAreExactlyTheEdges(t *testing.T) {
+	t.Parallel()
 	all := []dbstate.MergeState{
 		dbstate.MergePrepared, dbstate.MergeEvaluating, dbstate.MergeMerging, dbstate.MergeUncertain,
 		dbstate.MergeBlocked, dbstate.MergeExpired, dbstate.MergeSuperseded, dbstate.MergeMerged,

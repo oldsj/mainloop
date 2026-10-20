@@ -121,6 +121,7 @@ func lateDeliveredStop(t *testing.T) (*rig, *kagenttest.Server, string) {
 }
 
 func TestLateDeliveredTaskCannotBypassConfirmation(t *testing.T) {
+	t.Parallel()
 	r, f, attempt := lateDeliveredStop(t)
 	// The next native observation must list the task even though its delivery is now delivered
 	// and no longer appears in the possibly-landing-deliveries query.
@@ -142,6 +143,7 @@ func TestLateDeliveredTaskCannotBypassConfirmation(t *testing.T) {
 }
 
 func TestRecoveredWorkingTaskCannotBypassConfirmation(t *testing.T) {
+	t.Parallel()
 	r, f, attempt, session, mid := sendOrderProbe(t)
 	nativeID := r.str(`SELECT kagent_session_id FROM agent_bindings WHERE session_id=$1`, session)
 	r.exec(`UPDATE deliveries SET state='uncertain', kagent_session_id=$2, updated_at=now()-interval '31 minutes' WHERE id=$1`, mid, nativeID)
@@ -183,6 +185,7 @@ func TestRecoveredWorkingTaskCannotBypassConfirmation(t *testing.T) {
 }
 
 func TestStopConfirmsOnceLateDeliveredTaskFinishes(t *testing.T) {
+	t.Parallel()
 	r, f, attempt := lateDeliveredStop(t)
 	native, _ := f.Task("late-working-task")
 	native.Status.State = a2a.TaskStateCompleted
@@ -197,6 +200,7 @@ func TestStopConfirmsOnceLateDeliveredTaskFinishes(t *testing.T) {
 // A transaction that starts before observation can commit an outcome after it. Its now()
 // timestamp is stale, but the committed version must still invalidate that observation.
 func TestStopObservationRejectsLateFinalOutcome(t *testing.T) {
+	t.Parallel()
 	for _, state := range []dbstate.DeliveryState{dbstate.DeliveryCompleted, dbstate.DeliveryFailed, dbstate.DeliveryCancelled} {
 		t.Run(string(state), func(t *testing.T) {
 			r, _, attempt, _, mid := sendOrderProbe(t)

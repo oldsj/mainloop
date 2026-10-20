@@ -11,6 +11,7 @@ import (
 // A late handler with a live context sees attachment refused because the reclaimed operation has
 // already activated the attempt. That is not a stopped attempt and grants no cleanup authority.
 func TestLateWorkspaceReplayDoesNotDeleteAnActiveAttempt(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	stop := r.run()
 	_, sup := r.supervisor()

@@ -15,6 +15,7 @@ import (
 )
 
 func TestRereviewDescriptionBudgetIncludesFinalCursor(t *testing.T) {
+	t.Parallel()
 	for suffix := 0; suffix < 6; suffix++ {
 		t.Run(fmt.Sprintf("request_suffix_%d", suffix), func(t *testing.T) {
 			e := newEnv(t)
@@ -67,6 +68,7 @@ func TestRereviewDescriptionBudgetIncludesFinalCursor(t *testing.T) {
 }
 
 func TestRereviewApprovalProjectScopeMustHoldUntilDispatch(t *testing.T) {
+	t.Parallel()
 	for _, when := range []string{"before_completion_sweep", "after_evaluation_began", "during_evidence"} {
 		t.Run(when, func(t *testing.T) {
 			e := newEnv(t)
@@ -108,6 +110,7 @@ func TestRereviewApprovalProjectScopeMustHoldUntilDispatch(t *testing.T) {
 }
 
 func TestRereviewApprovalSessionProjectMustMatchProposal(t *testing.T) {
+	t.Parallel()
 	for _, when := range []string{"before_completion_sweep", "after_evaluation_began"} {
 		t.Run(when, func(t *testing.T) {
 			e := newEnv(t)
@@ -137,6 +140,7 @@ func TestRereviewApprovalSessionProjectMustMatchProposal(t *testing.T) {
 }
 
 func TestRereviewHeadChangeAtPUTIsGuarded(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	proposal := e.freezeApproved()
 	e.fake.Before("PUT", mergePath, func() {

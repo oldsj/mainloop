@@ -35,6 +35,7 @@ func (r *rig) failOpenReports() int {
 }
 
 func TestFailedDeliveryIsSentAgainThenBlocksTheTask(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	_, supSession, child, kid := r.reportingChild()
 	if _, err := r.svc.Report(context.Background(), kid, report(kid, "r1", dbstate.OutcomeProgress)); err != nil {
@@ -66,6 +67,7 @@ func TestFailedDeliveryIsSentAgainThenBlocksTheTask(t *testing.T) {
 }
 
 func TestParentEndedAfterTheReportCancelsTheDelivery(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	parent, _, child, kid := r.reportingChild()
 	// The parent ends between the report committing and the loop sending it. The runner is already
@@ -94,6 +96,7 @@ func TestParentEndedAfterTheReportCancelsTheDelivery(t *testing.T) {
 }
 
 func TestBlockedReportAlsoReachesMain(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	_, supSession, _, kid := r.reportingChild()
 	in := report(kid, "b1", dbstate.OutcomeBlocked)
@@ -121,6 +124,7 @@ func TestBlockedReportAlsoReachesMain(t *testing.T) {
 }
 
 func TestBusyParentGetsTheReportLater(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	r.run()
 	parent, sup := r.supervisor()
@@ -158,6 +162,7 @@ func TestBusyParentGetsTheReportLater(t *testing.T) {
 // A main thread that is switching provider refuses chat; a child's report to it waits in the queue
 // and is delivered through the normal path once the switch has finished.
 func TestAReportToAMainThatIsSwitchingProviderWaitsThenDrains(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	_, _, child, kid := r.reportingChild()
 	if _, err := r.svc.Sessions.EnsureMain(context.Background()); err != nil {

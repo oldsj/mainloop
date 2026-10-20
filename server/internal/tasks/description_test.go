@@ -22,6 +22,7 @@ func descriptionObservation(body *string) tasks.Observation {
 }
 
 func TestDescriptionBoundsAndDigest(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	for _, body := range []string{
@@ -53,6 +54,7 @@ func TestDescriptionBoundsAndDigest(t *testing.T) {
 }
 
 func TestDescriptionUnavailableAndFailedObservationClear(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	for _, tc := range []struct {
@@ -85,6 +87,7 @@ func TestDescriptionUnavailableAndFailedObservationClear(t *testing.T) {
 }
 
 func TestDescriptionSameHeadEditsAndUnchangedRefresh(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	for _, body := range []string{"first", "same-head edit", strings.Repeat("a", 16384) + "suffix A", strings.Repeat("a", 16384) + "suffix B"} {
@@ -122,6 +125,7 @@ func TestDescriptionSameHeadEditsAndUnchangedRefresh(t *testing.T) {
 }
 
 func TestDescriptionReadMasksIdentityAndAge(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	child := r.agent(dbstate.RoleChild, "kid-p")
@@ -171,6 +175,7 @@ func TestDescriptionReadMasksIdentityAndAge(t *testing.T) {
 }
 
 func TestDescriptionDiscardsChangedTaskDuringCollection(t *testing.T) {
+	t.Parallel()
 	for _, update := range []string{`current_attempt_id = NULL`, `checkout_branch = 'other'`} {
 		t.Run(update, func(t *testing.T) {
 			r := newRig(t)
@@ -188,6 +193,7 @@ func TestDescriptionDiscardsChangedTaskDuringCollection(t *testing.T) {
 }
 
 func TestDescriptionInconsistentObservationClears(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	id := r.projected()
 	for _, change := range []func(*tasks.Observation){

@@ -78,6 +78,7 @@ func importProject(t *testing.T, h http.Handler, repo string) api.Project {
 }
 
 func TestProjectImportListGet(t *testing.T) {
+	t.Parallel()
 	h, _ := projectServer(t, false)
 	p := importProject(t, h, "https://github.com/OldSJ/Mainloop.git")
 	if p.FullName != "oldsj/mainloop" || p.OpenPrCount != 1 || p.OpenIssueCount != 3 || p.MergePolicy != api.MergePolicyAuto ||
@@ -107,6 +108,7 @@ func TestProjectImportListGet(t *testing.T) {
 }
 
 func TestProjectErrorsAreTheContractShapes(t *testing.T) {
+	t.Parallel()
 	h, _ := projectServer(t, false)
 	p := importProject(t, h, "oldsj/mainloop")
 	for _, c := range []struct {
@@ -143,6 +145,7 @@ func TestProjectErrorsAreTheContractShapes(t *testing.T) {
 }
 
 func TestProjectDetail(t *testing.T) {
+	t.Parallel()
 	h, _ := projectServer(t, false)
 	p := importProject(t, h, "oldsj/mainloop")
 	r := send(h, "GET", "/projects/"+p.Id+"/detail", "", nil)
@@ -158,6 +161,7 @@ func TestProjectDetail(t *testing.T) {
 }
 
 func TestProjectDetailWhenGitHubIsDown(t *testing.T) {
+	t.Parallel()
 	h, fake := projectServer(t, false)
 	p := importProject(t, h, "oldsj/mainloop")
 	fake.Fail("GET", "/repos/oldsj/mainloop/pulls", 502)
@@ -170,6 +174,7 @@ func TestProjectDetailWhenGitHubIsDown(t *testing.T) {
 }
 
 func TestMergePolicyReadAndGatedCompareAndSwap(t *testing.T) {
+	t.Parallel()
 	h, _ := projectServer(t, true)
 	p := importProject(t, h, "oldsj/mainloop")
 	path := "/projects/" + p.Id + "/merge-policy"
@@ -205,6 +210,7 @@ func TestMergePolicyReadAndGatedCompareAndSwap(t *testing.T) {
 
 // Everything the server sent GitHub is on the allowlist: reads and token mints, nothing else.
 func TestProjectFlowsOnlyEverCallAllowlistedEndpoints(t *testing.T) {
+	t.Parallel()
 	h, fake := projectServer(t, false)
 	p := importProject(t, h, "oldsj/mainloop")
 	send(h, "GET", "/projects/"+p.Id+"/detail", "", nil)

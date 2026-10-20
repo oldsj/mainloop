@@ -21,6 +21,7 @@ import (
 // request id. For a delete's replayed create either one is an answer given after the lookup found no
 // Session holding the id, so the rows go.
 func TestDeleteOfANotReadyWorkspacePurgesTheRows(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, slow)
 	h.run()
 	h.fake.FailNext(kagent.ProcCreateSession, kagenttest.Fault{Drop: true})
@@ -42,6 +43,7 @@ func TestDeleteOfANotReadyWorkspacePurgesTheRows(t *testing.T) {
 }
 
 func TestReplayFoundNoSessionIsOneRule(t *testing.T) {
+	t.Parallel()
 	session := func(code connect.Code, detail string) error {
 		return &kagent.SessionError{Op: "CreateSession", Code: code, Detail: detail}
 	}
@@ -66,6 +68,7 @@ func TestReplayFoundNoSessionIsOneRule(t *testing.T) {
 }
 
 func TestTheNotReadyReasonNamesNoOperation(t *testing.T) {
+	t.Parallel()
 	err := &kagent.SessionError{Op: "ResumeSession", Code: connect.CodeFailedPrecondition, Detail: "Agent does not have a ready prepared revision"}
 	perm, reason := classify(err)
 	if perm || reason != "kagent is not ready for this change" {
@@ -74,6 +77,7 @@ func TestTheNotReadyReasonNamesNoOperation(t *testing.T) {
 }
 
 func TestAnOperationOnAWorkspaceDeletedMeanwhileIsNotFound(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	_, err := h.svc.insertOp(bg, dbq.New(h.svc.Pool), "no-such-workspace", dbstate.OpSuspend, nil)
 	if !errors.Is(err, ErrNotFound) {
@@ -84,6 +88,7 @@ func TestAnOperationOnAWorkspaceDeletedMeanwhileIsNotFound(t *testing.T) {
 // An open delete that lands in the gap between the refusal and the drop is as much a reason to keep
 // the rows as an open create: the delete decides what happens to them.
 func TestDropRejectedLeavesAWorkspaceWithAnOpenDelete(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, slow)
 	h.fake.FailNext(kagent.ProcCreateSession, kagenttest.Fault{Drop: true})
 	stop := h.run()
@@ -121,6 +126,7 @@ func TestDropRejectedLeavesAWorkspaceWithAnOpenDelete(t *testing.T) {
 // ---- Wake -----------------------------------------------------------------------------------------------------
 
 func TestWakeWaitsForAnOpenSuspendThenResumes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, map[string]string{"WORKSPACE_OPERATION_WAIT_SECONDS": "10"})
 	w := h.running()
 	if _, err := h.svc.enqueue(bg, w.WorkspaceId, dbstate.OpSuspend, nil); err != nil { // no runner: it stays open
@@ -156,6 +162,7 @@ func TestWakeWaitsForAnOpenSuspendThenResumes(t *testing.T) {
 }
 
 func TestWakeResumesASuspendedWorkspaceOnceAndLeavesARunningOne(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	w := h.running()
 	h.run()
@@ -176,6 +183,7 @@ func TestWakeResumesASuspendedWorkspaceOnceAndLeavesARunningOne(t *testing.T) {
 }
 
 func TestWakeOfAWorkspaceBeingDeletedOrGoneIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	w := h.running()
 	if _, err := h.svc.enqueue(bg, w.WorkspaceId, dbstate.OpDelete, nil); err != nil {
@@ -196,6 +204,7 @@ func TestWakeOfAWorkspaceBeingDeletedOrGoneIsRefused(t *testing.T) {
 // workspace:updated event. Callers that read "suspended" just before another resume finished queue
 // exactly such an operation.
 func TestResumeOfARunningWorkspacePublishesNothing(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	w := h.running()
 	h.run()
@@ -211,6 +220,7 @@ func TestResumeOfARunningWorkspacePublishesNothing(t *testing.T) {
 // A retried resume that finds the Session ready may be finishing a resume whose reply was lost, which
 // nothing else announced: it publishes.
 func TestRetriedResumeOfARunningWorkspacePublishes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	w := h.running()
 	op, err := h.svc.enqueue(bg, w.WorkspaceId, dbstate.OpResume, nil)

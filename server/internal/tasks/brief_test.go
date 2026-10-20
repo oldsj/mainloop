@@ -16,6 +16,7 @@ const maxGuidanceBytes = 3072
 // TestGuidanceDoesNotKeyTheCheckoutOnTheRole holds the wording to what is true of every brief: the
 // checkout belongs to code tasks, whatever their role, and the guidance names no role as lacking it.
 func TestGuidanceDoesNotKeyTheCheckoutOnTheRole(t *testing.T) {
+	t.Parallel()
 	for _, bad := range []string{"main and supervisor sessions have no checkout", "supervisor sessions have no checkout"} {
 		if strings.Contains(agentcontext.Guidance, bad) {
 			t.Errorf("guidance says %q", bad)
@@ -27,6 +28,7 @@ func TestGuidanceDoesNotKeyTheCheckoutOnTheRole(t *testing.T) {
 }
 
 func TestBriefsStateTheRoleAndShareTheGuidance(t *testing.T) {
+	t.Parallel()
 	const work = "Ship the thing"
 	cases := []struct {
 		name string

@@ -26,6 +26,7 @@ func (h *harness) knownAgents() []string {
 
 // The sweep reports the Agent set it covers, and the command prints it ahead of the orphans.
 func TestSweepOrphansReportsTheAgentsItSweeps(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	h.exec(`INSERT INTO kagent_agents (namespace, name) VALUES ('earlier', 'earlier-agent')`)
 	rep, err := h.svc.SweepOrphans(bg, OrphanOptions{})
@@ -45,6 +46,7 @@ func TestSweepOrphansReportsTheAgentsItSweeps(t *testing.T) {
 // --forget-agent drops an Agent a deployment once used: its Sessions are no longer swept. It
 // refuses an Agent the configuration names, one that is not recorded, and a malformed name.
 func TestForgetAgentRemovesItFromTheSweptSet(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	h.fake.AddAgent("earlier", "earlier-agent")
 	h.exec(`INSERT INTO kagent_agents (namespace, name) VALUES ('earlier', 'earlier-agent')`)
@@ -87,6 +89,7 @@ func TestForgetAgentRemovesItFromTheSweptSet(t *testing.T) {
 // review-6 P3-1: forgetting an Agent a workspace or an unsettled create still names would stop the
 // sweep reclaiming a Session that landed there, so --forget-agent refuses it until that is gone.
 func TestForgetAgentRefusesAnAgentStillInUse(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	w := h.running()
 	// The configuration moved on: the workspace's Agent is no longer one it names.

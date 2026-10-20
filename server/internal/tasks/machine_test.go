@@ -31,6 +31,7 @@ var (
 )
 
 func TestValidTaskStateTable(t *testing.T) {
+	t.Parallel()
 	valid := map[TaskState]bool{
 		{dbstate.TaskQueued, ""}:                                    true,
 		{dbstate.TaskQueued, dbstate.ReasonProvisioningUnavailable}: true,
@@ -61,6 +62,7 @@ func TestValidTaskStateTable(t *testing.T) {
 }
 
 func TestTransitionTask(t *testing.T) {
+	t.Parallel()
 	allowed := map[dbstate.TaskStatus][]dbstate.TaskStatus{
 		dbstate.TaskQueued:  {dbstate.TaskQueued, dbstate.TaskRunning, dbstate.TaskBlocked, dbstate.TaskFailed, dbstate.TaskCancelled},
 		dbstate.TaskRunning: {dbstate.TaskRunning, dbstate.TaskWaiting, dbstate.TaskBlocked, dbstate.TaskCompleted, dbstate.TaskFailed, dbstate.TaskCancelled},
@@ -89,6 +91,7 @@ func TestTransitionTask(t *testing.T) {
 }
 
 func TestTransitionTaskRefusesInvalidPairs(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ from, to TaskState }{
 		{TaskState{dbstate.TaskRunning, ""}, TaskState{dbstate.TaskWaiting, ""}},
 		{TaskState{dbstate.TaskRunning, ""}, TaskState{dbstate.TaskBlocked, dbstate.ReasonCI}},
@@ -103,6 +106,7 @@ func TestTransitionTaskRefusesInvalidPairs(t *testing.T) {
 }
 
 func TestTransitionTaskReasonChangesWithinAStatus(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ from, to TaskState }{
 		{TaskState{dbstate.TaskQueued, ""}, TaskState{dbstate.TaskQueued, dbstate.ReasonProvisioningUnavailable}},
 		{TaskState{dbstate.TaskQueued, dbstate.ReasonProvisioningUnavailable}, TaskState{dbstate.TaskQueued, ""}},
@@ -117,6 +121,7 @@ func TestTransitionTaskReasonChangesWithinAStatus(t *testing.T) {
 }
 
 func TestTransitionAttempt(t *testing.T) {
+	t.Parallel()
 	allowed := map[dbstate.AttemptState][]dbstate.AttemptState{
 		dbstate.AttemptCreating: {dbstate.AttemptActive, dbstate.AttemptDraining},
 		dbstate.AttemptActive:   {dbstate.AttemptDraining},
@@ -143,6 +148,7 @@ func TestTransitionAttempt(t *testing.T) {
 }
 
 func TestAttemptClassification(t *testing.T) {
+	t.Parallel()
 	live := map[dbstate.AttemptState]bool{dbstate.AttemptCreating: true, dbstate.AttemptActive: true}
 	unfenced := map[dbstate.AttemptState]bool{dbstate.AttemptCreating: true, dbstate.AttemptActive: true, dbstate.AttemptDraining: true}
 	final := map[dbstate.AttemptState]bool{
@@ -190,6 +196,7 @@ func contains(list []dbstate.TaskOpState, s dbstate.TaskOpState) bool {
 }
 
 func TestTransitionOperation(t *testing.T) {
+	t.Parallel()
 	forward[dbstate.TaskOpReassign] = forward[dbstate.TaskOpRetry]
 	for kind, edges := range forward {
 		for _, from := range allOpStates {
@@ -223,6 +230,7 @@ func TestTransitionOperation(t *testing.T) {
 }
 
 func TestUncertainOperationResumes(t *testing.T) {
+	t.Parallel()
 	for kind, edges := range forward {
 		for last := range edges {
 			for _, to := range allOpStates {
@@ -240,6 +248,7 @@ func TestUncertainOperationResumes(t *testing.T) {
 }
 
 func TestTransitionOperationUnknownKind(t *testing.T) {
+	t.Parallel()
 	if err := TransitionOperation("nope", dbstate.TaskOpRequested, dbstate.TaskOpRequested, dbstate.TaskOpBlocked); !errors.Is(err, ErrTransition) {
 		t.Fatalf("err = %v", err)
 	}

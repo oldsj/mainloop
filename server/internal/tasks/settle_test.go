@@ -14,6 +14,7 @@ import (
 )
 
 func TestCancelActiveChildSettlesItsAttempt(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()
@@ -48,6 +49,7 @@ func TestCancelActiveChildSettlesItsAttempt(t *testing.T) {
 }
 
 func TestSettleSweepFinishesStuckAttempts(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()
@@ -71,6 +73,7 @@ func TestSettleSweepFinishesStuckAttempts(t *testing.T) {
 // A code task that reports completed waits for its merge: its attempt stays live for merge status,
 // and the settle sweep leaves it alone.
 func TestCompletedReportKeepsTheCodeAttemptLive(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	r.run()
 	_, sup := r.supervisor()
@@ -94,6 +97,7 @@ func TestCompletedReportKeepsTheCodeAttemptLive(t *testing.T) {
 // order is tasks before attempts, so none of it deadlocks and the end state is consistent
 // whichever side wins.
 func TestSupervisorSettlementAgainstChildWrites(t *testing.T) {
+	t.Parallel()
 	for i := 0; i < 5; i++ {
 		r := newRig(t)
 		ctx := context.Background()
@@ -161,6 +165,7 @@ func TestSupervisorSettlementAgainstChildWrites(t *testing.T) {
 
 // An agent sees the reports of its own current attempt only, no artifacts, no approval ids.
 func TestAgentViewsAreNarrowed(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	root := e.mustCreate(e.own, tasks.CreateInput{})

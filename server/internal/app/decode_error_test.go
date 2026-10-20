@@ -12,6 +12,7 @@ import (
 )
 
 func TestRequestDecodeError(t *testing.T) {
+	t.Parallel()
 	handler := requestDecodeError(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	cases := []struct {
 		name   string

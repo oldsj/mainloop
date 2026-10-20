@@ -79,6 +79,7 @@ func (e *env) healthRows() (events, receipts, collected int, tracked bool, deliv
 // The turn's observations and the receipt that says they were read commit with the delivery's
 // terminal state: nothing waits for the recovery sweep, and the delivery leaves its discovery walk.
 func TestAFinishedTurnStoresItsHealthObservationsInTheSettlingTransaction(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.svc.Health = e.healthService()
 	id := e.settleHealthTurn(func(ctxID string) *a2a.Task { return healthTask("t-health", ctxID) })
@@ -100,6 +101,7 @@ func TestAFinishedTurnStoresItsHealthObservationsInTheSettlingTransaction(t *tes
 
 // A task with no health artifact stores nothing and marks nothing, so the sweep still discovers it.
 func TestATurnWithoutHealthArtifactsLeavesTheDeliveryToTheSweep(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.svc.Health = e.healthService()
 	e.settleHealthTurn(func(ctxID string) *a2a.Task {
@@ -128,6 +130,7 @@ func (brokenSink) IngestDelivery(ctx context.Context, tx pgx.Tx, _, deliveryID, 
 // event it publishes, and leaves nothing of its own behind (not even its earlier writes), so the
 // sweep finds the delivery untracked.
 func TestAFailedHealthIngestKeepsTheTerminalStateAndLeavesTheDeliveryToTheSweep(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.svc.Health = brokenSink{}
 	id := e.settleHealthTurn(func(ctxID string) *a2a.Task { return healthTask("t-health", ctxID) })

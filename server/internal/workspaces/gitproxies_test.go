@@ -28,6 +28,7 @@ func proxyReferences(creds []*ka.SessionCredential) (read, push int) {
 // it only with a push reference: it gets one that no reservation, grant or Secret backs, and it
 // reaches a confirmed preparation like any other.
 func TestAnEnvironmentWorkspaceWithoutAWritableAttemptIsPreparedWithAnInertPushReference(t *testing.T) {
+	t.Parallel()
 	h, _, w := gatedWorkspace(t)
 	var read, push int
 	for _, req := range h.fake.CreateRequests() {
@@ -52,6 +53,7 @@ func TestAnEnvironmentWorkspaceWithoutAWritableAttemptIsPreparedWithAnInertPushR
 // A development environment needs both Git transports; a server without them refuses the create
 // instead of making a workspace kagent can never prepare.
 func TestAnEnvironmentWorkspaceIsRefusedWhenTheGitTransportsAreNotConfigured(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"neither", "read only", "gate without upstream"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newHarness(t, nil)
@@ -83,6 +85,7 @@ func TestAnEnvironmentWorkspaceIsRefusedWhenTheGitTransportsAreNotConfigured(t *
 // A row that got its environment while this server could not carry the references (config lost
 // between planning and the create) is rejected with the reason, not retried for half an hour.
 func TestAnEnvironmentWorkspaceWhoseGitTransportsWereLostIsRejected(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	w, err := h.create(api.CreateWorkspaceRequest{Branch: ptr("feature")})
 	if err != nil {

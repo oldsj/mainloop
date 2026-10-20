@@ -83,6 +83,7 @@ func stopProbeProvision(t *testing.T) (*rig, func(), tasks.Principal, string, st
 }
 
 func TestStopFoundButUnreadableTaskIsNotStopped(t *testing.T) {
+	t.Parallel()
 	for _, age := range []string{"now()", "now() - interval '31 minutes'"} {
 		t.Run(age, func(t *testing.T) {
 			r, _, _, _, attempt, session := stopProbeProvision(t)
@@ -102,6 +103,7 @@ func TestStopFoundButUnreadableTaskIsNotStopped(t *testing.T) {
 }
 
 func TestStopLooksInTheDeliverysOwnSessionAndRenewsTheHold(t *testing.T) {
+	t.Parallel()
 	r, _, _, _, attempt, session := stopProbeProvision(t)
 	k := &fakeKagent{}
 	c := &stopProbeClient{k: k}
@@ -125,6 +127,7 @@ func TestStopLooksInTheDeliverysOwnSessionAndRenewsTheHold(t *testing.T) {
 }
 
 func TestStopOfAnAlreadyCancelledSessionIsStillObserved(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"owner cancelled session first", "crash after session cancel before attempt evidence", "binding session nil, delivery session present"} {
 		t.Run(mode, func(t *testing.T) {
 			r, _, sup, child, attempt, session := stopProbeProvision(t)
@@ -186,6 +189,7 @@ func TestStopOfAnAlreadyCancelledSessionIsStillObserved(t *testing.T) {
 }
 
 func TestStopSeesANativeTaskWithoutADelivery(t *testing.T) {
+	t.Parallel()
 	r, _, sup, child, attempt, session := stopProbeProvision(t)
 	f := kagenttest.New()
 	t.Cleanup(f.Close)
@@ -260,6 +264,7 @@ func (s *stopProbeEndBeforeBrief) SendToAs(ctx context.Context, source sessions.
 // A session that ended between activation and the first send can never take the brief: the create
 // operation gives up with evidence and a reconciliation block instead of retrying for ever.
 func TestInitialBriefToAnEndedSessionGivesUp(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	r.svc.Sessions = &stopProbeEndBeforeBrief{SessionRuntime: r.ses, real: r.ses.Service, r: r}
 	r.run()
@@ -291,6 +296,7 @@ func TestInitialBriefToAnEndedSessionGivesUp(t *testing.T) {
 // stop stays requested while the observer cannot cancel the native task, and only an observation of a
 // stopped session releases the claim and slot.
 func TestStopDoesNotDependOnTheEvidenceCap(t *testing.T) {
+	t.Parallel()
 	r, _, sup, child, attempt, _ := stopProbeProvision(t)
 	k := &fakeKagent{}
 	k.land(a2a.TaskStateWorking)
@@ -341,6 +347,7 @@ func stopProbeDeadlock(err error) bool {
 
 // Parent and child cancellation operations, child reports, and all settle steps contend on locks.
 func TestConcurrentParentAndChildCancelsDoNotDeadlock(t *testing.T) {
+	t.Parallel()
 	for round := range 4 {
 		t.Run(fmt.Sprint(round), func(t *testing.T) {
 			r := newRig(t)
@@ -423,6 +430,7 @@ func TestConcurrentParentAndChildCancelsDoNotDeadlock(t *testing.T) {
 // 'requested' and nothing else. The settle sweep alone resolves it: the observer finds the native task
 // still working, cancels it, and only a later look that sees it stopped confirms and fences.
 func TestStopRequestedBeforeAnyCancelIsResolvedBySweep(t *testing.T) {
+	t.Parallel()
 	r, _, _, child, attempt, _ := stopProbeProvision(t)
 	k := &fakeKagent{}
 	k.land(a2a.TaskStateWorking)

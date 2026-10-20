@@ -173,6 +173,7 @@ func finishSendOrderStop(t *testing.T, r *rig, attempt string) {
 }
 
 func TestTaskStopWinsBeforeSendingDecision(t *testing.T) {
+	t.Parallel()
 	r, f, attempt, _, mid := sendOrderProbe(t)
 	tr := &sendDecisionTrace{beforeFence: true}
 	done, release := traceDispatch(t, r, mid, tr)
@@ -196,6 +197,7 @@ func TestTaskStopWinsBeforeSendingDecision(t *testing.T) {
 // Port of the reviewer's last-fence probe: a decision committed before stop must still send.
 // Cancellation and an expired absent-message hold cannot erase its in-flight reservation.
 func TestSendingDecisionBeforeStopStillSendsAndDelaysConfirmation(t *testing.T) {
+	t.Parallel()
 	r, f, attempt, session, mid := sendOrderProbe(t)
 	tr := &sendDecisionTrace{afterCommit: true}
 	done, release := traceDispatch(t, r, mid, tr)
@@ -226,6 +228,7 @@ func TestSendingDecisionBeforeStopStillSendsAndDelaysConfirmation(t *testing.T) 
 // Port of the reviewer's delivery-lock probe: while admission waits on the delivery, its shared
 // attempt lock forces stop to wait. Neither action can decide from an old unfenced snapshot.
 func TestSendingDecisionLocksAttemptBeforeDelivery(t *testing.T) {
+	t.Parallel()
 	r, f, attempt, _, mid := sendOrderProbe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -288,6 +291,7 @@ func TestSendingDecisionLocksAttemptBeforeDelivery(t *testing.T) {
 }
 
 func TestTaskStopWaitsForUnknownDeliveryReconciliation(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"sending", "uncertain"} {
 		t.Run(state, func(t *testing.T) {
 			r, f, attempt, session, mid := sendOrderProbe(t)

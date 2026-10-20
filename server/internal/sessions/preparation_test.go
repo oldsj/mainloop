@@ -86,6 +86,7 @@ func withAssociation(s *kagentapi.Session) {
 }
 
 func TestReceiptClassificationsAndHistoryAreObservedOnly(t *testing.T) {
+	t.Parallel()
 	p := newPrep(t)
 	for _, c := range []struct {
 		class      string
@@ -125,6 +126,7 @@ func TestReceiptClassificationsAndHistoryAreObservedOnly(t *testing.T) {
 }
 
 func TestMissingReceiptAndAssociationAreIndependentUnknowns(t *testing.T) {
+	t.Parallel()
 	p := newPrep(t)
 	for _, receipt := range []bool{false, true} {
 		for _, association := range []bool{false, true} {
@@ -148,6 +150,7 @@ func TestMissingReceiptAndAssociationAreIndependentUnknowns(t *testing.T) {
 }
 
 func TestUnavailableReceiptKeepsTheCurrentRuntimeIdentity(t *testing.T) {
+	t.Parallel()
 	p := newPrep(t)
 	for name, edit := range map[string]func(*kagentapi.WorkspacePreparationReceipt){
 		"foreign session":       func(r *kagentapi.WorkspacePreparationReceipt) { r.Original.SessionId = "foreign-session" },
@@ -181,6 +184,7 @@ func TestUnavailableReceiptKeepsTheCurrentRuntimeIdentity(t *testing.T) {
 }
 
 func TestAbsentReceiptValuesAndAPresentEpochTimestampAreNotInvented(t *testing.T) {
+	t.Parallel()
 	p := newPrep(t)
 	o := p.read(func(s *kagentapi.Session) {
 		s.WorkspacePreparation = &kagentapi.WorkspacePreparationReceipt{
@@ -210,6 +214,7 @@ func TestAbsentReceiptValuesAndAPresentEpochTimestampAreNotInvented(t *testing.T
 }
 
 func TestAPendingOperationIsRetainedWithoutWakeOrPreparation(t *testing.T) {
+	t.Parallel()
 	p := newPrep(t)
 	o := p.read(func(s *kagentapi.Session) {
 		s.State = kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED
@@ -233,6 +238,7 @@ func TestAPendingOperationIsRetainedWithoutWakeOrPreparation(t *testing.T) {
 // client; a runtime field outside the contract's bounds is refused by the projection. Either way
 // the observation and the state are absent and the note says why, without echoing the value.
 func TestAReplyThatCannotBeProjectedLeavesNoObservation(t *testing.T) {
+	t.Parallel()
 	p := newPrep(t)
 	for name, edit := range map[string]func(*kagentapi.Session){
 		"foreign session":   func(s *kagentapi.Session) { s.Id = "foreign-session"; s.ContextId = "foreign-session" },
@@ -275,6 +281,7 @@ func TestAReplyThatCannotBeProjectedLeavesNoObservation(t *testing.T) {
 // shown with its own id as the context, unconfirmed. Acting on it stays refused (see the kagent
 // client test), and a context naming anything else is not shown.
 func TestAMissingExplicitContextIsShownUnconfirmed(t *testing.T) {
+	t.Parallel()
 	p := newPrep(t)
 	o := p.read(func(s *kagentapi.Session) { s.ContextId = "" }).PreparationObservation
 	if o == nil || o.SessionId != p.e.bindingKsid(p.sid) || o.ContextId != o.SessionId || o.ContextConfirmed || o.ReceiptStatus != "missing" {
@@ -283,6 +290,7 @@ func TestAMissingExplicitContextIsShownUnconfirmed(t *testing.T) {
 }
 
 func TestNoObservationWhenGetSessionIsUnavailable(t *testing.T) {
+	t.Parallel()
 	p := newPrep(t)
 	p.e.srv.FailNext(kagent.ProcGetSession, kagenttest.Fault{Drop: true})
 	p.mod.Store(ptr(func(*kagentapi.Session) {}))
@@ -302,6 +310,7 @@ func TestNoObservationWhenGetSessionIsUnavailable(t *testing.T) {
 
 // Nothing outside the allowlist reaches the response, whatever the Session and the receipt carry.
 func TestCredentialsConfigurationAndRuntimeDataNeverSerialize(t *testing.T) {
+	t.Parallel()
 	p := newPrep(t)
 	const private = "synthetic-private-value"
 	info := p.read(func(s *kagentapi.Session) {
@@ -342,6 +351,7 @@ func TestCredentialsConfigurationAndRuntimeDataNeverSerialize(t *testing.T) {
 }
 
 func TestAnUnknownSessionAndAnotherOwnerNeverReachKagent(t *testing.T) {
+	t.Parallel()
 	p := newPrep(t)
 	before := len(p.e.srv.Requests())
 	if _, err := p.e.API().GetSessionNative(context.Background(), api.GetSessionNativeRequestObject{SessionId: "nope"}); apierr.StatusOf(err) != 404 {

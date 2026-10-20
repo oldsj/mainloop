@@ -177,6 +177,7 @@ func pushCredentials(h *harness, id string) int {
 }
 
 func TestWorkspacePushAttachmentAndReadiness(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	w, a, u := queuedPushWorkspace(t, h, "feature/test", true)
 	createPushSession(t, h)
@@ -224,6 +225,7 @@ func TestWorkspacePushAttachmentAndReadiness(t *testing.T) {
 }
 
 func TestWorkspacePushReplayReusesReference(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	w, _, _ := queuedPushWorkspace(t, h, "feature/test", true)
 	tamper := h.fake.TamperSession
@@ -251,6 +253,7 @@ func TestWorkspacePushReplayReusesReference(t *testing.T) {
 }
 
 func TestWorkspacePushFailureAndExpiryRelease(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"refused", "expired", "failed runtime", "abandoned task", "no environment"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newHarness(t, nil)
@@ -292,6 +295,7 @@ func TestWorkspacePushFailureAndExpiryRelease(t *testing.T) {
 // A workspace with an environment that cannot push still holds the push reference kagent needs to
 // prepare it, but no reservation, grant or Secret ever backs that reference.
 func TestWorkspacePushReadOnlyAndExistingSessionGetNoAuthority(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"standalone", "default branch", "protected branch", "lost writer", "existing session"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newHarness(t, nil)
@@ -409,6 +413,9 @@ func (f *pushFixture) pushThroughGate(h *harness, a *authtest.Env, w wsRow, u *l
 }
 
 func TestWorkspaceHeldCredentialPushesThroughGate(t *testing.T) {
+	// Not parallel: pushes a real body through a pushgate.Server with a non-zero disk budget,
+	// which shares the pushgate package's process-wide receiveScratch counter (admission.go)
+	// with any other test in this binary that does the same.
 	h := newHarness(t, nil)
 	w, a, u := queuedPushWorkspace(t, h, "feature/test", true)
 	f := newPushFixture(t, h, w, u)
@@ -424,6 +431,7 @@ func TestWorkspaceHeldCredentialPushesThroughGate(t *testing.T) {
 }
 
 func TestWorkspacePushDeletionReplayAndRelease(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	w, _, _ := queuedPushWorkspace(t, h, "feature/test", true)
 	tamper := h.fake.TamperSession
@@ -454,6 +462,7 @@ func TestWorkspacePushDeletionReplayAndRelease(t *testing.T) {
 }
 
 func TestWorkspacePushEnrollmentRequiresOriginalAttachment(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"missing", "duplicate", "busy"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newHarness(t, nil)
@@ -521,6 +530,7 @@ func (s checkedPushSecrets) Create(ctx context.Context, name, purpose, bearer st
 }
 
 func TestWorkspacePushReservationBeforeRPCAndNoTransactionAcrossIO(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	w, a, u := queuedPushWorkspace(t, h, "feature/test", true)
 	cfg := h.svc.Pool.Config()
@@ -568,6 +578,7 @@ func TestWorkspacePushReservationBeforeRPCAndNoTransactionAcrossIO(t *testing.T)
 // kagent parks an idle Actor and attests the runtime only while one runs, so enrollment wakes the
 // Session and waits for the Actor instead of looping on an unattested runtime.
 func TestWorkspacePushEnrollmentWakesAnIdleActor(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	w, _, u := queuedPushWorkspace(t, h, "feature/test", true)
 	createPushSession(t, h)

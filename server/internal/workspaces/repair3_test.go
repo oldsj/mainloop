@@ -15,6 +15,7 @@ import (
 // replays the create to find the Session; kagent refuses a replay whose credentials differ, so the
 // replay must carry the same reference even though the credential is revoked.
 func TestADeleteReplayAfterCancelCarriesTheCreatesCredential(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, slow)
 	h.withCredentials()
 	ss := h.ledger()
@@ -67,6 +68,7 @@ func TestADeleteReplayAfterCancelCarriesTheCreatesCredential(t *testing.T) {
 // archives its session. The sweep starts a delete op for it (it has no Session id to delete by), the
 // op replays the create and deletes the Session, and the binding stops blocking the orphan sweep.
 func TestAnArchivedWorkspaceWithAnUnresolvedCreateIsDeleted(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, map[string]string{
 		"WORKSPACE_CREATE_RETRY_INITIAL_SECONDS": "30",
 		"WORKSPACE_CREATE_RETRY_MAX_SECONDS":     "30",
@@ -119,6 +121,7 @@ func TestAnArchivedWorkspaceWithAnUnresolvedCreateIsDeleted(t *testing.T) {
 
 // An archived workspace whose create is still pending is left alone: its create op decides.
 func TestAnArchivedWorkspaceWithAnOpenCreateIsNotDeletedBySweep(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, slow)
 	ss := h.ledger()
 	w, err := h.create(api.CreateWorkspaceRequest{}) // no runner: the create op stays open

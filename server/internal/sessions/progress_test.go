@@ -46,7 +46,7 @@ func (l *liveLog) all() []api.EventSessionProgress {
 
 func (l *liveLog) waitFor(t *testing.T, what string, ok func(api.EventSessionProgress) bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		for _, f := range l.all() {
 			if ok(f) {
@@ -101,6 +101,7 @@ func liveTurn() (steps []kagenttest.Step, final *a2a.Task) {
 }
 
 func TestALiveTurnPublishesGrowingTextAndToolLinesThenEndsNamingTheStoredReply(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	live := e.withProgress(40 * time.Millisecond)
 	steps, final := liveTurn()
@@ -159,6 +160,7 @@ func TestALiveTurnPublishesGrowingTextAndToolLinesThenEndsNamingTheStoredReply(t
 }
 
 func TestLiveUpdatesInABurstAreCoalesced(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	live := e.withProgress(300 * time.Millisecond)
 	steps := []kagenttest.Step{kagenttest.Emit{Event: agentArtifact("a1", "w", false)}}
@@ -184,6 +186,7 @@ func TestLiveUpdatesInABurstAreCoalesced(t *testing.T) {
 }
 
 func TestALateJoinerGetsTheCurrentPartialStateFromTheSnapshot(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	live := e.withProgress(20 * time.Millisecond)
 	running := &a2a.Task{ID: "t-live", ContextID: "ctx", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}
@@ -212,6 +215,7 @@ func TestALateJoinerGetsTheCurrentPartialStateFromTheSnapshot(t *testing.T) {
 }
 
 func TestADroppedLiveStreamFallsBackToTheDurableOutcome(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	live := e.withProgress(20 * time.Millisecond)
 	e.srv.Script(kagenttest.Emit{Event: agentArtifact("a1", "partial", false)}, kagenttest.Drop{})
@@ -239,6 +243,7 @@ func TestADroppedLiveStreamFallsBackToTheDurableOutcome(t *testing.T) {
 }
 
 func TestATurnThatFailsClosesTheLiveBubbleWithoutAReply(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	live := e.withProgress(20 * time.Millisecond)
 	failed := &a2a.Task{ID: "t-live", ContextID: "ctx", Status: a2a.TaskStatus{State: a2a.TaskStateFailed}}
@@ -259,6 +264,7 @@ func TestATurnThatFailsClosesTheLiveBubbleWithoutAReply(t *testing.T) {
 }
 
 func TestADeliveryWhoseSessionIsGoneEndsItsLiveTurn(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	live := e.withProgress(0)
 	ref := progress.Ref{UserID: owner, SessionID: "gone-session", MessageID: "gone-message"}

@@ -11,6 +11,7 @@ import (
 )
 
 func TestCreateValidation(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	a := &WorkspacesAPI{Svc: h.svc}
 	cases := map[string]api.CreateWorkspaceRequest{
@@ -34,6 +35,7 @@ func TestCreateValidation(t *testing.T) {
 }
 
 func TestUnknownWorkspaceIs404(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	a := &WorkspacesAPI{Svc: h.svc}
 	if _, err := a.GetWorkspace(bg, api.GetWorkspaceRequestObject{WorkspaceId: "x"}); apierr.StatusOf(err) != 404 {
@@ -50,6 +52,7 @@ func TestUnknownWorkspaceIs404(t *testing.T) {
 // The contract shapes: ports sorted by number with preview URLs, the lifecycle's JSON keys, the
 // list, and delete as 204.
 func TestContractShapes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	a := &WorkspacesAPI{Svc: h.svc}
 	stop := h.run()
@@ -106,6 +109,7 @@ func TestContractShapes(t *testing.T) {
 }
 
 func TestNilServiceIs503(t *testing.T) {
+	t.Parallel()
 	a := &WorkspacesAPI{}
 	_, err := a.ListWorkspaces(bg, api.ListWorkspacesRequestObject{})
 	var he *apierr.Error

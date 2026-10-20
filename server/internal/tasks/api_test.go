@@ -76,6 +76,7 @@ func reason(m map[string]any) any {
 }
 
 func TestRESTTaskLifecycle(t *testing.T) {
+	t.Parallel()
 	r := newRest(t)
 
 	var empty []any

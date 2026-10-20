@@ -57,7 +57,7 @@ func (p *parkEnv) firstTurn() string {
 	p.t.Helper()
 	p.waitState(p.send("one"), dbstate.DeliveryCompleted)
 	ksid := p.kagentSessionID()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		var scanned bool
 		err := p.pool.QueryRow(context.Background(),
@@ -83,7 +83,7 @@ func (p *parkEnv) count(query string, args ...any) int {
 
 func (p *parkEnv) waitCount(want int, what, query string, args ...any) {
 	p.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for p.count(query, args...) != want {
 		if time.Now().After(deadline) {
 			p.t.Fatalf("%s: want %d within 10 s", what, want)
@@ -107,6 +107,7 @@ func parkedTask(id, contextID, askID string, state a2a.TaskState) *a2a.Task {
 // A turn that parks for the owner shows up as a pending request within a sweep, though the
 // observer's scan period is an hour.
 func TestAParkedTurnShowsItsRequestWithoutWaitingForTheScanPeriod(t *testing.T) {
+	t.Parallel()
 	p := newParkEnv(t, 100*time.Millisecond, false, nil)
 	ksid := p.firstTurn()
 
@@ -122,6 +123,7 @@ func TestAParkedTurnShowsItsRequestWithoutWaitingForTheScanPeriod(t *testing.T) 
 // An auth-required park is not a HITL ask the observer adopts, so it does not make the session due.
 // The input-required park beside it is the control: the same setup does mark the session due.
 func TestAnAuthRequiredParkDoesNotHintTheObserver(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		state    a2a.TaskState
 		wantHint bool
@@ -156,7 +158,7 @@ func TestAnAuthRequiredParkDoesNotHintTheObserver(t *testing.T) {
 			e.send("two")
 
 			// Let the parked turn read the task several times.
-			deadline := time.Now().Add(10 * time.Second)
+			deadline := time.Now().Add(30 * time.Second)
 			for e.srv.Count("GetTask") < 4 {
 				if time.Now().After(deadline) {
 					t.Fatal("the parked turn was not read again")
