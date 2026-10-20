@@ -298,7 +298,12 @@ func (p ProviderProfile) validateEffortLevels() error {
 	return nil
 }
 
-// ProviderProfiles is the validated PROVIDER_PROFILES JSON list.
+// ProviderProfiles is the validated PROVIDER_PROFILES JSON list. An entry whose id matches a
+// built-in profile (claude or codex) replaces it; when that entry's native_provider still matches
+// the built-in's, it inherits the built-in's models, default_model, effort_levels and
+// default_effort for any of those it leaves empty, so an operator who only overrides agents and
+// capabilities does not silently lose /model and /effort. An entry that sets its own models or
+// effort_levels keeps them. See providers.NewRegistry.
 type ProviderProfiles []ProviderProfile
 
 // UnmarshalText parses and validates the JSON list.

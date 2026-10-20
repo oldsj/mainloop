@@ -1,6 +1,7 @@
 package providers_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -131,6 +134,143 @@ func TestRegistryOperatorProfiles(t *testing.T) {
 	if _, err := r.Resolve("team-x", "child", false); !errors.Is(err, providers.ErrNoRole) {
 		t.Errorf("missing role: %v", err)
 	}
+}
+
+// prodShapedClaude mirrors a production PROVIDER_PROFILES entry (see
+// server/internal/config/testdata/provider_profiles.json): it overrides the built-in "claude"
+// profile's agents and capabilities, but names no models or effort levels of its own.
+const prodShapedClaude = `{
+	"id": "claude",
+	"display_name": "Claude (workspace)",
+	"native_provider": "claude",
+	"configuration_revision": "prod-v1",
+	"agents": {
+		"main": {"namespace": "kagent", "name": "mainloop-main"},
+		"supervisor": {"namespace": "kagent", "name": "claude-workspace"},
+		"child": {"namespace": "kagent", "name": "claude-subscription"},
+		"agent": {"namespace": "kagent", "name": "claude-workspace"}
+	},
+	"capabilities": [{"capability": "native_create", "state": "proved", "scope": "live", "evidence_ref": "smoke-1"}]
+}`
+
+// TestOperatorProfileWithoutModelsInheritsTheBuiltin reproduces the production bug (PROVIDER_PROFILES
+// overrides agents/capabilities for "claude" and "codex" and omits models/effort entirely): the
+// operator profile must still offer /model and /effort as if it were the built-in.
+func TestOperatorProfileWithoutModelsInheritsTheBuiltin(t *testing.T) {
+	builtins, err := providers.NewRegistry(parse(t, nil).Kagent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantClaude, _ := builtins.Profile("claude")
+
+	r, err := providers.NewRegistry(parse(t, map[string]string{"PROVIDER_PROFILES": "[" + prodShapedClaude + "]"}).Kagent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := r.Profile("claude")
+	if !ok {
+		t.Fatal("no claude profile")
+	}
+	if !slices.Equal(modelIDs(got.Models), modelIDs(wantClaude.Models)) || got.DefaultModel != wantClaude.DefaultModel {
+		t.Errorf("models = %+v, default %q; want %+v, %q", got.Models, got.DefaultModel, wantClaude.Models, wantClaude.DefaultModel)
+	}
+	if !slices.Equal(got.EffortLevels, wantClaude.EffortLevels) || got.DefaultEffort != wantClaude.DefaultEffort {
+		t.Errorf("effort = %v, default %q; want %v, %q", got.EffortLevels, got.DefaultEffort, wantClaude.EffortLevels, wantClaude.DefaultEffort)
+	}
+	// The override itself still took effect.
+	if got.Agents["supervisor"].Name != "claude-workspace" || got.ConfigurationRevision != "prod-v1" {
+		t.Errorf("override did not apply: %+v", got)
+	}
+}
+
+// TestOperatorProfileExplicitModelsAndEffortWin confirms an operator profile that sets its own
+// models/effort_levels keeps them rather than inheriting the built-in's.
+func TestOperatorProfileExplicitModelsAndEffortWin(t *testing.T) {
+	override := withExtra(prodShapedClaude,
+		`"models":[{"id":"only-model","label":"Only Model"}],"default_model":"only-model",`+
+			`"effort_levels":["low"],"default_effort":"low"`)
+	r, err := providers.NewRegistry(parse(t, map[string]string{"PROVIDER_PROFILES": "[" + override + "]"}).Kagent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := r.Profile("claude")
+	if !ok {
+		t.Fatal("no claude profile")
+	}
+	if len(got.Models) != 1 || got.Models[0].ID != "only-model" || got.DefaultModel != "only-model" {
+		t.Errorf("models = %+v, default %q", got.Models, got.DefaultModel)
+	}
+	if !slices.Equal(got.EffortLevels, []string{"low"}) || got.DefaultEffort != "low" {
+		t.Errorf("effort = %v, default %q", got.EffortLevels, got.DefaultEffort)
+	}
+}
+
+func modelIDs(ms []config.ProviderModel) []string {
+	ids := make([]string, len(ms))
+	for i, m := range ms {
+		ids[i] = m.ID
+	}
+	return ids
+}
+
+// TestProdEnvProviderProfilesInheritTheBuiltin uses the sanitized production-shaped fixture
+// (server/internal/config/testdata/{prod.env,provider_profiles.json}) end to end: its "claude"
+// entry has the same shape as prodShapedClaude above.
+func TestProdEnvProviderProfilesInheritTheBuiltin(t *testing.T) {
+	builtins, err := providers.NewRegistry(parse(t, nil).Kagent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantClaude, _ := builtins.Profile("claude")
+
+	cfg, err := config.Parse(fixtureEnv(t, "prod.env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := providers.NewRegistry(cfg.Kagent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := r.Profile("claude")
+	if !ok {
+		t.Fatal("no claude profile")
+	}
+	if !slices.Equal(modelIDs(got.Models), modelIDs(wantClaude.Models)) || got.DefaultModel != wantClaude.DefaultModel {
+		t.Errorf("models = %+v, default %q; want %+v, %q", got.Models, got.DefaultModel, wantClaude.Models, wantClaude.DefaultModel)
+	}
+	if !slices.Equal(got.EffortLevels, wantClaude.EffortLevels) || got.DefaultEffort != wantClaude.DefaultEffort {
+		t.Errorf("effort = %v, default %q; want %v, %q", got.EffortLevels, got.DefaultEffort, wantClaude.EffortLevels, wantClaude.DefaultEffort)
+	}
+}
+
+// fixtureEnv reads ../config/testdata/<name>; a value "@file" is replaced by that file's
+// contents, the same convention server/internal/config/config_test.go uses for its own copy.
+func fixtureEnv(t *testing.T, name string) map[string]string {
+	t.Helper()
+	dir := filepath.Join("..", "config", "testdata")
+	f, err := os.Open(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	vars := map[string]string{}
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, _ := strings.Cut(line, "=")
+		if file, ok := strings.CutPrefix(v, "@"); ok {
+			b, err := os.ReadFile(filepath.Join(dir, file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			v = string(b)
+		}
+		vars[k] = v
+	}
+	return vars
 }
 
 // withExtra inserts extra raw JSON fields (no leading comma needed) into a profile() object.

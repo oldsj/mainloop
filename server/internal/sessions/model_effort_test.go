@@ -17,8 +17,10 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/apierr"
+	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
+	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 )
 
@@ -170,6 +172,58 @@ func TestSetSessionEffortAcceptsAProviderLevel(t *testing.T) {
 		t.Fatalf("set effort: %v", err)
 	}
 	if st.Effort == nil || *st.Effort != "xhigh" {
+		t.Fatalf("state %+v", st)
+	}
+}
+
+// withProductionShapedClaudeOverride gives the service a registry built the way production's
+// PROVIDER_PROFILES does: an operator profile for id "claude" that only overrides agents and
+// capabilities, naming no models or effort levels of its own.
+func (e *env) withProductionShapedClaudeOverride() {
+	e.t.Helper()
+	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "PROVIDER_PROFILES": `[{
+		"id": "claude",
+		"display_name": "Claude Co",
+		"native_provider": "claude",
+		"configuration_revision": "prod-v1",
+		"agents": {
+			"main": {"namespace": "kagent", "name": "mainloop-main"},
+			"supervisor": {"namespace": "kagent", "name": "claude-workspace"},
+			"child": {"namespace": "kagent", "name": "claude-subscription"},
+			"agent": {"namespace": "kagent", "name": "claude-workspace"}
+		},
+		"capabilities": [{"capability": "native_create", "state": "proved", "scope": "live", "evidence_ref": "smoke-1"}]
+	}]`})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	reg, err := providers.NewRegistry(cfg.Kagent)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	for _, p := range reg.Profiles() {
+		for _, a := range p.Agents {
+			e.srv.AddAgent(a.Namespace, a.Name)
+		}
+	}
+	e.svc.Providers = reg
+}
+
+func TestSetSessionEffortAcceptsABuiltinLevelWhenOperatorProfileOmitsEffort(t *testing.T) {
+	e := newEnv(t)
+	e.withProductionShapedClaudeOverride()
+
+	claude, ok := e.svc.Providers.Profile("claude")
+	if !ok || len(claude.Models) == 0 || claude.DefaultModel == "" || len(claude.EffortLevels) == 0 || claude.DefaultEffort == "" {
+		t.Fatalf("operator claude profile did not inherit built-in models/effort: %+v", claude)
+	}
+
+	id := e.newSession("start") // defaults to the Claude profile
+	st, err := e.setEffort(id, effortp("high"))
+	if err != nil {
+		t.Fatalf("set effort: %v", err)
+	}
+	if st.Effort == nil || *st.Effort != "high" {
 		t.Fatalf("state %+v", st)
 	}
 }
