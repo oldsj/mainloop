@@ -91,6 +91,7 @@ func scratchRepoTwoCommits(t *testing.T) (first, second string, pack []byte) {
 }
 
 func TestFetchArchiveUnpacksAndArchivesTheRequestedTrees(t *testing.T) {
+	t.Parallel()
 	sha, pack := scratchRepo(t)
 	seeder := &devlooptest.Seeder{Payload: pack}
 	out, err := devloop.FetchArchive(context.Background(), seeder, github.Repo{Owner: "o", Name: "n"}, sha, []string{"server", "web"})
@@ -109,6 +110,7 @@ func TestFetchArchiveUnpacksAndArchivesTheRequestedTrees(t *testing.T) {
 }
 
 func TestFilterTarRootsAndExcludes(t *testing.T) {
+	t.Parallel()
 	sha, pack := scratchRepo(t)
 	seeder := &devlooptest.Seeder{Payload: pack}
 	full, err := devloop.FetchArchive(context.Background(), seeder, github.Repo{Owner: "o", Name: "n"}, sha, []string{"server", "web"})

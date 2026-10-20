@@ -131,6 +131,7 @@ var serverExcludes = []string{".git/", "bin/", "tmp/", "testdata/", "*.test", "*
 // the old files. A deleted migration, a deleted Go file and a renamed one must all be gone, in
 // every userland the script runs in.
 func TestCopyTreeDeletesFilesTheCommitRemoved(t *testing.T) {
+	t.Parallel()
 	for name, bin := range shells(t) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -173,6 +174,7 @@ func TestCopyTreeDeletesFilesTheCommitRemoved(t *testing.T) {
 // dependencies and the other excluded paths in the destination are not in the archive and must
 // survive, whether an excluded directory or a pattern.
 func TestCopyTreeKeepsExcludedPaths(t *testing.T) {
+	t.Parallel()
 	for name, bin := range shells(t) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -205,6 +207,7 @@ func TestCopyTreeKeepsExcludedPaths(t *testing.T) {
 // newline would reach rm as two paths, the second relative to the wrong place. The script refuses
 // before deleting anything, and nothing outside the destination is touched.
 func TestCopyTreeRefusesToPruneAroundANewlineName(t *testing.T) {
+	t.Parallel()
 	for name, bin := range shells(t) {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -232,6 +235,7 @@ func TestCopyTreeRefusesToPruneAroundANewlineName(t *testing.T) {
 // TestCopyTreeRemovesSymlinksWithoutFollowingThem: a stale link to a directory and a stale link to
 // a file go, as links; what they point at, outside the destination, stays.
 func TestCopyTreeRemovesSymlinksWithoutFollowingThem(t *testing.T) {
+	t.Parallel()
 	for name, bin := range shells(t) {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -265,6 +269,7 @@ func TestCopyTreeRemovesSymlinksWithoutFollowingThem(t *testing.T) {
 // TestCopyTreeHandlesAwkwardNames proves names that tempt a shell script (spaces, a leading dash,
 // glob characters, non-ASCII) are kept when the commit has them and removed when it does not.
 func TestCopyTreeHandlesAwkwardNames(t *testing.T) {
+	t.Parallel()
 	awkward := []string{"a b.go", "-rf", "[a]*.go", "é.go", "dir with space/-x.go", "$HOME.go", "'quote'.go"}
 	for name, bin := range shells(t) {
 		t.Run(name, func(t *testing.T) {
@@ -289,6 +294,7 @@ func TestCopyTreeHandlesAwkwardNames(t *testing.T) {
 // TestCopyTreeDeletesNothingWhenTheExtractionFails proves a cut or corrupt archive does not prune:
 // the destination keeps its old files next to whatever was extracted, and the error says tar failed.
 func TestCopyTreeDeletesNothingWhenTheExtractionFails(t *testing.T) {
+	t.Parallel()
 	for name, bin := range shells(t) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -312,6 +318,7 @@ func TestCopyTreeDeletesNothingWhenTheExtractionFails(t *testing.T) {
 // TestCopyTreeRefusesAnArchiveWithoutAManifest proves a plain filtered tar cannot make the script
 // prune against nothing (which would delete the whole tree).
 func TestCopyTreeRefusesAnArchiveWithoutAManifest(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	seed(t, dir, map[string]string{"old.go": "package x\n"})
 	plain, err := devloop.FilterTar(bytes.NewReader(devlooptest.Tar(map[string]string{"t/new.go": "package x\n"})), "t", nil)
@@ -329,6 +336,7 @@ func TestCopyTreeRefusesAnArchiveWithoutAManifest(t *testing.T) {
 // tree is already in place, is a definite failure that carries the reason, not a success and not an
 // unobserved outcome that would be retried.
 func TestCopyTreeFailsClearlyWhenAFileCannotBeRemoved(t *testing.T) {
+	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("root can remove files from a read-only directory")
 	}
@@ -353,6 +361,7 @@ func TestCopyTreeFailsClearlyWhenAFileCannotBeRemoved(t *testing.T) {
 }
 
 func TestMirrorTarListsEveryKeptPathLast(t *testing.T) {
+	t.Parallel()
 	data := mirrorTar(t, map[string]string{"a.go": "x", "pkg/b.go": "y", "skipped_test.go": "z"}, serverExcludes)
 	names := tarNames(t, data)
 	for _, want := range []string{"a.go", "pkg/b.go", ".devloop-manifest"} {
@@ -368,6 +377,7 @@ func TestMirrorTarListsEveryKeptPathLast(t *testing.T) {
 }
 
 func TestMirrorTarRefusesPathsItCannotList(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"t/new\nline.go", "t/.devloop-manifest"} {
 		if _, err := devloop.MirrorTar(bytes.NewReader(devlooptest.Tar(map[string]string{name: "x"})), "t", nil); err == nil {
 			t.Errorf("MirrorTar accepted %q", name)
@@ -431,6 +441,7 @@ func packTrees(t *testing.T, trees ...map[string]string) (shas []string, pack []
 // container holds exactly the second commit plus its excluded paths, backend, mcp, git and frontend
 // alike, and the copy's manifest is gone.
 func TestSyncLeavesEveryContainerEqualToTheCommit(t *testing.T) {
+	t.Parallel()
 	first := map[string]string{
 		"server/go.mod": "module x\n", "server/main.go": "package main\n", "server/old.go": "package main\n",
 		"server/pkg/before.go": "package pkg\n", "server/internal/db/migrations/00270_x.sql": "-- abandoned\n",

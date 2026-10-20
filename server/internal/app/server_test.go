@@ -112,6 +112,7 @@ func detail(t *testing.T, r result) any {
 }
 
 func TestUnimplementedOperationReturns501WithErrorShape(t *testing.T) {
+	t.Parallel()
 	h := newUnimplementedHandler(t, nil)
 	for _, path := range []string{"/hitl/r1/merge/p1/details?section=files"} {
 		r := send(h, "GET", path, "", nil)
@@ -128,6 +129,7 @@ func TestUnimplementedOperationReturns501WithErrorShape(t *testing.T) {
 }
 
 func TestHealth(t *testing.T) {
+	t.Parallel()
 	t.Run("up", func(t *testing.T) {
 		r := send(newHandler(t, nil, up()), "GET", "/health", "", nil)
 		if r.status != 200 || !strings.Contains(r.body, `"status":"healthy"`) {
@@ -197,6 +199,7 @@ func assertPool(t *testing.T, pool *pgxpool.Pool) {
 }
 
 func TestRequestValidation(t *testing.T) {
+	t.Parallel()
 	h := newHandler(t, nil, up())
 	tests := []struct {
 		name         string
@@ -237,6 +240,7 @@ func TestRequestValidation(t *testing.T) {
 }
 
 func TestGuardsApplyToTheAPI(t *testing.T) {
+	t.Parallel()
 	h := newHandler(t, nil, up())
 	t.Run("foreign host", func(t *testing.T) {
 		r := send(h, "GET", "/schedules", "", map[string]string{"Host": "evil.example"})
@@ -280,6 +284,7 @@ func TestGuardsApplyToTheAPI(t *testing.T) {
 }
 
 func TestStubHandler(t *testing.T) {
+	t.Parallel()
 	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k"})
 	if err != nil {
 		t.Fatal(err)
@@ -298,6 +303,7 @@ func TestStubHandler(t *testing.T) {
 }
 
 func TestRequestBodyCap(t *testing.T) {
+	t.Parallel()
 	h := newHandler(t, nil, up())
 	huge := `{"message": "` + strings.Repeat("a", 9<<20) + `"}`
 	// Declared length: refused before the validator reads anything.
@@ -321,6 +327,7 @@ func TestRequestBodyCap(t *testing.T) {
 }
 
 func TestHealthLogsPingFailure(t *testing.T) {
+	t.Parallel()
 	var logs bytes.Buffer
 	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "mainloop.test", "MAINLOOP_API_HOSTS": "api.test"})
 	if err != nil {
@@ -343,6 +350,7 @@ func TestHealthLogsPingFailure(t *testing.T) {
 
 // Every access line carries a request id, on the API and on the stub listener.
 func TestAccessLinesCarryARequestID(t *testing.T) {
+	t.Parallel()
 	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "mainloop.test", "MAINLOOP_API_HOSTS": "api.test"})
 	if err != nil {
 		t.Fatal(err)
@@ -372,6 +380,7 @@ func TestAccessLinesCarryARequestID(t *testing.T) {
 // A required service missing from Deps is a startup error naming it, not a nil dereference on the
 // first request.
 func TestHandlerRefusesDepsMissingARequiredService(t *testing.T) {
+	t.Parallel()
 	cfg := newConfig(t, nil)
 	full := apptest.Deps(t, cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), nil)
 	if _, err := app.New(full).Handler(); err != nil {

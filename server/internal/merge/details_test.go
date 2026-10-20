@@ -17,6 +17,7 @@ import (
 )
 
 func TestDetailsPageThroughFilesChecksAndDescription(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	var files []githubtest.File
 	for i := range 120 {
@@ -86,6 +87,7 @@ func TestDetailsPageThroughFilesChecksAndDescription(t *testing.T) {
 }
 
 func TestDetailsOnlyFromACardThatNamesTheProposal(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	e.policy("approval")
@@ -115,6 +117,7 @@ func TestDetailsOnlyFromACardThatNamesTheProposal(t *testing.T) {
 }
 
 func TestDetailsAPIMapsErrors(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	a := &merge.MergeAPI{Svc: e.svc, OwnerID: owner}
 	if _, err := a.GetHITLMergeDetails(context.Background(), api.GetHITLMergeDetailsRequestObject{
@@ -128,8 +131,11 @@ func TestDetailsAPIMapsErrors(t *testing.T) {
 }
 
 func TestReviewDescriptionPageRetryCanShrink(t *testing.T) {
+	t.Parallel(
 	// A description of characters that JSON escapes to six bytes each used to fill a page past the
 	// cap at any limit. A page now stops at the encoded budget, and paging reads the whole text.
+	)
+
 	for _, limit := range []int{50, 1} {
 		t.Run(fmt.Sprintf("limit %d", limit), func(t *testing.T) {
 			e := newEnv(t)
@@ -177,6 +183,7 @@ func TestReviewDescriptionPageRetryCanShrink(t *testing.T) {
 }
 
 func TestDetailsItemPagesShrinkToTheByteBudget(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	var files []githubtest.File
 	for i := range 50 {

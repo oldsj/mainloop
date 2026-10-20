@@ -68,8 +68,11 @@ func (e *env) bumpPolicy(policy string) {
 }
 
 func TestReviewPolicyChangeMustInvalidateEvaluation(t *testing.T) {
+	t.Parallel(
 	// Ported from test_merge.py:2288 and test_merge_acceptance.py:556: a policy write after the
 	// intent was frozen ends the evaluation, whichever route it took.
+	)
+
 	t.Run("automatic", func(t *testing.T) {
 		e := newEnv(t)
 		p := e.freezeAuto()
@@ -91,8 +94,11 @@ func TestReviewPolicyChangeMustInvalidateEvaluation(t *testing.T) {
 }
 
 func TestPolicyWriteInFlightOrdersWithTheFinalDecision(t *testing.T) {
+	t.Parallel(
 	// A policy write holds the project row until it commits. The final decision waits for it and then
 	// sees the new version, so the merge can never read the old policy after the write began.
+	)
+
 	e := newEnv(t)
 	p := e.freezeAuto()
 	ctx := context.Background()
@@ -121,7 +127,10 @@ func TestPolicyWriteInFlightOrdersWithTheFinalDecision(t *testing.T) {
 }
 
 func TestReviewReplacementRuntimeMustInvalidateConsent(t *testing.T) {
+	t.Parallel(
 	// Ported from test_merge_acceptance.py:571: consent belongs to the runtime it was given for.
+	)
+
 	t.Run("before the call", func(t *testing.T) {
 		e := newEnv(t)
 		v := e.approvalProposal()
@@ -140,6 +149,7 @@ func TestReviewReplacementRuntimeMustInvalidateConsent(t *testing.T) {
 }
 
 func TestReviewArchivedSessionMustNotCompleteApprovedMerge(t *testing.T) {
+	t.Parallel()
 	for name, kill := range map[string]string{
 		"archived":        `UPDATE sessions SET archived_at = now() WHERE id = 's1'`,
 		"runtime deleted": `UPDATE agent_bindings SET kagent_deleted_at = now() WHERE session_id = 's1'`,
@@ -168,6 +178,7 @@ func TestReviewArchivedSessionMustNotCompleteApprovedMerge(t *testing.T) {
 }
 
 func TestReviewTemplateMappingChangeMustInvalidateConsent(t *testing.T) {
+	t.Parallel()
 	agent := kagent.AgentRef{Namespace: "ns", Name: "a"}
 	// Ported from test_merge_authorization.py:171: an Agent with an inline template, an unknown or
 	// duplicate template/provider pair, a Session that is not on the recorded Agent, or a failed read
@@ -243,6 +254,7 @@ func TestReviewTemplateMappingChangeMustInvalidateConsent(t *testing.T) {
 }
 
 func TestReviewConsentWithdrawnDuringEvidenceMustPreventPUT(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	p := e.freezeApproved()
 	// The last evidence read; the withdrawal lands after the pre-read check and before the decision.
@@ -253,6 +265,7 @@ func TestReviewConsentWithdrawnDuringEvidenceMustPreventPUT(t *testing.T) {
 }
 
 func TestReviewDeadlinePassingDuringEvidenceMustPreventPUT(t *testing.T) {
+	t.Parallel()
 	for name, freeze := range map[string]func(*env) string{
 		"automatic": (*env).freezeAuto,
 		"approved":  (*env).freezeApproved,
@@ -267,7 +280,10 @@ func TestReviewDeadlinePassingDuringEvidenceMustPreventPUT(t *testing.T) {
 }
 
 func TestReviewPinnedFactsMustNotChange(t *testing.T) {
+	t.Parallel(
 	// Ported from services/merge.py:813: the owner approved one repository, base and presentation.
+	)
+
 	cases := map[string]struct {
 		change func(r *githubtest.Repository)
 		detail string
@@ -298,7 +314,10 @@ func TestReviewPinnedFactsMustNotChange(t *testing.T) {
 }
 
 func TestDefaultBranchMovingAfterEvidenceMustPreventPUT(t *testing.T) {
+	t.Parallel(
 	// The tip is read again just before the decision: it moves after the evidence read and before it.
+	)
+
 	e := newEnv(t)
 	p := e.freezeApproved()
 	n := 0
@@ -316,8 +335,11 @@ func TestDefaultBranchMovingAfterEvidenceMustPreventPUT(t *testing.T) {
 }
 
 func TestReviewStatusAndApprovalMustBeProjectScoped(t *testing.T) {
+	t.Parallel(
 	// A session bound to another project, or to none, cannot read or approve a proposal of this one,
 	// even with the right owner, request id and session.
+	)
+
 	e := newEnv(t)
 	v := e.approvalProposal()
 	e.consent(v.ProposalID, "good", nil)

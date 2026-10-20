@@ -58,6 +58,7 @@ func holdLease(t *testing.T, d *testdb.DB, session string) {
 // with the same idempotency key (an agent's retried dev_sync) return the same durable row and the
 // work runs once, not twice.
 func TestSyncStartIsIdempotent(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := devlooptest.New()
 	pods.BySelector["app=mainloop-backend"] = []devloop.PodStatus{{Name: "backend-0", Phase: "Running", Ready: true}}
@@ -103,6 +104,7 @@ func TestSyncStartIsIdempotent(t *testing.T) {
 // first observing remote state, unlike the reconcile package's general rule, because overwriting
 // the sync directory with the same commit's tree is idempotent (see docs/specs/devloop.md).
 func TestSyncRetriesAnUncertainCopyToASuccessfulOutcome(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := devlooptest.New()
 	pods.BySelector["app=mainloop-backend"] = []devloop.PodStatus{{Name: "backend-0", Phase: "Running", Ready: true}}
@@ -141,6 +143,7 @@ func TestSyncRetriesAnUncertainCopyToASuccessfulOutcome(t *testing.T) {
 }
 
 func TestStatusReportsPods(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := devlooptest.New()
 	pods.AllPods = []devloop.PodStatus{{Name: "backend-0", Phase: "Running", Ready: true}}
@@ -190,6 +193,7 @@ func syncPods() *devlooptest.Pods {
 // copied again instead of being handed the stale finished row. A failed sync is retried the same
 // way.
 func TestSyncRunsAgainAfterTheEarlierRowFinished(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	sha, pack := scratchRepo(t)
@@ -225,6 +229,7 @@ func TestSyncRunsAgainAfterTheEarlierRowFinished(t *testing.T) {
 // TestSyncRefusesASessionThatLostTheLease proves the claim-time recheck: a sync queued by a
 // session that no longer holds the lease copies nothing.
 func TestSyncRefusesASessionThatLostTheLease(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	sha, pack := scratchRepo(t)
@@ -245,6 +250,7 @@ func TestSyncRefusesASessionThatLostTheLease(t *testing.T) {
 // TestSyncWaitsForTheBackendToComeBackHealthy proves the health wait: a backend that fails its
 // first checks (restarting under watchexec) is polled until it answers, and the result says so.
 func TestSyncWaitsForTheBackendToComeBackHealthy(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	pods.HealthFailFirst = 2
@@ -271,6 +277,7 @@ func TestSyncWaitsForTheBackendToComeBackHealthy(t *testing.T) {
 // under `go run`) fails the sync: the state is failed, not succeeded, the detail carries the log
 // tail, and neither the smoke run nor anything after the health wait happens.
 func TestSyncFailsWhenTheBackendIsUnhealthy(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	pods.HealthFailFirst = 1 << 30
@@ -296,6 +303,7 @@ func TestSyncFailsWhenTheBackendIsUnhealthy(t *testing.T) {
 // TestSyncFailsWhenMigrateFails proves `migrate up` failing fails the sync with the command's
 // output, before the health wait.
 func TestSyncFailsWhenMigrateFails(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	pods.MigrateErr = devlooptest.ExitError{Code: 1, Msg: "command terminated with exit code 1"}
@@ -321,6 +329,7 @@ func TestSyncFailsWhenMigrateFails(t *testing.T) {
 // TestSyncFailsWhenSmokeFails proves a failing read-only smoke run fails the sync and attaches
 // the run's output, even though the backend is healthy.
 func TestSyncFailsWhenSmokeFails(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	pods.SmokeErr = devlooptest.ExitError{Code: 1, Msg: "command terminated with exit code 1"}
@@ -343,6 +352,7 @@ func TestSyncFailsWhenSmokeFails(t *testing.T) {
 // TestSyncMigratesAfterTheCopiesAndSmokesAfterHealth proves the order: every copy, then migrate,
 // then /health, then smoke.
 func TestSyncMigratesAfterTheCopiesAndSmokesAfterHealth(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	sha, pack := scratchRepo(t)
@@ -363,6 +373,7 @@ func TestSyncMigratesAfterTheCopiesAndSmokesAfterHealth(t *testing.T) {
 // TestSyncPicksARunningPodThatIsNotBeingDeleted proves a terminating, pending or evicted pod that
 // matches the label is not a copy target, and that no such pod at all fails the sync.
 func TestSyncPicksARunningPodThatIsNotBeingDeleted(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	pods.BySelector["app=mainloop-backend"] = []devloop.PodStatus{
@@ -390,6 +401,7 @@ func TestSyncPicksARunningPodThatIsNotBeingDeleted(t *testing.T) {
 // TestSyncToleratesHarmlessBusyBoxTarWarnings proves a BusyBox tar that warns about PAX headers
 // and exits 0 does not fail the sync, while any other stderr still does.
 func TestSyncToleratesHarmlessBusyBoxTarWarnings(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	pods.QueueCopyStderr("frontend", "tar: warning: skipping header 'x'\ntar: removing leading '/' from member names\n")
@@ -416,6 +428,7 @@ func TestSyncToleratesHarmlessBusyBoxTarWarnings(t *testing.T) {
 // TestSyncGivesUpOnACopyThatKeepsBeingCut proves the retry cap: an exec stream that is cut every
 // time ends in failed, not in an endless unknown row.
 func TestSyncGivesUpOnACopyThatKeepsBeingCut(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	for range 20 {
@@ -469,6 +482,7 @@ func receivedMain(pods *devlooptest.Pods, container string) string {
 // TestReviewOlderUncertainSyncOverwritesNewerOne is the reviewer's repro: dev_sync(c1) is cut and
 // waits to retry, dev_sync(c2) succeeds, and c1's retry must not then copy c1 over c2.
 func TestReviewOlderUncertainSyncOverwritesNewerOne(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	pods.QueueCopyResult("backend", nil)
@@ -507,6 +521,7 @@ func TestReviewOlderUncertainSyncOverwritesNewerOne(t *testing.T) {
 // was not superseded when the newer one was created (another replica, a race) still does not run
 // once a newer sync from the same session is waiting or done.
 func TestSyncFailsWhenANewerSyncAlreadyRan(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	c1, _, pack := scratchRepoTwoCommits(t)
@@ -533,6 +548,7 @@ func TestSyncFailsWhenANewerSyncAlreadyRan(t *testing.T) {
 // (a newer commit from the same session, so it is not superseded: the first is running) does not
 // start copying until the first is done. Without the lock both extract into the same directories.
 func TestOnlyOneSyncCopiesAtATime(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	c1, c2, pack := scratchRepoTwoCommits(t)
@@ -601,6 +617,7 @@ func waitStateOrNot(t *testing.T, d *testdb.DB, id string) dbq.DevloopOperation 
 // TestSyncLockHeldByACrashedSyncExpires proves a sync lock left by a replica that died does not
 // block syncs for good: a live holder defers the sync, an expired one does not.
 func TestSyncLockHeldByACrashedSyncExpires(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	sha, pack := scratchRepo(t)
@@ -629,6 +646,7 @@ func TestSyncLockHeldByACrashedSyncExpires(t *testing.T) {
 // that is already past it fails without copying, and a copy that outlives the limit fails instead
 // of being retried as an interrupted copy.
 func TestSyncDeadlineRunsFromTheRequest(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	sha, pack := scratchRepo(t)
@@ -666,6 +684,7 @@ func TestSyncDeadlineRunsFromTheRequest(t *testing.T) {
 // message: a tar that ran and failed fails the sync at once even when its message holds a word
 // like "closed", "reset" or "EOF" (a file name is enough).
 func TestADefiniteTarFailureIsNotRetried(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	pods.QueueCopyResult("backend", devlooptest.ExitError{Code: 2, Msg: "command terminated with exit code 2: tar: server/reset/closed_EOF_timeout.go: Cannot open"})
@@ -687,6 +706,7 @@ func TestADefiniteTarFailureIsNotRetried(t *testing.T) {
 // c2 is requested, c1's copy is cut and waits to retry, and the agent calls dev_sync(c1) again.
 // That repeat call finds an unfinished row, so it is not a new request and must not supersede c2.
 func TestRepeatCallOfAnOlderSyncDoesNotFailTheNewerOne(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	c1, c2, pack := scratchRepoTwoCommits(t)
 	svc := newOperationsService(d, syncPods(), &devlooptest.Seeder{Payload: pack})
@@ -725,6 +745,7 @@ func runningBackend(name string, restarts int32) []devloop.PodStatus {
 // the smoke would pass for code that is not the commit under test. The restart count rising at the
 // first health probe, or during the smoke, fails the sync, with the previous instance's log.
 func TestSyncFailsWhenTheBackendRestartsAfterTheCopy(t *testing.T) {
+	t.Parallel()
 	for _, at := range []string{"health", "smoke"} {
 		t.Run(at, func(t *testing.T) {
 			d := testdb.New(t)
@@ -754,6 +775,7 @@ func TestSyncFailsWhenTheBackendRestartsAfterTheCopy(t *testing.T) {
 // TestSyncFailsWhenThePodIsReplacedMidWait proves a pod replaced after the copy fails the sync: the
 // new pod never got the copy, so asking it for /health would be asking about the image's tree.
 func TestSyncFailsWhenThePodIsReplacedMidWait(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	var once sync.Once
@@ -776,6 +798,7 @@ func TestSyncFailsWhenThePodIsReplacedMidWait(t *testing.T) {
 // TestSyncFailsWhenTheCommitMarkerIsGone proves the same-exec marker check: a container restarted
 // from the image has no marker for this commit, whatever its restart count says.
 func TestSyncFailsWhenTheCommitMarkerIsGone(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	pods.Hook = func(_ context.Context, event string) {
@@ -800,6 +823,7 @@ func TestSyncFailsWhenTheCommitMarkerIsGone(t *testing.T) {
 // TestSyncNamesTheStepThatTimedOut proves each step's timeout names its own cap, and that the
 // overall sync deadline is named as such instead of as the step's cap.
 func TestSyncNamesTheStepThatTimedOut(t *testing.T) {
+	t.Parallel()
 	block := func(step string) func(context.Context, string) {
 		return func(ctx context.Context, event string) {
 			if event == step {
@@ -855,6 +879,7 @@ func TestSyncNamesTheStepThatTimedOut(t *testing.T) {
 // migration already applied in the shared dev database) comes with what the owner can do, and that
 // the sync does not reset anything itself.
 func TestSyncNamesTheRecoveryForOutOfOrderMigrations(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	pods.MigrateErr = devlooptest.ExitError{Code: 1, Msg: "command terminated with exit code 1"}
@@ -874,6 +899,7 @@ func TestSyncNamesTheRecoveryForOutOfOrderMigrations(t *testing.T) {
 // TestSyncDetailStaysValidUTF8WhenTheTailIsCutMidCharacter proves a long multibyte output tail
 // cannot make the detail something the database refuses (which would rerun the whole sync).
 func TestSyncDetailStaysValidUTF8WhenTheTailIsCutMidCharacter(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	pods.MigrateErr = devlooptest.ExitError{Code: 1, Msg: "command terminated with exit code 1"}
@@ -892,6 +918,7 @@ func TestSyncDetailStaysValidUTF8WhenTheTailIsCutMidCharacter(t *testing.T) {
 // TestSyncWaitsForTheMCPAndGitListeners proves a backend that answers while mcp or git still does
 // not is not yet healthy: the health probe covers all three, so smoke cannot race their rebuilds.
 func TestSyncWaitsForTheMCPAndGitListeners(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	pods.HealthFailFirst = 2
@@ -917,6 +944,7 @@ func TestSyncWaitsForTheMCPAndGitListeners(t *testing.T) {
 // health deadline. Without the per-round check, only the check after the smoke would catch a
 // restart, and a health that never passes never gets that far.
 func TestSyncFailsOnARestartWhileHealthKeepsFailing(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	pods.SetPods("app=mainloop-backend", runningBackend("backend-0", 0))
@@ -958,6 +986,7 @@ func TestSyncFailsOnARestartWhileHealthKeepsFailing(t *testing.T) {
 // older crash: the mcp container restarted in an earlier sync, and this sync only the backend's
 // count rose.
 func TestSyncReadsPreviousLogsOnlyForContainersThatRestarted(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	pods := syncPods()
 	pod := func(backend int32) []devloop.PodStatus {
@@ -996,6 +1025,7 @@ func TestSyncReadsPreviousLogsOnlyForContainersThatRestarted(t *testing.T) {
 // TestSyncCrashLogTailIsSixtyLinesCappedByBytes proves a long goroutine dump still shows the panic
 // header 50 lines up, and that a log of very long lines is cut by bytes on a character boundary.
 func TestSyncCrashLogTailIsSixtyLinesCappedByBytes(t *testing.T) {
+	t.Parallel()
 	run := func(t *testing.T, log string) string {
 		t.Helper()
 		d := testdb.New(t)

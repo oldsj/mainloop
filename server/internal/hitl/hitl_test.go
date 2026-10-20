@@ -31,6 +31,12 @@ import (
 
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }
 
+// Tests in this package stay serial (no t.Parallel): this package's own job is a real-time
+// hold/recheck/timeout state machine, and many tests assert specific elapsed-wall-clock
+// boundaries (e.g. a send must land within a configured SendTimeout, a hold must end within one
+// recheck interval) against Opts durations as short as 150ms. Running them concurrently adds
+// scheduling jitter from sibling tests that crosses those margins and makes the assertions flake.
+
 const (
 	owner   = "owner-1"
 	session = "sess-1"

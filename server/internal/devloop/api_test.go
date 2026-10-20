@@ -14,6 +14,7 @@ import (
 )
 
 func TestDevloopAPIActsAsTheOwnerHolder(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	a := devloop.NewAPI(&devloop.LeaseService{Pool: d.Pool})
 	ctx := context.Background()
@@ -48,6 +49,7 @@ func TestDevloopAPIActsAsTheOwnerHolder(t *testing.T) {
 }
 
 func TestDevloopAPIWithNoLeaseServiceIsUnavailable(t *testing.T) {
+	t.Parallel()
 	a := devloop.NewAPI(nil)
 	ctx := context.Background()
 	if _, err := a.GetDevloopLease(ctx, api.GetDevloopLeaseRequestObject{}); !isUnavailable(err) {
@@ -67,6 +69,7 @@ func isUnavailable(err error) bool {
 }
 
 func TestListDevloopOperationsShowsEachSyncsVerdict(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	ctx := context.Background()
 	insert := func(id, session, sha string, state dbstate.DevloopOperationState, result, detail string, age time.Duration) {
@@ -122,6 +125,7 @@ func TestListDevloopOperationsShowsEachSyncsVerdict(t *testing.T) {
 }
 
 func TestListDevloopOperationsWithNoLeaseServiceIsUnavailable(t *testing.T) {
+	t.Parallel()
 	if _, err := devloop.NewAPI(nil).ListDevloopOperations(context.Background(), api.ListDevloopOperationsRequestObject{}); !isUnavailable(err) {
 		t.Fatalf("ListDevloopOperations with no Lease = %v, want 503 unavailable", err)
 	}

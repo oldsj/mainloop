@@ -16,6 +16,7 @@ import (
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }
 
 func TestLeaseAcquireIsGrantedWhenFree(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	info, err := s.Acquire(context.Background(), "session-a")
@@ -31,6 +32,7 @@ func TestLeaseAcquireIsGrantedWhenFree(t *testing.T) {
 }
 
 func TestLeaseAcquireIsIdempotentForTheHolder(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
@@ -54,6 +56,7 @@ func TestLeaseAcquireIsIdempotentForTheHolder(t *testing.T) {
 // TestLeaseQueuesASecondCallerFIFO is the behavior that fails without the change: a second
 // session asking for a held lease is queued, not granted, and is told its place in line.
 func TestLeaseQueuesASecondCallerFIFO(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
@@ -79,6 +82,7 @@ func TestLeaseQueuesASecondCallerFIFO(t *testing.T) {
 // TestLeaseReleaseHandsOffToTheEarliestQueuedCaller proves release does not grant the lease to
 // whichever session happens to call next: it is held free until the earliest queued caller asks.
 func TestLeaseReleaseHandsOffToTheEarliestQueuedCaller(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
@@ -114,6 +118,7 @@ func TestLeaseReleaseHandsOffToTheEarliestQueuedCaller(t *testing.T) {
 // TestLeaseExpiredIdleLeaseIsTakenOver proves an idle-expired holder loses the lease to the
 // earliest queued caller, without anyone calling Release.
 func TestLeaseExpiredIdleLeaseIsTakenOver(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
@@ -147,6 +152,7 @@ func TestLeaseExpiredIdleLeaseIsTakenOver(t *testing.T) {
 }
 
 func TestLeaseReleaseByNonHolderIsANoOp(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
@@ -169,6 +175,7 @@ func TestLeaseReleaseByNonHolderIsANoOp(t *testing.T) {
 // is accepted and its idle clock restarts, any other session is refused, and a holder whose idle
 // timeout ran out is refused once another session is next in line.
 func TestLeaseUseHeartbeatsTheHolderAndRefusesEveryoneElse(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
@@ -227,6 +234,7 @@ func backdateQueueEntry(t *testing.T, d *testdb.DB, session string, age time.Dur
 // never polls again. When the holder releases, the lease must go to the live caller, not sit
 // reserved for the one that left.
 func TestReviewAbandonedQueueEntryIsGrantedTheLease(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
@@ -252,6 +260,7 @@ func TestReviewAbandonedQueueEntryIsGrantedTheLease(t *testing.T) {
 // TestLeaseQueuePollKeepsAnEntryFresh proves polling is what keeps a place in line: an entry that
 // is polled again within the stale window keeps its place; one that is not loses it.
 func TestLeaseQueuePollKeepsAnEntryFresh(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
@@ -288,6 +297,7 @@ func TestLeaseQueuePollKeepsAnEntryFresh(t *testing.T) {
 // with Use: an idle-expired holder with someone fresh waiting no longer holds, and an expired
 // holder with nobody waiting still does.
 func TestLeaseHoldsAppliesTheIdleExpiryRuleOfUse(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()
@@ -330,6 +340,7 @@ func TestLeaseHoldsAppliesTheIdleExpiryRuleOfUse(t *testing.T) {
 // path calls, releases the lease the session held and removes its place in line, so a session that
 // ended does not keep the dev environment blocked for the idle timeout.
 func TestSessionEndDropsItsQueueEntryAndHoldership(t *testing.T) {
+	t.Parallel()
 	d := testdb.New(t)
 	s := &devloop.LeaseService{Pool: d.Pool}
 	ctx := context.Background()

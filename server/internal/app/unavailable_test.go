@@ -8,6 +8,7 @@ import (
 // Each of these routes has a domain handler that needs a dependency this test does not wire.
 // They answer 503, and the contract declares it: newHandler checks every response against it.
 func TestUnconfiguredServicesAnswerTheDeclared503(t *testing.T) {
+	t.Parallel()
 	h := newHandler(t, nil, up())
 	const schedule = `{"request_id":"r1","agent":{"namespace":"kagent","name":"a1"},"config":{"schedule":"0 * * * *","prompt":"go"}}`
 	const sid = "6f1f3a0e-2f7c-4c43-9a43-0d4e9d7b2f11"

@@ -87,7 +87,10 @@ func (e *env) movedMain(baseFiles, headFiles []githubtest.File) {
 }
 
 func TestReviewHeadSideFilesCannotProveProtectedMergePaths(t *testing.T) {
+	t.Parallel(
 	// main renamed src/build.yml into the workflows directory; the head only edits the old path.
+	)
+
 	e := newEnv(t)
 	e.movedMain(
 		[]githubtest.File{{Filename: ".github/workflows/build.yml", Status: "renamed", PreviousFilename: "src/build.yml"}},
@@ -100,8 +103,11 @@ func TestReviewHeadSideFilesCannotProveProtectedMergePaths(t *testing.T) {
 }
 
 func TestBaseSideRenameOfAHeadPathIsRefused(t *testing.T) {
+	t.Parallel(
 	// Ported from test_base_side_rename_of_a_head_path_is_refused. Compare may pair a rename that
 	// Git's merge detects as a delete and an add, so both shapes are refused.
+	)
+
 	head := []githubtest.File{{Filename: "src/build.yml", Status: "modified"}}
 	for name, base := range map[string]githubtest.File{
 		"renamed": {Filename: ".github/workflows/build.yml", Status: "renamed", PreviousFilename: "src/build.yml"},
@@ -116,8 +122,11 @@ func TestBaseSideRenameOfAHeadPathIsRefused(t *testing.T) {
 }
 
 func TestBaseSideDirectoryRenameIsRefused(t *testing.T) {
+	t.Parallel(
 	// Ported from test_base_side_directory_rename_is_refused: Git's directory rename detection
 	// carries a file the head adds under a renamed-away directory into main's new directory.
+	)
+
 	renames := []githubtest.File{
 		{Filename: ".github/workflows/build.yml", Status: "renamed", PreviousFilename: "ci/build.yml"},
 		{Filename: ".github/workflows/deep/test.yml", Status: "renamed", PreviousFilename: "ci/deep/test.yml"},
@@ -137,7 +146,10 @@ func TestBaseSideDirectoryRenameIsRefused(t *testing.T) {
 }
 
 func TestDirectoryStillPresentOnMainIsNotRenamed(t *testing.T) {
+	t.Parallel(
 	// Ported from test_directory_still_present_on_main_is_not_renamed.
+	)
+
 	rename := githubtest.File{Filename: ".github/workflows/build.yml", Status: "renamed", PreviousFilename: "ci/build.yml"}
 	for name, c := range map[string]struct{ base, head []githubtest.File }{
 		"head changed a file main did not": {nil, []githubtest.File{{Filename: "ci/keep.yml", Status: "modified"}}},
@@ -156,6 +168,7 @@ func TestDirectoryStillPresentOnMainIsNotRenamed(t *testing.T) {
 }
 
 func TestMovedMainWithAnUnrelatedChangeKeepsTheAutomaticRoute(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.movedMain(
 		[]githubtest.File{{Filename: "docs/readme.md", Status: "modified"}},
@@ -168,6 +181,7 @@ func TestMovedMainWithAnUnrelatedChangeKeepsTheAutomaticRoute(t *testing.T) {
 }
 
 func TestMergeInventoryRefusesAMergeCommitOnMain(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.movedMain(nil, []githubtest.File{{Filename: "server/a.go", Status: "modified"}})
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
@@ -184,6 +198,7 @@ func TestMergeInventoryRefusesAMergeCommitOnMain(t *testing.T) {
 }
 
 func TestReviewUnsupportedRulesAndAppBoundChecksMustBlock(t *testing.T) {
+	t.Parallel()
 	classic := func(inner string) string {
 		return `{"required_status_checks":` + inner + `,"enforce_admins":{"enabled":false}}`
 	}
@@ -284,7 +299,10 @@ func TestReviewUnsupportedRulesAndAppBoundChecksMustBlock(t *testing.T) {
 }
 
 func TestReviewFailedSuiteCannotDisappearBehindPassingRun(t *testing.T) {
+	t.Parallel(
 	// Ported from test_merge.py:1509: a newer passing run does not hide an unsuccessful suite.
+	)
+
 	e := newEnv(t)
 	e.run()
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
@@ -297,6 +315,7 @@ func TestReviewFailedSuiteCannotDisappearBehindPassingRun(t *testing.T) {
 }
 
 func TestSkippedChecksCountAsGreen(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
@@ -309,6 +328,7 @@ func TestSkippedChecksCountAsGreen(t *testing.T) {
 }
 
 func TestNeutralChecksMustNotCountAsGreen(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
@@ -321,6 +341,7 @@ func TestNeutralChecksMustNotCountAsGreen(t *testing.T) {
 }
 
 func TestSkippedSuitesCountAsGreen(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
@@ -333,6 +354,7 @@ func TestSkippedSuitesCountAsGreen(t *testing.T) {
 }
 
 func TestNeutralSuitesMustNotCountAsGreen(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
@@ -345,6 +367,7 @@ func TestNeutralSuitesMustNotCountAsGreen(t *testing.T) {
 }
 
 func TestOtherNonSuccessChecksMustNotCountAsGreen(t *testing.T) {
+	t.Parallel()
 	for _, conclusion := range []string{"cancelled", "timed_out", "action_required", "stale", "startup_failure", "a_future_conclusion"} {
 		t.Run(conclusion, func(t *testing.T) {
 			e := newEnv(t)
@@ -361,6 +384,7 @@ func TestOtherNonSuccessChecksMustNotCountAsGreen(t *testing.T) {
 }
 
 func TestReviewWrongHeadCIIsNotEvidence(t *testing.T) {
+	t.Parallel()
 	t.Run("run", func(t *testing.T) {
 		e := newEnv(t)
 		e.fake.Update("o", "n", func(r *githubtest.Repository) {
@@ -385,8 +409,11 @@ func TestReviewWrongHeadCIIsNotEvidence(t *testing.T) {
 }
 
 func TestAbandonedSuiteIsIgnoredAfterTheGrace(t *testing.T) {
+	t.Parallel(
 	// Ported from the abandoned-suite cases: a queued suite with no runs, older than the grace, is
 	// not a pending check; a fresh one still holds the merge.
+	)
+
 	for name, c := range map[string]struct {
 		age  time.Duration
 		want dbstate.MergeState
@@ -414,7 +441,10 @@ func TestAbandonedSuiteIsIgnoredAfterTheGrace(t *testing.T) {
 }
 
 func TestReviewRulesPermission403MustNotEraseRequirements(t *testing.T) {
+	t.Parallel(
 	// A 403 that is not the plan's own refusal fails closed, however the ruleset read goes.
+	)
+
 	for name, mut := range map[string]func(*githubtest.Repository){
 		"rules":      func(r *githubtest.Repository) { r.RulesStatus = 403 },
 		"protection": func(r *githubtest.Repository) { r.ProtectionStatus = 403 },
@@ -434,6 +464,7 @@ func TestReviewRulesPermission403MustNotEraseRequirements(t *testing.T) {
 }
 
 func TestPlanRefusalOfBothReadsStillUsesTheChecks(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
 		r.ProtectionStatus, r.RulesStatus = 403, 403
@@ -446,6 +477,7 @@ func TestPlanRefusalOfBothReadsStillUsesTheChecks(t *testing.T) {
 }
 
 func TestReviewMissingSquashSettingCannotBeAssumed(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.fake.Update("o", "n", func(r *githubtest.Repository) { r.OmitSquash = true })
 	e.unavailable("r1", merge.ReasonSquash)
@@ -455,12 +487,14 @@ func TestReviewMissingSquashSettingCannotBeAssumed(t *testing.T) {
 }
 
 func TestSquashDisabledIsRefused(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.fake.Update("o", "n", func(r *githubtest.Repository) { r.NoSquash = true })
 	e.unavailable("r1", merge.ReasonSquash)
 }
 
 func TestSummaryNamesMergeResultFilesOnlyWhenInventoried(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	v := e.prepared("r1")
 	if v.Summary.MergeFileCount == nil || *v.Summary.MergeFileCount != 1 || v.Summary.MergeOnlyFileCount == nil || *v.Summary.MergeOnlyFileCount != 0 ||

@@ -34,6 +34,7 @@ func sessionsServer(t *testing.T) http.Handler {
 }
 
 func TestChatAndMainThreadOverHTTP(t *testing.T) {
+	t.Parallel()
 	h := sessionsServer(t)
 
 	r := send(h, "GET", "/main-thread", "", nil)
@@ -130,6 +131,7 @@ func providerServer(t *testing.T, withKagent bool) http.Handler {
 }
 
 func TestMainProviderOverHTTP(t *testing.T) {
+	t.Parallel()
 	h := providerServer(t, true)
 
 	var p api.MainProviderInfo
@@ -187,6 +189,7 @@ func TestMainProviderOverHTTP(t *testing.T) {
 }
 
 func TestMainProviderRefusals(t *testing.T) {
+	t.Parallel()
 	h := providerServer(t, true)
 	for name, tc := range map[string]struct {
 		body    string
@@ -210,6 +213,7 @@ func TestMainProviderRefusals(t *testing.T) {
 }
 
 func TestMainProviderWithoutKagentIsUnavailable(t *testing.T) {
+	t.Parallel()
 	h := providerServer(t, false)
 	if r := send(h, "PUT", "/main-thread/provider", `{"provider":"codex"}`, nil); r.status != 503 {
 		t.Fatalf("%d %s", r.status, r.body)

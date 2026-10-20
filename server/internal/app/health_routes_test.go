@@ -108,6 +108,7 @@ func sameKeys(t *testing.T, what string, got any, want ...string) {
 
 // The field names the web fixtures (web/src/features/health/test/fixtures.ts) use, field for field.
 func TestOrchestrationHealthRoute(t *testing.T) {
+	t.Parallel()
 	h := healthServer(t)
 	r := send(h, "GET", "/orchestration-health", "", nil)
 	if r.status != 200 {
@@ -153,6 +154,7 @@ func TestOrchestrationHealthRoute(t *testing.T) {
 }
 
 func TestHealthEventsRoute(t *testing.T) {
+	t.Parallel()
 	h := healthServer(t)
 	r := send(h, "GET", "/orchestration-health/events?session_id=session-1", "", nil)
 	if r.status != 200 {
@@ -180,6 +182,7 @@ func TestHealthEventsRoute(t *testing.T) {
 }
 
 func TestHealthRoutesRejectAndHideOthersRecords(t *testing.T) {
+	t.Parallel()
 	h := healthServer(t)
 	for _, c := range []struct {
 		path   string
@@ -214,6 +217,7 @@ func TestHealthRoutesRejectAndHideOthersRecords(t *testing.T) {
 }
 
 func TestSmokeObservationsRoute(t *testing.T) {
+	t.Parallel()
 	h := healthServer(t)
 	r := send(h, "GET", "/projects/project-1/smoke-observations?branch=mainloop/x", "", nil)
 	if r.status != 200 {

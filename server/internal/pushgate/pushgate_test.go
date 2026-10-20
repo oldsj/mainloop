@@ -36,6 +36,11 @@ import (
 
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }
 
+// Tests in this package stay serial (no t.Parallel): most of them admit a push through the
+// server's HTTP handler, which shares the process-wide receiveScratch disk budget (admission.go).
+// Running them concurrently would make one test's reservation show up in another's "retained
+// bytes" accounting.
+
 type nativeFake struct {
 	mu      sync.Mutex
 	session *ka.Session

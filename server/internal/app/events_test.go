@@ -194,6 +194,7 @@ func (c *client) expectNoFrame(within time.Duration) {
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
 func TestSSEConnectedFirstThenLiveEventsThenHeartbeat(t *testing.T) {
+	t.Parallel()
 	e := newSSE(t, 16, 300*time.Millisecond)
 	before := e.publish(t, owner, events.TypeInboxUpdated, map[string]string{})
 	c := e.connect(t, "")
@@ -233,6 +234,7 @@ func TestSSEConnectedFirstThenLiveEventsThenHeartbeat(t *testing.T) {
 }
 
 func TestSSEHeartbeatWaitsOutTheSilence(t *testing.T) {
+	t.Parallel()
 	e := newSSE(t, 16, 500*time.Millisecond)
 	c := e.connect(t, "")
 	c.mustNext() // connected
@@ -252,6 +254,7 @@ func TestSSEHeartbeatWaitsOutTheSilence(t *testing.T) {
 }
 
 func TestSSEResumeReplaysMissedEventsThenGoesLive(t *testing.T) {
+	t.Parallel()
 	e := newSSE(t, 16, time.Hour)
 	e1 := e.publish(t, owner, events.TypeInboxUpdated, map[string]string{})
 	e2 := e.publish(t, owner, events.TypeTaskUpdated, map[string]string{"task_id": "t"})
@@ -279,6 +282,7 @@ func TestSSEResumeReplaysMissedEventsThenGoesLive(t *testing.T) {
 
 // Events published while a client connects with Last-Event-ID arrive exactly once, in order.
 func TestSSEResumeHasNoGapOrDuplicateUnderConcurrentPublishing(t *testing.T) {
+	t.Parallel()
 	e := newSSE(t, 256, time.Hour)
 	first := e.publish(t, owner, events.TypeInboxUpdated, map[string]string{})
 	var (
@@ -312,6 +316,7 @@ func TestSSEResumeHasNoGapOrDuplicateUnderConcurrentPublishing(t *testing.T) {
 // Beyond the retained window, or ahead of the outbox, a resume is a fresh connection: nothing is
 // replayed and `connected` tells the client to refetch.
 func TestSSEResumeOutsideTheWindowStartsFresh(t *testing.T) {
+	t.Parallel()
 	e := newSSE(t, 16, time.Hour)
 	ctx := context.Background()
 	old := e.publish(t, owner, events.TypeInboxUpdated, map[string]string{})
@@ -350,6 +355,7 @@ func TestSSEResumeOutsideTheWindowStartsFresh(t *testing.T) {
 }
 
 func TestSSEOnlyDeliversTheUsersOwnEvents(t *testing.T) {
+	t.Parallel()
 	e := newSSE(t, 16, time.Hour)
 	c := e.connect(t, "")
 	c.mustNext()
@@ -360,6 +366,7 @@ func TestSSEOnlyDeliversTheUsersOwnEvents(t *testing.T) {
 // Server shutdown: closing the hub ends open streams (so http.Server.Shutdown does not wait on
 // them), and new streams are refused.
 func TestSSEStreamsEndOnShutdown(t *testing.T) {
+	t.Parallel()
 	e := newSSE(t, 16, time.Hour)
 	a, b := e.connect(t, ""), e.connect(t, "")
 	a.mustNext()
@@ -383,6 +390,7 @@ func TestSSEStreamsEndOnShutdown(t *testing.T) {
 }
 
 func TestSSEEndsWhenTheClientLeaves(t *testing.T) {
+	t.Parallel()
 	e := newSSE(t, 16, time.Hour)
 	c := e.connect(t, "")
 	c.mustNext()
@@ -400,6 +408,7 @@ func TestSSEEndsWhenTheClientLeaves(t *testing.T) {
 }
 
 func TestEventsWithoutAHubAnswer503(t *testing.T) {
+	t.Parallel()
 	h := newHandler(t, nil, up())
 	r := send(h, "GET", "/events", "", nil)
 	if r.status != http.StatusServiceUnavailable {
@@ -411,6 +420,7 @@ func TestEventsWithoutAHubAnswer503(t *testing.T) {
 // saw the source start would miss every event committed in between: not dispatched (the source
 // starts after them) and not replayed (the stream began before them).
 func TestSSERefusesStreamsUntilTheSourceIsReady(t *testing.T) {
+	t.Parallel()
 	e := newSSEWithoutSource(t, 16, time.Hour)
 	get := func() int {
 		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, e.server.URL+"/events", nil)
@@ -445,6 +455,7 @@ func TestSSERefusesStreamsUntilTheSourceIsReady(t *testing.T) {
 // Retention can overtake a replay in progress. The stream ends instead of going live with a hole,
 // and the client's next attempt (its resume point is now below the floor) starts fresh.
 func TestSSEEndsWhenPruningOvertakesTheReplay(t *testing.T) {
+	t.Parallel()
 	e := newSSE(t, 16, time.Hour)
 	first := e.publish(t, owner, events.TypeInboxUpdated, map[string]string{})
 	var ids []int64
@@ -484,6 +495,7 @@ func TestSSEEndsWhenPruningOvertakesTheReplay(t *testing.T) {
 }
 
 func TestSSELiveProgressFramesCarryNoIDAndASnapshotFollowsConnected(t *testing.T) {
+	t.Parallel()
 	e := newSSE(t, 16, time.Hour)
 	ref := progress.Ref{UserID: owner, SessionID: "s1", MessageID: "m1", Started: time.Now()}
 	stored := e.publish(t, owner, events.TypeInboxUpdated, map[string]string{})
@@ -521,6 +533,7 @@ func TestSSELiveProgressFramesCarryNoIDAndASnapshotFollowsConnected(t *testing.T
 }
 
 func TestSSELiveProgressIsNotReplayedAfterAReconnect(t *testing.T) {
+	t.Parallel()
 	e := newSSE(t, 16, time.Hour)
 	ref := progress.Ref{UserID: owner, SessionID: "s1", MessageID: "m1", Started: time.Now()}
 	e.live.Begin(ref)

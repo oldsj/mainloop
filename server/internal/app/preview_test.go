@@ -47,6 +47,7 @@ func previewHandler(t *testing.T, withPreview bool) http.Handler {
 }
 
 func TestPreviewHostsAreRoutedAheadOfTheAPIHostGuard(t *testing.T) {
+	t.Parallel()
 	const host = "3000--ws1--preview.preview.test:8001"
 	h := previewHandler(t, true)
 
@@ -71,6 +72,7 @@ func TestPreviewHostsAreRoutedAheadOfTheAPIHostGuard(t *testing.T) {
 }
 
 func TestPreviewHostIsRefusedWithoutAProxy(t *testing.T) {
+	t.Parallel()
 	const host = "3000--ws1--preview.preview.test:8001"
 	h := previewHandler(t, false)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+host+"/projects", nil)

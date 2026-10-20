@@ -8,6 +8,7 @@ import (
 )
 
 func TestProtectedGlobs(t *testing.T) {
+	t.Parallel()
 	cases := map[string][]string{
 		"k8s/app.yaml":               {"k8s/**"},
 		"k8s":                        nil,
@@ -37,6 +38,7 @@ func TestProtectedGlobs(t *testing.T) {
 }
 
 func TestPathsThatCouldBeFooledAreRefused(t *testing.T) {
+	t.Parallel()
 	for _, bad := range []string{"", "a//b", "./a", "a/../k8s/x", "a\\b", "a\x00b", "a/./b", "../x"} {
 		if validPath(bad) {
 			t.Errorf("validPath(%q) = true", bad)
@@ -51,6 +53,7 @@ func TestPathsThatCouldBeFooledAreRefused(t *testing.T) {
 }
 
 func TestRenameAwayFromAProtectedPathMatches(t *testing.T) {
+	t.Parallel()
 	got, err := protectedMatches([]FileFact{{Filename: "docs/a.md", PreviousFilename: "k8s/a.yaml", Status: "renamed"}})
 	if err != nil || len(got) != 1 || got[0].Path != "k8s/a.yaml" || got[0].Glob != "k8s/**" {
 		t.Fatalf("matches = %+v, %v", got, err)
@@ -62,6 +65,7 @@ func evidence(mergeable *bool, state string, f Facts) *Evidence {
 }
 
 func TestJudge(t *testing.T) {
+	t.Parallel()
 	yes, no := true, false
 	head := "1111111111111111111111111111111111111111"
 	want := Facts{PathsDigest: "d", HeadSHA: head}

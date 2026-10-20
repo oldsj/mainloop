@@ -159,6 +159,7 @@ func (e *env) settled(proposal string) dbstate.MergeState {
 }
 
 func TestAutoMergeSquashesOnce(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	ctx := context.Background()
@@ -191,6 +192,7 @@ func TestAutoMergeSquashesOnce(t *testing.T) {
 }
 
 func TestRequestIDWithOtherArgumentsConflicts(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	if _, err := e.svc.Prepare(ctx, e.input("r1")); err != nil {
@@ -204,6 +206,7 @@ func TestRequestIDWithOtherArgumentsConflicts(t *testing.T) {
 }
 
 func TestPrepareFreezesFactsAndWritesNoApprovalCard(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	v, err := e.svc.Prepare(context.Background(), e.input("r1"))
 	if err != nil {
@@ -227,6 +230,7 @@ func TestPrepareFreezesFactsAndWritesNoApprovalCard(t *testing.T) {
 }
 
 func TestPrepareRefusals(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	code := func(in merge.PrepareInput) string {
@@ -274,6 +278,7 @@ func TestPrepareRefusals(t *testing.T) {
 }
 
 func TestProtectedPathRoutesToApproval(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
 		r.PullRequests[0].Files = append(r.PullRequests[0].Files, githubtest.File{Filename: "k8s/app.yaml", Additions: 1})
@@ -291,6 +296,7 @@ func TestProtectedPathRoutesToApproval(t *testing.T) {
 }
 
 func TestDockerfileOnlyChangeRoutesToApprovalWhenFlagIsOff(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
 		r.PullRequests[0].Files = append(r.PullRequests[0].Files, githubtest.File{Filename: "server/Dockerfile", Additions: 1})
@@ -308,6 +314,7 @@ func TestDockerfileOnlyChangeRoutesToApprovalWhenFlagIsOff(t *testing.T) {
 }
 
 func TestProtectedAutoMergesAProtectedPathOnGreenWithoutACard(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.svc.ProtectedAuto = true
@@ -329,6 +336,7 @@ func TestProtectedAutoMergesAProtectedPathOnGreenWithoutACard(t *testing.T) {
 }
 
 func TestProtectedAutoStillHonoursTheProjectsApprovalPolicy(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.svc.ProtectedAuto = true
@@ -343,6 +351,7 @@ func TestProtectedAutoStillHonoursTheProjectsApprovalPolicy(t *testing.T) {
 }
 
 func TestProtectedAutoRefusesUnavailableEvidenceInsteadOfACard(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.svc.ProtectedAuto = true
@@ -361,6 +370,7 @@ func TestProtectedAutoRefusesUnavailableEvidenceInsteadOfACard(t *testing.T) {
 }
 
 func TestTogglingProtectedAutoOffBlocksAnAlreadyQueuedCandidate(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.svc.ProtectedAuto = true
 	e.svc.Settle = 10 * time.Millisecond
@@ -399,6 +409,7 @@ func TestTogglingProtectedAutoOffBlocksAnAlreadyQueuedCandidate(t *testing.T) {
 }
 
 func TestApprovalPolicyNeverAutoMerges(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.policy("approval")
@@ -409,6 +420,7 @@ func TestApprovalPolicyNeverAutoMerges(t *testing.T) {
 }
 
 func TestWaitsForPendingCIThenMerges(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
@@ -430,6 +442,7 @@ func TestWaitsForPendingCIThenMerges(t *testing.T) {
 }
 
 func TestFailedChecksBlock(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
@@ -442,6 +455,7 @@ func TestFailedChecksBlock(t *testing.T) {
 }
 
 func TestNoCINeverMerges(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.fake.Update("o", "n", func(r *githubtest.Repository) { r.Runs = nil })
@@ -453,6 +467,7 @@ func TestNoCINeverMerges(t *testing.T) {
 }
 
 func TestExpiryEndsEvaluation(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
@@ -470,6 +485,7 @@ func TestExpiryEndsEvaluation(t *testing.T) {
 }
 
 func TestNewHeadSupersedes(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
@@ -490,6 +506,7 @@ func TestNewHeadSupersedes(t *testing.T) {
 }
 
 func TestSecondPreparationSupersedesTheFirst(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	first, err := e.svc.Prepare(ctx, e.input("r1"))
@@ -506,6 +523,7 @@ func TestSecondPreparationSupersedesTheFirst(t *testing.T) {
 }
 
 func TestMergeRefusedByGitHubBlocks(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.fake.Update("o", "n", func(r *githubtest.Repository) { r.MergeStatus = 403 })
@@ -524,6 +542,7 @@ func TestMergeRefusedByGitHubBlocks(t *testing.T) {
 }
 
 func TestRateLimitedMergeIsRetriedNotUncertain(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.fake.RateLimit("PUT", mergePath)
@@ -540,6 +559,7 @@ func TestRateLimitedMergeIsRetriedNotUncertain(t *testing.T) {
 }
 
 func TestLostPUTReplyIsSettledByReadingNotResending(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	// GitHub applies the merge but the reply is lost.
@@ -554,6 +574,7 @@ func TestLostPUTReplyIsSettledByReadingNotResending(t *testing.T) {
 }
 
 func TestLostPUTThatNeverRanEndsNotApplied(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	// The reply is lost and nothing was merged (the fake answers 502 without merging).
@@ -575,6 +596,7 @@ func TestLostPUTThatNeverRanEndsNotApplied(t *testing.T) {
 }
 
 func TestUncertainResolvesMergedWhenTheMergeLanded(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	v, err := e.svc.Prepare(ctx, e.input("r1"))
@@ -594,6 +616,7 @@ func TestUncertainResolvesMergedWhenTheMergeLanded(t *testing.T) {
 }
 
 func TestUncertainBlocksWhenTheHeadMovedOrPRClosed(t *testing.T) {
+	t.Parallel()
 	for name, change := range map[string]func(*githubtest.Repository){
 		"head_moved": func(r *githubtest.Repository) { r.PullRequests[0].HeadSHA = moved },
 		"closed_without_merge": func(r *githubtest.Repository) {
@@ -623,6 +646,7 @@ func TestUncertainBlocksWhenTheHeadMovedOrPRClosed(t *testing.T) {
 
 // A call that stops at each step of the merge, and a loop that takes over later, sends the PUT at most once.
 func TestReplayAfterAStopAtEveryStepSendsOnePUT(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, state string
 		// merged is true when GitHub has the merge already (the PUT landed before the stop).
@@ -671,6 +695,7 @@ func TestReplayAfterAStopAtEveryStepSendsOnePUT(t *testing.T) {
 }
 
 func TestOnlyOneCandidateHoldsTheMergeIntent(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	v, err := e.svc.Prepare(ctx, e.input("r1"))
@@ -745,6 +770,7 @@ func (e *env) approved(proposal, request string) (merge.View, error) {
 }
 
 func TestApprovedMergeNeedsTheOwnersExactConsent(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	v := e.approvalProposal()
@@ -797,6 +823,7 @@ func TestApprovedMergeNeedsTheOwnersExactConsent(t *testing.T) {
 }
 
 func TestApprovedMergeFromAnotherSessionIsRefused(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	v := e.approvalProposal()
 	e.consent(v.ProposalID, "good", nil)
@@ -807,6 +834,7 @@ func TestApprovedMergeFromAnotherSessionIsRefused(t *testing.T) {
 }
 
 func TestApprovedMergeOnAnAutoProposalIsRefused(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	v, err := e.svc.Prepare(context.Background(), e.input("r1"))
 	if err != nil {
@@ -819,6 +847,7 @@ func TestApprovedMergeOnAnAutoProposalIsRefused(t *testing.T) {
 }
 
 func TestWithdrawnConsentBlocksTheEvaluation(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	v := e.approvalProposal()
@@ -839,6 +868,7 @@ func TestWithdrawnConsentBlocksTheEvaluation(t *testing.T) {
 }
 
 func TestCompletionSweepMergesAnApprovedProposalWhoseCallNeverArrived(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	v := e.approvalProposal()
@@ -856,6 +886,7 @@ func TestCompletionSweepMergesAnApprovedProposalWhoseCallNeverArrived(t *testing
 }
 
 func TestStatusReadsStoredStateOnly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	ctx := context.Background()
@@ -882,7 +913,10 @@ func TestStatusReadsStoredStateOnly(t *testing.T) {
 const planMessage = "Upgrade to GitHub Pro or make this repository public to enable this feature."
 
 func TestRulesUnavailableOnPlanKeepsCIEvidence(t *testing.T) {
+	t.Parallel(
 	// A 403 on the protection and rules reads means the plan has neither: the checks decide.
+	)
+
 	e := newEnv(t)
 	e.run()
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
@@ -896,7 +930,10 @@ func TestRulesUnavailableOnPlanKeepsCIEvidence(t *testing.T) {
 }
 
 func TestOtherForbiddenReadsAreNotTreatedAsNoPlan(t *testing.T) {
+	t.Parallel(
 	// A 403 on the check-run read is a failure to read CI, not an absent feature: nothing merges.
+	)
+
 	e := newEnv(t)
 	e.run()
 	e.fake.Fail("GET", "/repos/o/n/commits/"+tip+"/check-runs", 403)
@@ -908,6 +945,7 @@ func TestOtherForbiddenReadsAreNotTreatedAsNoPlan(t *testing.T) {
 }
 
 func TestRulesReadFailureOtherThan403IsNotCIOnly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.fake.Update("o", "n", func(r *githubtest.Repository) { r.RulesStatus = 500 })
 	_, err := e.svc.Prepare(context.Background(), e.input("r1"))
@@ -918,6 +956,7 @@ func TestRulesReadFailureOtherThan403IsNotCIOnly(t *testing.T) {
 }
 
 func TestRequiredCheckWithoutResultWaits(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.run()
 	e.fake.Update("o", "n", func(r *githubtest.Repository) {
@@ -937,6 +976,7 @@ func TestRequiredCheckWithoutResultWaits(t *testing.T) {
 }
 
 func TestMergeQueueRoutesToApproval(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.fake.Update("o", "n", func(r *githubtest.Repository) { r.Rules = []githubtest.Rule{{Type: "merge_queue"}} })
 	v, err := e.svc.Merge(context.Background(), e.input("r1"))
@@ -998,6 +1038,7 @@ func (r *runtimeFake) template(ref kagent.AgentRef, name string) {
 // A bare Service returns at once, so the constructor the processes use must set the wait the spec
 // promises; without it merge_pull_request answers "evaluating" before the loop has run.
 func TestNewServiceWaitsForTheLoopToSettle(t *testing.T) {
+	t.Parallel()
 	if got := merge.NewService(&config.Config{}, nil, nil, nil, nil).Settle; got != merge.DefaultSettle || got < 10*time.Second {
 		t.Fatalf("Settle = %v, want %v", got, merge.DefaultSettle)
 	}
