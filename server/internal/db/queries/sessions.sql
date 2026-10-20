@@ -23,6 +23,34 @@ JOIN sessions s ON s.id = b.session_id
 LEFT JOIN workspaces w ON w.id = b.session_id
 WHERE s.id = $1 AND s.user_id = $2;
 
+-- Confirms the session is the owner's and names its provider profile, for /model and /effort: a
+-- model's format is checked at the API boundary, kagent is the real gate, but an effort level is
+-- checked here against the session's provider profile's own effort_levels before it is stored.
+-- name: GetBindingKindOwned :one
+SELECT b.kind FROM agent_bindings b
+JOIN sessions s ON s.id = b.session_id
+WHERE s.id = sqlc.arg(session_id) AND s.user_id = sqlc.arg(user_id);
+
+-- Sets, or clears (NULL), a session's /model override. Ownership is already confirmed by the
+-- caller's GetBindingKindOwned read; ":one" with no matching row (an id a concurrent delete just
+-- removed) reads as pgx.ErrNoRows, the same not-found the read would have given.
+-- name: SetBindingModelOverride :one
+UPDATE agent_bindings
+SET model_override = sqlc.narg(model_override)::text,
+    model_effort_touched = model_effort_touched OR sqlc.narg(model_override)::text IS NOT NULL,
+    updated_at = now()
+WHERE session_id = sqlc.arg(session_id)
+RETURNING session_id, model_override, effort_override;
+
+-- Sets, or clears (NULL), a session's /effort override. See SetBindingModelOverride.
+-- name: SetBindingEffortOverride :one
+UPDATE agent_bindings
+SET effort_override = sqlc.narg(effort_override)::text,
+    model_effort_touched = model_effort_touched OR sqlc.narg(effort_override)::text IS NOT NULL,
+    updated_at = now()
+WHERE session_id = sqlc.arg(session_id)
+RETURNING session_id, model_override, effort_override;
+
 -- The attempt keeps its session id and non-none stop state after settlement. This is a permanent
 -- send fence, independent of the session's activity status or the task's current attempt.
 -- Standalone and adopted scheduled sessions have no task attempt and remain resumable.
@@ -198,6 +226,7 @@ SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.u
        b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id,
        b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
        b.credential_identity,
+       b.model_override, b.effort_override, coalesce(b.model_effort_touched, false) AS model_effort_touched,
        coalesce(b.mcp_grant_kind::text, '')::text AS binding_grant, s.user_id, s.title AS session_title,
        w.id AS workspace_id,
        coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -70,6 +71,30 @@ func TestRegistryDefaults(t *testing.T) {
 			}
 		}
 	}
+	claude, codex := ps[0], ps[1]
+	if len(claude.Models) == 0 || claude.DefaultModel == "" {
+		t.Errorf("claude models = %+v, default %q", claude.Models, claude.DefaultModel)
+	}
+	wantEffort := func(p config.ProviderProfile, levels []string, def string) {
+		t.Helper()
+		if !slices.Equal(p.EffortLevels, levels) || p.DefaultEffort != def {
+			t.Errorf("%s effort_levels = %v, default %q; want %v, %q", p.ID, p.EffortLevels, p.DefaultEffort, levels, def)
+		}
+	}
+	wantEffort(claude, []string{"low", "medium", "high", "xhigh", "max"}, "medium")
+	wantEffort(codex, []string{"minimal", "low", "medium", "high"}, "medium")
+	if len(codex.Models) == 0 || codex.DefaultModel == "" {
+		t.Errorf("codex models = %+v, default %q", codex.Models, codex.DefaultModel)
+	}
+	for _, p := range []config.ProviderProfile{claude, codex} {
+		found := false
+		for _, m := range p.Models {
+			found = found || m.ID == p.DefaultModel
+		}
+		if !found {
+			t.Errorf("%s default_model %q is not one of its models", p.ID, p.DefaultModel)
+		}
+	}
 	// Changing the returned slice does not change the registry.
 	ps[0].ID = "mutated"
 	if r.Profiles()[0].ID != "claude" {
@@ -108,21 +133,36 @@ func TestRegistryOperatorProfiles(t *testing.T) {
 	}
 }
 
+// withExtra inserts extra raw JSON fields (no leading comma needed) into a profile() object.
+func withExtra(p, extra string) string {
+	return strings.TrimSuffix(p, "}") + "," + extra + "}"
+}
+
 func TestBadConfigurationFailsClearly(t *testing.T) {
 	good := profile("a", "claude", "", true)
+	badDefaultModel := withExtra(good, `"models":[{"id":"m1","label":"M1"}],"default_model":"nope"`)
+	modelWithNoModels := withExtra(good, `"default_model":"m1"`)
+	unknownEffortLevel := withExtra(good, `"effort_levels":["bogus"],"default_effort":"bogus"`)
+	defaultEffortNotOffered := withExtra(good, `"effort_levels":["low"],"default_effort":"high"`)
+	effortWithNoLevels := withExtra(good, `"default_effort":"low"`)
 	for name, tc := range map[string]struct {
 		env  map[string]string
 		want string
 	}{
-		"bad id":           {map[string]string{"PROVIDER_PROFILES": strings.Replace("["+good+"]", `"id":"a"`, `"id":"A b"`, 1)}, "profile id"},
-		"id too long":      {map[string]string{"PROVIDER_PROFILES": strings.Replace("["+good+"]", `"id":"a"`, `"id":"a`+strings.Repeat("b", 80)+`"`, 1)}, "profile id"},
-		"digit first":      {map[string]string{"PROVIDER_PROFILES": strings.Replace("["+good+"]", `"id":"a"`, `"id":"1a"`, 1)}, "profile id"},
-		"not json":         {map[string]string{"PROVIDER_PROFILES": "nonsense"}, "PROVIDER_PROFILES"},
-		"duplicate":        {map[string]string{"PROVIDER_PROFILES": "[" + good + "," + good + "]"}, "duplicate"},
-		"alias collides":   {map[string]string{"PROVIDER_PROFILES": "[" + good + "," + profile("b", "codex", `"a"`, true) + "]"}, "duplicate"},
-		"reserved alias":   {map[string]string{"PROVIDER_PROFILES": "[" + profile("b", "codex", `"claude"`, true) + "]"}, "reserved"},
-		"legacy id switch": {map[string]string{"PROVIDER_PROFILES": "[" + profile("claude", "codex", "", true) + "]"}, "legacy"},
-		"bad agent name":   {map[string]string{"PROVIDER_PROFILES": strings.Replace("["+good+"]", `a-sup`, `Bad Name`, 1)}, "AgentRef"},
+		"default_model not one of models": {map[string]string{"PROVIDER_PROFILES": "[" + badDefaultModel + "]"}, "default_model"},
+		"default_model with no models":    {map[string]string{"PROVIDER_PROFILES": "[" + modelWithNoModels + "]"}, "default_model"},
+		"unknown effort level":            {map[string]string{"PROVIDER_PROFILES": "[" + unknownEffortLevel + "]"}, "effort level"},
+		"default_effort not offered":      {map[string]string{"PROVIDER_PROFILES": "[" + defaultEffortNotOffered + "]"}, "default_effort"},
+		"default_effort with no levels":   {map[string]string{"PROVIDER_PROFILES": "[" + effortWithNoLevels + "]"}, "default_effort"},
+		"bad id":                          {map[string]string{"PROVIDER_PROFILES": strings.Replace("["+good+"]", `"id":"a"`, `"id":"A b"`, 1)}, "profile id"},
+		"id too long":                     {map[string]string{"PROVIDER_PROFILES": strings.Replace("["+good+"]", `"id":"a"`, `"id":"a`+strings.Repeat("b", 80)+`"`, 1)}, "profile id"},
+		"digit first":                     {map[string]string{"PROVIDER_PROFILES": strings.Replace("["+good+"]", `"id":"a"`, `"id":"1a"`, 1)}, "profile id"},
+		"not json":                        {map[string]string{"PROVIDER_PROFILES": "nonsense"}, "PROVIDER_PROFILES"},
+		"duplicate":                       {map[string]string{"PROVIDER_PROFILES": "[" + good + "," + good + "]"}, "duplicate"},
+		"alias collides":                  {map[string]string{"PROVIDER_PROFILES": "[" + good + "," + profile("b", "codex", `"a"`, true) + "]"}, "duplicate"},
+		"reserved alias":                  {map[string]string{"PROVIDER_PROFILES": "[" + profile("b", "codex", `"claude"`, true) + "]"}, "reserved"},
+		"legacy id switch":                {map[string]string{"PROVIDER_PROFILES": "[" + profile("claude", "codex", "", true) + "]"}, "legacy"},
+		"bad agent name":                  {map[string]string{"PROVIDER_PROFILES": strings.Replace("["+good+"]", `a-sup`, `Bad Name`, 1)}, "AgentRef"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := config.Parse(mergeEnv(tc.env))
@@ -231,6 +271,16 @@ func TestListProviders(t *testing.T) {
 	agents := x["agents"].(map[string]any)
 	if a := agents["supervisor"].(map[string]any); a["name"] != "team-x-sup" || a["namespace"] != "kagent" {
 		t.Errorf("agents = %v", agents)
+	}
+	// An operator profile with no models/effort_levels configured lists none, not an error.
+	if x["default_model"] != nil || x["default_effort"] != nil || len(x["models"].([]any)) != 0 || len(x["effort_levels"].([]any)) != 0 {
+		t.Errorf("team-x models/effort = %v", x)
+	}
+	// The built-in Claude profile lists /model and /effort's choices.
+	claude := got[0]
+	if claude["default_model"] == nil || claude["default_effort"] != "medium" ||
+		len(claude["models"].([]any)) == 0 || len(claude["effort_levels"].([]any)) == 0 {
+		t.Errorf("claude models/effort = %v", claude)
 	}
 	// Builtins report every capability with no evidence.
 	caps := got[0]["capabilities"].([]any)

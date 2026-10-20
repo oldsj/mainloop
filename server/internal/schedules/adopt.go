@@ -408,7 +408,7 @@ func (s *Service) openAttention(
 	// The item is not tied to the session: items of a session that ended are resolved with it, and
 	// this one is about that ending.
 	return attention.Open(ctx, tx, s.OwnerID, attention.NewQueueItem{
-		ID: "sched_exec_" + e.GetId(), ItemType: api.QueueItemTypeError, Priority: api.High,
+		ID: "sched_exec_" + e.GetId(), ItemType: api.QueueItemTypeError, Priority: api.QueueItemPriorityHigh,
 		Title: "Scheduled run " + what, Content: content, Needed: content, Context: ctxMap,
 	})
 }

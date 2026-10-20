@@ -145,6 +145,7 @@ func (a *SessionsAPI) GetMainThread(ctx context.Context, _ api.GetMainThreadRequ
 	native, err := a.native(ctx, q, nativeBinding{
 		SessionID: row.SessionID, Kind: row.Kind, Role: row.Role, ParentSessionID: row.ParentSessionID,
 		TopicID: row.TopicID, KagentSessionID: row.KagentSessionID, Model: row.Model, Turns: row.Turns,
+		ModelOverride: row.ModelOverride, EffortOverride: row.EffortOverride,
 	}, a.Svc.mainAgentName(row))
 	if err != nil {
 		return nil, err
@@ -233,6 +234,8 @@ type nativeBinding struct {
 	TopicID         *string
 	KagentSessionID *string
 	Model           *string
+	ModelOverride   *string
+	EffortOverride  *string
 	Turns           int32
 }
 
@@ -273,6 +276,7 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row nativeBind
 		AgentName: agentName, Deliveries: deliveries, KagentSessionId: row.KagentSessionID,
 		Kind: row.Kind, Model: row.Model, ParentSessionId: row.ParentSessionID,
 		Role: string(row.Role), SessionId: row.SessionID, TurnInFlight: inFlight, Turns: int(row.Turns),
+		ModelOverride: row.ModelOverride, EffortOverride: (*api.EffortLevel)(row.EffortOverride),
 	}
 	if row.TopicID != nil {
 		if name, err := q.GetTopicName(ctx, *row.TopicID); err == nil {
@@ -484,11 +488,54 @@ func (a *SessionsAPI) GetSessionNative(ctx context.Context, r api.GetSessionNati
 	info, err := a.native(ctx, q, nativeBinding{
 		SessionID: b.SessionID, Kind: b.Kind, Role: b.Role, ParentSessionID: b.ParentSessionID,
 		TopicID: b.TopicID, KagentSessionID: b.KagentSessionID, Model: b.Model, Turns: b.Turns,
+		ModelOverride: b.ModelOverride, EffortOverride: b.EffortOverride,
 	}, name)
 	if err != nil {
 		return nil, err
 	}
 	return api.GetSessionNative200JSONResponse(*info), nil
+}
+
+// SetSessionModel implements api.StrictServerInterface.
+func (a *SessionsAPI) SetSessionModel(ctx context.Context, r api.SetSessionModelRequestObject) (api.SetSessionModelResponseObject, error) {
+	if r.Body == nil {
+		return nil, apierr.Invalid("the body is required")
+	}
+	st, err := a.Svc.SetModelOverride(ctx, r.SessionId, r.Body.Model)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, apierr.NotFound("Session not found")
+	case err != nil:
+		return nil, err
+	}
+	return api.SetSessionModel200JSONResponse(toModelEffort(st)), nil
+}
+
+// SetSessionEffort implements api.StrictServerInterface.
+func (a *SessionsAPI) SetSessionEffort(ctx context.Context, r api.SetSessionEffortRequestObject) (api.SetSessionEffortResponseObject, error) {
+	if r.Body == nil {
+		return nil, apierr.Invalid("the body is required")
+	}
+	var effort *string
+	if r.Body.Effort != nil {
+		s := string(*r.Body.Effort)
+		effort = &s
+	}
+	st, err := a.Svc.SetEffortOverride(ctx, r.SessionId, effort)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, apierr.NotFound("Session not found")
+	case errors.Is(err, ErrInvalid):
+		return nil, apierr.Invalid(reason(err, ErrInvalid))
+	case err != nil:
+		return nil, err
+	}
+	return api.SetSessionEffort200JSONResponse(toModelEffort(st)), nil
+}
+
+// toModelEffort is the wire form of a session's /model and /effort override state.
+func toModelEffort(st ModelEffortState) api.SessionModelEffort {
+	return api.SessionModelEffort{SessionId: st.SessionID, Model: st.Model, Effort: (*api.EffortLevel)(st.Effort)}
 }
 
 // SendSessionMessage implements api.StrictServerInterface. Like POST /chat, each call is a new

@@ -189,7 +189,7 @@ func Open(ctx context.Context, tx pgx.Tx, ownerID string, in NewQueueItem) ([]ev
 		in.ItemType = api.QueueItemTypeQuestion
 	}
 	if in.Priority == "" {
-		in.Priority = api.Normal
+		in.Priority = api.QueueItemPriorityNormal
 	}
 	needed := in.Needed
 	if needed == "" {
@@ -395,7 +395,7 @@ func (s *Service) queueItem(r dbq.AttentionItem) (*api.QueueItem, bool) {
 
 func (s *Service) baseQueueItem(r dbq.AttentionItem) api.QueueItem {
 	return api.QueueItem{
-		MainThreadId: s.mainThreadID(), UserId: r.OwnerID, Priority: api.Normal, Title: r.Title,
+		MainThreadId: s.mainThreadID(), UserId: r.OwnerID, Priority: api.QueueItemPriorityNormal, Title: r.Title,
 		Status: api.QueueItemStatusPending, ReadAt: r.ReadAt, CreatedAt: r.CreatedAt, Context: map[string]any{},
 	}
 }

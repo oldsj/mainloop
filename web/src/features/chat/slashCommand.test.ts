@@ -3,8 +3,15 @@ import {
   activeSlashToken,
   matchSlashCommands,
   parseSlashCommand,
+  SLASH_COMMANDS,
   type SlashCommandSpec
 } from './slashCommand';
+
+describe('SLASH_COMMANDS', () => {
+  it('offers /model and /effort, in that order', () => {
+    expect(SLASH_COMMANDS.map((command) => command.name)).toEqual(['model', 'effort']);
+  });
+});
 
 const REGISTRY: SlashCommandSpec[] = [
   { name: 'model', summary: 'Switch the model' },

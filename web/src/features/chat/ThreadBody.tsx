@@ -56,6 +56,9 @@ export function ThreadBody({
   commands
 }: ThreadBodyProps) {
   const live = useLiveTurn(thread.sessionId, thread.busy, thread.messages);
+  const modelEffort = thread.native
+    ? { model: thread.native.model_override ?? null, effort: thread.native.effort_override ?? null }
+    : null;
   return (
     <>
       {thread.loadFailed && !offline ? (
@@ -142,6 +145,7 @@ export function ThreadBody({
         }
         allowImages={allowImages}
         commands={commands}
+        modelEffort={modelEffort}
       />
     </>
   );

@@ -1605,70 +1605,168 @@ describe('the /model command', () => {
     await screen.findByText('build it');
     await userEvent.type(input(), '/model{Enter}');
     const notice = await screen.findByTestId('command-notice');
-    expect(notice).toHaveTextContent('Current model: Claude (ready).');
-    expect(notice).toHaveTextContent('Available: claude, codex.');
-    expect(notice).toHaveTextContent('Reasoning effort is not supported');
+    expect(notice).toHaveTextContent('Current model: default');
+    expect(notice).toHaveTextContent('Available: claude-sonnet-5, claude-opus-5');
     expect(state.chatPosts).toHaveLength(0);
     expect(input()).toHaveValue('');
   });
 
-  it('switches the main provider instead of posting a chat message', async () => {
+  it('sets the model instead of posting a chat message', async () => {
     const { state } = setup(idleThread());
     await screen.findByText('build it');
-    await userEvent.type(input(), '/model codex{Enter}');
+    await userEvent.type(input(), '/model claude-opus-5{Enter}');
     expect(await screen.findByTestId('command-notice')).toHaveTextContent(
-      'Switching main model to Codex'
+      'Model set to claude-opus-5. Takes effect next turn.'
     );
-    await waitFor(() =>
-      expect(state.providerPosts).toEqual([{ provider: 'codex', restart_failed: false }])
-    );
+    await waitFor(() => expect(state.modelPosts).toHaveLength(1));
+    expect(state.modelPosts[0]).toEqual({
+      sessionId: MAIN_SESSION_ID,
+      body: { model: 'claude-opus-5' }
+    });
     expect(state.chatPosts).toHaveLength(0);
   });
 
-  it('matches the provider name case-insensitively', async () => {
+  it('matches a listed model case-insensitively', async () => {
     const { state } = setup(idleThread());
     await screen.findByText('build it');
-    await userEvent.type(input(), '/model Codex{Enter}');
-    await waitFor(() => expect(state.providerPosts).toHaveLength(1));
-    expect(state.providerPosts[0]).toEqual({ provider: 'codex', restart_failed: false });
+    await userEvent.type(input(), '/model Claude-Opus-5{Enter}');
+    await waitFor(() => expect(state.modelPosts).toHaveLength(1));
+    expect(state.modelPosts[0]?.body).toEqual({ model: 'claude-opus-5' });
   });
 
-  it('reports a no-op, without a write, for the provider already selected and ready', async () => {
-    const { state } = setup(idleThread());
+  it('reports a no-op, without a write, when the model is already selected', async () => {
+    const { state } = setup({
+      ...idleThread(),
+      mainThread: mainThreadFixture({
+        conversation_id: CONVERSATION_ID,
+        provider: providerFixture(),
+        native: nativeFixture({ model_override: 'claude-opus-5' })
+      }),
+      messages: [messageFixture({ id: 'm1', content: 'build it' })]
+    });
     await screen.findByText('build it');
-    await userEvent.type(input(), '/model claude{Enter}');
-    expect(await screen.findByTestId('command-notice')).toHaveTextContent('Already on Claude.');
-    expect(state.providerPosts).toHaveLength(0);
+    await userEvent.type(input(), '/model claude-opus-5{Enter}');
+    expect(await screen.findByTestId('command-notice')).toHaveTextContent('Already on Opus 5.');
+    expect(state.modelPosts).toHaveLength(0);
   });
 
-  it('reports an unknown model instead of switching', async () => {
+  it('refuses a malformed model name instead of sending it', async () => {
     const { state } = setup(idleThread());
     await screen.findByText('build it');
-    await userEvent.type(input(), '/model opus-5.5{Enter}');
+    await userEvent.type(input(), '/model "bad"{Enter}');
     expect(await screen.findByTestId('command-notice')).toHaveTextContent(
-      'Unknown model "opus-5.5"'
+      'is not a valid model name'
     );
-    expect(state.providerPosts).toHaveLength(0);
+    expect(state.modelPosts).toHaveLength(0);
   });
 
-  it('refuses a reasoning-effort argument rather than silently dropping it', async () => {
-    const { state } = setup(idleThread());
+  it('resets to the default model', async () => {
+    const { state } = setup({
+      ...idleThread(),
+      mainThread: mainThreadFixture({
+        conversation_id: CONVERSATION_ID,
+        provider: providerFixture(),
+        native: nativeFixture({ model_override: 'claude-opus-5' })
+      }),
+      messages: [messageFixture({ id: 'm1', content: 'build it' })]
+    });
     await screen.findByText('build it');
-    await userEvent.type(input(), '/model codex medium{Enter}');
+    await userEvent.type(input(), '/model default{Enter}');
     expect(await screen.findByTestId('command-notice')).toHaveTextContent(
-      'Reasoning effort is not supported'
+      'Model reset to default. Takes effect next turn.'
     );
-    expect(state.providerPosts).toHaveLength(0);
-    expect(state.chatPosts).toHaveLength(0);
+    await waitFor(() => expect(state.modelPosts).toHaveLength(1));
+    expect(state.modelPosts[0]?.body).toEqual({ model: null });
   });
 
   it('clears the command notice once an ordinary message is sent', async () => {
     const { state } = setup(idleThread());
     await screen.findByText('build it');
-    await userEvent.type(input(), '/model claude{Enter}');
+    await userEvent.type(input(), '/model claude-opus-5{Enter}');
     await screen.findByTestId('command-notice');
     await userEvent.type(input(), 'carry on{Enter}');
     await waitFor(() => expect(state.chatPosts).toHaveLength(1));
     expect(screen.queryByTestId('command-notice')).toBeNull();
+  });
+});
+
+describe('the /effort command', () => {
+  it('with no args, shows the current effort and choices without sending a chat message', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/effort{Enter}');
+    const notice = await screen.findByTestId('command-notice');
+    expect(notice).toHaveTextContent('Current effort: default.');
+    expect(notice).toHaveTextContent('Available: low, medium, high, xhigh, max');
+    expect(state.chatPosts).toHaveLength(0);
+  });
+
+  it('sets a level the provider offers', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/effort xhigh{Enter}');
+    expect(await screen.findByTestId('command-notice')).toHaveTextContent(
+      'Effort set to xhigh. Takes effect next turn.'
+    );
+    await waitFor(() => expect(state.effortPosts).toHaveLength(1));
+    expect(state.effortPosts[0]).toEqual({
+      sessionId: MAIN_SESSION_ID,
+      body: { effort: 'xhigh' }
+    });
+  });
+
+  it('rejects a level the current provider does not offer', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/effort minimal{Enter}');
+    expect(await screen.findByTestId('command-notice')).toHaveTextContent(
+      'Unknown effort "minimal"'
+    );
+    expect(state.effortPosts).toHaveLength(0);
+  });
+
+  it('resets to the default effort', async () => {
+    const { state } = setup({
+      ...idleThread(),
+      mainThread: mainThreadFixture({
+        conversation_id: CONVERSATION_ID,
+        provider: providerFixture(),
+        native: nativeFixture({ effort_override: 'high' })
+      }),
+      messages: [messageFixture({ id: 'm1', content: 'build it' })]
+    });
+    await screen.findByText('build it');
+    await userEvent.type(input(), '/effort default{Enter}');
+    expect(await screen.findByTestId('command-notice')).toHaveTextContent(
+      'Effort reset to default. Takes effect next turn.'
+    );
+    await waitFor(() => expect(state.effortPosts).toHaveLength(1));
+    expect(state.effortPosts[0]?.body).toEqual({ effort: null });
+  });
+});
+
+describe('the composer model/effort indicator', () => {
+  it('shows the session current model and effort, defaulting when there is no override', async () => {
+    setup(idleThread());
+    await screen.findByText('build it');
+    expect(screen.getByTestId('composer-model-effort')).toHaveTextContent(
+      'model: default · effort: default'
+    );
+  });
+
+  it('shows an override once one is set', async () => {
+    setup({
+      ...idleThread(),
+      mainThread: mainThreadFixture({
+        conversation_id: CONVERSATION_ID,
+        provider: providerFixture(),
+        native: nativeFixture({ model_override: 'claude-opus-5', effort_override: 'high' })
+      }),
+      messages: [messageFixture({ id: 'm1', content: 'build it' })]
+    });
+    await screen.findByText('build it');
+    expect(screen.getByTestId('composer-model-effort')).toHaveTextContent(
+      'model: claude-opus-5 · effort: high'
+    );
   });
 });

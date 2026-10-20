@@ -3095,7 +3095,7 @@ func (q *Queries) SetAttemptWriterGeneration(ctx context.Context, arg SetAttempt
 }
 
 const setBindingRole = `-- name: SetBindingRole :one
-UPDATE agent_bindings SET role = $2, updated_at = now() WHERE session_id = $1 RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id
+UPDATE agent_bindings SET role = $2, updated_at = now() WHERE session_id = $1 RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override, model_effort_touched
 `
 
 type SetBindingRoleParams struct {
@@ -3136,6 +3136,9 @@ func (q *Queries) SetBindingRole(ctx context.Context, arg SetBindingRoleParams) 
 		&i.MainReleasedAt,
 		&i.GuidanceVersion,
 		&i.GuidanceDeliveryID,
+		&i.ModelOverride,
+		&i.EffortOverride,
+		&i.ModelEffortTouched,
 	)
 	return i, err
 }

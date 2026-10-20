@@ -88,9 +88,29 @@ func NewRegistry(k config.Kagent) (*Registry, error) {
 	return r, nil
 }
 
+// claudeModels and codexModels are the built-in Claude and Codex profiles' /model listings. An
+// operator profile sets its own in PROVIDER_PROFILES; these are Mainloop's defaults only.
+var (
+	claudeModels = []config.ProviderModel{
+		{ID: "claude-sonnet-5", Label: "Sonnet 5"},
+		{ID: "claude-opus-5", Label: "Opus 5"},
+		{ID: "claude-haiku-4-5-20251001", Label: "Haiku 4.5"},
+		{ID: "claude-fable-5-1", Label: "Fable 5.1"},
+	}
+	claudeEffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+	codexModels        = []config.ProviderModel{
+		{ID: "gpt-5.1-codex", Label: "GPT-5.1 Codex"},
+		{ID: "gpt-5.1-codex-mini", Label: "GPT-5.1 Codex Mini"},
+	}
+	codexEffortLevels = []string{"minimal", "low", "medium", "high"}
+)
+
 func builtins(k config.Kagent) []config.ProviderProfile {
 	ref := func(name string) config.AgentRef { return config.AgentRef{Namespace: k.Namespace, Name: name} }
-	build := func(kind, display, main, supervisor, child, workspace string) config.ProviderProfile {
+	build := func(
+		kind, display, main, supervisor, child, workspace string,
+		models []config.ProviderModel, defaultModel string, effortLevels []string, defaultEffort string,
+	) config.ProviderProfile {
 		caps := make([]config.CapabilityResult, len(Capabilities))
 		for i, name := range Capabilities {
 			caps[i] = config.CapabilityResult{Capability: name, State: "unknown", Scope: "unverified"}
@@ -107,14 +127,20 @@ func builtins(k config.Kagent) []config.ProviderProfile {
 				"child":      ref(child),
 				"agent":      ref(workspace),
 			},
-			Aliases:      []string{},
-			Enabled:      true,
-			Capabilities: caps,
+			Aliases:       []string{},
+			Enabled:       true,
+			Capabilities:  caps,
+			Models:        models,
+			DefaultModel:  defaultModel,
+			EffortLevels:  effortLevels,
+			DefaultEffort: defaultEffort,
 		}
 	}
 	return []config.ProviderProfile{
-		build(config.NativeClaude, "Claude Code", k.MainAgent, k.SupervisorClaudeAgent, k.ClaudeAgent, k.WorkspaceClaudeAgent),
-		build(config.NativeCodex, "Codex", k.MainCodexAgent, k.SupervisorCodexAgent, k.CodexAgent, k.WorkspaceCodexAgent),
+		build(config.NativeClaude, "Claude Code", k.MainAgent, k.SupervisorClaudeAgent, k.ClaudeAgent, k.WorkspaceClaudeAgent,
+			claudeModels, claudeModels[0].ID, claudeEffortLevels, "medium"),
+		build(config.NativeCodex, "Codex", k.MainCodexAgent, k.SupervisorCodexAgent, k.CodexAgent, k.WorkspaceCodexAgent,
+			codexModels, codexModels[0].ID, codexEffortLevels, "medium"),
 	}
 }
 
@@ -123,6 +149,17 @@ func (r *Registry) Profiles() []config.ProviderProfile {
 	out := make([]config.ProviderProfile, len(r.profiles))
 	copy(out, r.profiles)
 	return out
+}
+
+// Profile finds a profile by ID or alias, with no role or enabled check: a caller that only needs
+// its identity (native provider, models, effort levels), not a chance to run a turn, uses this
+// instead of Resolve.
+func (r *Registry) Profile(identifier string) (config.ProviderProfile, bool) {
+	i, ok := r.byName[identifier]
+	if !ok {
+		return config.ProviderProfile{}, false
+	}
+	return r.profiles[i], true
 }
 
 // Resolve finds a profile by ID or alias. The profile must have an Agent for role. When

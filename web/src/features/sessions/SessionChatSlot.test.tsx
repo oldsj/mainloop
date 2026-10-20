@@ -9,10 +9,18 @@ import { deliveryFixture, messageFixture } from '@/features/chat/fixtures';
 import { LOST_REPLY_RECORDED } from '@/features/chat/useThread';
 import { createFakeHITL } from '@/features/hitl/handlers';
 import { hitlView } from '@/test/fixtures/hitl';
+import { profile } from '@/test/fixtures/tasks';
 import { server } from '@/test/msw/server';
 import { testChat } from '@/test/msw/handlers';
+import type { ProviderProfile } from '@/lib/contract';
 import { native, session } from './test/fixtures';
-import { nativeReadWith, problem, serveSessionChat, sessionAction } from './test/handlers';
+import {
+  nativeReadWith,
+  problem,
+  providersRead,
+  serveSessionChat,
+  sessionAction
+} from './test/handlers';
 import { renderSessions } from './test/render';
 
 // The chat's reads would otherwise queue behind the app's read limiter. See fastReads.ts.
@@ -38,9 +46,15 @@ async function openSession(
     turnInFlight?: boolean;
     messages?: Parameters<typeof messageFixture>[0][];
     session?: Parameters<typeof session>[0];
+    native?: Parameters<typeof native>[0];
+    providers?: ProviderProfile[];
   } = {}
 ) {
-  const info = native({ session_id: 's1', turn_in_flight: options.turnInFlight ?? false });
+  const info = native({
+    session_id: 's1',
+    turn_in_flight: options.turnInFlight ?? false,
+    ...options.native
+  });
   testChat.state.sessionThreads = {
     s1: {
       native: info,
@@ -49,7 +63,10 @@ async function openSession(
       )
     }
   };
-  server.use(...serveSessionChat(session({ id: 's1', ...options.session })));
+  // A test's own providers list must be checked first: serveSessionChat's own providersRead
+  // (behind the generic `claude-default`/`codex-default` ids) would otherwise shadow it.
+  const providerHandlers = options.providers ? [providersRead(options.providers)] : [];
+  server.use(...providerHandlers, ...serveSessionChat(session({ id: 's1', ...options.session })));
   renderSessions('/sessions/s1');
   await screen.findByRole('heading', { level: 1, name: 'Fix login redirect' });
   return screen.getByTestId('session-chat-slot');
@@ -315,5 +332,48 @@ describe('session requests (UI-C)', () => {
     expect(
       within(slot).queryByRole('heading', { name: 'Session needs input' })
     ).not.toBeInTheDocument();
+  });
+});
+
+const claudeProfile = profile({
+  id: 'claude',
+  native_provider: 'claude',
+  models: [
+    { id: 'claude-sonnet-5', label: 'Sonnet 5' },
+    { id: 'claude-opus-5', label: 'Opus 5' }
+  ],
+  default_model: 'claude-sonnet-5',
+  effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+  default_effort: 'medium'
+});
+
+describe('the session chat /model and /effort commands', () => {
+  it('sets the session model instead of posting a chat message', async () => {
+    const slot = await openSession({ providers: [claudeProfile] });
+    await userEvent.type(composerOf(slot), '/model claude-opus-5{Enter}');
+    expect(await within(slot).findByText(/Model set to claude-opus-5/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(testChat.state.modelPosts).toEqual([
+        { sessionId: 's1', body: { model: 'claude-opus-5' } }
+      ])
+    );
+    expect(testChat.state.sessionPosts.s1 ?? []).toHaveLength(0);
+  });
+
+  it('rejects an effort level the session provider does not offer', async () => {
+    const slot = await openSession({ providers: [claudeProfile] });
+    await userEvent.type(composerOf(slot), '/effort minimal{Enter}');
+    expect(await within(slot).findByText(/Unknown effort "minimal"/)).toBeInTheDocument();
+    expect(testChat.state.effortPosts).toHaveLength(0);
+  });
+
+  it('shows the composer model/effort indicator for the session', async () => {
+    const slot = await openSession({
+      providers: [claudeProfile],
+      native: { model_override: 'claude-opus-5', effort_override: 'high' }
+    });
+    expect(within(slot).getByTestId('composer-model-effort')).toHaveTextContent(
+      'model: claude-opus-5 · effort: high'
+    );
   });
 });

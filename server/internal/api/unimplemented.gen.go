@@ -359,6 +359,16 @@ func (Unimplemented) SendSessionMessage(context.Context, SendSessionMessageReque
 	return nil, apierr.NotImplemented
 }
 
+// SetSessionEffort is not implemented yet.
+func (Unimplemented) SetSessionEffort(context.Context, SetSessionEffortRequestObject) (SetSessionEffortResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// SetSessionModel is not implemented yet.
+func (Unimplemented) SetSessionModel(context.Context, SetSessionModelRequestObject) (SetSessionModelResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // StopTurn is not implemented yet.
 func (Unimplemented) StopTurn(context.Context, StopTurnRequestObject) (StopTurnResponseObject, error) {
 	return nil, apierr.NotImplemented

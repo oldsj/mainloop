@@ -284,7 +284,7 @@ const createMainBinding = `-- name: CreateMainBinding :one
 
 INSERT INTO agent_bindings (session_id, kind, role, mcp_grant_kind)
 VALUES ($1, $2, 'main', 'coordination')
-RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id
+RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override, model_effort_touched
 `
 
 type CreateMainBindingParams struct {
@@ -332,6 +332,9 @@ func (q *Queries) CreateMainBinding(ctx context.Context, arg CreateMainBindingPa
 		&i.MainReleasedAt,
 		&i.GuidanceVersion,
 		&i.GuidanceDeliveryID,
+		&i.ModelOverride,
+		&i.EffortOverride,
+		&i.ModelEffortTouched,
 	)
 	return i, err
 }
@@ -508,6 +511,27 @@ func (q *Queries) ForgetDeletedKagentSession(ctx context.Context, arg ForgetDele
 	return result.RowsAffected(), nil
 }
 
+const getBindingKindOwned = `-- name: GetBindingKindOwned :one
+SELECT b.kind FROM agent_bindings b
+JOIN sessions s ON s.id = b.session_id
+WHERE s.id = $1 AND s.user_id = $2
+`
+
+type GetBindingKindOwnedParams struct {
+	SessionID string
+	UserID    string
+}
+
+// Confirms the session is the owner's and names its provider profile, for /model and /effort: a
+// model's format is checked at the API boundary, kagent is the real gate, but an effort level is
+// checked here against the session's provider profile's own effort_levels before it is stored.
+func (q *Queries) GetBindingKindOwned(ctx context.Context, arg GetBindingKindOwnedParams) (string, error) {
+	row := q.db.QueryRow(ctx, getBindingKindOwned, arg.SessionID, arg.UserID)
+	var kind string
+	err := row.Scan(&kind)
+	return kind, err
+}
+
 const getBlockingDelivery = `-- name: GetBlockingDelivery :one
 SELECT id, state FROM deliveries
 WHERE session_id = $1
@@ -625,6 +649,7 @@ SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.u
        b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id,
        b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
        b.credential_identity,
+       b.model_override, b.effort_override, coalesce(b.model_effort_touched, false) AS model_effort_touched,
        coalesce(b.mcp_grant_kind::text, '')::text AS binding_grant, s.user_id, s.title AS session_title,
        w.id AS workspace_id,
        coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
@@ -656,6 +681,9 @@ type GetDeliveryContextRow struct {
 	BindingKind            *string
 	BindingRole            string
 	CredentialIdentity     *string
+	ModelOverride          *string
+	EffortOverride         *string
+	ModelEffortTouched     bool
 	BindingGrant           string
 	UserID                 string
 	SessionTitle           string
@@ -689,6 +717,9 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 		&i.BindingKind,
 		&i.BindingRole,
 		&i.CredentialIdentity,
+		&i.ModelOverride,
+		&i.EffortOverride,
+		&i.ModelEffortTouched,
 		&i.BindingGrant,
 		&i.UserID,
 		&i.SessionTitle,
@@ -702,7 +733,7 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 
 const getMainBinding = `-- name: GetMainBinding :one
 
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, b.guidance_version, b.guidance_delivery_id, s.user_id, s.title, s.status AS session_status
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, b.guidance_version, b.guidance_delivery_id, b.model_override, b.effort_override, b.model_effort_touched, s.user_id, s.title, s.status AS session_status
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
 WHERE b.role = 'main' AND b.main_released_at IS NULL AND s.user_id = $1 AND s.archived_at IS NULL
@@ -740,6 +771,9 @@ type GetMainBindingRow struct {
 	MainReleasedAt             *time.Time
 	GuidanceVersion            *int32
 	GuidanceDeliveryID         *string
+	ModelOverride              *string
+	EffortOverride             *string
+	ModelEffortTouched         bool
 	UserID                     string
 	Title                      string
 	SessionStatus              dbstate.SessionStatus
@@ -783,6 +817,9 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 		&i.MainReleasedAt,
 		&i.GuidanceVersion,
 		&i.GuidanceDeliveryID,
+		&i.ModelOverride,
+		&i.EffortOverride,
+		&i.ModelEffortTouched,
 		&i.UserID,
 		&i.Title,
 		&i.SessionStatus,
@@ -812,7 +849,7 @@ func (q *Queries) GetOpenSessionRestart(ctx context.Context, sessionID string) (
 }
 
 const getOwnedSessionBinding = `-- name: GetOwnedSessionBinding :one
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, b.guidance_version, b.guidance_delivery_id, s.user_id, s.title, s.status AS session_status, s.archived_at,
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, b.guidance_version, b.guidance_delivery_id, b.model_override, b.effort_override, b.model_effort_touched, s.user_id, s.title, s.status AS session_status, s.archived_at,
        w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name,
        coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
        coalesce(b.kagent_agent_name, w.agent_name, '') AS resolved_agent_name
@@ -857,6 +894,9 @@ type GetOwnedSessionBindingRow struct {
 	MainReleasedAt             *time.Time
 	GuidanceVersion            *int32
 	GuidanceDeliveryID         *string
+	ModelOverride              *string
+	EffortOverride             *string
+	ModelEffortTouched         bool
 	UserID                     string
 	Title                      string
 	SessionStatus              dbstate.SessionStatus
@@ -901,6 +941,9 @@ func (q *Queries) GetOwnedSessionBinding(ctx context.Context, arg GetOwnedSessio
 		&i.MainReleasedAt,
 		&i.GuidanceVersion,
 		&i.GuidanceDeliveryID,
+		&i.ModelOverride,
+		&i.EffortOverride,
+		&i.ModelEffortTouched,
 		&i.UserID,
 		&i.Title,
 		&i.SessionStatus,
@@ -2116,7 +2159,7 @@ func (q *Queries) ListUnresolvedCreates(ctx context.Context, limit int32) ([]Lis
 }
 
 const lockMainBinding = `-- name: LockMainBinding :one
-SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id FROM agent_bindings
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override, model_effort_touched FROM agent_bindings
 WHERE session_id = $1 AND role = 'main' AND main_released_at IS NULL
 FOR UPDATE
 `
@@ -2155,6 +2198,9 @@ func (q *Queries) LockMainBinding(ctx context.Context, sessionID string) (AgentB
 		&i.MainReleasedAt,
 		&i.GuidanceVersion,
 		&i.GuidanceDeliveryID,
+		&i.ModelOverride,
+		&i.EffortOverride,
+		&i.ModelEffortTouched,
 	)
 	return i, err
 }
@@ -2675,6 +2721,34 @@ func (q *Queries) SetBindingAgentRef(ctx context.Context, arg SetBindingAgentRef
 	return err
 }
 
+const setBindingEffortOverride = `-- name: SetBindingEffortOverride :one
+UPDATE agent_bindings
+SET effort_override = $1::text,
+    model_effort_touched = model_effort_touched OR $1::text IS NOT NULL,
+    updated_at = now()
+WHERE session_id = $2
+RETURNING session_id, model_override, effort_override
+`
+
+type SetBindingEffortOverrideParams struct {
+	EffortOverride *string
+	SessionID      string
+}
+
+type SetBindingEffortOverrideRow struct {
+	SessionID      string
+	ModelOverride  *string
+	EffortOverride *string
+}
+
+// Sets, or clears (NULL), a session's /effort override. See SetBindingModelOverride.
+func (q *Queries) SetBindingEffortOverride(ctx context.Context, arg SetBindingEffortOverrideParams) (SetBindingEffortOverrideRow, error) {
+	row := q.db.QueryRow(ctx, setBindingEffortOverride, arg.EffortOverride, arg.SessionID)
+	var i SetBindingEffortOverrideRow
+	err := row.Scan(&i.SessionID, &i.ModelOverride, &i.EffortOverride)
+	return i, err
+}
+
 const setBindingGuidanceVersion = `-- name: SetBindingGuidanceVersion :execrows
 UPDATE agent_bindings SET guidance_version = $1::integer, guidance_delivery_id = $2::text,
     updated_at = now()
@@ -2696,6 +2770,36 @@ func (q *Queries) SetBindingGuidanceVersion(ctx context.Context, arg SetBindingG
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setBindingModelOverride = `-- name: SetBindingModelOverride :one
+UPDATE agent_bindings
+SET model_override = $1::text,
+    model_effort_touched = model_effort_touched OR $1::text IS NOT NULL,
+    updated_at = now()
+WHERE session_id = $2
+RETURNING session_id, model_override, effort_override
+`
+
+type SetBindingModelOverrideParams struct {
+	ModelOverride *string
+	SessionID     string
+}
+
+type SetBindingModelOverrideRow struct {
+	SessionID      string
+	ModelOverride  *string
+	EffortOverride *string
+}
+
+// Sets, or clears (NULL), a session's /model override. Ownership is already confirmed by the
+// caller's GetBindingKindOwned read; ":one" with no matching row (an id a concurrent delete just
+// removed) reads as pgx.ErrNoRows, the same not-found the read would have given.
+func (q *Queries) SetBindingModelOverride(ctx context.Context, arg SetBindingModelOverrideParams) (SetBindingModelOverrideRow, error) {
+	row := q.db.QueryRow(ctx, setBindingModelOverride, arg.ModelOverride, arg.SessionID)
+	var i SetBindingModelOverrideRow
+	err := row.Scan(&i.SessionID, &i.ModelOverride, &i.EffortOverride)
+	return i, err
 }
 
 const setBindingStandingHash = `-- name: SetBindingStandingHash :execrows
