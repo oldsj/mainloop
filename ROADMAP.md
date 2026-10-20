@@ -186,6 +186,41 @@ The control plane remains outside worker isolation boundaries. Workspace provisi
 
 Security evolves with deployment scope. Initial milestones establish correct isolation and delivery semantics; later milestones add stronger credential scoping, egress control, runtime hardening, retention controls, and audit capabilities.
 
+## Durable project warm state
+
+Status: proposed, not implemented. See [docs/specs/warm-state.md](docs/specs/warm-state.md) for
+the full design and the live measurement it is based on.
+
+Working in Mainloop should feel like a regular Claude Code session on a laptop, but durable, safe
+and scalable: the second session in a repository is warm because the first warmed it, for any
+language, with nothing committed to the project's repository. Today that property exists for
+exactly one project (`oldsj/mainloop` itself), through a per-commit cache image built by an
+in-cluster pipeline from a recipe that lives in this repository, with a Go- and pnpm-specific
+smoke check. Every other project — including third-party repositories the owner does not control
+— starts cold every time.
+
+A Mainloop-held, devcontainer.json-shaped toolchain config (base environment, setup and
+maintenance scripts, cache directories, environment variables) replaces the in-repository recipe,
+at project level, edited without a repository change. A per-project warm state is captured after
+the setup script runs and restored at workspace start; its refresh is a durable, reconciled intent
+row keyed on the project, the default-branch commit, and the config revision, the same pattern
+used for environment version follows and the dev-loop sync. Credentials never enter it: Mainloop's
+existing per-binding Secret issuance already keeps them out of session and workspace state, and
+the warm state is built from a checkout and declared cache directories only. A stale or failed
+seed is one owner attention item, not a task failure, and a task always still works cold.
+
+The mechanism — a per-project cache archive restored at workspace start, or a kagent session fork
+from a Data checkpoint — is chosen in the spec based on what could be measured: forking is not
+reachable through the kagent API this project vends or through any tool this project's task
+workspaces can call, so the cache archive, which generalizes the already-proven `cache-main`
+pipeline, is the first mechanism; forking stays a candidate upgrade once it can be verified. The
+first implementation slice is `oldsj/mainloop`'s own recipe, moved into project config, with the
+current pipeline left running until the new path is proven. Overlaps
+[#100](https://github.com/oldsj/mainloop/issues/100)'s personal dev-environment layer, which this
+spec treats as a per-person override on the same config rather than a second mechanism. Also
+touches a cross-repository registry allowlist drift (`oldsj/infrastructure#217`) that needs an
+owner decision outside this repository's scope.
+
 ## Delivery phases
 
 ### Phase 0: native integration proof

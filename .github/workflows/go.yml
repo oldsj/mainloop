@@ -39,7 +39,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: server/go.mod
-          cache-dependency-path: server/go.sum
+          cache: false
+      - uses: ./.github/actions/go-cache
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.14.0
@@ -47,16 +48,21 @@ jobs:
           install-mode: goinstall
           working-directory: server
 
-  test:
-    name: go test -race
+  # The race suite is sharded in two so neither job runs close to its timeout: internal/tasks,
+  # internal/sessions and internal/workspaces are the heaviest packages (concurrency-heavy,
+  # database-backed), so they get their own job; everything else runs in the other.
+  test-heavy:
+    name: go test -race (tasks, sessions, workspaces)
+    needs: lint
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16-alpine
         env:
           POSTGRES_USER: mainloop
-          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
+          # trunk-ignore(checkov/CKV_SECRET_6): fixed, throwaway password for this job's local Postgres container only
+          POSTGRES_PASSWORD: mainloop-ci-test
           POSTGRES_DB: postgres
           POSTGRES_INITDB_ARGS: --no-sync
         ports:
@@ -66,7 +72,8 @@ jobs:
           --health-cmd "pg_isready -U mainloop -d postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      MAINLOOP_TEST_DATABASE_URL: postgresql://mainloop:ci-${{ github.run_id }}-${{ github.run_attempt }}@localhost:5432/postgres
+      # trunk-ignore(checkov/CKV_SECRET_4): same fixed throwaway password as above, not a real credential
+      MAINLOOP_TEST_DATABASE_URL: postgresql://mainloop:mainloop-ci-test@localhost:5432/postgres
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -74,8 +81,44 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: server/go.mod
-          cache-dependency-path: server/go.sum
-      - run: go test -race ./...
+          cache: false
+      - uses: ./.github/actions/go-cache
+      - run: go test -race ./internal/tasks/... ./internal/sessions/... ./internal/workspaces/...
+
+  test-rest:
+    name: go test -race (everything else)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mainloop
+          POSTGRES_PASSWORD: mainloop-ci-test
+          POSTGRES_DB: postgres
+          POSTGRES_INITDB_ARGS: --no-sync
+        ports:
+          - 5432:5432
+        options: >-
+          --tmpfs /var/lib/postgresql/data:rw,size=2g
+          --health-cmd "pg_isready -U mainloop -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      MAINLOOP_TEST_DATABASE_URL: postgresql://mainloop:mainloop-ci-test@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache: false
+      - uses: ./.github/actions/go-cache
+      - name: go test -race (excluding the sharded-out packages)
+        run: |
+          pkgs=$(go list ./... | grep -vE '/internal/(tasks|sessions|workspaces)$')
+          go test -race $pkgs
 
   generate:
     name: Generated code is current
@@ -88,7 +131,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: server/go.mod
-          cache-dependency-path: server/go.sum
+          cache: false
+      - uses: ./.github/actions/go-cache
       - run: go generate ./...
       - run: go mod tidy
       - name: Fail if generation or go mod tidy changed anything
@@ -109,7 +153,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: server/go.mod
-          cache-dependency-path: server/go.sum
+          cache: false
+      - uses: ./.github/actions/go-cache
       - name: Check api/mcp-tools.json against the Go tool registry
         run: make check-mcp-tools
 
