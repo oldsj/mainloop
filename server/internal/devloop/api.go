@@ -41,7 +41,7 @@ func (a *DevloopAPI) GetDevloopLease(ctx context.Context, _ api.GetDevloopLeaseR
 	if a.Lease == nil {
 		return nil, apierr.Unavailable("devloop is not available")
 	}
-	info, err := a.Lease.Status(ctx)
+	info, err := a.Lease.Status(ctx, LeaseID)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +53,7 @@ func (a *DevloopAPI) AcquireDevloopLease(ctx context.Context, _ api.AcquireDevlo
 	if a.Lease == nil {
 		return nil, apierr.Unavailable("devloop is not available")
 	}
-	info, err := a.Lease.Acquire(ctx, OwnerHolder)
+	info, err := a.Lease.Acquire(ctx, LeaseID, OwnerHolder)
 	if err != nil {
 		return nil, err
 	}
@@ -65,10 +65,10 @@ func (a *DevloopAPI) ReleaseDevloopLease(ctx context.Context, _ api.ReleaseDevlo
 	if a.Lease == nil {
 		return nil, apierr.Unavailable("devloop is not available")
 	}
-	if err := a.Lease.Release(ctx, OwnerHolder); err != nil {
+	if err := a.Lease.Release(ctx, LeaseID, OwnerHolder); err != nil {
 		return nil, err
 	}
-	info, err := a.Lease.Status(ctx)
+	info, err := a.Lease.Status(ctx, LeaseID)
 	if err != nil {
 		return nil, err
 	}

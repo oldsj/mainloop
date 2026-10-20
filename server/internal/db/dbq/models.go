@@ -173,6 +173,24 @@ type DevloopSyncLock struct {
 	UpdatedAt time.Time
 }
 
+type DevloopTarget struct {
+	ID                string
+	ProjectID         string
+	Kind              dbstate.DevloopTargetKind
+	Namespace         string
+	VclusterName      *string
+	VclusterNamespace *string
+	Workload          string
+	CommandContainer  string
+	SyncPaths         json.RawMessage
+	RestartCmd        *string
+	MigrateCmd        *string
+	HealthCmd         *string
+	SmokeCmd          *string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
 type EnvironmentGrant struct {
 	EnvironmentID string
 	ProjectID     string

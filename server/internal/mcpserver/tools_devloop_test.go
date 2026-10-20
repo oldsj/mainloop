@@ -39,8 +39,8 @@ func TestDevLoopToolsAreHiddenWithTheFlagOff(t *testing.T) {
 }
 
 // TestDevLoopToolsRefuseAnotherProject proves the behavior that fails without the change: a task
-// agent bound to a project other than oldsj/mainloop is refused even though the flag is on and its
-// role and grant would otherwise qualify.
+// agent bound to a project with no staging target configured is refused even though the flag is on
+// and its role and grant would otherwise qualify.
 func TestDevLoopToolsRefuseAnotherProject(t *testing.T) {
 	h := newDevloopHarness(t)
 	ctx := context.Background()
@@ -53,12 +53,12 @@ func TestDevLoopToolsRefuseAnotherProject(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Still listed (the flag is on; project is a handler-level check), but every call is refused.
+	// Still listed (the flag is on; the staging target is a handler-level check), but every call is refused.
 	if names := h.list(t, ordinary, a.Token); !slices.Contains(names, "dev_lease_acquire") {
 		t.Fatalf("tools/list = %v, want dev_lease_acquire listed (visibility does not vary by project)", names)
 	}
 	_, r := h.call(ordinary, a.Token, "dev_lease_acquire", map[string]any{})
-	if !r.Result.IsError || r.text() != "[forbidden] devloop tools are limited to oldsj/mainloop" {
+	if !r.Result.IsError || r.text() != "[forbidden] this project has no staging target configured" {
 		t.Fatalf("dev_lease_acquire for another project = error %v, %q, want the forbidden refusal", r.Result.IsError, r.text())
 	}
 
@@ -77,7 +77,7 @@ func TestDevSyncRequiresTheLease(t *testing.T) {
 	a := seedDevloopAgent(t, h)
 
 	_, r := h.call(ordinary, a.Token, "dev_sync", map[string]any{"commit_sha": prTip})
-	if !r.Result.IsError || r.text() != "[lease_required] acquire the mainloop-dev lease with dev_lease_acquire first" {
+	if !r.Result.IsError || r.text() != "[lease_required] acquire the staging-target lease with dev_lease_acquire first" {
 		t.Fatalf("dev_sync without the lease = error %v, %q, want the lease_required refusal", r.Result.IsError, r.text())
 	}
 	var n int
@@ -100,7 +100,7 @@ func TestDevSyncDescriptionTellsAgentsWhenToUseItAndWhatItProves(t *testing.T) {
 		if !strings.HasPrefix(tool.Description, "Use after pushing and before open_pull_request.") {
 			t.Errorf("dev_sync description = %q, want it to start with when to use it", tool.Description)
 		}
-		if !strings.Contains(tool.Description, "Succeeds only when mainloop-dev is healthy and the smoke passes") {
+		if !strings.Contains(tool.Description, "Succeeds only when the target is healthy and the smoke passes") {
 			t.Errorf("dev_sync description = %q, want it to say what success proves", tool.Description)
 		}
 		return

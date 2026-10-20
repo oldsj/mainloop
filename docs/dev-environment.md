@@ -94,8 +94,9 @@ This calls `POST /devloop/lease/acquire` and `.../release` as the fixed owner ho
 from a task agent's own MCP session). Raw `devspace` commands do not check the lease; only
 `make dev-live` does.
 
-A task agent of project `oldsj/mainloop` iterates on mainloop-dev the same way through MCP tools
-(`dev_lease_acquire`, `dev_sync`, `dev_status`; see `docs/specs/devloop.md`). They are on in
+A task agent of a project with a staging target configured (oldsj/mainloop's own target is
+mainloop-dev, seeded by migration) iterates on it the same way through MCP tools
+(`dev_lease_acquire`, `dev_sync`, `dev_status`; see `docs/specs/devloop.md`, "Staging targets"). They are on in
 production, where the **control-plane instance** (production, not mainloop-dev) sets
 `MAINLOOP_DEVLOOP_ENABLED=true`, by owner decision 2026-10-17. mainloop-dev still shares production's
 credentials and has open egress; the gaps are listed under "Not built" in `docs/specs/devloop.md`.

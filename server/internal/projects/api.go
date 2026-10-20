@@ -10,6 +10,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/devloop"
 	"github.com/oldsj/mainloop/server/internal/merge"
 )
 
@@ -19,6 +20,10 @@ const defaultListLimit = 20
 // ProjectsAPI serves the project operations of the strict server interface.
 type ProjectsAPI struct {
 	Svc *Service
+	// Devloop serves a project's staging target. Nil answers those routes 404, the same as an
+	// unconfigured project, since devloop's own operator flag already covers "not available"
+	// everywhere else.
+	Devloop *devloop.TargetService
 }
 
 func toProject(p dbq.Project) api.Project {
