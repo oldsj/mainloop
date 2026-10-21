@@ -138,6 +138,80 @@ func (q *Queries) CreateCredential(ctx context.Context, arg CreateCredentialPara
 	return i, err
 }
 
+const createForkedAgentBinding = `-- name: CreateForkedAgentBinding :one
+INSERT INTO agent_bindings (
+    session_id, kind, role, mcp_grant_kind, parent_session_id, kagent_session_id,
+    kagent_agent_namespace, kagent_agent_name
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8
+)
+RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override, model_effort_touched
+`
+
+type CreateForkedAgentBindingParams struct {
+	SessionID            string
+	Kind                 string
+	Role                 dbstate.BindingRole
+	MCPGrantKind         dbstate.MCPGrantKind
+	ParentSessionID      *string
+	KagentSessionID      *string
+	KagentAgentNamespace *string
+	KagentAgentName      *string
+}
+
+// A forked session's binding already has a live native Session (checkpoints.go's ForkSession
+// returned it), unlike a plain create, which only learns its kagent_session_id once the first
+// delivery lands.
+func (q *Queries) CreateForkedAgentBinding(ctx context.Context, arg CreateForkedAgentBindingParams) (AgentBinding, error) {
+	row := q.db.QueryRow(ctx, createForkedAgentBinding,
+		arg.SessionID,
+		arg.Kind,
+		arg.Role,
+		arg.MCPGrantKind,
+		arg.ParentSessionID,
+		arg.KagentSessionID,
+		arg.KagentAgentNamespace,
+		arg.KagentAgentName,
+	)
+	var i AgentBinding
+	err := row.Scan(
+		&i.SessionID,
+		&i.Kind,
+		&i.Role,
+		&i.MCPGrantKind,
+		&i.ParentSessionID,
+		&i.TopicID,
+		&i.KagentSessionID,
+		&i.KagentRequestID,
+		&i.Model,
+		&i.StandingHash,
+		&i.Turns,
+		&i.QueueHeld,
+		&i.ChildStartFailure,
+		&i.ReportedAt,
+		&i.KagentDeletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.KagentAgentNamespace,
+		&i.KagentAgentName,
+		&i.KagentCreateRequestID,
+		&i.KagentCreateAgentNamespace,
+		&i.KagentCreateAgentName,
+		&i.MainPending,
+		&i.MainError,
+		&i.MainRecoverable,
+		&i.CredentialIdentity,
+		&i.MainReleasedAt,
+		&i.GuidanceVersion,
+		&i.GuidanceDeliveryID,
+		&i.ModelOverride,
+		&i.EffortOverride,
+		&i.ModelEffortTouched,
+	)
+	return i, err
+}
+
 const createProject = `-- name: CreateProject :one
 
 INSERT INTO projects (

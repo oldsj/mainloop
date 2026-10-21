@@ -74,6 +74,25 @@ type AttentionVisible struct {
 	ReadAt     *time.Time
 }
 
+type CheckpointFork struct {
+	ID                    string
+	CheckpointID          string
+	SourceSessionID       string
+	FreshConversation     bool
+	Title                 string
+	State                 dbstate.ForkState
+	ForkedKagentSessionID *string
+	NewSessionID          *string
+	FailureReason         *dbstate.FailureReason
+	Detail                *string
+	Attempts              int32
+	RequestedAt           time.Time
+	AcceptedAt            *time.Time
+	ReadyAt               *time.Time
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+}
+
 type Credential struct {
 	ID              string
 	Kind            dbstate.CredentialKind
@@ -639,6 +658,23 @@ type Session struct {
 	AgentCancelOutcome       *string
 	AgentCancelAttempts      int32
 	AgentCancelNextAttemptAt time.Time
+}
+
+type SessionCheckpoint struct {
+	ID                 string
+	SessionID          string
+	KagentSessionID    string
+	ExpectedHeadTaskID string
+	State              dbstate.CheckpointState
+	CheckpointID       *string
+	CheckpointName     *string
+	FailureReason      *dbstate.FailureReason
+	Detail             *string
+	Attempts           int32
+	RequestedAt        time.Time
+	ConfirmedAt        *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type SessionMessage struct {

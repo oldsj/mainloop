@@ -597,14 +597,11 @@ func TestA2AGatewayErrorsWithoutAnEnvelope(t *testing.T) {
 		_, err := c.GetTask(ctx, agent, "t")
 		mustBe[*kagent.OutcomeUnknown](t, err)
 	})
-	t.Run("HTTP 404 is a protocol error", func(t *testing.T) {
+	t.Run("a bare HTTP 404 means not found, not a protocol error", func(t *testing.T) {
 		c, srv, _ := setup(t)
 		srv.FailNext("GetTask", kagenttest.Fault{Status: 404})
 		_, err := c.GetTask(ctx, agent, "t")
-		pe := asType[*kagent.ProtocolError](t, err)
-		if pe.Status != 404 {
-			t.Fatalf("status %d", pe.Status)
-		}
+		mustBe[*kagent.TaskNotFound](t, err)
 	})
 }
 

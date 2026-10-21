@@ -82,6 +82,19 @@ INSERT INTO agent_bindings (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
+-- A forked session's binding already has a live native Session (checkpoints.go's ForkSession
+-- returned it), unlike a plain create, which only learns its kagent_session_id once the first
+-- delivery lands.
+-- name: CreateForkedAgentBinding :one
+INSERT INTO agent_bindings (
+    session_id, kind, role, mcp_grant_kind, parent_session_id, kagent_session_id,
+    kagent_agent_namespace, kagent_agent_name
+) VALUES (
+    sqlc.arg(session_id), sqlc.arg(kind), sqlc.arg(role), sqlc.arg(mcp_grant_kind), sqlc.arg(parent_session_id),
+    sqlc.arg(kagent_session_id), sqlc.arg(kagent_agent_namespace), sqlc.arg(kagent_agent_name)
+)
+RETURNING *;
+
 -- name: GetAgentBinding :one
 SELECT * FROM agent_bindings WHERE session_id = $1;
 

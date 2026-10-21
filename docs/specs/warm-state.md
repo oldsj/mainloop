@@ -1,12 +1,17 @@
 # Durable project warm state
 
-Status: proposed. Nothing in this document is implemented. It is the measure-then-design output
-for [#288](https://github.com/oldsj/mainloop/issues/288): a Mainloop-held toolchain config and a
-per-project warm seed so that the second session in a repository is as fast as a warmed laptop
-checkout, for any language, with nothing committed to the repository. See
-[ROADMAP.md](../../ROADMAP.md#durable-project-warm-state) for how this fits the rest of the
-product direction, and [environments.md](environments.md) for the environment registration and
-selection this extends.
+Status: proposed. The toolchain-config and cache-archive design below is not implemented. It is
+the measure-then-design output for [#288](https://github.com/oldsj/mainloop/issues/288): a
+Mainloop-held toolchain config and a per-project warm seed so that the second session in a
+repository is as fast as a warmed laptop checkout, for any language, with nothing committed to the
+repository. See [ROADMAP.md](../../ROADMAP.md#durable-project-warm-state) for how this fits the
+rest of the product direction, and [environments.md](environments.md) for the environment
+registration and selection this extends.
+
+One piece is implemented, experimental and owner-only, ahead of the rest: a checkpoint and fork API
+directly over kagent's `CheckpointService`, built so the owner can run the live fork-vs-cache-image
+measurement this spec's choice of mechanism depends on. See "Checkpoint and fork API (implemented,
+experimental)" below; it is not the chosen warm-state mechanism, only how that choice gets measured.
 
 ## Measurement: what this task could and could not reach
 
@@ -94,6 +99,57 @@ If a later task gets a path to kagent's fork RPC, now vendored as `CheckpointSer
 in `server/third_party/kagentproto` (see the update above) but not yet wired into
 `server/internal/kagent`, or to kagent's own lifecycle docs, repeat this measurement before
 committing to seed-fork as the mechanism. Until then, this spec treats fork as unproven.
+
+**Update, 2026-10-20, a later task (issue #288, "warm-state comparison"):** `ForkSession` is now
+wired into `server/internal/kagent` (`CreateCheckpoint`, `GetCheckpoint`, `ListCheckpoints`,
+`DeleteCheckpoint`, `ForkSession`, in `server/internal/kagent/checkpoints.go`) and exposed as an
+**experimental, owner-only** HTTP API — see "Checkpoint and fork API (implemented, experimental)"
+below. That closes the gap this section reported ("no tool on this surface... reaches
+`SessionService` at all"): the API now exists and this task's own `kagenttest` fakes prove the
+client-side contract (idempotent create and fork, a reconciled retry after an uncertain kagent
+reply, and kagent's error codes mapped to this API's HTTP statuses). That is a **fixture-backed
+proof of the client code**, not a live measurement: nothing in this task's workspace can start a
+real kagent session, take a real checkpoint, or fork one, so fork time, cross-task/branch forking
+behavior, and credential carryover remain exactly as unknown as the table above says. The owner
+runs the live measurement on `mainloop-dev` and records it in "Measured: fork from warmed
+checkpoint" below; until that section is filled in, this spec still treats fork as unproven for
+the purpose of choosing it over the cache archive.
+
+## Checkpoint and fork API (implemented, experimental)
+
+Issue #288's "warm-state comparison" asked for the owner to measure a fork from a warmed checkpoint
+against the cache-image environment before either mechanism is chosen for real. That needs an API
+the owner can call from `mainloop-dev`, so this slice implements one, ahead of the rest of this
+spec's design (the toolchain config, the reconciled refresh intent, credential scrubbing, and the
+registry allowlist below remain proposed, not implemented): a thin, explicitly experimental and
+owner-only layer directly over kagent's `CheckpointService`, with no web UI and no seed-fork
+automation. It exists to produce the numbers below, not to be the warm-state mechanism itself; see
+"Mechanism" below for why the cache archive, not seed fork, is still the chosen path until a
+measurement says otherwise.
+
+- `POST /sessions/{session_id}/checkpoints` takes a checkpoint of the session's native kagent
+  Session at its latest terminal turn. `expected_head_task_id` (kagent's term) is the session's own
+  terminal task, read from Mainloop's delivery ledger, not supplied by the caller; the route refuses
+  (409) while a turn is in flight, or before the session has ever completed one. `request_id` is the
+  idempotency key.
+- `GET /checkpoints/{checkpoint_id}` and `GET /sessions/{session_id}/checkpoints` read live from
+  kagent (no local mirror of checkpoint state), scoped to the owner's own session.
+- `POST /checkpoints/{checkpoint_id}/fork` forks a checkpoint into a new Mainloop session bound to
+  the forked kagent Session, with the same project, provider profile and Agent as the checkpoint's
+  source session, and `parent_session_id` set to it. The response carries `requested_at`,
+  `accepted_at` and `ready_at` (each set as the fork reaches that point; repeating the idempotent
+  request_id reads them as they fill in), so time-to-running is `ready_at` minus `requested_at` once
+  both are set.
+- `DELETE /checkpoints/{checkpoint_id}` deletes one; already-gone is not an error.
+
+Follows the reconciler rule (AGENTS.md): both create-checkpoint and fork write a durable intent row
+(`session_checkpoints`, `checkpoint_forks`) keyed on the caller's `request_id` before calling kagent.
+kagent's `CreateCheckpoint` and `ForkSession` are themselves idempotent by `request_id`, the same
+contract `CreateSession` already has, so reconciling an uncertain outcome is a repeat of the same
+call, not a blind replay of a non-idempotent send: kagent answers from what it already holds for
+that `request_id`. A definite refusal (kagent's invalid argument, not found, failed precondition,
+mapped to this API's 422, 404, 409) is recorded once and never retried, since the frozen request
+would fail the same way again. See `server/internal/sessions/checkpoints.go`.
 
 ## Mechanism: cache archive now, seed fork later if it measures well
 
@@ -234,10 +290,24 @@ environment selection already resolves once per workspace (`environments.md`, "W
 environment resolution"). This spec does not implement that merge; it is named here so the two
 issues are not built as competing mechanisms.
 
+## Measured: fork from warmed checkpoint
+
+**Placeholder for the owner's numbers.** The checkpoint and fork API above is implemented and
+dev_sync'd to `mainloop-dev`; this section is where the owner records the live measurement issue
+#288 asked for (fork time from a warmed checkpoint, compared against the cache-image environment),
+once run against a real kagent session there. Not filled in by any task: a task's workspace cannot
+start a real session or reach `mainloop-dev`'s kagent beyond what `dev_status`'s read-only pod list
+shows (see "Measurement" above), so this section stays an honest placeholder, not a measured
+number, until the owner adds one.
+
 ## Not measured, not implemented
 
-Everything in this document is proposed design, not running code. In particular, not measured by
-this task, and not available to measure from this task's workspace, cluster access, or tool
-surface (see "Measurement" above for why each is out of reach here): fork time, fork cross-task/
-branch behavior and credential carryover, cold-workspace-on-toolchain-image-only timing, and
-whether a newer `oldsj/kagent` commit than the vendored `ce402bf7` adds a fork RPC at all.
+Everything in this document's cache-archive and toolchain-config design (from "Mechanism" onward)
+is proposed, not running code; the checkpoint and fork API above is implemented but experimental
+and owner-only, ahead of the rest. In particular, not measured by this task, and not available to
+measure from this task's workspace, cluster access, or tool surface (see "Measurement" above for
+why each is out of reach here): fork time, fork cross-task/branch behavior and credential
+carryover (see "Measured: fork from warmed checkpoint" above, where the owner records these once
+measured), cold-workspace-on-toolchain-image-only timing, and whether a newer `oldsj/kagent` commit
+than the vendored `a1164013` changes `ForkSession`'s behavior from what the `kagenttest` fakes
+assume.

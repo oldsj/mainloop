@@ -200,6 +200,14 @@ SELECT * FROM deliveries WHERE id = $1;
 -- name: ListSessionDeliveries :many
 SELECT * FROM deliveries WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2;
 
+-- The session's newest turn, for checkpoints.go: a checkpoint names the latest terminal turn's
+-- task as kagent's expected_head_task_id, and refuses (409) while the newest turn is still open.
+-- name: GetLatestDelivery :one
+SELECT id, state, task_id FROM deliveries
+WHERE session_id = sqlc.arg(session_id)
+ORDER BY created_at DESC, id DESC
+LIMIT 1;
+
 -- The deliveries that can attribute a mirrored reply to a provider: deliver.go sets
 -- kagent_session_id when it sends the message, naming the Session the turn ran on, and derives the
 -- reply's own id from this row (its task id, or its own id for a cancelled turn's stop note) rather

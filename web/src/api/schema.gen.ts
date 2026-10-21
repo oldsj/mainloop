@@ -1083,6 +1083,85 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/sessions/{session_id}/checkpoints': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Session Checkpoints
+     * @description **Experimental, owner-only.** List a session's checkpoints, read live from kagent's
+     *     CheckpointService. A session with no native session yet has none. See
+     *     docs/specs/warm-state.md.
+     */
+    get: operations['listSessionCheckpoints'];
+    put?: never;
+    /**
+     * Create Session Checkpoint
+     * @description **Experimental, owner-only.** Checkpoint the session's native kagent Session at its latest
+     *     terminal turn. Refuses (409) while a turn is in flight, or before the session has ever
+     *     completed one. `request_id` is the idempotency key: repeating it returns the recorded
+     *     outcome, or continues an interrupted attempt. See docs/specs/warm-state.md.
+     */
+    post: operations['createSessionCheckpoint'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/checkpoints/{checkpoint_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Checkpoint
+     * @description **Experimental, owner-only.** Read one checkpoint, scoped to the owner's own session. See docs/specs/warm-state.md.
+     */
+    get: operations['getCheckpoint'];
+    put?: never;
+    post?: never;
+    /**
+     * Delete Checkpoint
+     * @description **Experimental, owner-only.** Delete a checkpoint, scoped to the owner's own session. One
+     *     that is already gone is not an error. See docs/specs/warm-state.md.
+     */
+    delete: operations['deleteCheckpoint'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/checkpoints/{checkpoint_id}/fork': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Fork Checkpoint
+     * @description **Experimental, owner-only.** Fork a checkpoint into a new session bound to the forked
+     *     kagent Session, with the same project, provider profile and Agent as the checkpoint's
+     *     source session, and `parent_session_id` set to it. `request_id` is the idempotency key:
+     *     repeating it returns the recorded outcome, or continues an interrupted attempt (the
+     *     returned `accepted_at`/`ready_at` fill in as the fork proceeds, so repeating the request is
+     *     how time-to-running is read back). See docs/specs/warm-state.md.
+     */
+    post: operations['forkCheckpoint'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/task-operations/{operation_id}': {
     parameters: {
       query?: never;
@@ -2824,6 +2903,56 @@ export interface components {
       | 'failed'
       | 'cancelled'
       | 'waiting_on_user';
+    /**
+     * CheckpointState
+     * @description kagent's CheckpointService state for a checkpoint, read live.
+     * @enum {string}
+     */
+    CheckpointState: 'creating' | 'ready' | 'failed' | 'deleting' | 'unspecified';
+    Checkpoint: {
+      id: string;
+      /** @description The kagent Session (not the Mainloop session id) the checkpoint belongs to. */
+      session_id: string;
+      /** @description The terminal task the checkpoint was taken at. */
+      head_task_id: string;
+      name: string;
+      state: components['schemas']['CheckpointState'];
+    };
+    CheckpointCreateRequest: {
+      /**
+       * Format: uuid
+       * @description Idempotency key chosen by the caller; repeat it to retry the same checkpoint.
+       */
+      request_id: string;
+    };
+    CheckpointForkRequest: {
+      /**
+       * Format: uuid
+       * @description Idempotency key chosen by the caller; repeat it to retry or poll the same fork.
+       */
+      request_id: string;
+      /**
+       * @description Keep the forked runtime's workspace and caches but start with no A2A history and no native agent conversation. False (the default) keeps the full conversation up to the checkpoint.
+       * @default false
+       */
+      fresh_conversation: boolean;
+      /** @description Title for the forked session; defaults to "Fork of <source title>". */
+      title?: string;
+    };
+    CheckpointForkResponse: {
+      /** @description Empty until kagent's ForkSession is confirmed (accepted_at set). */
+      new_session_id: string;
+      checkpoint_id: string;
+      /**
+       * Format: date-time
+       * @description When this fork's intent was recorded.
+       */
+      requested_at: string;
+      /** @description When kagent's ForkSession confirmed the forked Session. */
+      accepted_at: string | null;
+      /** @description When the forked runtime was observed READY: time-to-running is ready_at minus requested_at. Null until observed; repeat the request to read it once it fills in. */
+      ready_at: string | null;
+    };
     /** TaskAction */
     TaskAction: {
       /** Request Id */
@@ -8610,6 +8739,317 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  listSessionCheckpoints: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Checkpoint'][];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  createSessionCheckpoint: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CheckpointCreateRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Checkpoint'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  getCheckpoint: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        checkpoint_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Checkpoint'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  deleteCheckpoint: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        checkpoint_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['StatusOk'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  forkCheckpoint: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        checkpoint_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CheckpointForkRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CheckpointForkResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
         };
       };
       /** @description Bad Gateway */
