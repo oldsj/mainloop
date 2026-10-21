@@ -109,6 +109,12 @@ func parseEnvelope(method string, status int, body []byte) (json.RawMessage, err
 	if status >= http.StatusInternalServerError {
 		return nil, &OutcomeUnknown{Op: "A2A " + method, Detail: "gateway error HTTP " + strconv.Itoa(status)}
 	}
+	if status == http.StatusNotFound {
+		// kagent answers a missing task or a Session that no longer exists this way, as well as with
+		// a JSON-RPC envelope carrying reasonNoTask (handled above): either way, this is definite, not
+		// an outcome a retry could resolve.
+		return nil, &TaskNotFound{A2AError: A2AError{Message: "not found", Domain: a2aErrorDomain, Reason: reasonNoTask}}
+	}
 	return nil, &ProtocolError{Op: "A2A " + method, Status: status}
 }
 

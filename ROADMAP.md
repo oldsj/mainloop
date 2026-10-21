@@ -210,12 +210,15 @@ the warm state is built from a checkout and declared cache directories only. A s
 seed is one owner attention item, not a task failure, and a task always still works cold.
 
 The mechanism — a per-project cache archive restored at workspace start, or a kagent session fork
-from a Data checkpoint — is chosen in the spec based on what could be measured: forking is not
-reachable through the kagent API this project vends or through any tool this project's task
-workspaces can call, so the cache archive, which generalizes the already-proven `cache-main`
-pipeline, is the first mechanism; forking stays a candidate upgrade once it can be verified. The
-first implementation slice is `oldsj/mainloop`'s own recipe, moved into project config, with the
-current pipeline left running until the new path is proven. Overlaps
+from a Data checkpoint — is chosen in the spec based on what could be measured: forking was not
+reachable through the kagent API this project vends when the spec was written, so the cache
+archive, which generalizes the already-proven `cache-main` pipeline, is the first mechanism.
+Forking's client side is now wired (an experimental, owner-only checkpoint and fork API; see
+`docs/specs/warm-state.md`), built so the owner can run the live measurement this choice depends on
+rather than to replace the cache archive outright; it stays a candidate upgrade once that
+measurement is in. The first implementation slice of the cache-archive mechanism itself is
+`oldsj/mainloop`'s own recipe, moved into project config, with the current pipeline left running
+until the new path is proven. Overlaps
 [#100](https://github.com/oldsj/mainloop/issues/100)'s personal dev-environment layer, which this
 spec treats as a per-person override on the same config rather than a second mechanism. Also
 touches a cross-repository registry allowlist drift (`oldsj/infrastructure#217`) that needs an

@@ -731,6 +731,28 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 	return i, err
 }
 
+const getLatestDelivery = `-- name: GetLatestDelivery :one
+SELECT id, state, task_id FROM deliveries
+WHERE session_id = $1
+ORDER BY created_at DESC, id DESC
+LIMIT 1
+`
+
+type GetLatestDeliveryRow struct {
+	ID     string
+	State  dbstate.DeliveryState
+	TaskID *string
+}
+
+// The session's newest turn, for checkpoints.go: a checkpoint names the latest terminal turn's
+// task as kagent's expected_head_task_id, and refuses (409) while the newest turn is still open.
+func (q *Queries) GetLatestDelivery(ctx context.Context, sessionID string) (GetLatestDeliveryRow, error) {
+	row := q.db.QueryRow(ctx, getLatestDelivery, sessionID)
+	var i GetLatestDeliveryRow
+	err := row.Scan(&i.ID, &i.State, &i.TaskID)
+	return i, err
+}
+
 const getMainBinding = `-- name: GetMainBinding :one
 
 SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, b.guidance_version, b.guidance_delivery_id, b.model_override, b.effort_override, b.model_effort_touched, s.user_id, s.title, s.status AS session_status

@@ -154,6 +154,12 @@ type Kagent interface {
 	FindTaskForMessage(ctx context.Context, agent kagent.AgentRef, contextID, messageID string) (*a2a.Task, bool, error)
 	SubscribeToTask(ctx context.Context, agent kagent.AgentRef, taskID string) iter.Seq2[a2a.Event, error]
 	CancelTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)
+
+	CreateCheckpoint(ctx context.Context, req *kagentapi.CreateCheckpointRequest) (*kagentapi.Checkpoint, error)
+	GetCheckpoint(ctx context.Context, id string) (*kagentapi.Checkpoint, error)
+	ListCheckpoints(ctx context.Context, sessionID string) ([]*kagentapi.Checkpoint, error)
+	DeleteCheckpoint(ctx context.Context, id string) error
+	ForkSession(ctx context.Context, req *kagentapi.ForkSessionRequest) (*kagentapi.Session, error)
 }
 
 // HealthSink stores a finished delivery's health observations in the transaction that ends the

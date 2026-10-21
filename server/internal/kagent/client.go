@@ -40,6 +40,12 @@ const (
 	ProcTriggerScheduledRun        = apiconnect.ScheduledRunServiceTriggerScheduledRunProcedure
 	ProcGetScheduledRunExecution   = apiconnect.ScheduledRunServiceGetScheduledRunExecutionProcedure
 	ProcListScheduledRunExecutions = apiconnect.ScheduledRunServiceListScheduledRunExecutionsProcedure
+
+	ProcCreateCheckpoint = apiconnect.CheckpointServiceCreateCheckpointProcedure
+	ProcGetCheckpoint    = apiconnect.CheckpointServiceGetCheckpointProcedure
+	ProcListCheckpoints  = apiconnect.CheckpointServiceListCheckpointsProcedure
+	ProcDeleteCheckpoint = apiconnect.CheckpointServiceDeleteCheckpointProcedure
+	ProcForkSession      = apiconnect.CheckpointServiceForkSessionProcedure
 )
 
 const (
@@ -97,16 +103,17 @@ func (a AgentRef) proto() *api.ResourceReference {
 
 // Client talks to one kagent gateway as one service identity. It is safe for concurrent use.
 type Client struct {
-	base       string
-	http       *http.Client
-	sessionCl  apiconnect.SessionServiceClient
-	agentCl    apiconnect.AgentServiceClient
-	scheduleCl apiconnect.ScheduledRunServiceClient
-	reqTimeout time.Duration
-	idle       time.Duration
-	budget     time.Duration
-	sleep      func(context.Context, time.Duration) error
-	now        func() time.Time
+	base         string
+	http         *http.Client
+	sessionCl    apiconnect.SessionServiceClient
+	agentCl      apiconnect.AgentServiceClient
+	scheduleCl   apiconnect.ScheduledRunServiceClient
+	checkpointCl apiconnect.CheckpointServiceClient
+	reqTimeout   time.Duration
+	idle         time.Duration
+	budget       time.Duration
+	sleep        func(context.Context, time.Duration) error
+	now          func() time.Time
 }
 
 // New builds a Client. It does not contact kagent.
@@ -157,6 +164,7 @@ func New(cfg Config) (*Client, error) {
 	c.sessionCl = apiconnect.NewSessionServiceClient(doer{c.http}, base, connect.WithGRPCWeb(), withStrictSessions())
 	c.scheduleCl = apiconnect.NewScheduledRunServiceClient(doer{c.http}, base, connect.WithGRPCWeb())
 	c.agentCl = apiconnect.NewAgentServiceClient(doer{c.http}, base, connect.WithGRPCWeb())
+	c.checkpointCl = apiconnect.NewCheckpointServiceClient(doer{c.http}, base, connect.WithGRPCWeb())
 	return c, nil
 }
 

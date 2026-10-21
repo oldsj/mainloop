@@ -132,6 +132,7 @@ type Server struct {
 	sessSeq  int
 	creates  []*api.CreateSessionRequest
 	sched    scheduleStore
+	cp       checkpointStore
 
 	// The Tamper hooks edit a reply, to test the client's checks that a reply belongs to its request.
 	// Set them before the first request.
@@ -182,6 +183,7 @@ func New() *Server {
 	handle(kagent.ProcDeleteSession, connect.NewUnaryHandler(kagent.ProcDeleteSession, s.deleteSession))
 	handle(kagent.ProcGetAgent, connect.NewUnaryHandler(kagent.ProcGetAgent, s.getAgent))
 	s.registerSchedules(handle)
+	s.registerCheckpoints(handle)
 	mux.HandleFunc("/agents/{ns}/{name}", s.a2a)
 	s.Server = httptest.NewServer(mux)
 	return s
