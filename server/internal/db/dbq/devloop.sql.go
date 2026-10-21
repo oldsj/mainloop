@@ -241,7 +241,7 @@ func (q *Queries) GetDevloopOperationByIdempotencyKey(ctx context.Context, idemp
 }
 
 const getDevloopTarget = `-- name: GetDevloopTarget :one
-SELECT id, project_id, kind, namespace, vcluster_name, vcluster_namespace, workload, command_container, sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd, created_at, updated_at FROM devloop_targets WHERE id = $1
+SELECT id, project_id, kind, namespace, vcluster_name, vcluster_namespace, workload, command_container, sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd, created_at, updated_at, vcluster_server FROM devloop_targets WHERE id = $1
 `
 
 func (q *Queries) GetDevloopTarget(ctx context.Context, id string) (DevloopTarget, error) {
@@ -263,12 +263,13 @@ func (q *Queries) GetDevloopTarget(ctx context.Context, id string) (DevloopTarge
 		&i.SmokeCmd,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.VclusterServer,
 	)
 	return i, err
 }
 
 const getDevloopTargetByProject = `-- name: GetDevloopTargetByProject :one
-SELECT id, project_id, kind, namespace, vcluster_name, vcluster_namespace, workload, command_container, sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd, created_at, updated_at FROM devloop_targets WHERE project_id = $1
+SELECT id, project_id, kind, namespace, vcluster_name, vcluster_namespace, workload, command_container, sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd, created_at, updated_at, vcluster_server FROM devloop_targets WHERE project_id = $1
 `
 
 // A project's staging target: owner-only writes (through the project API), reads visible to that
@@ -293,6 +294,7 @@ func (q *Queries) GetDevloopTargetByProject(ctx context.Context, projectID strin
 		&i.SmokeCmd,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.VclusterServer,
 	)
 	return i, err
 }
@@ -601,16 +603,16 @@ func (q *Queries) UpsertDevloopLeaseQueueEntry(ctx context.Context, arg UpsertDe
 
 const upsertDevloopTarget = `-- name: UpsertDevloopTarget :one
 INSERT INTO devloop_targets (
-    id, project_id, kind, namespace, vcluster_name, vcluster_namespace, workload, command_container,
-    sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    id, project_id, kind, namespace, vcluster_name, vcluster_namespace, vcluster_server, workload,
+    command_container, sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 ON CONFLICT (project_id) DO UPDATE SET
     kind = EXCLUDED.kind, namespace = EXCLUDED.namespace, vcluster_name = EXCLUDED.vcluster_name,
-    vcluster_namespace = EXCLUDED.vcluster_namespace, workload = EXCLUDED.workload,
-    command_container = EXCLUDED.command_container, sync_paths = EXCLUDED.sync_paths,
+    vcluster_namespace = EXCLUDED.vcluster_namespace, vcluster_server = EXCLUDED.vcluster_server,
+    workload = EXCLUDED.workload, command_container = EXCLUDED.command_container, sync_paths = EXCLUDED.sync_paths,
     restart_cmd = EXCLUDED.restart_cmd, migrate_cmd = EXCLUDED.migrate_cmd, health_cmd = EXCLUDED.health_cmd,
     smoke_cmd = EXCLUDED.smoke_cmd, updated_at = now()
-RETURNING id, project_id, kind, namespace, vcluster_name, vcluster_namespace, workload, command_container, sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd, created_at, updated_at
+RETURNING id, project_id, kind, namespace, vcluster_name, vcluster_namespace, workload, command_container, sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd, created_at, updated_at, vcluster_server
 `
 
 type UpsertDevloopTargetParams struct {
@@ -620,6 +622,7 @@ type UpsertDevloopTargetParams struct {
 	Namespace         string
 	VclusterName      *string
 	VclusterNamespace *string
+	VclusterServer    *string
 	Workload          string
 	CommandContainer  string
 	SyncPaths         json.RawMessage
@@ -639,6 +642,7 @@ func (q *Queries) UpsertDevloopTarget(ctx context.Context, arg UpsertDevloopTarg
 		arg.Namespace,
 		arg.VclusterName,
 		arg.VclusterNamespace,
+		arg.VclusterServer,
 		arg.Workload,
 		arg.CommandContainer,
 		arg.SyncPaths,
@@ -664,6 +668,7 @@ func (q *Queries) UpsertDevloopTarget(ctx context.Context, arg UpsertDevloopTarg
 		&i.SmokeCmd,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.VclusterServer,
 	)
 	return i, err
 }

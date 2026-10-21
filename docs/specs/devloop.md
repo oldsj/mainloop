@@ -3,9 +3,12 @@
 Status: slice 1 (lease, `dev_sync`, `dev_status`) implemented in `server/internal/devloop` and on in
 production by owner decision 2026-10-17, not proven live. Slice 2 (`dev_logs`, `dev_smoke`) is not
 built. Per-project staging targets (this page's "Staging targets" section; oldsj/mainloop#247 first
-slice) are implemented for the `namespace` kind; the `vcluster` kind's abstraction is implemented
-and tested against fakes, but not usable in production until the infra grant described under
-"vcluster targets" below exists — proposed until then.
+slice) are implemented for the `namespace` kind; the `vcluster` kind's abstraction, client
+resolution and production wiring (`cmd/mainloop/devloop.go`'s `VClusters` field, second slice) are
+all implemented and tested against fakes, but not usable in production until the infra grant
+described under "vcluster targets" below exists — proposed until then. Until it does,
+`devloop.ErrVClusterNotConfigured` is what every vcluster-kind sync fails with in production, the
+same as if `VClusters` were still nil.
 
 ## What it does
 
@@ -48,6 +51,12 @@ A target has:
 - a kind, `namespace` or `vcluster`, and the Kubernetes location that kind needs: `namespace` alone
   for `namespace`, or `namespace` (the vcluster's _host_ namespace), `vcluster_name` and
   `vcluster_namespace` (the namespace inside the vcluster's own API server) for `vcluster`;
+  `vcluster_server` is a further optional field, `vcluster` kind only (rejected on a `namespace`
+  target): it overrides the server the vcluster's own kubeconfig Secret names, for a vcluster
+  whose `exportKubeConfig.server` only resolves from inside its own pod (e.g.
+  `https://localhost:8443`). Normally left unset — the infra side should point
+  `exportKubeConfig.server` at the vcluster's in-cluster Service URL instead, which makes a task's
+  `dev_sync` work without this override;
 - `workload`, a label selector (e.g. `app=mainloop-backend`) identifying the pod that `restart_cmd`,
   `migrate_cmd`, `health_cmd` and `smoke_cmd` run in, and `command_container`, the container inside
   it;
@@ -59,10 +68,16 @@ A target has:
 - four optional commands, `restart_cmd`, `migrate_cmd`, `health_cmd` and `smoke_cmd`, each a plain
   shell command run in `command_container`. A target without one skips that step rather than
   failing it: `restart_cmd` is unused by mainloop-dev (its own `watchexec` already restarts on a
-  file change), but a target without a file watcher needs it. The commit marker that guards every
-  command step against a container that silently restarted from its image (see "Sync" below) is
-  always checked regardless of whether `health_cmd` is set; without one, health is only that check,
-  not a liveness probe.
+  file change) and by any other target whose command container's own process re-reads the synced
+  tree on its own; a target whose workload does not pick up a sync without being restarted (a
+  compiled binary started once at container start, say, rather than a file watcher or a `go run`)
+  sets `restart_cmd`. A sync path with no `restart_cmd` otherwise behaves exactly like
+  mainloop-dev's: the copy lands, and whatever already watches that destination (or re-execs on
+  every request) is what picks it up — `dev_sync` itself never restarts a container by name or
+  kills a process; `restart_cmd` is the only lever a target has for that. The commit marker that
+  guards every command step against a container that silently restarted from its image (see "Sync"
+  below) is always checked regardless of whether `health_cmd` is set; without one, health is only
+  that check, not a liveness probe.
 
 `GET /projects/{project_id}/devloop-target` and `PUT .../devloop-target` are the owner-only REST
 routes (`projects.ProjectsAPI`, like `GET`/`PUT .../merge-policy`): reachable only from the owner's
@@ -275,12 +290,12 @@ distinct remote state to observe first, unlike a git push or a GitHub mutation.
 
 ## Operator configuration
 
-| Setting                                    | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MAINLOOP_DEVLOOP_ENABLED`                 | Exactly `true` turns on tool visibility ([agentauth.Policy.DevLoop]) and registers the operations reconcile loop in `serve-api`. Off in the base config; on in the prod overlay by owner decision (see the boundary paragraph above).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| GitHub App configured                      | Required for `dev_sync`'s fetch step; without it, `dev_sync` fails with a clear detail and the other tools still work.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| In-cluster (`KUBERNETES_SERVICE_HOST` set) | Required for the Kubernetes client (`devloop.NewInClusterPods`); outside a cluster `serve-api` builds no `OperationsService` and every devloop tool answers `[unavailable] devloop is not available`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| RBAC                                       | `k8s/apps/mainloop/overlays/prod/devloop/` holds a namespaced `Role` in `mainloop-dev` (`pods` get/list, `pods/log` get, `pods/exec` create) and a `RoleBinding` to the production `mainloop-backend` ServiceAccount. There is no ClusterRole. It is applied by Argo as a second source of `mainloop-dev-config`, pinned to the same mainloop revision as the production app. Namespace mainloop-dev is owned by the cluster repository's Argo Application `mainloop-dev-config` (automated prune and selfHeal). A hand-applied copy is not tracked by it, `make dev-live-purge` deletes it with the namespace, and nothing recreates it. A `vcluster`-kind target needs a second, separate grant (reading its kubeconfig Secret, plus RBAC inside the vcluster itself); see "vcluster targets" below. Neither exists yet, so `devloop.OperationsService.VClusters` stays unconfigured in production. |
+| Setting                                    | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MAINLOOP_DEVLOOP_ENABLED`                 | Exactly `true` turns on tool visibility ([agentauth.Policy.DevLoop]) and registers the operations reconcile loop in `serve-api`. Off in the base config; on in the prod overlay by owner decision (see the boundary paragraph above).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| GitHub App configured                      | Required for `dev_sync`'s fetch step; without it, `dev_sync` fails with a clear detail and the other tools still work.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| In-cluster (`KUBERNETES_SERVICE_HOST` set) | Required for the Kubernetes client (`devloop.NewInClusterPods`); outside a cluster `serve-api` builds no `OperationsService` and every devloop tool answers `[unavailable] devloop is not available`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| RBAC                                       | `k8s/apps/mainloop/overlays/prod/devloop/` holds a namespaced `Role` in `mainloop-dev` (`pods` get/list, `pods/log` get, `pods/exec` create) and a `RoleBinding` to the production `mainloop-backend` ServiceAccount (namespace `mainloop`; confirmed against `k8s/apps/mainloop/base/rbac-backend.yaml`). There is no ClusterRole. It is applied by Argo as a second source of `mainloop-dev-config`, pinned to the same mainloop revision as the production app. Namespace mainloop-dev is owned by the cluster repository's Argo Application `mainloop-dev-config` (automated prune and selfHeal). A hand-applied copy is not tracked by it, `make dev-live-purge` deletes it with the namespace, and nothing recreates it. A `vcluster`-kind target needs a second, separate grant (reading its kubeconfig Secret, plus RBAC inside the vcluster itself); see "vcluster targets" below. Neither exists yet, so a vcluster-kind sync still fails with `devloop.ErrVClusterNotConfigured` in production even though `devloop.OperationsService.VClusters` is now wired (`cmd/mainloop/devloop.go`). |
 
 No credential, kubeconfig or Kubernetes client ever reaches a workspace: `serve-mcp`'s process
 (where every devloop tool handler runs) never imports a Kubernetes client package at all, the same
@@ -289,9 +304,10 @@ Secrets.
 
 ## vcluster targets
 
-Status: the target-kind abstraction and the `vcluster` kind's client resolution are implemented and
-tested against fakes (`server/internal/devloop/target_test.go`); proposed until the infra grant
-below exists, since no vcluster target can reach a real cluster in production without it.
+Status: the target-kind abstraction, the `vcluster` kind's client resolution and its production
+wiring are all implemented and tested against fakes (`server/internal/devloop/target_test.go`);
+proposed until the infra grant below exists, since no vcluster target can reach a real cluster in
+production without it.
 
 A `vcluster` target locates its workload inside a [vcluster](https://www.vcluster.com) — a virtual
 Kubernetes API server running as a workload of a host cluster — rather than a plain namespace on
@@ -299,34 +315,55 @@ the host cluster `serve-api` already reaches. This is the shape kagent's own sta
 takes: a vcluster named `kv` in host namespace `kagent-staging`, with the workload (controller
 Deployment `kagent-controller`) inside the vcluster's own namespace `kagent-dev`.
 
-**How `serve-api` would reach it.** `devloop.VClusterPods` (implemented) reads the vcluster's own
-kubeconfig from a Secret in its host namespace — by the vcluster chart's own convention, named
-`vc-<vcluster_name>` with the kubeconfig at key `config` — through a `devloop.SecretReader`, then
-builds a client-go client from it (`clientcmd.RESTConfigFromKubeConfig`,
+**How `serve-api` reaches it.** `devloop.VClusterPods`, wired into
+`OperationsService.VClusters` in `cmd/mainloop/devloop.go`, reads the vcluster's own kubeconfig
+from a Secret in its host namespace — by the vcluster chart's own convention, named
+`vc-<vcluster_name>` with the kubeconfig at key `config` — through a `devloop.SecretReader`
+(`devloop.K8sSecrets`, built by `devloop.NewInClusterSecrets`, the same in-cluster ServiceAccount
+credential `devloop.NewInClusterPods` already uses — no new credential type, and the kubeconfig is
+never logged or stored, only read and handed straight to `clientcmd`). It then builds a client-go
+client from it (`clientcmd.RESTConfigFromKubeConfig`, optionally overriding the resulting
+`rest.Config`'s `Host` with the target's `vcluster_server` field if set, then
 `kubernetes.NewForConfig`), scoped to `vcluster_namespace` inside that client. This is exactly the
 `namespace`/`vcluster` split `devloop.OperationsService.PodsFor` already dispatches on; the
-abstraction does not change between kinds, only how the pod client and namespace are resolved.
+abstraction does not change between kinds, only how the pod client and namespace are resolved. A
+Secret read failure (missing RBAC, or the Secret not existing yet) is reported as
+`ErrVClusterNotConfigured` wrapping a detail that names the Secret and namespace it could not
+read ("cannot read vc-kv Secret in kagent-staging: ..."), never a panic and never the kubeconfig
+itself.
 
-**What is missing.** `devloop.OperationsService.VClusters` is left `nil` in production
-(`cmd/mainloop/devloop.go`) until two things exist, neither of which this slice changes:
+**Why `vcluster_server` exists.** A vcluster's own kubeconfig Secret
+(`vcluster.exportKubeConfig`) can name a server that only resolves from inside the vcluster's own
+pod, such as `https://localhost:8443`; `serve-api`, reaching it from outside that pod, cannot dial
+that address. The infra side should set the vcluster's `exportKubeConfig.server` to its
+in-cluster Service URL (reachable from any pod in the host cluster) so this is normally
+unnecessary. `vcluster_server` is the escape hatch for a vcluster that cannot be configured that
+way: an optional per-target override (`vcluster` kind only; rejected on a `namespace` target) used
+in place of whatever server the kubeconfig names.
 
-1. A `Role` in `kagent-staging` granting `get` on the `vc-kv` Secret (or whichever vcluster the
-   target names), bound to `serve-api`'s ServiceAccount (`mainloop-backend` in production). This is
-   additive to the existing mainloop-dev RBAC (see the table above): it grants reading one Secret in
-   a namespace devloop does not otherwise touch, not `pods`/`exec` on the host cluster.
+**What is still missing.** Even with `OperationsService.VClusters` wired, a vcluster-kind sync
+cannot reach a real cluster until both of these exist — neither of which this repository's code
+can grant, and neither of which this slice changes:
+
+1. A `Role` in namespace `kagent-staging` granting `get` on `secrets` with
+   `resourceNames: [vc-kv]` (or whichever vcluster the target names), bound by a `RoleBinding` to
+   ServiceAccount `mainloop-backend` in namespace `mainloop` — `serve-api`'s own ServiceAccount,
+   confirmed against `k8s/apps/mainloop/base/rbac-backend.yaml` and the existing mainloop-dev
+   `RoleBinding` in `k8s/apps/mainloop/overlays/prod/devloop/rolebinding.yaml`, which binds the
+   same ServiceAccount. This is additive to that existing mainloop-dev RBAC (see the table above):
+   it grants reading one named Secret in a namespace devloop does not otherwise touch, not
+   `pods`/`exec` on the host cluster. This grant lives in the infra repository that owns
+   `kagent-staging`, not here.
 2. Inside the vcluster, the ServiceAccount the read kubeconfig authenticates as needs the same
    `pods` get/list, `pods/log` get, `pods/exec` create RBAC the mainloop-dev `Role` grants today,
    scoped to `kagent-dev`. The vcluster's own RBAC is a second, independent grant: reading the host
    Secret only gets a credential, not Kubernetes permissions inside the vcluster.
 
 Until both exist, `devloop.ErrVClusterNotConfigured` is what every vcluster-kind sync fails with
-(wrapping the Secret read's own error when a reader is wired but the grant is not), named clearly in
-the sync's detail rather than a timeout, a nil-pointer panic or a hang waiting on a credential that
-is not there. Applying either grant is an infra change outside this repository's scope (and outside
-what a task workspace's `dev_*` tools can do); this repository's own change, once they exist, is
-wiring a real `devloop.SecretReader` (`devloop.K8sSecrets`, a thin client-go Secrets client already
-implemented but not production-wired, analogous to `devloop.K8sPods`) into
-`cmd/mainloop/devloop.go`'s `VClusters` field.
+(wrapping the Secret read's own error when the grant is not there), named clearly in the sync's
+detail rather than a timeout, a nil-pointer panic or a hang waiting on a credential that is not
+there. Applying either grant is an infra change outside this repository's scope (and outside what
+a task workspace's `dev_*` tools can do).
 
 ## Proven and not proven
 
@@ -353,8 +390,12 @@ pre-existing mainloop-dev lease and sync lock rows, since the migrated template 
 project row to seed against); the `vcluster` kind end to end against a fake Kubernetes pod client
 reached through a fake `SecretReader` (copy, migrate, health, smoke all run the same as the
 `namespace` kind), a working fake kubeconfig resolving to the vcluster's own inner namespace (not
-the host namespace), and a failing Secret read wrapping `ErrVClusterNotConfigured` the same as no
-factory configured at all.
+the host namespace), a failing Secret read wrapping `ErrVClusterNotConfigured` the same as no
+factory configured at all with a detail naming the Secret and namespace it could not read, a
+`vcluster_server` override taking precedence over the kubeconfig's own server (the built client
+dials the override, not the kubeconfig's address), `vcluster_server` round-tripping through
+`TargetService.Set`/`Get`, and `TargetService.Set` rejecting `vcluster_server` on a `namespace`
+target.
 
 Not built (on in production by owner decision 2026-10-17; these would narrow the boundary above,
 and none is required to use it):
