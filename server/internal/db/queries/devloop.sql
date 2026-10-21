@@ -125,13 +125,13 @@ SELECT * FROM devloop_targets WHERE id = $1;
 -- first insert, never overwritten by a later upsert.
 -- name: UpsertDevloopTarget :one
 INSERT INTO devloop_targets (
-    id, project_id, kind, namespace, vcluster_name, vcluster_namespace, workload, command_container,
-    sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    id, project_id, kind, namespace, vcluster_name, vcluster_namespace, vcluster_server, workload,
+    command_container, sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 ON CONFLICT (project_id) DO UPDATE SET
     kind = EXCLUDED.kind, namespace = EXCLUDED.namespace, vcluster_name = EXCLUDED.vcluster_name,
-    vcluster_namespace = EXCLUDED.vcluster_namespace, workload = EXCLUDED.workload,
-    command_container = EXCLUDED.command_container, sync_paths = EXCLUDED.sync_paths,
+    vcluster_namespace = EXCLUDED.vcluster_namespace, vcluster_server = EXCLUDED.vcluster_server,
+    workload = EXCLUDED.workload, command_container = EXCLUDED.command_container, sync_paths = EXCLUDED.sync_paths,
     restart_cmd = EXCLUDED.restart_cmd, migrate_cmd = EXCLUDED.migrate_cmd, health_cmd = EXCLUDED.health_cmd,
     smoke_cmd = EXCLUDED.smoke_cmd, updated_at = now()
 RETURNING *;

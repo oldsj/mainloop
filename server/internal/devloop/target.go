@@ -62,6 +62,12 @@ type Target struct {
 	// server; both set for TargetVCluster, both empty for TargetNamespace.
 	VClusterName      string
 	VClusterNamespace string
+	// VClusterServer optionally overrides the server named by the vcluster's own kubeconfig
+	// Secret (see VClusterPods), for a vcluster whose exportKubeConfig.server only resolves from
+	// inside its own pod. Empty for TargetNamespace, and normally empty for TargetVCluster too:
+	// the infra side should set exportKubeConfig.server to the vcluster's in-cluster Service URL
+	// instead, which makes this override unnecessary in the common case.
+	VClusterServer string
 	// Workload is a label selector (e.g. "app=mainloop-backend") identifying the pod that
 	// RestartCmd, MigrateCmd, HealthCmd and SmokeCmd run in, inside CommandContainer.
 	Workload         string
@@ -121,7 +127,8 @@ func (s *TargetService) Set(ctx context.Context, projectID string, t Target) (Ta
 		row, err := q.UpsertDevloopTarget(ctx, dbq.UpsertDevloopTargetParams{
 			ID: id, ProjectID: projectID, Kind: t.Kind, Namespace: t.Namespace,
 			VclusterName: nilIfEmpty(t.VClusterName), VclusterNamespace: nilIfEmpty(t.VClusterNamespace),
-			Workload: t.Workload, CommandContainer: t.CommandContainer, SyncPaths: syncPaths,
+			VclusterServer: nilIfEmpty(t.VClusterServer),
+			Workload:       t.Workload, CommandContainer: t.CommandContainer, SyncPaths: syncPaths,
 			RestartCmd: t.RestartCmd, MigrateCmd: t.MigrateCmd, HealthCmd: t.HealthCmd, SmokeCmd: t.SmokeCmd,
 		})
 		if err != nil {
@@ -151,6 +158,9 @@ func validateTarget(t Target) error {
 	}
 	switch t.Kind {
 	case TargetNamespace:
+		if t.VClusterServer != "" {
+			return fmt.Errorf("%w: vcluster_server is only valid for a vcluster target", ErrInvalidTarget)
+		}
 	case TargetVCluster:
 		if t.VClusterName == "" || t.VClusterNamespace == "" {
 			return fmt.Errorf("%w: a vcluster target needs vcluster_name and vcluster_namespace", ErrInvalidTarget)
@@ -198,6 +208,9 @@ func fromRow(row dbq.DevloopTarget) (Target, error) {
 	}
 	if row.VclusterNamespace != nil {
 		t.VClusterNamespace = *row.VclusterNamespace
+	}
+	if row.VclusterServer != nil {
+		t.VClusterServer = *row.VclusterServer
 	}
 	return t, nil
 }

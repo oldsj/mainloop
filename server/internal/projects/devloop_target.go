@@ -41,6 +41,9 @@ func toDevloopTarget(t devloop.Target) api.DevloopTarget {
 	if t.VClusterNamespace != "" {
 		v.VclusterNamespace = &t.VClusterNamespace
 	}
+	if t.VClusterServer != "" {
+		v.VclusterServer = &t.VClusterServer
+	}
 	return v
 }
 
@@ -57,6 +60,9 @@ func fromDevloopTargetUpdate(u api.DevloopTargetUpdate) devloop.Target {
 	}
 	if u.VclusterNamespace != nil {
 		t.VClusterNamespace = *u.VclusterNamespace
+	}
+	if u.VclusterServer != nil {
+		t.VClusterServer = *u.VclusterServer
 	}
 	return t
 }

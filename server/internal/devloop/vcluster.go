@@ -7,6 +7,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -57,6 +58,23 @@ type K8sSecrets struct {
 	Clientset kubernetes.Interface
 }
 
+// NewInClusterSecrets builds a [K8sSecrets] from the pod's own ServiceAccount, the same
+// credential [NewInClusterPods] uses: serve-api's existing in-cluster identity, not a new
+// credential type. It needs the RBAC described in docs/specs/devloop.md's "vcluster targets"
+// section (get on the vcluster's own "vc-<name>" Secret); without it, ReadSecretKey fails clearly
+// and ForVCluster wraps that into [ErrVClusterNotConfigured] rather than this constructor failing.
+func NewInClusterSecrets() (*K8sSecrets, error) {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("devloop: in-cluster config: %w", err)
+	}
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("devloop: build clientset: %w", err)
+	}
+	return &K8sSecrets{Clientset: cs}, nil
+}
+
 func (k *K8sSecrets) ReadSecretKey(ctx context.Context, namespace, name, key string) ([]byte, error) {
 	secret, err := k.Clientset.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
@@ -85,13 +103,21 @@ func (v *VClusterPods) ForVCluster(ctx context.Context, t Target) (PodClient, st
 	if v == nil || v.Secrets == nil {
 		return nil, "", ErrVClusterNotConfigured
 	}
-	kubeconfig, err := v.Secrets.ReadSecretKey(ctx, t.Namespace, "vc-"+t.VClusterName, "config")
+	secretName := "vc-" + t.VClusterName
+	kubeconfig, err := v.Secrets.ReadSecretKey(ctx, t.Namespace, secretName, "config")
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: %w", ErrVClusterNotConfigured, err)
+		return nil, "", fmt.Errorf("%w: cannot read %s Secret in %s: %w", ErrVClusterNotConfigured, secretName, t.Namespace, err)
 	}
 	cfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
 	if err != nil {
 		return nil, "", fmt.Errorf("devloop: vcluster %s kubeconfig: %w", t.VClusterName, err)
+	}
+	// t.VClusterServer overrides the server the kubeconfig itself names, for a vcluster whose
+	// exportKubeConfig.server (e.g. https://localhost:8443) only resolves from inside its own pod.
+	// Normally unset: the infra side should point exportKubeConfig.server at the vcluster's
+	// in-cluster Service URL instead, which makes this override unnecessary.
+	if t.VClusterServer != "" {
+		cfg.Host = t.VClusterServer
 	}
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {

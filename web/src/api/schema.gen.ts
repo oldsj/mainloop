@@ -3224,6 +3224,8 @@ export interface components {
       vcluster_name?: string;
       /** @description The namespace inside the vcluster's own API server. Set only for kind "vcluster". */
       vcluster_namespace?: string;
+      /** @description Optional, kind "vcluster" only. Overrides the server the vcluster's own kubeconfig Secret names, for a vcluster whose exportKubeConfig.server only resolves from inside the vcluster's own pod (e.g. https://localhost:8443). Normally unset: the infra side should set the vcluster's exportKubeConfig.server to its in-cluster Service URL instead, which makes this override unnecessary. */
+      vcluster_server?: string;
       /** @description A label selector identifying the pod that restart_cmd, migrate_cmd, health_cmd and smoke_cmd run in, inside command_container. */
       workload: string;
       command_container: string;
@@ -3247,6 +3249,7 @@ export interface components {
       namespace: string;
       vcluster_name?: string;
       vcluster_namespace?: string;
+      vcluster_server?: string;
       workload: string;
       command_container: string;
       /** @default [] */

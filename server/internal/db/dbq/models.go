@@ -189,6 +189,7 @@ type DevloopTarget struct {
 	SmokeCmd          *string
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	VclusterServer    *string
 }
 
 type EnvironmentGrant struct {

@@ -7036,6 +7036,14 @@ components:
         vcluster_namespace:
           type: string
           description: The namespace inside the vcluster's own API server. Set only for kind "vcluster".
+        vcluster_server:
+          type: string
+          description: >-
+            Optional, kind "vcluster" only. Overrides the server the vcluster's own kubeconfig
+            Secret names, for a vcluster whose exportKubeConfig.server only resolves from inside
+            the vcluster's own pod (e.g. https://localhost:8443). Normally unset: the infra side
+            should set the vcluster's exportKubeConfig.server to its in-cluster Service URL
+            instead, which makes this override unnecessary.
         workload:
           type: string
           description: >-
@@ -7089,6 +7097,8 @@ components:
         vcluster_name:
           type: string
         vcluster_namespace:
+          type: string
+        vcluster_server:
           type: string
         workload:
           type: string

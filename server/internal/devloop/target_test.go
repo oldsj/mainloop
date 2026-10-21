@@ -122,6 +122,12 @@ func TestTargetServiceSetRejectsAnUnworkableTarget(t *testing.T) {
 	if _, err := svc.Set(ctx, "p1", mismatched); !errors.Is(err, devloop.ErrInvalidTarget) {
 		t.Errorf("workload matching no sync path = %v, want ErrInvalidTarget", err)
 	}
+
+	namespaceWithServer := minimalTarget("p1")
+	namespaceWithServer.VClusterServer = "https://example.invalid:8443"
+	if _, err := svc.Set(ctx, "p1", namespaceWithServer); !errors.Is(err, devloop.ErrInvalidTarget) {
+		t.Errorf("namespace target with vcluster_server = %v, want ErrInvalidTarget", err)
+	}
 }
 
 // TestLeaseIsIsolatedPerTarget proves the core of this slice: two projects' targets each get their
@@ -253,6 +259,27 @@ func vclusterTarget() devloop.Target {
 	}
 }
 
+// TestTargetServiceRoundTripsVClusterServer proves the optional per-target override survives a
+// write and a read, like every other vcluster field.
+func TestTargetServiceRoundTripsVClusterServer(t *testing.T) {
+	t.Parallel()
+	d := testdb.New(t)
+	seedProject(t, d, "p1", "o/n")
+	svc := &devloop.TargetService{Pool: d.Pool}
+	in := vclusterTarget()
+	in.VClusterServer = "https://kv.kagent-staging.svc.cluster.local:443"
+	if _, err := svc.Set(context.Background(), "p1", in); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(context.Background(), "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.VClusterServer != in.VClusterServer {
+		t.Fatalf("VClusterServer = %q, want %q", got.VClusterServer, in.VClusterServer)
+	}
+}
+
 // TestVClusterTargetFailsClearlyWithoutAConfiguredFactory proves the gate this slice requires:
 // until a VClusterClientFactory is wired in production (the infra grant in docs/specs/devloop.md
 // is what unblocks that), a vcluster-kind target fails with ErrVClusterNotConfigured, not a nil
@@ -297,6 +324,36 @@ func TestVClusterPodsWrapsASecretReadFailure(t *testing.T) {
 	_, _, err := svc.PodsFor(context.Background(), vclusterTarget())
 	if !errors.Is(err, devloop.ErrVClusterNotConfigured) {
 		t.Fatalf("PodsFor(vcluster) with a failing secret read = %v, want it to wrap ErrVClusterNotConfigured", err)
+	}
+	if !strings.Contains(err.Error(), "cannot read vc-kv Secret in kagent-staging") {
+		t.Fatalf("PodsFor(vcluster) with a failing secret read = %q, want a detail naming the Secret it could not read", err)
+	}
+}
+
+// TestVClusterPodsUsesServerOverride proves a target's optional vcluster_server replaces the
+// server the vcluster's own kubeconfig names, for a vcluster whose exportKubeConfig.server only
+// resolves from inside its own pod: the built client dials the override, not the kubeconfig's own
+// (unreachable here) server.
+func TestVClusterPodsUsesServerOverride(t *testing.T) {
+	t.Parallel()
+	target := vclusterTarget()
+	target.VClusterServer = "https://127.0.0.1:1"
+	reader := &fakeSecretReader{data: map[string][]byte{
+		"kagent-staging/vc-kv/config": []byte(minimalKubeconfig),
+	}}
+	svc := &devloop.OperationsService{VClusters: &devloop.VClusterPods{Secrets: reader}}
+	pods, _, err := svc.PodsFor(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _, err = pods.Exec(ctx, "kagent-dev", "x", "y", []string{"true"}, nil)
+	if err == nil {
+		t.Fatal("Exec against the overridden server = nil error, want a dial failure against 127.0.0.1:1")
+	}
+	if !strings.Contains(err.Error(), "127.0.0.1:1") {
+		t.Fatalf("Exec error = %v, want it to name the override host 127.0.0.1:1, not the kubeconfig's own vcluster.example:6443", err)
 	}
 }
 
