@@ -458,6 +458,7 @@ func TestSyncLeavesEveryContainerEqualToTheCommit(t *testing.T) {
 	for name, bin := range shells(t) {
 		t.Run(name, func(t *testing.T) {
 			d := testdb.New(t)
+			seedMainloopTarget(t, d, "proj-1")
 			pods := syncPods()
 			pods.LocalBin = bin
 			pods.LocalDirs = map[string]string{}

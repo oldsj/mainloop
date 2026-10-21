@@ -23,7 +23,12 @@ func newDevloopOperations(cfg *config.Config, pool *pgxpool.Pool) (*devloop.Oper
 	if err != nil {
 		return nil, fmt.Errorf("devloop: %w", err)
 	}
-	svc := &devloop.OperationsService{Pool: pool, Pods: pods}
+	// VClusters is left nil: a vcluster-kind target needs the infra grant described in
+	// docs/specs/devloop.md (a Role to read the vcluster's kubeconfig Secret in its host
+	// namespace, bound to this ServiceAccount) before a devloop.VClusterPods reading it can be
+	// wired in here. Until then every vcluster target fails clearly with
+	// devloop.ErrVClusterNotConfigured instead of reaching for a credential that is not there.
+	svc := &devloop.OperationsService{Pool: pool, Pods: pods, Targets: &devloop.TargetService{Pool: pool}}
 	if cfg.GitHub.AppID != "" {
 		seed, err := pushgate.NewGitHubUpstream(github.Options{AppID: cfg.GitHub.AppID, PrivateKey: cfg.GitHub.AppPrivateKey.Reveal()})
 		if err != nil {

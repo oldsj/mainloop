@@ -174,6 +174,11 @@ func (Unimplemented) GetProjectDetail(context.Context, GetProjectDetailRequestOb
 	return nil, apierr.NotImplemented
 }
 
+// GetProjectDevloopTarget is not implemented yet.
+func (Unimplemented) GetProjectDevloopTarget(context.Context, GetProjectDevloopTargetRequestObject) (GetProjectDevloopTargetResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetProjectEnvironment is not implemented yet.
 func (Unimplemented) GetProjectEnvironment(context.Context, GetProjectEnvironmentRequestObject) (GetProjectEnvironmentResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -421,6 +426,11 @@ func (Unimplemented) UpdateMergePolicy(context.Context, UpdateMergePolicyRequest
 
 // UpdateProjectDefaultProvider is not implemented yet.
 func (Unimplemented) UpdateProjectDefaultProvider(context.Context, UpdateProjectDefaultProviderRequestObject) (UpdateProjectDefaultProviderResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// UpdateProjectDevloopTarget is not implemented yet.
+func (Unimplemented) UpdateProjectDevloopTarget(context.Context, UpdateProjectDevloopTargetRequestObject) (UpdateProjectDevloopTargetResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

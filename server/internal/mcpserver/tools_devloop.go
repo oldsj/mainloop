@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,81 +17,81 @@ import (
 	"github.com/oldsj/mainloop/server/internal/devloop"
 )
 
-// devloopProject is the one project whose task agents may use the devloop tools (see
-// docs/specs/devloop.md). Visibility is gated by the MAINLOOP_DEVLOOP_ENABLED flag through
-// [agentauth.Policy.DevLoop]; this is the further, handler-level check the flag alone cannot
-// express.
-const devloopProject = "oldsj/mainloop"
-
 // devLoopWaitBound is how long each tool call waits for its devloop_operations row to finish
 // before answering with whatever is known so far; the row itself (and serve-api's reconcile loop)
 // keeps working past this bound.
 const devLoopWaitBound = 4 * time.Minute
 
-// devLoopTools let a task agent of devloopProject iterate on the shared mainloop-dev instance:
-// one FIFO lease, a sync that fetches a pushed commit and copies it into mainloop-dev's synced
-// containers, and a read-only pod status. The MCP listener never reaches Kubernetes itself;
-// every tool but the lease ones writes a devloop_operations row and polls it,
-// and serve-api's reconcile loop (the only holder of a Kubernetes client) does the work.
+// devLoopTools let a task agent whose project has a staging target configured (see
+// docs/specs/devloop.md) iterate on it: one FIFO lease per target, a sync that fetches a pushed
+// commit and copies it into the target's synced containers, and a read-only pod status. The MCP
+// listener never reaches Kubernetes itself; every tool but the lease ones writes a
+// devloop_operations row and polls it, and serve-api's reconcile loop (the only holder of a
+// Kubernetes client) does the work.
 func (s *Server) devLoopTools() []Tool {
 	none := objectSchema(map[string]any{})
 	sha := map[string]any{"type": "string", "pattern": "^[0-9a-f]{40}$"}
 	return []Tool{
 		{
 			Name: agentauth.ToolDevLeaseAcquire,
-			Description: "Acquire the one live-sync lease on mainloop-dev, or report your place in its FIFO " +
-				"queue. An idle-expired lease is taken over by the earliest queued session. A queued " +
+			Description: "Acquire the one live-sync lease on your project's staging target, or report your place " +
+				"in its FIFO queue. An idle-expired lease is taken over by the earliest queued session. A queued " +
 				"session must call this again within 2 minutes to keep its place.",
 			InputSchema: none, Handle: s.devLeaseAcquire,
 		},
 		{
 			Name:        agentauth.ToolDevLeaseRelease,
-			Description: "Release the mainloop-dev lease if this session holds it.",
+			Description: "Release your project's staging-target lease if this session holds it.",
 			InputSchema: none, Handle: s.devLeaseRelease,
 		},
 		{
 			Name: agentauth.ToolDevSync,
 			Description: "Use after pushing and before open_pull_request. Syncs commit_sha (already pushed through " +
-				"the git push transport) into mainloop-dev, migrates its database, waits for its /health, and runs " +
-				"the read-only smoke check. Succeeds only when mainloop-dev is healthy and the smoke passes; any " +
-				"other result is failed, with the output that explains it. Requires holding the lease. Waits up to " +
-				"4 minutes, then reports the state so far; retrying with the same commit_sha is safe.",
+				"the git push transport) into your project's staging target, migrates its database, waits for its " +
+				"health, and runs its read-only smoke check. Succeeds only when the target is healthy and the " +
+				"smoke passes; any other result is failed, with the output that explains it. Requires holding the " +
+				"lease. Waits up to 4 minutes, then reports the state so far; retrying with the same commit_sha is safe.",
 			InputSchema: objectSchema(map[string]any{"commit_sha": sha}, "commit_sha"), Handle: s.devSync,
 		},
 		{
 			Name:        agentauth.ToolDevStatus,
-			Description: "Read mainloop-dev's pod status: phase, readiness and restart counts.",
+			Description: "Read your project's staging-target pod status: phase, readiness and restart counts.",
 			InputSchema: none, Handle: s.devStatus,
 		},
 	}
 }
 
-// devLoopAuthority fails closed unless the actor is bound to devloopProject.
-func (s *Server) devLoopAuthority(ctx context.Context, a agentauth.Actor) error {
+// devLoopAuthority fails closed unless the actor's project has a staging target configured
+// (projects.ProjectsAPI's owner-only devloop-target routes are the only way to set one).
+func (s *Server) devLoopAuthority(ctx context.Context, a agentauth.Actor) (devloop.Target, error) {
 	if a.ProjectID == "" {
-		return failure("forbidden", "this session has no project")
+		return devloop.Target{}, failure("forbidden", "this session has no project")
 	}
-	full, err := s.Queries.GetProjectFullName(ctx, a.ProjectID)
+	if s.DevTargets == nil {
+		return devloop.Target{}, failure("unavailable", "devloop is not available")
+	}
+	target, err := s.DevTargets.Get(ctx, a.ProjectID)
+	if errors.Is(err, devloop.ErrTargetNotFound) {
+		return devloop.Target{}, failure("forbidden", "this project has no staging target configured")
+	}
 	if err != nil {
-		return failure("forbidden", "this session has no project")
+		return devloop.Target{}, err
 	}
-	if !strings.EqualFold(full, devloopProject) {
-		return failure("forbidden", "devloop tools are limited to "+devloopProject)
-	}
-	return nil
+	return target, nil
 }
 
 func (s *Server) devLeaseAcquire(ctx context.Context, a agentauth.Actor, raw json.RawMessage) (Result, error) {
 	if err := decode(raw, &struct{}{}); err != nil {
 		return Result{}, err
 	}
-	if err := s.devLoopAuthority(ctx, a); err != nil {
+	target, err := s.devLoopAuthority(ctx, a)
+	if err != nil {
 		return Result{}, err
 	}
 	if s.DevLease == nil {
 		return Result{}, failure("unavailable", "devloop is not available")
 	}
-	info, err := s.DevLease.Acquire(ctx, a.BindingID)
+	info, err := s.DevLease.Acquire(ctx, target.ID, a.BindingID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -103,13 +102,14 @@ func (s *Server) devLeaseRelease(ctx context.Context, a agentauth.Actor, raw jso
 	if err := decode(raw, &struct{}{}); err != nil {
 		return Result{}, err
 	}
-	if err := s.devLoopAuthority(ctx, a); err != nil {
+	target, err := s.devLoopAuthority(ctx, a)
+	if err != nil {
 		return Result{}, err
 	}
 	if s.DevLease == nil {
 		return Result{}, failure("unavailable", "devloop is not available")
 	}
-	if err := s.DevLease.Release(ctx, a.BindingID); err != nil {
+	if err := s.DevLease.Release(ctx, target.ID, a.BindingID); err != nil {
 		return Result{}, err
 	}
 	return Result{Text: "lease released", Structured: map[string]any{"text": "lease released"}}, nil
@@ -145,16 +145,17 @@ func (s *Server) devSync(ctx context.Context, a agentauth.Actor, raw json.RawMes
 	if !isSHA(in.CommitSHA) {
 		return Result{}, errValidation
 	}
-	if err := s.devLoopAuthority(ctx, a); err != nil {
+	target, err := s.devLoopAuthority(ctx, a)
+	if err != nil {
 		return Result{}, err
 	}
 	if s.DevLease == nil || s.DevOps == nil {
 		return Result{}, failure("unavailable", "devloop is not available")
 	}
 	// Using the lease is also its heartbeat, so a session that syncs steadily never idles out.
-	if err := s.DevLease.Use(ctx, a.BindingID); err != nil {
+	if err := s.DevLease.Use(ctx, target.ID, a.BindingID); err != nil {
 		if errors.Is(err, devloop.ErrNotHolder) {
-			return Result{}, failure("lease_required", "acquire the mainloop-dev lease with dev_lease_acquire first")
+			return Result{}, failure("lease_required", "acquire the staging-target lease with dev_lease_acquire first")
 		}
 		return Result{}, err
 	}
@@ -185,7 +186,7 @@ func (s *Server) devStatus(ctx context.Context, a agentauth.Actor, raw json.RawM
 	if err := decode(raw, &struct{}{}); err != nil {
 		return Result{}, err
 	}
-	if err := s.devLoopAuthority(ctx, a); err != nil {
+	if _, err := s.devLoopAuthority(ctx, a); err != nil {
 		return Result{}, err
 	}
 	if s.DevOps == nil {

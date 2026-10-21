@@ -1,43 +1,97 @@
-# Live dev loop on mainloop-dev
+# Live dev loop on a project's staging target
 
 Status: slice 1 (lease, `dev_sync`, `dev_status`) implemented in `server/internal/devloop` and on in
-production by owner decision 2026-10-17, not proven live. Slice 2 (`dev_logs`, `dev_smoke`) is not built.
+production by owner decision 2026-10-17, not proven live. Slice 2 (`dev_logs`, `dev_smoke`) is not
+built. Per-project staging targets (this page's "Staging targets" section; oldsj/mainloop#247 first
+slice) are implemented for the `namespace` kind; the `vcluster` kind's abstraction is implemented
+and tested against fakes, but not usable in production until the infra grant described under
+"vcluster targets" below exists — proposed until then.
 
 ## What it does
 
-A task agent of project `oldsj/mainloop` can iterate on the shared `mainloop-dev` instance
-(`docs/dev-environment.md#live-dev-instance`) the way an operator's `make dev-live` does: acquire
-the one lease, push its branch through the existing git push transport, sync the pushed commit
-into mainloop-dev and read pod status. The task's
-workspace never receives a Kubernetes credential or kubeconfig: every devloop MCP tool is served by
-`serve-mcp`, which reaches only Mainloop's own database, never Kubernetes. The Kubernetes- and
-GitHub-reaching work runs in `serve-api`'s reconcile loop, the same process and credential that
-already issue the MCP and git capability Secrets (`server/internal/k8ssecrets`).
+A task agent of a project with a staging target configured can iterate on it the way an operator's
+`make dev-live` does for oldsj/mainloop and mainloop-dev: acquire the target's lease, push its
+branch through the existing git push transport, sync the pushed commit into the target and read
+pod status. oldsj/mainloop's own target is mainloop-dev
+(`docs/dev-environment.md#live-dev-instance`), expressed as that project's configured target,
+seeded by migration (`00310_devloop_targets.sql`) onto the lease and sync lock rows the original
+devloop migration already created — dev_sync for Mainloop behaves exactly as before slice 1. The
+task's workspace never receives a Kubernetes credential or kubeconfig: every devloop MCP tool is
+served by `serve-mcp`, which reaches only Mainloop's own database, never Kubernetes. The
+Kubernetes- and GitHub-reaching work runs in `serve-api`'s reconcile loop, the same process and
+credential that already issue the MCP and git capability Secrets (`server/internal/k8ssecrets`).
 
-**The boundary this does not give you.** The code a task syncs runs inside mainloop-dev's own pods,
-with mainloop-dev's credentials, not in the task's workspace. Today those pods share production's
-secret set (the agent token key, the GitHub App private key, the kagent control token), their
-ServiceAccount can read and write Secrets in the kagent namespace, and the namespace's
-NetworkPolicies limit ingress only, so egress is open. A synced commit can therefore reach all of
-that. Syncing is a way to run agent-written code with those credentials. The owner accepted this on
-2026-10-17: the dev loop exists for faster iteration, not isolation from production, so it is on
-in the production overlay (`MAINLOOP_DEVLOOP_ENABLED=true`). The items under "Not built" would
-narrow this boundary; none is required to use the feature.
+**The boundary this does not give you.** The code a task syncs runs inside the target's own pods,
+with the target's credentials, not in the task's workspace. For mainloop-dev today those pods share
+production's secret set (the agent token key, the GitHub App private key, the kagent control
+token), their ServiceAccount can read and write Secrets in the kagent namespace, and the
+namespace's NetworkPolicies limit ingress only, so egress is open. A synced commit can therefore
+reach all of that. Syncing is a way to run agent-written code with those credentials. The owner
+accepted this on 2026-10-17: the dev loop exists for faster iteration, not isolation from
+production, so it is on in the production overlay (`MAINLOOP_DEVLOOP_ENABLED=true`). The items
+under "Not built" would narrow this boundary; none is required to use the feature.
+
+## Staging targets
+
+Implemented (the `namespace` kind; see "vcluster targets" for `vcluster`). A project's staging
+target is Mainloop-side configuration — stored in Mainloop's own database and set through the
+owner API, never a file committed to the project's own repository, since the owner works on
+arbitrary and third-party repos. One target per project (`devloop_targets`, `project_id` unique).
+It is read by `server/internal/devloop`'s `TargetService`, the same package that owns the lease and
+sync operations, so #246 (per-project verification settings) can extend the same project-settings
+shape rather than inventing a second one.
+
+A target has:
+
+- an id (independent of the project id: it is what the lease and sync lock rows are keyed by,
+  outliving any one edit to the target's other fields — see "The lease");
+- a kind, `namespace` or `vcluster`, and the Kubernetes location that kind needs: `namespace` alone
+  for `namespace`, or `namespace` (the vcluster's _host_ namespace), `vcluster_name` and
+  `vcluster_namespace` (the namespace inside the vcluster's own API server) for `vcluster`;
+- `workload`, a label selector (e.g. `app=mainloop-backend`) identifying the pod that `restart_cmd`,
+  `migrate_cmd`, `health_cmd` and `smoke_cmd` run in, and `command_container`, the container inside
+  it;
+- `sync_paths`, a list of `{selector, container, prefix, dest, exclude}`: which repository subtree
+  (`prefix`) a sync copies into which pod and container (`selector`, `container`), where it lands
+  (`dest`), and which paths under `prefix` it never writes or deletes (`exclude`) — the same shape
+  `FilterTar` and `CopyTree` already took as Go arguments, now read from the row instead of a
+  package-level constant;
+- four optional commands, `restart_cmd`, `migrate_cmd`, `health_cmd` and `smoke_cmd`, each a plain
+  shell command run in `command_container`. A target without one skips that step rather than
+  failing it: `restart_cmd` is unused by mainloop-dev (its own `watchexec` already restarts on a
+  file change), but a target without a file watcher needs it. The commit marker that guards every
+  command step against a container that silently restarted from its image (see "Sync" below) is
+  always checked regardless of whether `health_cmd` is set; without one, health is only that check,
+  not a liveness probe.
+
+`GET /projects/{project_id}/devloop-target` and `PUT .../devloop-target` are the owner-only REST
+routes (`projects.ProjectsAPI`, like `GET`/`PUT .../merge-policy`): reachable only from the owner's
+browser, the same as every other route in the owner API. A task never calls them directly — its
+own project's target is read internally by the MCP handlers (`devLoopAuthority`, and
+`OperationsService` at claim time), scoped to its own `project_id`, which is what "reads visible to
+the project's tasks" means here: a task cannot see another project's target through any path. `PUT`
+replaces a target wholesale and validates it (every field required for its kind is set, and
+`workload`/`command_container` match one `sync_paths` entry, since that is where the commit marker
+lives); replacing an existing target keeps its id, so an edit never orphans a lease already held or
+queued for it.
 
 ## Tools
 
 Four MCP tools, visible only when `MAINLOOP_DEVLOOP_ENABLED=true` (exactly that string) and only to
 a task's workspace credential (role `agent` depth 0, or a supervisor/child holding the workspace
 grant — the same population `open_pull_request` is visible to). A further handler-level check
-refuses every call whose session is not bound to project `oldsj/mainloop`, because the flag alone
-cannot express a project restriction.
+refuses every call whose session's project has no staging target configured, because the flag
+alone cannot express that restriction. (Before this project-targets slice, the check instead
+refused every project but oldsj/mainloop; a project with a configured target is now exactly the
+population allowed, oldsj/mainloop included.)
 
-- `dev_lease_acquire`, `dev_lease_release`: the one lease on mainloop-dev.
-- `dev_sync(commit_sha)`: sync a commit already pushed through the git push transport into
-  mainloop-dev, migrate its database, and check it is healthy and passes the read-only smoke.
-  Requires holding the lease. Its description starts "Use after pushing and before
-  open_pull_request." and says it succeeds only when mainloop-dev is healthy and the smoke passes.
-- `dev_status`: read mainloop-dev's pod status.
+- `dev_lease_acquire`, `dev_lease_release`: the one lease on the session's project's target.
+- `dev_sync(commit_sha)`: sync a commit already pushed through the git push transport into the
+  target, run its migrate command (if configured), and check it is healthy (its commit marker, and
+  its health command if configured) and passes its smoke command (if configured). Requires holding
+  the lease. Its description starts "Use after pushing and before open_pull_request." and says it
+  succeeds only when the target is healthy and the smoke passes.
+- `dev_status`: read the target's pod status.
 
 `dev_sync` and `dev_status` each write one `devloop_operations` row and poll it for up to a bound
 (4 minutes for `dev_sync`, 15s for `dev_status`), returning the row's state and detail either way:
@@ -54,13 +108,17 @@ fails with a detail naming the lease and copies nothing.
 
 ## The lease
 
-One durable row (`devloop_lease`, singleton id `mainloop-dev`): `holder_session_id`,
-`acquired_at`, `last_used_at`, `idle_timeout_seconds` (default 1200 = 20 minutes). A FIFO queue
-(`devloop_lease_queue`) orders waiting sessions by first request, so a retried or polling acquire
-never jumps the line. Every acquire call refreshes the caller's `last_seen_at`; an entry not seen
-for two minutes is ignored and removed, so a caller that queued once and left does not hold the
+One durable row per target (`devloop_lease`, PK `id` = the target's own id, not a singleton):
+`holder_session_id`, `acquired_at`, `last_used_at`, `idle_timeout_seconds` (default 1200 = 20
+minutes). A FIFO queue (`devloop_lease_queue`, also keyed by the target id) orders waiting sessions
+by first request, so a retried or polling acquire never jumps the line, and two different projects'
+targets never contend for the same lease: a session holding one project's lease does not block
+another project's `dev_sync`. Every acquire call refreshes the caller's `last_seen_at`; an entry not
+seen for two minutes is ignored and removed, so a caller that queued once and left does not hold the
 lease for the next caller. When a session ends (any path that revokes its credentials), it loses
-the lease if it held it and its queue entry.
+the lease if it held it and its queue entry. oldsj/mainloop's target keeps the id `mainloop-dev`
+(`devloop.LeaseID`), the same id the original devloop migration seeded this row under, so
+`dev_lease_acquire` for Mainloop is unchanged by project targets existing.
 
 `dev_lease_acquire` is DB-only, in one transaction: join the queue (a no-op if already queued);
 if the lease is free or idle-expired, grant it to the earliest queued session (not necessarily the
@@ -71,10 +129,14 @@ gets it, in FIFO order. `dev_lease_release` clears the holder and the caller's o
 does not itself hand the lease to the next session — that session's own next `dev_lease_acquire`
 call does, finding the lease free.
 
-`GET /devloop/lease` (owner API) reads the lease without acquiring it or joining the queue;
-`POST /devloop/lease/acquire` and `.../release` act as the fixed owner holder (`devloop.OwnerHolder`,
-distinct from any MCP session id), for `make dev-live` (`docs/dev-environment.md`). None of these
-three are yet wired into a task-view UI component: a known gap, see Not implemented below.
+`GET /devloop/lease` (owner API) reads mainloop-dev's own lease specifically (`devloop.LeaseID`)
+without acquiring it or joining the queue; `POST /devloop/lease/acquire` and `.../release` act on
+it as the fixed owner holder (`devloop.OwnerHolder`, distinct from any MCP session id), for
+`make dev-live` (`docs/dev-environment.md`). These three routes are not generalized to an arbitrary
+project's target: `make dev-live` and its lease coordination are explicitly out of scope for this
+slice (oldsj/mainloop#247's own rename is separate and also out of scope), so they keep naming
+mainloop-dev's lease the way they always have. None of these three are yet wired into a task-view
+UI component: a known gap, see Not implemented below.
 
 ## Sync
 
@@ -87,15 +149,18 @@ loop to drive (`server/internal/reconcile`):
    GitHub through the same seeder the git transport already uses to seed a new workspace
    (`pushgate.GitHubUpstream.Seed`, a `want <sha> / done` upload-pack request with no `have`
    lines), unpacks it into a scratch bare repository with a local `git index-pack --stdin`, and
-   runs `git archive` for the `server` and `web` trees. No GitHub call other than this read is
-   made; nothing is pushed.
-3. The archive is filtered and re-rooted per target (`FilterTar`), with the same exclusions
-   `devspace.yaml`'s sync already applies (`.git/`, `bin/`, `tmp/`, `testdata/`, `*_test.go`,
-   `*.test` for `server/`; `node_modules/`, `dist/`, `e2e/`, `playwright-report/`,
-   `test-results/` for `web/`), and mirrored onto each target container by piping a tar stream to a
-   short `sh` script over a Kubernetes exec (`k8s.io/client-go/tools/remotecommand`): the backend,
-   mcp and git containers' `/src`, and the frontend container's `/app/web`. mainloop-dev's existing
-   `watchexec` and Vite reload pick up the change; devloop restarts nothing itself.
+   runs `git archive` for every distinct `prefix` the target's `sync_paths` name (`server` and
+   `web` for mainloop-dev). No GitHub call other than this read is made; nothing is pushed.
+3. The archive is filtered and re-rooted per `sync_paths` entry (`FilterTar`), with that entry's
+   own `exclude` list (for mainloop-dev, the same exclusions `devspace.yaml`'s sync already applies:
+   `.git/`, `bin/`, `tmp/`, `testdata/`, `*_test.go`, `*.test` for `server/`; `node_modules/`,
+   `dist/`, `e2e/`, `playwright-report/`, `test-results/` for `web/`), and mirrored onto its
+   `selector`/`container`/`dest` by piping a tar stream to a short `sh` script over a Kubernetes
+   exec (`k8s.io/client-go/tools/remotecommand`): for mainloop-dev, the backend, mcp and git
+   containers' `/src`, and the frontend container's `/app/web`. mainloop-dev's existing
+   `watchexec` and Vite reload pick up the change; devloop restarts nothing itself (its own
+   `restart_cmd` is unset, since nothing needs it there — a target without a file watcher would
+   configure one).
 
    **Each copy mirrors the commit.** The archive ends with a manifest of every path it holds. The
    script extracts the archive over the destination, and only if `tar` succeeded and the manifest
@@ -118,11 +183,17 @@ loop to drive (`server/internal/reconcile`):
    on a directory becoming a file ("Cannot open: File exists"); BusyBox `tar` (the frontend)
    fails both ways. A container restart does not clear it, because the image's tree comes from
    `main`: `dev_sync` cannot test such a commit until the image has the new layout, or someone
-   removes the old path in the container by hand. The commit marker (`/src/.devloop-commit`) is not excluded: a copy removes the
-   previous sync's marker and the sync writes this commit's after the last copy.
+   removes the old path in the container by hand. The commit marker (for mainloop-dev,
+   `/src/.devloop-commit`; in general, `<dest>/.devloop-commit` of the `sync_paths` entry whose
+   `selector`/`container` match the target's `workload`/`command_container`) is not excluded: a
+   copy removes the previous sync's marker and the sync writes this commit's after the last copy.
 
-4. The sync then earns its verdict. Each step runs inside the backend container over exec, and the
-   first miss ends the sync as `failed` with that step's output in the detail:
+4. The sync then earns its verdict by running the target's `restart_cmd` (if set), `migrate_cmd`,
+   `health_cmd` and `smoke_cmd` (each skipped, not failed, if the target did not configure it) in
+   its command pod over exec, in that order, the first miss ending the sync as `failed` with that
+   step's output in the detail. The commit marker is always checked alongside the health command,
+   configured or not: this is devloop's own correctness guard, not something a target configures.
+   mainloop-dev's own seeded commands are:
    1. `go run ./cmd/mainloop migrate up` from the copied tree (idempotent, holds the migrate lock;
       bounded by `MigrateTimeout`, default 150s). Unmerged migrations land in the shared dev
       database, which is disposable, so a branch's migration can reach it before the branch merges.
@@ -150,23 +221,25 @@ loop to drive (`server/internal/reconcile`):
       reported as skipped). It sends no chat turn, writes nothing and spends no quota. Bounded by `SmokeTimeout` (default 90s). A
       passing run's summary line is kept; a failing run's output tail is attached.
 
-   Only a sync that passes all three is `succeeded`. `health_ok: false` is `failed`, never a success
-   with a warning. The row's result records how far the sync got: `migrate_ok`, `health_ok` and
-   `smoke` ({`passed`, `summary`}) are each absent until that step ran.
+   Only a sync that passes every configured step is `succeeded`. `health_ok: false` is `failed`,
+   never a success with a warning. The row's result records how far the sync got: `migrate_ok`,
+   `health_ok` and `smoke` ({`passed`, `summary`}) are each absent until that step ran (or if the
+   target did not configure it, for `migrate_ok` and `smoke`).
 
-   **The tree must stay the one the sync wrote.** The backend, mcp and git containers keep `/src` in
-   their writable layer, so a container restart (a liveness kill after a startup crash, say) puts
-   back the image's tree and loses the copy; a replaced pod never had it. Left unchecked, the
-   restarted instance would answer `/health` and pass the smoke for code that is not the commit
-   under test. So the sync records, before its first copy, the name and restart count of the backend
-   and frontend pods, and writes the commit to `/src/.devloop-commit` in the backend container after
-   the copies. Every health round, and once more after the smoke, it fails the sync if a pod was
-   replaced or deleted or its restart count rose, with the last log lines (60, at most 6000 bytes) of
-   the previous instance of each container whose own restart count rose (where a crash shows; a
-   container that crashed in an earlier sync is not read); the health exec fails it too if the marker does not hold the
-   commit. Migrate, health and smoke all run in the pod recorded before the copy. A backend that
-   crashed on an old schema before the migration ran is not restarted by the migration, and the
-   liveness restart that follows fails the sync; calling `dev_sync` again copies again.
+   **The tree must stay the one the sync wrote.** A target's containers typically keep their synced
+   path in a writable layer, so a container restart (a liveness kill after a startup crash, say)
+   puts back the image's tree and loses the copy; a replaced pod never had it. Left unchecked, the
+   restarted instance would answer healthy and pass the smoke for code that is not the commit under
+   test. So the sync records, before its first copy, the name and restart count of every pod its
+   `sync_paths` selectors name (for mainloop-dev, the backend and frontend pods), and writes the
+   commit to the command pod's marker file after the copies. Every health round, and once more after
+   the smoke, it fails the sync if a pod was replaced or deleted or its restart count rose, with the
+   last log lines (60, at most 6000 bytes) of the previous instance of each container whose own
+   restart count rose (where a crash shows; a container that crashed in an earlier sync is not
+   read); the health exec fails it too if the marker does not hold the commit. Restart, migrate,
+   health and smoke all run in the command pod recorded before the copy. A backend that crashed on
+   an old schema before the migration ran is not restarted by the migration, and the liveness
+   restart that follows fails the sync; calling `dev_sync` again copies again.
 
 Pods are picked by label and must be `Running` and not deleting (Ready ones first), so a terminating
 or evicted pod that still matches the label is never a target. BusyBox `tar` in the alpine frontend
@@ -202,17 +275,58 @@ distinct remote state to observe first, unlike a git push or a GitHub mutation.
 
 ## Operator configuration
 
-| Setting                                    | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MAINLOOP_DEVLOOP_ENABLED`                 | Exactly `true` turns on tool visibility ([agentauth.Policy.DevLoop]) and registers the operations reconcile loop in `serve-api`. Off in the base config; on in the prod overlay by owner decision (see the boundary paragraph above).                                                                                                                                                                                                                                                                                                                                                                                                     |
-| GitHub App configured                      | Required for `dev_sync`'s fetch step; without it, `dev_sync` fails with a clear detail and the other tools still work.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| In-cluster (`KUBERNETES_SERVICE_HOST` set) | Required for the Kubernetes client (`devloop.NewInClusterPods`); outside a cluster `serve-api` builds no `OperationsService` and every devloop tool answers `[unavailable] devloop is not available`.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| RBAC                                       | `k8s/apps/mainloop/overlays/prod/devloop/` holds a namespaced `Role` in `mainloop-dev` (`pods` get/list, `pods/log` get, `pods/exec` create) and a `RoleBinding` to the production `mainloop-backend` ServiceAccount. There is no ClusterRole. It is applied by Argo as a second source of `mainloop-dev-config`, pinned to the same mainloop revision as the production app. Namespace mainloop-dev is owned by the cluster repository's Argo Application `mainloop-dev-config` (automated prune and selfHeal). A hand-applied copy is not tracked by it, `make dev-live-purge` deletes it with the namespace, and nothing recreates it. |
+| Setting                                    | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MAINLOOP_DEVLOOP_ENABLED`                 | Exactly `true` turns on tool visibility ([agentauth.Policy.DevLoop]) and registers the operations reconcile loop in `serve-api`. Off in the base config; on in the prod overlay by owner decision (see the boundary paragraph above).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| GitHub App configured                      | Required for `dev_sync`'s fetch step; without it, `dev_sync` fails with a clear detail and the other tools still work.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| In-cluster (`KUBERNETES_SERVICE_HOST` set) | Required for the Kubernetes client (`devloop.NewInClusterPods`); outside a cluster `serve-api` builds no `OperationsService` and every devloop tool answers `[unavailable] devloop is not available`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| RBAC                                       | `k8s/apps/mainloop/overlays/prod/devloop/` holds a namespaced `Role` in `mainloop-dev` (`pods` get/list, `pods/log` get, `pods/exec` create) and a `RoleBinding` to the production `mainloop-backend` ServiceAccount. There is no ClusterRole. It is applied by Argo as a second source of `mainloop-dev-config`, pinned to the same mainloop revision as the production app. Namespace mainloop-dev is owned by the cluster repository's Argo Application `mainloop-dev-config` (automated prune and selfHeal). A hand-applied copy is not tracked by it, `make dev-live-purge` deletes it with the namespace, and nothing recreates it. A `vcluster`-kind target needs a second, separate grant (reading its kubeconfig Secret, plus RBAC inside the vcluster itself); see "vcluster targets" below. Neither exists yet, so `devloop.OperationsService.VClusters` stays unconfigured in production. |
 
 No credential, kubeconfig or Kubernetes client ever reaches a workspace: `serve-mcp`'s process
 (where every devloop tool handler runs) never imports a Kubernetes client package at all, the same
 boundary the package comment on `internal/devloop` and `serveMCP` already state for the credential
 Secrets.
+
+## vcluster targets
+
+Status: the target-kind abstraction and the `vcluster` kind's client resolution are implemented and
+tested against fakes (`server/internal/devloop/target_test.go`); proposed until the infra grant
+below exists, since no vcluster target can reach a real cluster in production without it.
+
+A `vcluster` target locates its workload inside a [vcluster](https://www.vcluster.com) — a virtual
+Kubernetes API server running as a workload of a host cluster — rather than a plain namespace on
+the host cluster `serve-api` already reaches. This is the shape kagent's own staging environment
+takes: a vcluster named `kv` in host namespace `kagent-staging`, with the workload (controller
+Deployment `kagent-controller`) inside the vcluster's own namespace `kagent-dev`.
+
+**How `serve-api` would reach it.** `devloop.VClusterPods` (implemented) reads the vcluster's own
+kubeconfig from a Secret in its host namespace — by the vcluster chart's own convention, named
+`vc-<vcluster_name>` with the kubeconfig at key `config` — through a `devloop.SecretReader`, then
+builds a client-go client from it (`clientcmd.RESTConfigFromKubeConfig`,
+`kubernetes.NewForConfig`), scoped to `vcluster_namespace` inside that client. This is exactly the
+`namespace`/`vcluster` split `devloop.OperationsService.PodsFor` already dispatches on; the
+abstraction does not change between kinds, only how the pod client and namespace are resolved.
+
+**What is missing.** `devloop.OperationsService.VClusters` is left `nil` in production
+(`cmd/mainloop/devloop.go`) until two things exist, neither of which this slice changes:
+
+1. A `Role` in `kagent-staging` granting `get` on the `vc-kv` Secret (or whichever vcluster the
+   target names), bound to `serve-api`'s ServiceAccount (`mainloop-backend` in production). This is
+   additive to the existing mainloop-dev RBAC (see the table above): it grants reading one Secret in
+   a namespace devloop does not otherwise touch, not `pods`/`exec` on the host cluster.
+2. Inside the vcluster, the ServiceAccount the read kubeconfig authenticates as needs the same
+   `pods` get/list, `pods/log` get, `pods/exec` create RBAC the mainloop-dev `Role` grants today,
+   scoped to `kagent-dev`. The vcluster's own RBAC is a second, independent grant: reading the host
+   Secret only gets a credential, not Kubernetes permissions inside the vcluster.
+
+Until both exist, `devloop.ErrVClusterNotConfigured` is what every vcluster-kind sync fails with
+(wrapping the Secret read's own error when a reader is wired but the grant is not), named clearly in
+the sync's detail rather than a timeout, a nil-pointer panic or a hang waiting on a credential that
+is not there. Applying either grant is an infra change outside this repository's scope (and outside
+what a task workspace's `dev_*` tools can do); this repository's own change, once they exist, is
+wiring a real `devloop.SecretReader` (`devloop.K8sSecrets`, a thin client-go Secrets client already
+implemented but not production-wired, analogous to `devloop.K8sPods`) into
+`cmd/mainloop/devloop.go`'s `VClusters` field.
 
 ## Proven and not proven
 
@@ -225,10 +339,22 @@ rules; the health wait, an unhealthy backend failing the sync with its log tail 
 each copy leaving the destination equal to the commit: a deleted file, a renamed file and a deleted migration gone, excluded paths untouched, awkward file names (spaces, a leading dash, glob characters) handled, a repeat copy a no-op, a failed extraction deleting nothing, a failed deletion failing clearly, a newline name refused before any deletion, stale links removed without touching their targets (the link and newline guards mutation-tested), and a plain tar without a manifest refused. The script runs for real in the tests, under this machine's `sh` with GNU tools and, where `busybox` is installed, under BusyBox applets (the deletion mutation-tested); a two-commit sync through the loop checks all four containers; each step's timeout naming its own cap and the sync deadline named as such; goose's out-of-order refusal naming the owner's recovery; a multibyte output tail staying valid UTF-8; pod selection ignoring terminating, evicted and pending pods; harmless BusyBox `tar` warnings accepted and real `tar` errors still failing; the sync history endpoint; the retry cap; recovery from an uncertain copy outcome
 (the row moves to `unknown` and a later claim retries the copy to success); every devloop tool
 refused with the flag off (not even listed in discovery) and with the flag on but the session
-bound to another project, or to none; every devloop write refused after its credential is
-revoked (`TestEveryWriteToolIsRefusedAfterItsCredentialIsRevoked`); `FetchArchive` unpacking a real
-packfile and archiving real `server/` and `web/` trees; `FilterTar` re-rooting and excluding
-entries.
+bound to a project with no staging target configured, or to none; every devloop write refused after
+its credential is revoked (`TestEveryWriteToolIsRefusedAfterItsCredentialIsRevoked`); `FetchArchive`
+unpacking a real packfile and archiving real `server/` and `web/` trees; `FilterTar` re-rooting and
+excluding entries.
+
+Also proven (`server/internal/devloop/target_test.go`): a target's lease and sync lock rows are
+created alongside it and keep their id across an edit to the target's other fields; two different
+projects' targets never share a lease, so holding one does not queue the other; `TargetService.Set`
+rejects a `vcluster` target missing its inner location and a `workload`/`command_container` that
+matches no `sync_paths` entry; migration `00310_devloop_targets.sql`'s seed (mirrored against the
+pre-existing mainloop-dev lease and sync lock rows, since the migrated template predates any
+project row to seed against); the `vcluster` kind end to end against a fake Kubernetes pod client
+reached through a fake `SecretReader` (copy, migrate, health, smoke all run the same as the
+`namespace` kind), a working fake kubeconfig resolving to the vcluster's own inner namespace (not
+the host namespace), and a failing Secret read wrapping `ErrVClusterNotConfigured` the same as no
+factory configured at all.
 
 Not built (on in production by owner decision 2026-10-17; these would narrow the boundary above,
 and none is required to use it):
@@ -248,7 +374,10 @@ Not implemented: task-view UI surfacing of the lease holder (the REST endpoint a
 `dev_lease_acquire`'s own structured result show it meanwhile); `dev_logs` and `dev_smoke` (slice
 2); a shallow fetch (every object reachable from the commit is fetched, not a depth-bounded slice);
 caching the fetched tree across a copy retry (a retried sync re-fetches, a safe, read-only GitHub
-call); a cleanup sweep for old `devloop_operations` rows.
+call); a cleanup sweep for old `devloop_operations` rows; the two RBAC grants a `vcluster` target
+needs (see "vcluster targets"), so no such target is usable in production yet; an owner-facing UI
+for creating or editing a project's staging target (`PUT /projects/{id}/devloop-target` is the only
+way today, called directly); a `restart_cmd` worked example (mainloop-dev does not need one).
 
 Known differences from `devspace dev` sync:
 

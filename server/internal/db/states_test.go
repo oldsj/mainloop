@@ -150,6 +150,8 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"devloop_operations", "state", strs(
 			string(dbstate.DevloopPending), string(dbstate.DevloopSucceeded),
 			string(dbstate.DevloopFailed), string(dbstate.DevloopUnknown))},
+		{"devloop_targets", "kind", strs(
+			string(dbstate.DevloopTargetNamespace), string(dbstate.DevloopTargetVCluster))},
 		{"session_checkpoints", "state", strs(string(dbstate.CheckpointPending), string(dbstate.CheckpointDone))},
 		{"session_checkpoints", "failure_reason", strs(
 			string(dbstate.FailureInvalidArgument), string(dbstate.FailureNotFound), string(dbstate.FailureFailedPrecondition))},

@@ -48,15 +48,24 @@ func newDevloopHarness(t *testing.T) *harness {
 		srv.Policy.DevLoop = true
 		srv.DevLease = &devloop.LeaseService{Pool: pool}
 		srv.DevOps = &devloop.OperationsService{Pool: pool}
+		srv.DevTargets = &devloop.TargetService{Pool: pool}
 	})
 }
 
-// seedDevloopAgent seeds a workspace agent bound to the one project the devloop tools allow.
+// seedDevloopAgent seeds a workspace agent bound to a project with a staging target configured
+// (the devloop tools' handler-level check, replacing the old hardcoded oldsj/mainloop check).
 func seedDevloopAgent(t *testing.T, h *harness) authtest.Seeded {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := h.env.Pool.Exec(ctx, `INSERT INTO projects (id, user_id, owner, name, full_name, html_url, default_branch)
 		VALUES ('devloop-p', 'owner', 'oldsj', 'mainloop', 'oldsj/mainloop', 'https://x', 'main') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&devloop.TargetService{Pool: h.env.Pool}).Set(ctx, "devloop-p", devloop.Target{
+		Kind: devloop.TargetNamespace, Namespace: "mainloop-dev",
+		Workload: "app=mainloop-backend", CommandContainer: "backend",
+		SyncPaths: []devloop.SyncPath{{Selector: "app=mainloop-backend", Container: "backend", Prefix: "server", Dest: "/src"}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	a := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})

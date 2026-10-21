@@ -15,8 +15,8 @@ aliases. Task schemas reject the old `kind` payload.
 `models` is a list of `{id, label}`; `default_model` names one of them (or is unset when `models`
 is empty). `effort_levels` is a subset of `minimal`, `low`, `medium`, `high`, `xhigh`, `max`;
 `default_effort` names one of them (or is unset when `effort_levels` is empty). Mainloop's built-in
-Claude profile lists Sonnet 5, Opus 5, Haiku 4.5 and Fable 5.1, defaulting to Sonnet 5, and effort
-`low`/`medium`/`high`/`xhigh`/`max`, defaulting to `medium`. Its built-in Codex profile lists two
+Claude profile lists Sonnet 5.5, Opus 5.5, Haiku 5.5 and Fable 5.1, defaulting to Sonnet 5.5, and
+effort `low`/`medium`/`high`/`xhigh`/`max`, defaulting to `medium`. Its built-in Codex profile lists two
 models defaulting to the first, and effort `minimal`/`low`/`medium`/`high`, defaulting to `medium`.
 An operator profile sets its own `models` and `effort_levels` in `PROVIDER_PROFILES`, or leaves them
 empty: `/model` still accepts a model by name against an empty list (kagent is the real gate on

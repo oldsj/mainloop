@@ -208,6 +208,12 @@ sql:
                 import: github.com/oldsj/mainloop/server/internal/db/dbstate,
                 type: DevloopOperationState
               }
+          - column: devloop_targets.kind
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: DevloopTargetKind
+              }
           - column: session_checkpoints.state
             go_type:
               {

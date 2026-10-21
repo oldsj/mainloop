@@ -1476,6 +1476,98 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /projects/{project_id}/devloop-target:
+    get:
+      tags:
+        - devloop
+      summary: Get Project Devloop Target
+      description: >-
+        Read the project's staging target: where its code runs and the commands dev_sync uses.
+        Owner-only over this route; a task's own project is also visible to it through the
+        dev_lease_acquire, dev_sync and dev_status MCP tools.
+      operationId: getProjectDevloopTarget
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DevloopTarget'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+        - devloop
+      summary: Set Project Devloop Target
+      description: >-
+        Create or replace the project's staging target. Owner-only; never set from the project's
+        own repository, since the owner works on arbitrary and third-party repos. Replacing an
+        existing target keeps its lease and sync lock (and so any session already holding or
+        queued for it).
+      operationId: updateProjectDevloopTarget
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DevloopTargetUpdate'
+      responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DevloopTarget'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
   /projects/{project_id}/environment:
     get:
       tags:
@@ -7240,6 +7332,145 @@ components:
       required:
         - passed
         - summary
+      additionalProperties: false
+    DevloopSyncPath:
+      type: object
+      description: >-
+        One container a sync copies into: a repository subtree (prefix) lands at dest inside
+        container, in the pod selector matches, excluding the listed paths under prefix.
+      properties:
+        selector:
+          type: string
+          description: A Kubernetes label selector identifying the pod, e.g. "app=mainloop-backend".
+        container:
+          type: string
+        prefix:
+          type: string
+          description: The repository subtree this path copies from, relative to the project root.
+        dest:
+          type: string
+          description: Where prefix lands inside container.
+        exclude:
+          type: array
+          items:
+            type: string
+          description: >-
+            Paths under prefix a copy never writes or deletes: a trailing slash excludes a
+            top-level directory, anything else is a glob matched against a path's base name.
+          default: []
+      required:
+        - selector
+        - container
+        - prefix
+        - dest
+      additionalProperties: false
+    DevloopTargetKind:
+      type: string
+      enum: [namespace, vcluster]
+      description: >-
+        How to reach the target's Kubernetes location: a plain namespace, or a namespace inside a
+        vcluster reached through its own API server.
+    DevloopTarget:
+      type: object
+      description: >-
+        A project's staging target: Mainloop-side configuration (never a file in the project's own
+        repository) describing where its code runs and the commands dev_sync uses to bring it up
+        to date. See docs/specs/devloop.md.
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        kind:
+          $ref: '#/components/schemas/DevloopTargetKind'
+        namespace:
+          type: string
+          description: >-
+            The Kubernetes namespace the workload runs in for kind "namespace", or the host
+            namespace holding the vcluster for kind "vcluster".
+        vcluster_name:
+          type: string
+          description: Set only for kind "vcluster".
+        vcluster_namespace:
+          type: string
+          description: The namespace inside the vcluster's own API server. Set only for kind "vcluster".
+        workload:
+          type: string
+          description: >-
+            A label selector identifying the pod that restart_cmd, migrate_cmd, health_cmd and
+            smoke_cmd run in, inside command_container.
+        command_container:
+          type: string
+        sync_paths:
+          type: array
+          items:
+            $ref: '#/components/schemas/DevloopSyncPath'
+          default: []
+        restart_cmd:
+          type: string
+          description: Run after copying, before migrate. Optional; a target without one skips this step.
+        migrate_cmd:
+          type: string
+          description: Optional; a target without one skips this step.
+        health_cmd:
+          type: string
+          description: >-
+            Optional. The commit marker is always checked regardless; a target without a health
+            command gets only that check, not a liveness probe.
+        smoke_cmd:
+          type: string
+          description: Expected to be read-only. Optional; a target without one skips this step.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - project_id
+        - kind
+        - namespace
+        - workload
+        - command_container
+        - sync_paths
+        - created_at
+        - updated_at
+      additionalProperties: false
+    DevloopTargetUpdate:
+      type: object
+      properties:
+        kind:
+          $ref: '#/components/schemas/DevloopTargetKind'
+        namespace:
+          type: string
+        vcluster_name:
+          type: string
+        vcluster_namespace:
+          type: string
+        workload:
+          type: string
+        command_container:
+          type: string
+        sync_paths:
+          type: array
+          items:
+            $ref: '#/components/schemas/DevloopSyncPath'
+          default: []
+        restart_cmd:
+          type: string
+        migrate_cmd:
+          type: string
+        health_cmd:
+          type: string
+        smoke_cmd:
+          type: string
+      required:
+        - kind
+        - namespace
+        - workload
+        - command_container
+        - sync_paths
       additionalProperties: false
     SmokePush:
       type: object

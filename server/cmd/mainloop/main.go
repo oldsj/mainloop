@@ -197,7 +197,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		Config: cfg, Log: log, DB: pool, Pool: pool, Hub: hub, Live: live,
 		Providers: reg, Projects: projectSvc, Tasks: taskSvc, Workspaces: wsSvc, Sessions: svc, Preview: previews,
 		HITL: hitlSvc, Attention: attn, Health: healthSvc, Schedules: schedSvc, Merge: mergeSvc,
-		Devloop: &devloop.LeaseService{Pool: pool},
+		Devloop: &devloop.LeaseService{Pool: pool}, DevloopTargets: &devloop.TargetService{Pool: pool},
 	}).Handler()
 	if err != nil {
 		return err

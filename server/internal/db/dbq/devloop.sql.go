@@ -115,6 +115,26 @@ func (q *Queries) DropDevloopSyncLock(ctx context.Context, arg DropDevloopSyncLo
 	return err
 }
 
+const ensureDevloopLease = `-- name: EnsureDevloopLease :exec
+INSERT INTO devloop_lease (id) VALUES ($1) ON CONFLICT (id) DO NOTHING
+`
+
+// Every target needs its own lease and sync lock row, created once alongside it; a later update to
+// the same target (same id) leaves an in-progress lease or sync untouched.
+func (q *Queries) EnsureDevloopLease(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, ensureDevloopLease, id)
+	return err
+}
+
+const ensureDevloopSyncLock = `-- name: EnsureDevloopSyncLock :exec
+INSERT INTO devloop_sync_lock (id) VALUES ($1) ON CONFLICT (id) DO NOTHING
+`
+
+func (q *Queries) EnsureDevloopSyncLock(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, ensureDevloopSyncLock, id)
+	return err
+}
+
 const finishDevloopOperation = `-- name: FinishDevloopOperation :execrows
 UPDATE devloop_operations SET state = $4, result = $5, detail = $6, lease_owner = NULL, lease_until = NULL,
     updated_at = now()
@@ -214,6 +234,63 @@ func (q *Queries) GetDevloopOperationByIdempotencyKey(ctx context.Context, idemp
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getDevloopTarget = `-- name: GetDevloopTarget :one
+SELECT id, project_id, kind, namespace, vcluster_name, vcluster_namespace, workload, command_container, sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd, created_at, updated_at FROM devloop_targets WHERE id = $1
+`
+
+func (q *Queries) GetDevloopTarget(ctx context.Context, id string) (DevloopTarget, error) {
+	row := q.db.QueryRow(ctx, getDevloopTarget, id)
+	var i DevloopTarget
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Kind,
+		&i.Namespace,
+		&i.VclusterName,
+		&i.VclusterNamespace,
+		&i.Workload,
+		&i.CommandContainer,
+		&i.SyncPaths,
+		&i.RestartCmd,
+		&i.MigrateCmd,
+		&i.HealthCmd,
+		&i.SmokeCmd,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getDevloopTargetByProject = `-- name: GetDevloopTargetByProject :one
+SELECT id, project_id, kind, namespace, vcluster_name, vcluster_namespace, workload, command_container, sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd, created_at, updated_at FROM devloop_targets WHERE project_id = $1
+`
+
+// A project's staging target: owner-only writes (through the project API), reads visible to that
+// project's tasks (the MCP handlers read it to decide whether devloop tools are available and
+// which lease and sync lock to use).
+func (q *Queries) GetDevloopTargetByProject(ctx context.Context, projectID string) (DevloopTarget, error) {
+	row := q.db.QueryRow(ctx, getDevloopTargetByProject, projectID)
+	var i DevloopTarget
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Kind,
+		&i.Namespace,
+		&i.VclusterName,
+		&i.VclusterNamespace,
+		&i.Workload,
+		&i.CommandContainer,
+		&i.SyncPaths,
+		&i.RestartCmd,
+		&i.MigrateCmd,
+		&i.HealthCmd,
+		&i.SmokeCmd,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -520,4 +597,73 @@ type UpsertDevloopLeaseQueueEntryParams struct {
 func (q *Queries) UpsertDevloopLeaseQueueEntry(ctx context.Context, arg UpsertDevloopLeaseQueueEntryParams) error {
 	_, err := q.db.Exec(ctx, upsertDevloopLeaseQueueEntry, arg.LeaseID, arg.SessionID)
 	return err
+}
+
+const upsertDevloopTarget = `-- name: UpsertDevloopTarget :one
+INSERT INTO devloop_targets (
+    id, project_id, kind, namespace, vcluster_name, vcluster_namespace, workload, command_container,
+    sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+ON CONFLICT (project_id) DO UPDATE SET
+    kind = EXCLUDED.kind, namespace = EXCLUDED.namespace, vcluster_name = EXCLUDED.vcluster_name,
+    vcluster_namespace = EXCLUDED.vcluster_namespace, workload = EXCLUDED.workload,
+    command_container = EXCLUDED.command_container, sync_paths = EXCLUDED.sync_paths,
+    restart_cmd = EXCLUDED.restart_cmd, migrate_cmd = EXCLUDED.migrate_cmd, health_cmd = EXCLUDED.health_cmd,
+    smoke_cmd = EXCLUDED.smoke_cmd, updated_at = now()
+RETURNING id, project_id, kind, namespace, vcluster_name, vcluster_namespace, workload, command_container, sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd, created_at, updated_at
+`
+
+type UpsertDevloopTargetParams struct {
+	ID                string
+	ProjectID         string
+	Kind              dbstate.DevloopTargetKind
+	Namespace         string
+	VclusterName      *string
+	VclusterNamespace *string
+	Workload          string
+	CommandContainer  string
+	SyncPaths         json.RawMessage
+	RestartCmd        *string
+	MigrateCmd        *string
+	HealthCmd         *string
+	SmokeCmd          *string
+}
+
+// Keeps the row's id (and so its lease and sync lock) stable across an update: id is only used on
+// first insert, never overwritten by a later upsert.
+func (q *Queries) UpsertDevloopTarget(ctx context.Context, arg UpsertDevloopTargetParams) (DevloopTarget, error) {
+	row := q.db.QueryRow(ctx, upsertDevloopTarget,
+		arg.ID,
+		arg.ProjectID,
+		arg.Kind,
+		arg.Namespace,
+		arg.VclusterName,
+		arg.VclusterNamespace,
+		arg.Workload,
+		arg.CommandContainer,
+		arg.SyncPaths,
+		arg.RestartCmd,
+		arg.MigrateCmd,
+		arg.HealthCmd,
+		arg.SmokeCmd,
+	)
+	var i DevloopTarget
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Kind,
+		&i.Namespace,
+		&i.VclusterName,
+		&i.VclusterNamespace,
+		&i.Workload,
+		&i.CommandContainer,
+		&i.SyncPaths,
+		&i.RestartCmd,
+		&i.MigrateCmd,
+		&i.HealthCmd,
+		&i.SmokeCmd,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

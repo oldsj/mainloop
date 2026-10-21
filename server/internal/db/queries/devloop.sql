@@ -111,3 +111,35 @@ SELECT * FROM devloop_operations
 WHERE kind = 'sync' AND (sqlc.arg(session_id)::text = '' OR session_id = sqlc.arg(session_id)::text)
 ORDER BY created_at DESC, id
 LIMIT 50;
+
+-- A project's staging target: owner-only writes (through the project API), reads visible to that
+-- project's tasks (the MCP handlers read it to decide whether devloop tools are available and
+-- which lease and sync lock to use).
+-- name: GetDevloopTargetByProject :one
+SELECT * FROM devloop_targets WHERE project_id = $1;
+
+-- name: GetDevloopTarget :one
+SELECT * FROM devloop_targets WHERE id = $1;
+
+-- Keeps the row's id (and so its lease and sync lock) stable across an update: id is only used on
+-- first insert, never overwritten by a later upsert.
+-- name: UpsertDevloopTarget :one
+INSERT INTO devloop_targets (
+    id, project_id, kind, namespace, vcluster_name, vcluster_namespace, workload, command_container,
+    sync_paths, restart_cmd, migrate_cmd, health_cmd, smoke_cmd
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+ON CONFLICT (project_id) DO UPDATE SET
+    kind = EXCLUDED.kind, namespace = EXCLUDED.namespace, vcluster_name = EXCLUDED.vcluster_name,
+    vcluster_namespace = EXCLUDED.vcluster_namespace, workload = EXCLUDED.workload,
+    command_container = EXCLUDED.command_container, sync_paths = EXCLUDED.sync_paths,
+    restart_cmd = EXCLUDED.restart_cmd, migrate_cmd = EXCLUDED.migrate_cmd, health_cmd = EXCLUDED.health_cmd,
+    smoke_cmd = EXCLUDED.smoke_cmd, updated_at = now()
+RETURNING *;
+
+-- Every target needs its own lease and sync lock row, created once alongside it; a later update to
+-- the same target (same id) leaves an in-progress lease or sync untouched.
+-- name: EnsureDevloopLease :exec
+INSERT INTO devloop_lease (id) VALUES ($1) ON CONFLICT (id) DO NOTHING;
+
+-- name: EnsureDevloopSyncLock :exec
+INSERT INTO devloop_sync_lock (id) VALUES ($1) ON CONFLICT (id) DO NOTHING;

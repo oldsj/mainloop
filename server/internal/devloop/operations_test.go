@@ -39,16 +39,63 @@ func runOperations(t *testing.T, s *devloop.OperationsService, pool *testdb.DB) 
 
 func newOperationsService(d *testdb.DB, pods devloop.PodClient, seed devloop.GitSeeder) *devloop.OperationsService {
 	return &devloop.OperationsService{
-		Pool: d.Pool, Pods: pods, Seed: seed,
+		Pool: d.Pool, Pods: pods, Seed: seed, Targets: &devloop.TargetService{Pool: d.Pool},
 		HealthTimeout: 5 * time.Second, SettleDelay: time.Millisecond, UncertainRetryDelay: 20 * time.Millisecond,
 	}
 }
 
-// holdLease makes session the lease holder, as a task agent's dev_lease_acquire would before it
-// calls dev_sync.
+// mainloopExcludes and webExcludes are the exclusion lists FilterTar and devspace.yaml's sync both
+// already use for the two trees; seedMainloopTarget below reproduces them so a seeded target
+// behaves exactly like the hand-written sync it replaces.
+var (
+	mainloopExcludes = []string{".git/", "bin/", "tmp/", "testdata/", "*.test", "*_test.go"}
+	webExcludes      = []string{"node_modules/", "dist/", "e2e/", "playwright-report/", "test-results/"}
+)
+
+// seedMainloopTarget seeds projectID's staging target (and its project row, lease and sync lock),
+// matching oldsj/mainloop's own target as migration 00310_devloop_targets.sql seeds it: the same
+// selectors, containers, destinations, excludes and commands. Every test in this file gets this
+// target for "proj-1", so runSync and runStatus exercise the real config-driven path instead of a
+// hardcoded one, while every assertion written against today's mainloop-dev behavior still holds.
+func seedMainloopTarget(t *testing.T, d *testdb.DB, projectID string) devloop.Target {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := d.Pool.Exec(ctx, `INSERT INTO projects (id, user_id, owner, name, full_name, html_url, default_branch)
+		VALUES ($1, 'owner', 'o', 'n', 'o/n', 'https://x', 'main') ON CONFLICT (id) DO NOTHING`, projectID); err != nil {
+		t.Fatal(err)
+	}
+	migrateCmd := "go run ./cmd/mainloop migrate up"
+	healthCmd := "curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:8000/health" +
+		" && curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:8002/health" +
+		" && curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:8003/health"
+	smokeCmd := "go run ./cmd/mainloop smoke --read-only --base-url http://127.0.0.1:8000 --mcp-url http://127.0.0.1:8002" +
+		" --git-url http://127.0.0.1:8003 --git-push-url http://127.0.0.1:8004"
+	target, err := (&devloop.TargetService{Pool: d.Pool}).Set(ctx, projectID, devloop.Target{
+		Kind: devloop.TargetNamespace, Namespace: "mainloop-dev",
+		Workload: "app=mainloop-backend", CommandContainer: "backend",
+		SyncPaths: []devloop.SyncPath{
+			{Selector: "app=mainloop-backend", Container: "backend", Prefix: "server", Dest: "/src", Exclude: mainloopExcludes},
+			{Selector: "app=mainloop-backend", Container: "mcp", Prefix: "server", Dest: "/src", Exclude: mainloopExcludes},
+			{Selector: "app=mainloop-backend", Container: "git", Prefix: "server", Dest: "/src", Exclude: mainloopExcludes},
+			{Selector: "app=mainloop-frontend", Container: "frontend", Prefix: "web", Dest: "/app/web", Exclude: webExcludes},
+		},
+		MigrateCmd: &migrateCmd, HealthCmd: &healthCmd, SmokeCmd: &smokeCmd,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return target
+}
+
+// holdLease makes session the lease holder of proj-1's target (seeded by seedMainloopTarget), as a
+// task agent's dev_lease_acquire would before it calls dev_sync.
 func holdLease(t *testing.T, d *testdb.DB, session string) {
 	t.Helper()
-	info, err := (&devloop.LeaseService{Pool: d.Pool}).Acquire(context.Background(), session)
+	target, err := (&devloop.TargetService{Pool: d.Pool}).Get(context.Background(), "proj-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := (&devloop.LeaseService{Pool: d.Pool}).Acquire(context.Background(), target.ID, session)
 	if err != nil || info.Status != devloop.LeaseAcquired {
 		t.Fatalf("Acquire(%s) = %+v, %v, want acquired", session, info, err)
 	}
@@ -60,6 +107,7 @@ func holdLease(t *testing.T, d *testdb.DB, session string) {
 func TestSyncStartIsIdempotent(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := devlooptest.New()
 	pods.BySelector["app=mainloop-backend"] = []devloop.PodStatus{{Name: "backend-0", Phase: "Running", Ready: true}}
 	pods.BySelector["app=mainloop-frontend"] = []devloop.PodStatus{{Name: "frontend-0", Phase: "Running", Ready: true}}
@@ -106,6 +154,7 @@ func TestSyncStartIsIdempotent(t *testing.T) {
 func TestSyncRetriesAnUncertainCopyToASuccessfulOutcome(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := devlooptest.New()
 	pods.BySelector["app=mainloop-backend"] = []devloop.PodStatus{{Name: "backend-0", Phase: "Running", Ready: true}}
 	pods.BySelector["app=mainloop-frontend"] = []devloop.PodStatus{{Name: "frontend-0", Phase: "Running", Ready: true}}
@@ -145,6 +194,7 @@ func TestSyncRetriesAnUncertainCopyToASuccessfulOutcome(t *testing.T) {
 func TestStatusReportsPods(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := devlooptest.New()
 	pods.AllPods = []devloop.PodStatus{{Name: "backend-0", Phase: "Running", Ready: true}}
 	svc := newOperationsService(d, pods, nil)
@@ -195,6 +245,7 @@ func syncPods() *devlooptest.Pods {
 func TestSyncRunsAgainAfterTheEarlierRowFinished(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	sha, pack := scratchRepo(t)
 	seed := &devlooptest.Seeder{Payload: pack}
@@ -231,6 +282,7 @@ func TestSyncRunsAgainAfterTheEarlierRowFinished(t *testing.T) {
 func TestSyncRefusesASessionThatLostTheLease(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	sha, pack := scratchRepo(t)
 	seed := &devlooptest.Seeder{Payload: pack}
@@ -252,6 +304,7 @@ func TestSyncRefusesASessionThatLostTheLease(t *testing.T) {
 func TestSyncWaitsForTheBackendToComeBackHealthy(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	pods.HealthFailFirst = 2
 	sha, pack := scratchRepo(t)
@@ -279,6 +332,7 @@ func TestSyncWaitsForTheBackendToComeBackHealthy(t *testing.T) {
 func TestSyncFailsWhenTheBackendIsUnhealthy(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	pods.HealthFailFirst = 1 << 30
 	pods.LogLines["backend-0/backend"] = "cmd/mainloop/main.go:1: undefined: nope"
@@ -305,6 +359,7 @@ func TestSyncFailsWhenTheBackendIsUnhealthy(t *testing.T) {
 func TestSyncFailsWhenMigrateFails(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	pods.MigrateErr = devlooptest.ExitError{Code: 1, Msg: "command terminated with exit code 1"}
 	pods.MigrateOut = "migrate: 00251_x.sql: column \"y\" does not exist"
@@ -331,6 +386,7 @@ func TestSyncFailsWhenMigrateFails(t *testing.T) {
 func TestSyncFailsWhenSmokeFails(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	pods.SmokeErr = devlooptest.ExitError{Code: 1, Msg: "command terminated with exit code 1"}
 	pods.SmokeOut = "ok   health\nFAIL projects: GET /projects: status 500\nsummary: 1 ok, 1 fail, 0 skip\n"
@@ -354,6 +410,7 @@ func TestSyncFailsWhenSmokeFails(t *testing.T) {
 func TestSyncMigratesAfterTheCopiesAndSmokesAfterHealth(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	sha, pack := scratchRepo(t)
 	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
@@ -375,6 +432,7 @@ func TestSyncMigratesAfterTheCopiesAndSmokesAfterHealth(t *testing.T) {
 func TestSyncPicksARunningPodThatIsNotBeingDeleted(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	pods.BySelector["app=mainloop-backend"] = []devloop.PodStatus{
 		{Name: "backend-old", Phase: "Running", Ready: true, Deleting: true},
@@ -403,6 +461,7 @@ func TestSyncPicksARunningPodThatIsNotBeingDeleted(t *testing.T) {
 func TestSyncToleratesHarmlessBusyBoxTarWarnings(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	pods.QueueCopyStderr("frontend", "tar: warning: skipping header 'x'\ntar: removing leading '/' from member names\n")
 	sha, pack := scratchRepo(t)
@@ -430,6 +489,7 @@ func TestSyncToleratesHarmlessBusyBoxTarWarnings(t *testing.T) {
 func TestSyncGivesUpOnACopyThatKeepsBeingCut(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	for range 20 {
 		pods.QueueCopyResult("frontend", devlooptest.ErrStreamReset)
@@ -484,6 +544,7 @@ func receivedMain(pods *devlooptest.Pods, container string) string {
 func TestReviewOlderUncertainSyncOverwritesNewerOne(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	pods.QueueCopyResult("backend", nil)
 	pods.QueueCopyResult("mcp", nil)
@@ -523,6 +584,7 @@ func TestReviewOlderUncertainSyncOverwritesNewerOne(t *testing.T) {
 func TestSyncFailsWhenANewerSyncAlreadyRan(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	c1, _, pack := scratchRepoTwoCommits(t)
 	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
@@ -550,6 +612,7 @@ func TestSyncFailsWhenANewerSyncAlreadyRan(t *testing.T) {
 func TestOnlyOneSyncCopiesAtATime(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	c1, c2, pack := scratchRepoTwoCommits(t)
 	var (
@@ -619,6 +682,7 @@ func waitStateOrNot(t *testing.T, d *testdb.DB, id string) dbq.DevloopOperation 
 func TestSyncLockHeldByACrashedSyncExpires(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	sha, pack := scratchRepo(t)
 	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
@@ -648,6 +712,7 @@ func TestSyncLockHeldByACrashedSyncExpires(t *testing.T) {
 func TestSyncDeadlineRunsFromTheRequest(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	sha, pack := scratchRepo(t)
 	svc := newOperationsService(d, pods, &devlooptest.Seeder{Payload: pack})
@@ -686,6 +751,7 @@ func TestSyncDeadlineRunsFromTheRequest(t *testing.T) {
 func TestADefiniteTarFailureIsNotRetried(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	pods.QueueCopyResult("backend", devlooptest.ExitError{Code: 2, Msg: "command terminated with exit code 2: tar: server/reset/closed_EOF_timeout.go: Cannot open"})
 	sha, pack := scratchRepo(t)
@@ -708,6 +774,7 @@ func TestADefiniteTarFailureIsNotRetried(t *testing.T) {
 func TestRepeatCallOfAnOlderSyncDoesNotFailTheNewerOne(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	c1, c2, pack := scratchRepoTwoCommits(t)
 	svc := newOperationsService(d, syncPods(), &devlooptest.Seeder{Payload: pack})
 	holdLease(t, d, "session-a")
@@ -749,6 +816,7 @@ func TestSyncFailsWhenTheBackendRestartsAfterTheCopy(t *testing.T) {
 	for _, at := range []string{"health", "smoke"} {
 		t.Run(at, func(t *testing.T) {
 			d := testdb.New(t)
+			seedMainloopTarget(t, d, "proj-1")
 			pods := syncPods()
 			pods.SetPods("app=mainloop-backend", runningBackend("backend-0", 0))
 			pods.LogLines["backend-0/backend/previous"] = "panic: nil pointer in newWiring"
@@ -777,6 +845,7 @@ func TestSyncFailsWhenTheBackendRestartsAfterTheCopy(t *testing.T) {
 func TestSyncFailsWhenThePodIsReplacedMidWait(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	var once sync.Once
 	pods.Hook = func(_ context.Context, event string) {
@@ -800,6 +869,7 @@ func TestSyncFailsWhenThePodIsReplacedMidWait(t *testing.T) {
 func TestSyncFailsWhenTheCommitMarkerIsGone(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	pods.Hook = func(_ context.Context, event string) {
 		if event == "migrate" {
@@ -837,6 +907,7 @@ func TestSyncNamesTheStepThatTimedOut(t *testing.T) {
 	} {
 		t.Run(tc.step, func(t *testing.T) {
 			d := testdb.New(t)
+			seedMainloopTarget(t, d, "proj-1")
 			pods := syncPods()
 			pods.Hook = block(tc.step)
 			sha, pack := scratchRepo(t)
@@ -855,6 +926,7 @@ func TestSyncNamesTheStepThatTimedOut(t *testing.T) {
 	for _, step := range []string{"migrate", "smoke"} {
 		t.Run(step+" past the sync deadline", func(t *testing.T) {
 			d := testdb.New(t)
+			seedMainloopTarget(t, d, "proj-1")
 			pods := syncPods()
 			pods.Hook = block(step)
 			sha, pack := scratchRepo(t)
@@ -881,6 +953,7 @@ func TestSyncNamesTheStepThatTimedOut(t *testing.T) {
 func TestSyncNamesTheRecoveryForOutOfOrderMigrations(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	pods.MigrateErr = devlooptest.ExitError{Code: 1, Msg: "command terminated with exit code 1"}
 	pods.MigrateOut = "migrate: detected 1 missing (out-of-order) migration lower than database version (270): version 260"
@@ -901,6 +974,7 @@ func TestSyncNamesTheRecoveryForOutOfOrderMigrations(t *testing.T) {
 func TestSyncDetailStaysValidUTF8WhenTheTailIsCutMidCharacter(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	pods.MigrateErr = devlooptest.ExitError{Code: 1, Msg: "command terminated with exit code 1"}
 	pods.MigrateOut = strings.Repeat("é", 2000) + "x" // 4001 bytes on one line: the 3000-byte cut lands inside a character
@@ -920,6 +994,7 @@ func TestSyncDetailStaysValidUTF8WhenTheTailIsCutMidCharacter(t *testing.T) {
 func TestSyncWaitsForTheMCPAndGitListeners(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	pods.HealthFailFirst = 2
 	sha, pack := scratchRepo(t)
@@ -946,6 +1021,7 @@ func TestSyncWaitsForTheMCPAndGitListeners(t *testing.T) {
 func TestSyncFailsOnARestartWhileHealthKeepsFailing(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	pods.SetPods("app=mainloop-backend", runningBackend("backend-0", 0))
 	pods.HealthFailFirst = 1000
@@ -988,6 +1064,7 @@ func TestSyncFailsOnARestartWhileHealthKeepsFailing(t *testing.T) {
 func TestSyncReadsPreviousLogsOnlyForContainersThatRestarted(t *testing.T) {
 	t.Parallel()
 	d := testdb.New(t)
+	seedMainloopTarget(t, d, "proj-1")
 	pods := syncPods()
 	pod := func(backend int32) []devloop.PodStatus {
 		return []devloop.PodStatus{{
@@ -1029,6 +1106,7 @@ func TestSyncCrashLogTailIsSixtyLinesCappedByBytes(t *testing.T) {
 	run := func(t *testing.T, log string) string {
 		t.Helper()
 		d := testdb.New(t)
+		seedMainloopTarget(t, d, "proj-1")
 		pods := syncPods()
 		pods.SetPods("app=mainloop-backend", runningBackend("backend-0", 0))
 		pods.LogLines["backend-0/backend/previous"] = log

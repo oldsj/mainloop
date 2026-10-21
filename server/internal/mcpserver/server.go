@@ -51,10 +51,12 @@ type Server struct {
 	// Issues serves the read-only issue, Dependabot-alert and check-run tools, over the same
 	// GitHub App as PRs and Merge. With none, those tools answer that they are unavailable.
 	Issues *issues.Service
-	// DevLease and DevOps serve the devloop tools. With none, those tools answer that they are
-	// unavailable.
-	DevLease *devloop.LeaseService
-	DevOps   *devloop.OperationsService
+	// DevLease, DevOps and DevTargets serve the devloop tools. With DevLease or DevOps nil, those
+	// tools answer that they are unavailable; DevTargets resolves the calling session's project to
+	// its configured staging target (nil also answers unavailable).
+	DevLease   *devloop.LeaseService
+	DevOps     *devloop.OperationsService
+	DevTargets *devloop.TargetService
 	Log      *slog.Logger
 	// AllowedHosts are the Host names the listener answers to; Dev also allows loopback.
 	AllowedHosts map[string]bool

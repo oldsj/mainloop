@@ -17,9 +17,6 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 )
 
-// LeaseID is the one lease this package manages: mainloop-dev has exactly one live-sync target.
-const LeaseID = "mainloop-dev"
-
 // DefaultIdleTimeout is how long a held lease may go unused before it is taken over.
 const DefaultIdleTimeout = 20 * time.Minute
 
@@ -51,32 +48,32 @@ type LeaseInfo struct {
 	QueueLength int
 }
 
-// LeaseService holds the one mainloop-dev lease: a durable row, acquired_at, last_used_at, an
-// idle timeout, and a FIFO queue. Every operation is DB-only; this package never opens a
-// transaction around network or Kubernetes I/O.
+// LeaseService holds every devloop lease: one durable row per target (acquired_at, last_used_at,
+// an idle timeout) and a FIFO queue, keyed by leaseID (a [Target].ID). Every operation is
+// DB-only; this package never opens a transaction around network or Kubernetes I/O.
 type LeaseService struct {
 	Pool *pgxpool.Pool
 }
 
-// Acquire tries to take the lease for sessionID. An idle-expired lease is taken over by whichever
-// queued session is earliest, so a caller that is not yet first in line is told it is queued
-// rather than granted the lease out of turn. Calling it again (a heartbeat, or a poll while
+// Acquire tries to take leaseID's lease for sessionID. An idle-expired lease is taken over by
+// whichever queued session is earliest, so a caller that is not yet first in line is told it is
+// queued rather than granted the lease out of turn. Calling it again (a heartbeat, or a poll while
 // queued) is always safe: a holder's call just extends last_used_at.
-func (s *LeaseService) Acquire(ctx context.Context, sessionID string) (LeaseInfo, error) {
+func (s *LeaseService) Acquire(ctx context.Context, leaseID, sessionID string) (LeaseInfo, error) {
 	var info LeaseInfo
 	err := db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
 		q := dbq.New(tx)
 		if err := q.UpsertDevloopLeaseQueueEntry(ctx, dbq.UpsertDevloopLeaseQueueEntryParams{
-			LeaseID: LeaseID, SessionID: sessionID,
+			LeaseID: leaseID, SessionID: sessionID,
 		}); err != nil {
 			return err
 		}
-		lease, err := q.LockDevloopLease(ctx, LeaseID)
+		lease, err := q.LockDevloopLease(ctx, leaseID)
 		if err != nil {
 			return err
 		}
 		if err := q.DeleteStaleDevloopLeaseQueueEntries(ctx, dbq.DeleteStaleDevloopLeaseQueueEntriesParams{
-			LeaseID: LeaseID, StaleSecs: staleSecs(),
+			LeaseID: leaseID, StaleSecs: staleSecs(),
 		}); err != nil {
 			return err
 		}
@@ -84,7 +81,7 @@ func (s *LeaseService) Acquire(ctx context.Context, sessionID string) (LeaseInfo
 		expired := lease.HolderSessionID == nil || lease.LastUsedAt == nil ||
 			lease.LastUsedAt.Add(idle).Before(time.Now())
 		if expired {
-			next, err := q.NextDevloopLeaseQueueEntry(ctx, dbq.NextDevloopLeaseQueueEntryParams{LeaseID: LeaseID, StaleSecs: staleSecs()})
+			next, err := q.NextDevloopLeaseQueueEntry(ctx, dbq.NextDevloopLeaseQueueEntryParams{LeaseID: leaseID, StaleSecs: staleSecs()})
 			switch {
 			case errors.Is(err, pgx.ErrNoRows):
 				// No one is waiting; the lease stays free until someone asks.
@@ -92,13 +89,13 @@ func (s *LeaseService) Acquire(ctx context.Context, sessionID string) (LeaseInfo
 				return err
 			default:
 				granted, err := q.GrantDevloopLease(ctx, dbq.GrantDevloopLeaseParams{
-					ID: LeaseID, HolderSessionID: &next,
+					ID: leaseID, HolderSessionID: &next,
 				})
 				if err != nil {
 					return err
 				}
 				if err := q.DequeueDevloopLeaseSession(ctx, dbq.DequeueDevloopLeaseSessionParams{
-					LeaseID: LeaseID, SessionID: next,
+					LeaseID: leaseID, SessionID: next,
 				}); err != nil {
 					return err
 				}
@@ -108,11 +105,11 @@ func (s *LeaseService) Acquire(ctx context.Context, sessionID string) (LeaseInfo
 		}
 		info.IdleTimeout = idle
 		if lease.HolderSessionID != nil && *lease.HolderSessionID == sessionID {
-			lastUsed, err := q.TouchDevloopLease(ctx, dbq.TouchDevloopLeaseParams{ID: LeaseID, HolderSessionID: &sessionID})
+			lastUsed, err := q.TouchDevloopLease(ctx, dbq.TouchDevloopLeaseParams{ID: leaseID, HolderSessionID: &sessionID})
 			if err != nil {
 				return err
 			}
-			if err := q.DequeueDevloopLeaseSession(ctx, dbq.DequeueDevloopLeaseSessionParams{LeaseID: LeaseID, SessionID: sessionID}); err != nil {
+			if err := q.DequeueDevloopLeaseSession(ctx, dbq.DequeueDevloopLeaseSessionParams{LeaseID: leaseID, SessionID: sessionID}); err != nil {
 				return err
 			}
 			info.Status, info.HolderSession = LeaseAcquired, sessionID
@@ -124,11 +121,11 @@ func (s *LeaseService) Acquire(ctx context.Context, sessionID string) (LeaseInfo
 			info.HolderSession = *lease.HolderSessionID
 			info.AcquiredAt, info.LastUsedAt = lease.AcquiredAt, lease.LastUsedAt
 		}
-		pos, err := q.DevloopLeaseQueuePosition(ctx, dbq.DevloopLeaseQueuePositionParams{LeaseID: LeaseID, SessionID: sessionID})
+		pos, err := q.DevloopLeaseQueuePosition(ctx, dbq.DevloopLeaseQueuePositionParams{LeaseID: leaseID, SessionID: sessionID})
 		if err != nil {
 			return err
 		}
-		length, err := q.DevloopLeaseQueueLength(ctx, dbq.DevloopLeaseQueueLengthParams{LeaseID: LeaseID, StaleSecs: staleSecs()})
+		length, err := q.DevloopLeaseQueueLength(ctx, dbq.DevloopLeaseQueueLengthParams{LeaseID: leaseID, StaleSecs: staleSecs()})
 		if err != nil {
 			return err
 		}
@@ -141,26 +138,27 @@ func (s *LeaseService) Acquire(ctx context.Context, sessionID string) (LeaseInfo
 	return info, nil
 }
 
-// Release gives up the lease if sessionID holds it, and drops its queue entry if it was only
-// waiting. It is a no-op, not an error, for a session that holds neither.
-func (s *LeaseService) Release(ctx context.Context, sessionID string) error {
+// Release gives up leaseID's lease if sessionID holds it, and drops its queue entry if it was
+// only waiting. It is a no-op, not an error, for a session that holds neither.
+func (s *LeaseService) Release(ctx context.Context, leaseID, sessionID string) error {
 	return db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
 		q := dbq.New(tx)
-		if _, err := q.ReleaseDevloopLease(ctx, dbq.ReleaseDevloopLeaseParams{ID: LeaseID, HolderSessionID: &sessionID}); err != nil {
+		if _, err := q.ReleaseDevloopLease(ctx, dbq.ReleaseDevloopLeaseParams{ID: leaseID, HolderSessionID: &sessionID}); err != nil {
 			return err
 		}
-		return q.DequeueDevloopLeaseSession(ctx, dbq.DequeueDevloopLeaseSessionParams{LeaseID: LeaseID, SessionID: sessionID})
+		return q.DequeueDevloopLeaseSession(ctx, dbq.DequeueDevloopLeaseSessionParams{LeaseID: leaseID, SessionID: sessionID})
 	})
 }
 
-// Status reads the lease without taking it or joining the queue, for the owner-facing task view.
-func (s *LeaseService) Status(ctx context.Context) (LeaseInfo, error) {
+// Status reads leaseID's lease without taking it or joining the queue, for the owner-facing task
+// view.
+func (s *LeaseService) Status(ctx context.Context, leaseID string) (LeaseInfo, error) {
 	q := dbq.New(s.Pool)
-	lease, err := q.GetDevloopLease(ctx, LeaseID)
+	lease, err := q.GetDevloopLease(ctx, leaseID)
 	if err != nil {
 		return LeaseInfo{}, err
 	}
-	length, err := q.DevloopLeaseQueueLength(ctx, dbq.DevloopLeaseQueueLengthParams{LeaseID: LeaseID, StaleSecs: staleSecs()})
+	length, err := q.DevloopLeaseQueueLength(ctx, dbq.DevloopLeaseQueueLengthParams{LeaseID: leaseID, StaleSecs: staleSecs()})
 	if err != nil {
 		return LeaseInfo{}, err
 	}
@@ -174,19 +172,19 @@ func (s *LeaseService) Status(ctx context.Context) (LeaseInfo, error) {
 
 // ErrNotHolder means the session does not hold the lease, or held it but let it idle-expire with
 // another session waiting.
-var ErrNotHolder = errors.New("devloop: this session does not hold the mainloop-dev lease")
+var ErrNotHolder = errors.New("devloop: this session does not hold this lease")
 
 // holds applies the one rule for "this session still holds the lease": it is the recorded holder,
 // and either its idle timeout has not run out or nobody else is waiting for the lease (a live
 // queued session other than itself takes it over once it has).
-func holds(ctx context.Context, q *dbq.Queries, lease dbq.DevloopLease, sessionID string) (bool, error) {
+func holds(ctx context.Context, q *dbq.Queries, leaseID string, lease dbq.DevloopLease, sessionID string) (bool, error) {
 	if lease.HolderSessionID == nil || *lease.HolderSessionID != sessionID || lease.LastUsedAt == nil {
 		return false, nil
 	}
 	if !lease.LastUsedAt.Add(time.Duration(lease.IdleTimeoutSeconds) * time.Second).Before(time.Now()) {
 		return true, nil
 	}
-	next, err := q.NextDevloopLeaseQueueEntry(ctx, dbq.NextDevloopLeaseQueueEntryParams{LeaseID: LeaseID, StaleSecs: staleSecs()})
+	next, err := q.NextDevloopLeaseQueueEntry(ctx, dbq.NextDevloopLeaseQueueEntryParams{LeaseID: leaseID, StaleSecs: staleSecs()})
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return true, nil
@@ -199,31 +197,31 @@ func holds(ctx context.Context, q *dbq.Queries, lease dbq.DevloopLease, sessionI
 
 // Use is a holder's heartbeat for work other than dev_lease_acquire: it extends last_used_at so an
 // active sync loop does not idle-expire, and fails with [ErrNotHolder] when the session no longer
-// holds the lease (including an expired lease a queued session is next in line for).
-func (s *LeaseService) Use(ctx context.Context, sessionID string) error {
+// holds leaseID's lease (including an expired lease a queued session is next in line for).
+func (s *LeaseService) Use(ctx context.Context, leaseID, sessionID string) error {
 	return db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
 		q := dbq.New(tx)
-		lease, err := q.LockDevloopLease(ctx, LeaseID)
+		lease, err := q.LockDevloopLease(ctx, leaseID)
 		if err != nil {
 			return err
 		}
-		if ok, err := holds(ctx, q, lease, sessionID); err != nil {
+		if ok, err := holds(ctx, q, leaseID, lease, sessionID); err != nil {
 			return err
 		} else if !ok {
 			return ErrNotHolder
 		}
-		_, err = q.TouchDevloopLease(ctx, dbq.TouchDevloopLeaseParams{ID: LeaseID, HolderSessionID: &sessionID})
+		_, err = q.TouchDevloopLease(ctx, dbq.TouchDevloopLeaseParams{ID: leaseID, HolderSessionID: &sessionID})
 		return err
 	})
 }
 
-// Holds reports whether sessionID still holds the lease by the same rule as [LeaseService.Use],
-// without touching it.
-func (s *LeaseService) Holds(ctx context.Context, sessionID string) (bool, error) {
+// Holds reports whether sessionID still holds leaseID's lease by the same rule as
+// [LeaseService.Use], without touching it.
+func (s *LeaseService) Holds(ctx context.Context, leaseID, sessionID string) (bool, error) {
 	q := dbq.New(s.Pool)
-	lease, err := q.GetDevloopLease(ctx, LeaseID)
+	lease, err := q.GetDevloopLease(ctx, leaseID)
 	if err != nil {
 		return false, err
 	}
-	return holds(ctx, q, lease, sessionID)
+	return holds(ctx, q, leaseID, lease, sessionID)
 }
