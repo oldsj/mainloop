@@ -140,7 +140,9 @@ measurement says otherwise.
   `accepted_at` and `ready_at` (each set as the fork reaches that point; repeating the idempotent
   request_id reads them as they fill in), so time-to-running is `ready_at` minus `requested_at` once
   both are set.
-- `DELETE /checkpoints/{checkpoint_id}` deletes one; already-gone is not an error.
+- `DELETE /checkpoints/{checkpoint_id}` deletes one; already-gone is not an error. Checkpoint
+  snapshot retention itself is tracked separately, in
+  [#302](https://github.com/oldsj/mainloop/issues/302).
 
 Follows the reconciler rule (AGENTS.md): both create-checkpoint and fork write a durable intent row
 (`session_checkpoints`, `checkpoint_forks`) keyed on the caller's `request_id` before calling kagent.
@@ -343,10 +345,11 @@ be measured at all:
    timers — an explicit quiesce-then-checkpoint operation, or changing Mainloop's idle suspend so
    it does not suspend the kagent Session underneath an in-progress checkpoint.
 
-Two Mainloop bugs surfaced by this measurement, to be filed as issues and linked here once filed:
-the stored-409 replay for kagent's retryable `KAGENT_CHECKPOINT_SNAPSHOT_PENDING` (treated as a
-terminal failure instead of retried), and a checkpoint row recorded `succeeded` while kagent's own
-checkpoint state was `FAILED`.
+Two Mainloop bugs surfaced by this measurement, filed as
+[#299](https://github.com/oldsj/mainloop/issues/299): the stored-409 replay for kagent's retryable
+`KAGENT_CHECKPOINT_SNAPSHOT_PENDING` (treated as a terminal failure instead of retried), and
+[#300](https://github.com/oldsj/mainloop/issues/300): a checkpoint row recorded `succeeded` while
+kagent's own checkpoint state was `FAILED`.
 
 ## Not measured, not implemented
 
