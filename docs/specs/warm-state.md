@@ -155,13 +155,17 @@ would fail the same way again. See `server/internal/sessions/checkpoints.go`.
 
 Issue #288 offers two mechanisms: a seed fork from a kagent Data checkpoint, or its fallback, a
 per-project cache archive in object storage or the in-cluster registry (zot), restored at
-workspace start. This spec chooses the **cache archive** as the first implemented mechanism, for
-one reason: it is the only one of the two whose primitives are provable today. Seed fork depends
-on a kagent capability this task could not find in the vendored API, could not find in local
-kagent sources, and could not confirm via kagent's own docs (GitHub unreachable). Building the
-warm-state design around an unverified, currently unreachable primitive would violate the
-project's own evidence rule (AGENTS.md: "never present a fixture, mocked integration, or agent
-claim as live proof").
+workspace start. This spec chooses the **cache archive** as the first implemented mechanism.
+The fork RPC itself is reachable today — `CheckpointService.ForkSession` exists at the deployed
+kagent controller `a116401`, and Mainloop's API calls it (see "Checkpoint and fork API" above) —
+but the fork _operation_ remains unproven: the live measurement (see "Measured: fork from warmed
+checkpoint" below) found production's harnesses take `Full` checkpoints, which kagent refuses to
+fork (409), and the one harness configured for the `Data` checkpoints kagent does fork runs only
+on `mainloop-dev`, which cannot provision a workspace on the cache environment at all
+(`git_transport_required`). So no fork time, cross-task/branch behavior, or credential carryover
+number exists yet. Building the warm-state design around an operation with no proven timing or
+safety numbers would violate the project's own evidence rule (AGENTS.md: "never present a
+fixture, mocked integration, or agent claim as live proof").
 
 The cache archive also generalizes a pattern this project already runs in production: `cache-main`
 (`environments.md`, "Following a watched tag"; `.github/README.md`, "Workspace cache image") is
@@ -292,22 +296,67 @@ issues are not built as competing mechanisms.
 
 ## Measured: fork from warmed checkpoint
 
-**Placeholder for the owner's numbers.** The checkpoint and fork API above is implemented and
-dev_sync'd to `mainloop-dev`; this section is where the owner records the live measurement issue
-#288 asked for (fork time from a warmed checkpoint, compared against the cache-image environment),
-once run against a real kagent session there. Not filled in by any task: a task's workspace cannot
-start a real session or reach `mainloop-dev`'s kagent beyond what `dev_status`'s read-only pod list
-shows (see "Measurement" above), so this section stays an honest placeholder, not a measured
-number, until the owner adds one.
+The fork RPC is no longer unreachable: `CheckpointService.ForkSession` exists at the deployed
+kagent controller `a116401`, and Mainloop's API calls it (see "Checkpoint and fork API" above).
+The owner ran the live measurement issue #288 asked for, against `mainloop-dev`, but
+`mainloop-dev` refused to provision a workspace at all: it requires `git_transport_required`
+(`GIT_TRANSPORT_ENABLED` and `PUSH_GATE_ENABLED`), and dev has both off. The measurement below
+therefore ran on **production** (`mainloop-api.olds.network`) instead, not `mainloop-dev` as
+#288 asked.
+
+**Measured 2026-10-21, production**, `oldsj/mainloop` project, cache environment
+(`36b25532`, version `2648b9fe`, image
+`registry.olds.network/local/mainloop-dev@sha256:889a94bb`, `linux/arm64`), `claude-workspace`
+agent, kagent controller `a116401`:
+
+- Time to running: task created 17:48:11.7Z, session active by 17:48:19 (10s poll) — **≤ 7.6 s**.
+- Checkout prepared at `/data/workspace` (no clone), HEAD `c58164b`. `/opt/cache` 2.3 GB;
+  `GOCACHE=/opt/cache/go-build`, `GOMODCACHE=/opt/cache/go-mod`, pnpm store
+  `/opt/cache/pnpm-store/v3`.
+- `go build ./...` in `server/`: first build **28.97 s** real (user 85 s), rebuild **14.95 s**.
+- Identity/credentials in the workspace: git `user.name`/`user.email` set (Mainloop agent /
+  noreply); no git credential helper; no `gh` binary; `ANTHROPIC_API_KEY`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN` all unset; Mainloop MCP tools reachable.
+- Checkpoint: accepted at 19:16:30Z and READY immediately, but only 15–30 minutes after the
+  session's last turn. kagent requires the Session READY _and_ its Actor suspended on the
+  snapshot recorded for the head task. Production sets `KAGENT_QUIESCE_DELAY=15m`, so kagent's
+  lifecycle worker suspends the Actor and records that snapshot 15 minutes after a turn;
+  Mainloop's own workspace idle suspend (`idle_timeout_minutes` default 30) then suspends the
+  Session, and kagent refuses a SUSPENDED session (409 conflict). Resuming the workspace moves
+  the Actor off the recorded snapshot, and the checkpoint tag then fails ("snapshot changed").
+- Fork: **NOT MEASURED, refused.** `POST /checkpoints/{id}/fork` → 409 "Checkpoint includes
+  process state and cannot be forked". Production's `claude-workspace-harness` and
+  `codex-workspace-harness` use `snapshotPolicy: onQuiesce: Full`; kagent forks only Data
+  checkpoints. Only `claude-workspace-dev-harness` (`mainloop-dev`) uses Data, and
+  `mainloop-dev` cannot provision cache-env workspaces (see `git_transport_required` above). So
+  no fork time, first-build-after-fork, or carryover numbers exist yet.
+
+**Recommendation** (owner decision, not a measured fact): keep the cache-image environment as
+the warm-state mechanism for now. It already gives ≤ 8 s to running and a 29 s first build with
+nothing to fork. Seed fork stays a later option and needs two owner decisions first before it can
+be measured at all:
+
+1. Data snapshots for workspace harnesses — either switching `claude-workspace-harness` and
+   `codex-workspace-harness` from `Full` to `Data` (which drops process state across every
+   suspend/resume, not just the measured one), or standing up a dedicated seed harness on `Data`.
+2. A checkpoint window that does not depend on racing the 15/30-minute quiesce and idle-suspend
+   timers — an explicit quiesce-then-checkpoint operation, or changing Mainloop's idle suspend so
+   it does not suspend the kagent Session underneath an in-progress checkpoint.
+
+Two Mainloop bugs surfaced by this measurement, to be filed as issues and linked here once filed:
+the stored-409 replay for kagent's retryable `KAGENT_CHECKPOINT_SNAPSHOT_PENDING` (treated as a
+terminal failure instead of retried), and a checkpoint row recorded `succeeded` while kagent's own
+checkpoint state was `FAILED`.
 
 ## Not measured, not implemented
 
 Everything in this document's cache-archive and toolchain-config design (from "Mechanism" onward)
 is proposed, not running code; the checkpoint and fork API above is implemented but experimental
-and owner-only, ahead of the rest. In particular, not measured by this task, and not available to
-measure from this task's workspace, cluster access, or tool surface (see "Measurement" above for
-why each is out of reach here): fork time, fork cross-task/branch behavior and credential
-carryover (see "Measured: fork from warmed checkpoint" above, where the owner records these once
-measured), cold-workspace-on-toolchain-image-only timing, and whether a newer `oldsj/kagent` commit
-than the vendored `a1164013` changes `ForkSession`'s behavior from what the `kagenttest` fakes
-assume.
+and owner-only, ahead of the rest. The fork RPC itself is now reachable and was exercised live
+(see "Measured: fork from warmed checkpoint" above), but the fork operation it performs is still
+not measured: fork time, fork cross-task/branch behavior, and credential carryover remain unknown,
+because production's harnesses take `Full` checkpoints and kagent only forks `Data` ones, and the
+one harness that does take `Data` checkpoints runs on `mainloop-dev`, which refuses to provision a
+workspace on the cache environment (`git_transport_required`). Also not measured: cold-workspace-
+on-toolchain-image-only timing, and whether a newer `oldsj/kagent` commit than the vendored
+`a1164013` changes `ForkSession`'s behavior from what the `kagenttest` fakes assume.
