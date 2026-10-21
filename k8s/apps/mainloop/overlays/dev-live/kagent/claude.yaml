@@ -27,11 +27,13 @@ spec:
       value: user.email
     - name: GIT_CONFIG_VALUE_1
       value: 12104969+oldsj@users.noreply.github.com
-  # No Git proxies: kagent's Harness CRD accepts only production's proxy origins, and
-  # mainloop-dev keeps Git transport off.
+  # mainloop-dev's own Git read/push proxies, named like production's but under
+  # mainloop-dev.svc.cluster.local (docs/dev-environment.md#live-dev-instance).
   git:
     origins:
       - github.com
+    readProxyOrigin: http://mainloop-git-read.mainloop-dev.svc.cluster.local
+    pushProxyOrigin: http://mainloop-git-push.mainloop-dev.svc.cluster.local
   extraHTTPSOrigins:
     - https://registry.npmjs.org
     - https://pypi.org
