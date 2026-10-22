@@ -333,6 +333,33 @@ agent, kagent controller `a116401`:
   `mainloop-dev` cannot provision cache-env workspaces (see `git_transport_required` above). So
   no fork time, first-build-after-fork, or carryover numbers exist yet.
 
+**Measured 2026-10-22, mainloop-dev**: the owner enabled dev's Git transport and push gate
+(`GIT_TRANSPORT_ENABLED` and `PUSH_GATE_ENABLED` in `mainloop-dev`), removing the
+`git_transport_required` refusal the production block above hit. The dev project used the same
+cache image as the production run above
+(`registry.olds.network/local/mainloop-dev@sha256:889a94bb`), selected as env `48157344`,
+version `c97e3803`.
+
+- Measured, session start: task created 02:52:21.1Z; the session was creating at 02:52:53 and
+  active by 02:53:14 (10 s poll) — **≈ 52 s** to an active session, against ≤ 7.6 s on
+  production. This is time to an active session, not to a usable workspace, because preparation
+  then failed (next bullet). The gap is not explained yet.
+- Not measured, and why: no dev workspace could be prepared. Two kagent single-instance
+  assumptions blocked the second Mainloop instance:
+  - Git proxy origins were hard-coded to production's instance. Fixed in `oldsj/kagent#46`.
+  - Preparation required an MCP server keyed literally `mainloop`, but dev's is `mainloop-dev`.
+    It surfaced as "Current prepared runtime identity is unavailable" and was diagnosed through
+    #47's logging. Fixed in `oldsj/kagent#48` (`b785c99`), which binds the MCP server to the
+    session's own instance by URL origin. Production runs `b785c99`
+    (`oldsj/infrastructure#227`) and was verified with a task.
+- Open: the two dev harnesses (`claude-workspace-dev-harness`, `codex-workspace-dev-harness`)
+  still run the pre-fix `23ee46c` harness image. They live outside GitOps and are waiting on an
+  owner-approved update. Until they move, no fork time, first build after fork, or identity and
+  credential carryover numbers exist for dev.
+- Related, Open: #309. A session whose stuck turn is stopped can't take another turn (its
+  workspace preparation stays stale). Any fork or checkpoint run that needs a stopped turn hits
+  it.
+
 **Recommendation** (owner decision, not a measured fact): keep the cache-image environment as
 the warm-state mechanism for now. It already gives ≤ 8 s to running and a 29 s first build with
 nothing to fork. Seed fork stays a later option and needs two owner decisions first before it can
@@ -344,6 +371,9 @@ be measured at all:
 2. A checkpoint window that does not depend on racing the 15/30-minute quiesce and idle-suspend
    timers — an explicit quiesce-then-checkpoint operation, or changing Mainloop's idle suspend so
    it does not suspend the kagent Session underneath an in-progress checkpoint.
+
+The dev data so far adds no evidence for seed fork, and the ≈ 52 s dev session start is a reason
+to measure dev's time to running separately once workspaces prepare.
 
 Two Mainloop bugs surfaced by this measurement, filed as
 [#299](https://github.com/oldsj/mainloop/issues/299): the stored-409 replay for kagent's retryable
