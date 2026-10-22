@@ -374,8 +374,24 @@ version `c97e3803`.
 - Measured, first build in the fork: 24.2 s (rebuild 10.7 s). That is close to the source's first
   build (26.9 s), not to its rebuild (11.5 s).
 - Inferred, not verified: build-cache entries the source wrote under `/opt/cache`, which is image
-  content outside `/data`, did not survive the `Data` snapshot. A fork therefore gives no
-  build-time advantage over a fresh session on the same cache image.
+  content outside `/data`, did not survive the `Data` snapshot. With caches under `/opt/cache`, a
+  fork gives no build-time advantage over a fresh session on the same cache image. The measurement
+  below confirms that caches kept under `/data` do carry over.
+- **Measured, Go build cache under `/data`** (probe task d08ed5c4, same image and env):
+  - The seed set `GOCACHE=/data/cache/go-build` and kept `GOMODCACHE=/opt/cache/go-mod`. Its cold
+    build took 1 m 49.7 s, its warm rebuild 16.8 s, and the cache was 993 MB.
+  - Checkpointed at 13:16:03Z, 16 min after the turn; it was `ready` in one call.
+  - The fork call took 0.5 s (13:16:03.8 to 13:16:04.2Z).
+  - In the fork, the first build took **18.9 s** and the rebuild 11.6 s. The marker file and the
+    993 MB cache were intact.
+  - So a Go build cache under `/data` survives a `Data` checkpoint and fork. The fork's first
+    build is close to the seed's warm rebuild, not its cold build.
+  - The fork's MCP calls were again rejected (401), as #311 describes.
+- **Measured, side observation:** the seed's warm rebuild on `/data` (16.8 s) was slower than on
+  `/opt/cache` (11.5 s). An earlier probe that copied the 2.3 GB `/opt/cache` tree, many small
+  files, into `/data` with `cp -a` ran for about 30 min without finishing.
+- **Not measured:** `/data` small-file write throughput, and the restore time of a larger `/data`
+  snapshot.
 - Open, #311: the fork has no Mainloop workspace row. Its MCP calls were rejected (401
   `AUTH_HEADER_REJECTED`, where the source's succeeded). It can't be deleted through Mainloop.
   `DELETE /checkpoints/{id}` answers 200 while kagent keeps the checkpoint, because the fork still
@@ -384,10 +400,10 @@ version `c97e3803`.
   workspace preparation stays stale). Any fork or checkpoint run that needs a stopped turn hits
   it.
 
-**Recommendation** (owner decision, not a measured fact): keep the cache-image environment as
-the warm-state mechanism for now. It already gives ≤ 8 s to running and a 29 s first build with
-nothing to fork. Seed fork stays a later option and needs two owner decisions first before it can
-be measured at all:
+**Recommendation** (owner decision, not a measured fact; current default below, pending the
+owner's decision): keep the cache-image environment as the warm-state mechanism for now. It
+already gives ≤ 8 s to running and a 29 s first build with nothing to fork. Seed fork stays a
+later option and needs two owner decisions first before it can be measured at all:
 
 1. Data snapshots for workspace harnesses — either switching `claude-workspace-harness` and
    `codex-workspace-harness` from `Full` to `Data` (which drops process state across every
@@ -397,9 +413,12 @@ be measured at all:
    it does not suspend the kagent Session underneath an in-progress checkpoint.
 
 The dev data so far adds no evidence for seed fork, and the ≈ 52 s dev session start is a reason
-to measure dev's time to running separately once workspaces prepare. The dev fork data supports
-this: a fork kept the workspace and conversation, but gave no faster first build than a fresh
-cache-image session.
+to measure dev's time to running separately once workspaces prepare. The dev data now points the
+other way for builds: with caches under `/data`, a fork carries a warm build cache (18.9 s first
+build against 1 m 49.7 s cold), as well as the checkout and conversation. That makes per-project
+seed forks a candidate to replace the cache image, pending #311 (fork binding and cleanup), #299
+(the 15–30 min checkpoint window), production harnesses snapshotting `Data` instead of `Full`,
+and a measurement of `/data` I/O and snapshot restore at realistic sizes.
 
 Two Mainloop bugs surfaced by this measurement, filed as
 [#299](https://github.com/oldsj/mainloop/issues/299): the stored-409 replay for kagent's retryable
