@@ -352,10 +352,34 @@ version `c97e3803`.
     #47's logging. Fixed in `oldsj/kagent#48` (`b785c99`), which binds the MCP server to the
     session's own instance by URL origin. Production runs `b785c99`
     (`oldsj/infrastructure#227`) and was verified with a task.
-- Open: the two dev harnesses (`claude-workspace-dev-harness`, `codex-workspace-dev-harness`)
-  still run the pre-fix `23ee46c` harness image. They live outside GitOps and are waiting on an
-  owner-approved update. Until they move, no fork time, first build after fork, or identity and
-  credential carryover numbers exist for dev.
+- Measured, source session (probe task `8e41c4f1`): task created 11:43:28.2Z, session active
+  11:44:19.5Z (≈ 51 s, matching the earlier ≈ 52 s). The workspace prepared at `/data/workspace`
+  on HEAD `3facbea`, with caches under `/opt/cache` (2.3 GB). `go build ./...` in `server/`: first
+  build 26.9 s, rebuild 11.5 s. The turn ended 11:47:35Z.
+- Measured, checkpoint: requested 12:14:57Z, about 27 min after the turn, inside the 15–30 min
+  window described above. It returned `ready` in the same call. Dev's workspace harness snapshots
+  `Data` on quiesce, so the fork was allowed (production's `Full` snapshots were refused, as
+  above).
+- Measured, fork: `POST /checkpoints/{id}/fork` with `fresh_conversation: false` took 0.8 s
+  (12:15:03.4 to 12:15:04.2Z) and returned a new session, already `active`, with
+  `parent_session_id` set. A message sent at 12:15:21Z ran its first command at 12:15:46Z (≈ 25 s,
+  including model latency), and the turn ended at 12:16:39Z.
+- Measured, carryover into the fork:
+  - The conversation carried over: it quoted the source's build times from memory.
+  - The workspace carried over: the marker file written before the checkpoint was present with
+    its original contents, on the same HEAD and branch, and the file was untracked as expected.
+  - Git identity carried over: same `user.name` and `user.email`.
+  - Credentials: as in the source, no credential helper and no token environment variables, so
+    nothing carried over or leaked.
+- Measured, first build in the fork: 24.2 s (rebuild 10.7 s). That is close to the source's first
+  build (26.9 s), not to its rebuild (11.5 s).
+- Inferred, not verified: build-cache entries the source wrote under `/opt/cache`, which is image
+  content outside `/data`, did not survive the `Data` snapshot. A fork therefore gives no
+  build-time advantage over a fresh session on the same cache image.
+- Open, #311: the fork has no Mainloop workspace row. Its MCP calls were rejected (401
+  `AUTH_HEADER_REJECTED`, where the source's succeeded). It can't be deleted through Mainloop.
+  `DELETE /checkpoints/{id}` answers 200 while kagent keeps the checkpoint, because the fork still
+  pins it.
 - Related, Open: #309. A session whose stuck turn is stopped can't take another turn (its
   workspace preparation stays stale). Any fork or checkpoint run that needs a stopped turn hits
   it.
@@ -373,7 +397,9 @@ be measured at all:
    it does not suspend the kagent Session underneath an in-progress checkpoint.
 
 The dev data so far adds no evidence for seed fork, and the ≈ 52 s dev session start is a reason
-to measure dev's time to running separately once workspaces prepare.
+to measure dev's time to running separately once workspaces prepare. The dev fork data supports
+this: a fork kept the workspace and conversation, but gave no faster first build than a fresh
+cache-image session.
 
 Two Mainloop bugs surfaced by this measurement, filed as
 [#299](https://github.com/oldsj/mainloop/issues/299): the stored-409 replay for kagent's retryable
