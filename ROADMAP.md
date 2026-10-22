@@ -136,6 +136,7 @@ Agents in Mainloop currently receive less context than prior native-harness work
 - A goal is a long-running supervisor task with explicit limits set at creation: token or quota budget, wall-clock budget, maximum concurrent children, maximum repair attempts per child, allowed projects and paths, and decisions reserved for the owner that raise approval cards. This extends the bounded-autonomy direction already set out for [Phase 2](#phase-2-cohesive-queues-and-bounded-autonomy).
 - A goal has a "done when" condition the supervisor must prove with evidence — a merged PR, a live check — rather than claim. It stops and asks the owner when a limit is reached, when repairs stop converging, or when a reserved decision comes up.
 - Goals share the same task tree and explorer progress as other work.
+- [docs/specs/goals.md](docs/specs/goals.md) and [docs/specs/loops.md](docs/specs/loops.md) propose the goal object's shape on top of the existing task model, and name [loops](docs/specs/loops.md) (#314) as the goal supervisor's scheduling primitive for watching and repairing children without staying always-on.
 
 ### Slices
 
