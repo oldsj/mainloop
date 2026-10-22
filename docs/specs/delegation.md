@@ -36,6 +36,8 @@ Status: **implemented** (guidance v3, `server/internal/agentcontext`); wording i
 
 A change of substance to the wording bumps the version in the code and its heading; the main binding records the version it was given, so a bump reaches a running main on its next message. Not measured: whether agents follow it.
 
+Not implemented yet: agent dotfiles ([docs/specs/agent-dotfiles.md](agent-dotfiles.md)), a proposed way to carry owner-level instructions and skills as native files materialized into an agent's home directory instead of rendered guidance text.
+
 `task_retry` and `task_reassign` remain hidden and directly denied until the shared handoff port is installed. No provider fallback is inferred. Legacy session tools `status`, `read`, `cancel` and `clear`, and topic/kind delegation arguments, are removed.
 
 `whoami` returns server-resolved task, attempt, parent, root, role, depth, workspace, attempt number and writer generation alongside existing scoped identity. A workspace grant supplies repository tools only within its own checkout; coordination grants supply no repository or merge tools. Existing PR/merge consent and enablement gates remain in force.
