@@ -139,10 +139,18 @@ measurement says otherwise.
   source session, and `parent_session_id` set to it. The response carries `requested_at`,
   `accepted_at` and `ready_at` (each set as the fork reaches that point; repeating the idempotent
   request_id reads them as they fill in), so time-to-running is `ready_at` minus `requested_at` once
-  both are set.
-- `DELETE /checkpoints/{checkpoint_id}` deletes one; already-gone is not an error. Checkpoint
-  snapshot retention itself is tracked separately, in
-  [#302](https://github.com/oldsj/mainloop/issues/302).
+  both are set. If the source session is itself a workspace, the fork also gets its own workspace
+  row with the source's manifest copied, so it is managed like any other workspace; see
+  [sessions](sessions.md#forked-sessions-issue-311) and
+  [workspaces](workspaces.md#forked-workspaces-issue-311).
+- `DELETE /checkpoints/{checkpoint_id}` deletes one; already-gone is not an error. kagent's own
+  delete skips a checkpoint a fork still pins and answers NotFound exactly as it does for one that
+  is genuinely gone ([#311](https://github.com/oldsj/mainloop/issues/311)), so after that answer
+  this route re-reads the checkpoint before telling the caller it is gone: if it is still there, the
+  response is 409, naming the pinning fork session when Mainloop's own fork records know it
+  (`checkpoint is pinned by fork session <id>`), or `checkpoint is pinned by a fork` otherwise. It
+  never answers 200 for a checkpoint that still exists. Checkpoint snapshot retention itself is
+  tracked separately, in [#302](https://github.com/oldsj/mainloop/issues/302).
 
 Follows the reconciler rule (AGENTS.md): both create-checkpoint and fork write a durable intent row
 (`session_checkpoints`, `checkpoint_forks`) keyed on the caller's `request_id` before calling kagent.
@@ -406,10 +414,16 @@ version `c97e3803`.
   files, into `/data` with `cp -a` ran for about 30 min without finishing.
 - **Not measured:** `/data` small-file write throughput, and the restore time of a larger `/data`
   snapshot.
-- Open, #311: the fork has no Mainloop workspace row. Its MCP calls were rejected (401
-  `AUTH_HEADER_REJECTED`, where the source's succeeded). It can't be deleted through Mainloop.
-  `DELETE /checkpoints/{id}` answers 200 while kagent keeps the checkpoint, because the fork still
-  pins it.
+- [#311](https://github.com/oldsj/mainloop/issues/311), fixed except for the credential: a fork
+  of a workspace now gets its own workspace row (manifest copied from the source), deleting or
+  archiving it deletes the forked kagent Session, and `DELETE /checkpoints/{id}` answers 409
+  instead of 200 while a fork still pins the checkpoint. See
+  [sessions](sessions.md#forked-sessions-issue-311) and
+  [workspaces](workspaces.md#forked-workspaces-issue-311). Its MCP calls are still rejected (401
+  `AUTH_HEADER_REJECTED`, where the source's succeeded): kagent's `ForkSession` carries no
+  credential reference to attach one to, so this is left as an explicit, documented gap rather
+  than a workaround. A kagent-side change (`oldsj/kagent`, branch `mainloop-substrate-0-4`) adds
+  one; a follow-up Mainloop task vendors it and issues per-fork credentials once it lands.
 - Related, Open: #309. A session whose stuck turn is stopped can't take another turn (its
   workspace preparation stays stale). Any fork or checkpoint run that needs a stopped turn hits
   it.
@@ -430,9 +444,10 @@ The dev data so far adds no evidence for seed fork, and the ≈ 52 s dev session
 to measure dev's time to running separately once workspaces prepare. The dev data now points the
 other way for builds: with caches under `/data`, a fork carries a warm build cache (18.9 s first
 build against 1 m 49.7 s cold), as well as the checkout and conversation. That makes per-project
-seed forks a candidate to replace the cache image, pending #311 (fork binding and cleanup), #299
-(the 15–30 min checkpoint window), production harnesses snapshotting `Data` instead of `Full`,
-and a measurement of `/data` I/O and snapshot restore at realistic sizes.
+seed forks a candidate to replace the cache image, pending #311's remaining credential gap (the
+fork binding and cleanup are now fixed; see above), #299 (the 15–30 min checkpoint window),
+production harnesses snapshotting `Data` instead of `Full`, and a measurement of `/data` I/O and
+snapshot restore at realistic sizes.
 
 Two Mainloop bugs surfaced by this measurement, filed as
 [#299](https://github.com/oldsj/mainloop/issues/299): the stored-409 replay for kagent's retryable
