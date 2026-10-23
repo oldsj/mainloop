@@ -12,7 +12,7 @@ spec:
       name: kagent-default
     snapshotPolicy:
       location: s3://ate-snapshots/kagent-dev/
-      onQuiesce: Full
+      onQuiesce: Data
   sessionIdleTTL: 0s
   env:
     - name: KAGENT_RUNTIME_GENERATION
