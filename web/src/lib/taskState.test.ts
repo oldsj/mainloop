@@ -55,7 +55,10 @@ test('a task with no attempt falls back to its assigned profile', () => {
 
 test('model and effort are shown only when chosen (#318)', () => {
   expect(modelEffortLabel(view())).toBe(null);
-  const chosenAttempt = view({}, { attempts: [attempt({ model: 'claude-opus-5-5', effort: 'high' })] });
+  const chosenAttempt = view(
+    {},
+    { attempts: [attempt({ model: 'claude-opus-5-5', effort: 'high' })] }
+  );
   expect(modelEffortLabel(chosenAttempt)).toBe('model: claude-opus-5-5 · effort: high');
   const modelOnly = view({}, { attempts: [attempt({ model: 'claude-opus-5-5' })] });
   expect(modelEffortLabel(modelOnly)).toBe('model: claude-opus-5-5');

@@ -7023,12 +7023,12 @@ components:
           type: array
           items:
             type: string
-          description: 'model_unavailable only: the resolved profile''s offered model ids.'
+          description: "model_unavailable only: the resolved profile's offered model ids."
         allowed_effort_levels:
           type: array
           items:
             $ref: '#/components/schemas/EffortLevel'
-          description: 'effort_unavailable only: the resolved profile''s offered effort levels.'
+          description: "effort_unavailable only: the resolved profile's offered effort levels."
       required:
         - reason
       additionalProperties: true
