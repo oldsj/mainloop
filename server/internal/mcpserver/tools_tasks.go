@@ -33,6 +33,8 @@ func (s *Server) taskTools() []Tool {
 				"mode":       map[string]any{"type": "string", "enum": []any{"code", "coordination"}},
 				"project_id": optional(stringSchema(1, 100)),
 				"topic_id":   optional(stringSchema(1, 100)),
+				"model":      optional(stringSchema(1, 200)),
+				"effort":     optional(stringSchema(1, 20)),
 				"provider_profile_id": optional(map[string]any{
 					"type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-z][a-z0-9_-]*$",
 				}),
@@ -109,6 +111,9 @@ func taskFailure(err error) error {
 	var r *tasks.Error
 	if errors.As(err, &r) {
 		reason := r.Reason
+		if r.Detail != "" {
+			reason += ": " + r.Detail
+		}
 		if reason == tasks.ReasonEnvironmentRequired {
 			reason += ": the owner must select a development environment on the project page (Environment section), then delegate again"
 		}
@@ -152,6 +157,8 @@ func (s *Server) delegate(ctx context.Context, a agentauth.Actor, args json.RawM
 		ProjectID         *string `json:"project_id"`
 		TopicID           *string `json:"topic_id"`
 		ProviderProfileID *string `json:"provider_profile_id"`
+		Model             *string `json:"model"`
+		Effort            *string `json:"effort"`
 		Checkout          *struct {
 			Branch string `json:"branch"`
 			Ref    string `json:"ref"`
@@ -163,6 +170,7 @@ func (s *Server) delegate(ctx context.Context, a agentauth.Actor, args json.RawM
 	}
 	var err error
 	create := tasks.CreateInput{ProjectID: str(in.ProjectID), TopicID: str(in.TopicID), ProviderProfileID: str(in.ProviderProfileID)}
+	create.Model, create.Effort = in.Model, in.Effort
 	if create.RequestID, err = text(in.RequestID, 1, 100); err != nil {
 		return Result{}, err
 	}

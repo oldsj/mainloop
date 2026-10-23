@@ -5,13 +5,29 @@ import (
 	"strings"
 
 	"github.com/oldsj/mainloop/server/internal/agentcontext"
+	"github.com/oldsj/mainloop/server/internal/config"
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
+
+func (s *Service) delegatedBrief(attempt dbq.TaskAttempt, task dbq.Task) string {
+	var profiles []config.ProviderProfile
+	if registry, ok := s.Providers.(interface {
+		Profiles() []config.ProviderProfile
+	}); ok {
+		for _, profile := range registry.Profiles() {
+			if task.ProviderConstraint == nil || profile.ID == *task.ProviderConstraint {
+				profiles = append(profiles, profile)
+			}
+		}
+	}
+	return DelegatedBrief(attempt.Role, task.Mode, task.Brief, profiles...)
+}
 
 // DelegatedBrief is the first message a task's agent receives: the role and tool guidance, then
 // the brief as the delegator wrote it, then the shared guidance for working in Mainloop. The
 // stored brief is not changed; this is only what reaches the agent.
-func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief string) string {
+func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief string, profiles ...config.ProviderProfile) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the Mainloop task %s. First call `whoami`, then `task_get` with its task_id.", role)
 	if mode == dbstate.TaskModeCode {
@@ -28,6 +44,9 @@ func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief strin
 		b.WriteString(" Do the assigned coordination work; you have no repository authority.")
 	}
 	b.WriteString(" Then `report` with task_id, attempt_id, outcome, evidence_refs and a stable request_id.")
+	if role == dbstate.AttemptSupervisor && len(profiles) > 0 {
+		b.WriteString(agentcontext.DelegationProfiles(profiles))
+	}
 	b.WriteString("\n\n## Assigned work\n")
 	b.WriteString(brief)
 	b.WriteString("\n\n")

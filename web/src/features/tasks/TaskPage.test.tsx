@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection } from '@/api';
 import { createSseApplier } from '@/api/invalidation';
 import { server } from '@/test/msw/server';
-import { operation, projection, view } from '@/test/fixtures/tasks';
+import { attempt, operation, projection, view } from '@/test/fixtures/tasks';
 import { renderTasks } from './test/render';
 import {
   problem,
@@ -42,6 +42,23 @@ function deferred() {
 const REQUEST_ID = expect.stringMatching(/^ui-/);
 
 describe('task page layout', () => {
+  it.each([
+    { model: 'claude-opus-5', effort: 'high' as const, expected: 'claude-opus-5 · high effort' },
+    { model: null, effort: null, expected: 'claude-sonnet-5 · medium effort' },
+    { expected: 'claude-sonnet-5 · medium effort' }
+  ])(
+    'shows effective attempt settings beside the provider: $expected',
+    async ({ expected, ...settings }) => {
+      server.use(...serveTaskPage(taskScreen(view({}, { attempts: [attempt(settings)] }))));
+      renderTasks('/tasks/task-1');
+
+      expect(await screen.findByTestId('task-provider')).toHaveTextContent(`claude · ${expected}`);
+      expect(screen.getByTestId('task-attempts')).toHaveTextContent(
+        `Attempt 1 · claude · ${expected}`
+      );
+    }
+  );
+
   it('shows the sections in the frozen order, each under its own heading', async () => {
     server.use(...serveTaskPage(taskScreen(view())));
     renderTasks('/tasks/task-1');

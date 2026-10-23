@@ -85,7 +85,11 @@ func standingHash(deliveryID, text string) string {
 // withContext renders the message with the preamble in front of it: mainContext, then the earlier
 // conversation when there is any to carry.
 func (t *turn) withContext(earlier string) string {
-	return mainContext + earlier + newMessageMarker + "\n" + t.d.Content
+	choices := ""
+	if t.s.Providers != nil {
+		choices = agentcontext.DelegationProfiles(t.s.Providers.Profiles())
+	}
+	return mainContext + choices + earlier + newMessageMarker + "\n" + t.d.Content
 }
 
 // newMessageMarker ends the preamble; the owner's message follows it.

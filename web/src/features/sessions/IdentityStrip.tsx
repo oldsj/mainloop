@@ -32,7 +32,12 @@ export function IdentityStrip({ session }: { session: Session }) {
   const last = deliveries.at(-1);
   const problem = last ? deliveryNotices(deliveries).get(last.message_id) : undefined;
   const provider = agentLabel(nativeProviderFor(info.kind, providers.data ?? []));
-  const model = info.model ?? session.model;
+  const profiles = providers.data ?? [];
+  const profile = profiles.find(
+    (item) => item.id === info.kind || item.aliases.includes(info.kind)
+  );
+  const model = info.model_override ?? profile?.default_model ?? info.model ?? session.model;
+  const effort = info.effort_override ?? profile?.default_effort;
 
   return (
     <section
@@ -48,6 +53,7 @@ export function IdentityStrip({ session }: { session: Session }) {
         <span className="text-foreground">{provider}</span>
         <span>·</span>
         <span className="truncate">{(model ?? 'model pending').replace(/^claude-/, '')}</span>
+        {effort ? <span className="shrink-0">· {effort} effort</span> : null}
         <span>·</span>
         <span>{live}</span>
         {info.topic ? <span className="hidden truncate sm:inline">· #{info.topic}</span> : null}
@@ -71,6 +77,11 @@ export function IdentityStrip({ session }: { session: Session }) {
           <Field label="model" testId="id-model">
             {model ?? 'unknown yet'}
           </Field>
+          {effort ? (
+            <Field label="effort" testId="id-effort">
+              {effort}
+            </Field>
+          ) : null}
           <Field label="kagent agent" testId="id-agent">
             {info.agent_name}
           </Field>

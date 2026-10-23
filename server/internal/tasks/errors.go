@@ -7,6 +7,7 @@ import "fmt"
 type Error struct {
 	Status int
 	Reason string
+	Detail string
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("tasks: %d %s", e.Status, e.Reason) }

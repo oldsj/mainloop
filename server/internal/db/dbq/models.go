@@ -795,6 +795,8 @@ type TaskAttempt struct {
 	ProgressAt                *time.Time
 	StopRequestedAt           *time.Time
 	LivenessFailingSince      *time.Time
+	Model                     *string
+	Effort                    *string
 }
 
 type TaskEventDelivery struct {

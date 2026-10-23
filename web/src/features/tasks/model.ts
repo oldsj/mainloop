@@ -3,9 +3,17 @@
  * the wording shared by the page and the tree. Components import from here so the copy lives in
  * one place.
  */
-import type { TaskProjection, TaskView } from '@/lib/contract';
+import type { ProviderProfile, TaskAttempt, TaskProjection, TaskView } from '@/lib/contract';
 import type { ActionIntent, ActionOutcome } from '@/lib/taskActions';
 import { currentAttempt } from '@/lib/taskState';
+
+export function attemptSettings(attempt: TaskAttempt | null, providers: ProviderProfile[]): string {
+  if (!attempt) return '';
+  const profile = providers.find((item) => item.id === attempt.profile_id);
+  const model = attempt.model ?? profile?.default_model;
+  const effort = attempt.effort ?? profile?.default_effort;
+  return `${model ? ` · ${model}` : ''}${effort ? ` · ${effort} effort` : ''}`;
+}
 
 export type NoticeTone = 'info' | 'warn' | 'error';
 
