@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -164,7 +165,11 @@ type CreateInput struct {
 	ProjectID         string
 	TopicID           string
 	ProviderProfileID string
-	Checkout          *Checkout
+	// Model and Effort are the new attempt's starting overrides, validated against the resolved
+	// provider profile's Models and EffortLevels. Empty means the profile's own default.
+	Model    string
+	Effort   string
+	Checkout *Checkout
 }
 
 // Checkout is the repository position a code task starts from.
@@ -178,7 +183,8 @@ func (in CreateInput) payload() map[string]any {
 	m := map[string]any{
 		"title": in.Title, "brief": in.Brief, "mode": in.Mode,
 		"project_id": nilIfEmpty(in.ProjectID), "topic_id": nilIfEmpty(in.TopicID),
-		"provider_profile_id": nilIfEmpty(in.ProviderProfileID), "checkout": nil,
+		"provider_profile_id": nilIfEmpty(in.ProviderProfileID),
+		"model": nilIfEmpty(in.Model), "effort": nilIfEmpty(in.Effort), "checkout": nil,
 	}
 	if in.Checkout != nil {
 		m["checkout"] = map[string]any{"branch": in.Checkout.Branch, "ref": in.Checkout.Ref, "depth": in.Checkout.Depth}
@@ -274,6 +280,27 @@ func (s *Service) selectProfile(ctx context.Context, q *dbq.Queries, in CreateIn
 		return selection{}, err
 	}
 	return selection{profile: prof, source: dbstate.SelectionInstallationDefault}, nil
+}
+
+// validateModelEffort checks a create request's model and effort against the resolved profile.
+// Either left empty keeps the profile's own default_model/default_effort; given, it must be one
+// of the profile's offered models or effort_levels, or the refusal carries the allowed values.
+func validateModelEffort(in CreateInput, prof config.ProviderProfile) error {
+	if in.Model != "" && !slices.ContainsFunc(prof.Models, func(m config.ProviderModel) bool { return m.ID == in.Model }) {
+		return refusalDetail(422, ReasonModelUnavailable, map[string]any{"allowed_models": modelIDs(prof.Models)})
+	}
+	if in.Effort != "" && !slices.Contains(prof.EffortLevels, in.Effort) {
+		return refusalDetail(422, ReasonEffortUnavailable, map[string]any{"allowed_effort_levels": prof.EffortLevels})
+	}
+	return nil
+}
+
+func modelIDs(models []config.ProviderModel) []string {
+	ids := make([]string, len(models))
+	for i, m := range models {
+		ids[i] = m.ID
+	}
+	return ids
 }
 
 // Create records a task and its create operation, both with no reason: nothing has gone wrong
@@ -423,6 +450,9 @@ func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, i
 	if err != nil {
 		return dbq.Task{}, err
 	}
+	if err := validateModelEffort(in, sel.profile); err != nil {
+		return dbq.Task{}, err
+	}
 	id := uuid.NewString()
 	root := id
 	var parentID *string
@@ -433,6 +463,7 @@ func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, i
 		ID: id, OwnerID: p.OwnerID, ProjectID: project, TopicID: topic, ParentTaskID: parentID, RootTaskID: root,
 		CreatorBindingID: ptr(p.BindingID), Title: in.Title, Brief: in.Brief, Mode: in.Mode,
 		AssignedProfileID: sel.profile.ID, SelectionSource: sel.source, ProviderConstraint: sel.constraint,
+		Model: ptr(in.Model), Effort: ptr(in.Effort),
 	}
 	if c := in.Checkout; c != nil {
 		depth := int32(c.Depth) //nolint:gosec // validate bounds it to 0..1000

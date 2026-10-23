@@ -6636,6 +6636,23 @@ components:
               pattern: ^[a-z][a-z0-9_-]*$
             - type: 'null'
           title: Provider Profile Id
+        model:
+          anyOf:
+            - type: string
+              pattern: ^[A-Za-z0-9._:/-]{1,200}$
+            - type: 'null'
+          title: Model
+          description: >-
+            One of the resolved provider profile's models. Unset keeps the profile's
+            default_model. 422 with the allowed models if the profile does not offer it.
+        effort:
+          anyOf:
+            - $ref: '#/components/schemas/EffortLevel'
+            - type: 'null'
+          title: Effort
+          description: >-
+            One of the resolved provider profile's effort_levels. Unset keeps the profile's
+            default_effort. 422 with the allowed levels if the profile does not offer it.
         checkout:
           anyOf:
             - $ref: '#/components/schemas/TaskCheckout'
@@ -7002,6 +7019,16 @@ components:
         recovery:
           type: string
           description: 'parent_capacity only: how to free capacity.'
+        allowed_models:
+          type: array
+          items:
+            type: string
+          description: "model_unavailable only: the resolved profile's offered model ids."
+        allowed_effort_levels:
+          type: array
+          items:
+            $ref: '#/components/schemas/EffortLevel'
+          description: "effort_unavailable only: the resolved profile's offered effort levels."
       required:
         - reason
       additionalProperties: true
@@ -7975,6 +8002,23 @@ components:
           pattern: ^[a-z][a-z0-9_-]*$
           title: Assigned Profile Id
           type: string
+        model:
+          anyOf:
+            - type: string
+            - type: 'null'
+          default: null
+          title: Model
+          description: >-
+            The model the create request chose, validated against assigned_profile_id. Null
+            means the profile's default_model.
+        effort:
+          anyOf:
+            - $ref: '#/components/schemas/EffortLevel'
+            - type: 'null'
+          default: null
+          description: >-
+            The reasoning effort the create request chose, validated against
+            assigned_profile_id. Null means the profile's default_effort.
         selection_source:
           enum:
             - explicit
@@ -8068,6 +8112,8 @@ components:
         - brief
         - mode
         - assigned_profile_id
+        - model
+        - effort
         - selection_source
         - created_at
         - updated_at
@@ -8153,6 +8199,19 @@ components:
         configuration_revision:
           title: Configuration Revision
           type: string
+        model:
+          anyOf:
+            - type: string
+            - type: 'null'
+          default: null
+          title: Model
+          description: The model this attempt started with, or null for the profile's default.
+        effort:
+          anyOf:
+            - $ref: '#/components/schemas/EffortLevel'
+            - type: 'null'
+          default: null
+          description: The reasoning effort this attempt started with, or null for the profile's default.
         agent_ref:
           $ref: '#/components/schemas/ProviderAgentRef'
         role:
@@ -8321,6 +8380,8 @@ components:
         - profile_id
         - native_provider
         - configuration_revision
+        - model
+        - effort
         - agent_ref
         - role
         - depth

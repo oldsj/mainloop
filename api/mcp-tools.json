@@ -321,7 +321,7 @@
     },
     {
       "name": "delegate",
-      "description": "Create a durable task and scoped attempt. Reuse request_id for lost or uncertain responses. After a confirmed terminal blocked create, use a NEW request_id for a new create; reusing the old id returns the blocked operation. Role and tool guidance prefixes the brief.",
+      "description": "Create a durable task and scoped attempt. Reuse request_id for lost or uncertain responses. After a confirmed terminal blocked create, use a NEW request_id for a new create; reusing the old id returns the blocked operation. Role and tool guidance prefixes the brief. Choosing model and effort: match the tier to the task's scope, risk and reversibility, not habit. Mechanical or bounded, easily-reversible work takes the cheapest model and lowest effort likely to succeed; design, debugging, security-sensitive review, or anything hard to undo takes the strongest model and highest effort the profile offers. When re-delegating a failed attempt, prefer a higher tier over repeating the same one. Read the resolved provider profile's own models and effort_levels (see the providers list) rather than assuming any provider's names; leaving both unset keeps the profile's defaults.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -361,9 +361,33 @@
             ],
             "default": null
           },
+          "effort": {
+            "anyOf": [
+              {
+                "enum": ["minimal", "low", "medium", "high", "xhigh", "max"],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "mode": {
             "enum": ["code", "coordination"],
             "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9._:/-]{1,200}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "project_id": {
             "anyOf": [

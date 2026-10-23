@@ -6,6 +6,7 @@ import type { TaskView } from '@/lib/contract';
 import {
   attemptHistory,
   currentAttempt,
+  modelEffortLabel,
   openOperations,
   providerLabel,
   publicationFacts,
@@ -47,6 +48,7 @@ export function TaskFacts({
   const facts = publicationFacts(view.projection);
   const operations = openOperations(view);
   const waitingWithoutRequest = view.task.reason === 'approval' && pending.length === 0;
+  const modelEffort = modelEffortLabel(view);
 
   return (
     <>
@@ -96,6 +98,11 @@ export function TaskFacts({
           {providerLabel(view)}
           {attempt ? ` · attempt ${attempt.number}` : ''}
         </p>
+        {modelEffort ? (
+          <p data-testid="task-model-effort" className="text-muted-foreground text-sm">
+            {modelEffort}
+          </p>
+        ) : null}
         <p className="text-muted-foreground text-sm">
           Status: <span data-testid="task-status-reason">{statusLabel(view.task.status)}</span>
           {view.task.reason ? `, ${reasonLabel(view.task.reason)}` : ''}
