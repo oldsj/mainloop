@@ -6,7 +6,7 @@ spec:
   codex: {}
   workload:
     # Production pin; `make dev-harness` overrides it through DevSpace.
-    image: ghcr.io/oldsj/kagent-codex-harness:0.0.0-4616d73@sha256:df7350affc0d08adea5ae68c736a54266be18425e147c3e8c9b4519ead05d1ac
+    image: ghcr.io/oldsj/kagent-codex-harness:0.0.0-4127ba7@sha256:97405041648fc5486c9767185199b39ac45832076310d588a860cbe05f0f2aed
   substrate:
     workerPoolRef:
       name: kagent-default
