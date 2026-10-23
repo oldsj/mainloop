@@ -2979,6 +2979,10 @@ export interface components {
     };
     /** TaskCreate */
     TaskCreate: {
+      /** @description Initial model override; must be offered by the resolved provider profile. */
+      model?: string | null;
+      /** @description Initial reasoning effort; must be offered by the resolved provider profile. */
+      effort?: string | null;
       /** Request Id */
       request_id: string;
       /** Title */
@@ -3739,6 +3743,10 @@ export interface components {
     };
     /** TaskAttempt */
     TaskAttempt: {
+      /** @description Persisted initial model override; null uses the profile default. */
+      model?: string | null;
+      /** @description Persisted initial effort override; null uses the profile default. */
+      effort?: string | null;
       /** Id */
       id: string;
       /** Task Id */

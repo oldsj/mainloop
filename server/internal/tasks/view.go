@@ -132,6 +132,8 @@ func toAttempt(a dbq.TaskAttempt) (api.TaskAttempt, error) {
 		Number:                int(a.Number),
 		PredecessorId:         a.PredecessorID,
 		ProfileId:             a.ProfileID,
+		Model:                 a.Model,
+		Effort:                a.Effort,
 		ResultRef:             a.ResultRef,
 		RetentionHold:         a.RetentionHold,
 		Role:                  api.TaskAttemptRole(a.Role),

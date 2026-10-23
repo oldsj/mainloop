@@ -4,6 +4,30 @@ Mainloop's MCP tools create and read durable tasks through the same application 
 
 ## Tool scope
 
+### Initial model and effort (implemented)
+
+`TaskCreate` and `delegate` also accept optional nullable `model` and `effort`.
+Both are checked against the resolved profile: inherited provider constraints, an explicit
+profile, the project's preference, then the installation's owner-task default. A model must
+occur in `models`, and an effort in `effort_levels`; an empty offered list allows no override.
+Invalid selections return 422 with the profile and allowed values, before creating a task.
+These fields participate in request idempotency: changing them on a replay conflicts.
+
+The operation records the requested values and the attempt persists its initial overrides.
+Before activation and brief delivery, both coordination and code attempts initialize the
+existing binding override storage transactionally. The first native turn therefore receives
+the overrides through the same metadata path as later session turns, without calling the
+session override endpoints. Omitted fields leave the binding untouched and preserve defaults.
+Resuming the same attempt retains these durable values. Successor-attempt creation inherits
+the source attempt's selections and replaces only fields supplied in its operation request;
+this does not enable the currently unavailable retry/reassign handoff port.
+
+Main's role context and supervisor briefs list enabled profiles' model IDs, effort levels and
+defaults from the registry, not hardcoded provider model names. Guidance weighs scope, risk,
+reversibility and mechanical versus judgment work; it favors the cheapest choice likely to
+succeed and suggests a higher tier when re-delegating a failure. The task views show the initial
+selection (falling back to profile defaults); session identity shows current effective overrides.
+
 Main at depth zero creates supervisors. A supervisor at depth one creates direct children within its persisted project and task tree. Children at depth two and ordinary owner workspace agents cannot delegate. Discovery and direct invocation use the same exact role, depth and grant rules; each task call revalidates persisted identity and current ancestry. Missing, superseded, revoked, archived or terminal attempts cannot authenticate.
 
 `delegate` accepts `request_id`, `title`, `brief`, `mode`, optional `project_id`, `topic_id`, `provider_profile_id` and typed `checkout`. Code tasks require an owned project and checkout; coordination tasks have no repository authority. The service chooses role, depth, owner, root and native configuration. Provider constraints and admission caps apply through the shared service. Reusing a request ID with identical input returns the original operation; changed input conflicts. A returned pending operation is not a running native session.
@@ -22,7 +46,7 @@ MCP-created coding briefs include a Workspace environment section after the shar
 
 ### Shared agent guidance
 
-Status: **implemented** (guidance v3, `server/internal/agentcontext`); wording is checked in, not yet owner-editable. It is the same text for every role and any project, so it holds no repository specifics; those belong in the repository's own `AGENTS.md`. It is bounded (2 KiB, enforced by a test) and rendered, not stored: every task brief carries it after the assigned work, and the stored brief stays as written. The main session gets it in the first message of each kagent Session, after one line naming its role, and in the next message of an existing Session that was given an older version or none (see [chat](chat.md)). The text is the same for every role, so it keys what differs on the task's mode, not its role: a supervisor is any task without a parent, and a root code task has a checkout. It tells the agent:
+Status: **implemented** (guidance v4, `server/internal/agentcontext`); wording is checked in, not yet owner-editable. It is the same text for every role and any project, so it holds no repository specifics; those belong in the repository's own `AGENTS.md`. It is bounded (2 KiB, enforced by a test) and rendered, not stored: every task brief carries it after the assigned work, and the stored brief stays as written. The main session gets it in the first message of each kagent Session, after one line naming its role, and in the next message of an existing Session that was given an older version or none (see [chat](chat.md)). The text is the same for every role, so it keys what differs on the task's mode, not its role: a supervisor is any task without a parent, and a root code task has a checkout. It tells the agent:
 
 - Where it runs: Mainloop sessions are isolated; code tasks, whatever their role, run in an isolated workspace whose checkout is `/data/workspace`, and the main session and coordination tasks have no checkout and hand code work to code tasks.
 - What survives a pause: committed work and `/data`; writes elsewhere, `/tmp` and processes may be reset. It keeps work in progress committed or under `/data` and runs builds and tests in the foreground.

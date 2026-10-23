@@ -31,6 +31,9 @@ var actionRefusals = []int{http.StatusForbidden, http.StatusNotFound, http.Statu
 func taskReply(err error, declared ...int) error {
 	var e *Error
 	if errors.As(err, &e) && slices.Contains(declared, e.Status) {
+		if e.Detail != "" {
+			return apierr.Invalid(e.Detail)
+		}
 		return apierr.Reason(e.Status, e.Reason)
 	}
 	return err
@@ -91,6 +94,7 @@ func (a *TasksAPI) CreateTask(ctx context.Context, req api.CreateTaskRequestObje
 	in := CreateInput{
 		RequestID: body.RequestId, Title: body.Title, Brief: body.Brief, Mode: dbstate.TaskMode(body.Mode),
 		ProjectID: deref(body.ProjectId), TopicID: deref(body.TopicId), ProviderProfileID: deref(body.ProviderProfileId),
+		Model: body.Model, Effort: body.Effort,
 	}
 	if c := body.Checkout; c != nil {
 		in.Checkout = &Checkout{Branch: c.Branch, Ref: deref(c.Ref)}

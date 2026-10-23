@@ -19,7 +19,8 @@ import {
   type Fact,
   type OperationProgress
 } from '@/lib/taskState';
-import { notPublishedYet } from './model';
+import { attemptSettings, notPublishedYet } from './model';
+import { useProviders } from './queries';
 
 const HEADING = 'text-muted-foreground text-xs tracking-wide uppercase';
 const PANEL = 'gap-sm p-md border-border flex flex-col border-t';
@@ -43,6 +44,7 @@ export function TaskFacts({
 }) {
   const pending = view.projection.pending_approval_ids ?? [];
   const attempt = currentAttempt(view);
+  const providers = useProviders();
   const workspace = workspaceFacts(view);
   const facts = publicationFacts(view.projection);
   const operations = openOperations(view);
@@ -94,6 +96,7 @@ export function TaskFacts({
         </h2>
         <p data-testid="task-provider" className="text-sm">
           {providerLabel(view)}
+          {attemptSettings(attempt, providers.data ?? [])}
           {attempt ? ` · attempt ${attempt.number}` : ''}
         </p>
         <p className="text-muted-foreground text-sm">
@@ -247,6 +250,7 @@ function OperationItem({ progress }: { progress: OperationProgress }) {
 
 /** The task's history: attempts, the provider's own summary, reports and child tasks. */
 export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: TaskView[] }) {
+  const providers = useProviders();
   const attempts = attemptHistory(view);
   const summary = unverifiedSummary(view);
 
@@ -264,6 +268,7 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
               <li key={attempt.id} className="gap-xs flex flex-col text-sm">
                 <p className="font-medium">
                   Attempt {attempt.number} · {attempt.native_provider}
+                  {attemptSettings(attempt, providers.data ?? [])}
                 </p>
                 <p className="text-muted-foreground text-xs">
                   {attempt.state}

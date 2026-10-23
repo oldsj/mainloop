@@ -164,6 +164,8 @@ type CreateInput struct {
 	ProjectID         string
 	TopicID           string
 	ProviderProfileID string
+	Model             *string
+	Effort            *string
 	Checkout          *Checkout
 }
 
@@ -179,6 +181,12 @@ func (in CreateInput) payload() map[string]any {
 		"title": in.Title, "brief": in.Brief, "mode": in.Mode,
 		"project_id": nilIfEmpty(in.ProjectID), "topic_id": nilIfEmpty(in.TopicID),
 		"provider_profile_id": nilIfEmpty(in.ProviderProfileID), "checkout": nil,
+	}
+	if in.Model != nil {
+		m["model"] = *in.Model
+	}
+	if in.Effort != nil {
+		m["effort"] = *in.Effort
 	}
 	if in.Checkout != nil {
 		m["checkout"] = map[string]any{"branch": in.Checkout.Branch, "ref": in.Checkout.Ref, "depth": in.Checkout.Depth}
@@ -421,6 +429,9 @@ func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, i
 	}
 	sel, err := s.selectProfile(ctx, q, in, project, parent)
 	if err != nil {
+		return dbq.Task{}, err
+	}
+	if err := validateOverrides(sel.profile, in.Model, in.Effort); err != nil {
 		return dbq.Task{}, err
 	}
 	id := uuid.NewString()

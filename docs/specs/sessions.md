@@ -136,7 +136,13 @@ the conversation's old attention flag. An unavailable session disables message i
 
 Assistant message prompts and processing indicators use the native runtime kind (`claude` or `codex`), including the main thread, inline replies, and fullscreen session views. Unknown or missing identity is labelled `agent` rather than guessed from a model name.
 
-The session view shows the conversation, session status, and a native identity strip with the agent kind, model, kagent Agent and Session state, turn count, delivery states, and the reason for the last failed or unconfirmed delivery. Workspace health and lifecycle controls are shown separately.
+The session view shows the conversation, session status, and a native identity strip with the agent kind, effective model and effort, kagent Agent and Session state, turn count, delivery states, and the reason for the last failed or unconfirmed delivery. Explicit binding overrides take precedence over profile defaults. Workspace health and lifecycle controls are shown separately.
+
+Task creation can initialize the binding's model and effort overrides before the first brief is
+delivered (see [delegation](delegation.md)). This reuses durable session override storage and
+turn metadata; it does not race a later model/effort API request against the first turn. An
+attempt without initial overrides keeps the existing provider-default behavior. Changes through
+the session override endpoints still affect later turns, not the attempt's recorded initial values.
 
 The owner-only `GET /sessions/{id}/native` (and the main thread's `native`) also returns an optional
 `preparation_observation`, projected from the kagent GetSession response it already reads for the

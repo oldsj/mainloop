@@ -141,6 +141,13 @@ func withoutContext(t *testing.T, got string) string {
 	if !ok {
 		t.Fatalf("no context block at the start of %q", got)
 	}
+	if strings.HasPrefix(rest, "\n## Delegation choices\n") {
+		end := strings.Index(rest, "[mainloop:")
+		if end < 0 || !strings.Contains(rest[:end], agentcontext.DelegationGuidance) {
+			t.Fatalf("invalid delegation choices: %q", rest)
+		}
+		rest = rest[end:]
+	}
 	return rest
 }
 

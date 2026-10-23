@@ -3,7 +3,7 @@ import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection, keys } from '@/api';
 import { reasonLabel } from '@/lib/taskState';
-import { projection, view } from '@/test/fixtures/tasks';
+import { attempt, projection, view } from '@/test/fixtures/tasks';
 import { server } from '@/test/msw/server';
 import { renderTasks } from './test/render';
 import { problem, providersRead, tasksList } from './test/handlers';
@@ -27,6 +27,22 @@ function deferred() {
   });
   return { promise, release };
 }
+
+it('shows the current attempt model and effort in the task list', async () => {
+  server.use(
+    tasksList(() =>
+      HttpResponse.json([
+        view({}, { attempts: [attempt({ model: 'claude-opus-5', effort: 'high' })] })
+      ])
+    ),
+    providersRead()
+  );
+  renderTasks('/', () => <TaskTree />);
+
+  expect(await screen.findByRole('link', { name: /Add retry button/ })).toHaveTextContent(
+    'claude · claude-opus-5 · high effort'
+  );
+});
 
 /**
  * Port of the frozen CI matrix (`frontend/src/lib/taskRecovery.test.ts`, test 2). The list shows CI

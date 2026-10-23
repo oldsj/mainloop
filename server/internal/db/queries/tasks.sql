@@ -171,9 +171,10 @@ WHERE kind = 'create' AND target_attempt_id = $1 AND state IN ('target_creating'
 -- name: InsertTaskAttempt :one
 INSERT INTO task_attempts (
     id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name,
-    role, depth, writer_generation, initial_ref, session_id, binding_id, workspace_id, workspace_request_id
+    role, depth, writer_generation, initial_ref, session_id, binding_id, workspace_id, workspace_request_id,
+    model, effort
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 )
 RETURNING *;
 

@@ -6591,6 +6591,16 @@ components:
       title: TaskCheckout
     TaskCreate:
       properties:
+        model:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 200
+          description: Initial model override; must be offered by the resolved provider profile.
+        effort:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 20
+          description: Initial reasoning effort; must be offered by the resolved provider profile.
         request_id:
           type: string
           maxLength: 100
@@ -8122,6 +8132,12 @@ components:
     TaskAttempt:
       additionalProperties: false
       properties:
+        model:
+          type: [string, 'null']
+          description: Persisted initial model override; null uses the profile default.
+        effort:
+          type: [string, 'null']
+          description: Persisted initial effort override; null uses the profile default.
         id:
           maxLength: 100
           minLength: 1

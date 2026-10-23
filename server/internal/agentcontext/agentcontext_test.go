@@ -17,7 +17,7 @@ func TestGuidanceIsBounded(t *testing.T) {
 }
 
 func TestGuidanceNamesItsVersion(t *testing.T) {
-	if want := "(guidance v3)"; agentcontext.Version != 3 || !strings.Contains(agentcontext.Guidance, want) {
+	if want := "(guidance v4)"; agentcontext.Version != 4 || !strings.Contains(agentcontext.Guidance, want) {
 		t.Fatalf("version %d does not match the heading %q", agentcontext.Version, want)
 	}
 }

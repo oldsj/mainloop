@@ -230,6 +230,20 @@ func (s *Service) beginCreate(ctx context.Context, c reconcile.Claim, op dbq.Tas
 			NativeProvider: dbstate.NativeProvider(prof.NativeProvider), ConfigurationRevision: prof.ConfigurationRevision,
 			AgentNamespace: agent.Namespace, AgentName: agent.Name, Role: shape.role, Depth: shape.depth,
 		}
+		if op.SourceAttemptID != nil {
+			source, err := q.GetTaskAttempt(ctx, *op.SourceAttemptID)
+			if err != nil {
+				return nil, err
+			}
+			a.Model, a.Effort = source.Model, source.Effort
+		}
+		a.Model, a.Effort, err = initialOverrides(op.RequestPayload, a.Model, a.Effort)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateOverrides(prof, a.Model, a.Effort); err != nil {
+			return nil, err
+		}
 		var repo string
 		if t.Mode == dbstate.TaskModeCode {
 			if t.ProjectID == nil || t.CheckoutBranch == nil {
@@ -390,6 +404,16 @@ func (s *Service) createRuntime(ctx context.Context, c reconcile.Claim, op dbq.T
 		}
 		if cur.State != dbstate.AttemptCreating || TaskFinal(t.Status) || t.CurrentAttemptID == nil || *t.CurrentAttemptID != a.ID {
 			return nil, advance(ctx, q, c, op, dbstate.TaskOpBlocked, nil, nil)
+		}
+		if cur.Model != nil {
+			if _, err := q.SetBindingModelOverride(ctx, dbq.SetBindingModelOverrideParams{SessionID: *cur.SessionID, ModelOverride: cur.Model}); err != nil {
+				return nil, err
+			}
+		}
+		if cur.Effort != nil {
+			if _, err := q.SetBindingEffortOverride(ctx, dbq.SetBindingEffortOverrideParams{SessionID: *cur.SessionID, EffortOverride: cur.Effort}); err != nil {
+				return nil, err
+			}
 		}
 		if _, err := q.MoveAttempt(ctx, dbq.MoveAttemptParams{
 			ID: a.ID, FromState: dbstate.AttemptCreating, ToState: dbstate.AttemptActive, CapacityHeld: true,
@@ -579,7 +603,7 @@ func (s *Service) sendBrief(ctx context.Context, c reconcile.Claim, op dbq.TaskO
 	}
 	mid := briefMessageID(a.ID)
 	if _, err := q.GetDelivery(ctx, mid); errors.Is(err, pgx.ErrNoRows) {
-		_, err := s.Sessions.SendToAs(ctx, sessions.SourceMainloop, *a.SessionID, mid, DelegatedBrief(a.Role, t.Mode, t.Brief))
+		_, err := s.Sessions.SendToAs(ctx, sessions.SourceMainloop, *a.SessionID, mid, s.delegatedBrief(a, t))
 		switch {
 		case errors.Is(err, sessions.ErrNotFound):
 			return s.giveUpInitialBrief(ctx, c, op, a, mid)

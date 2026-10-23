@@ -5,12 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection } from '@/api';
 import { server } from '@/test/msw/server';
 import { workspaceFixture } from '@/test/fixtures';
-import { attempt, view } from '@/test/fixtures/tasks';
+import { attempt, CLAUDE_PROFILE, CODEX_PROFILE, view } from '@/test/fixtures/tasks';
 import { delivery, native, session } from './test/fixtures';
 import {
   nativeReadWith,
   otherListReads,
   problem,
+  providersRead,
   sessionAction,
   sessionRead,
   serveSession,
@@ -355,6 +356,95 @@ describe('stop turn and clear', () => {
 });
 
 describe('identity strip', () => {
+  it.each([
+    {
+      model_override: 'claude-opus-5',
+      effort_override: 'high' as const,
+      model: 'claude-sonnet-5',
+      expectedModel: 'claude-opus-5',
+      expectedEffort: 'high'
+    },
+    {
+      model_override: null,
+      effort_override: null,
+      model: null,
+      expectedModel: 'claude-sonnet-5',
+      expectedEffort: 'medium'
+    },
+    {
+      model_override: null,
+      effort_override: null,
+      model: 'claude-observed-model',
+      expectedModel: 'claude-sonnet-5',
+      expectedEffort: 'medium'
+    }
+  ])(
+    'shows effective settings: $expectedModel / $expectedEffort',
+    async ({ expectedModel, expectedEffort, ...settings }) => {
+      server.use(
+        providersRead([CLAUDE_PROFILE]),
+        ...serveSession(
+          session({ agent_kind: CLAUDE_PROFILE.id, model: 'stale-session-model' }),
+          native({ kind: CLAUDE_PROFILE.id, ...settings })
+        )
+      );
+      renderSessions('/sessions/s1');
+
+      const strip = await screen.findByTestId('identity-strip');
+      await waitFor(() => {
+        expect(strip).toHaveTextContent(expectedModel.replace(/^claude-/, ''));
+        expect(strip).toHaveTextContent(`${expectedEffort} effort`);
+      });
+      await userEvent.setup().click(screen.getByTestId('identity-toggle'));
+      expect(screen.getByTestId('id-model')).toHaveTextContent(expectedModel);
+      expect(screen.getByTestId('id-effort')).toHaveTextContent(expectedEffort);
+    }
+  );
+
+  it('uses the binding profile defaults after switching providers', async () => {
+    server.use(
+      providersRead([CLAUDE_PROFILE, { ...CODEX_PROFILE, default_effort: 'high' }]),
+      ...serveSession(
+        session({ agent_kind: CLAUDE_PROFILE.id, model: 'claude-opus-5' }),
+        native({ kind: CODEX_PROFILE.id, model: 'stale-native-model' })
+      )
+    );
+    renderSessions('/sessions/s1');
+
+    const strip = await screen.findByTestId('identity-strip');
+    await waitFor(() => expect(strip).toHaveTextContent('gpt-5.1-codex'));
+    expect(strip).toHaveTextContent('high effort');
+    expect(strip).not.toHaveTextContent('stale-native-model');
+    expect(strip).not.toHaveTextContent('claude-opus-5');
+  });
+
+  it.each([
+    {
+      model: 'last-native-model',
+      sessionModel: 'last-session-model',
+      expected: 'last-native-model'
+    },
+    { model: null, sessionModel: 'last-session-model', expected: 'last-session-model' },
+    { model: null, sessionModel: null, expected: 'model pending' }
+  ])(
+    'keeps unknown binding defaults safe: $expected',
+    async ({ model, sessionModel, expected }) => {
+      server.use(
+        providersRead([CLAUDE_PROFILE]),
+        ...serveSession(
+          session({ agent_kind: CLAUDE_PROFILE.id, model: sessionModel }),
+          native({ kind: 'missing-profile', model })
+        )
+      );
+      renderSessions('/sessions/s1');
+
+      const strip = await screen.findByTestId('identity-strip');
+      expect(strip).toHaveTextContent(expected);
+      expect(strip).not.toHaveTextContent('effort');
+      expect(strip).not.toHaveTextContent('sonnet-5');
+    }
+  );
+
   it('is collapsed by default and shows the agent details on toggle', async () => {
     server.use(
       ...serveSession(

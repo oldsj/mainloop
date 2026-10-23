@@ -3,6 +3,7 @@ import { StatusBadge } from '@/components/shared/status-badge';
 import type { TaskView } from '@/lib/contract';
 import {
   buildTree,
+  currentAttempt,
   isTerminal,
   openOperations,
   providerLabel,
@@ -11,8 +12,8 @@ import {
   statusLabel,
   statusTone
 } from '@/lib/taskState';
-import { indentClass, unreadableTasksText } from './model';
-import { useTaskList, useUnreadableTaskCount } from './queries';
+import { attemptSettings, indentClass, unreadableTasksText } from './model';
+import { useProviders, useTaskList, useUnreadableTaskCount } from './queries';
 
 /**
  * Tasks with their children beneath them, optionally limited to one project. Each row shows what
@@ -80,6 +81,7 @@ function errorText(error: unknown): string {
 }
 
 function TaskRow({ view, depth, detached }: { view: TaskView; depth: number; detached: boolean }) {
+  const providers = useProviders();
   const facts = publicationFacts(view.projection);
   const operation = openOperations(view)[0];
   const reason = view.task.reason ? reasonLabel(view.task.reason) : null;
@@ -107,6 +109,7 @@ function TaskRow({ view, depth, detached }: { view: TaskView; depth: number; det
         <span className="text-sm font-medium break-words">{view.task.title}</span>
         <span className="text-muted-foreground text-xs break-words">
           {providerLabel(view)}
+          {attemptSettings(currentAttempt(view), providers.data ?? [])}
           {reason ? ` · ${reason}` : ''}
         </span>
         {operation ? <span className="text-xs break-words">{operation.summary}</span> : null}
