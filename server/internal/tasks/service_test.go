@@ -297,6 +297,50 @@ func TestProviderSelection(t *testing.T) {
 	}
 }
 
+// TestCreateValidatesModelAndEffort covers #318: model and effort are optional, validated against
+// the resolved profile's own models and effort_levels, persisted on the task when valid, and left
+// unset (the profile's default, unchanged behavior) when the request names neither.
+func TestCreateValidatesModelAndEffort(t *testing.T) {
+	e := newEnv(t)
+
+	// Neither given: the task's model and effort stay unset, so the profile's own default applies,
+	// exactly as if the fields had never existed.
+	plain := e.view(e.own, e.mustCreate(e.own, tasks.CreateInput{ProjectID: "p1"})).Task
+	if plain.Model != nil || plain.Effort != nil {
+		t.Fatalf("model/effort = %v/%v, want unset", plain.Model, plain.Effort)
+	}
+
+	// A model and effort the resolved (built-in claude) profile offers persist on the task.
+	chosen := e.view(e.own, e.mustCreate(e.own, tasks.CreateInput{
+		ProjectID: "p1", Model: "claude-opus-5-5", Effort: "high",
+	})).Task
+	if chosen.Model == nil || *chosen.Model != "claude-opus-5-5" || chosen.Effort == nil || *chosen.Effort != "high" {
+		t.Fatalf("model/effort = %v/%v", chosen.Model, chosen.Effort)
+	}
+
+	// A model the resolved profile does not offer is refused with the allowed models.
+	_, err := e.create(e.own, tasks.CreateInput{ProjectID: "p1", Model: "gpt-5.1-codex"})
+	var refused *tasks.Error
+	if !errors.As(err, &refused) || refused.Status != 422 || refused.Reason != tasks.ReasonModelUnavailable {
+		t.Fatalf("err = %v", err)
+	}
+	want := []string{"claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5", "claude-fable-5-1"}
+	if got, _ := refused.Detail["allowed_models"].([]string); !reflect.DeepEqual(got, want) {
+		t.Fatalf("allowed_models = %v, want %v", refused.Detail["allowed_models"], want)
+	}
+
+	// An effort the resolved profile does not offer is refused with the allowed levels (codex's
+	// minimal is not one of claude's).
+	_, err = e.create(e.own, tasks.CreateInput{ProjectID: "p1", Effort: "minimal"})
+	if !errors.As(err, &refused) || refused.Status != 422 || refused.Reason != tasks.ReasonEffortUnavailable {
+		t.Fatalf("err = %v", err)
+	}
+	wantEffort := []string{"low", "medium", "high", "xhigh", "max"}
+	if got, _ := refused.Detail["allowed_effort_levels"].([]string); !reflect.DeepEqual(got, wantEffort) {
+		t.Fatalf("allowed_effort_levels = %v, want %v", refused.Detail["allowed_effort_levels"], wantEffort)
+	}
+}
+
 func TestSupervisorCreatesChildren(t *testing.T) {
 	e := newEnv(t)
 	root := e.mustCreate(e.own, tasks.CreateInput{ProjectID: "p1", TopicID: "tp1", ProviderProfileID: "codex"})

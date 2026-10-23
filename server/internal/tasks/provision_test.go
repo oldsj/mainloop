@@ -108,6 +108,40 @@ func TestDelegateProvisionsAndReports(t *testing.T) {
 	}
 }
 
+// TestDelegateAppliesModelAndEffortBeforeTheFirstTurn covers #318: a chosen model and effort are
+// recorded on the attempt and applied as the session's own override (the same storage /model and
+// /effort use) before the brief is sent, so the first turn already carries them. Leaving both
+// unset leaves no override at all: unchanged behavior.
+func TestDelegateAppliesModelAndEffortBeforeTheFirstTurn(t *testing.T) {
+	r := newRig(t)
+	r.run()
+
+	root := r.mustCreate(r.own, tasks.CreateInput{
+		ProjectID: "p1", Brief: "Ship the thing", Model: "claude-opus-5-5", Effort: "high",
+	})
+	r.eventually("chosen supervisor provisioned", func() bool { return r.opState(root) == "completed" })
+	attempt, binding := r.attemptOf(root)
+	if got := r.str(`SELECT model FROM task_attempts WHERE id = $1`, attempt); got != "claude-opus-5-5" {
+		t.Fatalf("attempt model = %q", got)
+	}
+	if got := r.str(`SELECT effort FROM task_attempts WHERE id = $1`, attempt); got != "high" {
+		t.Fatalf("attempt effort = %q", got)
+	}
+	if got := r.str(`SELECT model_override FROM agent_bindings WHERE session_id = $1`, binding); got != "claude-opus-5-5" {
+		t.Fatalf("binding model_override = %q, want it set before the first turn", got)
+	}
+	if got := r.str(`SELECT effort_override FROM agent_bindings WHERE session_id = $1`, binding); got != "high" {
+		t.Fatalf("binding effort_override = %q, want it set before the first turn", got)
+	}
+
+	plain := r.mustCreate(r.own, tasks.CreateInput{ProjectID: "p1", Brief: "Plain"})
+	r.eventually("plain supervisor provisioned", func() bool { return r.opState(plain) == "completed" })
+	_, plainBinding := r.attemptOf(plain)
+	if n := r.count(`SELECT count(*) FROM agent_bindings WHERE session_id = $1 AND model_override IS NULL AND effort_override IS NULL`, plainBinding); n != 1 {
+		t.Fatalf("unset model/effort left an override on the binding")
+	}
+}
+
 func TestProvisionReplaysWithoutASecondWorkspace(t *testing.T) {
 	r := newRig(t)
 	root := r.mustCreate(r.own, tasks.CreateInput{ProjectID: "p1"})

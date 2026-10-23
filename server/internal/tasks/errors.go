@@ -3,15 +3,23 @@ package tasks
 import "fmt"
 
 // Error is a refusal the caller is shown: an HTTP status and the stable machine code that goes in
-// the task error body. Anything that is not an *Error is an internal failure.
+// the task error body. Detail carries extra TaskErrorDetail fields, for example the allowed
+// values of a model_unavailable or effort_unavailable refusal. Anything that is not an *Error is
+// an internal failure.
 type Error struct {
 	Status int
 	Reason string
+	Detail map[string]any
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("tasks: %d %s", e.Status, e.Reason) }
 
 func refusal(status int, reason string) *Error { return &Error{Status: status, Reason: reason} }
+
+// refusalDetail is [refusal] with extra TaskErrorDetail fields.
+func refusalDetail(status int, reason string, detail map[string]any) *Error {
+	return &Error{Status: status, Reason: reason, Detail: detail}
+}
 
 // Reasons. The set is the contract of the task routes and the MCP tools.
 const (
@@ -46,4 +54,6 @@ const (
 	ReasonBriefTooLong         = "brief_too_long"
 	ReasonChildCapacity        = "child_capacity"
 	ReasonGlobalCapacity       = "global_capacity"
+	ReasonModelUnavailable     = "model_unavailable"
+	ReasonEffortUnavailable    = "effort_unavailable"
 )

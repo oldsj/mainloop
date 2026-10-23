@@ -25,7 +25,14 @@ func (s *Server) taskTools() []Tool {
 			Name: agentauth.ToolDelegate,
 			Description: "Create a durable task and scoped attempt. Reuse request_id for lost or uncertain responses. " +
 				"After a confirmed terminal blocked create, use a NEW request_id for a new create; reusing the old id " +
-				"returns the blocked operation. Role and tool guidance prefixes the brief.",
+				"returns the blocked operation. Role and tool guidance prefixes the brief. " +
+				"Choosing model and effort: match the tier to the task's scope, risk and reversibility, not habit. " +
+				"Mechanical or bounded, easily-reversible work takes the cheapest model and lowest effort likely to " +
+				"succeed; design, debugging, security-sensitive review, or anything hard to undo takes the strongest " +
+				"model and highest effort the profile offers. When re-delegating a failed attempt, prefer a higher " +
+				"tier over repeating the same one. Read the resolved provider profile's own models and effort_levels " +
+				"(see the providers list) rather than assuming any provider's names; leaving both unset keeps the " +
+				"profile's defaults.",
 			InputSchema: objectSchema(map[string]any{
 				"request_id": id,
 				"title":      stringSchema(1, 200),
@@ -35,6 +42,12 @@ func (s *Server) taskTools() []Tool {
 				"topic_id":   optional(stringSchema(1, 100)),
 				"provider_profile_id": optional(map[string]any{
 					"type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-z][a-z0-9_-]*$",
+				}),
+				"model": optional(map[string]any{
+					"type": "string", "pattern": "^[A-Za-z0-9._:/-]{1,200}$",
+				}),
+				"effort": optional(map[string]any{
+					"type": "string", "enum": []any{"minimal", "low", "medium", "high", "xhigh", "max"},
 				}),
 				"checkout": optional(objectSchema(map[string]any{
 					"branch": stringSchema(1, 255),
@@ -109,8 +122,13 @@ func taskFailure(err error) error {
 	var r *tasks.Error
 	if errors.As(err, &r) {
 		reason := r.Reason
-		if reason == tasks.ReasonEnvironmentRequired {
+		switch reason {
+		case tasks.ReasonEnvironmentRequired:
 			reason += ": the owner must select a development environment on the project page (Environment section), then delegate again"
+		case tasks.ReasonModelUnavailable:
+			reason += fmt.Sprintf(": allowed models are %v", r.Detail["allowed_models"])
+		case tasks.ReasonEffortUnavailable:
+			reason += fmt.Sprintf(": allowed effort levels are %v", r.Detail["allowed_effort_levels"])
 		}
 		return failure(strconv.Itoa(r.Status), reason)
 	}
@@ -152,6 +170,8 @@ func (s *Server) delegate(ctx context.Context, a agentauth.Actor, args json.RawM
 		ProjectID         *string `json:"project_id"`
 		TopicID           *string `json:"topic_id"`
 		ProviderProfileID *string `json:"provider_profile_id"`
+		Model             *string `json:"model"`
+		Effort            *string `json:"effort"`
 		Checkout          *struct {
 			Branch string `json:"branch"`
 			Ref    string `json:"ref"`
@@ -162,7 +182,10 @@ func (s *Server) delegate(ctx context.Context, a agentauth.Actor, args json.RawM
 		return Result{}, err
 	}
 	var err error
-	create := tasks.CreateInput{ProjectID: str(in.ProjectID), TopicID: str(in.TopicID), ProviderProfileID: str(in.ProviderProfileID)}
+	create := tasks.CreateInput{
+		ProjectID: str(in.ProjectID), TopicID: str(in.TopicID), ProviderProfileID: str(in.ProviderProfileID),
+		Model: str(in.Model), Effort: str(in.Effort),
+	}
 	if create.RequestID, err = text(in.RequestID, 1, 100); err != nil {
 		return Result{}, err
 	}

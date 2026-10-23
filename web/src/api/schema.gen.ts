@@ -2998,6 +2998,16 @@ export interface components {
       topic_id?: string | null;
       /** Provider Profile Id */
       provider_profile_id?: string | null;
+      /**
+       * Model
+       * @description One of the resolved provider profile's models. Unset keeps the profile's default_model. 422 with the allowed models if the profile does not offer it.
+       */
+      model?: string | null;
+      /**
+       * Effort
+       * @description One of the resolved provider profile's effort_levels. Unset keeps the profile's default_effort. 422 with the allowed levels if the profile does not offer it.
+       */
+      effort?: components['schemas']['EffortLevel'] | null;
       checkout?: components['schemas']['TaskCheckout'] | null;
     };
     /** TaskReassign */
@@ -3186,6 +3196,10 @@ export interface components {
       held_tasks?: components['schemas']['TaskCapacityHolder'][];
       /** @description parent_capacity only: how to free capacity. */
       recovery?: string;
+      /** @description model_unavailable only: the resolved profile's offered model ids. */
+      allowed_models?: string[];
+      /** @description effort_unavailable only: the resolved profile's offered effort levels. */
+      allowed_effort_levels?: components['schemas']['EffortLevel'][];
     } & {
       [key: string]: unknown;
     };
@@ -3658,6 +3672,17 @@ export interface components {
       /** Assigned Profile Id */
       assigned_profile_id: string;
       /**
+       * Model
+       * @description The model the create request chose, validated against assigned_profile_id. Null means the profile's default_model.
+       * @default null
+       */
+      model: string | null;
+      /**
+       * @description The reasoning effort the create request chose, validated against assigned_profile_id. Null means the profile's default_effort.
+       * @default null
+       */
+      effort: components['schemas']['EffortLevel'] | null;
+      /**
        * Selection Source
        * @enum {string}
        */
@@ -3756,6 +3781,17 @@ export interface components {
       native_provider: 'claude' | 'codex';
       /** Configuration Revision */
       configuration_revision: string;
+      /**
+       * Model
+       * @description The model this attempt started with, or null for the profile's default.
+       * @default null
+       */
+      model: string | null;
+      /**
+       * @description The reasoning effort this attempt started with, or null for the profile's default.
+       * @default null
+       */
+      effort: components['schemas']['EffortLevel'] | null;
       agent_ref: components['schemas']['ProviderAgentRef'];
       /**
        * Role

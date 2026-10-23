@@ -38,6 +38,10 @@ type SessionRuntime interface {
 	Cancel(ctx context.Context, sessionID string) (sessions.CancelResult, error)
 	Complete(ctx context.Context, sessionID string) (sessions.CancelResult, error)
 	Fail(ctx context.Context, sessionID string) (sessions.CancelResult, error)
+	// SetModelOverride and SetEffortOverride apply an attempt's model and effort as the session's
+	// own override, reusing the same storage and turn metadata as the owner's /model and /effort.
+	SetModelOverride(ctx context.Context, sessionID string, model *string) (sessions.ModelEffortState, error)
+	SetEffortOverride(ctx context.Context, sessionID string, effort *string) (sessions.ModelEffortState, error)
 }
 
 // Register adds the task loops and sweeps to the runner. Without Workspaces and Sessions the rows
@@ -229,6 +233,7 @@ func (s *Service) beginCreate(ctx context.Context, c reconcile.Claim, op dbq.Tas
 			ID: uuid.NewString(), TaskID: t.ID, Number: number, ProfileID: prof.ID,
 			NativeProvider: dbstate.NativeProvider(prof.NativeProvider), ConfigurationRevision: prof.ConfigurationRevision,
 			AgentNamespace: agent.Namespace, AgentName: agent.Name, Role: shape.role, Depth: shape.depth,
+			Model: t.Model, Effort: t.Effort,
 		}
 		var repo string
 		if t.Mode == dbstate.TaskModeCode {
@@ -576,6 +581,18 @@ func (s *Service) sendBrief(ctx context.Context, c reconcile.Claim, op dbq.TaskO
 	t, err := q.GetTaskByID(ctx, a.TaskID)
 	if err != nil {
 		return reconcile.Outcome{}, err
+	}
+	// Apply the attempt's model and effort as the session's own override before anything is sent,
+	// so the first turn already carries them; setting the same value again on a replay is a no-op.
+	if a.Model != nil {
+		if _, err := s.Sessions.SetModelOverride(ctx, *a.SessionID, a.Model); err != nil {
+			return reconcile.Outcome{}, err
+		}
+	}
+	if a.Effort != nil {
+		if _, err := s.Sessions.SetEffortOverride(ctx, *a.SessionID, a.Effort); err != nil {
+			return reconcile.Outcome{}, err
+		}
 	}
 	mid := briefMessageID(a.ID)
 	if _, err := q.GetDelivery(ctx, mid); errors.Is(err, pgx.ErrNoRows) {

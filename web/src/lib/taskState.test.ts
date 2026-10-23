@@ -16,6 +16,7 @@ import {
   ancestors,
   attemptHistory,
   buildTree,
+  modelEffortLabel,
   normalizeView,
   observationAge,
   openOperations,
@@ -50,6 +51,20 @@ test('a task with no attempt falls back to its assigned profile', () => {
   const queued = view({ status: 'queued', current_attempt_id: null }, { attempts: [] });
   expect(providerLabel(queued)).toBe('claude-default');
   expect(workspaceFacts(queued).workspaceId).toBe(null);
+});
+
+test('model and effort are shown only when chosen (#318)', () => {
+  expect(modelEffortLabel(view())).toBe(null);
+  const chosenAttempt = view({}, { attempts: [attempt({ model: 'claude-opus-5-5', effort: 'high' })] });
+  expect(modelEffortLabel(chosenAttempt)).toBe('model: claude-opus-5-5 · effort: high');
+  const modelOnly = view({}, { attempts: [attempt({ model: 'claude-opus-5-5' })] });
+  expect(modelEffortLabel(modelOnly)).toBe('model: claude-opus-5-5');
+  // Before an attempt exists, the task's own chosen model/effort still shows.
+  const queuedChosen = view(
+    { status: 'queued', current_attempt_id: null, model: 'claude-opus-5-5', effort: 'high' },
+    { attempts: [] }
+  );
+  expect(modelEffortLabel(queuedChosen)).toBe('model: claude-opus-5-5 · effort: high');
 });
 
 test('observed branch wins over the requested checkout branch', () => {

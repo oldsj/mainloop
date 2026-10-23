@@ -522,3 +522,19 @@ export function providerLabel(view: TaskView): string {
   const attempt = currentAttempt(view);
   return attempt ? attempt.native_provider : view.task.assigned_profile_id;
 }
+
+/**
+ * Model and effort shown alongside the provider (#318): the running attempt's own choice, else
+ * the task's own (set at delegation, before an attempt exists). Null when neither was ever
+ * chosen, so the profile's own default applies and there is nothing to show.
+ */
+export function modelEffortLabel(view: TaskView): string | null {
+  const attempt = currentAttempt(view);
+  const model = attempt ? attempt.model : view.task.model;
+  const effort = attempt ? attempt.effort : view.task.effort;
+  if (!model && !effort) return null;
+  const parts: string[] = [];
+  if (model) parts.push(`model: ${model}`);
+  if (effort) parts.push(`effort: ${effort}`);
+  return parts.join(' · ');
+}

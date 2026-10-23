@@ -31,7 +31,7 @@ var actionRefusals = []int{http.StatusForbidden, http.StatusNotFound, http.Statu
 func taskReply(err error, declared ...int) error {
 	var e *Error
 	if errors.As(err, &e) && slices.Contains(declared, e.Status) {
-		return apierr.Reason(e.Status, e.Reason)
+		return apierr.ReasonDetail(e.Status, e.Reason, e.Detail)
 	}
 	return err
 }
@@ -91,6 +91,7 @@ func (a *TasksAPI) CreateTask(ctx context.Context, req api.CreateTaskRequestObje
 	in := CreateInput{
 		RequestID: body.RequestId, Title: body.Title, Brief: body.Brief, Mode: dbstate.TaskMode(body.Mode),
 		ProjectID: deref(body.ProjectId), TopicID: deref(body.TopicId), ProviderProfileID: deref(body.ProviderProfileId),
+		Model: deref(body.Model), Effort: derefEffort(body.Effort),
 	}
 	if c := body.Checkout; c != nil {
 		in.Checkout = &Checkout{Branch: c.Branch, Ref: deref(c.Ref)}
@@ -110,6 +111,13 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+func derefEffort(e *api.EffortLevel) string {
+	if e == nil {
+		return ""
+	}
+	return string(*e)
 }
 
 // CancelTask implements api.StrictServerInterface.

@@ -96,7 +96,7 @@ UPDATE task_attempts
 SET session_id = $2, binding_id = $2, workspace_id = $2,
     environment = coalesce(environment, $3::jsonb), updated_at = now()
 WHERE id = $1 AND state = 'creating' AND (session_id IS NULL OR session_id = $2)
-RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since
+RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since, model, effort
 `
 
 type AttachAttemptSessionParams struct {
@@ -153,6 +153,8 @@ func (q *Queries) AttachAttemptSession(ctx context.Context, arg AttachAttemptSes
 		&i.ProgressAt,
 		&i.StopRequestedAt,
 		&i.LivenessFailingSince,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
@@ -227,7 +229,7 @@ UPDATE tasks
 SET status = 'completed', reason = NULL, decision_attempt_id = NULL, decision_report_id = NULL,
     decision_action = NULL, merge_proposal_id = $3, version = version + 1, updated_at = now()
 WHERE id = $1 AND version = $2
-RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort
 `
 
 type CompleteTaskMergedParams struct {
@@ -277,6 +279,8 @@ func (q *Queries) CompleteTaskMerged(ctx context.Context, arg CompleteTaskMerged
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MergeProposalID,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
@@ -292,7 +296,7 @@ WHERE task_attempts.id = $1 AND task_attempts.state = 'draining'
   )
   AND (SELECT coalesce(sum(d.outcome_version), 0)::bigint FROM deliveries d
        WHERE d.session_id = task_attempts.session_id) = $2::bigint
-RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since
+RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since, model, effort
 `
 
 type ConfirmAttemptStopParams struct {
@@ -354,6 +358,8 @@ func (q *Queries) ConfirmAttemptStop(ctx context.Context, arg ConfirmAttemptStop
 		&i.ProgressAt,
 		&i.StopRequestedAt,
 		&i.LivenessFailingSince,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
@@ -604,7 +610,7 @@ func (q *Queries) GetProjectFullName(ctx context.Context, id string) (string, er
 }
 
 const getTask = `-- name: GetTask :one
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id FROM tasks WHERE id = $1 AND owner_id = $2
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort FROM tasks WHERE id = $1 AND owner_id = $2
 `
 
 type GetTaskParams struct {
@@ -652,13 +658,15 @@ func (q *Queries) GetTask(ctx context.Context, arg GetTaskParams) (Task, error) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MergeProposalID,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
 
 const getTaskAttempt = `-- name: GetTaskAttempt :one
 
-SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since FROM task_attempts WHERE id = $1
+SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since, model, effort FROM task_attempts WHERE id = $1
 `
 
 // Attempts
@@ -709,13 +717,15 @@ func (q *Queries) GetTaskAttempt(ctx context.Context, id string) (TaskAttempt, e
 		&i.ProgressAt,
 		&i.StopRequestedAt,
 		&i.LivenessFailingSince,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
 
 const getTaskByID = `-- name: GetTaskByID :one
 
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id FROM tasks WHERE id = $1
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort FROM tasks WHERE id = $1
 `
 
 // Internal lookups for the reconcile handlers, which know a row id and not the caller.
@@ -759,12 +769,14 @@ func (q *Queries) GetTaskByID(ctx context.Context, id string) (Task, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MergeProposalID,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
 
 const getTaskByIDForUpdate = `-- name: GetTaskByIDForUpdate :one
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id FROM tasks WHERE id = $1 FOR UPDATE
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort FROM tasks WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetTaskByIDForUpdate(ctx context.Context, id string) (Task, error) {
@@ -807,6 +819,8 @@ func (q *Queries) GetTaskByIDForUpdate(ctx context.Context, id string) (Task, er
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MergeProposalID,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
@@ -849,7 +863,7 @@ func (q *Queries) GetTaskEventDelivery(ctx context.Context, id string) (TaskEven
 }
 
 const getTaskForUpdate = `-- name: GetTaskForUpdate :one
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id FROM tasks WHERE id = $1 AND owner_id = $2 FOR UPDATE
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort FROM tasks WHERE id = $1 AND owner_id = $2 FOR UPDATE
 `
 
 type GetTaskForUpdateParams struct {
@@ -897,6 +911,8 @@ func (q *Queries) GetTaskForUpdate(ctx context.Context, arg GetTaskForUpdatePara
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MergeProposalID,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
@@ -1115,11 +1131,11 @@ const insertTask = `-- name: InsertTask :one
 INSERT INTO tasks (
     id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief,
     mode, assigned_profile_id, selection_source, provider_constraint, checkout_branch, checkout_ref,
-    checkout_depth
+    checkout_depth, model, effort
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 )
-RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort
 `
 
 type InsertTaskParams struct {
@@ -1139,11 +1155,14 @@ type InsertTaskParams struct {
 	CheckoutBranch     *string
 	CheckoutRef        *string
 	CheckoutDepth      *int32
+	Model              *string
+	Effort             *string
 }
 
 // Tasks
 // reason stays NULL: a new task has nothing wrong with it yet, and provisioning has not been
-// attempted. See Service.Create.
+// attempted. See Service.Create. model and effort are the create request's own, already
+// validated against the resolved profile; NULL means the profile's default.
 func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) (Task, error) {
 	row := q.db.QueryRow(ctx, insertTask,
 		arg.ID,
@@ -1162,6 +1181,8 @@ func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) (Task, e
 		arg.CheckoutBranch,
 		arg.CheckoutRef,
 		arg.CheckoutDepth,
+		arg.Model,
+		arg.Effort,
 	)
 	var i Task
 	err := row.Scan(
@@ -1201,6 +1222,8 @@ func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) (Task, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MergeProposalID,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
@@ -1209,11 +1232,12 @@ const insertTaskAttempt = `-- name: InsertTaskAttempt :one
 
 INSERT INTO task_attempts (
     id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name,
-    role, depth, writer_generation, initial_ref, session_id, binding_id, workspace_id, workspace_request_id
+    role, depth, writer_generation, initial_ref, session_id, binding_id, workspace_id, workspace_request_id,
+    model, effort
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 )
-RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since
+RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since, model, effort
 `
 
 type InsertTaskAttemptParams struct {
@@ -1233,10 +1257,14 @@ type InsertTaskAttemptParams struct {
 	BindingID             *string
 	WorkspaceID           *string
 	WorkspaceRequestID    *string
+	Model                 *string
+	Effort                *string
 }
 
 // Provisioning and settlement. The attempt, the task's pointer to it and the writer claim change
 // in one transaction under the task row lock.
+// model and effort are copied from the task row: the create request's own choice, already
+// validated against the resolved profile, or NULL for the profile's default.
 func (q *Queries) InsertTaskAttempt(ctx context.Context, arg InsertTaskAttemptParams) (TaskAttempt, error) {
 	row := q.db.QueryRow(ctx, insertTaskAttempt,
 		arg.ID,
@@ -1255,6 +1283,8 @@ func (q *Queries) InsertTaskAttempt(ctx context.Context, arg InsertTaskAttemptPa
 		arg.BindingID,
 		arg.WorkspaceID,
 		arg.WorkspaceRequestID,
+		arg.Model,
+		arg.Effort,
 	)
 	var i TaskAttempt
 	err := row.Scan(
@@ -1301,6 +1331,8 @@ func (q *Queries) InsertTaskAttempt(ctx context.Context, arg InsertTaskAttemptPa
 		&i.ProgressAt,
 		&i.StopRequestedAt,
 		&i.LivenessFailingSince,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
@@ -1449,7 +1481,7 @@ func (q *Queries) InsertTaskReport(ctx context.Context, arg InsertTaskReportPara
 }
 
 const listActiveAttemptsForLiveness = `-- name: ListActiveAttemptsForLiveness :many
-SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at, a.progress_marker, a.progress_at, a.stop_requested_at, a.liveness_failing_since FROM task_attempts a
+SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at, a.progress_marker, a.progress_at, a.stop_requested_at, a.liveness_failing_since, a.model, a.effort FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
 WHERE a.state = 'active' AND t.status = 'running' AND t.current_attempt_id = a.id
 ORDER BY a.updated_at, a.id
@@ -1512,6 +1544,8 @@ func (q *Queries) ListActiveAttemptsForLiveness(ctx context.Context, limit int32
 			&i.ProgressAt,
 			&i.StopRequestedAt,
 			&i.LivenessFailingSince,
+			&i.Model,
+			&i.Effort,
 		); err != nil {
 			return nil, err
 		}
@@ -1524,7 +1558,7 @@ func (q *Queries) ListActiveAttemptsForLiveness(ctx context.Context, limit int32
 }
 
 const listAttemptWorkspaceCleanups = `-- name: ListAttemptWorkspaceCleanups :many
-SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since FROM task_attempts
+SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since, model, effort FROM task_attempts
 WHERE state IN ('superseded', 'failed', 'cancelled', 'completed')
   AND workspace_request_id IS NOT NULL AND brief_delivery_id IS NULL AND NOT workspace_cleanup_confirmed
   AND updated_at < now() - make_interval(secs => $2::float8)
@@ -1593,6 +1627,8 @@ func (q *Queries) ListAttemptWorkspaceCleanups(ctx context.Context, arg ListAtte
 			&i.ProgressAt,
 			&i.StopRequestedAt,
 			&i.LivenessFailingSince,
+			&i.Model,
+			&i.Effort,
 		); err != nil {
 			return nil, err
 		}
@@ -1605,7 +1641,7 @@ func (q *Queries) ListAttemptWorkspaceCleanups(ctx context.Context, arg ListAtte
 }
 
 const listChildTasks = `-- name: ListChildTasks :many
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id FROM tasks WHERE owner_id = $1 AND parent_task_id = $2 ORDER BY created_at, id
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort FROM tasks WHERE owner_id = $1 AND parent_task_id = $2 ORDER BY created_at, id
 `
 
 type ListChildTasksParams struct {
@@ -1659,6 +1695,8 @@ func (q *Queries) ListChildTasks(ctx context.Context, arg ListChildTasksParams) 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.MergeProposalID,
+			&i.Model,
+			&i.Effort,
 		); err != nil {
 			return nil, err
 		}
@@ -1671,7 +1709,7 @@ func (q *Queries) ListChildTasks(ctx context.Context, arg ListChildTasksParams) 
 }
 
 const listChildTasksForUpdate = `-- name: ListChildTasksForUpdate :many
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id FROM tasks WHERE parent_task_id = $1 ORDER BY id FOR UPDATE
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort FROM tasks WHERE parent_task_id = $1 ORDER BY id FOR UPDATE
 `
 
 // Child tasks in id order, locked. Settling a supervisor takes its task, then these, then its
@@ -1722,6 +1760,8 @@ func (q *Queries) ListChildTasksForUpdate(ctx context.Context, parentTaskID *str
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.MergeProposalID,
+			&i.Model,
+			&i.Effort,
 		); err != nil {
 			return nil, err
 		}
@@ -1734,7 +1774,7 @@ func (q *Queries) ListChildTasksForUpdate(ctx context.Context, parentTaskID *str
 }
 
 const listFailedBriefAttempts = `-- name: ListFailedBriefAttempts :many
-SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at, a.progress_marker, a.progress_at, a.stop_requested_at, a.liveness_failing_since FROM task_attempts a
+SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at, a.progress_marker, a.progress_at, a.stop_requested_at, a.liveness_failing_since, a.model, a.effort FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
 JOIN deliveries d ON d.id = a.brief_delivery_id
 WHERE a.state = 'active' AND t.status NOT IN ('completed', 'failed', 'cancelled')
@@ -1799,6 +1839,8 @@ func (q *Queries) ListFailedBriefAttempts(ctx context.Context, limit int32) ([]T
 			&i.ProgressAt,
 			&i.StopRequestedAt,
 			&i.LivenessFailingSince,
+			&i.Model,
+			&i.Effort,
 		); err != nil {
 			return nil, err
 		}
@@ -1908,7 +1950,7 @@ func (q *Queries) ListOpenOperationsForSource(ctx context.Context, sourceAttempt
 
 const listProjectionCandidates = `-- name: ListProjectionCandidates :many
 
-SELECT t.id, t.owner_id, t.project_id, t.topic_id, t.parent_task_id, t.root_task_id, t.creator_binding_id, t.title, t.brief, t.mode, t.assigned_profile_id, t.selection_source, t.provider_constraint, t.accepted_environment, t.status, t.reason, t.decision_attempt_id, t.decision_report_id, t.decision_action, t.current_attempt_id, t.version, t.checkout_branch, t.checkout_ref, t.checkout_depth, t.pr_number, t.pr_url, t.pr_head_sha, t.pr_repository, t.pr_description, t.pr_state, t.ci_state, t.ci_head_sha, t.projected_at, t.created_at, t.updated_at, t.merge_proposal_id, p.full_name AS project_full_name
+SELECT t.id, t.owner_id, t.project_id, t.topic_id, t.parent_task_id, t.root_task_id, t.creator_binding_id, t.title, t.brief, t.mode, t.assigned_profile_id, t.selection_source, t.provider_constraint, t.accepted_environment, t.status, t.reason, t.decision_attempt_id, t.decision_report_id, t.decision_action, t.current_attempt_id, t.version, t.checkout_branch, t.checkout_ref, t.checkout_depth, t.pr_number, t.pr_url, t.pr_head_sha, t.pr_repository, t.pr_description, t.pr_state, t.ci_state, t.ci_head_sha, t.projected_at, t.created_at, t.updated_at, t.merge_proposal_id, t.model, t.effort, p.full_name AS project_full_name
 FROM tasks t
 JOIN projects p ON p.id = t.project_id
 WHERE t.mode = 'code' AND t.status NOT IN ('completed', 'failed', 'cancelled')
@@ -1960,6 +2002,8 @@ type ListProjectionCandidatesRow struct {
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 	MergeProposalID     *string
+	Model               *string
+	Effort              *string
 	ProjectFullName     string
 }
 
@@ -2011,6 +2055,8 @@ func (q *Queries) ListProjectionCandidates(ctx context.Context, arg ListProjecti
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.MergeProposalID,
+			&i.Model,
+			&i.Effort,
 			&i.ProjectFullName,
 		); err != nil {
 			return nil, err
@@ -2159,7 +2205,7 @@ func (q *Queries) ListTaskArtifacts(ctx context.Context, taskIds []string) ([]Ta
 }
 
 const listTaskAttempts = `-- name: ListTaskAttempts :many
-SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since FROM task_attempts WHERE task_id = ANY($1::text[]) ORDER BY task_id, number
+SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since, model, effort FROM task_attempts WHERE task_id = ANY($1::text[]) ORDER BY task_id, number
 `
 
 func (q *Queries) ListTaskAttempts(ctx context.Context, taskIds []string) ([]TaskAttempt, error) {
@@ -2215,6 +2261,8 @@ func (q *Queries) ListTaskAttempts(ctx context.Context, taskIds []string) ([]Tas
 			&i.ProgressAt,
 			&i.StopRequestedAt,
 			&i.LivenessFailingSince,
+			&i.Model,
+			&i.Effort,
 		); err != nil {
 			return nil, err
 		}
@@ -2347,7 +2395,7 @@ func (q *Queries) ListTaskReports(ctx context.Context, taskIds []string) ([]Task
 }
 
 const listTasks = `-- name: ListTasks :many
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id FROM tasks
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort FROM tasks
 WHERE owner_id = $1
   AND ($2::text IS NULL OR project_id = $2)
   AND ($3::text IS NULL OR parent_task_id = $3)
@@ -2406,6 +2454,8 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.MergeProposalID,
+			&i.Model,
+			&i.Effort,
 		); err != nil {
 			return nil, err
 		}
@@ -2471,7 +2521,7 @@ func (q *Queries) ListUnresolvedStops(ctx context.Context, ownerID string) ([]Li
 }
 
 const listUnsettledAttempts = `-- name: ListUnsettledAttempts :many
-SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at, a.progress_marker, a.progress_at, a.stop_requested_at, a.liveness_failing_since FROM task_attempts a
+SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at, a.progress_marker, a.progress_at, a.stop_requested_at, a.liveness_failing_since, a.model, a.effort FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
 WHERE (a.state IN ('draining', 'fenced')
        OR (a.state IN ('creating', 'active') AND t.status IN ('completed', 'failed', 'cancelled')))
@@ -2542,6 +2592,8 @@ func (q *Queries) ListUnsettledAttempts(ctx context.Context, arg ListUnsettledAt
 			&i.ProgressAt,
 			&i.StopRequestedAt,
 			&i.LivenessFailingSince,
+			&i.Model,
+			&i.Effort,
 		); err != nil {
 			return nil, err
 		}
@@ -2576,7 +2628,7 @@ func (q *Queries) LockParentCurrentAttemptShared(ctx context.Context, id string)
 }
 
 const lockTaskAttemptShared = `-- name: LockTaskAttemptShared :one
-SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since FROM task_attempts WHERE id = $1 FOR SHARE
+SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since, model, effort FROM task_attempts WHERE id = $1 FOR SHARE
 `
 
 // Locks an attempt against being moved while the caller's write commits, and reads its state.
@@ -2627,6 +2679,8 @@ func (q *Queries) LockTaskAttemptShared(ctx context.Context, id string) (TaskAtt
 		&i.ProgressAt,
 		&i.StopRequestedAt,
 		&i.LivenessFailingSince,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
@@ -2674,7 +2728,7 @@ const markAttemptStopUnresolved = `-- name: MarkAttemptStopUnresolved :one
 UPDATE task_attempts
 SET stop_state = 'unresolved', updated_at = now()
 WHERE id = $1 AND state = 'draining' AND stop_state = 'requested'
-RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since
+RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since, model, effort
 `
 
 // The resolver has looked the bound number of times. Returns no row when it was already marked, so
@@ -2726,6 +2780,8 @@ func (q *Queries) MarkAttemptStopUnresolved(ctx context.Context, id string) (Tas
 		&i.ProgressAt,
 		&i.StopRequestedAt,
 		&i.LivenessFailingSince,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
@@ -2739,7 +2795,7 @@ SET state = $1, capacity_held = $2, updated_at = now(),
     evidence_refs = CASE WHEN $3::text IS NULL THEN evidence_refs
                          ELSE array_append(evidence_refs, $3::text) END
 WHERE id = $4 AND state = $5
-RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since
+RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since, model, effort
 `
 
 type MoveAttemptParams struct {
@@ -2805,6 +2861,8 @@ func (q *Queries) MoveAttempt(ctx context.Context, arg MoveAttemptParams) (TaskA
 		&i.ProgressAt,
 		&i.StopRequestedAt,
 		&i.LivenessFailingSince,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
@@ -2962,7 +3020,7 @@ WHERE a.id = $1 AND a.state = 'creating' AND a.workspace_request_id IS NOT NULL
   AND EXISTS (SELECT 1 FROM task_operations o WHERE o.id = $2
               AND o.target_attempt_id = a.id AND o.state = 'target_creating'
               AND o.lease_owner = $3 AND o.attempts = $4)
-RETURNING a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at, a.progress_marker, a.progress_at, a.stop_requested_at, a.liveness_failing_since
+RETURNING a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at, a.progress_marker, a.progress_at, a.stop_requested_at, a.liveness_failing_since, a.model, a.effort
 `
 
 type ReserveAttemptWorkspaceCreateParams struct {
@@ -3026,6 +3084,8 @@ func (q *Queries) ReserveAttemptWorkspaceCreate(ctx context.Context, arg Reserve
 		&i.ProgressAt,
 		&i.StopRequestedAt,
 		&i.LivenessFailingSince,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
@@ -3152,7 +3212,7 @@ SET current_attempt_id = $1, status = $2, reason = $3,
     decision_action = CASE WHEN $2 = 'blocked' THEN decision_action END,
     version = version + 1, updated_at = now()
 WHERE id = $5
-RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort
 `
 
 type SetTaskAttemptParams struct {
@@ -3209,6 +3269,8 @@ func (q *Queries) SetTaskAttempt(ctx context.Context, arg SetTaskAttemptParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MergeProposalID,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
@@ -3360,7 +3422,7 @@ SET pr_number = $2, pr_url = $3, pr_head_sha = $4, pr_state = $5, ci_state = $6,
     pr_repository = $8, pr_description = $9,
     projected_at = $10, version = version + 1, updated_at = now()
 WHERE id = $1
-RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort
 `
 
 type SetTaskProjectionParams struct {
@@ -3427,6 +3489,8 @@ func (q *Queries) SetTaskProjection(ctx context.Context, arg SetTaskProjectionPa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MergeProposalID,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
@@ -3443,7 +3507,7 @@ func (q *Queries) TouchAttemptLiveness(ctx context.Context, id string) error {
 }
 
 const touchTask = `-- name: TouchTask :one
-UPDATE tasks SET version = version + 1, updated_at = now() WHERE id = $1 AND version = $2 RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id
+UPDATE tasks SET version = version + 1, updated_at = now() WHERE id = $1 AND version = $2 RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort
 `
 
 type TouchTaskParams struct {
@@ -3492,6 +3556,8 @@ func (q *Queries) TouchTask(ctx context.Context, arg TouchTaskParams) (Task, err
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MergeProposalID,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }
@@ -3522,7 +3588,7 @@ SET status = $3,
     version = version + 1,
     updated_at = now()
 WHERE id = $1 AND version = $2
-RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort
 `
 
 type UpdateTaskStateParams struct {
@@ -3585,6 +3651,8 @@ func (q *Queries) UpdateTaskState(ctx context.Context, arg UpdateTaskStateParams
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MergeProposalID,
+		&i.Model,
+		&i.Effort,
 	)
 	return i, err
 }

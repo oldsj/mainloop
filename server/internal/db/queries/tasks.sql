@@ -8,13 +8,14 @@ SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(key)::text, 0));
 
 -- name: InsertTask :one
 -- reason stays NULL: a new task has nothing wrong with it yet, and provisioning has not been
--- attempted. See Service.Create.
+-- attempted. See Service.Create. model and effort are the create request's own, already
+-- validated against the resolved profile; NULL means the profile's default.
 INSERT INTO tasks (
     id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief,
     mode, assigned_profile_id, selection_source, provider_constraint, checkout_branch, checkout_ref,
-    checkout_depth
+    checkout_depth, model, effort
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 )
 RETURNING *;
 
@@ -169,11 +170,14 @@ WHERE kind = 'create' AND target_attempt_id = $1 AND state IN ('target_creating'
 -- in one transaction under the task row lock.
 
 -- name: InsertTaskAttempt :one
+-- model and effort are copied from the task row: the create request's own choice, already
+-- validated against the resolved profile, or NULL for the profile's default.
 INSERT INTO task_attempts (
     id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name,
-    role, depth, writer_generation, initial_ref, session_id, binding_id, workspace_id, workspace_request_id
+    role, depth, writer_generation, initial_ref, session_id, binding_id, workspace_id, workspace_request_id,
+    model, effort
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 )
 RETURNING *;
 

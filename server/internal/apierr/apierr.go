@@ -50,9 +50,7 @@ type validationBody struct {
 }
 
 type reasonBody struct {
-	Detail struct {
-		Reason string `json:"reason"`
-	} `json:"detail"`
+	Detail map[string]any `json:"detail"`
 }
 
 // New builds an error with the contract's HTTPError body.
@@ -95,9 +93,17 @@ func Invalid(msg string) *Error {
 // Reason builds an error with the contract's TaskError body: a stable machine code the client
 // switches on.
 func Reason(status int, reason string) *Error {
-	var b reasonBody
-	b.Detail.Reason = reason
-	return &Error{Status: status, Message: reason, body: b}
+	return ReasonDetail(status, reason, nil)
+}
+
+// ReasonDetail is [Reason] with extra TaskErrorDetail fields alongside reason, for example the
+// allowed values of a 422 the client can show.
+func ReasonDetail(status int, reason string, extra map[string]any) *Error {
+	detail := map[string]any{"reason": reason}
+	for k, v := range extra {
+		detail[k] = v
+	}
+	return &Error{Status: status, Message: reason, body: reasonBody{Detail: detail}}
 }
 
 // NotImplemented is returned by operations no slice has implemented yet.

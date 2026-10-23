@@ -18,6 +18,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
+	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/tasks"
@@ -456,7 +457,10 @@ func newRig(t *testing.T) *rig {
 	e := newEnv(t)
 	r := &rig{env: e}
 	r.ws = &fakeWorkspaces{pool: e.pool}
-	r.ses = &fakeSessions{Service: sessions.NewService(mustConfig(t), e.pool, nil, nil, nil, nil, nil, nil, slog.Default())}
+	// The same registry the task service resolves profiles from, so a session's /model and
+	// /effort (and an attempt's initial override) see the same models and effort_levels.
+	reg := e.svc.Providers.(*providers.Registry) //nolint:forcetypeassert // newEnv always builds one
+	r.ses = &fakeSessions{Service: sessions.NewService(mustConfig(t), e.pool, nil, reg, nil, nil, nil, nil, slog.Default())}
 	r.ses.OwnerID = owner
 	r.obs = &fakeObserver{}
 	r.stops = &fakeStops{}
