@@ -679,3 +679,33 @@ The guard denies new preview admissions after draining; it does not terminate al
 connections. Write-enabled handoff remains unqualified until retained-source isolation and preview
 fencing are proven by the handoff/runtime slices. Superseded history cannot use the ordinary
 immediate-delete archive path; its retention is a separate slice.
+
+## Forked workspaces (issue #311)
+
+A checkpoint fork ([warm-state](warm-state.md#checkpoint-and-fork-api-implemented-experimental),
+`POST /checkpoints/{id}/fork`) of a session that is itself a workspace gets its own workspace row
+in the same transaction as its session and agent binding
+(`server/internal/sessions/checkpoints.go`'s `commitFork`): the manifest (repository, ref, branch,
+depth, agent kind, dev settings and development environment) is copied from the source workspace's
+row, and the Agent is the one the forked kagent Session actually reports, falling back to the
+source's resolved Agent if kagent names none. Unlike an ordinary workspace, whose binding gets its
+kagent Session id only once its first `CreateSession` reply lands, the forked binding already has
+it (kagent's `ForkSession` returned it) at the moment the workspace row is written, so this
+workspace is created with no `workspace_ops` create operation: there is nothing to retry and
+nothing to replay. See [sessions](sessions.md#forked-sessions-issue-311) for what is deliberately
+not copied (an MCP credential) and why.
+
+Because the row is ordinary once written — a `workspaces` row joined to an `agent_bindings` row
+that already names a kagent Session — every lifecycle path above applies unchanged: `GET
+/workspaces/{id}`, suspend, resume, idle suspend, and delete. In particular, deleting or archiving
+a fork's workspace goes through the same reconciler-rule delete op as any other workspace (a
+durable `workspace_ops` intent row, written before any kagent call): `doDelete` finds the Session
+already bound and calls kagent's `DeleteSession` directly, with no create to replay first, which
+releases kagent's `pinned_checkpoint_id` on the checkpoint the fork came from. A fork of a session
+that is not a workspace (a plain `/agents` session, or the main thread) gets no workspace row:
+there is no manifest to copy, and nothing in this change invents one.
+
+Tested against the fake kagent only: a fork of a workspace gets the workspace row with the copied
+manifest and no create operation, and deleting it calls kagent's `DeleteSession` and removes the
+rows. Not measured against a live kagent; the owner verifies this on `mainloop-dev` separately
+(see warm-state.md's live fork measurement).

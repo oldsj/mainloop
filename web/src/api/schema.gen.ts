@@ -1129,7 +1129,9 @@ export interface paths {
     /**
      * Delete Checkpoint
      * @description **Experimental, owner-only.** Delete a checkpoint, scoped to the owner's own session. One
-     *     that is already gone is not an error. See docs/specs/warm-state.md.
+     *     that is already gone is not an error. One a fork still pins answers 409, naming the
+     *     pinning fork session when it is known, rather than reporting success for a checkpoint that
+     *     still exists (issue #311). See docs/specs/warm-state.md.
      */
     delete: operations['deleteCheckpoint'];
     options?: never;

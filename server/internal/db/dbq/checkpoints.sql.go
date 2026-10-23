@@ -340,6 +340,34 @@ func (q *Queries) ListDueSessionCheckpoints(ctx context.Context, arg ListDueSess
 	return items, nil
 }
 
+const listForksByCheckpoint = `-- name: ListForksByCheckpoint :many
+SELECT new_session_id FROM checkpoint_forks
+WHERE checkpoint_id = $1 AND new_session_id IS NOT NULL
+ORDER BY accepted_at
+`
+
+// The Mainloop session ids of forks that still pin a checkpoint: a DeleteCheckpoint that kagent
+// answered NotFound for, re-read and found still present (issue #311), names them in its 409.
+func (q *Queries) ListForksByCheckpoint(ctx context.Context, checkpointID string) ([]*string, error) {
+	rows, err := q.db.Query(ctx, listForksByCheckpoint, checkpointID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*string{}
+	for rows.Next() {
+		var new_session_id *string
+		if err := rows.Scan(&new_session_id); err != nil {
+			return nil, err
+		}
+		items = append(items, new_session_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const noteCheckpointForkAttempt = `-- name: NoteCheckpointForkAttempt :exec
 UPDATE checkpoint_forks SET attempts = attempts + 1, detail = $1, updated_at = now()
 WHERE id = $2 AND state IN ('requested', 'accepted')

@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -388,7 +389,11 @@ func (s *Service) DeleteCheckpoint(ctx context.Context, checkpointID string) err
 	}
 	if err := s.Kagent.DeleteCheckpoint(ctx, checkpointID); err != nil {
 		if nativeAbsent(err) {
-			return nil
+			// kagent's BeginDeleteSessionCheckpoint answers NotFound both for a checkpoint that is
+			// genuinely gone and for one a fork still pins (issue #311): its own deletion skips a
+			// pinned checkpoint instead of refusing outright. A fresh read tells which; answering 200
+			// here while the checkpoint still exists would not be true.
+			return s.checkStillPinned(ctx, checkpointID)
 		}
 		var se *kagent.SessionError
 		if errors.As(err, &se) && se.Code == connect.CodeFailedPrecondition {
@@ -397,6 +402,36 @@ func (s *Service) DeleteCheckpoint(ctx context.Context, checkpointID string) err
 		return &KagentError{Err: err}
 	}
 	return nil
+}
+
+// checkStillPinned re-reads a checkpoint kagent just answered NotFound for deleting, to tell a
+// checkpoint that is truly gone (not an error) from one a fork still pins (409, naming the pinning
+// fork session(s) when Mainloop's own fork records know them).
+func (s *Service) checkStillPinned(ctx context.Context, checkpointID string) error {
+	cp, err := s.Kagent.GetCheckpoint(ctx, checkpointID)
+	if nativeAbsent(err) {
+		return nil
+	}
+	if err != nil {
+		return &KagentError{Err: err}
+	}
+	detail := "checkpoint is pinned by a fork"
+	if rows, err := dbq.New(s.Pool).ListForksByCheckpoint(ctx, cp.GetId()); err == nil && len(rows) > 0 {
+		ids := make([]string, 0, len(rows))
+		for _, id := range rows {
+			if id != nil {
+				ids = append(ids, *id)
+			}
+		}
+		if len(ids) > 0 {
+			word := "session"
+			if len(ids) > 1 {
+				word = "sessions"
+			}
+			detail = "checkpoint is pinned by fork " + word + " " + strings.Join(ids, ", ")
+		}
+	}
+	return conflict("%s", detail)
 }
 
 // ---- fork ---------------------------------------------------------------------------------------
@@ -526,6 +561,20 @@ func (s *Service) commitFork(ctx context.Context, r dbq.CheckpointFork, forked *
 	if err != nil {
 		return dbq.CheckpointFork{}, fmt.Errorf("get source binding: %w", err)
 	}
+	// A forked session whose source is a workspace (a git checkout bound to a kagent Session; not
+	// every session has one, see completedSession in the tests) gets its own workspace row too, so
+	// it is a first-class workspace session (issue #311): GET, suspend, resume, idle suspend and
+	// delete all work on it like any other workspace, and delete releases the forked kagent Session
+	// through that ordinary path. The manifest is copied from the source; the forked binding
+	// inserted below already carries the forked kagent Session id, so no create is ever sent for
+	// this workspace row. The fork has no Mainloop MCP credential (MCPGrantKind stays none, below):
+	// kagent's ForkSession carries no credential reference to attach one to (see
+	// docs/specs/warm-state.md and #311).
+	srcWorkspace, err := q.GetWorkspaceForOp(ctx, r.SourceSessionID)
+	hasWorkspace := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return dbq.CheckpointFork{}, fmt.Errorf("get source workspace: %w", err)
+	}
 	title := r.Title
 	if title == "" {
 		title = "Fork of " + src.Title
@@ -563,6 +612,24 @@ func (s *Service) commitFork(ctx context.Context, r dbq.CheckpointFork, forked *
 			KagentAgentNamespace: ns, KagentAgentName: name,
 		}); err != nil {
 			return fmt.Errorf("create forked binding: %w", err)
+		}
+		if hasWorkspace {
+			agentNamespace, agentName := srcWorkspace.AgentNamespace, srcWorkspace.AgentName
+			if v := ref.GetNamespace(); v != "" {
+				agentNamespace = v
+			}
+			if v := ref.GetName(); v != "" {
+				agentName = v
+			}
+			if _, err := q.InsertWorkspace(ctx, dbq.InsertWorkspaceParams{
+				ID: newID, UserID: s.OwnerID, ProjectID: srcWorkspace.ProjectID, RepoURL: srcWorkspace.RepoURL,
+				Ref: srcWorkspace.Ref, Branch: srcWorkspace.Branch, Depth: srcWorkspace.Depth,
+				AgentKind: srcWorkspace.AgentKind, AgentNamespace: agentNamespace, AgentName: agentName,
+				Ports: srcWorkspace.Ports, IdleTimeoutMinutes: srcWorkspace.IdleTimeoutMinutes,
+				Environment: srcWorkspace.Environment, RequestID: uuid.NewString(),
+			}); err != nil {
+				return fmt.Errorf("create forked workspace: %w", err)
+			}
 		}
 		if _, err := q.SetSessionStatus(ctx, dbq.SetSessionStatusParams{ID: newID, Status: dbstate.SessionActive}); err != nil {
 			return fmt.Errorf("activate forked session: %w", err)

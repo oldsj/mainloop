@@ -68,3 +68,10 @@ SELECT * FROM checkpoint_forks
 WHERE state IN ('requested', 'accepted') AND updated_at < now() - make_interval(secs => sqlc.arg(idle_seconds)::float8)
 ORDER BY created_at, id
 LIMIT sqlc.arg(limit_count);
+
+-- The Mainloop session ids of forks that still pin a checkpoint: a DeleteCheckpoint that kagent
+-- answered NotFound for, re-read and found still present (issue #311), names them in its 409.
+-- name: ListForksByCheckpoint :many
+SELECT new_session_id FROM checkpoint_forks
+WHERE checkpoint_id = $1 AND new_session_id IS NOT NULL
+ORDER BY accepted_at;

@@ -208,6 +208,42 @@ Existing sessions are not migrated, and there is no legacy workspace enrollment 
 conversion. The task-session checks have fake runtime and PostgreSQL evidence only;
 there is no live native-agent, Kubernetes or retained-source handoff qualification in this slice.
 
+## Forked sessions (issue #311)
+
+A session forked with `POST /checkpoints/{id}/fork` ([warm-state](warm-state.md#checkpoint-and-fork-api-implemented-experimental))
+always gets a Mainloop session row with `parent_session_id` set. If its source session is itself a
+workspace (a git checkout, not every session has one — a plain `/agents` session or the main
+thread does not), the fork also gets a workspace row, so it is a first-class workspace session
+like any other: its manifest (repository, ref, branch, depth, agent kind, dev settings and
+development environment) is copied from the source, and `GET /workspaces/{fork}` works, as do
+suspend, resume, idle suspend and delete, through the same code paths as any workspace (see
+[workspaces](workspaces.md#forked-workspaces-issue-311)). Which checkpoint and source workspace a
+fork came from is not duplicated onto the new row: it is the existing `checkpoint_forks` row (keyed
+by the fork's request id) together with the forked binding's `parent_session_id`, which already
+name the checkpoint and the source session (and, since a workspace's row shares its session's id,
+the source workspace). A fork of a non-workspace session gets no workspace row; there is no
+manifest to copy and this change does not invent one.
+
+A fork's agent binding keeps `mcp_grant_kind` `none` and is issued no MCP credential, the same as
+before this change: kagent's `ForkSession` carries no credential reference for Mainloop to attach
+one to (`checkpoints.proto`'s `ForkSessionRequest`, and `sessions.proto`'s `Session` comment that
+forks do not inherit credential bindings; see warm-state.md's measurement). This is why the fork's
+MCP calls are still rejected (401 `AUTH_HEADER_REJECTED`) where the source session's succeeded, and
+it is deliberate, not an oversight left over from the fork having no workspace row: giving the fork
+a credential anyway, by some path other than the one every other session's credential is issued
+through, would be a workaround this change does not take. The grant staying `none` is how that
+state is recorded; it is the same field an ordinary ungranted `/agents` session already carries,
+read here as "this session has no Mainloop credential yet" rather than "this session never asked
+for one". A kagent-side change (`oldsj/kagent`, branch `mainloop-substrate-0-4`) adds credential
+references to `ForkSessionRequest`; a follow-up Mainloop task vendors it and issues per-fork
+credentials once it lands and the vendored pin is bumped.
+
+Tested against the fake kagent only (a fork of a workspace gets the workspace row with the copied
+manifest; a fork of a plain session does not); not measured against a live kagent. See
+[workspaces](workspaces.md#forked-workspaces-issue-311) for the delete behavior and
+[checkpoints](warm-state.md#checkpoint-and-fork-api-implemented-experimental) for
+`DELETE /checkpoints/{id}` now answering 409, not 200, while a fork still pins the checkpoint.
+
 ## React status
 
 Labels: **implemented** means built in `web/` and covered by component or route tests against a fake backend. Nothing here is live-proven.
