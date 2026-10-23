@@ -296,6 +296,20 @@ environment selection already resolves once per workspace (`environments.md`, "W
 environment resolution"). This spec does not implement that merge; it is named here so the two
 issues are not built as competing mechanisms.
 
+## Dev harness snapshot policy
+
+The checked-in `mainloop-dev` Claude and Codex workspace Harness manifests both use
+`substrate.snapshotPolicy.onQuiesce: Data`, enabling checkpoint forks that kagent refuses
+for `Full` snapshots. Applying these manifests is an operator step (`make dev-live` or
+`make dev-agents`), not part of task-agent `dev_sync`. Production Harnesses are managed in
+`oldsj/infrastructure` and are unchanged by this dev configuration.
+
+A Data restore starts the Actor fresh from its image and restores `/data`, not process
+state. In-memory processes, including Codex's app-server, do not survive suspend/resume.
+The Codex dev policy supports measuring that trade-off for #288; it is not a live proof of
+Codex resume or fork behavior. The measurements below describe the policies deployed at
+the time, when only the Claude dev Harness used Data snapshots.
+
 ## Measured: fork from warmed checkpoint
 
 The fork RPC is no longer unreachable: `CheckpointService.ForkSession` exists at the deployed

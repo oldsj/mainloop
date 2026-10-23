@@ -74,6 +74,19 @@ make dev-live-purge    # delete namespace mainloop-dev and the *-dev agents (typ
 
 All targets use kube context `admin@internal-01` through DevSpace profile `live` in `devspace.yaml`, whose pipelines (`build`, `dev`, `deploy`, `deploy-agents`, `purge`) refuse any other context or namespace. Use these targets or `scripts/dev-live.sh`: raw `devspace sync`, `restart`, `enter`, `logs` and `attach` with `-p live` are not guarded and act on whatever `--kube-context` and `-n` say. This page covers only the `live` profile.
 
+### Dev harness snapshots
+
+Both dev workspace Harness manifests (`claude-workspace-dev-harness` and
+`codex-workspace-dev-harness`) set `substrate.snapshotPolicy.onQuiesce: Data`.
+This allows checkpoint forks, which kagent refuses for `Full` snapshots. A Data restore
+starts the Actor fresh from its image with `/data` restored; in-memory processes such as
+Codex's app-server do not survive suspend/resume. This is the dev trade-off being measured
+for #288, not evidence that Codex resume or fork behavior has been verified live.
+
+An operator must apply the dev Harness manifests with `make dev-live` or `make dev-agents`.
+Task agents' `dev_sync` updates application source, not the Harness resources. Production
+Harnesses live in `oldsj/infrastructure` and are unchanged.
+
 ### The devloop lease
 
 mainloop-dev has one live-sync lease (`docs/specs/devloop.md`), so the owner's own iteration and a
