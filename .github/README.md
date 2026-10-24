@@ -85,16 +85,15 @@ The tags (`cache-<sha>`, one per build) are not pruned yet.
 `ubuntu-24.04-arm`, publishing only `linux/arm64` images (15 minutes each):
 
 - `ghcr.io/oldsj/mainloop-backend:<first seven commit SHA characters>` (the Go server;
-  the image keeps its historical name because the production manifests pin it)
+  the image keeps its historical name because deployments pin it)
 - `ghcr.io/oldsj/mainloop-frontend:<first seven commit SHA characters>`
 
 The frontend uses the workflow's production API build argument. There is no
 `latest` tag or job-level output. Step outputs provide the short SHA and build
 digest; summaries record source, tag, digest and an immutable infrastructure pin.
-The image jobs are not restricted to `main`, but the `release` job is: it runs only on
-`main`, and only while its commit is still the tip of `main`. It force-pushes the
-`release` branch and a `release-<sha7>` tag with the digests pinned in the prod overlay.
-Argo tracks `release`; no infrastructure PR is needed per release.
+The image jobs are not restricted to `main`, but the `chart` job is: it runs only on
+`main` and publishes `oci://ghcr.io/oldsj/charts/mainloop` `0.1.<run number>` with both
+digests pinned. Deployments track `0.1.*`; no infrastructure PR is needed per release.
 
 ## Shared live-development application images
 

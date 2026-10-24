@@ -29,7 +29,6 @@ secrets.yaml
 gcp-credentials.json
 
 # Personal k8s config (for open source - keeps your domains private)
-k8s/apps/mainloop/overlays/*/personal-config-patch.yaml
 
 # Logs
 *.log

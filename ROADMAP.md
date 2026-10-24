@@ -172,7 +172,7 @@ Messages receive stable identities and are persisted before delivery. Retries wi
 
 After a timeout or disconnect, Mainloop reconciles native-session and workspace state before deciding whether to retry. Unknown delivery is not equivalent to failure. Recovery never replays transcript commands automatically.
 
-Production delivery is mechanical: a merge to `main` publishes images, and CI force-pushes a `release` branch carrying their digests, which Argo tracks. Rollback is pushing a previous release commit back to `release`.
+Production delivery is mechanical: a merge to `main` publishes images and a chart version pinning their digests, which Argo tracks. Rollback is pinning a previous chart version.
 
 Check results and review verdicts bind to an exact candidate identity. Integration review covers combined-system concerns such as duplicated foundations, conflicting abstractions, contract drift, and inconsistent security or data handling—not only whether each feature works independently.
 
