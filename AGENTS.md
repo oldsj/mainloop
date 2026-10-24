@@ -34,7 +34,8 @@ When documents differ, do not silently blend future design with current behavior
 api/           OpenAPI contract (openapi.yaml) and MCP tool manifest (mcp-tools.json)
 server/        Go server: one binary, cmd/mainloop, with a subcommand per process
 web/           React app (Vite, TanStack Router, Tailwind); design system in web/design/
-k8s/           Kubernetes bases, overlays and kagent integration (apps/mainloop, integrations/kagent)
+charts/        Helm chart for Mainloop (charts/mainloop)
+k8s/           kagent integration example (integrations/kagent)
 docs/specs/    User-visible behavior specifications
 scripts/       Development and CI helper scripts
 ```

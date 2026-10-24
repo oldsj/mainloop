@@ -74,7 +74,7 @@ limitation are in [Pull requests](docs/specs/pull-requests.md). The `get_issue`,
 
 ## Production Deployment
 
-The Kubernetes manifests under `k8s/apps/mainloop/` provide reusable bases and example overlays. Supply environment-specific images, domains, credentials, and storage through your deployment configuration, and apply production changes through your GitOps workflow.
+The [Helm chart](charts/mainloop) deploys Mainloop. Supply environment-specific domains, credentials, and storage through your own values file, and apply production changes through your GitOps workflow ([details](docs/production-rollout.md)).
 
 The [Publish images workflow](.github/workflows/images.yml) builds and pushes
 `linux/arm64` production images on every push to `main`, using native
@@ -86,15 +86,14 @@ context); it receives `VITE_API_URL=https://mainloop-api.olds.network` at build 
 Images are published to `ghcr.io/oldsj/mainloop-backend` and
 `ghcr.io/oldsj/mainloop-frontend`, tagged with the first seven characters of the
 source commit SHA. Each image's job summary records the full source SHA, tag,
-digest, and copyable `image@sha256:...` reference. When both image jobs succeed and
-the commit is still the tip of `main`, the `release` job force-pushes the `release`
-branch (the `main` commit plus one commit pinning both digests in the prod overlay) and
-tags it `release-<sha7>`. Once the deployment repository points Argo at `release`, a merge to `main` deploys. Rolling
-back is pushing the previous release tag back to `release`
+digest, and copyable `image@sha256:...` reference. When both image jobs succeed on `main`,
+the `chart` job publishes `oci://ghcr.io/oldsj/charts/mainloop` version `0.1.<run number>`
+with both digests pinned, so a deployment tracking `0.1.*` deploys each merge. Rolling back
+is pinning the previous chart version
 ([details](docs/production-rollout.md#production-changes-are-gitops-only)).
 
 The image jobs authenticate with `GITHUB_TOKEN` (`contents: read`,
-`packages: write`; the `release` job has `contents: write`) and use separate GitHub Actions caches for each image. Existing
+`packages: write`) and use separate GitHub Actions caches for each image. Existing
 GHCR packages must grant this repository Actions write access. New pushes cancel
 older image builds for the same ref; a cancelled run may have published only one
 image, so use a fully successful run for a pin update.
