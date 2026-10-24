@@ -135,17 +135,10 @@ jobs:
           helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$GHCR_TOKEN"
           helm push "$RUNNER_TEMP/mainloop-${VERSION}.tgz" oci://ghcr.io/oldsj/charts
           {
-            printf '### Chart mainloop %s
-
-' "$VERSION"
-            printf 'Pull: `oci://ghcr.io/oldsj/charts/mainloop --version %s`
-
-' "$VERSION"
-            printf 'Backend: `%s`
-
-' "$backend"
-            printf 'Frontend: `%s`
-' "$frontend"
+            printf '### Chart mainloop %s\n\n' "$VERSION"
+            printf 'Pull: `oci://ghcr.io/oldsj/charts/mainloop --version %s`\n\n' "$VERSION"
+            printf 'Backend: `%s`\n\n' "$backend"
+            printf 'Frontend: `%s`\n' "$frontend"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Pins production to this commit's images. The release branch is the main commit plus one commit
