@@ -1,8 +1,34 @@
+{{- with .Values.database.cnpg }}
+{{- if .enabled }}
+# CNPG generates the application credentials in Secret <name>-app (keys username, password).
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  instances: {{ .instances }}
+  storage:
+    size: {{ .storage.size }}
+    {{- with .storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  bootstrap:
+    initdb:
+      database: mainloop
+      owner: mainloop
+  resources:
+    {{- toYaml .resources | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- with .Values.database.local }}
+{{- if .enabled }}
+---
 apiVersion: v1
 kind: Service
 metadata:
   name: mainloop-postgres
-  namespace: mainloop
+  namespace: {{ $.Release.Namespace }}
 spec:
   clusterIP: None
   selector:
@@ -15,7 +41,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: mainloop-postgres
-  namespace: mainloop
+  namespace: {{ $.Release.Namespace }}
 spec:
   serviceName: mainloop-postgres
   replicas: 1
@@ -29,7 +55,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:16-alpine
+          image: {{ .image }}
           env:
             - name: POSTGRES_DB
               value: mainloop
@@ -63,13 +89,13 @@ spec:
         accessModes: [ReadWriteOnce]
         resources:
           requests:
-            storage: 1Gi
+            storage: {{ .storage }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: mainloop-postgres-ingress
-  namespace: mainloop
+  namespace: {{ $.Release.Namespace }}
 spec:
   podSelector:
     matchLabels:
@@ -83,3 +109,5 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+{{- end }}
+{{- end }}

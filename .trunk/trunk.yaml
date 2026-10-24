@@ -29,6 +29,10 @@ lint:
     - linters: [hadolint, terrascan]
       paths:
         - '**/*Dockerfile*'
+    # Helm templates are Go templates, not YAML; helm lint and the deploytest renders cover them.
+    - linters: [yamllint, prettier, checkov, trivy]
+      paths:
+        - charts/*/templates/**
     # Written by the TanStack Router plugin on every vite run; its output is committed as written
     - linters: [ALL]
       paths:

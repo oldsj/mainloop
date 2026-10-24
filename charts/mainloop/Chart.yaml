@@ -1,0 +1,9 @@
+apiVersion: v2
+name: mainloop
+description: Mainloop's Go server (REST, MCP and Git listeners) and React app.
+type: application
+# The Publish images workflow packages this chart as <major>.<minor>.<run number>, with
+# appVersion set to the short commit SHA and the image digests pinned in values.yaml. Bump the
+# minor version here for a values change a deployment has to act on.
+version: 0.1.0
+appVersion: dev

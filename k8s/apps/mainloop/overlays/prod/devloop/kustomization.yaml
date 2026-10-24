@@ -3,7 +3,7 @@ kind: Kustomization
 
 # No top-level `namespace:`: the RoleBinding below must stay in mainloop-dev even though this
 # overlay's own resources render into `mainloop`. This mirrors
-# overlays/dev-live/kagent/, a standalone kustomization for the same reason (a resource that must
+# the live instance's kagent/ kustomization, standalone for the same reason (a resource that must
 # land in a namespace other than the one `../../base` renders into).
 #
 # Applied by Argo as a second source of `mainloop-dev-config`. Namespace mainloop-dev has a

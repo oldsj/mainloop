@@ -1,0 +1,164 @@
+# A generic live-sync instance (DevSpace profile `live`), rendered by server/internal/deploytest. A
+# real deployment keeps its own values file and passes it as MAINLOOP_DEV_VALUES.
+
+# The -dev images carry the Go toolchain (server) and Vite (web), built from main. They are public.
+images:
+  backend:
+    repository: ghcr.io/oldsj/mainloop-server-dev
+    tag: main
+  frontend:
+    repository: ghcr.io/oldsj/mainloop-web-dev
+    tag: main
+  pullPolicy: Always
+imagePullSecrets: []
+
+# Images are published for arm64 only.
+nodeSelector:
+  kubernetes.io/arch: arm64
+
+database:
+  cnpg:
+    enabled: true
+    # local-path storage is deleted with the namespace.
+    storage:
+      size: 2Gi
+      storageClass: local-path
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+kagentControlAuth:
+  enabled: true
+
+# Each server container runs watchexec over `go run` from /src, which DevSpace syncs server/ into;
+# the same commands run when the pods start without `devspace dev`. Each container rebuilds into
+# its own Go build cache, on top of the warm cache baked into the image, so each gets its own
+# ephemeral-storage budget; a 3Gi pod total was evicted after about ten hot reloads.
+server:
+  strategy:
+    type: Recreate
+  importSecretEnv: false
+  # The instance starts without the GitHub App; AGENT_TOKEN_KEY is still required.
+  githubAppOptional: true
+  command: [watchexec, --restart, --exts, 'go,sql', --stop-timeout, 5s, --, go, run, ./cmd/mainloop]
+  workingDir: /src
+  # `go run` compiles first, so the probes wait for a cold build.
+  livenessProbe:
+    initialDelaySeconds: 120
+    failureThreshold: 6
+  readinessProbe:
+    initialDelaySeconds: 20
+    failureThreshold: 60
+  api:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+        ephemeral-storage: 1Gi
+      limits:
+        cpu: '2'
+        memory: 2Gi
+        ephemeral-storage: 8Gi
+  mcp:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+        ephemeral-storage: 1Gi
+      limits:
+        cpu: '2'
+        memory: 2Gi
+        ephemeral-storage: 8Gi
+  git:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 128Mi
+        ephemeral-storage: 1Gi
+      limits:
+        cpu: '2'
+        memory: 2Gi
+        ephemeral-storage: 8Gi
+  # The dev image keeps the source it was built from at /src, so migrate runs the image's own
+  # revision before the first sync.
+  migrate:
+    command: [go, run, ./cmd/mainloop, migrate, up]
+    workingDir: /src
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+        ephemeral-storage: 1Gi
+      limits:
+        cpu: '2'
+        memory: 2Gi
+        ephemeral-storage: 8Gi
+
+# Vite dev server with HMR. The browser calls /api on the same host and Vite forwards it to the
+# backend Service.
+frontend:
+  command: [/app/web/node_modules/.bin/vite]
+  workingDir: /app/web
+  env:
+    - name: VITE_HOST
+      value: 0.0.0.0
+    - name: VITE_PORT
+      value: '3000'
+    - name: VITE_API_URL
+      value: /api
+    - name: MAINLOOP_API_PROXY
+      value: http://mainloop-backend:8000
+    # Vite rejects unknown Host headers; allow the gateway host.
+    - name: __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS
+      value: mainloop-dev.example.test
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: '2'
+      memory: 2Gi
+  livenessProbe:
+    initialDelaySeconds: 90
+  readinessProbe:
+    initialDelaySeconds: 20
+    failureThreshold: 12
+
+config:
+  FRONTEND_DOMAIN: mainloop-dev.example.test
+  FRONTEND_SCHEME: https
+  MAINLOOP_API_HOSTS: mainloop-backend,mainloop-backend.mainloop-dev,mainloop-backend.mainloop-dev.svc,mainloop-backend.mainloop-dev.svc.cluster.local
+  MAINLOOP_OWNER_ID: dev-owner
+  # Hosts the MCP listener accepts; in-cluster it must include its own Service name.
+  MAINLOOP_MCP_HOSTS: mainloop-mcp,mainloop-mcp.mainloop-dev,mainloop-mcp.mainloop-dev.svc,mainloop-mcp.mainloop-dev.svc.cluster.local
+  # Lets `mainloop migrate reset` run in this prototype instance.
+  MAINLOOP_ALLOW_RESET: '1'
+  DEV_MODE: 'true'
+  IS_TEST_ENV: 'false'
+  NATIVE_CHILD_KINDS: claude,codex
+  # Derives the MCP and Git origins (*.mainloop-dev.svc.cluster.local) and the mainloop-dev- prefix
+  # of this instance's credential Secrets in the kagent namespace.
+  MAINLOOP_NAMESPACE: mainloop-dev
+  # On: dev Git goes through mainloop-dev's own read/push proxies, not production's. kagent's
+  # service policy accepts them once its instance allowlist includes mainloop-dev.
+  GIT_TRANSPORT_ENABLED: 'true'
+  PUSH_GATE_ENABLED: 'true'
+  MAINLOOP_MERGE_TOOLS_ENABLED: 'false'
+  MAINLOOP_OWNER_HITL_WRITES_ENABLED: 'true'
+  # Dev-only kagent agents; production agents are never used from here.
+  KAGENT_NAMESPACE: kagent
+  KAGENT_ACTOR_ATESPACE: kagent
+  KAGENT_MAIN_AGENT: claude-workspace-dev
+  # Codex main uses the dev workspace Agent, like the Claude main. The default (mainloop-main-codex)
+  # is production's Agent on this shared kagent.
+  KAGENT_MAIN_CODEX_AGENT: codex-workspace-dev
+  KAGENT_CLAUDE_AGENT: claude-workspace-dev
+  KAGENT_CODEX_AGENT: codex-workspace-dev
+  KAGENT_WORKSPACE_CLAUDE_AGENT: claude-workspace-dev
+  KAGENT_WORKSPACE_CODEX_AGENT: codex-workspace-dev
+  KAGENT_SUPERVISOR_CLAUDE_AGENT: claude-workspace-dev
+  KAGENT_SUPERVISOR_CODEX_AGENT: codex-workspace-dev

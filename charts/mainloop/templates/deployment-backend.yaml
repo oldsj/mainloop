@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-backend
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  {{- with .Values.server.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: mainloop-backend
+  template:
+    metadata:
+      labels:
+        app: mainloop-backend
+      annotations:
+        # Pods read mainloop-config as env vars, which only load at start.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.kagentControlAuth.enabled }}
+        mainloop.dev/control-auth: service-token-tls-v1
+        {{- end }}
+        {{- with .Values.server.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: mainloop-backend
+      securityContext:
+        fsGroup: 1000
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- if .Values.kagentControlAuth.enabled }}
+        # Appends the kagent control CA to the default roots for SSL_CERT_FILE.
+        - name: kagent-control-trust-bundle
+          image: {{ include "mainloop.backendImage" . }}
+          {{- include "mainloop.pullPolicy" . | nindent 10 }}
+          command:
+            - sh
+            - -c
+            - |
+              cat /etc/ssl/certs/ca-certificates.crt > /run/kagent-control-ca/ca-bundle.crt
+              echo >> /run/kagent-control-ca/ca-bundle.crt
+              cat /run/kagent-control-root/ca.crt >> /run/kagent-control-ca/ca-bundle.crt
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          volumeMounts:
+            - name: kagent-control-root
+              mountPath: /run/kagent-control-root
+              readOnly: true
+            - name: kagent-control-ca
+              mountPath: /run/kagent-control-ca
+        {{- end }}
+        - name: migrate
+          image: {{ include "mainloop.backendImage" . }}
+          {{- include "mainloop.pullPolicy" . | nindent 10 }}
+          command: {{ toJson .Values.server.migrate.command }}
+          {{- with .Values.server.migrate.workingDir }}
+          workingDir: {{ . }}
+          {{- end }}
+          {{- include "mainloop.securityContext" . | nindent 10 }}
+          envFrom:
+            - configMapRef:
+                name: mainloop-config
+          env:
+            {{- include "mainloop.dbEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.server.migrate.resources | nindent 12 }}
+      containers:
+        {{- include "mainloop.listener" (dict
+          "root" .
+          "name" "backend"
+          "subcommand" "serve-api"
+          "ports" (list (dict "containerPort" 8000))
+          "resources" .Values.server.api.resources
+          "liveness" (dict "httpGet" (dict "path" "/health" "port" 8000) "initialDelaySeconds" 30 "periodSeconds" 10 "timeoutSeconds" 5 "failureThreshold" 3)
+          "readiness" (dict "httpGet" (dict "path" "/health" "port" 8000) "initialDelaySeconds" 5 "periodSeconds" 5 "timeoutSeconds" 3 "failureThreshold" 3)
+        ) | nindent 8 }}
+        {{- include "mainloop.listener" (dict
+          "root" .
+          "name" "mcp"
+          "subcommand" "serve-mcp"
+          "ports" (list (dict "containerPort" 8002))
+          "resources" .Values.server.mcp.resources
+          "liveness" (dict "httpGet" (dict "path" "/health" "port" 8002) "initialDelaySeconds" 30 "periodSeconds" 10)
+          "readiness" (dict "httpGet" (dict "path" "/health" "port" 8002) "initialDelaySeconds" 5 "periodSeconds" 5)
+        ) | nindent 8 }}
+        {{- /* The read listener answers /health only when the process is up; a failing push
+               listener ends the process, so one probe covers both ports. */}}
+        {{- include "mainloop.listener" (dict
+          "root" .
+          "name" "git"
+          "subcommand" "serve-git"
+          "ports" (list (dict "name" "git-read" "containerPort" 8003) (dict "name" "git-push" "containerPort" 8004))
+          "mounts" (list (dict "name" "git-spool" "mountPath" "/var/lib/mainloop/git"))
+          "resources" .Values.server.git.resources
+          "liveness" (dict "httpGet" (dict "path" "/health" "port" "git-read") "initialDelaySeconds" 30 "periodSeconds" 10)
+          "readiness" (dict "httpGet" (dict "path" "/health" "port" "git-read") "initialDelaySeconds" 5 "periodSeconds" 5)
+        ) | nindent 8 }}
+      volumes:
+        - name: git-spool
+          emptyDir:
+            sizeLimit: 3Gi
+        {{- if .Values.kagentControlAuth.enabled }}
+        - name: kagent-control-auth
+          secret:
+            secretName: kagent-control-token
+            items:
+              - key: current
+                path: current
+        - name: kagent-control-ca
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Mi
+        - name: kagent-control-root
+          secret:
+            secretName: kagent-control-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+        {{- end }}
+        {{- with .Values.server.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}

@@ -26,7 +26,7 @@ dev-reset: ## Wipe the Kind database and restart the backend
 	@./scripts/kind/reset-data.sh
 
 # =============================================================================
-# Shared live instance (DevSpace profile `live`, namespace mainloop-dev on internal-01)
+# Shared live instance (DevSpace profile `live`, namespace mainloop-dev; needs DEV_LIVE_CONTEXT and MAINLOOP_DEV_CONFIG)
 # =============================================================================
 
 dev-live: ## Deploy mainloop-dev and live-sync the Go server and web app into it

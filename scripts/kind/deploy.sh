@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply the Kind overlay and wait until PostgreSQL and both app Deployments are ready.
+# Install the chart with the Kind values and wait until PostgreSQL and both app Deployments are ready.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,10 +12,11 @@ if ! kubectl --context "${CONTEXT}" get secret mainloop-secrets -n mainloop >/de
   exit 1
 fi
 
-echo "=== Applying the Kind overlay to ${CONTEXT} ==="
-kubectl --context "${CONTEXT}" apply -k "${REPO_ROOT}/k8s/apps/mainloop/overlays/kind"
+echo "=== Installing the chart into ${CONTEXT} ==="
+helm --kube-context "${CONTEXT}" upgrade --install mainloop "${REPO_ROOT}/charts/mainloop" \
+  --namespace mainloop --values "${REPO_ROOT}/charts/mainloop/values-kind.yaml" --take-ownership
 
-# The overlay names the images :kind. A rebuild reloads them under the same name, so apply alone
+# The Kind values name the images :kind. A rebuild reloads them under the same name, so apply alone
 # leaves the old pods running. Restart the app pods to pick up the newly loaded images.
 kubectl --context "${CONTEXT}" rollout restart deployment/mainloop-backend deployment/mainloop-frontend -n mainloop
 

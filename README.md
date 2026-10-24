@@ -243,6 +243,6 @@ database and let `mainloop migrate up` create the schema. Main and child Session
 credential references; the main thread uses its dedicated main Agent. Native session history
 from earlier development builds is not carried over.
 
-The [Kind overlay](k8s/apps/mainloop/overlays/kind/README.md) runs the Go/React stack without kagent,
+The [Kind setup](docs/dev-environment.md#kind) runs the Go/React stack without kagent,
 so native sessions, workspaces and schedules are unavailable there. A tracked recipe for installing
 kagent into a local cluster does not exist yet.

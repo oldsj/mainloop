@@ -1,4 +1,4 @@
-// Package deploytest renders the tracked Kubernetes manifests offline and checks the properties
+// Package deploytest renders the Helm chart (charts/mainloop) offline and checks the properties
 // the Go server and React app depend on. No cluster is contacted.
 package deploytest
 
@@ -23,9 +23,18 @@ import (
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 )
 
-const manifests = "../../../k8s/apps/mainloop"
+const chart = "../../../charts/mainloop"
 
-// rendered is one kustomization after `kubectl kustomize`, split by kind.
+// installs are the values files a deployment of the chart is rendered with. The production and
+// live-dev files are generic stand-ins; real deployments keep theirs in their own repository.
+var installs = map[string]struct{ namespace, values string }{
+	"defaults":   {"mainloop", ""},
+	"production": {"mainloop", "ci/production-values.yaml"},
+	"live-dev":   {"mainloop-dev", "ci/live-dev-values.yaml"},
+	"kind":       {"mainloop", "values-kind.yaml"},
+}
+
+// rendered is one install after `helm template`, split by kind.
 type rendered struct {
 	deployments  map[string]appsv1.Deployment
 	statefulSets map[string]appsv1.StatefulSet
@@ -39,19 +48,27 @@ type rendered struct {
 	objects []string
 }
 
-// render builds a kustomization with the local kubectl (client-side, offline).
+// render templates the chart with the local helm (client-side, offline).
 func render(t *testing.T, path string) rendered {
 	t.Helper()
-	kubectl, err := exec.LookPath("kubectl")
+	helm, err := exec.LookPath("helm")
 	if err != nil {
-		t.Skip("kubectl is not installed")
+		t.Skip("helm is not installed")
 	}
-	cmd := exec.CommandContext(t.Context(), kubectl, "kustomize", filepath.Join(manifests, path))
+	install, ok := installs[path]
+	if !ok {
+		t.Fatalf("no install %q", path)
+	}
+	args := []string{"template", "mainloop", chart, "--namespace", install.namespace}
+	if install.values != "" {
+		args = append(args, "--values", filepath.Join(chart, install.values))
+	}
+	cmd := exec.CommandContext(t.Context(), helm, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("kubectl kustomize %s: %v\n%s", path, err, stderr.String())
+		t.Fatalf("helm template %s: %v\n%s", path, err, stderr.String())
 	}
 
 	r := rendered{
@@ -166,10 +183,10 @@ func serverContainers(pod corev1.PodSpec) []corev1.Container {
 	return out
 }
 
-var overlays = []string{"base", "overlays/prod", "overlays/dev-live", "overlays/kind"}
+var installNames = []string{"defaults", "production", "live-dev", "kind"}
 
 func TestServerContainersRunTheGoBinary(t *testing.T) {
-	for _, path := range overlays {
+	for _, path := range installNames {
 		t.Run(path, func(t *testing.T) {
 			pod := render(t, path).backend(t)
 			for _, c := range serverContainers(pod) {
@@ -205,7 +222,7 @@ func TestServeSubcommandsAndPorts(t *testing.T) {
 		"mcp":     {"serve-mcp", []int32{8002}},
 		"git":     {"serve-git", []int32{8003, 8004}},
 	}
-	for _, path := range overlays {
+	for _, path := range installNames {
 		t.Run(path, func(t *testing.T) {
 			cs := containers(render(t, path).backend(t))
 			for name, w := range want {
@@ -227,7 +244,7 @@ func TestServeSubcommandsAndPorts(t *testing.T) {
 }
 
 func TestProbesAreHTTPOrTCP(t *testing.T) {
-	for _, path := range overlays {
+	for _, path := range installNames {
 		t.Run(path, func(t *testing.T) {
 			r := render(t, path)
 			for name, d := range r.deployments {
@@ -256,7 +273,7 @@ func TestProbesAreHTTPOrTCP(t *testing.T) {
 }
 
 func TestMigrateInitContainerRunsFirst(t *testing.T) {
-	for _, path := range overlays {
+	for _, path := range installNames {
 		t.Run(path, func(t *testing.T) {
 			pod := render(t, path).backend(t)
 			var migrate *corev1.Container
@@ -290,7 +307,7 @@ func TestMigrateInitContainerRunsFirst(t *testing.T) {
 
 func TestSecretsAreReferencedNotEmbedded(t *testing.T) {
 	secrets := []string{"DB_PASSWORD", "AGENT_TOKEN_KEY", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"}
-	for _, path := range overlays {
+	for _, path := range installNames {
 		t.Run(path, func(t *testing.T) {
 			for _, c := range serverContainers(render(t, path).backend(t)) {
 				env := envByName(c)
@@ -307,9 +324,9 @@ func TestSecretsAreReferencedNotEmbedded(t *testing.T) {
 	}
 }
 
-// Base and prod require the GitHub App keys from mainloop-secrets; dev-live makes them optional.
+// Every install but the live dev instance requires the GitHub App keys from mainloop-secrets.
 func TestGitHubAppKeysComeFromMainloopSecrets(t *testing.T) {
-	for _, path := range overlays {
+	for _, path := range installNames {
 		t.Run(path, func(t *testing.T) {
 			for name, c := range containers(render(t, path).backend(t)) {
 				env := envByName(c)
@@ -322,7 +339,7 @@ func TestGitHubAppKeysComeFromMainloopSecrets(t *testing.T) {
 					if ref.SecretKeyRef.Name != "mainloop-secrets" || ref.SecretKeyRef.Key != key {
 						t.Errorf("%s: %s refs %s/%s", name, envName, ref.SecretKeyRef.Name, ref.SecretKeyRef.Key)
 					}
-					if optional := ref.SecretKeyRef.Optional != nil && *ref.SecretKeyRef.Optional; optional != (path == "overlays/dev-live") {
+					if optional := ref.SecretKeyRef.Optional != nil && *ref.SecretKeyRef.Optional; optional != (path == "live-dev") {
 						t.Errorf("%s: %s optional=%v in %s", name, envName, optional, path)
 					}
 				}
@@ -337,7 +354,7 @@ func TestGitHubAppKeysComeFromMainloopSecrets(t *testing.T) {
 }
 
 func TestGitListenersAreInternalAndShareTheBackendEnvironment(t *testing.T) {
-	for _, path := range overlays {
+	for _, path := range installNames {
 		t.Run(path, func(t *testing.T) {
 			r := render(t, path)
 			pod := r.backend(t)
@@ -401,7 +418,7 @@ func envEqual(a, b corev1.EnvVar) bool {
 
 // The git ports accept traffic only from the egress proxy, and no NetworkPolicy adds another peer.
 func TestNoNetworkPolicyOpensGitPortsToAnotherPeer(t *testing.T) {
-	for _, path := range overlays {
+	for _, path := range installNames {
 		t.Run(path, func(t *testing.T) {
 			allowed := map[intstr.IntOrString]bool{}
 			for _, policy := range render(t, path).policies {
@@ -445,7 +462,7 @@ func TestNoClusterScopedSecretAccess(t *testing.T) {
 	grants := func(rule rbacv1.PolicyRule) bool {
 		return (slices.Contains(rule.Resources, "secrets") || slices.Contains(rule.Resources, "*")) && len(rule.Verbs) > 0
 	}
-	for _, path := range overlays {
+	for _, path := range installNames {
 		t.Run(path, func(t *testing.T) {
 			r := render(t, path)
 			defined := map[string]bool{}
@@ -476,13 +493,12 @@ func TestNoClusterScopedSecretAccess(t *testing.T) {
 
 func TestFeatureFlagsDefaultOff(t *testing.T) {
 	flags := []string{"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_MERGE_TOOLS_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED", "MAINLOOP_OWNER_POLICY_WRITES_ENABLED"}
-	// The live dev instance is a single-owner prototype, so the owner turned HITL answers and,
-	// owner-approved for dev, Git transport and the push gate on there (through mainloop-dev's own
-	// proxies). Every other overlay, prod included, keeps every flag off.
+	// The live dev instance is a single-owner prototype, so it may turn HITL answers, Git transport
+	// and the push gate on (through its own proxies). Every other install keeps every flag off.
 	allowed := map[string][]string{
-		"overlays/dev-live": {"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED"},
+		"live-dev": {"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED"},
 	}
-	for _, path := range overlays {
+	for _, path := range installNames {
 		t.Run(path, func(t *testing.T) {
 			data := render(t, path).configMaps["mainloop-config"].Data
 			for _, flag := range flags {
@@ -498,11 +514,11 @@ func TestFeatureFlagsDefaultOff(t *testing.T) {
 }
 
 func TestProdIsNotTheLiveDevInstance(t *testing.T) {
-	data := render(t, "overlays/prod").configMaps["mainloop-config"].Data
+	data := render(t, "production").configMaps["mainloop-config"].Data
 	if data["MAINLOOP_ALLOW_RESET"] != "" {
 		t.Error("prod must not allow `migrate reset`")
 	}
-	for _, c := range render(t, "overlays/prod").backend(t).Containers {
+	for _, c := range render(t, "production").backend(t).Containers {
 		if strings.Contains(c.Image, "-dev") {
 			t.Errorf("prod container %s runs dev image %s", c.Name, c.Image)
 		}
@@ -510,7 +526,7 @@ func TestProdIsNotTheLiveDevInstance(t *testing.T) {
 }
 
 func TestLiveDev(t *testing.T) {
-	r := render(t, "overlays/dev-live")
+	r := render(t, "live-dev")
 	pod := r.backend(t)
 
 	t.Run("images are the arm64 main dev images", func(t *testing.T) {
@@ -562,7 +578,7 @@ func TestLiveDev(t *testing.T) {
 		if env["VITE_API_URL"].Value != "/api" || env["VITE_HOST"].Value != "0.0.0.0" || env["VITE_PORT"].Value != "3000" {
 			t.Errorf("vite env: %+v", env)
 		}
-		if env["__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS"].Value != "mainloop-dev.olds.network" {
+		if env["__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS"].Value != "mainloop-dev.example.test" {
 			t.Errorf("allowed host: %q", env["__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS"].Value)
 		}
 	})
@@ -615,39 +631,11 @@ func TestLiveDev(t *testing.T) {
 	})
 }
 
-// The backend publishes per-session MCP credential Secrets into kagent, so its ServiceAccount
-// needs the production Role there. `make dev-agents` applies the binding.
-func TestLiveDevBackendMayPublishAgentCredentials(t *testing.T) {
-	live := render(t, "overlays/dev-live")
-	if got := live.backend(t).ServiceAccountName; got != "mainloop-backend" {
-		t.Fatalf("backend ServiceAccount %q, want mainloop-backend", got)
-	}
-	var binding *rbacv1.RoleBinding
-	for _, b := range render(t, "overlays/dev-live/kagent").roleBindings {
-		if b.Name == "mainloop-dev-agent-tokens" {
-			binding = &b
-		}
-	}
-	if binding == nil {
-		t.Fatal("no RoleBinding mainloop-dev-agent-tokens in the dev-live kagent render")
-	}
-	if binding.Namespace != "kagent" {
-		t.Errorf("namespace %q, want kagent", binding.Namespace)
-	}
-	if binding.RoleRef.Kind != "Role" || binding.RoleRef.Name != "mainloop-agent-tokens" {
-		t.Errorf("roleRef %+v, want Role mainloop-agent-tokens", binding.RoleRef)
-	}
-	want := rbacv1.Subject{Kind: "ServiceAccount", Name: "mainloop-backend", Namespace: "mainloop-dev"}
-	if len(binding.Subjects) != 1 || binding.Subjects[0] != want {
-		t.Errorf("subjects %+v, want only %+v", binding.Subjects, want)
-	}
-}
-
-// The Kind overlay (`make dev`) runs the same Go images as prod against a local PostgreSQL. It must
+// The Kind install (`make dev`) runs the same Go images as prod against a local PostgreSQL. It must
 // boot without kagent, the GitHub App or a registry pull, and its Services and origin must match
 // the port forwards in devspace.yaml and the Makefile.
-func TestKindOverlayBootsWithoutKagentOrGitHubApp(t *testing.T) {
-	r := render(t, "overlays/kind")
+func TestKindBootsWithoutKagentOrGitHubApp(t *testing.T) {
+	r := render(t, "kind")
 
 	for _, o := range r.objects {
 		if lower := strings.ToLower(o); strings.Contains(lower, "kagent") || strings.Contains(lower, "substrate") {

@@ -1,0 +1,34 @@
+# Local Kind cluster for trying Mainloop out (docs/dev-environment.md#kind). Runs the Go server and
+# React app with a local PostgreSQL. kagent, Substrate, the GitHub App and Tailscale exposure are
+# not configured here, so the stack boots without them. Images are built on the host and loaded
+# into Kind; nothing is pulled from ghcr.io.
+
+images:
+  backend:
+    repository: mainloop-backend
+    tag: kind
+  frontend:
+    repository: mainloop-frontend
+    tag: kind
+
+# Kind loads the images onto the nodes and has no ghcr.io pull secret to use.
+imagePullSecrets: []
+
+database:
+  local:
+    enabled: true
+
+config:
+  # The browser reaches the web app at http://localhost:5173 and the API at http://localhost:8000
+  # through port forwards. The Origin and Host checks compare these values exactly, so keep them
+  # in step with the forwards and with the VITE_API_URL build argument.
+  FRONTEND_SCHEME: http
+  FRONTEND_DOMAIN: localhost:5173
+  API_DOMAIN: localhost
+  # Lets `make dev-reset` run `mainloop migrate reset` against this throwaway database.
+  MAINLOOP_ALLOW_RESET: '1'
+
+frontend:
+  env:
+    - name: ORIGIN
+      value: http://localhost:5173

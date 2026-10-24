@@ -233,7 +233,7 @@ responses and internal generic status/response mutations reject HITL cards.
 `POST /hitl/{request_id}/respond` accepts `action_id` and a complete typed `response`. This route
 is disabled unless **`MAINLOOP_OWNER_HITL_WRITES_ENABLED=true`** exactly. Like the policy gate,
 this is an operator opt-in after proving owner-route isolation, not request authentication.
-Only the live dev overlay (`overlays/dev-live`, a single-owner prototype) enables it. Fresh ownership/task checks, exact batch validation, sorted verified
+Only the live dev instance (a single-owner prototype; see `charts/mainloop/ci/live-dev-values.yaml`) enables it. Fresh ownership/task checks, exact batch validation, sorted verified
 leaf locks and route revalidation precede immutable recording. Same action/body is idempotent;
 another action or contradictory batch cannot take any already-recorded leaf member.
 

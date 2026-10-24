@@ -1,0 +1,37 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mainloop-backend-ingress
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: mainloop-backend
+  policyTypes: [Ingress]
+  ingress:
+    {{- toYaml .Values.networkPolicy.backendIngress | nindent 4 }}
+---
+# Separate policy, so a deployment's backendIngress never opens the git listeners to another peer.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mainloop-git-ingress
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: mainloop-backend
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ate-system
+          podSelector:
+            matchLabels:
+              app: atenet-egress
+      ports:
+        - protocol: TCP
+          port: 8003
+        - protocol: TCP
+          port: 8004

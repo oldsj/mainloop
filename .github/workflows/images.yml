@@ -85,6 +85,62 @@ jobs:
             printf 'Pin: `%s@%s`\n' "$IMAGE" "$DIGEST"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Publishes charts/mainloop to oci://ghcr.io/oldsj/charts/mainloop as 0.1.<run number>, with this
+  # commit's image digests pinned in its values. Deployments track the newest 0.1.* version. Run
+  # numbers only grow, so a re-run or a late older run never outranks a newer commit's chart.
+  chart:
+    name: Publish the chart
+    needs: publish
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package and push
+        shell: bash
+        env:
+          VERSION: 0.1.${{ github.run_number }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_SHA:0:7}"
+          digest_of() {
+            local d
+            d="$(docker buildx imagetools inspect "ghcr.io/oldsj/mainloop-$1:${tag}" --format '{{.Manifest.Digest}}')"
+            [[ "$d" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no digest for mainloop-$1:${tag}: '${d}'" >&2; exit 1; }
+            printf '%s' "$d"
+          }
+          backend="$(digest_of backend)" frontend="$(digest_of frontend)"
+          values=charts/mainloop/values.yaml
+          yq -i ".images.backend.tag = \"${tag}\" | .images.backend.digest = \"${backend}\"" "$values"
+          yq -i ".images.frontend.tag = \"${tag}\" | .images.frontend.digest = \"${frontend}\"" "$values"
+          rendered="$(helm template mainloop charts/mainloop)"
+          grep -qF "mainloop-backend@${backend}" <<<"$rendered"
+          grep -qF "mainloop-frontend@${frontend}" <<<"$rendered"
+          helm package charts/mainloop --version "$VERSION" --app-version "$tag" --destination "$RUNNER_TEMP"
+          helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$GHCR_TOKEN"
+          helm push "$RUNNER_TEMP/mainloop-${VERSION}.tgz" oci://ghcr.io/oldsj/charts
+          {
+            printf '### Chart mainloop %s\n\n' "$VERSION"
+            printf 'Pull: `oci://ghcr.io/oldsj/charts/mainloop --version %s`\n\n' "$VERSION"
+            printf 'Backend: `%s`\n\n' "$backend"
+            printf 'Frontend: `%s`\n' "$frontend"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Pins production to this commit's images. The release branch is the main commit plus one commit
   # that adds an images block to the prod overlay; Argo tracks it. Pushes made with GITHUB_TOKEN do
   # not start workflows, so this cannot loop. A run releases only while its commit is still the tip of
