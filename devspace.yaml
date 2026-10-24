@@ -13,10 +13,19 @@ vars:
   DEV_CODEX_HARNESS_IMAGE:
     command: scripts/dev-live-harness.sh
     args: [image, codex]
+  # Live profile: the deployment's own config for its live instance, kept outside this repository
+  # (docs/dev-environment.md#live-dev-instance). A directory holding values.yaml for the chart and
+  # kagent/, a kustomization of the instance's dev agents; and the only kube context it may use.
+  MAINLOOP_DEV_CONFIG:
+    source: env
+    default: ''
+  DEV_LIVE_CONTEXT:
+    source: env
+    default: ''
 
 # Local Kind stack (`make dev`; see docs/dev-environment.md#kind). Builds the Go server and the React
-# app from this checkout, loads both into the Kind cluster and deploys overlays/kind. The live
-# profile below replaces this whole section on internal-01.
+# app from this checkout, loads both into the Kind cluster and deploys the chart with
+# charts/mainloop/values-kind.yaml. The live profile below replaces this whole section.
 
 # Images - built locally, then loaded into Kind by DevSpace. No constant tag: each build gets a new
 # generated tag, so a changed image rolls the pods. A fixed tag would leave them on the old image.
@@ -40,14 +49,23 @@ images:
         # Baked into the bundle at build time; must match the API port forward below.
         - --build-arg=VITE_API_URL=http://localhost:8000
 
-# Deployments using Kustomize
 deployments:
   mainloop:
     namespace: mainloop
-    kubectl:
-      kustomize: true
-      manifests:
-        - k8s/apps/mainloop/overlays/kind
+    helm:
+      chart:
+        name: ./charts/mainloop
+      valuesFiles:
+        - charts/mainloop/values-kind.yaml
+      # The images DevSpace just built and loaded, under their generated tags.
+      values:
+        images:
+          backend:
+            repository: ${runtime.images.backend.image}
+            tag: ${runtime.images.backend.tag}
+          frontend:
+            repository: ${runtime.images.frontend.image}
+            tag: ${runtime.images.frontend.tag}
 
 # Port forwards: the web app on localhost:5173 and the API on localhost:8000. Ctrl-C stops them.
 dev:
@@ -89,9 +107,9 @@ commands:
 
 # Profiles
 profiles:
-  # Shared live instance on internal-01 (`make dev-live`). No local builds: images
-  # come from ghcr (CI publishes the --target=dev images on pushes to main).
-  # DevSpace owns namespace mainloop-dev and the *-dev kagent agents directly.
+  # Shared live instance (`make dev-live`). No local builds: images come from ghcr (CI publishes
+  # the --target=dev images on pushes to main). DevSpace owns the instance's workloads and its
+  # *-dev kagent agents directly; values and agents come from MAINLOOP_DEV_CONFIG.
   - name: live
     patches:
       - op: remove
@@ -101,14 +119,18 @@ profiles:
       - op: remove
         path: commands
       # v2beta1 has no kube-context key, so every live pipeline starts with this pin:
-      # it refuses any context or namespace other than admin@internal-01/mainloop-dev
-      # (pass --kube-context admin@internal-01 -n mainloop-dev, as scripts/dev-live.sh does).
+      # it refuses any context or namespace other than DEV_LIVE_CONTEXT/mainloop-dev
+      # (pass --kube-context "$DEV_LIVE_CONTEXT" -n mainloop-dev, as scripts/dev-live.sh does).
       - op: add
         path: functions
         value:
           require_live_target: |-
-            if [ "${DEVSPACE_CONTEXT}" != "admin@internal-01" ] || [ "${DEVSPACE_NAMESPACE}" != "mainloop-dev" ]; then
-              echo "profile live runs only against context admin@internal-01, namespace mainloop-dev (got ${DEVSPACE_CONTEXT}/${DEVSPACE_NAMESPACE})" >&2
+            if [ -z "${MAINLOOP_DEV_CONFIG}" ] || [ -z "${DEV_LIVE_CONTEXT}" ]; then
+              echo "profile live needs MAINLOOP_DEV_CONFIG and DEV_LIVE_CONTEXT (see docs/dev-environment.md#live-dev-instance)" >&2
+              exit 1
+            fi
+            if [ "${DEVSPACE_CONTEXT}" != "${DEV_LIVE_CONTEXT}" ] || [ "${DEVSPACE_NAMESPACE}" != "mainloop-dev" ]; then
+              echo "profile live runs only against context ${DEV_LIVE_CONTEXT}, namespace mainloop-dev (got ${DEVSPACE_CONTEXT}/${DEVSPACE_NAMESPACE})" >&2
               exit 1
             fi
       # dev and deploy touch only mainloop-dev; the shared kagent namespace changes
@@ -139,16 +161,20 @@ profiles:
         value:
           mainloop:
             namespace: mainloop-dev
-            kubectl:
-              kustomize: true
-              manifests:
-                - k8s/apps/mainloop/overlays/dev-live
+            helm:
+              chart:
+                name: ./charts/mainloop
+              valuesFiles:
+                - ${MAINLOOP_DEV_CONFIG}/values.yaml
+              # Adopts objects an earlier kubectl deployment of the instance created.
+              upgradeArgs:
+                - --take-ownership
           dev-agents:
             namespace: kagent
             kubectl:
               kustomize: true
               manifests:
-                - k8s/apps/mainloop/overlays/dev-live/kagent
+                - ${MAINLOOP_DEV_CONFIG}/kagent
               # `make dev-harness` records dev images under .devspace/dev-harness/.
               patches:
                 - target:
@@ -255,6 +281,4 @@ profiles:
                 value: /api
               - name: MAINLOOP_API_PROXY
                 value: http://mainloop-backend:8000
-              - name: __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS
-                value: mainloop-dev.olds.network
             logs: {}

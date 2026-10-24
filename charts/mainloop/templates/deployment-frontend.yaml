@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-frontend
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mainloop-frontend
+  template:
+    metadata:
+      labels:
+        app: mainloop-frontend
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: frontend
+          image: {{ include "mainloop.frontendImage" . }}
+          {{- include "mainloop.pullPolicy" . | nindent 10 }}
+          {{- with .Values.frontend.command }}
+          command: {{ toJson . }}
+          {{- end }}
+          {{- with .Values.frontend.workingDir }}
+          workingDir: {{ . }}
+          {{- end }}
+          ports:
+            - containerPort: 3000
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          {{- with .Values.frontend.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          {{- $liveness := dict "httpGet" (dict "path" "/" "port" 3000) "initialDelaySeconds" 30 "periodSeconds" 10 "timeoutSeconds" 5 "failureThreshold" 3 }}
+          {{- $readiness := dict "httpGet" (dict "path" "/" "port" 3000) "initialDelaySeconds" 10 "periodSeconds" 5 "timeoutSeconds" 3 "failureThreshold" 3 }}
+          livenessProbe:
+            {{- toYaml (mergeOverwrite $liveness .Values.frontend.livenessProbe) | nindent 12 }}
+          readinessProbe:
+            {{- toYaml (mergeOverwrite $readiness .Values.frontend.readinessProbe) | nindent 12 }}

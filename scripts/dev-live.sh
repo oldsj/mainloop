@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Shared live-sync instance mainloop-dev on internal-01 (DevSpace profile `live`).
+# Shared live-sync instance mainloop-dev (DevSpace profile `live`). Needs MAINLOOP_DEV_CONFIG and
+# DEV_LIVE_CONTEXT, from the environment or .env (docs/dev-environment.md#live-dev-instance).
 #
 #   dev-live.sh dev      deploy and start syncing (Ctrl-C stops sync; pods keep running).
 #                        If MAINLOOP_API_URL is set it first acquires the devloop lease as the
@@ -19,9 +20,13 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-CONTEXT=${DEV_LIVE_CONTEXT:-admin@internal-01}
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
 NAMESPACE=mainloop-dev
-DEVSPACE=(devspace --kube-context "${CONTEXT}" --namespace "${NAMESPACE}" --profile live)
 
 # lease calls the devloop lease REST API (served by the control-plane instance that runs the
 # devloop tools, not by mainloop-dev itself): POST /devloop/lease/acquire or .../release.
@@ -69,6 +74,10 @@ lease-release)
   ;;
 *) ;;
 esac
+
+CONTEXT=${DEV_LIVE_CONTEXT:?set DEV_LIVE_CONTEXT to the kube context of the live instance}
+: "${MAINLOOP_DEV_CONFIG:?set MAINLOOP_DEV_CONFIG to the live instance config directory}"
+DEVSPACE=(devspace --kube-context "${CONTEXT}" --namespace "${NAMESPACE}" --profile live)
 
 # DevSpace renders manifests with a bare `kubectl create --dry-run=client`, which uses the
 # kubeconfig's current context. Prepend a credential-free fragment that selects $CONTEXT,
@@ -119,7 +128,7 @@ status)
     grep -E "^NAME|-dev(-|\s|$)" || true
   ;;
 *)
-  sed -n '2,16p' "$0" >&2
+  sed -n '2,17p' "$0" >&2
   exit 2
   ;;
 esac

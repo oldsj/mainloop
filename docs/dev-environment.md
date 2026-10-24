@@ -58,11 +58,20 @@ Without DevSpace, `make kind-up` creates the cluster, builds and loads the image
 
 `KIND_CLUSTER_NAME=<name>` picks another cluster, with kubectl context `kind-<name>`. The commands pass their context explicitly. Creating a cluster does switch your kubectl current context to it.
 
-What works without kagent: the web app, the REST API (migrations run on start), and the MCP and Git listeners, which start with Git transport off. Not available: native Claude Code and Codex sessions, workspaces, and schedules. They need a kagent installation that this stack does not set up, so `/schedules` returns 502. GitHub is not configured, so there are no repository reads or pushes. The [Kind overlay README](../k8s/apps/mainloop/overlays/kind/README.md) lists what the overlay changes.
+What works without kagent: the web app, the REST API (migrations run on start), and the MCP and Git listeners, which start with Git transport off. Not available: native Claude Code and Codex sessions, workspaces, and schedules. They need a kagent installation that this stack does not set up, so `/schedules` returns 502. GitHub is not configured, so there are no repository reads or pushes. [charts/mainloop/values-kind.yaml](../charts/mainloop/values-kind.yaml) holds the Kind settings.
 
 ## Live dev instance
 
 `mainloop-dev` is a shared, prototype instance for fast iteration. It runs in namespace `mainloop-dev` on the production cluster, next to production `mainloop`, but DevSpace deploys and owns it directly; it is not Argo-managed. Production still changes only through pull requests, CI and GitOps.
+
+The instance's own settings live with the deployment, outside this repository. Point two variables at them, in the environment or in a git-ignored `.env` at the repository root:
+
+```bash
+DEV_LIVE_CONTEXT=my-cluster                     # the only kube context the live profile may use
+MAINLOOP_DEV_CONFIG=../infrastructure/mainloop-dev   # values.yaml for charts/mainloop, and kagent/
+```
+
+`$MAINLOOP_DEV_CONFIG/values.yaml` is a values file for `charts/mainloop` (`charts/mainloop/ci/live-dev-values.yaml` is a complete example), and `$MAINLOOP_DEV_CONFIG/kagent` is a kustomization of the instance's `*-dev` kagent Agents, Harnesses, RemoteMCPServer and token RoleBinding. Secrets, the route and any RBAC the instance needs come from the cluster's own GitOps.
 
 ```bash
 make dev-live          # deploy mainloop-dev, then sync and stream logs (Ctrl-C stops sync)
@@ -72,7 +81,7 @@ make dev-harness       # build arm64 harness images from ../kagent, apply them t
 make dev-live-purge    # delete namespace mainloop-dev and the *-dev agents (typed confirmation)
 ```
 
-All targets use kube context `admin@internal-01` through DevSpace profile `live` in `devspace.yaml`, whose pipelines (`build`, `dev`, `deploy`, `deploy-agents`, `purge`) refuse any other context or namespace. Use these targets or `scripts/dev-live.sh`: raw `devspace sync`, `restart`, `enter`, `logs` and `attach` with `-p live` are not guarded and act on whatever `--kube-context` and `-n` say. This page covers only the `live` profile.
+All targets use kube context `$DEV_LIVE_CONTEXT` through DevSpace profile `live` in `devspace.yaml`, whose pipelines (`build`, `dev`, `deploy`, `deploy-agents`, `purge`) refuse any other context or namespace. Use these targets or `scripts/dev-live.sh`: raw `devspace sync`, `restart`, `enter`, `logs` and `attach` with `-p live` are not guarded and act on whatever `--kube-context` and `-n` say. This page covers only the `live` profile.
 
 ### Dev harness snapshots
 
@@ -121,32 +130,32 @@ What runs and syncs: the Go server and the React app.
 - The images already hold the source they were built from, so a pod serves before the first sync lands. A `migrate` initContainer runs `mainloop migrate up` on every pod start, but it sees only that baked-in source, never synced files. After syncing a new migration, apply it yourself in the backend container:
 
   ```bash
-  kubectl --context admin@internal-01 -n mainloop-dev exec deploy/mainloop-backend -c backend -- \
+  kubectl --context "$DEV_LIVE_CONTEXT" -n mainloop-dev exec deploy/mainloop-backend -c backend -- \
     go run ./cmd/mainloop migrate up
   ```
 
   (Under `devspace dev` the serving pod is `mainloop-backend-devspace`; see Reset below for addressing it.)
 
-The UI is `https://mainloop-dev.olds.network` (tailnet only, through the same Envoy gateway as production). The browser calls `/api` on that host, and Vite forwards it to the backend Service (`MAINLOOP_API_PROXY`), so the backend needs no route of its own. Vite accepts the gateway host through `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`.
+The UI is served at the host the deployment's route gives it. The browser calls `/api` on that host, and Vite forwards it to the backend Service (`MAINLOOP_API_PROXY`), so the backend needs no route of its own. Vite accepts the gateway host through `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`.
 
-Images: the **Publish live dev images** workflow builds arm64 images on each push to `main` and pushes `ghcr.io/oldsj/mainloop-server-dev` (`server/Dockerfile --target dev`: Go toolchain, `git`, `watchexec`) and `ghcr.io/oldsj/mainloop-web-dev` (`web/Dockerfile --target dev`: node 24, pnpm, Vite on `0.0.0.0:3000`), each tagged `<short SHA>` and `main`. The overlay pulls the `main` tag. The pods pull the moving tag and the sync overlays the working tree. The pods carry no pull secret, so after the first build of each of the two `-dev` packages make it public once in the GitHub UI (package settings, change visibility); until then the pods sit in `ImagePullBackOff`.
+Images: the **Publish live dev images** workflow builds arm64 images on each push to `main` and pushes `ghcr.io/oldsj/mainloop-server-dev` (`server/Dockerfile --target dev`: Go toolchain, `git`, `watchexec`) and `ghcr.io/oldsj/mainloop-web-dev` (`web/Dockerfile --target dev`: node 24, pnpm, Vite on `0.0.0.0:3000`), each tagged `<short SHA>` and `main`. The live values pull the `main` tag. The pods pull the moving tag and the sync overlays the working tree. The pods carry no pull secret, so after the first build of each of the two `-dev` packages make it public once in the GitHub UI (package settings, change visibility); until then the pods sit in `ImagePullBackOff`.
 
 Data: a one-instance CloudNativePG cluster on `local-path` storage. CNPG creates the database credentials. Purging deletes the data.
 
-Reset: the overlay sets `MAINLOOP_ALLOW_RESET=1`, which lets `mainloop migrate reset` drop the schema and migrate back to the latest version. Run it in the backend container of the pod that is serving, then delete that pod so the listeners reconnect. While `devspace dev` is running (`make dev-live`), the serving pod is `mainloop-backend-devspace` and the Deployment's own pod is replaced; otherwise it is the Deployment's `mainloop-backend` pod. Select it by label so both states work:
+Reset: `MAINLOOP_ALLOW_RESET=1` in the live values lets `mainloop migrate reset` drop the schema and migrate back to the latest version. Run it in the backend container of the pod that is serving, then delete that pod so the listeners reconnect. While `devspace dev` is running (`make dev-live`), the serving pod is `mainloop-backend-devspace` and the Deployment's own pod is replaced; otherwise it is the Deployment's `mainloop-backend` pod. Select it by label so both states work:
 
 ```bash
-K="kubectl --context admin@internal-01 -n mainloop-dev"
+K="kubectl --context $DEV_LIVE_CONTEXT -n mainloop-dev"
 POD=$($K get pod -l app=mainloop-backend -o name | head -n1)
 $K exec "$POD" -c backend -- go run ./cmd/mainloop migrate reset
 $K delete "$POD"
 ```
 
 The Go server keeps its tables in the `mainloop` schema. A database first used by the retired Python backend may still have tables in `public`. `migrate reset` does not touch them. To drop them as well:
-`kubectl --context admin@internal-01 -n mainloop-dev exec mainloop-pg-1 -c postgres -- psql -d mainloop -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'`.
+`kubectl --context "$DEV_LIVE_CONTEXT" -n mainloop-dev exec mainloop-pg-1 -c postgres -- psql -d mainloop -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'`.
 `make dev-live-purge` drops all the data, along with the namespace.
 
-Settings (`k8s/apps/mainloop/overlays/dev-live`): `DEV_MODE=true`; merge tools and owner policy writes are off; Git transport and the push gate are on, owner-approved for dev, through mainloop-dev's own read/push proxies; every kagent role uses `claude-workspace-dev` or `codex-workspace-dev`; `MAINLOOP_MCP_HOSTS` lists the `mainloop-mcp` Service names in `mainloop-dev`; the `control-auth` component is on. Dev work targets `oldsj/testrepo` only through the dev agents' instructions: Mainloop has no repository allowlist, and the shared production GitHub App can reach every repository it is installed on, so a dev task can push to any repository the App is installed on. The push gate still refuses pushes to default and protected branches, and merge tools stay off, so nothing here merges on its own.
+Settings (as in `charts/mainloop/ci/live-dev-values.yaml`): `DEV_MODE=true`; merge tools and owner policy writes are off; Git transport and the push gate are on, owner-approved for dev, through mainloop-dev's own read/push proxies; every kagent role uses `claude-workspace-dev` or `codex-workspace-dev`; `MAINLOOP_MCP_HOSTS` lists the `mainloop-mcp` Service names in `mainloop-dev`; the `control-auth` component is on. Dev work targets `oldsj/testrepo` only through the dev agents' instructions: Mainloop has no repository allowlist, and the shared production GitHub App can reach every repository it is installed on, so a dev task can push to any repository the App is installed on. The push gate still refuses pushes to default and protected branches, and merge tools stay off, so nothing here merges on its own.
 
 Secrets are not in this repository. The infrastructure repository supplies them from production's existing items (mainloop-dev shares production's GitHub App, agent token key and kagent control principal). The server needs `agent-token-key` and the kagent control Secrets to start, because it has no fallback for the token key; the GitHub App keys are optional, so without them the instance runs with GitHub unavailable:
 
@@ -168,15 +177,15 @@ Production and mainloop-dev share one kagent principal, so each can list the oth
 Smoke: `mainloop smoke --read-only` probes a running instance: health, the owner reads, the event stream, the MCP and Git listeners' refusals, and with `--kagent` the kagent probe. It sends no writes and spends no quota, so run it after each deploy. Run it in the backend container, where the in-cluster Service names resolve:
 
 ```bash
-kubectl --context admin@internal-01 -n mainloop-dev exec deploy/mainloop-backend -c backend -- \
+kubectl --context "$DEV_LIVE_CONTEXT" -n mainloop-dev exec deploy/mainloop-backend -c backend -- \
   go run ./cmd/mainloop smoke --read-only --kagent
 ```
 
-Git transport and the push gate are on here (owner-approved for dev), so `git-read` and `git-push` report `ok` rather than `skip`. That is Mainloop's own listeners answering through mainloop-dev's own proxies; a native session reaching GitHub for real still needs the kagent side, landing separately: the Harness change naming mainloop-dev's own `readProxyOrigin`/`pushProxyOrigin` (`k8s/apps/mainloop/overlays/dev-live/kagent/claude.yaml`, `codex.yaml`) and kagent's service policy accepting mainloop-dev's Git tuples. The owner's operator applies the Harness change once that policy ships; until then a dev session's Git calls still go nowhere. The live run (`smoke --live`) drives one task from chat to merge and spends quota, so only run it once that kagent-side change has shipped. Run it from an operator machine, not the pod: the pod has no `gh` login, and the live path reads GitHub through the operator's `gh auth status`. It checks `gh` before anything else and refuses, spending no budget, when `gh` is missing or not logged in. Open two port-forwards first, each in its own terminal:
+Git transport and the push gate are on here (owner-approved for dev), so `git-read` and `git-push` report `ok` rather than `skip`. That is Mainloop's own listeners answering through mainloop-dev's own proxies; a native session reaching GitHub for real still needs the kagent side, landing separately: the Harness change naming mainloop-dev's own `readProxyOrigin`/`pushProxyOrigin` (`$MAINLOOP_DEV_CONFIG/kagent/claude.yaml`, `codex.yaml`) and kagent's service policy accepting mainloop-dev's Git tuples. The owner's operator applies the Harness change once that policy ships; until then a dev session's Git calls still go nowhere. The live run (`smoke --live`) drives one task from chat to merge and spends quota, so only run it once that kagent-side change has shipped. Run it from an operator machine, not the pod: the pod has no `gh` login, and the live path reads GitHub through the operator's `gh auth status`. It checks `gh` before anything else and refuses, spending no budget, when `gh` is missing or not logged in. Open two port-forwards first, each in its own terminal:
 
 ```bash
-kubectl --context admin@internal-01 -n mainloop-dev port-forward svc/mainloop-backend 8000:8000
-kubectl --context admin@internal-01 -n mainloop-dev port-forward svc/mainloop-git-push 8004:80
+kubectl --context "$DEV_LIVE_CONTEXT" -n mainloop-dev port-forward svc/mainloop-backend 8000:8000
+kubectl --context "$DEV_LIVE_CONTEXT" -n mainloop-dev port-forward svc/mainloop-git-push 8004:80
 ```
 
 Then, from `server/`:
@@ -207,12 +216,12 @@ policy entry for `mainloop-dev`); until then they are proven in production.
 
 ### Testing approvals on dev
 
-The overlay's `claude-workspace-dev-template` has no approval gate. To test the Approve and
+The dev `claude-workspace-dev-template` has no approval gate. To test the Approve and
 Reject flow on this instance, gate a tool temporarily and restore the template afterwards.
 
 1. Add `tools: [whoami]` and `requireApproval: true` to the template's `mcp` binding (next to
-   `server`), and apply it with `kubectl --context admin@internal-01 -n kagent apply`. Do not
-   commit the change; the overlay stays ungated.
+   `server`), and apply it with `kubectl --context "$DEV_LIVE_CONTEXT" -n kagent apply`. Do not
+   commit the change; the template stays ungated.
 2. A template change reaches only new native sessions. Switch the main chat's provider away and
    back (`PUT /api/main-thread/provider` with `codex`, then `claude`) so the main chat starts a
    fresh session on the new template.
@@ -221,6 +230,6 @@ Reject flow on this instance, gate a tool temporarily and restore the template a
    the agent-side connection is cut at about 360 s, an approval after that resumes into a
    dead call, and the agent reports "The call timed out." This is a known kagent issue; Mainloop's
    request stays pending and answerable meanwhile.
-4. Restore: re-apply the template from `k8s/apps/mainloop/overlays/dev-live/kagent/claude.yaml`
+4. Restore: re-apply the template from `$MAINLOOP_DEV_CONFIG/kagent/claude.yaml`
    (`make dev-agents`), then switch the provider away and back again so the main chat drops the
    gated session.

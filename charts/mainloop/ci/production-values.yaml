@@ -1,0 +1,97 @@
+# A generic production install, rendered by server/internal/deploytest. A real deployment keeps its
+# own values file (domains, agents, owner decisions) in its deployment repository.
+
+# A GitOps owner tracks the Namespace, so keep it in the render.
+createNamespace: true
+
+server:
+  # The API process runs the reconcilers and strict projection readers and writers must stay on
+  # one model version, so replace pods instead of surging a second one.
+  strategy:
+    type: Recreate
+  podAnnotations:
+    # mainloop-site is read through envFrom, so editing it does not restart the backend. Change
+    # this value with each site-config change to roll the backend through GitOps.
+    example.test/site-config: example-1
+  # Only the keys the server needs, not the whole mainloop-secrets item.
+  importSecretEnv: false
+  # FRONTEND_DOMAIN, API_DOMAIN, MAINLOOP_OWNER_ID, SUBSTRATE_PREVIEW_BASE_URL and feature flags.
+  extraEnvFrom:
+    - configMapRef:
+        name: mainloop-site
+  # Idle use is about 50Mi for the API and 25Mi each for MCP and Git; the limits keep headroom.
+  api:
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 250m
+      limits:
+        memory: 2Gi
+        cpu: 1000m
+  mcp:
+    resources:
+      requests:
+        memory: 128Mi
+        cpu: 100m
+      limits:
+        memory: 1Gi
+        cpu: 500m
+  git:
+    resources:
+      requests:
+        memory: 128Mi
+        cpu: 100m
+        ephemeral-storage: 1Gi
+      limits:
+        memory: 2Gi
+        cpu: 1000m
+        ephemeral-storage: 3Gi
+
+frontend:
+  env:
+    - name: ORIGIN
+      valueFrom:
+        configMapKeyRef:
+          name: mainloop-site
+          key: FRONTEND_ORIGIN
+
+database:
+  cnpg:
+    enabled: true
+
+kagentControlAuth:
+  enabled: true
+
+config:
+  # Domains come from mainloop-site.
+  FRONTEND_DOMAIN: null
+  FRONTEND_SCHEME: https
+  MAINLOOP_API_HOSTS: mainloop-backend,mainloop-backend.mainloop,mainloop-backend.mainloop.svc,mainloop-backend.mainloop.svc.cluster.local
+  DEV_MODE: 'false'
+  IS_TEST_ENV: 'false'
+  KAGENT_GATEWAY_URL: http://kagent-controller.kagent.svc.cluster.local:8083
+  KAGENT_USER_ID: mainloop
+  KAGENT_NAMESPACE: kagent
+  KAGENT_ACTOR_ATESPACE: kagent
+  KAGENT_MAIN_AGENT: mainloop-main
+  KAGENT_CLAUDE_AGENT: claude-subscription
+  KAGENT_CODEX_AGENT: codex-subscription-https
+  KAGENT_WORKSPACE_CLAUDE_AGENT: claude-workspace
+  KAGENT_WORKSPACE_CODEX_AGENT: codex-workspace
+  SUBSTRATE_ROUTER_ADDRESS: http://atenet-router.ate-system.svc.cluster.local:8081
+
+networkPolicy:
+  # Only the actor egress proxy reaches MCP. The browser reaches the API through the gateway, whose
+  # peer the deployment adds as a separate policy. The frontend makes no server-side calls to the
+  # backend.
+  backendIngress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ate-system
+          podSelector:
+            matchLabels:
+              app: atenet-egress
+      ports:
+        - protocol: TCP
+          port: 8002

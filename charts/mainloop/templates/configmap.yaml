@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mainloop-config
+  namespace: {{ .Release.Namespace }}
+data:
+  {{- $data := merge (dict) .Values.config }}
+  {{- if not (hasKey $data "DB_HOST") }}
+  {{- $_ := set $data "DB_HOST" (include "mainloop.dbHost" .) }}
+  {{- end }}
+  {{- range $k, $v := $data }}
+  {{- if not (kindIs "invalid" $v) }}
+  {{ $k }}: {{ $v | toString | quote }}
+  {{- end }}
+  {{- end }}

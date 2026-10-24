@@ -1,0 +1,180 @@
+# Defaults render a generic install: the Go server and the web app, reading credentials from the
+# mainloop-secrets Secret and connecting to an external PostgreSQL. A deployment sets its domains,
+# database and integrations through its own values file; see docs/production-rollout.md.
+
+images:
+  # tag defaults to the chart's appVersion. A digest, when set, replaces the tag; published charts
+  # carry the digests their release built.
+  backend:
+    repository: ghcr.io/oldsj/mainloop-backend
+    tag: ''
+    digest: ''
+  frontend:
+    repository: ghcr.io/oldsj/mainloop-frontend
+    tag: ''
+    digest: ''
+  # Applies to every container. Empty leaves the Kubernetes default.
+  pullPolicy: ''
+
+imagePullSecrets:
+  - name: ghcr-secret
+
+# Renders the release namespace as an object. Leave it on for a GitOps owner that already tracks
+# the Namespace, so a sync never prunes it.
+createNamespace: false
+
+nodeSelector: {}
+
+# Non-secret settings for every server container (ConfigMap mainloop-config). A key set to null
+# drops the default.
+config:
+  HOST: 0.0.0.0
+  PORT: '8000'
+  DB_PORT: '5432'
+  DB_NAME: mainloop
+  FRONTEND_DOMAIN: mainloop.example.com
+  # Merge tools and owner write routes remain off pending deployed authority proof.
+  MAINLOOP_MERGE_TOOLS_ENABLED: 'false'
+  MAINLOOP_MERGE_CONFIGURATIONS: '[]'
+  # Pinned explicitly so a value baked into an image (e.g. by an ENV in a Dockerfile) can never
+  # win over the deployed config. Enable only through this checked-in config, not the image.
+  MAINLOOP_MERGE_PROTECTED_AUTO: 'false'
+  # The live dev loop (dev_sync and the lease tools) stays off except where a deployment turns it on.
+  MAINLOOP_DEVLOOP_ENABLED: 'false'
+
+database:
+  # DB_HOST when neither database below is enabled.
+  host: mainloop-db-pooler.mainloop
+  # Where DB_USER and DB_PASSWORD come from. With cnpg.enabled and no name set, the CNPG-generated
+  # <cluster>-app Secret (keys username, password).
+  credentials:
+    secretName: ''
+    usernameKey: ''
+    passwordKey: ''
+  # A single-instance CloudNativePG Cluster. The server connects to its rw Service directly: one
+  # client app, and no pooler whose pool could stall DBOS LISTEN/NOTIFY sessions.
+  cnpg:
+    enabled: false
+    name: mainloop-pg
+    instances: 1
+    storage:
+      size: 10Gi
+      storageClass: ''
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: '1'
+        memory: 1Gi
+  # A throwaway PostgreSQL StatefulSet for the local Kind stack.
+  local:
+    enabled: false
+    image: postgres:16-alpine
+    storage: 1Gi
+
+# The three listeners and the migrate initContainer, all from the backend image.
+server:
+  # Pod-level settings for Deployment mainloop-backend.
+  strategy: {}
+  podAnnotations: {}
+  # Imports every key of mainloop-secrets as env vars. Turn off to read only the keys named below.
+  importSecretEnv: true
+  # Added after mainloop-config in every server container's envFrom (e.g. a site ConfigMap).
+  extraEnvFrom: []
+  # GitHub App credentials from mainloop-secrets (github-app-id, github-app-private-key).
+  # Optional lets the server start without them.
+  githubAppOptional: false
+  extraEnv: []
+  extraVolumeMounts: []
+  extraVolumes: []
+  # Replaces /usr/local/bin/mainloop; the listener's subcommand is passed as args.
+  command: []
+  workingDir: ''
+  # Merged over each listener's probes.
+  livenessProbe: {}
+  readinessProbe: {}
+  api:
+    resources:
+      requests:
+        memory: 1Gi
+        cpu: 250m
+      limits:
+        memory: 2Gi
+        cpu: 1000m
+  mcp:
+    resources:
+      requests:
+        memory: 1Gi
+        cpu: 250m
+      limits:
+        memory: 2Gi
+        cpu: 1000m
+  git:
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 100m
+        ephemeral-storage: 1Gi
+      limits:
+        memory: 2Gi
+        cpu: 1000m
+        ephemeral-storage: 3Gi
+  # Brings the schema to the latest version before any listener starts. `migrate up` takes the
+  # migrator lock, so a restart racing another pod waits instead of failing.
+  migrate:
+    command: [/usr/local/bin/mainloop, migrate, up]
+    workingDir: ''
+    resources:
+      requests:
+        memory: 64Mi
+        cpu: 50m
+      limits:
+        memory: 256Mi
+        cpu: 500m
+
+frontend:
+  # The full env list of the web container.
+  env:
+    - name: ORIGIN
+      value: https://mainloop.example.com
+  command: []
+  workingDir: ''
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 250m
+  livenessProbe: {}
+  readinessProbe: {}
+
+# Authenticated, TLS calls to kagent's control gateway. Needs Secrets kagent-control-token (key
+# current) and kagent-control-ca (key ca.crt) in the release namespace.
+kagentControlAuth:
+  enabled: false
+  gatewayURL: https://kagent-control.kagent.svc.cluster.local
+  userID: mainloop
+
+networkPolicy:
+  # Ingress to the REST and MCP listeners. The git listeners have their own fixed policy, open only
+  # to the actor egress proxy.
+  backendIngress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ate-system
+          podSelector:
+            matchLabels:
+              app: atenet-egress
+      ports:
+        - protocol: TCP
+          port: 8002
+    - from:
+        - podSelector:
+            matchLabels:
+              app: mainloop-frontend
+      ports:
+        - protocol: TCP
+          port: 8000

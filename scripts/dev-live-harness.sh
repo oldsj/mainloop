@@ -11,7 +11,10 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 STATE="${ROOT}/.devspace/dev-harness"
-MANIFESTS="${ROOT}/k8s/apps/mainloop/overlays/dev-live/kagent"
+if [[ -z ${MAINLOOP_DEV_CONFIG-} && -f "${ROOT}/.env" ]]; then
+  MAINLOOP_DEV_CONFIG=$(sed -n 's/^MAINLOOP_DEV_CONFIG=//p' "${ROOT}/.env" | tail -1)
+fi
+MANIFESTS="${MAINLOOP_DEV_CONFIG-}/kagent"
 KAGENT_DIR=${KAGENT_DIR:-${HOME}/dev/kagent}
 REGISTRY=ghcr.io
 REPO=oldsj
@@ -21,6 +24,8 @@ image() {
   if [[ -s "${STATE}/${provider}" ]]; then
     cat "${STATE}/${provider}"
   else
+    # DevSpace resolves this for every profile, so print nothing when no live config is set.
+    [[ -f "${MANIFESTS}/${provider}.yaml" ]] || return 0
     sed -n 's/^ *image: *\(.*\)$/\1/p' "${MANIFESTS}/${provider}.yaml" | head -1
   fi
 }
