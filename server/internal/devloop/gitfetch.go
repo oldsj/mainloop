@@ -23,7 +23,13 @@ type GitSeeder interface {
 const (
 	gitFetchTimeout = 2 * time.Minute
 	maxPackBytes    = 512 << 20
-	gitBinary       = "/usr/bin/git"
+	// maxArchiveBytes bounds the tar `git archive` writes. The packfile cap does not bound it: a
+	// small pack of highly compressible blobs expands to an archive many times its size, and the
+	// whole archive is held in memory.
+	maxArchiveBytes = 256 << 20
+	// maxGitStderr is how much of a git subprocess's stderr is kept for its error message.
+	maxGitStderr = 64 << 10
+	gitBinary    = "/usr/bin/git"
 )
 
 // FetchArchive fetches commitSHA's packfile from GitHub through seeder and returns a tar archive
@@ -36,6 +42,10 @@ const (
 // known scaling limit worth a follow-up (a shallow protocol v2 negotiation) before this targets a
 // large one.
 func FetchArchive(ctx context.Context, seeder GitSeeder, repo github.Repo, commitSHA string, paths []string) ([]byte, error) {
+	return fetchArchive(ctx, seeder, repo, commitSHA, paths, maxArchiveBytes)
+}
+
+func fetchArchive(ctx context.Context, seeder GitSeeder, repo github.Repo, commitSHA string, paths []string, maxArchive int) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitFetchTimeout)
 	defer cancel()
 	dir, err := os.MkdirTemp("", "devloop-fetch-")
@@ -51,14 +61,14 @@ func FetchArchive(ctx context.Context, seeder GitSeeder, repo github.Repo, commi
 		return nil, fmt.Errorf("devloop: init scratch repository: %w", err)
 	}
 	var pack bytes.Buffer
-	if err := seeder.Seed(ctx, repo, []string{commitSHA}, &capWriter{buf: &pack, max: maxPackBytes}); err != nil {
+	if err := seeder.Seed(ctx, repo, []string{commitSHA}, &capWriter{buf: &pack, max: maxPackBytes, what: "packfile"}); err != nil {
 		return nil, fmt.Errorf("devloop: seed %s: %w", commitSHA, err)
 	}
-	if _, err := gitRun(ctx, dir, pack.Bytes(), "index-pack", "--stdin"); err != nil {
+	if _, err := gitRun(ctx, dir, pack.Bytes(), maxGitStderr, "index-pack", "--stdin"); err != nil {
 		return nil, fmt.Errorf("devloop: index packfile for %s: %w", commitSHA, err)
 	}
 	args := append([]string{"archive", "--format=tar", commitSHA, "--"}, paths...)
-	out, err := gitRun(ctx, dir, nil, args...)
+	out, err := gitRun(ctx, dir, nil, maxArchive, args...)
 	if err != nil {
 		return nil, fmt.Errorf("devloop: archive %s: %w", commitSHA, err)
 	}
@@ -66,18 +76,19 @@ func FetchArchive(ctx context.Context, seeder GitSeeder, repo github.Repo, commi
 }
 
 func initBareRepo(ctx context.Context, dir string) error {
-	_, err := gitRunArgv(ctx, nil, "init", "--bare", "-q", dir)
+	_, err := gitRunArgv(ctx, nil, maxGitStderr, "init", "--bare", "-q", dir)
 	return err
 }
 
 // gitRun isolates the subprocess the way pushgate's quarantine spool already does for its own
 // git calls: a fixed, minimal environment, no shell, and a bounded wait for the process to exit
-// after its context ends.
-func gitRun(ctx context.Context, gitDir string, stdin []byte, args ...string) ([]byte, error) {
-	return gitRunArgv(ctx, stdin, append([]string{"--git-dir=" + gitDir}, args...)...)
+// after its context ends. Its stdout is capped at maxOut bytes: past that the subprocess's pipe is
+// closed, it stops, and the call fails.
+func gitRun(ctx context.Context, gitDir string, stdin []byte, maxOut int, args ...string) ([]byte, error) {
+	return gitRunArgv(ctx, stdin, maxOut, append([]string{"--git-dir=" + gitDir}, args...)...)
 }
 
-func gitRunArgv(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
+func gitRunArgv(ctx context.Context, stdin []byte, maxOut int, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, gitBinary, args...) //nolint:gosec // fixed binary, internal argv, no shell
 	cmd.Env = []string{
 		"PATH=/usr/bin:/bin", "LANG=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
@@ -87,24 +98,50 @@ func gitRunArgv(ctx context.Context, stdin []byte, args ...string) ([]byte, erro
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	out := &capWriter{buf: &stdout, max: maxOut, what: "git output"}
+	cmd.Stdout, cmd.Stderr = out, &truncWriter{buf: &stderr, max: maxGitStderr}
 	cmd.WaitDelay = 5 * time.Second
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	if out.err != nil {
+		return nil, out.err
+	}
+	if err != nil {
 		return nil, fmt.Errorf("%w: %s", err, bytes.TrimSpace(stderr.Bytes()))
 	}
 	return stdout.Bytes(), nil
 }
 
 // capWriter stops at max instead of growing without bound; GitHub cannot make this process hold
-// more than one bounded packfile in memory.
+// more than one bounded packfile, or one bounded archive, in memory. Once over, every later write
+// fails with the same error.
 type capWriter struct {
+	buf  *bytes.Buffer
+	max  int
+	what string
+	err  error
+}
+
+func (c *capWriter) Write(p []byte) (int, error) {
+	if c.err != nil {
+		return 0, c.err
+	}
+	if c.buf.Len()+len(p) > c.max {
+		c.err = fmt.Errorf("devloop: %s exceeds %d bytes", c.what, c.max)
+		return 0, c.err
+	}
+	return c.buf.Write(p)
+}
+
+// truncWriter keeps the first max bytes and silently drops the rest, so a chatty subprocess's
+// stderr neither grows without bound nor fails the command.
+type truncWriter struct {
 	buf *bytes.Buffer
 	max int
 }
 
-func (c *capWriter) Write(p []byte) (int, error) {
-	if c.buf.Len()+len(p) > c.max {
-		return 0, fmt.Errorf("devloop: packfile exceeds %d bytes", c.max)
+func (t *truncWriter) Write(p []byte) (int, error) {
+	if room := t.max - t.buf.Len(); room > 0 {
+		t.buf.Write(p[:min(len(p), room)])
 	}
-	return c.buf.Write(p)
+	return len(p), nil
 }

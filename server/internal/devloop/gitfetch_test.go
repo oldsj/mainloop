@@ -109,6 +109,30 @@ func TestFetchArchiveUnpacksAndArchivesTheRequestedTrees(t *testing.T) {
 	}
 }
 
+// A packfile under its own cap can still expand into an archive far larger (compressible blobs),
+// and FetchArchive holds the whole archive in memory, so the archive has its own cap: past it the
+// git subprocess is stopped and the fetch fails instead of growing the server's memory.
+func TestFetchArchiveFailsPastTheArchiveCap(t *testing.T) {
+	t.Parallel()
+	sha, pack := scratchRepo(t)
+	repo := github.Repo{Owner: "o", Name: "n"}
+	paths := []string{"server", "web"}
+
+	// git archive pads a tar to 10 KiB records, so even this tiny tree is over 1 KiB.
+	_, err := devloop.FetchArchiveMax(context.Background(), &devlooptest.Seeder{Payload: pack}, repo, sha, paths, 1024)
+	if err == nil || !strings.Contains(err.Error(), "git output exceeds 1024 bytes") {
+		t.Fatalf("err = %v, want the archive cap error", err)
+	}
+
+	out, err := devloop.FetchArchiveMax(context.Background(), &devlooptest.Seeder{Payload: pack}, repo, sha, paths, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tarNames(t, out)["server/main.go"] {
+		t.Fatal("archive under the cap is missing server/main.go")
+	}
+}
+
 func TestFilterTarRootsAndExcludes(t *testing.T) {
 	t.Parallel()
 	sha, pack := scratchRepo(t)
