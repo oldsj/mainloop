@@ -123,17 +123,17 @@ export function createSseClient(options: SseClientOptions) {
   /** One connection, ending when the stream ends, errors, goes silent, or `signal` aborts. */
   async function connect(signal: AbortSignal): Promise<boolean> {
     const attemptController = new AbortController();
-    const abortAttempt = () => attemptController.abort();
-    signal.addEventListener('abort', abortAttempt, { once: true });
     let reader: ReadableStreamDefaultReader<string> | undefined;
+    const abortAttempt = () => {
+      attemptController.abort();
+      // A stalled body read does not always reject on abort.
+      void reader?.cancel().catch(() => {});
+    };
+    signal.addEventListener('abort', abortAttempt, { once: true });
     let idle: ReturnType<typeof setTimeout> | undefined;
     const arm = () => {
       clearTimeout(idle);
-      idle = setTimeout(() => {
-        attemptController.abort();
-        // A stalled body read does not always reject on abort.
-        void reader?.cancel().catch(() => {});
-      }, idleTimeoutMs);
+      idle = setTimeout(abortAttempt, idleTimeoutMs);
     };
     let opened = false;
     try {

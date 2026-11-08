@@ -8,7 +8,7 @@ describe('LiveUpdates', () => {
     vi.restoreAllMocks();
   });
 
-  it('closes the event stream while the page is in the back/forward cache', async () => {
+  it('aborts the event stream on pagehide and reopens it on a restored pageshow', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const streams = () =>
       fetchSpy.mock.calls.filter(([input]) => String(input).endsWith('/events'));

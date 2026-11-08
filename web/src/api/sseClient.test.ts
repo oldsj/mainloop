@@ -32,6 +32,46 @@ describe('createSseClient', () => {
     expect(requests).toEqual([null, '41']);
     expect(messages.map((m) => m.event)).toEqual(['inbox:updated']);
   });
+
+  it('resumes from the last event after stop() and start()', async () => {
+    const signals: AbortSignal[] = [];
+    const lastIds: Array<string | null> = [];
+    let first!: ReadableStreamDefaultController<Uint8Array>;
+    let delivered!: () => void;
+    const seen = new Promise<void>((resolve) => (delivered = resolve));
+    const fetchStub = vi.fn<typeof fetch>((_url, init) => {
+      if (init?.signal) signals.push(init.signal);
+      lastIds.push(new Headers(init?.headers).get('Last-Event-ID'));
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (signals.length === 1) first = controller;
+        }
+      });
+      return Promise.resolve(
+        new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
+      );
+    });
+    const client = createSseClient({
+      fetch: fetchStub,
+      backoff: () => 0,
+      sleep: () => Promise.resolve(),
+      onMessage: () => delivered()
+    });
+    client.start();
+    await vi.waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(1));
+    first.enqueue(new TextEncoder().encode('id: 41\nevent: inbox:updated\ndata: {}\n\n'));
+    await seen;
+
+    client.stop();
+    expect(signals[0]?.aborted).toBe(true);
+    client.start();
+    await vi.waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(2));
+    // The stopped loop does not reconnect on its own.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+    expect(lastIds).toEqual([null, '41']);
+    client.stop();
+  });
 });
 
 describe('createSseClient watchdog and wake-ups', () => {
