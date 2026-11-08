@@ -58,8 +58,13 @@ export const baseHandlers = [
   http.get(url('/projects'), () => HttpResponse.json(projects)),
   http.get(url('/workspaces'), () => HttpResponse.json(workspaces)),
   http.get(url('/tasks'), () => HttpResponse.json(tasks)),
-  // The explorer reads schedules on every shell, so an empty page is the default.
-  http.get(url('/schedules'), () => HttpResponse.json({ items: [], next_page_token: null })),
+  // The explorer reads schedules on every shell, so an empty page is the default. It issues no
+  // page token, so it refuses one, as kagent refuses any token it did not issue.
+  http.get(url('/schedules'), ({ request }) =>
+    new URL(request.url).searchParams.has('page_token')
+      ? HttpResponse.json({ detail: 'Invalid page token' }, { status: 400 })
+      : HttpResponse.json({ items: [], next_page_token: null })
+  ),
   // A test that only passes through /health incidentally (on its way elsewhere) still needs these.
   http.get(url('/orchestration-health'), () => HttpResponse.json(orchestrationHealth)),
   http.get(url('/providers'), () => HttpResponse.json(providers))

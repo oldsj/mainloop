@@ -8,6 +8,17 @@ import { ifMatch, type ScheduleConfigInput } from './model';
 
 export const PAGE_SIZE = 50;
 
+/**
+ * Paging for kagent-backed lists. The first page must carry no page_token: openapi-react-query
+ * fills an undefined page param with 0, and kagent rejects "0" as a page token, so the list fails.
+ * A null param is left out of the query.
+ */
+const tokenPaging = {
+  initialPageParam: null as string | null,
+  getNextPageParam: (page: { next_page_token?: string | null }) => page.next_page_token ?? null,
+  pageParamName: 'page_token'
+};
+
 export function useProviders() {
   return $api.useQuery('get', '/providers');
 }
@@ -18,11 +29,7 @@ export function useSchedules() {
     'get',
     '/schedules',
     { params: { query: { limit: PAGE_SIZE } } },
-    {
-      initialPageParam: undefined as string | undefined,
-      getNextPageParam: (page) => page.next_page_token ?? undefined,
-      pageParamName: 'page_token'
-    }
+    tokenPaging
   );
 }
 
@@ -37,11 +44,7 @@ export function useScheduleExecutions(scheduleId: string) {
     'get',
     '/schedules/{schedule_id}/executions',
     { params: { path: { schedule_id: scheduleId }, query: { limit: PAGE_SIZE } } },
-    {
-      initialPageParam: undefined as string | undefined,
-      getNextPageParam: (page) => page.next_page_token ?? undefined,
-      pageParamName: 'page_token'
-    }
+    tokenPaging
   );
 }
 
