@@ -130,6 +130,18 @@ func TestScheduleGetListDelete(t *testing.T) {
 	if page[0].GetId() >= page[1].GetId() {
 		t.Fatal("the listing is not in id order")
 	}
+	rest, _, err := c.ListScheduledRunsPage(ctx, next, 2)
+	if err != nil || len(rest) != 1 || rest[0].GetId() <= page[1].GetId() {
+		t.Fatalf("the next page: %v, %v", rest, err)
+	}
+	// Page tokens are kagent's to issue: one it did not issue, as a client that fills in "0" for
+	// the first page sends, is refused.
+	if _, _, err := c.ListScheduledRunsPage(ctx, "0", 2); grpcCode(t, err) != connect.CodeInvalidArgument {
+		t.Fatalf("an invented page token: %v", err)
+	}
+	if _, _, err := c.ListScheduledRunExecutionsPage(ctx, ids[0], "0", 2); grpcCode(t, err) != connect.CodeInvalidArgument {
+		t.Fatalf("an invented execution page token: %v", err)
+	}
 	if _, err := c.DeleteScheduledRun(ctx, ids[1]); err != nil {
 		t.Fatal(err)
 	}

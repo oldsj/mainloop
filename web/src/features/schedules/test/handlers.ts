@@ -18,11 +18,9 @@ export const providersRead = (list: ProviderProfile[]) =>
  */
 const invalidToken = () => HttpResponse.json({ detail: 'Invalid page token' }, { status: 400 });
 
-/** Pages of schedules. The first page takes no token; each page's token returns the next. */
-export const schedulesRead = (
-  pages: { items: ScheduleView[]; next_page_token?: string | null }[]
-) =>
-  http.get(url('/schedules'), ({ request }) => {
+/** Serves pages in order: the first takes no token, and each page's token returns the next. */
+function paged<T>(pages: { items: T[] }[]): HttpResponseResolver {
+  return ({ request }) => {
     const token = new URL(request.url).searchParams.get('page_token');
     const index = token === null ? 0 : pages.findIndex((_, i) => i > 0 && token === `page-${i}`);
     const page = pages[index];
@@ -31,7 +29,11 @@ export const schedulesRead = (
       items: page.items,
       next_page_token: index + 1 < pages.length ? `page-${index + 1}` : null
     });
-  });
+  };
+}
+
+export const schedulesRead = (pages: { items: ScheduleView[] }[]) =>
+  http.get(url('/schedules'), paged(pages));
 
 export const schedulesReadWith = (resolve: HttpResponseResolver) =>
   http.get(url('/schedules'), resolve);
@@ -54,10 +56,7 @@ export const scheduleDelete = (resolve: HttpResponseResolver) =>
 export const scheduleTrigger = (resolve: HttpResponseResolver) =>
   http.post(url('/schedules/:schedule_id/trigger'), resolve);
 
-/** One page of executions; it issues no token, so any token sent is refused. */
-export const executionsRead = (items: ScheduleExecution[]) =>
-  http.get(url('/schedules/:schedule_id/executions'), ({ request }) =>
-    new URL(request.url).searchParams.has('page_token')
-      ? invalidToken()
-      : HttpResponse.json({ items, next_page_token: null })
-  );
+export const executionPagesRead = (pages: { items: ScheduleExecution[] }[]) =>
+  http.get(url('/schedules/:schedule_id/executions'), paged(pages));
+
+export const executionsRead = (items: ScheduleExecution[]) => executionPagesRead([{ items }]);

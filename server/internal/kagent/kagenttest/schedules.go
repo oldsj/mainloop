@@ -2,6 +2,7 @@ package kagenttest
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -180,7 +181,10 @@ func (s *Server) listSchedules(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sched.init()
-	after := req.Msg.GetPage().GetPageToken()
+	after, err := pageAfter(req.Msg.GetPage().GetPageToken())
+	if err != nil {
+		return nil, err
+	}
 	var ids []string
 	for id, sc := range s.sched.schedules {
 		if sc.GetDeletedAt() == nil && id > after {
@@ -191,7 +195,7 @@ func (s *Server) listSchedules(
 	resp := &api.ListScheduledRunsResponse{Page: &api.PageResponse{}}
 	if len(ids) > limit {
 		ids = ids[:limit]
-		resp.Page.NextPageToken = ids[limit-1]
+		resp.Page.NextPageToken = pageToken(ids[limit-1])
 	}
 	for _, id := range ids {
 		resp.ScheduledRuns = append(resp.ScheduledRuns, s.outSchedule(kagent.ProcListScheduledRuns, s.sched.schedules[id]))
@@ -321,7 +325,10 @@ func (s *Server) listExecutions(
 	if _, err := s.schedule(req.Msg.GetScheduledRunId()); err != nil {
 		return nil, err
 	}
-	before := req.Msg.GetPage().GetPageToken()
+	before, err := pageAfter(req.Msg.GetPage().GetPageToken())
+	if err != nil {
+		return nil, err
+	}
 	var ids []string
 	for id, e := range s.sched.executions {
 		if e.GetScheduledRunId() == req.Msg.GetScheduledRunId() && (before == "" || id < before) {
@@ -333,7 +340,7 @@ func (s *Server) listExecutions(
 	resp := &api.ListScheduledRunExecutionsResponse{Page: &api.PageResponse{}}
 	if len(ids) > limit {
 		ids = ids[:limit]
-		resp.Page.NextPageToken = ids[limit-1]
+		resp.Page.NextPageToken = pageToken(ids[limit-1])
 	}
 	for _, id := range ids {
 		resp.Executions = append(resp.Executions, proto.CloneOf(s.sched.executions[id]))
@@ -394,4 +401,23 @@ func (s *Server) EditExecution(id string, edit func(*api.ScheduledRunExecution))
 	}
 	edit(e)
 	return proto.CloneOf(e)
+}
+
+// pageToken and pageAfter mirror kagent's page tokens: the base64url of the last id on the page. Any
+// other token, "0" included, is refused as kagent refuses it, so a client that invents a token fails
+// against the fake too.
+func pageToken(id string) string { return base64.RawURLEncoding.EncodeToString([]byte(id)) }
+
+func pageAfter(token string) (string, error) {
+	if token == "" {
+		return "", nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err == nil {
+		_, err = uuid.Parse(string(raw))
+	}
+	if err != nil {
+		return "", connect.NewError(connect.CodeInvalidArgument, errors.New("invalid page token"))
+	}
+	return string(raw), nil
 }

@@ -2,6 +2,7 @@ package schedules_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"os"
@@ -767,14 +768,15 @@ func TestDeletedSessionIsNotRecreated(t *testing.T) {
 	}
 }
 
-// repeating answers every execution page with the same next token.
+// repeating answers every execution page with the same next token, one in kagent's form (base64url
+// of a UUID) so the fake accepts it when it is sent back.
 type repeating struct{ schedules.Kagent }
 
 func (r repeating) ListScheduledRunExecutionsPage(
 	c context.Context, scheduleID, token string, limit int,
 ) ([]*kagentapi.ScheduledRunExecution, string, error) {
 	list, _, err := r.Kagent.ListScheduledRunExecutionsPage(c, scheduleID, token, limit)
-	return list, "same-token", err
+	return list, base64.RawURLEncoding.EncodeToString([]byte(scheduleID)), err
 }
 
 func TestARepeatedExecutionPageTokenEndsThePass(t *testing.T) {

@@ -13,7 +13,7 @@ export const PAGE_SIZE = 50;
  * fills an undefined page param with 0, and kagent rejects "0" as a page token, so the list fails.
  * A null param is left out of the query.
  */
-const pages = {
+const tokenPaging = {
   initialPageParam: null as string | null,
   getNextPageParam: (page: { next_page_token?: string | null }) => page.next_page_token ?? null,
   pageParamName: 'page_token'
@@ -29,7 +29,7 @@ export function useSchedules() {
     'get',
     '/schedules',
     { params: { query: { limit: PAGE_SIZE } } },
-    pages
+    tokenPaging
   );
 }
 
@@ -44,7 +44,7 @@ export function useScheduleExecutions(scheduleId: string) {
     'get',
     '/schedules/{schedule_id}/executions',
     { params: { path: { schedule_id: scheduleId }, query: { limit: PAGE_SIZE } } },
-    pages
+    tokenPaging
   );
 }
 
