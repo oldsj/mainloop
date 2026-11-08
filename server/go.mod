@@ -1,6 +1,6 @@
 module github.com/oldsj/mainloop/server
 
-go 1.27.2
+go 1.27.3
 
 tool (
 	connectrpc.com/connect/cmd/protoc-gen-connect-go
@@ -113,7 +113,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20260824195058-e88cd73687aa // indirect
 	golang.org/x/mod v0.42.0 // indirect
-	golang.org/x/net v0.61.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/text v0.43.0 // indirect

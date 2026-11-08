@@ -11,7 +11,7 @@ amd64)
 	node_sha=2598641d188b41793930917f1a99a81c9615856b4205d408a44ab676c1acbb3d
 	trunk_sha=3845ff76a70cebb10e61a267ff719ffdccfa3ef6d877d51870a2c62b79603ab9
 	kubectl_sha=7721f265e18709862655affba5343e85e1980639395d5754473dafaadcaa69e3
-	go_sha=ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
+	go_sha=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
 	golangci_sha=ab90aeb7b066f92a33415b638a50fe5344bbb75a0d32ad30cc248d88f81032ab
 	;;
 arm64)
@@ -20,7 +20,7 @@ arm64)
 	node_sha=323e6bc34bfe82a21f42d9eb94d9a2b6c8082d8c03cb510cf2f95dd1dcaa1531
 	trunk_sha=cc210d2185cf95bedbec06384be6ef342bdb7dcf3ff72dd08fe0e69859516887
 	kubectl_sha=420e6110e3ba7ee5a3927b5af868d18df17aae36b720529ffa4e9e945aa95450
-	go_sha=94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8
+	go_sha=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
 	golangci_sha=ee7ec5f3453d15ddf106fae5a4d6c71737712348a979d1fe9cd52ec7ea299bae
 	;;
 *)
@@ -42,7 +42,7 @@ install "${scratch}/trunk" /usr/local/bin/trunk
 fetch "https://dl.k8s.io/release/v1.34.1/bin/linux/${arch}/kubectl" "${kubectl_sha}" kubectl
 install "${scratch}/kubectl" /usr/local/bin/kubectl
 # Go matches server/go.mod; golangci-lint matches the version CI runs.
-fetch "https://go.dev/dl/go1.27.2.linux-${arch}.tar.gz" "${go_sha}" go.tar.gz
+fetch "https://go.dev/dl/go1.27.3.linux-${arch}.tar.gz" "${go_sha}" go.tar.gz
 tar -xzf "${scratch}/go.tar.gz" -C /usr/local
 fetch "https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-linux-${arch}.tar.gz" "${golangci_sha}" golangci.tar.gz
 tar -xzf "${scratch}/golangci.tar.gz" -C "${scratch}"

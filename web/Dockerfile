@@ -42,7 +42,7 @@ ARG VITE_API_URL=/api
 ENV VITE_API_URL=$VITE_API_URL
 RUN pnpm run build
 
-FROM golang:1.27-alpine AS serve
+FROM golang:1.27.3-alpine AS serve
 WORKDIR /src
 COPY web/serve/go.mod ./
 COPY web/serve/*.go ./
