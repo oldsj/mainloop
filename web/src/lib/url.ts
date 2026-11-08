@@ -5,6 +5,8 @@
  * - `httpsUrl`: https only (PR, CI and project links);
  * - `httpUrl`: http and https (dev previews and declared repository URLs);
  * - `githubUrl`: https on github.com only;
+ * - `avatarUrl`: https on avatars.githubusercontent.com only, the one image host the web
+ *   server's CSP allows (`web/serve/main.go`), so any other host shows no image, not a broken one;
  * - `markdownHref`: http, https and mailto (links in agent text), plus a same-origin task link
  *   (`taskPathId`) so an agent can reference a task's page without a full origin.
  *
@@ -42,6 +44,10 @@ export function httpUrl(value: unknown): string | null {
 
 export function githubUrl(value: unknown): string | null {
   return allowedUrl(value, HTTPS, 'github.com');
+}
+
+export function avatarUrl(value: unknown): string | null {
+  return allowedUrl(value, HTTPS, 'avatars.githubusercontent.com');
 }
 
 /** The task id, if `value` is a same-origin task page link (`/tasks/<id>`), else null. */

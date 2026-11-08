@@ -20,7 +20,7 @@ export function project(overrides: Partial<ProjectFixture> = {}): ProjectFixture
     full_name: 'acme/widgets',
     description: 'Widget things',
     default_branch: 'main',
-    avatar_url: 'https://avatars.example.com/acme.png',
+    avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4',
     html_url: REPO_URL,
     created_at: '2026-01-01T00:00:00Z',
     last_used_at: '2026-01-02T00:00:00Z',

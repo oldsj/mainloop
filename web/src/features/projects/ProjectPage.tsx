@@ -11,7 +11,7 @@ import {
   WorkspacePublicationBadge
 } from '@/features/sessions/WorkspaceBadges';
 import { agentLabel } from '@/lib/agentLabel';
-import { httpsUrl } from '@/lib/url';
+import { avatarUrl, httpsUrl } from '@/lib/url';
 import { MergePolicySection } from './MergePolicySection';
 import {
   agentKindOf,
@@ -81,7 +81,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
     );
   }
 
-  const avatar = httpsUrl(project.avatar_url);
+  const avatar = avatarUrl(project.avatar_url);
   const github = httpsUrl(project.html_url);
   const pulls = keepValid(data.open_prs, pullRequestRowSchema);
   const commits = keepValid(data.recent_commits, commitRowSchema);

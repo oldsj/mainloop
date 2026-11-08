@@ -102,6 +102,15 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
+// GitHub serves the project avatars the API returns from avatars.githubusercontent.com; without it
+// in img-src every project page shows a broken image.
+func TestImagesAllowGitHubAvatarsOnly(t *testing.T) {
+	csp := contentSecurityPolicy("/api")
+	if !strings.Contains(csp, "; img-src 'self' data: https://avatars.githubusercontent.com;") {
+		t.Fatalf("CSP = %q", csp)
+	}
+}
+
 func TestRelativeAPIURLAddsNoOrigin(t *testing.T) {
 	if csp := contentSecurityPolicy("/api"); !strings.Contains(csp, "connect-src 'self';") {
 		t.Fatalf("CSP = %q", csp)
