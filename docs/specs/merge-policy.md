@@ -40,8 +40,8 @@ returns 404. Actual changes increment the version and append an immutable audit 
 the same value at the current version is a no-op. Updates lock the project row; future merge
 claims must take that same lock before reading current policy.
 
-Protected globs are server constants, version 2: `k8s/**`, `.github/**`, `**/migrations/**`,
-and `**/Dockerfile*`. Matching is case-sensitive and repository-relative POSIX; `**` includes
+Protected globs are server constants, version 3: `k8s/**`, `charts/**`, `.github/**`,
+`**/migrations/**`, and `**/Dockerfile*`. Matching is case-sensitive and repository-relative POSIX; `**` includes
 zero directories. Deleted paths and both sides of a rename count. Missing rename sources,
 invalid or incomplete paths, and more than 3,000 files fail closed. An approval policy or a
 protected match requires approval; callers cannot edit the globs or select an execution mode.
@@ -49,8 +49,10 @@ This helper establishes path policy only; the merge service must prove GitHub pa
 completeness and all other merge gates. `**/Dockerfile*` is protected because an image build
 input that sets a runtime environment variable (for example `MAINLOOP_MERGE_PROTECTED_AUTO`)
 could otherwise bake a self-enabled escalation into an image without owner approval; the
-checked-in k8s base config also pins `MAINLOOP_MERGE_PROTECTED_AUTO: 'false'` explicitly, so a
-value baked into an image can never win over the deployed config.
+Helm chart values (`charts/mainloop/values.yaml`) also pin `MAINLOOP_MERGE_PROTECTED_AUTO: 'false'`
+explicitly, so a value baked into an image can never win over the deployed config. `charts/**` is
+protected for the same reason: the chart is the deploy path and pins the merge gates themselves,
+so a merged chart change could otherwise turn a gate on without owner approval.
 
 An operator may set `MAINLOOP_MERGE_PROTECTED_AUTO=true` (same exact-value rule as the other
 gates) to let a protected-path match merge on green without an owner card. The match is still
