@@ -42,7 +42,9 @@ func contentSecurityPolicy(apiURL string) string {
 		// Radix positions popovers with inline styles; the font CSS comes from Google Fonts.
 		"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
 		"font-src 'self' https://fonts.gstatic.com",
-		"img-src 'self' data:",
+		// Project pages show the repository owner's GitHub avatar (the API's avatar_url); chat
+		// images are data: URLs.
+		"img-src 'self' data: https://avatars.githubusercontent.com",
 		"connect-src " + connect,
 		"object-src 'none'",
 		"base-uri 'self'",
