@@ -114,23 +114,62 @@ func TestFetchArchiveUnpacksAndArchivesTheRequestedTrees(t *testing.T) {
 // git subprocess is stopped and the fetch fails instead of growing the server's memory.
 func TestFetchArchiveFailsPastTheArchiveCap(t *testing.T) {
 	t.Parallel()
-	sha, pack := scratchRepo(t)
+	sha, pack := zeroBlobRepo(t, 4<<20)
+	if len(pack) > 64<<10 {
+		t.Fatalf("pack is %d bytes; the point is a small pack that expands", len(pack))
+	}
 	repo := github.Repo{Owner: "o", Name: "n"}
-	paths := []string{"server", "web"}
+	paths := []string{"server"}
 
-	// git archive pads a tar to 10 KiB records, so even this tiny tree is over 1 KiB.
-	_, err := devloop.FetchArchiveMax(context.Background(), &devlooptest.Seeder{Payload: pack}, repo, sha, paths, 1024)
-	if err == nil || !strings.Contains(err.Error(), "git output exceeds 1024 bytes") {
+	// 4 MiB of output is far past a pipe buffer, so git is still writing when the cap closes its
+	// pipe: the cap error, not git's broken-pipe exit, must come back.
+	_, err := devloop.FetchArchiveMax(context.Background(), &devlooptest.Seeder{Payload: pack}, repo, sha, paths, 64<<10)
+	if err == nil || err.Error() != "devloop: archive of "+sha+" exceeds 65536 bytes" {
 		t.Fatalf("err = %v, want the archive cap error", err)
 	}
 
-	out, err := devloop.FetchArchiveMax(context.Background(), &devlooptest.Seeder{Payload: pack}, repo, sha, paths, 1<<20)
+	out, err := devloop.FetchArchiveMax(context.Background(), &devlooptest.Seeder{Payload: pack}, repo, sha, paths, 8<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !tarNames(t, out)["server/main.go"] {
-		t.Fatal("archive under the cap is missing server/main.go")
+	if !tarNames(t, out)["server/zeros.bin"] {
+		t.Fatal("archive under the cap is missing server/zeros.bin")
 	}
+}
+
+// zeroBlobRepo commits server/zeros.bin, size bytes of zeros, and returns the commit and a pack
+// of it: a pack of a few KiB whose archive is size bytes.
+func zeroBlobRepo(t *testing.T, size int) (sha string, pack []byte) {
+	t.Helper()
+	ctx := context.Background()
+	dir := t.TempDir()
+	git := func(stdin []byte, args ...string) []byte {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = dir
+		cmd.Env = []string{
+			"PATH=/usr/bin:/bin", "HOME=" + dir,
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+		}
+		if stdin != nil {
+			cmd.Stdin = bytes.NewReader(stdin)
+		}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return out
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "server"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "server", "zeros.bin"), make([]byte, size), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(nil, "init", "-q", "-b", "main")
+	git(nil, "add", ".")
+	git(nil, "commit", "-q", "-m", "zeros")
+	sha = strings.TrimSpace(string(git(nil, "rev-parse", "HEAD")))
+	return sha, git(git(nil, "rev-list", "--objects", sha), "pack-objects", "--stdout")
 }
 
 func TestFilterTarRootsAndExcludes(t *testing.T) {
