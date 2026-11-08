@@ -272,6 +272,24 @@ func TestProbesAreHTTPOrTCP(t *testing.T) {
 	}
 }
 
+// Liveness restarts a container, so it must only fail when the process itself is stuck: the
+// API's /health pings the database, and as a liveness probe a database outage would restart every
+// API container (and keep it in crash-loop backoff after the database is back). Readiness keeps
+// /health, which takes the pod out of its Services while the database is down.
+func TestLivenessDoesNotDependOnTheDatabase(t *testing.T) {
+	for _, path := range installNames {
+		t.Run(path, func(t *testing.T) {
+			cs := containers(render(t, path).backend(t))
+			if api := cs["backend"].LivenessProbe; api == nil || api.TCPSocket == nil || api.HTTPGet != nil {
+				t.Errorf("backend liveness = %+v, want a tcpSocket probe (its /health pings the database)", api)
+			}
+			if api := cs["backend"].ReadinessProbe; api == nil || api.HTTPGet == nil || api.HTTPGet.Path != "/health" {
+				t.Errorf("backend readiness = %+v, want GET /health", api)
+			}
+		})
+	}
+}
+
 func TestMigrateInitContainerRunsFirst(t *testing.T) {
 	for _, path := range installNames {
 		t.Run(path, func(t *testing.T) {

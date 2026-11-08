@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - server/**
+      - charts/**
       - web/src/features/chat/testdata/**
       - api/**
       - .github/workflows/go.yml
@@ -12,6 +13,7 @@ on:
     branches: [main]
     paths:
       - server/**
+      - charts/**
       - web/src/features/chat/testdata/**
       - api/**
       - .github/workflows/go.yml
@@ -119,6 +121,10 @@ jobs:
         run: |
           pkgs=$(go list ./... | grep -vE '/internal/(tasks|sessions|workspaces)$')
           go test -race $pkgs
+      # deploytest renders charts/mainloop with a helm subprocess, outside the Go module, so Go's
+      # test cache does not see chart changes and the step above can report a cached pass.
+      - name: chart render tests (uncached)
+        run: go test -count=1 ./internal/deploytest
 
   generate:
     name: Generated code is current
