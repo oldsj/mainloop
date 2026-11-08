@@ -80,6 +80,7 @@ make lint-all             # whole repository; slow
 # change touches concurrency. Database tests need MAINLOOP_TEST_DATABASE_URL, a disposable
 # PostgreSQL 16 server; they skip without it.
 go test ./internal/<pkg>/...
+go test -count=1 ./internal/deploytest     # after a chart change: helm reads charts/ outside the module, so a cached pass is stale
 golangci-lint run ./...
 go generate ./... && git status --short    # generated code must not change
 
@@ -100,7 +101,8 @@ pnpm build:design && pnpm check:design    # CI also installs Chromium first
 
 CI (`.github/workflows/go.yml`) runs the checks above at full breadth on every PR push and again on
 merge: lint, the full `go test -race ./...` (sharded into two jobs so neither runs close to its
-timeout), `go generate`/`go mod tidy` drift, the MCP contract check, and the prod image build.
+timeout), the chart render tests uncached (`charts/**` also triggers it), `go generate`/`go mod tidy`
+drift, the MCP contract check, and the prod image build.
 `go-nightly.yml` reruns the full suite with `-race -count=1` once a day as a backstop against a
 stale cached result between PRs.
 

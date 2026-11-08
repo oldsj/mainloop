@@ -91,7 +91,9 @@ server:
   # Replaces /usr/local/bin/mainloop; the listener's subcommand is passed as args.
   command: []
   workingDir: ''
-  # Merged over each listener's probes.
+  # Merged over each listener's probes. Override timing fields only: the probe handler differs
+  # per listener (the API's liveness is tcpSocket, the others httpGet), and adding a handler
+  # here gives that probe two, which the API server rejects.
   livenessProbe: {}
   readinessProbe: {}
   api:
