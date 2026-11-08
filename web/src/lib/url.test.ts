@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { githubUrl, httpUrl, httpsUrl, markdownHref, taskPathId } from './url';
+import { avatarUrl, githubUrl, httpUrl, httpsUrl, markdownHref, taskPathId } from './url';
 
 // One row per value: what each helper returns. null means the link is refused.
 const REFUSED = null;
@@ -84,6 +84,15 @@ it('accepts a github.com PR link as it is', () => {
   expect(githubUrl('https://github.com/owner/repo/pull/7')).toBe(
     'https://github.com/owner/repo/pull/7'
   );
+});
+
+it('accepts only https GitHub avatars, the image host the CSP allows', () => {
+  expect(avatarUrl('https://avatars.githubusercontent.com/u/1?v=4')).toBe(
+    'https://avatars.githubusercontent.com/u/1?v=4'
+  );
+  expect(avatarUrl('http://avatars.githubusercontent.com/u/1')).toBeNull();
+  expect(avatarUrl('https://avatars.example.com/acme.png')).toBeNull();
+  expect(avatarUrl('https://avatars.githubusercontent.com.evil.example/u/1')).toBeNull();
 });
 
 it('reads the id out of a task link, and nothing else', () => {
