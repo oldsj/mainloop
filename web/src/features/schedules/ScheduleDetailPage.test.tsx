@@ -7,6 +7,7 @@ import { createSseApplier } from '@/api/invalidation';
 import { server } from '@/test/msw/server';
 import { execution, schedule } from './test/fixtures';
 import {
+  executionPagesRead,
   executionsRead,
   problem,
   scheduleDelete,
@@ -257,6 +258,31 @@ describe('schedule page', () => {
 
     await user.click(links[0]!);
     expect(await screen.findByText('Session page')).toBeInTheDocument();
+  });
+
+  it('loads older executions with the token the server issued', async () => {
+    serve();
+    server.use(
+      executionPagesRead([
+        { items: [execution({ id: 'exe-2', state: 'succeeded' })] },
+        {
+          items: [
+            execution({
+              id: 'exe-1',
+              session_id: null,
+              state: 'failed',
+              failure_reason: 'Agent timed out'
+            })
+          ]
+        }
+      ])
+    );
+    const user = userEvent.setup();
+    renderSchedules('/schedules/sch-1');
+
+    await user.click(await screen.findByRole('button', { name: 'Load older executions' }));
+    expect(await screen.findByText('Agent timed out')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load older executions' })).not.toBeInTheDocument();
   });
 
   it('refreshes an open page and its executions when schedule:updated arrives', async () => {
