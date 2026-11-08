@@ -41,10 +41,11 @@ the same value at the current version is a no-op. Updates lock the project row; 
 claims must take that same lock before reading current policy.
 
 Protected globs are server constants, version 3: `k8s/**`, `charts/**`, `.github/**`,
-`**/migrations/**`, and `**/Dockerfile*`. Matching is case-sensitive and repository-relative POSIX; `**` includes
-zero directories. Deleted paths and both sides of a rename count. Missing rename sources,
-invalid or incomplete paths, and more than 3,000 files fail closed. An approval policy or a
-protected match requires approval; callers cannot edit the globs or select an execution mode.
+`**/migrations/**`, and `**/Dockerfile*`. Matching is case-sensitive and repository-relative
+POSIX; `**` includes zero directories. Deleted paths and both sides of a rename count. Missing
+rename sources, invalid or incomplete paths, and more than 3,000 files fail closed. An approval
+policy or a protected match requires approval; callers cannot edit the globs or select an
+execution mode.
 This helper establishes path policy only; the merge service must prove GitHub path
 completeness and all other merge gates. `**/Dockerfile*` is protected because an image build
 input that sets a runtime environment variable (for example `MAINLOOP_MERGE_PROTECTED_AUTO`)
