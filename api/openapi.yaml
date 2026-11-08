@@ -4793,15 +4793,16 @@ components:
           title: Protected Globs
           default:
             - k8s/**
+            - charts/**
             - .github/**
             - '**/migrations/**'
             - '**/Dockerfile*'
-          maxItems: 4
+          maxItems: 5
         protected_globs_version:
           type: integer
-          const: 2
+          const: 3
           title: Protected Globs Version
-          default: 2
+          default: 3
       type: object
       required:
         - merge_policy
