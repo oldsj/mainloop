@@ -40,7 +40,7 @@ func toProject(p dbq.Project) api.Project {
 func (a *ProjectsAPI) view(m MergePolicy) api.MergePolicyView {
 	return api.MergePolicyView{
 		MergePolicy: api.MergePolicy(m.Policy), MergePolicyVersion: int(m.Version),
-		ProtectedGlobs: merge.ProtectedGlobs, ProtectedGlobsVersion: api.MergePolicyViewProtectedGlobsVersionN2,
+		ProtectedGlobs: merge.ProtectedGlobs, ProtectedGlobsVersion: api.MergePolicyViewProtectedGlobsVersion(merge.GlobsVersion),
 		WritesEnabled: a.Svc.PolicyWrites,
 	}
 }

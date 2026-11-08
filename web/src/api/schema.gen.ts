@@ -1820,6 +1820,7 @@ export interface components {
        * Protected Globs
        * @default [
        *       "k8s/**",
+       *       "charts/**",
        *       ".github/**",
        *       "**\/migrations/**",
        *       "**\/Dockerfile*"
@@ -1828,10 +1829,10 @@ export interface components {
       protected_globs: string[];
       /**
        * Protected Globs Version
-       * @default 2
+       * @default 3
        * @constant
        */
-      protected_globs_version: 2;
+      protected_globs_version: 3;
     };
     /**
      * Message

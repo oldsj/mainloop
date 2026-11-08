@@ -9,14 +9,18 @@ import (
 // ProtectedGlobs are the fixed path globs that always need the owner's approval, and
 // GlobsVersion is their version. They are not configurable.
 //
+// charts/** is the deployed config: the Helm chart is the only deploy path, a merge publishes it,
+// and its values pin the merge gates themselves (MAINLOOP_MERGE_PROTECTED_AUTO). k8s/** holds the
+// kagent integration manifests.
+//
 // Dockerfile* covers every image-build input that can set a runtime environment variable (such
 // as MAINLOOP_MERGE_PROTECTED_AUTO) baked into an image: a value set there must never be able to
-// win over the deployed k8s config, so the build input that could set it needs the same approval
-// as the config itself.
-var ProtectedGlobs = []string{"k8s/**", ".github/**", "**/migrations/**", "**/Dockerfile*"}
+// win over the deployed chart config, so the build input that could set it needs the same
+// approval as the config itself.
+var ProtectedGlobs = []string{"k8s/**", "charts/**", ".github/**", "**/migrations/**", "**/Dockerfile*"}
 
 // GlobsVersion is the version of ProtectedGlobs.
-const GlobsVersion = 2
+const GlobsVersion = 3
 
 // MaxFiles is the most changed files a preparation reads; a larger pull request is unavailable.
 const MaxFiles = 3000
@@ -31,6 +35,9 @@ func matchedGlobs(path string) []string {
 	var out []string
 	if len(parts) > 1 && parts[0] == "k8s" {
 		out = append(out, "k8s/**")
+	}
+	if len(parts) > 1 && parts[0] == "charts" {
+		out = append(out, "charts/**")
 	}
 	if len(parts) > 1 && parts[0] == ".github" {
 		out = append(out, ".github/**")
