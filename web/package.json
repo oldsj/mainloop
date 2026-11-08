@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.104.1",
-    "@tanstack/react-router": "^1.170.42",
+    "@tanstack/react-router": "^1.170.46",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.55.0",
@@ -39,7 +39,7 @@
     "@playwright/test": "^1.64.0",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query-devtools": "^5.104.1",
-    "@tanstack/router-plugin": "^1.168.43",
+    "@tanstack/router-plugin": "^1.169.0",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",
@@ -59,6 +59,6 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.71.1",
     "vite": "^7.3.7",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }
