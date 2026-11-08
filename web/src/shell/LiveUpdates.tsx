@@ -20,8 +20,24 @@ export function LiveUpdates() {
     const client = createSseClient({
       onMessage: (message) => apply(message)
     });
+    // A page kept in the back/forward cache would keep its stream open. Over HTTP/1.1 each one
+    // holds one of the browser's six connections to the API, and once they are used up every
+    // request waits and the app reads as offline. Close the stream on the way out; if the page
+    // comes back, reopen it from the last event seen and recheck the backend at once.
+    const leave = () => client.stop();
+    const restore = (event: PageTransitionEvent) => {
+      if (!event.persisted) return;
+      client.start();
+      void connection.check();
+    };
+    window.addEventListener('pagehide', leave);
+    window.addEventListener('pageshow', restore);
     client.start();
-    return () => client.stop();
+    return () => {
+      window.removeEventListener('pagehide', leave);
+      window.removeEventListener('pageshow', restore);
+      client.stop();
+    };
   }, [queryClient]);
 
   useEffect(() => {
