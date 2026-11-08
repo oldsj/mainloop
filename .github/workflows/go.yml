@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - server/**
+      - charts/**
       - web/src/features/chat/testdata/**
       - api/**
       - .github/workflows/go.yml
@@ -12,6 +13,7 @@ on:
     branches: [main]
     paths:
       - server/**
+      - charts/**
       - web/src/features/chat/testdata/**
       - api/**
       - .github/workflows/go.yml
@@ -117,8 +119,13 @@ jobs:
       - uses: ./.github/actions/go-cache
       - name: go test -race (excluding the sharded-out packages)
         run: |
-          pkgs=$(go list ./... | grep -vE '/internal/(tasks|sessions|workspaces)$')
+          pkgs=$(go list ./... | grep -vE '/internal/(tasks|sessions|workspaces|deploytest)$')
           go test -race $pkgs
+      # deploytest renders charts/mainloop with a helm subprocess, outside the Go module, so Go's
+      # test cache does not see chart changes; run it uncached. It skips without helm, so check
+      # helm is there first.
+      - name: chart render tests (uncached)
+        run: helm version --short && go test -count=1 ./internal/deploytest
 
   generate:
     name: Generated code is current
