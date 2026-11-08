@@ -37,6 +37,7 @@ describe('createSseClient', () => {
     const signals: AbortSignal[] = [];
     const lastIds: Array<string | null> = [];
     let first!: ReadableStreamDefaultController<Uint8Array>;
+    let cancelled = 0;
     let delivered!: () => void;
     const seen = new Promise<void>((resolve) => (delivered = resolve));
     const fetchStub = vi.fn<typeof fetch>((_url, init) => {
@@ -45,6 +46,10 @@ describe('createSseClient', () => {
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
           if (signals.length === 1) first = controller;
+        },
+        // This body ignores the abort signal, so only cancelling the reader can end the old read.
+        cancel() {
+          cancelled += 1;
         }
       });
       return Promise.resolve(
@@ -64,6 +69,7 @@ describe('createSseClient', () => {
 
     client.stop();
     expect(signals[0]?.aborted).toBe(true);
+    await vi.waitFor(() => expect(cancelled).toBe(1));
     client.start();
     await vi.waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(2));
     // The stopped loop does not reconnect on its own.

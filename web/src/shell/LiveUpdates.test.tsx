@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { connection } from '@/api/connection';
 import { LiveUpdates } from './LiveUpdates';
 
 describe('LiveUpdates', () => {
@@ -10,6 +11,7 @@ describe('LiveUpdates', () => {
 
   it('aborts the event stream on pagehide and reopens it on a restored pageshow', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const check = vi.spyOn(connection, 'check');
     const streams = () =>
       fetchSpy.mock.calls.filter(([input]) => String(input).endsWith('/events'));
     const { unmount } = render(
@@ -23,12 +25,14 @@ describe('LiveUpdates', () => {
       window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
     });
     expect(streams()[0]?.[1]?.signal?.aborted).toBe(true);
+    const checksBeforeRestore = check.mock.calls.length;
 
     act(() => {
       window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
     });
     await waitFor(() => expect(streams()).toHaveLength(2));
     expect(streams()[1]?.[1]?.signal?.aborted).toBe(false);
+    expect(check.mock.calls.length).toBe(checksBeforeRestore + 1);
     unmount();
     expect(streams()[1]?.[1]?.signal?.aborted).toBe(true);
   });
