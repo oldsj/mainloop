@@ -67,6 +67,10 @@ database:
       limits:
         cpu: '1'
         memory: 1Gi
+    # The Cluster's spec.affinity (CNPG's AffinityConfiguration: nodeSelector, tolerations,
+    # nodeAffinity, ...), e.g. nodeSelector: {kubernetes.io/arch: amd64} to keep the instance on
+    # one architecture's nodes. Empty: CNPG's defaults.
+    affinity: {}
   # A throwaway PostgreSQL StatefulSet for the local Kind stack.
   local:
     enabled: false
