@@ -25,6 +25,7 @@ ENV GOMODCACHE=/opt/cache/go-mod \
     GOCACHE=/opt/cache/go-build \
     pnpm_config_store_dir=/opt/cache/pnpm-store \
     pnpm_config_virtual_store_dir=/opt/cache/pnpm-virtual \
+    pnpm_config_cache_dir=/opt/cache/pnpm-cache \
     pnpm_config_package_import_method=copy
 WORKDIR /data/workspace
 
@@ -37,17 +38,20 @@ COPY --chown=65532:65532 package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --chown=65532:65532 web/package.json web/
 # One RUN, so the file times are set on files this step created. A separate RUN would copy up every
 # file in the overlay first, which is very slow for the module cache.
-# fetch fills the content store; install --offline then builds the shared virtual store from it.
+# fetch fills the content store and pnpm's metadata cache; install --offline then builds the shared
+# virtual store from them. pnpm 12's offline install needs that metadata, so it lives under
+# /opt/cache too.
 RUN (cd server && go mod download) \
     && pnpm fetch --frozen-lockfile \
     && pnpm install --frozen-lockfile --offline \
-    && find /opt/cache/go-mod /opt/cache/pnpm-store /opt/cache/pnpm-virtual -exec touch -h -d "@${DEPS_EPOCH}" {} +
+    && find /opt/cache/go-mod /opt/cache/pnpm-store /opt/cache/pnpm-virtual /opt/cache/pnpm-cache -exec touch -h -d "@${DEPS_EPOCH}" {} +
 
 FROM prep AS build
 ARG SOURCE_SHA
 COPY --from=deps --chown=65532:65532 /opt/cache/go-mod /opt/cache/go-mod
 COPY --from=deps --chown=65532:65532 /opt/cache/pnpm-store /opt/cache/pnpm-store
 COPY --from=deps --chown=65532:65532 /opt/cache/pnpm-virtual /opt/cache/pnpm-virtual
+COPY --from=deps --chown=65532:65532 /opt/cache/pnpm-cache /opt/cache/pnpm-cache
 # A real clone at the commit, as a session makes. safe.directory is needed because the mounted
 # context is owned by another user. It goes in a throwaway global config file: git drops -c and
 # GIT_CONFIG_COUNT for the helper process a local clone starts, but keeps GIT_CONFIG_GLOBAL. The shallow clone is enough for Go's VCS stamp.
@@ -68,16 +72,18 @@ FROM base AS cache
 ARG SOURCE_SHA
 LABEL org.opencontainers.image.revision=${SOURCE_SHA}
 USER root
-# Layer 1: dependencies (module cache, pnpm content store, shared virtual store).
+# Layer 1: dependencies (module cache, pnpm content store, metadata cache, shared virtual store).
 COPY --from=deps --chown=65532:65532 /opt/cache/go-mod /opt/cache/go-mod
 COPY --from=deps --chown=65532:65532 /opt/cache/pnpm-store /opt/cache/pnpm-store
 COPY --from=deps --chown=65532:65532 /opt/cache/pnpm-virtual /opt/cache/pnpm-virtual
+COPY --from=deps --chown=65532:65532 /opt/cache/pnpm-cache /opt/cache/pnpm-cache
 # Layer 2: build outputs.
 COPY --from=build --chown=65532:65532 /opt/cache/go-build /opt/cache/go-build
 USER 65532:65532
 ENV GOMODCACHE=/opt/cache/go-mod \
     GOCACHE=/opt/cache/go-build \
     pnpm_config_store_dir=/opt/cache/pnpm-store \
-    pnpm_config_virtual_store_dir=/opt/cache/pnpm-virtual
+    pnpm_config_virtual_store_dir=/opt/cache/pnpm-virtual \
+    pnpm_config_cache_dir=/opt/cache/pnpm-cache
 # Replaces the base image's check with one for what this image adds.
 HEALTHCHECK --interval=30s --timeout=3s CMD test -r /opt/cache/go-build && test -r /opt/cache/go-mod
