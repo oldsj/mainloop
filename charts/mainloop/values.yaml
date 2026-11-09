@@ -100,6 +100,10 @@ server:
   # here gives that probe two, which the API server rejects.
   livenessProbe: {}
   readinessProbe: {}
+  # Timing fields for an optional startup probe on each listener, using that listener's
+  # liveness handler. Empty: no startup probe. Set it when a container builds before it serves
+  # (the live dev instance runs `go run`), so liveness does not kill a slow cold build.
+  startupProbe: {}
   api:
     resources:
       requests:

@@ -46,10 +46,12 @@ server:
   githubAppOptional: true
   command: [watchexec, --restart, --exts, 'go,sql', --stop-timeout, 5s, --, go, run, ./cmd/mainloop]
   workingDir: /src
-  # `go run` compiles first, so the probes wait for a cold build.
-  livenessProbe:
-    initialDelaySeconds: 120
-    failureThreshold: 6
+  # `go run` compiles first. The startup probe allows up to 10 minutes for a cold build (one on
+  # worker-01 took 2.5 minutes and was killed by the old 3-minute liveness window), then liveness
+  # takes over at its normal timing.
+  startupProbe:
+    periodSeconds: 5
+    failureThreshold: 120
   readinessProbe:
     initialDelaySeconds: 20
     failureThreshold: 60
