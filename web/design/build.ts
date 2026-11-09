@@ -2,7 +2,7 @@
 //   web/src/styles/theme.css  Tailwind v4 @theme block plus one CSS variable set per theme
 //   web/design/system/        files for the published Claude Design System artifact
 //
-// Run with: node web/design/build.ts   (Node 24; the width check uses the installed tailwindcss)
+// Run with: node web/design/build.ts   (Node 26; the width check uses the installed tailwindcss)
 // Invalid tokens, or a max-w class that Tailwind would resolve to spacing, exit 1 and write nothing.
 // Output has no timestamps and a fixed order.
 

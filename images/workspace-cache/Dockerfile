@@ -33,7 +33,7 @@ FROM prep AS deps
 # never to matter and constant, unlike the extraction time the downloads would otherwise carry.
 ARG DEPS_EPOCH=1767225600
 COPY --chown=65532:65532 server/go.mod server/go.sum server/
-COPY --chown=65532:65532 package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY --chown=65532:65532 package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --chown=65532:65532 web/package.json web/
 # One RUN, so the file times are set on files this step created. A separate RUN would copy up every
 # file in the overlay first, which is very slow for the module cache.

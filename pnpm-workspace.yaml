@@ -1,2 +1,20 @@
 packages:
   - web
+
+# pnpm 11+ reads settings only from this file (.npmrc keeps auth and registry settings only).
+fetchTimeout: 30000
+fetchRetries: 1
+fetchRetryMintimeout: 1000
+fetchRetryMaxtimeout: 5000
+
+overrides:
+  cookie: ^0.7.0
+  picomatch@^4.0.3: ^4.0.7
+  '@typescript-eslint/typescript-estree>minimatch': ^11.0.5
+  rollup: ^4.59.0
+
+# Dependency install scripts stay off (pnpm 10+ default); neither is needed: esbuild's binary comes
+# from its platform package, and msw's only copies its worker, which the tests don't use.
+allowBuilds:
+  esbuild: false
+  msw: false

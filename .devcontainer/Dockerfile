@@ -16,7 +16,7 @@ ENV HOME=/home/nonroot \
 COPY .devcontainer/install-tools /usr/local/lib/mainloop/install-tools
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates curl git make ripgrep \
-       build-essential pkg-config libpq-dev xz-utils unzip gnupg locales util-linux \
+       build-essential pkg-config libatomic1 libpq-dev xz-utils unzip gnupg locales util-linux \
     && /usr/local/lib/mainloop/install-tools "${TARGETARCH}" \
     && rm -rf /var/lib/apt/lists/*
 
@@ -30,7 +30,7 @@ RUN groupadd --gid 65532 nonroot \
 FROM base AS deps
 USER 65532:65532
 WORKDIR /opt/mainloop-deps
-COPY --chown=65532:65532 package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY --chown=65532:65532 package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY scripts/with-timeout.mjs /usr/local/lib/mainloop/with-timeout.mjs
 RUN node /usr/local/lib/mainloop/with-timeout.mjs 240 "pnpm prewarm" -- pnpm fetch --frozen-lockfile
 

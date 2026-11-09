@@ -37,7 +37,7 @@ check-write permission for lint. It publishes no images or job outputs.
 pushes to `main` only when one of these paths changes (no manual trigger):
 
 - `.devcontainer/**`, `.trunk/**`, `scripts/with-timeout.mjs`
-- `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.npmrc`
+- `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`
 - `.github/workflows/dev-image.yml`
 
 PR-only `validate` builds `.devcontainer/Dockerfile` without pushing, separately

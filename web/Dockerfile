@@ -7,14 +7,14 @@
 # is baked in so the pod starts before any sync; DevSpace then syncs web/ over it. Runs as uid
 # 1001 like the prod image, so the synced files and Vite's caches are writable. The prod image
 # below stays the last stage and so the default target.
-FROM node:24-alpine AS dev
-RUN npm install -g pnpm@9.15.9 --fetch-timeout=30000 --fetch-retries=1 \
+FROM node:26-alpine AS dev
+RUN npm install -g pnpm@12.18.0 --fetch-timeout=30000 --fetch-retries=1 \
     && adduser -D -u 1001 app \
     && mkdir /app \
     && chown 1001:1001 /app
 USER 1001:1001
 WORKDIR /app
-COPY --chown=1001:1001 package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY --chown=1001:1001 package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --chown=1001:1001 web/package.json ./web/package.json
 RUN pnpm install --frozen-lockfile --filter web...
 COPY --chown=1001:1001 web ./web
@@ -26,13 +26,13 @@ ENV VITE_HOST=0.0.0.0 \
 EXPOSE 3000
 CMD ["node_modules/.bin/vite"]
 
-FROM node:24-alpine AS web
+FROM node:26-alpine AS web
 WORKDIR /app
-RUN npm install -g pnpm@9.15.9 --fetch-timeout=30000 --fetch-retries=1
+RUN npm install -g pnpm@12.18.0 --fetch-timeout=30000 --fetch-retries=1
 
 # Install from the lockfile. Its importers are the root and web/, so both manifests are needed for
 # --frozen-lockfile to match.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY web/package.json ./web/package.json
 RUN pnpm install --frozen-lockfile --filter web...
 

@@ -5,7 +5,7 @@ This folder holds Mainloop's visual source of truth. Values are defined once, in
 ## Workflow
 
 1. **Edit `tokens.json`** (W3C Design Tokens format). It is the only place a value is defined.
-2. **Run the build** from the repository root: `node web/design/build.ts`. It needs Node 24 and no installs.
+2. **Run the build** from the repository root: `node web/design/build.ts`. It needs Node 26 and no installs.
 3. **Commit `tokens.json` and the generated files together.**
 4. **The app and the design artifact read the output.**
 
