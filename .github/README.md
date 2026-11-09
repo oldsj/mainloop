@@ -64,14 +64,16 @@ from the cluster to start workspaces on a new digest (#274).
 Every 30 minutes the workflow clones `main` and builds the dev image
 (`.devcontainer/Dockerfile`) when its inputs change, then the cache image when its inputs
 (`images/workspace-cache/**`, `server/go.mod`, `server/go.sum`, the pnpm manifests and
-the dev image digest) or the UTC date change, so it rebuilds once a day otherwise. Builds
-run natively on an arm64 node and push zstd-compressed OCI layers, which a node unpacks
-several times faster than gzip.
+the dev image digest) or the UTC date change, so it rebuilds once a day otherwise. It
+builds arm64 and amd64 in parallel, each natively on a node of that arch, and pushes
+zstd-compressed OCI layers, which a node unpacks several times faster than gzip. amd64 tags
+end in `-amd64` (`cache-main-amd64`); an environment validates one architecture, so it
+follows the tag for its own.
 
 A smoke step runs the new image by digest on the workspace node: a fresh clone at the
 commit must build with zero compiles (`go build` and test binaries) and install the pnpm
-workspace offline, with each of `GOMODCACHE`, `GOCACHE`, `npm_config_store_dir` and
-`npm_config_virtual_store_dir` under `/opt/cache`. Only then does `cache-main` move, and
+workspace offline, with each of `GOMODCACHE`, `GOCACHE`, `pnpm_config_store_dir` and
+`pnpm_config_virtual_store_dir` under `/opt/cache`. Only then does that arch's `cache-main` move, and
 only if the commit is still the head of `main`. Because the smoke step runs on the
 workspace node, the node already holds the image when environments start following it.
 
