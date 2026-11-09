@@ -159,4 +159,10 @@ env:
     {{- toYaml (mergeOverwrite (deepCopy .liveness) $v.server.livenessProbe) | nindent 4 }}
   readinessProbe:
     {{- toYaml (mergeOverwrite (deepCopy .readiness) $v.server.readinessProbe) | nindent 4 }}
+  {{- /* Opt-in: reuses the listener's own liveness handler, so it checks what liveness checks.
+         Liveness does not start until the startup probe passes. */}}
+  {{- with $v.server.startupProbe }}
+  startupProbe:
+    {{- toYaml (mergeOverwrite (pick (deepCopy $.liveness) "httpGet" "tcpSocket") .) | nindent 4 }}
+  {{- end }}
 {{- end -}}

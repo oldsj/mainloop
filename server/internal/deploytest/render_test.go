@@ -11,6 +11,7 @@ import (
 	"maps"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -266,6 +267,20 @@ func TestProbesAreHTTPOrTCP(t *testing.T) {
 			for name, c := range containers(r.backend(t)) {
 				if c.ReadinessProbe == nil || c.LivenessProbe == nil {
 					t.Errorf("%s: missing a liveness or readiness probe", name)
+				}
+			}
+		})
+	}
+}
+
+// A startup probe is opt-in (server.startupProbe): the default install starts a prebuilt binary
+// and needs none.
+func TestNoStartupProbeByDefault(t *testing.T) {
+	for _, path := range []string{"defaults", "production"} {
+		t.Run(path, func(t *testing.T) {
+			for name, c := range containers(render(t, path).backend(t)) {
+				if c.StartupProbe != nil {
+					t.Errorf("%s: startup probe %+v, want none", name, c.StartupProbe)
 				}
 			}
 		})
@@ -580,6 +595,22 @@ func TestLiveDev(t *testing.T) {
 			}
 			if c.WorkingDir != "/src" {
 				t.Errorf("%s: workingDir %q, want /src", name, c.WorkingDir)
+			}
+		}
+	})
+
+	t.Run("a startup probe covers the cold go run build", func(t *testing.T) {
+		for name, c := range containers(pod) {
+			s, l := c.StartupProbe, c.LivenessProbe
+			if s == nil || l == nil {
+				t.Errorf("%s: startup %+v, liveness %+v, want both", name, s, l)
+				continue
+			}
+			if !reflect.DeepEqual(s.ProbeHandler, l.ProbeHandler) {
+				t.Errorf("%s: startup handler %+v, want the liveness handler %+v", name, s.ProbeHandler, l.ProbeHandler)
+			}
+			if budget := s.PeriodSeconds * s.FailureThreshold; budget < 300 {
+				t.Errorf("%s: startup budget %ds, want at least 300s for a cold build", name, budget)
 			}
 		}
 	})

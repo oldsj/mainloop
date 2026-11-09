@@ -55,7 +55,6 @@ jobs:
   # database-backed), so they get their own job; everything else runs in the other.
   test-heavy:
     name: go test -race (tasks, sessions, workspaces)
-    needs: lint
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -89,7 +88,6 @@ jobs:
 
   test-rest:
     name: go test -race (everything else)
-    needs: lint
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
