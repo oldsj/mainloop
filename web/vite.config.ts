@@ -4,7 +4,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
-import { designPreviews } from './design/previews';
+import { designPreviews } from './design/previews.ts';
 
 // The local Go `serve-api` listens here; override with MAINLOOP_API_PROXY.
 const apiProxy = process.env.MAINLOOP_API_PROXY ?? 'http://127.0.0.1:8000';

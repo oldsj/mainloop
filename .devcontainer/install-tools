@@ -8,7 +8,8 @@ case "${arch}" in
 amd64)
 	node_arch=x64
 	trunk_arch=x86_64
-	node_sha=2598641d188b41793930917f1a99a81c9615856b4205d408a44ab676c1acbb3d
+	node_sha=d28a96af6c38596f6d9d97c0ee531c13d238d757742387d1928de822d959e997
+	pnpm_sha=679df2eedf158f639db6d1f00e713d766d0d7afc6a931bc51497a625d1e1bdf7
 	trunk_sha=3845ff76a70cebb10e61a267ff719ffdccfa3ef6d877d51870a2c62b79603ab9
 	kubectl_sha=7721f265e18709862655affba5343e85e1980639395d5754473dafaadcaa69e3
 	go_sha=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
@@ -17,7 +18,8 @@ amd64)
 arm64)
 	node_arch=arm64
 	trunk_arch=arm64
-	node_sha=323e6bc34bfe82a21f42d9eb94d9a2b6c8082d8c03cb510cf2f95dd1dcaa1531
+	node_sha=406fe3fbde1c054adff8b297c16fdb5af6659db327c1ac8acd46b56ef1af9a92
+	pnpm_sha=2e326930b9b670712df1c93849d725c85f6b897cdf9239ee724b587c50ddd5bc
 	trunk_sha=cc210d2185cf95bedbec06384be6ef342bdb7dcf3ff72dd08fe0e69859516887
 	kubectl_sha=420e6110e3ba7ee5a3927b5af868d18df17aae36b720529ffa4e9e945aa95450
 	go_sha=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
@@ -34,7 +36,7 @@ fetch() {
 	curl --fail --silent --show-error --location --connect-timeout 10 --max-time 45 --retry 1 --retry-delay 1 --retry-max-time 95 "$1" -o "${scratch}/$3"
 	echo "$2  ${scratch}/$3" | sha256sum --check --strict
 }
-fetch "https://nodejs.org/dist/v24.8.0/node-v24.8.0-linux-${node_arch}.tar.xz" "${node_sha}" node.tar.xz
+fetch "https://nodejs.org/dist/v26.13.0/node-v26.13.0-linux-${node_arch}.tar.xz" "${node_sha}" node.tar.xz
 tar -xJf "${scratch}/node.tar.xz" -C /usr/local --strip-components=1
 fetch "https://trunk.io/releases/1.25.0/trunk-1.25.0-linux-${trunk_arch}.tar.gz" "${trunk_sha}" trunk.tar.gz
 tar -xzf "${scratch}/trunk.tar.gz" -C "${scratch}"
@@ -47,11 +49,12 @@ tar -xzf "${scratch}/go.tar.gz" -C /usr/local
 fetch "https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-linux-${arch}.tar.gz" "${golangci_sha}" golangci.tar.gz
 tar -xzf "${scratch}/golangci.tar.gz" -C "${scratch}"
 install "${scratch}/golangci-lint-2.14.0-linux-${arch}/golangci-lint" /usr/local/bin/golangci-lint
-fetch https://registry.npmjs.org/pnpm/-/pnpm-9.15.9.tgz cf86a7ad764406395d4286a6d09d730711720acc6d93e9dce9ac7ac4dc4a28a7 pnpm.tgz
-mkdir -p /opt/pnpm
-tar -xzf "${scratch}/pnpm.tgz" -C /opt/pnpm --strip-components=1
-ln -s /opt/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm
-ln -s /opt/pnpm/bin/pnpx.cjs /usr/local/bin/pnpx
+# pnpm 11+ ships as a native binary; this matches packageManager in package.json.
+fetch "https://registry.npmjs.org/@pnpm/exe.linux-${node_arch}/-/exe.linux-${node_arch}-12.18.0.tgz" "${pnpm_sha}" pnpm.tgz
+tar -xzf "${scratch}/pnpm.tgz" -C "${scratch}"
+install "${scratch}/package/pnpm" /usr/local/bin/pnpm
+printf '#!/bin/sh\nexec pnpm dlx "$@"\n' >/usr/local/bin/pnpx
+chmod 755 /usr/local/bin/pnpx
 fetch https://www.postgresql.org/media/keys/ACCC4CF8.asc 0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76 pgdg.asc
 install -m 644 "${scratch}/pgdg.asc" /usr/share/keyrings/pgdg.asc
 echo 'deb [signed-by=/usr/share/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main' >/etc/apt/sources.list.d/pgdg.list
