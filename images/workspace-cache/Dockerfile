@@ -23,9 +23,9 @@ RUN mkdir -p /opt/cache /data/workspace && chown -R 65532:65532 /opt/cache /data
 USER 65532:65532
 ENV GOMODCACHE=/opt/cache/go-mod \
     GOCACHE=/opt/cache/go-build \
-    npm_config_store_dir=/opt/cache/pnpm-store \
-    npm_config_virtual_store_dir=/opt/cache/pnpm-virtual \
-    npm_config_package_import_method=copy
+    pnpm_config_store_dir=/opt/cache/pnpm-store \
+    pnpm_config_virtual_store_dir=/opt/cache/pnpm-virtual \
+    pnpm_config_package_import_method=copy
 WORKDIR /data/workspace
 
 FROM prep AS deps
@@ -77,7 +77,7 @@ COPY --from=build --chown=65532:65532 /opt/cache/go-build /opt/cache/go-build
 USER 65532:65532
 ENV GOMODCACHE=/opt/cache/go-mod \
     GOCACHE=/opt/cache/go-build \
-    npm_config_store_dir=/opt/cache/pnpm-store \
-    npm_config_virtual_store_dir=/opt/cache/pnpm-virtual
+    pnpm_config_store_dir=/opt/cache/pnpm-store \
+    pnpm_config_virtual_store_dir=/opt/cache/pnpm-virtual
 # Replaces the base image's check with one for what this image adds.
 HEALTHCHECK --interval=30s --timeout=3s CMD test -r /opt/cache/go-build && test -r /opt/cache/go-mod
