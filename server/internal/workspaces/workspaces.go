@@ -33,8 +33,6 @@ import (
 type Kagent interface {
 	CreateSession(ctx context.Context, req *kagentapi.CreateSessionRequest) (*kagentapi.Session, error)
 	GetSession(ctx context.Context, id string) (*kagentapi.Session, error)
-	SuspendSession(ctx context.Context, id string) (*kagentapi.Session, error)
-	ResumeSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	DeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	ListSessions(ctx context.Context) ([]*kagentapi.Session, error)
 	PrepareSessionWorkspace(ctx context.Context, req *kagentapi.PrepareSessionWorkspaceRequest) (*kagentapi.WorkspacePreparationReceipt, error)

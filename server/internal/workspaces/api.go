@@ -132,27 +132,3 @@ func (a *WorkspacesAPI) RefreshWorkspace(ctx context.Context, r api.RefreshWorks
 	}
 	return api.RefreshWorkspace200JSONResponse(w), nil
 }
-
-// ResumeWorkspace implements api.StrictServerInterface.
-func (a *WorkspacesAPI) ResumeWorkspace(ctx context.Context, r api.ResumeWorkspaceRequestObject) (api.ResumeWorkspaceResponseObject, error) {
-	if a.Svc == nil {
-		return nil, errUnavailable
-	}
-	w, err := a.Svc.Resume(ctx, r.WorkspaceId)
-	if err != nil {
-		return nil, failure(err)
-	}
-	return api.ResumeWorkspace200JSONResponse(w), nil
-}
-
-// SuspendWorkspace implements api.StrictServerInterface.
-func (a *WorkspacesAPI) SuspendWorkspace(ctx context.Context, r api.SuspendWorkspaceRequestObject) (api.SuspendWorkspaceResponseObject, error) {
-	if a.Svc == nil {
-		return nil, errUnavailable
-	}
-	w, err := a.Svc.Suspend(ctx, r.WorkspaceId)
-	if err != nil {
-		return nil, failure(err)
-	}
-	return api.SuspendWorkspace200JSONResponse(w), nil
-}

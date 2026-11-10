@@ -7,6 +7,7 @@ import (
 	"errors"
 	"regexp"
 
+	"github.com/oldsj/mainloop/server/internal/kagent"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
@@ -28,14 +29,23 @@ var actorSafe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}/[A-Za-z0-9][A-Za-z0
 // Valid reports whether actor is safe to put in the router's CONNECT request head.
 func Valid(actor string) bool { return actorSafe.MatchString(actor) }
 
-// Of is the router's "<atespace>/<actor>" name of the Session's running actor, from its runtime
-// association. kagent reports the association only while the actor runs, and the actor name
-// carries the runtime generation, so it cannot be derived from the Session id.
-func Of(ks *kagentapi.Session) (string, bool) {
-	ra := ks.GetRuntimeAssociation()
-	if ra.GetAtespace() == "" || ra.GetActorName() == "" {
+// Of is the router's "<atespace>/<actor>" name of the Session's Actor. It comes from the runtime
+// association when kagent reports one, current or not. A sleeping Session may report none: kagent
+// names a Session's Actor "session-<id>" for its whole life, so it is then built from that and
+// defaultAtespace (the atespace Sessions run in). The caller's connection through the Substrate
+// router wakes a sleeping Actor. ok is false for a Session that cannot have an Actor (not READY) or
+// a name that is not safe for the CONNECT request head.
+func Of(ks *kagentapi.Session, defaultAtespace string) (string, bool) {
+	if ks.GetState() != kagentapi.RuntimeState_RUNTIME_STATE_READY {
 		return "", false
 	}
-	actor := ra.GetAtespace() + "/" + ra.GetActorName()
+	atespace, name := defaultAtespace, kagent.ActorName(ks.GetId())
+	if ra := ks.GetRuntimeAssociation(); ra.GetAtespace() != "" && ra.GetActorName() != "" {
+		atespace, name = ra.GetAtespace(), ra.GetActorName()
+	}
+	if atespace == "" || ks.GetId() == "" {
+		return "", false
+	}
+	actor := atespace + "/" + name
 	return actor, Valid(actor)
 }

@@ -310,7 +310,7 @@ func (s *Service) observe(ctx context.Context, w dbq.GetPushWorkspaceRow) (strin
 	}
 	if n.GetId() != w.NativeSessionID || n.GetContextId() != w.NativeSessionID || n.GetState() != ka.RuntimeState_RUNTIME_STATE_READY || n.GetOperation() != ka.RuntimeOperation_RUNTIME_OPERATION_NONE || n.GetPreparedRevision() == "" || n.GetRuntimeComposition() == nil ||
 		ra.GetGenerationId() == "" || ra.GetAtespace() == "" || ra.GetActorName() == "" || ra.GetActorUid() == "" || ra.GetPhase() != "active" || !ra.GetCurrentActive() ||
-		n.GetAgent().GetNamespace() != w.AgentNamespace || n.GetAgent().GetName() != w.AgentName || nw.GetRepo() != w.RepoURL || nw.GetRef() != w.Ref || nw.GetBranch() != w.Branch || nw.GetDepth() != w.Depth ||
+		n.GetAgent().GetRef().GetNamespace() != w.AgentNamespace || n.GetAgent().GetRef().GetName() != w.AgentName || nw.GetRepo() != w.RepoURL || nw.GetRef() != w.Ref || nw.GetBranch() != w.Branch || nw.GetDepth() != w.Depth ||
 		env.GetImage() != expected.Image || env.GetPlatform() != expected.Platform || env.GetPolicyIdentity() != expected.PolicyIdentity {
 		return "", denial("runtime_unattested")
 	}

@@ -178,17 +178,12 @@ func (s *Service) prepare(ctx context.Context, c reconcile.Claim) (reconcile.Out
 	if !gitref.IsSHA(w.Ref) {
 		return s.failPreparation(ctx, c.ID, "the checkout ref is not a commit SHA")
 	}
-	// kagent prepares an Actor that is running. An idle Session has none, so wake it: resume joins
-	// an operation already under way and is safe to repeat.
+	// The preparation names the runtime generation and Actor it was read against. kagent wakes a
+	// sleeping runtime for it, so an association that is not current is sent as it is: kagent then
+	// answers that it is stale (see kagent.StaleRuntime below) and the next pass reads the new one.
+	// With no association at all there is nothing to name yet; look again.
 	ra := n.GetRuntimeAssociation()
-	if ra.GetGenerationId() == "" || ra.GetActorUid() == "" || !ra.GetCurrentActive() {
-		if _, err := s.Kagent.ResumeSession(ctx, *w.KagentSessionID); err != nil && !notFoundErr(err) {
-			if late() {
-				return timedOut()
-			}
-			// The loop's backoff spaces the retries and logs the error.
-			return reconcile.Retry(), fmt.Errorf("wake the session to prepare its workspace: %w", err)
-		}
+	if ra.GetGenerationId() == "" || ra.GetActorUid() == "" {
 		return wait()
 	}
 
@@ -229,6 +224,9 @@ func (s *Service) prepare(ctx context.Context, c reconcile.Claim) (reconcile.Out
 		// kagent keeps one preparation per Session: other bytes for it are a conflict no retry fixes.
 		if errors.As(err, &se) && se.Wire && se.Code == connect.CodeAlreadyExists {
 			return s.failPreparation(ctx, c.ID, "kagent holds a different preparation for this session")
+		}
+		if errors.As(err, &se) && se.Wire && kagent.StaleRuntime(err) {
+			return wait() // the runtime woke under a new generation: read it again
 		}
 		// The outcome is unknown or transient: the next pass reads the Session for a receipt before
 		// anything is sent again, and the loop's backoff spaces the retries.

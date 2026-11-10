@@ -185,7 +185,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	liveRelay := preview.NewLive(previews, svc, []byte(cfg.Identity.AgentTokenKey.Reveal()), cfg.FrontendOrigin(), cfg.IsDev(), log)
 	taskOpts := []tasks.Option{
 		tasks.WithRuntimes(wsSvc, svc),
-		tasks.WithStopObserver(&tasks.KagentStops{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc, Liveness: kc, Workspaces: wsSvc, Deleter: kc}),
+		tasks.WithStopObserver(&tasks.KagentStops{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc, Liveness: kc, Deleter: kc}),
 		tasks.WithLivenessObserver(&tasks.KagentLiveness{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc, Activity: ledger}),
 	}
 	if gh != nil {

@@ -598,7 +598,7 @@ func (s *Service) commitFork(ctx context.Context, r dbq.CheckpointFork, forked *
 		}); err != nil {
 			return fmt.Errorf("create forked session: %w", err)
 		}
-		ref := forked.GetAgent()
+		ref := kagent.AgentOf(forked)
 		var ns, name *string
 		if v := ref.GetNamespace(); v != "" {
 			ns = &v

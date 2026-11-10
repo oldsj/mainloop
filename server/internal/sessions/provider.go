@@ -263,9 +263,9 @@ func (s *Service) requireAgentReady(ctx context.Context, agent kagent.AgentRef) 
 	return nil
 }
 
-// retireIdle establishes that the main is idle and suspends its native Session. It reads and
-// suspends; it commits nothing. Anything it cannot confirm refuses the switch with 409 and
-// changes nothing but possibly the Session's suspended state, which the next send reverses.
+// retireIdle establishes that the main is idle. It only reads; it commits nothing, and anything it
+// cannot confirm refuses the switch with 409. The old native Session is left as it is: kagent parks
+// its idle Actor itself, and it is kept for history.
 func (s *Service) retireIdle(ctx context.Context, b dbq.GetMainBindingRow) error {
 	q := dbq.New(s.Pool)
 	if err := s.requireNoOpenWork(ctx, q, b.SessionID); err != nil {
@@ -275,7 +275,7 @@ func (s *Service) retireIdle(ctx context.Context, b dbq.GetMainBindingRow) error
 		if b.KagentCreateRequestID != nil {
 			return conflictCode(codeUnresolved, "A native Session create for the main thread is unresolved; try again once it settles.")
 		}
-		return nil // never started: nothing to suspend
+		return nil // never started: nothing to settle
 	}
 	ksid := *b.KagentSessionID
 	agent := s.agentOf(b)
@@ -289,8 +289,7 @@ func (s *Service) retireIdle(ctx context.Context, b dbq.GetMainBindingRow) error
 	case sessionEnded(sess):
 		return nil
 	}
-	if st := sess.GetState(); changing(sess) ||
-		(st != kagentapi.RuntimeState_RUNTIME_STATE_READY && st != kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED) {
+	if st := sess.GetState(); changing(sess) || st != kagentapi.RuntimeState_RUNTIME_STATE_READY {
 		return conflictCode(codeUnconfirmed, "The main thread's native Session is not settled (%s); try again shortly.", st)
 	}
 	tasks, err := s.Kagent.ListTasks(ctx, agent, ksid)
@@ -301,16 +300,6 @@ func (s *Service) retireIdle(ctx context.Context, b dbq.GetMainBindingRow) error
 		if !isTerminal(t.Status.State) {
 			return conflictCode(codeBusy, "The main thread has a native turn in progress.")
 		}
-	}
-	if sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED {
-		return nil
-	}
-	if _, err := s.Kagent.SuspendSession(ctx, ksid); err != nil {
-		return conflictCode(codeUnconfirmed, "The main thread's native Session could not be suspended.")
-	}
-	after, err := s.Kagent.GetSession(ctx, ksid)
-	if err != nil || after.GetState() != kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED {
-		return conflictCode(codeUnconfirmed, "The suspend of the main thread's native Session is unconfirmed.")
 	}
 	if s.AfterSuspend != nil {
 		return s.AfterSuspend(ctx)

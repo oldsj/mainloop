@@ -62,14 +62,6 @@ func (s *Service) sweeps() []reconcile.Sweep {
 		{Name: "workspace-archived", Every: w.ArchivedDeleteInterval.Duration(), Run: s.DeleteArchived},
 		{Name: OrphanSweepName, Every: w.OrphanSweepInterval.Duration(), Run: s.scheduledOrphanSweep},
 	}
-	// Without the delivery ledger neither the open-turn check nor delivery activity exists, so the
-	// sweep would suspend a workspace in the middle of a turn. Interim: it stays off until the
-	// ledger is wired.
-	if s.Deliveries == nil {
-		s.Log.Warn("idle suspend is off: no delivery ledger is wired, so a running turn cannot be seen")
-	} else {
-		out = append(out, reconcile.Sweep{Name: "workspace-idle", Every: w.IdleCheckInterval.Duration(), Run: s.SuspendIdle})
-	}
 	return out
 }
 
@@ -123,10 +115,10 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 	switch op.Kind {
 	case dbstate.OpCreate:
 		res = s.doCreate(ctx, w)
-	case dbstate.OpSuspend:
-		res = s.doSuspend(ctx, op, w)
-	case dbstate.OpResume:
-		res = s.doResume(ctx, w)
+	case dbstate.OpSuspend, dbstate.OpResume:
+		// kagent suspends an idle Session itself and wakes it on use; an operation queued before
+		// that change has nothing left to do.
+		res = result{state: dbstate.OpCancelled, reason: "kagent suspends and wakes a workspace itself"}
 	case dbstate.OpDelete:
 		res = s.doDelete(ctx, w)
 	default:
@@ -196,11 +188,6 @@ func (s *Service) finalize(ctx context.Context, c reconcile.Claim, op dbq.Worksp
 		}
 		if res.touch {
 			if _, err := q.TouchWorkspace(ctx, w.ID); err != nil {
-				return false, err
-			}
-		}
-		if res.idle {
-			if err := q.MarkWorkspaceIdleSuspended(ctx, w.ID); err != nil {
 				return false, err
 			}
 		}
@@ -447,83 +434,6 @@ func (s *Service) turnOpen(ctx context.Context, w wsRow) (bool, error) {
 		return false, nil
 	}
 	return s.Deliveries.HasOpen(ctx, w.ID)
-}
-
-func (s *Service) doSuspend(ctx context.Context, op dbq.WorkspaceOp, w wsRow) result {
-	if w.KagentSessionID == nil {
-		return result{state: dbstate.OpRejected, reason: "the workspace has no runtime session yet"}
-	}
-	if op.QuietSince != nil {
-		at, err := s.activity(ctx, w)
-		if err != nil {
-			return result{err: err}
-		}
-		if at.After(*op.QuietSince) {
-			return result{state: dbstate.OpCancelled, reason: "the workspace was used since the idle check"}
-		}
-	}
-	if open, err := s.turnOpen(ctx, w); err != nil {
-		return result{err: err}
-	} else if open {
-		return result{state: dbstate.OpRejected, reason: "a turn is open"}
-	}
-	idle := op.QuietSince != nil // queued by the idle sweep, not asked for
-	sess, err := s.Kagent.GetSession(ctx, w.sessionID())
-	if err != nil {
-		if idle && notFoundErr(err) {
-			// Mark the workspace so the sweep does not queue the same doomed suspend every pass.
-			return result{state: dbstate.OpRejected, reason: "kagent no longer has the session", idle: true}
-		}
-		return result{err: err}
-	}
-	busy := sess.GetOperation() == kagentapi.RuntimeOperation_RUNTIME_OPERATION_SUSPEND ||
-		sess.GetOperation() == kagentapi.RuntimeOperation_RUNTIME_OPERATION_RESUME
-	switch {
-	case sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED:
-		return result{state: dbstate.OpSucceeded, sess: sess, idle: true}
-	case sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_READY && !busy:
-		sess, err = s.Kagent.SuspendSession(ctx, w.sessionID())
-		if err != nil {
-			return result{err: err}
-		}
-		if sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED ||
-			sess.GetOperation() == kagentapi.RuntimeOperation_RUNTIME_OPERATION_SUSPEND {
-			return result{state: dbstate.OpSucceeded, sess: sess, idle: true}
-		}
-		return result{err: &unconfirmed{"kagent did not confirm the suspend"}}
-	case idle && (busy || sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_CREATING):
-		return result{err: &unconfirmed{"the workspace is changing state"}} // look again shortly
-	}
-	// Failed, deleting or otherwise unsuitable: an idle suspend marks the workspace, so the sweep
-	// leaves it alone until it is used again.
-	return result{state: dbstate.OpRejected, reason: "the workspace is not in a state that can be suspended", sess: sess, idle: idle}
-}
-
-func (s *Service) doResume(ctx context.Context, w wsRow) result {
-	if w.KagentSessionID == nil {
-		return result{state: dbstate.OpRejected, reason: "the workspace has no runtime session yet"}
-	}
-	sess, err := s.Kagent.GetSession(ctx, w.sessionID())
-	if err != nil {
-		return result{err: err}
-	}
-	switch sess.GetState() {
-	case kagentapi.RuntimeState_RUNTIME_STATE_READY:
-		return result{state: dbstate.OpSucceeded, sess: sess, touch: true, unchanged: true}
-	case kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED:
-		sess, err = s.Kagent.ResumeSession(ctx, w.sessionID())
-		if err != nil {
-			return result{err: err}
-		}
-		if sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_READY ||
-			sess.GetOperation() == kagentapi.RuntimeOperation_RUNTIME_OPERATION_RESUME {
-			return result{state: dbstate.OpSucceeded, sess: sess, touch: true}
-		}
-		return result{err: &unconfirmed{"kagent did not confirm the resume"}}
-	case kagentapi.RuntimeState_RUNTIME_STATE_CREATING:
-		return result{err: &unconfirmed{"the workspace is still starting"}}
-	}
-	return result{state: dbstate.OpRejected, reason: "the workspace is not in a state that can be resumed", sess: sess}
 }
 
 func (s *Service) doDelete(ctx context.Context, w wsRow) result {

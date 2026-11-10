@@ -23,7 +23,7 @@ func (p *Proxy) actorOf(ctx context.Context, kagentSessionID string) (string, er
 	if err != nil {
 		return "", err
 	}
-	actor, ok := liveactor.Of(ks)
+	actor, ok := liveactor.Of(ks, p.atespace)
 	if !ok {
 		return "", errNoActor
 	}

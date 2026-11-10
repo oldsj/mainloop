@@ -10,6 +10,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/kagent"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
@@ -58,15 +59,17 @@ func stateOf(sess *kagentapi.Session) (api.WorkspaceObservedState, *string) {
 		sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_DELETED:
 		return api.WorkspaceObservedStateUnknown, nil
 	case sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_CREATING,
-		sess.GetOperation() == kagentapi.RuntimeOperation_RUNTIME_OPERATION_CREATE,
-		sess.GetOperation() == kagentapi.RuntimeOperation_RUNTIME_OPERATION_RESUME:
+		sess.GetOperation() == kagentapi.RuntimeOperation_RUNTIME_OPERATION_CREATE:
 		return api.WorkspaceObservedStateResuming, &starting
-	case sess.GetOperation() == kagentapi.RuntimeOperation_RUNTIME_OPERATION_SUSPEND:
-		return api.WorkspaceObservedStateSuspending, nil
-	case sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED:
-		return api.WorkspaceObservedStateSuspended, nil
-	case sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_READY:
+	case kagent.Settling(sess):
+		// kagent's own lifecycle work (settling an idle Actor, waking it, reverting a crash).
+		return api.WorkspaceObservedStateResuming, nil
+	case sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_READY && kagent.Awake(sess):
 		return api.WorkspaceObservedStateRunning, nil
+	case sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_READY:
+		// Asleep: kagent parked the idle Actor. The Session stays READY and the next message,
+		// preparation or attach wakes it.
+		return api.WorkspaceObservedStateSuspended, nil
 	}
 	return api.WorkspaceObservedStateUnknown, nil
 }
