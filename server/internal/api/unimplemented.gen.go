@@ -204,6 +204,11 @@ func (Unimplemented) GetSessionConversation(context.Context, GetSessionConversat
 	return nil, apierr.NotImplemented
 }
 
+// GetSessionLive is not implemented yet.
+func (Unimplemented) GetSessionLive(context.Context, GetSessionLiveRequestObject) (GetSessionLiveResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetSessionNative is not implemented yet.
 func (Unimplemented) GetSessionNative(context.Context, GetSessionNativeRequestObject) (GetSessionNativeResponseObject, error) {
 	return nil, apierr.NotImplemented

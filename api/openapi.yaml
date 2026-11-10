@@ -2829,6 +2829,62 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/HTTPValidationError'
                   - $ref: '#/components/schemas/HTTPError'
+  /sessions/{session_id}/live:
+    get:
+      tags:
+        - sessions
+      summary: Live Session WebSocket
+      description: |-
+        Upgrades to a WebSocket with subprotocol `kagent.sdk-runner.v1` (the SDK runner's client
+        event protocol, one JSON object per text frame) for a session whose `NativeSessionInfo.live`
+        is true. The server bootstraps the runner and keeps its token; frames are relayed verbatim
+        both ways. A suspended session is woken by connecting.
+
+        404 when the session is not the owner's, has no kagent session, or its Agent is not live.
+        503 while the session cannot be reached yet; the client retries with backoff.
+      operationId: getSessionLive
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+        - name: since
+          in: query
+          required: false
+          description: Resume after this event `seq`; events still in the runner's backlog are replayed in `hello`.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+      responses:
+        '101':
+          description: Switching to the WebSocket protocol `kagent.sdk-runner.v1`.
+        '400':
+          description: Not a WebSocket upgrade request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '502':
+          description: The runner refused the connection or failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '503':
+          description: The session is waking or unreachable; retry with backoff.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
   /sessions/{session_id}/native:
     get:
       tags:
@@ -5214,11 +5270,17 @@ components:
             - type: string
             - type: 'null'
           title: Note
+        live:
+          type: boolean
+          title: Live
+          description: Whether the session's Agent runs the Agent SDK runner, so GET /sessions/{session_id}/live serves a live WebSocket view of it.
+          default: false
       type: object
       required:
         - session_id
         - kind
         - agent_name
+        - live
         - role
         - parent_session_id
         - topic
