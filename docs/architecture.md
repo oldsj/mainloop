@@ -49,8 +49,8 @@ stateDiagram-v2
 
 A sleeping Session stays `READY`. Mainloop reads asleep or awake from
 `Session.runtime_association.current_active` on `GetSession` and shows a sleeping workspace as
-`suspended`; an absent association is not known, not asleep (the pinned kagent does not report
-one yet). What wakes it is the next A2A
+`suspended`; an absent association (no Actor verified on that read) is not known, not asleep.
+What wakes it is the next A2A
 send, `PrepareSessionWorkspace`, or a connection through the Substrate router (a preview request
 or a live-view attach). Opening a workspace page does not wake its actor. Processes do not survive
 sleep, because snapshots are data-only: the checkout is kept, but a dev server must be started

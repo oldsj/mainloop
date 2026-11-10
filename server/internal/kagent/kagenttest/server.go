@@ -151,8 +151,8 @@ type Server struct {
 	// workspace preparation or Wake starts it. A sleeping Session stays READY and its runtime
 	// association is not current.
 	IdleActors bool
-	// NoAssociation withholds the runtime association, as kagent at the vendored pin does (see
-	// third_party/kagentproto/SOURCE): the Session still names its Actor in its A2A authority.
+	// NoAssociation withholds the runtime association, as kagent does on a read that verified no
+	// Actor: the Session still names its Actor in its A2A authority.
 	NoAssociation bool
 	asleep        map[string]bool
 	woken         map[string]bool

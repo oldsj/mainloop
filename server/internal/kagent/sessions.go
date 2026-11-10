@@ -215,9 +215,9 @@ func Awake(s *api.Session) bool {
 }
 
 // Asleep reports whether kagent said, on this read, that the Session has no running Actor. Only a
-// runtime association can say so. Without one (the kagent this is built against does not report
-// it yet, see third_party/kagentproto/SOURCE) sleep is unknown, which is not asleep: a caller must
-// not take a Session it cannot see into for a stopped one.
+// runtime association can say so: kagent reports one whenever the Session has an Actor, current
+// only while the Actor runs. Without one (no Actor verified on this read) sleep is unknown, which
+// is not asleep: a caller must not take a Session it cannot see into for a stopped one.
 func Asleep(s *api.Session) bool {
 	ra := s.GetRuntimeAssociation()
 	return ra != nil && !ra.GetCurrentActive()

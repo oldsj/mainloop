@@ -45,7 +45,7 @@ func TestLiveTargetNamesTheActorAwakeOrAsleepAndWakesNothing(t *testing.T) {
 	}
 }
 
-// Without a runtime association (kagent at the vendored pin reports none) the Actor is the one the
+// Without a runtime association (a read on which kagent verified no Actor) the Actor is the one the
 // Session's A2A authority names.
 func TestLiveTargetWithoutAnAssociationIsTheA2AAuthoritysActor(t *testing.T) {
 	e, mainID, ksid := liveEnv(t)

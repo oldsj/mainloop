@@ -9,16 +9,10 @@
    rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
    rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
    rpc UpdateSessionName(UpdateSessionNameRequest) returns (UpdateSessionNameResponse);
-@@ -55,6 +57,17 @@
-   Workspace workspace = 16;
-   // Secret references only; forks do not inherit these bindings.
-   repeated SessionCredential credentials = 17;
-+  DevelopmentEnvironment development_environment = 18;
-+  // Output only. Operator-resolved payload pinned at creation.
-+  RuntimeComposition runtime_composition = 19;
-+  // Output only. Present only on authorized GetSession for a freshly observed
-+  // current active runtime. Never a creation, resume, or fork input.
-+  RuntimeAssociation runtime_association = 20;
+@@ -66,6 +68,11 @@
+   // Session's runtime Actor. Absent means no association was verified by this
+   // read; it is never a creation or fork input.
+   RuntimeAssociation runtime_association = 20;
 +  // Output only, historical preparation evidence. GET never refreshes it.
 +  WorkspacePreparationReceipt workspace_preparation = 21;
 +  // Output only. Set on a fork created with a fresh conversation: its restored
@@ -26,53 +20,13 @@
 +  bool fresh_conversation = 22;
  }
  
- // SecretKeyReference identifies a key in the Agent's namespace. The value is
-@@ -110,6 +123,7 @@
-   Workspace workspace = 6;
-   // Per-session headers for origins already allowed by the Agent revision.
-   repeated SessionCredential credentials = 7 [(buf.validate.field).repeated.max_items = 4];
-+  DevelopmentEnvironment development_environment = 8;
- }
- 
- message CreateSessionResponse {
-@@ -208,3 +222,85 @@
+ // RuntimeAssociation is a bounded observation of the runtime Actor that serves
+@@ -275,3 +282,53 @@
  }
  
  message RevokeSessionShareResponse {}
 +
 +// Fork additions (oldsj/kagent mainloop-substrate-1-0), field numbers kept from v1alpha1.
-+
-+// Output only. A bounded observation, not an atomic cross-system grant.
-+// The durable generation must remain active around a fresh lookup of the exact
-+// running Actor, and the Session must remain READY with no pending operation.
-+// Dispatchers must recheck with their normal fencing/locks before runtime work.
-+// Absence means no current active association was verified by this read.
-+message RuntimeAssociation {
-+  string generation_id = 1;
-+  string atespace = 2;
-+  string actor_name = 3;
-+  string actor_uid = 4;
-+  string phase = 5;
-+  bool current_active = 6;
-+}
-+
-+// Trusted controller selection; runtime payloads are operator-owned.
-+message DevelopmentEnvironment {
-+  string image = 1 [(buf.validate.field).string = {
-+    max_len: 512
-+    pattern: "^[A-Za-z0-9][A-Za-z0-9./_:-]*@sha256:[a-f0-9]{64}$"
-+  }];
-+  string platform = 2 [(buf.validate.field).string.in = "linux/amd64", (buf.validate.field).string.in = "linux/arm64"];
-+  string policy_identity = 3 [(buf.validate.field).string = {min_len: 1, max_len: 256}];
-+}
-+
-+// Output only. Immutable inputs retained with the native Session.
-+message RuntimeComposition {
-+  string payload_image = 1;
-+  string provider = 2;
-+  uint32 schema = 3;
-+  string cli_version = 4;
-+}
 +
 +// A fixed model-free action over the original owned Create tuple. Repeating a
 +// completed action requests a new read-only challenge; uncertain setup never reissues.

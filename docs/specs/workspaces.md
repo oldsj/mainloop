@@ -68,8 +68,9 @@ History before `e776537` describes the retired Python backend. Where other text 
   router (a preview request or a live-view attach). A sleeping Session stays `READY`. Asleep or
   awake is read from `Session.runtime_association.current_active` on `GetSession`: present and
   false is asleep (shown as `suspended`); absent is not known and shown as `running`, since the
-  Session runs on use either way. The kagent Mainloop is pinned to does not report the association
-  yet (see `server/third_party/kagentproto/SOURCE`), so until it does no workspace shows asleep. `RUNTIME_STATE_SUSPENDED` and the `SUSPEND`,
+  Session runs on use either way. kagent reports the association whenever the Session has an
+  Actor, with `phase` `active` and `current_active` true only while the Actor runs.
+  `RUNTIME_STATE_SUSPENDED` and the `SUSPEND`,
   `RESUME` and `REVERT` operations can still appear briefly for kagent's own lifecycle work;
   Mainloop treats them as busy and reads again.
 - Processes do not survive sleep: kagent's snapshots are data-only. The checkout is kept, but a

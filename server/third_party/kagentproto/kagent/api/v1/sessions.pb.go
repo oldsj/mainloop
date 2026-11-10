@@ -98,12 +98,17 @@ type Session struct {
 	// the Session starts with an empty workspace.
 	Workspace *Workspace `protobuf:"bytes,16,opt,name=workspace,proto3" json:"workspace,omitempty"`
 	// Secret references only; forks do not inherit these bindings.
-	Credentials            []*SessionCredential    `protobuf:"bytes,17,rep,name=credentials,proto3" json:"credentials,omitempty"`
+	Credentials []*SessionCredential `protobuf:"bytes,17,rep,name=credentials,proto3" json:"credentials,omitempty"`
+	// Output only. The development image this Session runs in, as selected at
+	// creation. Unset for Sessions on the Agent's single-image revision. Forks
+	// keep it.
 	DevelopmentEnvironment *DevelopmentEnvironment `protobuf:"bytes,18,opt,name=development_environment,json=developmentEnvironment,proto3" json:"development_environment,omitempty"`
-	// Output only. Operator-resolved payload pinned at creation.
+	// Output only. The operator's runtime payload pinned at creation; set exactly
+	// when development_environment is.
 	RuntimeComposition *RuntimeComposition `protobuf:"bytes,19,opt,name=runtime_composition,json=runtimeComposition,proto3" json:"runtime_composition,omitempty"`
-	// Output only. Present only on authorized GetSession for a freshly observed
-	// current active runtime. Never a creation, resume, or fork input.
+	// Output only. Set only by GetSession, from a fresh observation of the
+	// Session's runtime Actor. Absent means no association was verified by this
+	// read; it is never a creation or fork input.
 	RuntimeAssociation *RuntimeAssociation `protobuf:"bytes,20,opt,name=runtime_association,json=runtimeAssociation,proto3" json:"runtime_association,omitempty"`
 	// Output only, historical preparation evidence. GET never refreshes it.
 	WorkspacePreparation *WorkspacePreparationReceipt `protobuf:"bytes,21,opt,name=workspace_preparation,json=workspacePreparation,proto3" json:"workspace_preparation,omitempty"`
@@ -277,1176 +282,29 @@ func (x *Session) GetFreshConversation() bool {
 	return false
 }
 
-// SecretKeyReference identifies a key in the Agent's namespace. The value is
-// the complete HTTP header value, including any authorization scheme prefix.
-type SecretKeyReference struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SecretKeyReference) Reset() {
-	*x = SecretKeyReference{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SecretKeyReference) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SecretKeyReference) ProtoMessage() {}
-
-func (x *SecretKeyReference) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SecretKeyReference.ProtoReflect.Descriptor instead.
-func (*SecretKeyReference) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *SecretKeyReference) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *SecretKeyReference) GetKey() string {
-	if x != nil {
-		return x.Key
-	}
-	return ""
-}
-
-// SessionCredential binds a same-namespace Secret to an existing egress origin.
-// Injection must be supported by the gateway dataplane for the origin's protocol.
-// Stock agentgateway supports HTTP injection; stock Envoy skips it.
-type SessionCredential struct {
-	state  protoimpl.MessageState `protogen:"open.v1"`
-	Origin string                 `protobuf:"bytes,1,opt,name=origin,proto3" json:"origin,omitempty"`
-	// Header names are case-insensitive and canonicalized to lowercase.
-	Header        string              `protobuf:"bytes,2,opt,name=header,proto3" json:"header,omitempty"`
-	SecretRef     *SecretKeyReference `protobuf:"bytes,3,opt,name=secret_ref,json=secretRef,proto3" json:"secret_ref,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SessionCredential) Reset() {
-	*x = SessionCredential{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SessionCredential) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SessionCredential) ProtoMessage() {}
-
-func (x *SessionCredential) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SessionCredential.ProtoReflect.Descriptor instead.
-func (*SessionCredential) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *SessionCredential) GetOrigin() string {
-	if x != nil {
-		return x.Origin
-	}
-	return ""
-}
-
-func (x *SessionCredential) GetHeader() string {
-	if x != nil {
-		return x.Header
-	}
-	return ""
-}
-
-func (x *SessionCredential) GetSecretRef() *SecretKeyReference {
-	if x != nil {
-		return x.SecretRef
-	}
-	return nil
-}
-
-type AgentProvenance struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ref           *ResourceReference     `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
-	Uid           string                 `protobuf:"bytes,2,opt,name=uid,proto3" json:"uid,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *AgentProvenance) Reset() {
-	*x = AgentProvenance{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *AgentProvenance) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AgentProvenance) ProtoMessage() {}
-
-func (x *AgentProvenance) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use AgentProvenance.ProtoReflect.Descriptor instead.
-func (*AgentProvenance) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *AgentProvenance) GetRef() *ResourceReference {
-	if x != nil {
-		return x.Ref
-	}
-	return nil
-}
-
-func (x *AgentProvenance) GetUid() string {
-	if x != nil {
-		return x.Uid
-	}
-	return ""
-}
-
-type CreateSessionRequest struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	Agent     *ResourceReference     `protobuf:"bytes,5,opt,name=agent,proto3" json:"agent,omitempty"`
-	RequestId string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	// Optional display name. Empty means unnamed.
-	Name string `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
-	// Optional Git checkout to establish before the first turn. Its host must be
-	// one of the Agent's Git origins.
-	Workspace *Workspace `protobuf:"bytes,6,opt,name=workspace,proto3" json:"workspace,omitempty"`
-	// Per-session headers for origins already allowed by the Agent revision.
-	Credentials            []*SessionCredential    `protobuf:"bytes,7,rep,name=credentials,proto3" json:"credentials,omitempty"`
-	DevelopmentEnvironment *DevelopmentEnvironment `protobuf:"bytes,8,opt,name=development_environment,json=developmentEnvironment,proto3" json:"development_environment,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
-}
-
-func (x *CreateSessionRequest) Reset() {
-	*x = CreateSessionRequest{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateSessionRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateSessionRequest) ProtoMessage() {}
-
-func (x *CreateSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateSessionRequest.ProtoReflect.Descriptor instead.
-func (*CreateSessionRequest) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *CreateSessionRequest) GetAgent() *ResourceReference {
-	if x != nil {
-		return x.Agent
-	}
-	return nil
-}
-
-func (x *CreateSessionRequest) GetRequestId() string {
-	if x != nil {
-		return x.RequestId
-	}
-	return ""
-}
-
-func (x *CreateSessionRequest) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *CreateSessionRequest) GetWorkspace() *Workspace {
-	if x != nil {
-		return x.Workspace
-	}
-	return nil
-}
-
-func (x *CreateSessionRequest) GetCredentials() []*SessionCredential {
-	if x != nil {
-		return x.Credentials
-	}
-	return nil
-}
-
-func (x *CreateSessionRequest) GetDevelopmentEnvironment() *DevelopmentEnvironment {
-	if x != nil {
-		return x.DevelopmentEnvironment
-	}
-	return nil
-}
-
-type CreateSessionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Session       *Session               `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateSessionResponse) Reset() {
-	*x = CreateSessionResponse{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateSessionResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateSessionResponse) ProtoMessage() {}
-
-func (x *CreateSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateSessionResponse.ProtoReflect.Descriptor instead.
-func (*CreateSessionResponse) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *CreateSessionResponse) GetSession() *Session {
-	if x != nil {
-		return x.Session
-	}
-	return nil
-}
-
-type GetSessionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetSessionRequest) Reset() {
-	*x = GetSessionRequest{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetSessionRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetSessionRequest) ProtoMessage() {}
-
-func (x *GetSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetSessionRequest.ProtoReflect.Descriptor instead.
-func (*GetSessionRequest) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *GetSessionRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-type GetSessionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Session       *Session               `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetSessionResponse) Reset() {
-	*x = GetSessionResponse{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetSessionResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetSessionResponse) ProtoMessage() {}
-
-func (x *GetSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetSessionResponse.ProtoReflect.Descriptor instead.
-func (*GetSessionResponse) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *GetSessionResponse) GetSession() *Session {
-	if x != nil {
-		return x.Session
-	}
-	return nil
-}
-
-type ListSessionsRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Includes sessions created by other users when authorized.
-	AllCreators bool         `protobuf:"varint,2,opt,name=all_creators,json=allCreators,proto3" json:"all_creators,omitempty"`
-	Page        *PageRequest `protobuf:"bytes,3,opt,name=page,proto3" json:"page,omitempty"`
-	// Filters by the Agent that produced each session's pinned revision.
-	Agent         *ResourceReference `protobuf:"bytes,6,opt,name=agent,proto3" json:"agent,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListSessionsRequest) Reset() {
-	*x = ListSessionsRequest{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[9]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListSessionsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListSessionsRequest) ProtoMessage() {}
-
-func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[9]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListSessionsRequest.ProtoReflect.Descriptor instead.
-func (*ListSessionsRequest) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{9}
-}
-
-func (x *ListSessionsRequest) GetAllCreators() bool {
-	if x != nil {
-		return x.AllCreators
-	}
-	return false
-}
-
-func (x *ListSessionsRequest) GetPage() *PageRequest {
-	if x != nil {
-		return x.Page
-	}
-	return nil
-}
-
-func (x *ListSessionsRequest) GetAgent() *ResourceReference {
-	if x != nil {
-		return x.Agent
-	}
-	return nil
-}
-
-type ListSessionsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Sessions      []*Session             `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
-	Page          *PageResponse          `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListSessionsResponse) Reset() {
-	*x = ListSessionsResponse{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[10]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListSessionsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListSessionsResponse) ProtoMessage() {}
-
-func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[10]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListSessionsResponse.ProtoReflect.Descriptor instead.
-func (*ListSessionsResponse) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{10}
-}
-
-func (x *ListSessionsResponse) GetSessions() []*Session {
-	if x != nil {
-		return x.Sessions
-	}
-	return nil
-}
-
-func (x *ListSessionsResponse) GetPage() *PageResponse {
-	if x != nil {
-		return x.Page
-	}
-	return nil
-}
-
-type UpdateSessionNameRequest struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	// The new display name. Empty clears the name, returning the conversation to
-	// being identified by its id.
-	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UpdateSessionNameRequest) Reset() {
-	*x = UpdateSessionNameRequest{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[11]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpdateSessionNameRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpdateSessionNameRequest) ProtoMessage() {}
-
-func (x *UpdateSessionNameRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[11]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpdateSessionNameRequest.ProtoReflect.Descriptor instead.
-func (*UpdateSessionNameRequest) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{11}
-}
-
-func (x *UpdateSessionNameRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *UpdateSessionNameRequest) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-type UpdateSessionNameResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Session       *Session               `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UpdateSessionNameResponse) Reset() {
-	*x = UpdateSessionNameResponse{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[12]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpdateSessionNameResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpdateSessionNameResponse) ProtoMessage() {}
-
-func (x *UpdateSessionNameResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[12]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpdateSessionNameResponse.ProtoReflect.Descriptor instead.
-func (*UpdateSessionNameResponse) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{12}
-}
-
-func (x *UpdateSessionNameResponse) GetSession() *Session {
-	if x != nil {
-		return x.Session
-	}
-	return nil
-}
-
-type RevertSessionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RevertSessionRequest) Reset() {
-	*x = RevertSessionRequest{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[13]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RevertSessionRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RevertSessionRequest) ProtoMessage() {}
-
-func (x *RevertSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[13]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RevertSessionRequest.ProtoReflect.Descriptor instead.
-func (*RevertSessionRequest) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{13}
-}
-
-func (x *RevertSessionRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-type RevertSessionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Session       *Session               `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RevertSessionResponse) Reset() {
-	*x = RevertSessionResponse{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[14]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RevertSessionResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RevertSessionResponse) ProtoMessage() {}
-
-func (x *RevertSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[14]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RevertSessionResponse.ProtoReflect.Descriptor instead.
-func (*RevertSessionResponse) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{14}
-}
-
-func (x *RevertSessionResponse) GetSession() *Session {
-	if x != nil {
-		return x.Session
-	}
-	return nil
-}
-
-type DeleteSessionRequest struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	// Terminate ongoing turns instead of rejecting deletion while they are active.
-	// Authorization and conflicting lifecycle operations are still checked.
-	Force         bool `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteSessionRequest) Reset() {
-	*x = DeleteSessionRequest{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[15]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteSessionRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteSessionRequest) ProtoMessage() {}
-
-func (x *DeleteSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[15]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteSessionRequest.ProtoReflect.Descriptor instead.
-func (*DeleteSessionRequest) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{15}
-}
-
-func (x *DeleteSessionRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *DeleteSessionRequest) GetForce() bool {
-	if x != nil {
-		return x.Force
-	}
-	return false
-}
-
-type DeleteSessionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Session       *Session               `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteSessionResponse) Reset() {
-	*x = DeleteSessionResponse{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[16]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteSessionResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteSessionResponse) ProtoMessage() {}
-
-func (x *DeleteSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[16]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteSessionResponse.ProtoReflect.Descriptor instead.
-func (*DeleteSessionResponse) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{16}
-}
-
-func (x *DeleteSessionResponse) GetSession() *Session {
-	if x != nil {
-		return x.Session
-	}
-	return nil
-}
-
-// Grants read-only access to a session, including A2A get, list, and subscribe.
-type SessionShare struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	Id        string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	SessionId string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	// When the share's token stops granting access. Unset means never.
-	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SessionShare) Reset() {
-	*x = SessionShare{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[17]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SessionShare) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SessionShare) ProtoMessage() {}
-
-func (x *SessionShare) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[17]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SessionShare.ProtoReflect.Descriptor instead.
-func (*SessionShare) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{17}
-}
-
-func (x *SessionShare) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-func (x *SessionShare) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *SessionShare) GetCreatedAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.CreatedAt
-	}
-	return nil
-}
-
-func (x *SessionShare) GetExpiresAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.ExpiresAt
-	}
-	return nil
-}
-
-type CreateSessionShareRequest struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	// How long the share's token grants access, from its creation. Unset takes the
-	// controller's maximum share lifetime; without one, the share grants access
-	// until it is revoked or the session deleted.
-	Ttl           *durationpb.Duration `protobuf:"bytes,2,opt,name=ttl,proto3" json:"ttl,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateSessionShareRequest) Reset() {
-	*x = CreateSessionShareRequest{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[18]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateSessionShareRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateSessionShareRequest) ProtoMessage() {}
-
-func (x *CreateSessionShareRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[18]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateSessionShareRequest.ProtoReflect.Descriptor instead.
-func (*CreateSessionShareRequest) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{18}
-}
-
-func (x *CreateSessionShareRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *CreateSessionShareRequest) GetTtl() *durationpb.Duration {
-	if x != nil {
-		return x.Ttl
-	}
-	return nil
-}
-
-type CreateSessionShareResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	Share *SessionShare          `protobuf:"bytes,1,opt,name=share,proto3" json:"share,omitempty"`
-	// Returned only when the share is created.
-	Token         string `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateSessionShareResponse) Reset() {
-	*x = CreateSessionShareResponse{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[19]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateSessionShareResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateSessionShareResponse) ProtoMessage() {}
-
-func (x *CreateSessionShareResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[19]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateSessionShareResponse.ProtoReflect.Descriptor instead.
-func (*CreateSessionShareResponse) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{19}
-}
-
-func (x *CreateSessionShareResponse) GetShare() *SessionShare {
-	if x != nil {
-		return x.Share
-	}
-	return nil
-}
-
-func (x *CreateSessionShareResponse) GetToken() string {
-	if x != nil {
-		return x.Token
-	}
-	return ""
-}
-
-type ListSessionSharesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Page          *PageRequest           `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListSessionSharesRequest) Reset() {
-	*x = ListSessionSharesRequest{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[20]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListSessionSharesRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListSessionSharesRequest) ProtoMessage() {}
-
-func (x *ListSessionSharesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[20]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListSessionSharesRequest.ProtoReflect.Descriptor instead.
-func (*ListSessionSharesRequest) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{20}
-}
-
-func (x *ListSessionSharesRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *ListSessionSharesRequest) GetPage() *PageRequest {
-	if x != nil {
-		return x.Page
-	}
-	return nil
-}
-
-type ListSessionSharesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Shares        []*SessionShare        `protobuf:"bytes,1,rep,name=shares,proto3" json:"shares,omitempty"`
-	Page          *PageResponse          `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListSessionSharesResponse) Reset() {
-	*x = ListSessionSharesResponse{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[21]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListSessionSharesResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListSessionSharesResponse) ProtoMessage() {}
-
-func (x *ListSessionSharesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[21]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListSessionSharesResponse.ProtoReflect.Descriptor instead.
-func (*ListSessionSharesResponse) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{21}
-}
-
-func (x *ListSessionSharesResponse) GetShares() []*SessionShare {
-	if x != nil {
-		return x.Shares
-	}
-	return nil
-}
-
-func (x *ListSessionSharesResponse) GetPage() *PageResponse {
-	if x != nil {
-		return x.Page
-	}
-	return nil
-}
-
-type RevokeSessionShareRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ShareId       string                 `protobuf:"bytes,1,opt,name=share_id,json=shareId,proto3" json:"share_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RevokeSessionShareRequest) Reset() {
-	*x = RevokeSessionShareRequest{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[22]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RevokeSessionShareRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RevokeSessionShareRequest) ProtoMessage() {}
-
-func (x *RevokeSessionShareRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[22]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RevokeSessionShareRequest.ProtoReflect.Descriptor instead.
-func (*RevokeSessionShareRequest) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{22}
-}
-
-func (x *RevokeSessionShareRequest) GetShareId() string {
-	if x != nil {
-		return x.ShareId
-	}
-	return ""
-}
-
-type RevokeSessionShareResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RevokeSessionShareResponse) Reset() {
-	*x = RevokeSessionShareResponse{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[23]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RevokeSessionShareResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RevokeSessionShareResponse) ProtoMessage() {}
-
-func (x *RevokeSessionShareResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[23]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RevokeSessionShareResponse.ProtoReflect.Descriptor instead.
-func (*RevokeSessionShareResponse) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{23}
-}
-
-// Output only. A bounded observation, not an atomic cross-system grant.
-// The durable generation must remain active around a fresh lookup of the exact
-// running Actor, and the Session must remain READY with no pending operation.
-// Dispatchers must recheck with their normal fencing/locks before runtime work.
-// Absence means no current active association was verified by this read.
+// RuntimeAssociation is a bounded observation of the runtime Actor that serves
+// a Session, not a grant: callers recheck with their own fencing before
+// runtime work.
 type RuntimeAssociation struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	GenerationId  string                 `protobuf:"bytes,1,opt,name=generation_id,json=generationId,proto3" json:"generation_id,omitempty"`
-	Atespace      string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName     string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid      string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	Phase         string                 `protobuf:"bytes,5,opt,name=phase,proto3" json:"phase,omitempty"`
-	CurrentActive bool                   `protobuf:"varint,6,opt,name=current_active,json=currentActive,proto3" json:"current_active,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Stable identity of the Session's current runtime: a name-based UUID of the
+	// Session ID and the Actor UID. It changes only if the Actor is replaced.
+	GenerationId string `protobuf:"bytes,1,opt,name=generation_id,json=generationId,proto3" json:"generation_id,omitempty"`
+	Atespace     string `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName    string `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid     string `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// "active" while the observed Actor is the Session's recorded runtime.
+	Phase string `protobuf:"bytes,5,opt,name=phase,proto3" json:"phase,omitempty"`
+	// True while the Actor is running; false while it is suspended or otherwise
+	// not serving. A sleeping Session stays READY and reports false here.
+	CurrentActive bool `protobuf:"varint,6,opt,name=current_active,json=currentActive,proto3" json:"current_active,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RuntimeAssociation) Reset() {
 	*x = RuntimeAssociation{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[24]
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1458,7 +316,7 @@ func (x *RuntimeAssociation) String() string {
 func (*RuntimeAssociation) ProtoMessage() {}
 
 func (x *RuntimeAssociation) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[24]
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1471,7 +329,7 @@ func (x *RuntimeAssociation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeAssociation.ProtoReflect.Descriptor instead.
 func (*RuntimeAssociation) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{24}
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *RuntimeAssociation) GetGenerationId() string {
@@ -1516,19 +374,283 @@ func (x *RuntimeAssociation) GetCurrentActive() bool {
 	return false
 }
 
-// Trusted controller selection; runtime payloads are operator-owned.
+// SecretKeyReference identifies a key in the Agent's namespace. The value is
+// the complete HTTP header value, including any authorization scheme prefix.
+type SecretKeyReference struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SecretKeyReference) Reset() {
+	*x = SecretKeyReference{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SecretKeyReference) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SecretKeyReference) ProtoMessage() {}
+
+func (x *SecretKeyReference) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SecretKeyReference.ProtoReflect.Descriptor instead.
+func (*SecretKeyReference) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *SecretKeyReference) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SecretKeyReference) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+// SessionCredential binds a same-namespace Secret to an existing egress origin.
+// Injection must be supported by the gateway dataplane for the origin's protocol.
+// Stock agentgateway supports HTTP injection; stock Envoy skips it.
+type SessionCredential struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Origin string                 `protobuf:"bytes,1,opt,name=origin,proto3" json:"origin,omitempty"`
+	// Header names are case-insensitive and canonicalized to lowercase.
+	Header        string              `protobuf:"bytes,2,opt,name=header,proto3" json:"header,omitempty"`
+	SecretRef     *SecretKeyReference `protobuf:"bytes,3,opt,name=secret_ref,json=secretRef,proto3" json:"secret_ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionCredential) Reset() {
+	*x = SessionCredential{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionCredential) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionCredential) ProtoMessage() {}
+
+func (x *SessionCredential) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionCredential.ProtoReflect.Descriptor instead.
+func (*SessionCredential) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *SessionCredential) GetOrigin() string {
+	if x != nil {
+		return x.Origin
+	}
+	return ""
+}
+
+func (x *SessionCredential) GetHeader() string {
+	if x != nil {
+		return x.Header
+	}
+	return ""
+}
+
+func (x *SessionCredential) GetSecretRef() *SecretKeyReference {
+	if x != nil {
+		return x.SecretRef
+	}
+	return nil
+}
+
+type AgentProvenance struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ref           *ResourceReference     `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	Uid           string                 `protobuf:"bytes,2,opt,name=uid,proto3" json:"uid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentProvenance) Reset() {
+	*x = AgentProvenance{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentProvenance) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentProvenance) ProtoMessage() {}
+
+func (x *AgentProvenance) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentProvenance.ProtoReflect.Descriptor instead.
+func (*AgentProvenance) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *AgentProvenance) GetRef() *ResourceReference {
+	if x != nil {
+		return x.Ref
+	}
+	return nil
+}
+
+func (x *AgentProvenance) GetUid() string {
+	if x != nil {
+		return x.Uid
+	}
+	return ""
+}
+
+type CreateSessionRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Agent     *ResourceReference     `protobuf:"bytes,5,opt,name=agent,proto3" json:"agent,omitempty"`
+	RequestId string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	// Optional display name. Empty means unnamed.
+	Name string `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	// Optional Git checkout to establish before the first turn. Its host must be
+	// one of the Agent's Git origins.
+	Workspace *Workspace `protobuf:"bytes,6,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	// Per-session headers for origins already allowed by the Agent revision.
+	Credentials []*SessionCredential `protobuf:"bytes,7,rep,name=credentials,proto3" json:"credentials,omitempty"`
+	// Optional development image to run the Agent's Claude or Codex harness in.
+	// The harness, its CLI and helpers come from the operator's runtime payload.
+	// Selection requires the controller's session policy to allow its registry.
+	DevelopmentEnvironment *DevelopmentEnvironment `protobuf:"bytes,8,opt,name=development_environment,json=developmentEnvironment,proto3" json:"development_environment,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *CreateSessionRequest) Reset() {
+	*x = CreateSessionRequest{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateSessionRequest) ProtoMessage() {}
+
+func (x *CreateSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateSessionRequest.ProtoReflect.Descriptor instead.
+func (*CreateSessionRequest) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *CreateSessionRequest) GetAgent() *ResourceReference {
+	if x != nil {
+		return x.Agent
+	}
+	return nil
+}
+
+func (x *CreateSessionRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *CreateSessionRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CreateSessionRequest) GetWorkspace() *Workspace {
+	if x != nil {
+		return x.Workspace
+	}
+	return nil
+}
+
+func (x *CreateSessionRequest) GetCredentials() []*SessionCredential {
+	if x != nil {
+		return x.Credentials
+	}
+	return nil
+}
+
+func (x *CreateSessionRequest) GetDevelopmentEnvironment() *DevelopmentEnvironment {
+	if x != nil {
+		return x.DevelopmentEnvironment
+	}
+	return nil
+}
+
+// DevelopmentEnvironment selects the image a composed Session runs in.
 type DevelopmentEnvironment struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Image          string                 `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"`
-	Platform       string                 `protobuf:"bytes,2,opt,name=platform,proto3" json:"platform,omitempty"`
-	PolicyIdentity string                 `protobuf:"bytes,3,opt,name=policy_identity,json=policyIdentity,proto3" json:"policy_identity,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Digest-pinned image reference.
+	Image    string `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"`
+	Platform string `protobuf:"bytes,2,opt,name=platform,proto3" json:"platform,omitempty"`
+	// Caller-owned immutable identity of the policy the image was admitted
+	// under, such as a registration revision. It is part of the revision identity.
+	PolicyIdentity string `protobuf:"bytes,3,opt,name=policy_identity,json=policyIdentity,proto3" json:"policy_identity,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
 func (x *DevelopmentEnvironment) Reset() {
 	*x = DevelopmentEnvironment{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[25]
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1540,7 +662,7 @@ func (x *DevelopmentEnvironment) String() string {
 func (*DevelopmentEnvironment) ProtoMessage() {}
 
 func (x *DevelopmentEnvironment) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[25]
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1553,7 +675,7 @@ func (x *DevelopmentEnvironment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DevelopmentEnvironment.ProtoReflect.Descriptor instead.
 func (*DevelopmentEnvironment) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{25}
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *DevelopmentEnvironment) GetImage() string {
@@ -1577,20 +699,25 @@ func (x *DevelopmentEnvironment) GetPolicyIdentity() string {
 	return ""
 }
 
-// Output only. Immutable inputs retained with the native Session.
+// RuntimeComposition is the operator-resolved runtime payload a composed
+// Session runs its harness from.
 type RuntimeComposition struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PayloadImage  string                 `protobuf:"bytes,1,opt,name=payload_image,json=payloadImage,proto3" json:"payload_image,omitempty"`
-	Provider      string                 `protobuf:"bytes,2,opt,name=provider,proto3" json:"provider,omitempty"`
-	Schema        uint32                 `protobuf:"varint,3,opt,name=schema,proto3" json:"schema,omitempty"`
-	CliVersion    string                 `protobuf:"bytes,4,opt,name=cli_version,json=cliVersion,proto3" json:"cli_version,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Digest-pinned payload image from the operator catalog.
+	PayloadImage string `protobuf:"bytes,1,opt,name=payload_image,json=payloadImage,proto3" json:"payload_image,omitempty"`
+	// Harness provider the payload serves: claude or codex.
+	Provider string `protobuf:"bytes,2,opt,name=provider,proto3" json:"provider,omitempty"`
+	// Payload contract schema.
+	Schema uint32 `protobuf:"varint,3,opt,name=schema,proto3" json:"schema,omitempty"`
+	// CLI version the payload carries.
+	CliVersion    string `protobuf:"bytes,4,opt,name=cli_version,json=cliVersion,proto3" json:"cli_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RuntimeComposition) Reset() {
 	*x = RuntimeComposition{}
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[26]
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1602,7 +729,7 @@ func (x *RuntimeComposition) String() string {
 func (*RuntimeComposition) ProtoMessage() {}
 
 func (x *RuntimeComposition) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_sessions_proto_msgTypes[26]
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1615,7 +742,7 @@ func (x *RuntimeComposition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeComposition.ProtoReflect.Descriptor instead.
 func (*RuntimeComposition) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{26}
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RuntimeComposition) GetPayloadImage() string {
@@ -1644,6 +771,898 @@ func (x *RuntimeComposition) GetCliVersion() string {
 		return x.CliVersion
 	}
 	return ""
+}
+
+type CreateSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Session       *Session               `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateSessionResponse) Reset() {
+	*x = CreateSessionResponse{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateSessionResponse) ProtoMessage() {}
+
+func (x *CreateSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateSessionResponse.ProtoReflect.Descriptor instead.
+func (*CreateSessionResponse) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *CreateSessionResponse) GetSession() *Session {
+	if x != nil {
+		return x.Session
+	}
+	return nil
+}
+
+type GetSessionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSessionRequest) Reset() {
+	*x = GetSessionRequest{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSessionRequest) ProtoMessage() {}
+
+func (x *GetSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSessionRequest.ProtoReflect.Descriptor instead.
+func (*GetSessionRequest) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *GetSessionRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+type GetSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Session       *Session               `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSessionResponse) Reset() {
+	*x = GetSessionResponse{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSessionResponse) ProtoMessage() {}
+
+func (x *GetSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSessionResponse.ProtoReflect.Descriptor instead.
+func (*GetSessionResponse) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *GetSessionResponse) GetSession() *Session {
+	if x != nil {
+		return x.Session
+	}
+	return nil
+}
+
+type ListSessionsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Includes sessions created by other users when authorized.
+	AllCreators bool         `protobuf:"varint,2,opt,name=all_creators,json=allCreators,proto3" json:"all_creators,omitempty"`
+	Page        *PageRequest `protobuf:"bytes,3,opt,name=page,proto3" json:"page,omitempty"`
+	// Filters by the Agent that produced each session's pinned revision.
+	Agent         *ResourceReference `protobuf:"bytes,6,opt,name=agent,proto3" json:"agent,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSessionsRequest) Reset() {
+	*x = ListSessionsRequest{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSessionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSessionsRequest) ProtoMessage() {}
+
+func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSessionsRequest.ProtoReflect.Descriptor instead.
+func (*ListSessionsRequest) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ListSessionsRequest) GetAllCreators() bool {
+	if x != nil {
+		return x.AllCreators
+	}
+	return false
+}
+
+func (x *ListSessionsRequest) GetPage() *PageRequest {
+	if x != nil {
+		return x.Page
+	}
+	return nil
+}
+
+func (x *ListSessionsRequest) GetAgent() *ResourceReference {
+	if x != nil {
+		return x.Agent
+	}
+	return nil
+}
+
+type ListSessionsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sessions      []*Session             `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
+	Page          *PageResponse          `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSessionsResponse) Reset() {
+	*x = ListSessionsResponse{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSessionsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSessionsResponse) ProtoMessage() {}
+
+func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSessionsResponse.ProtoReflect.Descriptor instead.
+func (*ListSessionsResponse) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ListSessionsResponse) GetSessions() []*Session {
+	if x != nil {
+		return x.Sessions
+	}
+	return nil
+}
+
+func (x *ListSessionsResponse) GetPage() *PageResponse {
+	if x != nil {
+		return x.Page
+	}
+	return nil
+}
+
+type UpdateSessionNameRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// The new display name. Empty clears the name, returning the conversation to
+	// being identified by its id.
+	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateSessionNameRequest) Reset() {
+	*x = UpdateSessionNameRequest{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateSessionNameRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateSessionNameRequest) ProtoMessage() {}
+
+func (x *UpdateSessionNameRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateSessionNameRequest.ProtoReflect.Descriptor instead.
+func (*UpdateSessionNameRequest) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *UpdateSessionNameRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *UpdateSessionNameRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type UpdateSessionNameResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Session       *Session               `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateSessionNameResponse) Reset() {
+	*x = UpdateSessionNameResponse{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateSessionNameResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateSessionNameResponse) ProtoMessage() {}
+
+func (x *UpdateSessionNameResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateSessionNameResponse.ProtoReflect.Descriptor instead.
+func (*UpdateSessionNameResponse) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *UpdateSessionNameResponse) GetSession() *Session {
+	if x != nil {
+		return x.Session
+	}
+	return nil
+}
+
+type RevertSessionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevertSessionRequest) Reset() {
+	*x = RevertSessionRequest{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevertSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevertSessionRequest) ProtoMessage() {}
+
+func (x *RevertSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevertSessionRequest.ProtoReflect.Descriptor instead.
+func (*RevertSessionRequest) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *RevertSessionRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+type RevertSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Session       *Session               `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevertSessionResponse) Reset() {
+	*x = RevertSessionResponse{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevertSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevertSessionResponse) ProtoMessage() {}
+
+func (x *RevertSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevertSessionResponse.ProtoReflect.Descriptor instead.
+func (*RevertSessionResponse) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *RevertSessionResponse) GetSession() *Session {
+	if x != nil {
+		return x.Session
+	}
+	return nil
+}
+
+type DeleteSessionRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Terminate ongoing turns instead of rejecting deletion while they are active.
+	// Authorization and conflicting lifecycle operations are still checked.
+	Force         bool `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteSessionRequest) Reset() {
+	*x = DeleteSessionRequest{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteSessionRequest) ProtoMessage() {}
+
+func (x *DeleteSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteSessionRequest.ProtoReflect.Descriptor instead.
+func (*DeleteSessionRequest) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *DeleteSessionRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *DeleteSessionRequest) GetForce() bool {
+	if x != nil {
+		return x.Force
+	}
+	return false
+}
+
+type DeleteSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Session       *Session               `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteSessionResponse) Reset() {
+	*x = DeleteSessionResponse{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteSessionResponse) ProtoMessage() {}
+
+func (x *DeleteSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteSessionResponse.ProtoReflect.Descriptor instead.
+func (*DeleteSessionResponse) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *DeleteSessionResponse) GetSession() *Session {
+	if x != nil {
+		return x.Session
+	}
+	return nil
+}
+
+// Grants read-only access to a session, including A2A get, list, and subscribe.
+type SessionShare struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Id        string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	SessionId string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// When the share's token stops granting access. Unset means never.
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionShare) Reset() {
+	*x = SessionShare{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionShare) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionShare) ProtoMessage() {}
+
+func (x *SessionShare) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionShare.ProtoReflect.Descriptor instead.
+func (*SessionShare) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *SessionShare) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *SessionShare) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SessionShare) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *SessionShare) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+type CreateSessionShareRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// How long the share's token grants access, from its creation. Unset takes the
+	// controller's maximum share lifetime; without one, the share grants access
+	// until it is revoked or the session deleted.
+	Ttl           *durationpb.Duration `protobuf:"bytes,2,opt,name=ttl,proto3" json:"ttl,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateSessionShareRequest) Reset() {
+	*x = CreateSessionShareRequest{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateSessionShareRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateSessionShareRequest) ProtoMessage() {}
+
+func (x *CreateSessionShareRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateSessionShareRequest.ProtoReflect.Descriptor instead.
+func (*CreateSessionShareRequest) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *CreateSessionShareRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *CreateSessionShareRequest) GetTtl() *durationpb.Duration {
+	if x != nil {
+		return x.Ttl
+	}
+	return nil
+}
+
+type CreateSessionShareResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Share *SessionShare          `protobuf:"bytes,1,opt,name=share,proto3" json:"share,omitempty"`
+	// Returned only when the share is created.
+	Token         string `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateSessionShareResponse) Reset() {
+	*x = CreateSessionShareResponse{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateSessionShareResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateSessionShareResponse) ProtoMessage() {}
+
+func (x *CreateSessionShareResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateSessionShareResponse.ProtoReflect.Descriptor instead.
+func (*CreateSessionShareResponse) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *CreateSessionShareResponse) GetShare() *SessionShare {
+	if x != nil {
+		return x.Share
+	}
+	return nil
+}
+
+func (x *CreateSessionShareResponse) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+type ListSessionSharesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Page          *PageRequest           `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSessionSharesRequest) Reset() {
+	*x = ListSessionSharesRequest{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSessionSharesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSessionSharesRequest) ProtoMessage() {}
+
+func (x *ListSessionSharesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSessionSharesRequest.ProtoReflect.Descriptor instead.
+func (*ListSessionSharesRequest) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *ListSessionSharesRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ListSessionSharesRequest) GetPage() *PageRequest {
+	if x != nil {
+		return x.Page
+	}
+	return nil
+}
+
+type ListSessionSharesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Shares        []*SessionShare        `protobuf:"bytes,1,rep,name=shares,proto3" json:"shares,omitempty"`
+	Page          *PageResponse          `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSessionSharesResponse) Reset() {
+	*x = ListSessionSharesResponse{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSessionSharesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSessionSharesResponse) ProtoMessage() {}
+
+func (x *ListSessionSharesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSessionSharesResponse.ProtoReflect.Descriptor instead.
+func (*ListSessionSharesResponse) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *ListSessionSharesResponse) GetShares() []*SessionShare {
+	if x != nil {
+		return x.Shares
+	}
+	return nil
+}
+
+func (x *ListSessionSharesResponse) GetPage() *PageResponse {
+	if x != nil {
+		return x.Page
+	}
+	return nil
+}
+
+type RevokeSessionShareRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ShareId       string                 `protobuf:"bytes,1,opt,name=share_id,json=shareId,proto3" json:"share_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeSessionShareRequest) Reset() {
+	*x = RevokeSessionShareRequest{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeSessionShareRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeSessionShareRequest) ProtoMessage() {}
+
+func (x *RevokeSessionShareRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeSessionShareRequest.ProtoReflect.Descriptor instead.
+func (*RevokeSessionShareRequest) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *RevokeSessionShareRequest) GetShareId() string {
+	if x != nil {
+		return x.ShareId
+	}
+	return ""
+}
+
+type RevokeSessionShareResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeSessionShareResponse) Reset() {
+	*x = RevokeSessionShareResponse{}
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeSessionShareResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeSessionShareResponse) ProtoMessage() {}
+
+func (x *RevokeSessionShareResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_sessions_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeSessionShareResponse.ProtoReflect.Descriptor instead.
+func (*RevokeSessionShareResponse) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{26}
 }
 
 // A fixed model-free action over the original owned Create tuple. Repeating a
@@ -2029,7 +2048,15 @@ const file_kagent_api_v1_sessions_proto_rawDesc = "" +
 	"\x13runtime_composition\x18\x13 \x01(\v2!.kagent.api.v1.RuntimeCompositionR\x12runtimeComposition\x12R\n" +
 	"\x13runtime_association\x18\x14 \x01(\v2!.kagent.api.v1.RuntimeAssociationR\x12runtimeAssociation\x12_\n" +
 	"\x15workspace_preparation\x18\x15 \x01(\v2*.kagent.api.v1.WorkspacePreparationReceiptR\x14workspacePreparation\x12-\n" +
-	"\x12fresh_conversation\x18\x16 \x01(\bR\x11freshConversation\"\xa9\x01\n" +
+	"\x12fresh_conversation\x18\x16 \x01(\bR\x11freshConversation\"\xce\x01\n" +
+	"\x12RuntimeAssociation\x12#\n" +
+	"\rgeneration_id\x18\x01 \x01(\tR\fgenerationId\x12\x1a\n" +
+	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
+	"\n" +
+	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
+	"\tactor_uid\x18\x04 \x01(\tR\bactorUid\x12\x14\n" +
+	"\x05phase\x18\x05 \x01(\tR\x05phase\x12%\n" +
+	"\x0ecurrent_active\x18\x06 \x01(\bR\rcurrentActive\"\xa9\x01\n" +
 	"\x12SecretKeyReference\x12b\n" +
 	"\x04name\x18\x01 \x01(\tBN\xbaHKrI\x10\x01\x18\xfd\x012B^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$R\x04name\x12/\n" +
 	"\x03key\x18\x02 \x01(\tB\x1d\xbaH\x1ar\x18\x10\x01\x18\xfd\x012\x11^[A-Za-z0-9._-]+$R\x03key\"\xeb\x01\n" +
@@ -2049,7 +2076,17 @@ const file_kagent_api_v1_sessions_proto_rawDesc = "" +
 	"\x04name\x18\x04 \x01(\tB=\xbaH:r8\x18\xc8\x0123^(?:$|[^\\p{Z}\\p{Cc}](?:[^\\p{Cc}]*[^\\p{Z}\\p{Cc}])?)$R\x04name\x126\n" +
 	"\tworkspace\x18\x06 \x01(\v2\x18.kagent.api.v1.WorkspaceR\tworkspace\x12L\n" +
 	"\vcredentials\x18\a \x03(\v2 .kagent.api.v1.SessionCredentialB\b\xbaH\x05\x92\x01\x02\x10\x04R\vcredentials\x12^\n" +
-	"\x17development_environment\x18\b \x01(\v2%.kagent.api.v1.DevelopmentEnvironmentR\x16developmentEnvironment\"I\n" +
+	"\x17development_environment\x18\b \x01(\v2%.kagent.api.v1.DevelopmentEnvironmentR\x16developmentEnvironment\"\xeb\x01\n" +
+	"\x16DevelopmentEnvironment\x12R\n" +
+	"\x05image\x18\x01 \x01(\tB<\xbaH9r7\x18\x80\x0422^[A-Za-z0-9][A-Za-z0-9./_:-]*@sha256:[a-f0-9]{64}$R\x05image\x12;\n" +
+	"\bplatform\x18\x02 \x01(\tB\x1f\xbaH\x1cr\x1aR\vlinux/amd64R\vlinux/arm64R\bplatform\x12@\n" +
+	"\x0fpolicy_identity\x18\x03 \x01(\tB\x17\xbaH\x14r\x12\x10\x01\x18\x80\x022\v^\\S(.*\\S)?$R\x0epolicyIdentity\"\x8e\x01\n" +
+	"\x12RuntimeComposition\x12#\n" +
+	"\rpayload_image\x18\x01 \x01(\tR\fpayloadImage\x12\x1a\n" +
+	"\bprovider\x18\x02 \x01(\tR\bprovider\x12\x16\n" +
+	"\x06schema\x18\x03 \x01(\rR\x06schema\x12\x1f\n" +
+	"\vcli_version\x18\x04 \x01(\tR\n" +
+	"cliVersion\"I\n" +
 	"\x15CreateSessionResponse\x120\n" +
 	"\asession\x18\x01 \x01(\v2\x16.kagent.api.v1.SessionR\asession\"<\n" +
 	"\x11GetSessionRequest\x12'\n" +
@@ -2105,26 +2142,7 @@ const file_kagent_api_v1_sessions_proto_rawDesc = "" +
 	"\x04page\x18\x02 \x01(\v2\x1b.kagent.api.v1.PageResponseR\x04page\"@\n" +
 	"\x19RevokeSessionShareRequest\x12#\n" +
 	"\bshare_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\ashareId\"\x1c\n" +
-	"\x1aRevokeSessionShareResponse\"\xce\x01\n" +
-	"\x12RuntimeAssociation\x12#\n" +
-	"\rgeneration_id\x18\x01 \x01(\tR\fgenerationId\x12\x1a\n" +
-	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
-	"\n" +
-	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
-	"\tactor_uid\x18\x04 \x01(\tR\bactorUid\x12\x14\n" +
-	"\x05phase\x18\x05 \x01(\tR\x05phase\x12%\n" +
-	"\x0ecurrent_active\x18\x06 \x01(\bR\rcurrentActive\"\xde\x01\n" +
-	"\x16DevelopmentEnvironment\x12R\n" +
-	"\x05image\x18\x01 \x01(\tB<\xbaH9r7\x18\x80\x0422^[A-Za-z0-9][A-Za-z0-9./_:-]*@sha256:[a-f0-9]{64}$R\x05image\x12;\n" +
-	"\bplatform\x18\x02 \x01(\tB\x1f\xbaH\x1cr\x1aR\vlinux/amd64R\vlinux/arm64R\bplatform\x123\n" +
-	"\x0fpolicy_identity\x18\x03 \x01(\tB\n" +
-	"\xbaH\ar\x05\x10\x01\x18\x80\x02R\x0epolicyIdentity\"\x8e\x01\n" +
-	"\x12RuntimeComposition\x12#\n" +
-	"\rpayload_image\x18\x01 \x01(\tR\fpayloadImage\x12\x1a\n" +
-	"\bprovider\x18\x02 \x01(\tR\bprovider\x12\x16\n" +
-	"\x06schema\x18\x03 \x01(\rR\x06schema\x12\x1f\n" +
-	"\vcli_version\x18\x04 \x01(\tR\n" +
-	"cliVersion\"\xff\x06\n" +
+	"\x1aRevokeSessionShareResponse\"\xff\x06\n" +
 	"\x1ePrepareSessionWorkspaceRequest\x12'\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12;\n" +
@@ -2202,31 +2220,31 @@ var file_kagent_api_v1_sessions_proto_msgTypes = make([]protoimpl.MessageInfo, 3
 var file_kagent_api_v1_sessions_proto_goTypes = []any{
 	(*Failure)(nil),                         // 0: kagent.api.v1.Failure
 	(*Session)(nil),                         // 1: kagent.api.v1.Session
-	(*SecretKeyReference)(nil),              // 2: kagent.api.v1.SecretKeyReference
-	(*SessionCredential)(nil),               // 3: kagent.api.v1.SessionCredential
-	(*AgentProvenance)(nil),                 // 4: kagent.api.v1.AgentProvenance
-	(*CreateSessionRequest)(nil),            // 5: kagent.api.v1.CreateSessionRequest
-	(*CreateSessionResponse)(nil),           // 6: kagent.api.v1.CreateSessionResponse
-	(*GetSessionRequest)(nil),               // 7: kagent.api.v1.GetSessionRequest
-	(*GetSessionResponse)(nil),              // 8: kagent.api.v1.GetSessionResponse
-	(*ListSessionsRequest)(nil),             // 9: kagent.api.v1.ListSessionsRequest
-	(*ListSessionsResponse)(nil),            // 10: kagent.api.v1.ListSessionsResponse
-	(*UpdateSessionNameRequest)(nil),        // 11: kagent.api.v1.UpdateSessionNameRequest
-	(*UpdateSessionNameResponse)(nil),       // 12: kagent.api.v1.UpdateSessionNameResponse
-	(*RevertSessionRequest)(nil),            // 13: kagent.api.v1.RevertSessionRequest
-	(*RevertSessionResponse)(nil),           // 14: kagent.api.v1.RevertSessionResponse
-	(*DeleteSessionRequest)(nil),            // 15: kagent.api.v1.DeleteSessionRequest
-	(*DeleteSessionResponse)(nil),           // 16: kagent.api.v1.DeleteSessionResponse
-	(*SessionShare)(nil),                    // 17: kagent.api.v1.SessionShare
-	(*CreateSessionShareRequest)(nil),       // 18: kagent.api.v1.CreateSessionShareRequest
-	(*CreateSessionShareResponse)(nil),      // 19: kagent.api.v1.CreateSessionShareResponse
-	(*ListSessionSharesRequest)(nil),        // 20: kagent.api.v1.ListSessionSharesRequest
-	(*ListSessionSharesResponse)(nil),       // 21: kagent.api.v1.ListSessionSharesResponse
-	(*RevokeSessionShareRequest)(nil),       // 22: kagent.api.v1.RevokeSessionShareRequest
-	(*RevokeSessionShareResponse)(nil),      // 23: kagent.api.v1.RevokeSessionShareResponse
-	(*RuntimeAssociation)(nil),              // 24: kagent.api.v1.RuntimeAssociation
-	(*DevelopmentEnvironment)(nil),          // 25: kagent.api.v1.DevelopmentEnvironment
-	(*RuntimeComposition)(nil),              // 26: kagent.api.v1.RuntimeComposition
+	(*RuntimeAssociation)(nil),              // 2: kagent.api.v1.RuntimeAssociation
+	(*SecretKeyReference)(nil),              // 3: kagent.api.v1.SecretKeyReference
+	(*SessionCredential)(nil),               // 4: kagent.api.v1.SessionCredential
+	(*AgentProvenance)(nil),                 // 5: kagent.api.v1.AgentProvenance
+	(*CreateSessionRequest)(nil),            // 6: kagent.api.v1.CreateSessionRequest
+	(*DevelopmentEnvironment)(nil),          // 7: kagent.api.v1.DevelopmentEnvironment
+	(*RuntimeComposition)(nil),              // 8: kagent.api.v1.RuntimeComposition
+	(*CreateSessionResponse)(nil),           // 9: kagent.api.v1.CreateSessionResponse
+	(*GetSessionRequest)(nil),               // 10: kagent.api.v1.GetSessionRequest
+	(*GetSessionResponse)(nil),              // 11: kagent.api.v1.GetSessionResponse
+	(*ListSessionsRequest)(nil),             // 12: kagent.api.v1.ListSessionsRequest
+	(*ListSessionsResponse)(nil),            // 13: kagent.api.v1.ListSessionsResponse
+	(*UpdateSessionNameRequest)(nil),        // 14: kagent.api.v1.UpdateSessionNameRequest
+	(*UpdateSessionNameResponse)(nil),       // 15: kagent.api.v1.UpdateSessionNameResponse
+	(*RevertSessionRequest)(nil),            // 16: kagent.api.v1.RevertSessionRequest
+	(*RevertSessionResponse)(nil),           // 17: kagent.api.v1.RevertSessionResponse
+	(*DeleteSessionRequest)(nil),            // 18: kagent.api.v1.DeleteSessionRequest
+	(*DeleteSessionResponse)(nil),           // 19: kagent.api.v1.DeleteSessionResponse
+	(*SessionShare)(nil),                    // 20: kagent.api.v1.SessionShare
+	(*CreateSessionShareRequest)(nil),       // 21: kagent.api.v1.CreateSessionShareRequest
+	(*CreateSessionShareResponse)(nil),      // 22: kagent.api.v1.CreateSessionShareResponse
+	(*ListSessionSharesRequest)(nil),        // 23: kagent.api.v1.ListSessionSharesRequest
+	(*ListSessionSharesResponse)(nil),       // 24: kagent.api.v1.ListSessionSharesResponse
+	(*RevokeSessionShareRequest)(nil),       // 25: kagent.api.v1.RevokeSessionShareRequest
+	(*RevokeSessionShareResponse)(nil),      // 26: kagent.api.v1.RevokeSessionShareResponse
 	(*PrepareSessionWorkspaceRequest)(nil),  // 27: kagent.api.v1.PrepareSessionWorkspaceRequest
 	(*PrepareSessionWorkspaceResponse)(nil), // 28: kagent.api.v1.PrepareSessionWorkspaceResponse
 	(*WorkspacePreparationReceipt)(nil),     // 29: kagent.api.v1.WorkspacePreparationReceipt
@@ -2240,24 +2258,24 @@ var file_kagent_api_v1_sessions_proto_goTypes = []any{
 	(*durationpb.Duration)(nil),             // 37: google.protobuf.Duration
 }
 var file_kagent_api_v1_sessions_proto_depIdxs = []int32{
-	4,  // 0: kagent.api.v1.Session.agent:type_name -> kagent.api.v1.AgentProvenance
+	5,  // 0: kagent.api.v1.Session.agent:type_name -> kagent.api.v1.AgentProvenance
 	30, // 1: kagent.api.v1.Session.state:type_name -> kagent.api.v1.RuntimeState
 	31, // 2: kagent.api.v1.Session.operation:type_name -> kagent.api.v1.RuntimeOperation
 	0,  // 3: kagent.api.v1.Session.failure:type_name -> kagent.api.v1.Failure
 	32, // 4: kagent.api.v1.Session.created_at:type_name -> google.protobuf.Timestamp
 	32, // 5: kagent.api.v1.Session.updated_at:type_name -> google.protobuf.Timestamp
 	33, // 6: kagent.api.v1.Session.workspace:type_name -> kagent.api.v1.Workspace
-	3,  // 7: kagent.api.v1.Session.credentials:type_name -> kagent.api.v1.SessionCredential
-	25, // 8: kagent.api.v1.Session.development_environment:type_name -> kagent.api.v1.DevelopmentEnvironment
-	26, // 9: kagent.api.v1.Session.runtime_composition:type_name -> kagent.api.v1.RuntimeComposition
-	24, // 10: kagent.api.v1.Session.runtime_association:type_name -> kagent.api.v1.RuntimeAssociation
+	4,  // 7: kagent.api.v1.Session.credentials:type_name -> kagent.api.v1.SessionCredential
+	7,  // 8: kagent.api.v1.Session.development_environment:type_name -> kagent.api.v1.DevelopmentEnvironment
+	8,  // 9: kagent.api.v1.Session.runtime_composition:type_name -> kagent.api.v1.RuntimeComposition
+	2,  // 10: kagent.api.v1.Session.runtime_association:type_name -> kagent.api.v1.RuntimeAssociation
 	29, // 11: kagent.api.v1.Session.workspace_preparation:type_name -> kagent.api.v1.WorkspacePreparationReceipt
-	2,  // 12: kagent.api.v1.SessionCredential.secret_ref:type_name -> kagent.api.v1.SecretKeyReference
+	3,  // 12: kagent.api.v1.SessionCredential.secret_ref:type_name -> kagent.api.v1.SecretKeyReference
 	34, // 13: kagent.api.v1.AgentProvenance.ref:type_name -> kagent.api.v1.ResourceReference
 	34, // 14: kagent.api.v1.CreateSessionRequest.agent:type_name -> kagent.api.v1.ResourceReference
 	33, // 15: kagent.api.v1.CreateSessionRequest.workspace:type_name -> kagent.api.v1.Workspace
-	3,  // 16: kagent.api.v1.CreateSessionRequest.credentials:type_name -> kagent.api.v1.SessionCredential
-	25, // 17: kagent.api.v1.CreateSessionRequest.development_environment:type_name -> kagent.api.v1.DevelopmentEnvironment
+	4,  // 16: kagent.api.v1.CreateSessionRequest.credentials:type_name -> kagent.api.v1.SessionCredential
+	7,  // 17: kagent.api.v1.CreateSessionRequest.development_environment:type_name -> kagent.api.v1.DevelopmentEnvironment
 	1,  // 18: kagent.api.v1.CreateSessionResponse.session:type_name -> kagent.api.v1.Session
 	1,  // 19: kagent.api.v1.GetSessionResponse.session:type_name -> kagent.api.v1.Session
 	35, // 20: kagent.api.v1.ListSessionsRequest.page:type_name -> kagent.api.v1.PageRequest
@@ -2270,37 +2288,37 @@ var file_kagent_api_v1_sessions_proto_depIdxs = []int32{
 	32, // 27: kagent.api.v1.SessionShare.created_at:type_name -> google.protobuf.Timestamp
 	32, // 28: kagent.api.v1.SessionShare.expires_at:type_name -> google.protobuf.Timestamp
 	37, // 29: kagent.api.v1.CreateSessionShareRequest.ttl:type_name -> google.protobuf.Duration
-	17, // 30: kagent.api.v1.CreateSessionShareResponse.share:type_name -> kagent.api.v1.SessionShare
+	20, // 30: kagent.api.v1.CreateSessionShareResponse.share:type_name -> kagent.api.v1.SessionShare
 	35, // 31: kagent.api.v1.ListSessionSharesRequest.page:type_name -> kagent.api.v1.PageRequest
-	17, // 32: kagent.api.v1.ListSessionSharesResponse.shares:type_name -> kagent.api.v1.SessionShare
+	20, // 32: kagent.api.v1.ListSessionSharesResponse.shares:type_name -> kagent.api.v1.SessionShare
 	36, // 33: kagent.api.v1.ListSessionSharesResponse.page:type_name -> kagent.api.v1.PageResponse
 	33, // 34: kagent.api.v1.PrepareSessionWorkspaceRequest.workspace:type_name -> kagent.api.v1.Workspace
-	25, // 35: kagent.api.v1.PrepareSessionWorkspaceRequest.development_environment:type_name -> kagent.api.v1.DevelopmentEnvironment
-	26, // 36: kagent.api.v1.PrepareSessionWorkspaceRequest.runtime_composition:type_name -> kagent.api.v1.RuntimeComposition
+	7,  // 35: kagent.api.v1.PrepareSessionWorkspaceRequest.development_environment:type_name -> kagent.api.v1.DevelopmentEnvironment
+	8,  // 36: kagent.api.v1.PrepareSessionWorkspaceRequest.runtime_composition:type_name -> kagent.api.v1.RuntimeComposition
 	29, // 37: kagent.api.v1.PrepareSessionWorkspaceResponse.receipt:type_name -> kagent.api.v1.WorkspacePreparationReceipt
 	27, // 38: kagent.api.v1.WorkspacePreparationReceipt.original:type_name -> kagent.api.v1.PrepareSessionWorkspaceRequest
 	32, // 39: kagent.api.v1.WorkspacePreparationReceipt.effect_observed_at:type_name -> google.protobuf.Timestamp
 	32, // 40: kagent.api.v1.WorkspacePreparationReceipt.observed_at:type_name -> google.protobuf.Timestamp
-	5,  // 41: kagent.api.v1.SessionService.CreateSession:input_type -> kagent.api.v1.CreateSessionRequest
+	6,  // 41: kagent.api.v1.SessionService.CreateSession:input_type -> kagent.api.v1.CreateSessionRequest
 	27, // 42: kagent.api.v1.SessionService.PrepareSessionWorkspace:input_type -> kagent.api.v1.PrepareSessionWorkspaceRequest
-	7,  // 43: kagent.api.v1.SessionService.GetSession:input_type -> kagent.api.v1.GetSessionRequest
-	9,  // 44: kagent.api.v1.SessionService.ListSessions:input_type -> kagent.api.v1.ListSessionsRequest
-	11, // 45: kagent.api.v1.SessionService.UpdateSessionName:input_type -> kagent.api.v1.UpdateSessionNameRequest
-	13, // 46: kagent.api.v1.SessionService.RevertSession:input_type -> kagent.api.v1.RevertSessionRequest
-	15, // 47: kagent.api.v1.SessionService.DeleteSession:input_type -> kagent.api.v1.DeleteSessionRequest
-	18, // 48: kagent.api.v1.SessionService.CreateSessionShare:input_type -> kagent.api.v1.CreateSessionShareRequest
-	20, // 49: kagent.api.v1.SessionService.ListSessionShares:input_type -> kagent.api.v1.ListSessionSharesRequest
-	22, // 50: kagent.api.v1.SessionService.RevokeSessionShare:input_type -> kagent.api.v1.RevokeSessionShareRequest
-	6,  // 51: kagent.api.v1.SessionService.CreateSession:output_type -> kagent.api.v1.CreateSessionResponse
+	10, // 43: kagent.api.v1.SessionService.GetSession:input_type -> kagent.api.v1.GetSessionRequest
+	12, // 44: kagent.api.v1.SessionService.ListSessions:input_type -> kagent.api.v1.ListSessionsRequest
+	14, // 45: kagent.api.v1.SessionService.UpdateSessionName:input_type -> kagent.api.v1.UpdateSessionNameRequest
+	16, // 46: kagent.api.v1.SessionService.RevertSession:input_type -> kagent.api.v1.RevertSessionRequest
+	18, // 47: kagent.api.v1.SessionService.DeleteSession:input_type -> kagent.api.v1.DeleteSessionRequest
+	21, // 48: kagent.api.v1.SessionService.CreateSessionShare:input_type -> kagent.api.v1.CreateSessionShareRequest
+	23, // 49: kagent.api.v1.SessionService.ListSessionShares:input_type -> kagent.api.v1.ListSessionSharesRequest
+	25, // 50: kagent.api.v1.SessionService.RevokeSessionShare:input_type -> kagent.api.v1.RevokeSessionShareRequest
+	9,  // 51: kagent.api.v1.SessionService.CreateSession:output_type -> kagent.api.v1.CreateSessionResponse
 	28, // 52: kagent.api.v1.SessionService.PrepareSessionWorkspace:output_type -> kagent.api.v1.PrepareSessionWorkspaceResponse
-	8,  // 53: kagent.api.v1.SessionService.GetSession:output_type -> kagent.api.v1.GetSessionResponse
-	10, // 54: kagent.api.v1.SessionService.ListSessions:output_type -> kagent.api.v1.ListSessionsResponse
-	12, // 55: kagent.api.v1.SessionService.UpdateSessionName:output_type -> kagent.api.v1.UpdateSessionNameResponse
-	14, // 56: kagent.api.v1.SessionService.RevertSession:output_type -> kagent.api.v1.RevertSessionResponse
-	16, // 57: kagent.api.v1.SessionService.DeleteSession:output_type -> kagent.api.v1.DeleteSessionResponse
-	19, // 58: kagent.api.v1.SessionService.CreateSessionShare:output_type -> kagent.api.v1.CreateSessionShareResponse
-	21, // 59: kagent.api.v1.SessionService.ListSessionShares:output_type -> kagent.api.v1.ListSessionSharesResponse
-	23, // 60: kagent.api.v1.SessionService.RevokeSessionShare:output_type -> kagent.api.v1.RevokeSessionShareResponse
+	11, // 53: kagent.api.v1.SessionService.GetSession:output_type -> kagent.api.v1.GetSessionResponse
+	13, // 54: kagent.api.v1.SessionService.ListSessions:output_type -> kagent.api.v1.ListSessionsResponse
+	15, // 55: kagent.api.v1.SessionService.UpdateSessionName:output_type -> kagent.api.v1.UpdateSessionNameResponse
+	17, // 56: kagent.api.v1.SessionService.RevertSession:output_type -> kagent.api.v1.RevertSessionResponse
+	19, // 57: kagent.api.v1.SessionService.DeleteSession:output_type -> kagent.api.v1.DeleteSessionResponse
+	22, // 58: kagent.api.v1.SessionService.CreateSessionShare:output_type -> kagent.api.v1.CreateSessionShareResponse
+	24, // 59: kagent.api.v1.SessionService.ListSessionShares:output_type -> kagent.api.v1.ListSessionSharesResponse
+	26, // 60: kagent.api.v1.SessionService.RevokeSessionShare:output_type -> kagent.api.v1.RevokeSessionShareResponse
 	51, // [51:61] is the sub-list for method output_type
 	41, // [41:51] is the sub-list for method input_type
 	41, // [41:41] is the sub-list for extension type_name
