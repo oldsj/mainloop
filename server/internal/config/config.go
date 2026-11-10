@@ -179,9 +179,20 @@ type Git struct {
 }
 
 // Preview configures workspace previews: the wildcard base URL and the Substrate router the
-// proxy tunnels through.
+// proxy and the live relay tunnel through.
 type Preview struct {
-	RouterAddress  string  `env:"SUBSTRATE_ROUTER_ADDRESS" envDefault:"http://atenet-router.ate-system.svc.cluster.local:8081"`
+	// RouterAddress is the router's CONNECT-over-TLS listener (Service port 8444). The router has
+	// no plain-HTTP listener.
+	RouterAddress string `env:"SUBSTRATE_ROUTER_ADDRESS" envDefault:"https://atenet-router.ate-system.svc.cluster.local:8444"`
+	// RouterServerName is the name the router's serving certificate is verified against.
+	RouterServerName string `env:"SUBSTRATE_ROUTER_SERVER_NAME" envDefault:"atenet-router.ate-system.svc"`
+	// RouterClientCredential is the pod certificate the backend presents to the router: one PEM
+	// file holding the private key and the certificate chain (signer
+	// podidentity.podcert.ate.dev/identity). The kubelet rotates it, so it is read on every connect.
+	RouterClientCredential string `env:"SUBSTRATE_ROUTER_CLIENT_CREDENTIAL" envDefault:"/run/substrate-router/identity/credential-bundle.pem"`
+	// RouterCA is the trust bundle for the router's serving certificate (signer
+	// servicedns.podcert.ate.dev/identity), also read on every connect.
+	RouterCA       string  `env:"SUBSTRATE_ROUTER_CA" envDefault:"/run/substrate-router/ca/trust-bundle.pem"`
 	BaseURL        string  `env:"SUBSTRATE_PREVIEW_BASE_URL" envDefault:"http://localhost:8001"`
 	ConnectTimeout Seconds `env:"SUBSTRATE_PREVIEW_CONNECT_TIMEOUT_SECONDS" envDefault:"5"`
 }

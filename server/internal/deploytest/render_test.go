@@ -771,3 +771,49 @@ func TestKindBootsWithoutKagentOrGitHubApp(t *testing.T) {
 		t.Errorf("MAINLOOP_ALLOW_RESET %q, want 1 for dev-reset", data["MAINLOOP_ALLOW_RESET"])
 	}
 }
+
+// The preview proxy and the live relay reach the Substrate 1.0 router over mutual TLS: the API
+// container, and only it, gets a podidentity pod certificate and the servicedns trust bundle at
+// the paths the server reads by default.
+func TestTheAPIGetsTheSubstrateRouterCredentials(t *testing.T) {
+	for _, path := range []string{"production", "live-dev"} {
+		t.Run(path, func(t *testing.T) {
+			r := render(t, path)
+			if got := r.configMaps["mainloop-config"].Data["SUBSTRATE_ROUTER_ADDRESS"]; got != "" &&
+				got != "https://atenet-router.ate-system.svc.cluster.local:8444" {
+				t.Errorf("SUBSTRATE_ROUTER_ADDRESS=%q, want the router's CONNECT-over-TLS listener", got)
+			}
+			pod := r.backend(t)
+			var cert *corev1.PodCertificateProjection
+			var bundle *corev1.ClusterTrustBundleProjection
+			for _, v := range pod.Volumes {
+				if v.Projected == nil || len(v.Projected.Sources) != 1 {
+					continue
+				}
+				switch v.Name {
+				case "substrate-router-identity":
+					cert = v.Projected.Sources[0].PodCertificate
+				case "substrate-router-ca":
+					bundle = v.Projected.Sources[0].ClusterTrustBundle
+				}
+			}
+			if cert == nil || cert.SignerName != "podidentity.podcert.ate.dev/identity" || cert.CredentialBundlePath != "credential-bundle.pem" {
+				t.Errorf("substrate-router-identity is not a podidentity pod certificate: %+v", cert)
+			}
+			if bundle == nil || bundle.SignerName == nil || *bundle.SignerName != "servicedns.podcert.ate.dev/identity" || bundle.Path != "trust-bundle.pem" {
+				t.Errorf("substrate-router-ca is not the servicedns trust bundle: %+v", bundle)
+			}
+			for name, c := range containers(pod) {
+				mounts := map[string]string{}
+				for _, m := range c.VolumeMounts {
+					mounts[m.Name] = m.MountPath
+				}
+				want := name == "backend"
+				if got := mounts["substrate-router-identity"] == "/run/substrate-router/identity" &&
+					mounts["substrate-router-ca"] == "/run/substrate-router/ca"; got != want {
+					t.Errorf("%s: router credentials mounted = %v, want %v (%v)", name, got, want, mounts)
+				}
+			}
+		})
+	}
+}

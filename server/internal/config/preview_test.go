@@ -16,8 +16,10 @@ func TestPreviewSettingsAreValidated(t *testing.T) {
 		{"SUBSTRATE_PREVIEW_BASE_URL", "https://previews.test/app", "SUBSTRATE_PREVIEW_BASE_URL"},
 		{"SUBSTRATE_PREVIEW_BASE_URL", "https://user@previews.test", "SUBSTRATE_PREVIEW_BASE_URL"},
 		{"SUBSTRATE_PREVIEW_BASE_URL", "previews.test", "SUBSTRATE_PREVIEW_BASE_URL"},
-		{"SUBSTRATE_ROUTER_ADDRESS", "https://router.test", "SUBSTRATE_ROUTER_ADDRESS"},
-		{"SUBSTRATE_ROUTER_ADDRESS", "http://router.test/x", "SUBSTRATE_ROUTER_ADDRESS"},
+		{"SUBSTRATE_ROUTER_ADDRESS", "http://router.test:8081", "SUBSTRATE_ROUTER_ADDRESS"},
+		{"SUBSTRATE_ROUTER_ADDRESS", "https://router.test/x", "SUBSTRATE_ROUTER_ADDRESS"},
+		{"SUBSTRATE_ROUTER_CLIENT_CREDENTIAL", "identity/credential-bundle.pem", "SUBSTRATE_ROUTER_CLIENT_CREDENTIAL"},
+		{"SUBSTRATE_ROUTER_CA", "trust-bundle.pem", "SUBSTRATE_ROUTER_CA"},
 		{"SUBSTRATE_PREVIEW_CONNECT_TIMEOUT_SECONDS", "0", "CONNECT_TIMEOUT"},
 		{"KAGENT_ACTOR_ATESPACE", "kagent\r\nx: y", "KAGENT_ACTOR_ATESPACE"},
 	}
@@ -30,7 +32,7 @@ func TestPreviewSettingsAreValidated(t *testing.T) {
 	}
 	vars := fixtureEnv(t, "prod.env")
 	vars["SUBSTRATE_PREVIEW_BASE_URL"] = "https://previews.example.test"
-	vars["SUBSTRATE_ROUTER_ADDRESS"] = "http://router.test:8081"
+	vars["SUBSTRATE_ROUTER_ADDRESS"] = "https://router.test:8444"
 	if _, err := Parse(vars); err != nil {
 		t.Errorf("valid preview settings rejected: %v", err)
 	}

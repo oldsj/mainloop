@@ -88,11 +88,19 @@ spec:
       containers:
         {{- /* The API's /health pings the database, so it is the readiness probe only: as liveness
                it would restart every API container during a database outage or failover. */}}
+        {{- /* Only the API dials the Substrate router (previews and the live relay). */}}
+        {{- $routerMounts := list }}
+        {{- if .Values.substrateRouterAuth.enabled }}
+        {{- $routerMounts = list
+          (dict "name" "substrate-router-identity" "mountPath" "/run/substrate-router/identity" "readOnly" true)
+          (dict "name" "substrate-router-ca" "mountPath" "/run/substrate-router/ca" "readOnly" true) }}
+        {{- end }}
         {{- include "mainloop.listener" (dict
           "root" .
           "name" "backend"
           "subcommand" "serve-api"
           "ports" (list (dict "containerPort" 8000))
+          "mounts" $routerMounts
           "resources" .Values.server.api.resources
           "liveness" (dict "tcpSocket" (dict "port" 8000) "initialDelaySeconds" 30 "periodSeconds" 10 "timeoutSeconds" 5 "failureThreshold" 3)
           "readiness" (dict "httpGet" (dict "path" "/health" "port" 8000) "initialDelaySeconds" 5 "periodSeconds" 5 "timeoutSeconds" 3 "failureThreshold" 3)
@@ -143,6 +151,27 @@ spec:
             items:
               - key: ca.crt
                 path: ca.crt
+        {{- end }}
+        {{- if .Values.substrateRouterAuth.enabled }}
+        # The router's client certificate and key in one file, short-lived and rotated by the
+        # kubelet; the backend re-reads it on every connect.
+        - name: substrate-router-identity
+          projected:
+            sources:
+              - podCertificate:
+                  signerName: podidentity.podcert.ate.dev/identity
+                  keyType: ECDSAP256
+                  credentialBundlePath: credential-bundle.pem
+        # The CA that signs the router's serving certificate (atenet-router.ate-system.svc).
+        - name: substrate-router-ca
+          projected:
+            sources:
+              - clusterTrustBundle:
+                  signerName: servicedns.podcert.ate.dev/identity
+                  labelSelector:
+                    matchLabels:
+                      podcert.ate.dev/canarying: live
+                  path: trust-bundle.pem
         {{- end }}
         {{- with .Values.server.extraVolumes }}
         {{- toYaml . | nindent 8 }}

@@ -3,13 +3,18 @@ package preview
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,30 +64,54 @@ func (f *fakeWaker) counts() (wakes, touches int) {
 	return len(f.wakes), len(f.touches)
 }
 
-// fakeRouter is a Substrate router stand-in: it accepts CONNECT, records the target actor and
-// bridges the tunnel to the dev server at devAddr.
+// fakeRouter is a Substrate router stand-in: it serves CONNECT over mutual TLS, admits only
+// the SPIFFE ID on its allow-list (closing the connection on anyone else, as the router does),
+// records the target actor and bridges the tunnel to the dev server at devAddr.
 type fakeRouter struct {
 	ln      net.Listener
 	devAddr atomic.Value // string
 	// refuse is how many of the next CONNECTs answer 503.
 	refuse  atomic.Int32
+	allowed atomic.Value // string, the one SPIFFE ID admitted
 	mu      sync.Mutex
-	targets []string // "<actor> <connect target>"
+	targets []string // "<actor> <connect target> <method>"
+	clients []string // the SPIFFE ID of every client that completed a handshake
 	wg      sync.WaitGroup
+
+	// servicedns signs the router's serving certificate; podidentity signs client certificates.
+	servicedns, podidentity *testCA
+	dir                     string
 }
+
+const (
+	routerServerName = "atenet-router.ate-system.svc"
+	backendSPIFFEID  = "spiffe://cluster.local/ns/mainloop/sa/mainloop-backend"
+)
 
 func newFakeRouter(t *testing.T) *fakeRouter {
 	t.Helper()
-	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	r := &fakeRouter{servicedns: newTestCA(t, "servicedns"), podidentity: newTestCA(t, "podidentity"), dir: t.TempDir()}
+	r.allowed.Store(backendSPIFFEID)
+	certPEM, keyPEM := r.servicedns.issue(t, routerServerName, "", x509.ExtKeyUsageServerAuth)
+	serving, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &fakeRouter{ln: ln}
+	inner, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.ln = tls.NewListener(inner, &tls.Config{
+		Certificates: []tls.Certificate{serving}, ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs: r.podidentity.pool(), MinVersion: tls.VersionTLS12,
+	})
+	writeFile(t, r.caPath(), r.servicedns.pem)
+	r.issueClient(t, backendSPIFFEID)
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
 		for {
-			c, err := ln.Accept()
+			c, err := r.ln.Accept()
 			if err != nil {
 				return
 			}
@@ -90,12 +119,55 @@ func newFakeRouter(t *testing.T) *fakeRouter {
 			go func() { defer r.wg.Done(); r.handle(c) }()
 		}
 	}()
-	t.Cleanup(func() { _ = ln.Close(); r.wg.Wait() })
+	t.Cleanup(func() { _ = r.ln.Close(); r.wg.Wait() })
 	return r
+}
+
+func (r *fakeRouter) caPath() string { return filepath.Join(r.dir, "ca", "trust-bundle.pem") }
+func (r *fakeRouter) credentialPath() string {
+	return filepath.Join(r.dir, "identity", "credential-bundle.pem")
+}
+
+// issueClient writes a new pod certificate for spiffeID, key and chain in one file, as the kubelet
+// does on rotation.
+func (r *fakeRouter) issueClient(t *testing.T, spiffeID string) {
+	t.Helper()
+	certPEM, keyPEM := r.podidentity.issue(t, "", spiffeID, x509.ExtKeyUsageClientAuth)
+	writeFile(t, r.credentialPath(), slices.Concat(keyPEM, certPEM, r.podidentity.pem))
+}
+
+// vars are the backend's router settings for this fake.
+func (r *fakeRouter) vars() map[string]string {
+	return map[string]string{
+		"SUBSTRATE_ROUTER_ADDRESS":           "https://" + r.ln.Addr().String(),
+		"SUBSTRATE_ROUTER_SERVER_NAME":       routerServerName,
+		"SUBSTRATE_ROUTER_CLIENT_CREDENTIAL": r.credentialPath(),
+		"SUBSTRATE_ROUTER_CA":                r.caPath(),
+	}
+}
+
+func (r *fakeRouter) seenClients() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.clients...)
 }
 
 func (r *fakeRouter) handle(c net.Conn) {
 	defer func() { _ = c.Close() }()
+	tc := c.(*tls.Conn)
+	if err := tc.HandshakeContext(context.Background()); err != nil {
+		return
+	}
+	var id string
+	if peer := tc.ConnectionState().PeerCertificates; len(peer) > 0 && len(peer[0].URIs) == 1 {
+		id = peer[0].URIs[0].String()
+	}
+	r.mu.Lock()
+	r.clients = append(r.clients, id)
+	r.mu.Unlock()
+	if id != r.allowed.Load().(string) {
+		return
+	}
 	br := bufio.NewReader(c)
 	req, err := http.ReadRequest(br)
 	if err != nil {
@@ -126,8 +198,6 @@ func (r *fakeRouter) seen() []string {
 	defer r.mu.Unlock()
 	return append([]string(nil), r.targets...)
 }
-
-func (r *fakeRouter) addr() string { return "http://" + r.ln.Addr().String() }
 
 // env is a seeded owner workspace behind a fake router and dev server.
 type env struct {
@@ -162,11 +232,12 @@ func newEnv(t *testing.T) *env {
 	t.Cleanup(e.dev.Close)
 	e.router.devAddr.Store(e.dev.Listener.Addr().String())
 
-	cfg, err := config.Parse(map[string]string{
+	vars := map[string]string{
 		"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "mainloop.test", "MAINLOOP_API_HOSTS": "api.test",
 		"MAINLOOP_OWNER_ID": owner, "SUBSTRATE_PREVIEW_BASE_URL": origin,
-		"SUBSTRATE_ROUTER_ADDRESS": e.router.addr(),
-	})
+	}
+	maps.Copy(vars, e.router.vars())
+	cfg, err := config.Parse(vars)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -194,7 +194,8 @@ and offers Retry now and Use the chat view (the regular session view, until the 
 used by the tests).
 
 The server relays the WebSocket verbatim to the runner's client port (`:7682/ws`) on the session's
-actor through the Substrate router, like the workspace preview proxy. `live` is true when the
+actor through the Substrate router, like the workspace preview proxy and over the same mutual-TLS
+connection (see "Router TLS" in [workspaces.md](workspaces.md)). `live` is true when the
 session has a kagent Session and its Agent is listed in `MAINLOOP_LIVE_AGENTS`. An attach is the
 owner's only (another owner's session, or one that is not live, is `404`); a cross-origin `Origin` is
 `403` and a request that is not a WebSocket upgrade is `400`. The relay names the actor the way the preview

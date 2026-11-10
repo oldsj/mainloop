@@ -138,8 +138,10 @@ A preview of a just-woken workspace can fail until the agent has started the dev
 
 ## Isolation and known gaps
 
-- Preview CONNECT traffic goes through the Substrate router, which has no authentication of its
-  own; the owner and port checks live in Mainloop.
+- Preview and live-view CONNECT traffic goes through the Substrate router over mutual TLS: the
+  backend presents a pod certificate whose SPIFFE ID must be on the router's allow-list, and
+  verifies the router against the servicedns trust bundle. The router knows nothing of owners or
+  ports; those checks live in Mainloop.
 - The backend reaches Substrate only through the router CONNECT path.
 - Workspace lifecycle and preview have fake-backed and Postgres-backed tests. Sleep and wake on
   the current kagent API (Substrate 1.0) are tested with fakes only; a live check on a Kind stack

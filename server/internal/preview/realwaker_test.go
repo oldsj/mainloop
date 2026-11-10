@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"testing"
 	"time"
@@ -29,12 +30,13 @@ func (noDeliveries) LastActivity(context.Context, string) (time.Time, error) { r
 // workspace id and the host to request.
 func realWorkspace(t *testing.T, e *env) (svc *workspaces.Service, fake *kagenttest.Server, id, host string) {
 	t.Helper()
-	cfg, err := config.Parse(map[string]string{
+	vars := map[string]string{
 		"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "mainloop.test", "MAINLOOP_API_HOSTS": "api.test",
 		"MAINLOOP_OWNER_ID": owner, "SUBSTRATE_PREVIEW_BASE_URL": origin,
-		"SUBSTRATE_ROUTER_ADDRESS":         e.router.addr(),
 		"WORKSPACE_OPERATION_WAIT_SECONDS": "1",
-	})
+	}
+	maps.Copy(vars, e.router.vars())
+	cfg, err := config.Parse(vars)
 	if err != nil {
 		t.Fatal(err)
 	}

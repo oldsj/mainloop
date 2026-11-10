@@ -128,8 +128,8 @@ History before `e776537` describes the retired Python backend. Where other text 
 - Preview URLs are `<port>--<workspace>--preview.<host>` built from `SUBSTRATE_PREVIEW_BASE_URL`, ports sorted
   by number.
 - The preview proxy (G12, `server/internal/preview`), described under "Go preview proxy" in the
-  preview section below. Tests cover it with a fake router and dev server; it has not been run
-  against a real Substrate router.
+  preview section below. Tests cover it, including the router's mutual TLS and allow-list, with a
+  fake router and dev server; it has not been run against a real Substrate router.
 
 ### Proposed, not built
 
@@ -300,7 +300,8 @@ that the port is one the workspace declares, then opens
 is `<atespace>/<actor name>` from the kagent Session's runtime association when kagent reports one,
 current or not. A sleeping Session may report none; the target is then
 `<KAGENT_ACTOR_ATESPACE>/session-<kagent session id, lower case>`, kagent's stable Actor name. The
-router has no authentication of its own, so the owner check is Mainloop's. Mainloop does not ask
+router authenticates the backend by its pod certificate (mutual TLS, see "Tunnel" below) but knows
+nothing of owners or ports, so the owner check is Mainloop's. Mainloop does not ask
 kagent to wake anything: the `CONNECT` through the router is what wakes a sleeping Actor. A
 Session that is not `READY` shows the waking page and the router is not contacted. Processes do
 not survive sleep, so a preview of a just-woken workspace can fail until the agent has started the
@@ -384,6 +385,18 @@ request id, access log and panic recovery still wrap it. Any other host is the A
   It asks kagent for nothing. A workspace that is still being created, or has no kagent Session,
   shows a `503` "Workspace waking up" page with `Retry-After: 2`; one that is being deleted is
   `409`; any other failure is `502`.
+- **Router TLS.** The Substrate 1.0 router has no plain-HTTP listener. `SUBSTRATE_ROUTER_ADDRESS`
+  is its CONNECT-over-TLS listener (default
+  `https://atenet-router.ate-system.svc.cluster.local:8444`; an `http` address is refused at
+  startup). The backend verifies the router's certificate as `SUBSTRATE_ROUTER_SERVER_NAME`
+  (default `atenet-router.ate-system.svc`) against the trust bundle at `SUBSTRATE_ROUTER_CA`
+  (signer `servicedns.podcert.ate.dev/identity`), and presents the pod certificate at
+  `SUBSTRATE_ROUTER_CLIENT_CREDENTIAL` (signer `podidentity.podcert.ate.dev/identity`, key and
+  chain in one file). The kubelet rotates both, so both are read on every connect. The router
+  admits only SPIFFE IDs on its allow-list (`atenetRouter.ingressAllowedSPIFFEIDs`); the backend's
+  is `spiffe://cluster.local/ns/<namespace>/sa/mainloop-backend`. The router closes the connection
+  of a client it does not admit, and a missing or unreadable credential file fails the dial. After
+  the one retry, both end in the waking page, logged as "preview tunnel not ready" with the reason. The chart's `substrateRouterAuth.enabled` mounts both files into the API container only.
 - **Tunnel.** `CONNECT actor-upstream:<port>` to `SUBSTRATE_ROUTER_ADDRESS` with
   `ate-target-actor: <atespace>/<actor name>` from the kagent Session's runtime association (read
   per request), current or not. With no association the target is

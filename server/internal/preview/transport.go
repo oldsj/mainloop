@@ -3,6 +3,7 @@ package preview
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -195,12 +196,20 @@ func (p *Proxy) tunnel(ctx context.Context, h hop) (net.Conn, error) {
 }
 
 // connectActor opens a CONNECT tunnel through the router to a port of an actor, named
-// "<atespace>/<actor>". The router resumes a suspended actor on CONNECT.
+// "<atespace>/<actor>". The router wakes a sleeping actor on CONNECT. The connection is mutual
+// TLS: the router accepts only a client whose pod certificate's SPIFFE ID is on its allow-list,
+// and answers any other client by closing the connection.
 func (p *Proxy) connectActor(ctx context.Context, actor string, port int) (net.Conn, error) {
-	d := net.Dialer{Timeout: p.connect}
-	conn, err := d.DialContext(ctx, "tcp", p.router)
+	cfg, err := p.routerTLS.config()
 	if err != nil {
 		return nil, err
+	}
+	dctx, cancel := context.WithTimeout(ctx, p.connect)
+	defer cancel()
+	d := tls.Dialer{NetDialer: &net.Dialer{}, Config: cfg}
+	conn, err := d.DialContext(dctx, "tcp", p.router)
+	if err != nil {
+		return nil, fmt.Errorf("router: %w", err)
 	}
 	target := upstreamHost + ":" + strconv.Itoa(port)
 	req := &http.Request{
@@ -240,12 +249,12 @@ func (c *bufferedConn) Read(b []byte) (int, error) { return c.r.Read(b) }
 
 func routerHostPort(addr string) (string, error) {
 	u, err := url.Parse(addr)
-	if err != nil || u.Scheme != "http" || u.Hostname() == "" {
-		return "", errors.New("preview: router address must be an http origin")
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return "", errors.New("preview: router address must be an https origin")
 	}
 	port := u.Port()
 	if port == "" {
-		port = "80"
+		port = "443"
 	}
 	return net.JoinHostPort(u.Hostname(), port), nil
 }

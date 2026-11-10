@@ -62,6 +62,9 @@ database:
 kagentControlAuth:
   enabled: true
 
+substrateRouterAuth:
+  enabled: true
+
 config:
   # Domains come from mainloop-site.
   FRONTEND_DOMAIN: null
@@ -78,7 +81,7 @@ config:
   KAGENT_CODEX_AGENT: codex-subscription-https
   KAGENT_WORKSPACE_CLAUDE_AGENT: claude-workspace
   KAGENT_WORKSPACE_CODEX_AGENT: codex-workspace
-  SUBSTRATE_ROUTER_ADDRESS: http://atenet-router.ate-system.svc.cluster.local:8081
+  SUBSTRATE_ROUTER_ADDRESS: https://atenet-router.ate-system.svc.cluster.local:8444
 
 networkPolicy:
   # Only the actor egress proxy reaches MCP. The browser reaches the API through the gateway, whose
