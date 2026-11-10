@@ -1,13 +1,13 @@
 repo: oldsj/kagent (branch mainloop-substrate-1-0), plus overlay.patch
-commit: 912351dc8160b0cc5e99718cd8b6f5d29bf40920
+commit: f3473e9a3ed931cec68554ab6ef6804117fc75fe
 paths: proto/kagent/api/v1/{common.proto,runtime.proto,sessions.proto,agents.proto,scheduled_runs.proto,checkpoints.proto}
 notes: |
   The six files are the fork's at the commit above: through #63 (per-Session Git workspace:
   CreateSessionRequest.workspace = 6, Session.workspace = 16, message Workspace in common.proto)
   and #66 (per-Session credentials: CreateSessionRequest.credentials = 7, Session.credentials = 17,
-  SessionCredential, SecretKeyReference). overlay.patch adds the fork API from the 0.4 line that
-  the Substrate 1.0 port has not landed yet, at its 0.4 field numbers, so Mainloop keeps building
-  against it:
+  SessionCredential, SecretKeyReference); #65, #67 and #69 to #72 changed no proto in this set.
+  overlay.patch adds the fork API from the 0.4 line that the Substrate 1.0 port has not landed
+  yet, at its 0.4 field numbers, so Mainloop keeps building against it:
     environment       CreateSessionRequest.development_environment = 8,
                       Session.development_environment = 18, DevelopmentEnvironment,
                       Session.runtime_composition = 19, RuntimeComposition      (runtime composition)

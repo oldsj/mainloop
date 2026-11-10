@@ -29,7 +29,7 @@ const createAgentBinding = `-- name: CreateAgentBinding :one
 INSERT INTO agent_bindings (
     session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_request_id, model
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override, model_effort_touched
+RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override
 `
 
 type CreateAgentBindingParams struct {
@@ -88,7 +88,6 @@ func (q *Queries) CreateAgentBinding(ctx context.Context, arg CreateAgentBinding
 		&i.GuidanceDeliveryID,
 		&i.ModelOverride,
 		&i.EffortOverride,
-		&i.ModelEffortTouched,
 	)
 	return i, err
 }
@@ -146,7 +145,7 @@ INSERT INTO agent_bindings (
     $1, $2, $3, $4, $5,
     $6, $7, $8
 )
-RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override, model_effort_touched
+RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override
 `
 
 type CreateForkedAgentBindingParams struct {
@@ -207,7 +206,6 @@ func (q *Queries) CreateForkedAgentBinding(ctx context.Context, arg CreateForked
 		&i.GuidanceDeliveryID,
 		&i.ModelOverride,
 		&i.EffortOverride,
-		&i.ModelEffortTouched,
 	)
 	return i, err
 }
@@ -448,7 +446,7 @@ func (q *Queries) DeleteTopic(ctx context.Context, id string) (int64, error) {
 }
 
 const getAgentBinding = `-- name: GetAgentBinding :one
-SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override, model_effort_touched FROM agent_bindings WHERE session_id = $1
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override FROM agent_bindings WHERE session_id = $1
 `
 
 func (q *Queries) GetAgentBinding(ctx context.Context, sessionID string) (AgentBinding, error) {
@@ -486,16 +484,15 @@ func (q *Queries) GetAgentBinding(ctx context.Context, sessionID string) (AgentB
 		&i.GuidanceDeliveryID,
 		&i.ModelOverride,
 		&i.EffortOverride,
-		&i.ModelEffortTouched,
 	)
 	return i, err
 }
 
 const getAgentBindingByKagentSession = `-- name: GetAgentBindingByKagentSession :one
-SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override, model_effort_touched FROM (
-    SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, b.guidance_version, b.guidance_delivery_id, b.model_override, b.effort_override, b.model_effort_touched FROM agent_bindings b WHERE b.kagent_session_id = $1
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override FROM (
+    SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, b.guidance_version, b.guidance_delivery_id, b.model_override, b.effort_override FROM agent_bindings b WHERE b.kagent_session_id = $1
     UNION ALL
-    SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, b.guidance_version, b.guidance_delivery_id, b.model_override, b.effort_override, b.model_effort_touched FROM agent_bindings b JOIN main_provider_history h ON h.session_id = b.session_id
+    SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.credential_identity, b.main_released_at, b.guidance_version, b.guidance_delivery_id, b.model_override, b.effort_override FROM agent_bindings b JOIN main_provider_history h ON h.session_id = b.session_id
     WHERE h.kagent_session_id = $1
 ) bound LIMIT 1
 `
@@ -536,7 +533,6 @@ func (q *Queries) GetAgentBindingByKagentSession(ctx context.Context, kagentSess
 		&i.GuidanceDeliveryID,
 		&i.ModelOverride,
 		&i.EffortOverride,
-		&i.ModelEffortTouched,
 	)
 	return i, err
 }
@@ -708,7 +704,7 @@ func (q *Queries) GetTopicByName(ctx context.Context, arg GetTopicByNameParams) 
 }
 
 const listAgentBindingsByParent = `-- name: ListAgentBindingsByParent :many
-SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override, model_effort_touched FROM agent_bindings WHERE parent_session_id = $1 ORDER BY created_at, session_id
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override FROM agent_bindings WHERE parent_session_id = $1 ORDER BY created_at, session_id
 `
 
 func (q *Queries) ListAgentBindingsByParent(ctx context.Context, parentSessionID *string) ([]AgentBinding, error) {
@@ -752,7 +748,6 @@ func (q *Queries) ListAgentBindingsByParent(ctx context.Context, parentSessionID
 			&i.GuidanceDeliveryID,
 			&i.ModelOverride,
 			&i.EffortOverride,
-			&i.ModelEffortTouched,
 		); err != nil {
 			return nil, err
 		}
@@ -1050,7 +1045,7 @@ const setBindingKagentSession = `-- name: SetBindingKagentSession :one
 UPDATE agent_bindings
 SET kagent_session_id = $2, updated_at = now()
 WHERE session_id = $1
-RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override, model_effort_touched
+RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override
 `
 
 type SetBindingKagentSessionParams struct {
@@ -1093,7 +1088,6 @@ func (q *Queries) SetBindingKagentSession(ctx context.Context, arg SetBindingKag
 		&i.GuidanceDeliveryID,
 		&i.ModelOverride,
 		&i.EffortOverride,
-		&i.ModelEffortTouched,
 	)
 	return i, err
 }
