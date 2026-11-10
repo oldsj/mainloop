@@ -239,7 +239,7 @@ func newEnvForRole(t *testing.T, role dbstate.BindingRole) *env {
 		t.Fatal(err)
 	}
 	e.native = &nativeFake{session: &ka.Session{Id: "native", ContextId: "native", State: ka.RuntimeState_RUNTIME_STATE_READY, Operation: ka.RuntimeOperation_RUNTIME_OPERATION_NONE, PreparedRevision: "revision",
-		Agent: &ka.ResourceReference{Namespace: "kagent", Name: "claude"}, Workspace: &ka.Workspace{Repo: "https://github.com/oldsj/alpha", Ref: e.base, Branch: "feature/test"}, DevelopmentEnvironment: &ka.DevelopmentEnvironment{Image: "example.test/dev@sha256:abc", Platform: "linux/amd64", PolicyIdentity: "policy"},
+		Agent: &ka.AgentProvenance{Ref: &ka.ResourceReference{Namespace: "kagent", Name: "claude"}}, Workspace: &ka.Workspace{Repo: "https://github.com/oldsj/alpha", Ref: e.base, Branch: "feature/test"}, DevelopmentEnvironment: &ka.DevelopmentEnvironment{Image: "example.test/dev@sha256:abc", Platform: "linux/amd64", PolicyIdentity: "policy"},
 		RuntimeComposition: &ka.RuntimeComposition{PayloadImage: "example.test/harness@sha256:def", Provider: "claude", Schema: 1}, RuntimeAssociation: &ka.RuntimeAssociation{GenerationId: "runtime-g1", ActorUid: "actor-uid", ActorName: "actor", Atespace: "space", Phase: "active", CurrentActive: true}}}
 	e.svc = &Service{Pool: e.pool, Native: e.native, Upstream: e.upstream, Credentials: e.creds}
 	ref := Reference(e.creds, "http://mainloop-git-push.mainloop.svc.cluster.local", "ws")

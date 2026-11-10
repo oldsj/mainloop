@@ -192,8 +192,8 @@ type ForceLevel int
 const (
 	// ForceNone leaves the stop to the ordinary observation.
 	ForceNone ForceLevel = iota
-	// ForceSuspend parks the runtime through the workspace service. The workspace and any unpushed
-	// work in it survive, and the turn cannot continue.
+	// ForceSuspend is the level a stop reaches at the first grace. Nothing is pressed for it: kagent
+	// has no suspend call and parks an idle runtime itself.
 	ForceSuspend
 	// ForceDelete has kagent delete the native session. The runtime and its workspace are gone, but
 	// Mainloop's rows are kept as audit history.

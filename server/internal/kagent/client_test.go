@@ -104,8 +104,6 @@ func TestProcedureNamesMatchTheForkDefinitions(t *testing.T) {
 		kagent.ProcPrepareSessionWorkspace:    "/kagent.api.v1.SessionService/PrepareSessionWorkspace",
 		kagent.ProcGetSession:                 "/kagent.api.v1.SessionService/GetSession",
 		kagent.ProcListSessions:               "/kagent.api.v1.SessionService/ListSessions",
-		kagent.ProcSuspendSession:             "/kagent.api.v1.SessionService/SuspendSession",
-		kagent.ProcResumeSession:              "/kagent.api.v1.SessionService/ResumeSession",
 		kagent.ProcDeleteSession:              "/kagent.api.v1.SessionService/DeleteSession",
 		kagent.ProcGetAgent:                   "/kagent.api.v1.AgentService/GetAgent",
 		kagent.ProcCreateScheduledRun:         "/kagent.api.v1.ScheduledRunService/CreateScheduledRun",
@@ -146,12 +144,6 @@ func TestSessionLifecycle(t *testing.T) {
 	if err != nil || got.GetId() != created.GetId() {
 		t.Fatalf("get: %v, %v", got, err)
 	}
-	if s, err := c.SuspendSession(ctx, created.GetId()); err != nil || s.GetState() != api.RuntimeState_RUNTIME_STATE_SUSPENDED {
-		t.Fatalf("suspend: %v, %v", s, err)
-	}
-	if s, err := c.ResumeSession(ctx, created.GetId()); err != nil || s.GetState() != api.RuntimeState_RUNTIME_STATE_READY {
-		t.Fatalf("resume: %v, %v", s, err)
-	}
 	if r, err := c.PrepareSessionWorkspace(ctx, &api.PrepareSessionWorkspaceRequest{SessionId: created.GetId()}); err != nil || r == nil {
 		t.Fatalf("prepare: %v, %v", r, err)
 	}
@@ -165,8 +157,6 @@ func TestSessionLifecycle(t *testing.T) {
 	for _, key := range []string{
 		"/kagent.api.v1.SessionService/CreateSession",
 		"/kagent.api.v1.SessionService/GetSession",
-		"/kagent.api.v1.SessionService/SuspendSession",
-		"/kagent.api.v1.SessionService/ResumeSession",
 		"/kagent.api.v1.SessionService/PrepareSessionWorkspace",
 		"/kagent.api.v1.SessionService/DeleteSession",
 	} {

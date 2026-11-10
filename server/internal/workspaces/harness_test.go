@@ -105,6 +105,7 @@ func newHarness(t *testing.T, extra map[string]string) *harness {
 	}
 	fake := kagenttest.New()
 	t.Cleanup(fake.Close)
+	fake.Actors = true // a READY Session has a running Actor unless a test puts it to sleep
 	h := &harness{t: t, fake: fake, cfg: cfg, dl: &deliveries{open: map[string]bool{}, active: map[string]time.Time{}}}
 	h.deleteState.Store(int32(kagentapi.RuntimeState_RUNTIME_STATE_DELETED))
 	fake.TamperSession = func(proc string, s *kagentapi.Session) {

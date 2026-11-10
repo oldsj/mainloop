@@ -1,11 +1,16 @@
 package kagent_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/oldsj/mainloop/server/internal/kagent"
+	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
 	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
@@ -49,10 +54,48 @@ func TestObserveLivenessReportsTerminalRuntimeStates(t *testing.T) {
 			}
 		})
 	}
-	session := marshal(t, &api.Session{Id: "s-1", ContextId: "s-1", State: api.RuntimeState_RUNTIME_STATE_SUSPENDED})
+	// A sleeping Session is READY with no current Actor; an awake one carries a current association.
+	session := marshal(t, &api.Session{Id: "s-1", ContextId: "s-1", State: api.RuntimeState_RUNTIME_STATE_READY})
 	live, err := rawSessionServer(t, session).ObserveLiveness(ctx, "s-1")
-	if err != nil || !live.Exists || live.Terminal {
-		t.Fatalf("suspended: live = %+v, err = %v, want Exists and not Terminal", live, err)
+	if err != nil || !live.Exists || live.Terminal || !live.Asleep {
+		t.Fatalf("asleep: live = %+v, err = %v, want Exists, Asleep and not Terminal", live, err)
+	}
+	session = marshal(t, &api.Session{
+		Id: "s-1", ContextId: "s-1", State: api.RuntimeState_RUNTIME_STATE_READY,
+		RuntimeAssociation: &api.RuntimeAssociation{GenerationId: "g", Atespace: "ate", ActorName: "session-s-1", ActorUid: "u", CurrentActive: true},
+	})
+	live, err = rawSessionServer(t, session).ObserveLiveness(ctx, "s-1")
+	if err != nil || !live.Exists || live.Terminal || live.Asleep {
+		t.Fatalf("awake: live = %+v, err = %v, want Exists and not Asleep", live, err)
+	}
+}
+
+// A forced delete carries force on the wire; an ordinary one is refused while a turn runs.
+func TestForceDeleteSessionTerminatesARunningTurn(t *testing.T) {
+	srv := kagenttest.New()
+	t.Cleanup(srv.Close)
+	srv.AddAgent("kagent", "a")
+	c, err := kagent.New(kagent.Config{GatewayURL: srv.URL, UserID: "mainloop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.CreateSession(ctx, &api.CreateSessionRequest{Agent: &api.ResourceReference{Namespace: "kagent", Name: "a"}, RequestId: "r"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.AddTask(&a2a.Task{ID: "t1", ContextID: s.GetId(), Status: a2a.TaskStatus{State: a2a.TaskStateWorking}})
+	var se *kagent.SessionError
+	if _, err := c.DeleteSession(ctx, s.GetId()); !errors.As(err, &se) || se.Code != connect.CodeFailedPrecondition {
+		t.Fatalf("delete with a running turn: %v, want FailedPrecondition", err)
+	}
+	if _, err := c.ForceDeleteSession(ctx, s.GetId()); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.ForcedDeletes(); len(got) != 1 || got[0] != s.GetId() {
+		t.Fatalf("forced deletes %v", got)
+	}
+	if _, ok := srv.Session(s.GetId()); ok {
+		t.Fatal("session still stored")
 	}
 }
 

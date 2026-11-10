@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/config"
@@ -120,61 +121,6 @@ func TestDropRejectedLeavesAWorkspaceWithAnOpenDelete(t *testing.T) {
 
 // ---- Wake -----------------------------------------------------------------------------------------------------
 
-func TestWakeWaitsForAnOpenSuspendThenResumes(t *testing.T) {
-	h := newHarness(t, map[string]string{"WORKSPACE_OPERATION_WAIT_SECONDS": "10"})
-	w := h.running()
-	if _, err := h.svc.enqueue(bg, w.WorkspaceId, dbstate.OpSuspend, nil); err != nil { // no runner: it stays open
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- h.svc.Wake(bg, w.WorkspaceId) }()
-
-	select {
-	case err := <-done:
-		t.Fatalf("Wake returned while the suspend was open: %v", err)
-	case <-time.After(200 * time.Millisecond):
-	}
-	if h.fake.Count(kagent.ProcResumeSession) != 0 {
-		t.Fatal("resumed under an open suspend")
-	}
-	h.run()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("Wake never returned")
-	}
-	if h.fake.Count(kagent.ProcSuspendSession) != 1 || h.fake.Count(kagent.ProcResumeSession) != 1 {
-		t.Fatalf("%d suspends, %d resumes", h.fake.Count(kagent.ProcSuspendSession), h.fake.Count(kagent.ProcResumeSession))
-	}
-	got, _ := h.svc.Get(bg, w.WorkspaceId)
-	if got.ObservedState != api.WorkspaceObservedStateRunning {
-		t.Fatalf("%+v", got)
-	}
-}
-
-func TestWakeResumesASuspendedWorkspaceOnceAndLeavesARunningOne(t *testing.T) {
-	h := newHarness(t, nil)
-	w := h.running()
-	h.run()
-	if err := h.svc.Wake(bg, w.WorkspaceId); err != nil || h.fake.Count(kagent.ProcResumeSession) != 0 {
-		t.Fatalf("a running workspace was resumed: %v", err)
-	}
-	if _, err := h.svc.Suspend(bg, w.WorkspaceId); err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		if err := h.svc.Wake(bg, w.WorkspaceId); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if n := h.fake.Count(kagent.ProcResumeSession); n != 1 {
-		t.Fatalf("%d resumes", n)
-	}
-}
-
 func TestWakeOfAWorkspaceBeingDeletedOrGoneIsRefused(t *testing.T) {
 	h := newHarness(t, nil)
 	w := h.running()
@@ -192,38 +138,41 @@ func TestWakeOfAWorkspaceBeingDeletedOrGoneIsRefused(t *testing.T) {
 
 // ---- G6b follow-up 3: a resume that finds the workspace running ---------------------------------------------
 
-// A resume operation that finds the Session already ready changes nothing, so it publishes no
-// workspace:updated event. Callers that read "suspended" just before another resume finished queue
-// exactly such an operation.
-func TestResumeOfARunningWorkspacePublishesNothing(t *testing.T) {
+// kagent parks and wakes a workspace's Actor itself, so Wake only records the use: it starts no
+// operation, for a running workspace or a sleeping one.
+func TestWakeTouchesAndStartsNoOperation(t *testing.T) {
 	h := newHarness(t, nil)
 	w := h.running()
-	h.run()
-	events := h.events()
-	if _, err := h.svc.Resume(bg, w.WorkspaceId); err != nil {
-		t.Fatal(err)
+	h.exec(`UPDATE workspaces SET last_active_at = now() - interval '1 hour' WHERE id = $1`, w.WorkspaceId)
+	for range 2 {
+		if err := h.svc.Wake(bg, w.WorkspaceId); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if n := h.fake.Count(kagent.ProcResumeSession); n != 0 || h.events() != events {
-		t.Fatalf("resume calls %d, events %d -> %d", n, events, h.events())
+	got, err := h.svc.Get(bg, w.WorkspaceId)
+	if err != nil || got.LastActivityAt == nil || time.Since(*got.LastActivityAt) > time.Minute {
+		t.Fatalf("not touched: %+v %v", got.LastActivityAt, err)
+	}
+	if _, err := dbq.New(h.svc.Pool).GetOpenWorkspaceOp(bg, w.WorkspaceId); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("Wake opened an operation: %v", err)
 	}
 }
 
-// A retried resume that finds the Session ready may be finishing a resume whose reply was lost, which
-// nothing else announced: it publishes.
-func TestRetriedResumeOfARunningWorkspacePublishes(t *testing.T) {
+// A suspend or resume operation queued before kagent took over sleeping has nothing to do: the loop
+// cancels it without a kagent call.
+func TestAQueuedSuspendOrResumeIsCancelled(t *testing.T) {
 	h := newHarness(t, nil)
 	w := h.running()
-	op, err := h.svc.enqueue(bg, w.WorkspaceId, dbstate.OpResume, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h.exec(`UPDATE workspace_ops SET failures = 1 WHERE id = $1`, op.ID)
-	events := h.events()
-	h.run()
-	if final, err := h.svc.await(bg, op); err != nil || final.State != dbstate.OpSucceeded {
-		t.Fatalf("%+v %v", final, err)
-	}
-	if h.events() != events+1 {
-		t.Fatalf("events %d -> %d", events, h.events())
+	for _, kind := range []dbstate.WorkspaceOpKind{dbstate.OpSuspend, dbstate.OpResume} {
+		op, err := h.svc.enqueue(bg, w.WorkspaceId, kind, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stop := h.run()
+		final, err := h.svc.await(bg, op)
+		stop()
+		if err != nil || final.State != dbstate.OpCancelled {
+			t.Fatalf("%s: %+v %v", kind, final, err)
+		}
 	}
 }

@@ -129,15 +129,17 @@ func TestPreparationUsesTheAttemptRole(t *testing.T) {
 	}
 }
 
-func TestPreparationWakesAnIdleSessionBeforeAsking(t *testing.T) {
+// kagent wakes a sleeping runtime for a preparation itself. The first ask names the generation that
+// was read while it slept, which kagent answers is stale; the next pass reads the new one.
+func TestPreparationOfASleepingSessionRetriesOnTheNewGeneration(t *testing.T) {
 	h := newHarness(t, nil)
 	h.fake.IdleActors = true
 	r := preparedWorkspace(t, h)
-	if got := prepareOnce(t, h, r.ID); got != dbstate.PreparationPlanned {
+	if got := prepareOnce(t, h, r.ID); got != dbstate.PreparationRequested {
 		t.Fatalf("first pass state = %s", got)
 	}
-	if n := h.fake.Count(kagent.ProcResumeSession); n != 1 || len(h.fake.PrepareRequests()) != 0 {
-		t.Fatalf("resumes = %d, prepares = %d", n, len(h.fake.PrepareRequests()))
+	if n := h.fake.Wakes(r.sessionID()); n != 1 || len(h.fake.PrepareRequests()) != 0 {
+		t.Fatalf("wakes = %d, prepares = %d", n, len(h.fake.PrepareRequests()))
 	}
 	if got := prepareOnce(t, h, r.ID); got != dbstate.PreparationConfirmed {
 		t.Fatalf("second pass state = %s", got)

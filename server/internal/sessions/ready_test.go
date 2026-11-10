@@ -2,6 +2,7 @@ package sessions_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -10,80 +11,80 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/sessions"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
-func TestReadySessionResumesASuspendedSession(t *testing.T) {
-	e := newEnv(t)
-	e.run()
-	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
-	ksid := e.kagentSessionID()
-	if _, err := e.other().SuspendSession(context.Background(), ksid); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.svc.ReadySession(context.Background(), "s1", nil, ksid); err != nil {
-		t.Fatal(err)
-	}
-	if n := e.srv.Count(kagent.ProcResumeSession); n != 1 {
-		t.Fatalf("%d resumes", n)
-	}
-	// Ready already: nothing more to do.
-	if err := e.svc.ReadySession(context.Background(), "s1", nil, ksid); err != nil || e.srv.Count(kagent.ProcResumeSession) != 1 {
-		t.Fatalf("ready session: %v, %d resumes", err, e.srv.Count(kagent.ProcResumeSession))
-	}
-}
-
-// wakeFake stands in for the workspace service: waking the workspace resumes its Session.
+// wakeFake stands in for the workspace service's admission of a send.
 type wakeFake struct {
-	resume func() error
-	wakes  atomic.Int32
+	wake  func() error
+	wakes atomic.Int32
 }
 
 func (w *wakeFake) Wake(context.Context, string) error {
 	w.wakes.Add(1)
-	return w.resume()
+	return w.wake()
 }
 
-func TestReadySessionWakesTheWorkspaceBehindASuspendedSession(t *testing.T) {
+// A sleeping Session is READY: nothing resumes it before a send, which is what wakes its Actor.
+func TestReadySessionLeavesASleepingSessionForTheSendToWake(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Actors = true
+	e.run()
+	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
+	ksid := e.kagentSessionID()
+	e.srv.Sleep(ksid)
+	if err := e.svc.ReadySession(context.Background(), "s1", nil, ksid); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.srv.Wakes(ksid); n != 0 {
+		t.Fatalf("readiness woke the Session %d times", n)
+	}
+	e.waitState(e.send("two"), dbstate.DeliveryCompleted)
+	if n := e.srv.Wakes(ksid); n != 1 || e.kagentSessionID() != ksid || e.srv.Count(kagent.ProcCreateSession) != 1 {
+		t.Fatalf("%d wakes; the session was replaced or not woken by the send", n)
+	}
+}
+
+// A workspace session is admitted through the workspace service, whose refusal (a workspace being
+// deleted) stops the send.
+func TestReadySessionAsksTheWorkspaceServiceAndHonoursItsRefusal(t *testing.T) {
 	e := newEnv(t)
 	e.run()
 	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
 	ksid := e.kagentSessionID()
-	if _, err := e.other().SuspendSession(context.Background(), ksid); err != nil {
-		t.Fatal(err)
-	}
-	w := &wakeFake{resume: func() error {
-		_, err := e.other().ResumeSession(context.Background(), ksid)
-		return err
-	}}
+	w := &wakeFake{wake: func() error { return nil }}
 	e.svc.Waker = w
 	ws := "ws1"
-	if err := e.svc.ReadySession(context.Background(), "ws1", &ws, ksid); err != nil {
-		t.Fatal(err)
+	if err := e.svc.ReadySession(context.Background(), "ws1", &ws, ksid); err != nil || w.wakes.Load() != 1 {
+		t.Fatalf("%v, %d wakes", err, w.wakes.Load())
 	}
-	if w.wakes.Load() != 1 {
-		t.Fatalf("%d wakes", w.wakes.Load())
-	}
-	// A workspace is resumed through its own wake, never directly.
-	if n := e.srv.Count(kagent.ProcResumeSession); n != 1 {
-		t.Fatalf("%d resumes (the wake's own)", n)
-	}
-}
-
-func TestReadySessionFailsWhenTheWorkspaceStaysAsleep(t *testing.T) {
-	e := newEnv(t, func(o *sessions.Options, _ *kagent.Config) { o.ReadyWait = 100 * time.Millisecond })
-	e.run()
-	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
-	ksid := e.kagentSessionID()
-	if _, err := e.other().SuspendSession(context.Background(), ksid); err != nil {
-		t.Fatal(err)
-	}
-	e.svc.Waker = &wakeFake{resume: func() error { return nil }} // wakes, but the Session stays suspended
-	ws := "ws1"
+	e.svc.Waker = &wakeFake{wake: func() error { return errors.New("the workspace is being deleted") }}
 	if err := e.svc.ReadySession(context.Background(), "ws1", &ws, ksid); err == nil {
-		t.Fatal("a Session that is still suspended after the wake is not ready")
+		t.Fatal("a refused workspace was ready")
 	}
 	if err := e.svc.ReadySession(context.Background(), "ws1", nil, ""); err == nil {
 		t.Fatal("no kagent session is not ready")
+	}
+}
+
+// kagent's own lifecycle work is brief: a Session it is settling is waited for, not resumed.
+func TestReadySessionWaitsOutKagentSettling(t *testing.T) {
+	e := newEnv(t, func(o *sessions.Options, _ *kagent.Config) { o.ReadyWait = 2 * time.Second })
+	e.run()
+	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
+	ksid := e.kagentSessionID()
+	var reads atomic.Int32
+	e.srv.TamperSession = func(proc string, s *kagentapi.Session) {
+		if proc == kagent.ProcGetSession && reads.Add(1) <= 2 {
+			s.State = kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED
+			s.Operation = kagentapi.RuntimeOperation_RUNTIME_OPERATION_RESUME
+		}
+	}
+	if err := e.svc.ReadySession(context.Background(), "s1", nil, ksid); err != nil {
+		t.Fatal(err)
+	}
+	if reads.Load() < 3 {
+		t.Fatalf("%d reads: a settling Session was treated as ready", reads.Load())
 	}
 }
 

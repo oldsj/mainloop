@@ -109,7 +109,7 @@ func TestStoppedTaskSessionDoesNotDispatchRecordedMessage(t *testing.T) {
 			if got := r.str(`SELECT state FROM deliveries WHERE id=$1`, mid); got != "cancelled" {
 				t.Fatalf("delivery = %s, want cancelled", got)
 			}
-			for _, method := range []string{kagent.ProcGetSession, kagent.ProcCreateSession, kagent.ProcResumeSession, "SendStreamingMessage"} {
+			for _, method := range []string{kagent.ProcGetSession, kagent.ProcCreateSession, "SendStreamingMessage"} {
 				if n := f.Count(method); n != 0 {
 					t.Fatalf("native %s calls = %d, want zero", method, n)
 				}

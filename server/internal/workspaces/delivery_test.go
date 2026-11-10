@@ -11,7 +11,6 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
-	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 )
@@ -66,88 +65,6 @@ func (h *harness) runtimeSessionState(id string) string {
 	return string(got.ObservedState)
 }
 
-// Mined: test_suspended_session_is_resumed_before_the_turn.
-func TestAMessageForASuspendedWorkspaceResumesItFirstAndIsSentOnce(t *testing.T) {
-	h := newHarness(t, nil)
-	ss := h.ledger()
-	w := h.running()
-	h.runBoth(ss)
-	if _, err := h.svc.Suspend(bg, w.WorkspaceId); err != nil {
-		t.Fatal(err)
-	}
-	if h.runtimeSessionState(w.WorkspaceId) != string(api.WorkspaceObservedStateSuspended) {
-		t.Fatal("not suspended")
-	}
-
-	id := uuid.NewString()
-	if _, err := ss.SendTo(bg, w.WorkspaceId, id, "continue please"); err != nil {
-		t.Fatal(err)
-	}
-	eventually(t, "delivered and finished", func() bool { return h.deliveryState(id) == dbstate.DeliveryCompleted })
-	if n := h.fake.Count(kagent.ProcResumeSession); n != 1 {
-		t.Fatalf("%d resumes", n)
-	}
-	if n := h.fake.Count("SendStreamingMessage"); n != 1 {
-		t.Fatalf("sent %d times", n)
-	}
-	if h.runtimeSessionState(w.WorkspaceId) != string(api.WorkspaceObservedStateRunning) {
-		t.Fatal("the send went to a Session that was not running")
-	}
-}
-
-// Mined: test_a_message_arriving_during_suspend_waits_then_resumes_before_sending.
-func TestAMessageDuringAnOpenSuspendWaitsForItThenResumes(t *testing.T) {
-	h := newHarness(t, nil)
-	ss := h.ledger()
-	w := h.running()
-	h.fake.FailNext(kagent.ProcSuspendSession, kagenttest.Fault{Delay: 600 * time.Millisecond}) // the suspend is in flight
-	h.runBoth(ss)
-	if _, err := h.svc.enqueue(bg, w.WorkspaceId, dbstate.OpSuspend, nil); err != nil {
-		t.Fatal(err)
-	}
-	eventually(t, "suspend reached kagent", func() bool { return h.fake.Count(kagent.ProcSuspendSession) == 1 })
-
-	id := uuid.NewString()
-	if _, err := ss.SendTo(bg, w.WorkspaceId, id, "hello"); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(200 * time.Millisecond)
-	if n := h.fake.Count("SendStreamingMessage"); n != 0 || h.fake.Count(kagent.ProcResumeSession) != 0 {
-		t.Fatalf("the send did not wait: %d sends, %d resumes", n, h.fake.Count(kagent.ProcResumeSession))
-	}
-	eventually(t, "finished", func() bool { return h.deliveryState(id) == dbstate.DeliveryCompleted })
-	if h.fake.Count(kagent.ProcSuspendSession) != 1 || h.fake.Count(kagent.ProcResumeSession) != 1 {
-		t.Fatalf("%d suspends, %d resumes", h.fake.Count(kagent.ProcSuspendSession), h.fake.Count(kagent.ProcResumeSession))
-	}
-	if n := h.fake.Count("SendStreamingMessage"); n != 1 {
-		t.Fatalf("sent %d times", n)
-	}
-}
-
-// Mined: test_an_active_turn_is_left_alone.
-func TestIdleSuspendLeavesASessionWithAnOpenTurn(t *testing.T) {
-	h := newHarness(t, nil)
-	ss := h.ledger()
-	w := h.running()
-	h.backdate(w.WorkspaceId)
-	id := uuid.NewString()
-	if _, err := ss.SendTo(bg, w.WorkspaceId, id, "working"); err != nil { // recorded; no loop runs it
-		t.Fatal(err)
-	}
-	if err := h.svc.SuspendIdle(bg); err != nil || h.suspendOps() != 0 {
-		t.Fatalf("an open turn was suspended: %v", err)
-	}
-	// Finished just now: still not idle.
-	h.exec(`UPDATE deliveries SET state = 'completed', updated_at = now() WHERE id = $1`, id)
-	if err := h.svc.SuspendIdle(bg); err != nil || h.suspendOps() != 0 {
-		t.Fatalf("a turn that just finished counted as idle: %v", err)
-	}
-	h.exec(`UPDATE deliveries SET updated_at = now() - interval '2 hours' WHERE id = $1`, id)
-	if err := h.svc.SuspendIdle(bg); err != nil || h.suspendOps() != 1 {
-		t.Fatalf("a quiet session was kept: ops %d, %v", h.suspendOps(), err)
-	}
-}
-
 func TestHasOpenAndLastActivity(t *testing.T) {
 	h := newHarness(t, nil)
 	ss := h.ledger()
@@ -185,51 +102,29 @@ func TestHasOpenAndLastActivity(t *testing.T) {
 	}
 }
 
-// skipFirstWake is a Waker whose first call does nothing, as when something suspends the workspace
-// between the wake and the check that follows it.
-type skipFirstWake struct {
-	inner sessions.Waker
-	calls int
-}
-
-func (w *skipFirstWake) Wake(ctx context.Context, id string) error {
-	w.calls++
-	if w.calls == 1 {
-		return nil
-	}
-	return w.inner.Wake(ctx, id)
-}
-
-// A workspace's Session is never resumed outside its operation ledger, even when the delivery finds
-// it suspended right after a wake: it wakes the workspace again.
-func TestADeliveryThatFindsTheWorkspaceSuspendedAfterWakeWakesAgain(t *testing.T) {
+// kagent parks an idle workspace's Actor itself and the Session stays READY. A message for it is
+// sent without any resume: the send is what wakes the Actor.
+func TestAMessageForASleepingWorkspaceWakesItAndIsSentOnce(t *testing.T) {
 	h := newHarness(t, nil)
 	ss := h.ledger()
 	w := h.running()
 	h.runBoth(ss)
-	if _, err := h.svc.Suspend(bg, w.WorkspaceId); err != nil {
-		t.Fatal(err)
+	ksid := h.row(w.WorkspaceId).sessionID()
+	h.fake.Sleep(ksid)
+	if h.runtimeSessionState(w.WorkspaceId) != string(api.WorkspaceObservedStateSuspended) {
+		t.Fatal("a sleeping workspace does not show as suspended")
 	}
-	waker := &skipFirstWake{inner: h.svc}
-	ss.Waker = waker
 
 	id := uuid.NewString()
 	if _, err := ss.SendTo(bg, w.WorkspaceId, id, "continue please"); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "delivered and finished", func() bool { return h.deliveryState(id) == dbstate.DeliveryCompleted })
-	if waker.calls < 2 {
-		t.Fatalf("%d wakes: the delivery resumed the Session itself", waker.calls)
+	if n := h.fake.Count("SendStreamingMessage"); n != 1 {
+		t.Fatalf("sent %d times", n)
 	}
-	if n := h.fake.Count(kagent.ProcResumeSession); n != 1 {
-		t.Fatalf("%d resumes", n)
-	}
-	var resumes int
-	if err := h.svc.Pool.QueryRow(bg, `SELECT count(*) FROM workspace_ops WHERE workspace_id = $1 AND kind = 'resume'`, w.WorkspaceId).Scan(&resumes); err != nil {
-		t.Fatal(err)
-	}
-	if resumes != 1 {
-		t.Fatalf("%d resume ops: the resume did not go through the ledger", resumes)
+	if h.fake.Wakes(ksid) != 1 || h.runtimeSessionState(w.WorkspaceId) != string(api.WorkspaceObservedStateRunning) {
+		t.Fatalf("the send did not wake the workspace: %d wakes", h.fake.Wakes(ksid))
 	}
 }
 

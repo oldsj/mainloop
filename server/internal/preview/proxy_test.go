@@ -147,7 +147,7 @@ type env struct {
 type fakeSessions struct{}
 
 func (fakeSessions) ObserveSession(_ context.Context, id string) (*kagentapi.Session, error) {
-	return &kagentapi.Session{Id: id, RuntimeAssociation: &kagentapi.RuntimeAssociation{
+	return &kagentapi.Session{Id: id, State: kagentapi.RuntimeState_RUNTIME_STATE_READY, RuntimeAssociation: &kagentapi.RuntimeAssociation{
 		Atespace: "kagent", ActorName: "session-" + id + "-ab12", CurrentActive: true,
 	}}, nil
 }
@@ -486,9 +486,9 @@ func TestTunnelRetriesOnceThenShowsWakingPage(t *testing.T) {
 	}
 }
 
-// A Session whose actor is not running (kagent reports no runtime association) is never tunnelled
-// to a guessed name; the owner sees the waking page and reloads.
-func TestNoRunningActorShowsWakingPage(t *testing.T) {
+// A Session that is not READY yet has no Actor to tunnel to; the owner sees the waking page and
+// reloads.
+func TestASessionThatIsNotReadyShowsWakingPage(t *testing.T) {
 	e := newEnv(t)
 	e.proxy.Sessions = noActorSessions{}
 	rec := e.do("GET", wsHost, "/", nil, nil)

@@ -196,23 +196,6 @@ func TestAParkedTaskIsReadWithBackoff(t *testing.T) {
 
 // ---- P2-4: the kagent Session is made usable before a send ----------------------------------------
 
-func TestASuspendedSessionIsResumedBeforeTheNextSend(t *testing.T) {
-	e := newEnv(t)
-	e.run()
-	e.waitState(e.send("one"), dbstate.DeliveryCompleted)
-	ksid := e.kagentSessionID()
-	if _, err := e.other().SuspendSession(context.Background(), ksid); err != nil {
-		t.Fatal(err)
-	}
-	e.waitState(e.send("two"), dbstate.DeliveryCompleted)
-	if n := e.srv.Count(kagent.ProcResumeSession); n != 1 {
-		t.Fatalf("%d resumes", n)
-	}
-	if e.kagentSessionID() != ksid || e.srv.Count(kagent.ProcCreateSession) != 1 {
-		t.Fatal("the session was replaced instead of resumed")
-	}
-}
-
 func TestASessionStillStartingIsWaitedFor(t *testing.T) {
 	e := newEnv(t, func(o *sessions.Options, _ *kagent.Config) { o.ReadyWait = 5 * time.Second })
 	var gets atomic.Int32

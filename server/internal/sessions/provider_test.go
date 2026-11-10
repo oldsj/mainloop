@@ -240,7 +240,7 @@ func TestASwitchIsRefusedUnlessTheMainIsIdle(t *testing.T) {
 
 // ---- a successful switch ------------------------------------------------------------------------
 
-func TestASwitchSuspendsTheOldSessionRevokesItsCredentialAndKeepsTheConversation(t *testing.T) {
+func TestASwitchLeavesTheOldSessionRevokesItsCredentialAndKeepsTheConversation(t *testing.T) {
 	e := providerEnv(t)
 	a := e.withCredentials()
 	cleanup := runCredentialCleanup(t, e, a)
@@ -262,8 +262,8 @@ func TestASwitchSuspendsTheOldSessionRevokesItsCredentialAndKeepsTheConversation
 	if codexKsid == "" || codexKsid == claudeKsid {
 		t.Fatalf("Codex Session %q (Claude's %q)", codexKsid, claudeKsid)
 	}
-	if got := e.ksState(claudeKsid); got != kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED {
-		t.Fatalf("old Session is %s, want suspended", got)
+	if got := e.ksState(claudeKsid); got != kagentapi.RuntimeState_RUNTIME_STATE_READY {
+		t.Fatalf("old Session is %s, want it kept as it was", got)
 	}
 	if len(st.History) != 1 || st.History[0].Provider != "claude" || deref(st.History[0].KagentSessionID) != claudeKsid {
 		t.Fatalf("history = %+v", st.History)
@@ -304,7 +304,7 @@ func TestASwitchSuspendsTheOldSessionRevokesItsCredentialAndKeepsTheConversation
 	if e.sends() != sends+1 || e.bindingKsid(main) != codexKsid {
 		t.Fatalf("sends %d -> %d, bound %s", sends, e.sends(), e.bindingKsid(main))
 	}
-	if got := e.ksState(claudeKsid); got != kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED {
+	if got := e.ksState(claudeKsid); got != kagentapi.RuntimeState_RUNTIME_STATE_READY {
 		t.Fatalf("old Session is %s after the next message", got)
 	}
 	// The retired Session is still Mainloop's: the orphan sweep leaves it alone.
@@ -418,7 +418,7 @@ func TestACrashAfterTheIntentCommitsRecoversTheSameContract(t *testing.T) {
 	if e.createsOn(codexAgentName) != 0 {
 		t.Fatal("a create was sent before the intent was repeated")
 	}
-	if got := e.ksState(claudeKsid); got != kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED {
+	if got := e.ksState(claudeKsid); got != kagentapi.RuntimeState_RUNTIME_STATE_READY {
 		t.Fatalf("old Session is %s", got)
 	}
 	st := e.providerState()
