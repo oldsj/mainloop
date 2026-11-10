@@ -217,5 +217,77 @@
         }
       }
     }
+  ],
+  "openai_response": [
+    {
+      "name": "kind_hello",
+      "match": {
+        "match_type": "contains",
+        "input": "kind-hello"
+      },
+      "response": {
+        "id": "resp_kind_hello",
+        "object": "response",
+        "created_at": 1677652290,
+        "model": "gpt-5.2-codex",
+        "output": [
+          {
+            "id": "msg_kind_hello",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "KIND_HELLO_DONE",
+                "annotations": []
+              }
+            ]
+          }
+        ],
+        "parallel_tool_calls": false,
+        "tools": [],
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4,
+          "total_tokens": 14
+        }
+      }
+    },
+    {
+      "name": "default",
+      "match": {
+        "match_type": "contains",
+        "input": ""
+      },
+      "response": {
+        "id": "resp_default",
+        "object": "response",
+        "created_at": 1677652290,
+        "model": "gpt-5.2-codex",
+        "output": [
+          {
+            "id": "msg_default",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "KIND_DEFAULT_DONE",
+                "annotations": []
+              }
+            ]
+          }
+        ],
+        "parallel_tool_calls": false,
+        "tools": [],
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4,
+          "total_tokens": 14
+        }
+      }
+    }
   ]
 }
