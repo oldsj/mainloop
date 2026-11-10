@@ -47,7 +47,7 @@ dev-live-lease-acquire: ## Acquire the devloop lease as the owner (needs MAINLOO
 dev-live-lease-release: ## Release the devloop lease as the owner (needs MAINLOOP_API_URL)
 	./scripts/dev-live.sh lease-release
 
-dev-harness: ## Build arm64 harness images from ~/dev/kagent and point the dev agents at them
+dev-harness: ## Build multi-arch harness images from ~/dev/kagent and point the dev agents at them
 	./scripts/dev-live-harness.sh build
 
 kind-up: kind-create kind-load kind-secrets kind-deploy ## Create the cluster, build and load images, deploy (no DevSpace)

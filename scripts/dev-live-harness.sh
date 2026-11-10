@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Dev kagent harness images for mainloop-dev (`make dev-harness`).
 #
-#   dev-live-harness.sh build        build arm64 Claude and Codex harness images from the
-#                                    kagent fork, push dev-<sha> tags to ghcr, record them
+#   dev-live-harness.sh build        build multi-arch (amd64 + arm64) Claude and Codex harness
+#                                    images from the kagent fork, push dev-<sha> tags to ghcr, record them
 #                                    and apply the *-workspace-dev agents with them
 #   dev-live-harness.sh image <p>    print the recorded image for claude|codex, else the
 #                                    production pin from the dev manifests (DevSpace var)
@@ -43,9 +43,11 @@ build() {
     echo "${KAGENT_DIR} has uncommitted changes; commit them first (images are pushed to ghcr)" >&2
     exit 1
   fi
-  echo "Building arm64 harness images ${tag} from ${KAGENT_DIR}"
+  # Both arches: the dev agents run on the amd64 micro-VM pool (b550), and kagent-default
+  # (arm64) stays as the rollback. The Go build cross-compiles; only the final stage is emulated.
+  echo "Building amd64 + arm64 harness images ${tag} from ${KAGENT_DIR}"
   make -C "${KAGENT_DIR}" build-claude-harness build-codex-harness \
-    LOCALARCH=arm64 DOCKER_REGISTRY="${REGISTRY}" DOCKER_REPO="${REPO}" \
+    DOCKER_BUILD_ARGS="--push --platform linux/amd64,linux/arm64" DOCKER_REGISTRY="${REGISTRY}" DOCKER_REPO="${REPO}" \
     CLAUDE_HARNESS_IMAGE_NAME=kagent-claude-harness CLAUDE_HARNESS_IMAGE_TAG="${tag}" \
     CODEX_HARNESS_IMAGE_NAME=kagent-codex-harness CODEX_HARNESS_IMAGE_TAG="${tag}"
 
