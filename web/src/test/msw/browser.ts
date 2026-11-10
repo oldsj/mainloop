@@ -1,5 +1,6 @@
 import { setupWorker } from 'msw/browser';
 import { createChatBackend } from '@/features/chat/handlers';
+import { createFakeRunner } from '@/features/live/fakeRunner';
 import { createFakeHITL } from '@/features/hitl/handlers';
 import { hitlView } from '@/test/fixtures/hitl';
 import { baseHandlers } from './handlers';
@@ -16,5 +17,7 @@ export const worker = setupWorker(
   ...(seed?.handlers ?? []),
   ...baseHandlers,
   ...localChat.handlers,
-  ...localHITL.handlers
+  ...localHITL.handlers,
+  // Every session's live channel: open one with `?live=1`.
+  createFakeRunner({ step: 400 }).handler
 );
