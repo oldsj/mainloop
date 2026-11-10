@@ -364,11 +364,6 @@ func (Unimplemented) RestartSession(context.Context, RestartSessionRequestObject
 	return nil, apierr.NotImplemented
 }
 
-// ResumeWorkspace is not implemented yet.
-func (Unimplemented) ResumeWorkspace(context.Context, ResumeWorkspaceRequestObject) (ResumeWorkspaceResponseObject, error) {
-	return nil, apierr.NotImplemented
-}
-
 // RetryTask is not implemented yet.
 func (Unimplemented) RetryTask(context.Context, RetryTaskRequestObject) (RetryTaskResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -406,11 +401,6 @@ func (Unimplemented) SetSessionModel(context.Context, SetSessionModelRequestObje
 
 // StopTurn is not implemented yet.
 func (Unimplemented) StopTurn(context.Context, StopTurnRequestObject) (StopTurnResponseObject, error) {
-	return nil, apierr.NotImplemented
-}
-
-// SuspendWorkspace is not implemented yet.
-func (Unimplemented) SuspendWorkspace(context.Context, SuspendWorkspaceRequestObject) (SuspendWorkspaceResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

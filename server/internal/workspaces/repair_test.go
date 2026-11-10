@@ -174,26 +174,20 @@ func TestScheduledOrphanSweepLogsWhenBlocked(t *testing.T) {
 	}
 }
 
-// Interim: without the delivery ledger a running turn is invisible, so idle suspend stays off.
-func TestIdleSweepIsOffWithoutADeliveryLedger(t *testing.T) {
-	names := func(h *harness) map[string]bool {
-		out := map[string]bool{}
-		for _, sw := range h.svc.sweeps() {
-			out[sw.Name] = true
-		}
-		return out
-	}
+// kagent parks idle workspaces itself, so there is no idle sweep, with or without a delivery ledger.
+func TestThereIsNoIdleSweep(t *testing.T) {
 	h := newHarness(t, nil)
-	if got := names(h); !got["workspace-idle"] || !got["workspace-archived"] || !got["workspace-orphans"] {
-		t.Fatalf("%v", got)
-	}
-	h.svc.Deliveries = nil
-	got := names(h)
-	if got["workspace-idle"] || !got["workspace-archived"] || !got["workspace-orphans"] {
-		t.Fatalf("%v", got)
-	}
-	if !strings.Contains(h.logs.String(), "idle suspend is off") {
-		t.Fatalf("not logged: %s", h.logs.String())
+	for _, ledger := range []bool{true, false} {
+		if !ledger {
+			h.svc.Deliveries = nil
+		}
+		got := map[string]bool{}
+		for _, sw := range h.svc.sweeps() {
+			got[sw.Name] = true
+		}
+		if got["workspace-idle"] || !got["workspace-archived"] || !got["workspace-orphans"] {
+			t.Fatalf("ledger=%v: %v", ledger, got)
+		}
 	}
 }
 

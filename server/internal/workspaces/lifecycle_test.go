@@ -230,7 +230,12 @@ func TestAnotherOperationOpenIsBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.svc.Delete(bg, w.WorkspaceId); !errors.Is(err, ErrBusy) {
+	// Preview traffic is not held while the workspace is still being created.
+	if err := h.svc.WakeForPreview(bg, w.WorkspaceId); !errors.Is(err, ErrBusy) {
+		t.Fatalf("%v", err)
+	}
+	// A second create joins nothing: one operation at a time.
+	if _, err := h.svc.enqueue(bg, w.WorkspaceId, dbstate.OpResume, nil); !errors.Is(err, ErrBusy) {
 		t.Fatalf("%v", err)
 	}
 }
