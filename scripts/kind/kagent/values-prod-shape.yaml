@@ -1,7 +1,7 @@
-# Prod-shaped delta over values.yaml for chart 0.0.0-72431b2. Apply with upgrade.sh.
+# Prod-shaped delta over values.yaml for chart 0.0.0-58a5957. Apply with upgrade.sh.
 controller:
   image:
-    tag: 0.0.0-72431b2
+    tag: 0.0.0-58a5957
 config:
   runtimePayloads:
     payloads:

@@ -1,12 +1,12 @@
 # The prod-shaped session policy, applied by upgrade.sh unless SESSION_POLICY=off.
-# Union of the workers using this install: kagent-sync (claude-smoke, kport-compose) and
-# runner-harness (git-instance-e2e, with the mainloop-dev Git tuples prod also lists).
+# claude-smoke is the kind smoke Agent. git-instance-e2e is runner-harness's Git E2E,
+# with the mainloop-dev Git tuples prod also lists. Add an E2E's Agents for its run.
 config:
   server:
     auth:
       sessionPolicy:
         namespace: kagent
-        agents: [claude-smoke, kport-compose, git-instance-e2e]
+        agents: [claude-smoke, git-instance-e2e]
         developmentEnvironmentRegistries: [docker.io]
         credentials:
           - {purpose: git-read, origin: "http://mainloop-git-read.mainloop-dev.svc.cluster.local", secretNamePattern: "mainloop-dev-git-read-*", key: authorization, header: authorization}
