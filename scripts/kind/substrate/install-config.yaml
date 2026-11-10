@@ -25,6 +25,19 @@ releases:
         ingressAllowedSPIFFEIDs:
           - spiffe://cluster.local/ns/ate-system/sa/atenet-client
           - spiffe://cluster.local/ns/kagent/sa/kagent-controller
+      # As in production: kagent Actors may resolve only labeled Secrets in namespace kagent.
+      credentialProvider:
+        namespacePolicies:
+          - atespace: kagent
+            allowedNamespaces: [kagent]
+            secretSelector:
+              matchLabels:
+                mainloop.dev/actor-egress: "true"
+          - atespace: kagent
+            allowedNamespaces: [kagent]
+            secretSelector:
+              matchLabels:
+                kagent.dev/runtime-injection: "true"
       otel:
         traces:
           enabled: false
