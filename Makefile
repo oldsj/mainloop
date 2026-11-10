@@ -1,4 +1,4 @@
-.PHONY: help dev dev-stop dev-reset kind-up kind-create kind-delete kind-load kind-secrets kind-deploy kind-forward kind-reset kind-logs kind-shell dev-live dev-live-status dev-live-purge dev-agents dev-harness dev-live-lease-acquire dev-live-lease-release install check check-mcp-tools check-server check-web lint lint-all fmt fmt-all _fmt _fmt-all test-timeouts test-timeout-integration
+.PHONY: help dev dev-stop dev-reset kind-up kind-create kind-delete kind-substrate kind-substrate-smoke kind-load kind-secrets kind-deploy kind-forward kind-reset kind-logs kind-shell dev-live dev-live-status dev-live-purge dev-agents dev-harness dev-live-lease-acquire dev-live-lease-release install check check-mcp-tools check-server check-web lint lint-all fmt fmt-all _fmt _fmt-all test-timeouts test-timeout-integration
 
 # Load .env file if it exists
 -include .env
@@ -66,6 +66,12 @@ kind-secrets: ## Create mainloop-secrets with random local values (kept if prese
 
 kind-deploy: ## Apply the Kind overlay and wait until it is ready
 	@./scripts/kind/deploy.sh
+
+kind-substrate: kind-create ## Install Substrate v1.0.1 (gVisor) on the Kind cluster
+	@./scripts/kind/substrate/install.sh
+
+kind-substrate-smoke: ## Create an actor, call it, suspend it and resume it
+	@./scripts/kind/substrate/smoke.sh
 
 kind-forward: ## Forward the app to http://localhost:5173 and the API to localhost:8000 (Ctrl-C stops both)
 	@trap 'kill 0' INT TERM; \

@@ -1,0 +1,31 @@
+# ActorTemplate for smoke.sh: one HTTP server and a durable directory. It is not a Kubernetes
+# object; `kubectl ate create actor-template` sends it to the Substrate API.
+metadata:
+  atespace: substrate-demo
+  name: smoke
+workerSelector:
+  matchLabels:
+    substrate-demo/pool: gvisor
+containers:
+  - name: http
+    image: registry.k8s.io/e2e-test-images/agnhost:2.56@sha256:352a050380078cb2a1c246357a0dfa2fcf243ee416b92ff28b44a01d1b4b0294
+    command:
+      - /agnhost
+      - netexec
+      - --http-port=80
+    wakeupProbe:
+      httpGet:
+        path: /
+        port: 80
+    volumeMounts:
+      - name: data
+        mountPath: /data
+resources:
+  limits:
+    cpuMillicores: 500
+    memoryBytes: 268435456
+snapshotConfig:
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
+volumes:
+  - name: data
+    durableDir: {}

@@ -60,6 +60,25 @@ Without DevSpace, `make kind-up` creates the cluster, builds and loads the image
 
 What works without kagent: the web app, the REST API (migrations run on start), and the MCP and Git listeners, which start with Git transport off. Not available: native Claude Code and Codex sessions, workspaces, and schedules. They need a kagent installation that this stack does not set up, so `/schedules` returns 502. GitHub is not configured, so there are no repository reads or pushes. [charts/mainloop/values-kind.yaml](../charts/mainloop/values-kind.yaml) holds the Kind settings.
 
+### Substrate on Kind
+
+`make kind-substrate` installs [Substrate](https://github.com/kagent-dev/substrate) v1.0.1 on the same cluster. It does not install kagent, so native sessions still need a kagent installation on top of it.
+
+```bash
+make kind-substrate         # PostgreSQL, the four Substrate Helm releases, one gVisor worker pool
+make kind-substrate-smoke   # create an actor, call it, suspend it, resume it
+```
+
+The script downloads `kubectl-ate` and Substrate's `setup.sql` for that version into `.cache/substrate/`, checks their SHA-256, and runs `kubectl ate install` with `scripts/kind/substrate/install-config.yaml`. It is safe to rerun. It needs `curl` and `openssl` in addition to the Kind prerequisites, and about 2 GiB of memory for the Substrate pods.
+
+What the install sets up, and why:
+
+- **PostgreSQL.** Substrate 1.0 ships no database. The script runs one in namespace `substrate-db`, creates the roles and schema with `setup.sql`, and writes the two connection-string Secrets the chart reads.
+- **Kubernetes 1.37 node with `certificates.k8s.io/v1beta1` on.** Substrate uses pod certificates and ClusterTrustBundles. Its components use the `v1` API, but the installer's preflight looks for `v1beta1`. `scripts/kind/cluster-config.yaml` enables it, so a cluster created before this change must be recreated (`make kind-delete`, then `make kind-substrate`).
+- **Router ingress.** The router denies callers that are not listed in `atenetRouter.ingressAllowedSPIFFEIDs`. The config lists ServiceAccount `atenet-client` in `ate-system`, the identity `kubectl ate proxy actor` uses. The chart does not create that ServiceAccount; the script does.
+- **Authorization.** It is on by default. `kubectl ate` without `--token-file` acts as the release's bootstrap owner, ServiceAccount `ate-client`.
+- **gVisor only.** The microVM sandbox class needs KVM, which Docker on macOS does not provide.
+
 ## Live dev instance
 
 `mainloop-dev` is a shared, prototype instance for fast iteration. It runs in namespace `mainloop-dev` on the production cluster, next to production `mainloop`, but DevSpace deploys and owns it directly; it is not Argo-managed. Production still changes only through pull requests, CI and GitOps.

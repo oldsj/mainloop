@@ -1,0 +1,28 @@
+# One gVisor worker for the Kind stack. Substrate requires the worker image by digest.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: substrate-demo
+---
+apiVersion: ate.dev/v1
+kind: WorkerPool
+metadata:
+  name: gvisor
+  namespace: substrate-demo
+  labels:
+    # Substrate copies the pool's labels to its workers; actor templates select on them.
+    substrate-demo/pool: gvisor
+spec:
+  # Two workers: one for an actor, one for the golden actor a template snapshots from.
+  replicas: 2
+  workerImage: ghcr.io/kagent-dev/substrate/ateworker-gvisor:v1.0.1@sha256:97ca74cd2cabc3fd28ac67790ed3b1f25b7b4247709a316ff374a428822c420e
+  sandboxClasses:
+    - name: gvisor
+  template:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: '1'
+        memory: 1Gi

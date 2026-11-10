@@ -1,0 +1,21 @@
+# Config for `kubectl ate install` (Substrate v1.0.1) on Kind. install.sh supplies the database
+# before the installer runs, hence `external`. The microVM sandbox class needs KVM, which Docker
+# on macOS does not have, so this stack runs gVisor only.
+postgres: external
+objectStore: rustfs
+timeout: 10m
+releases:
+  substrate:
+    values:
+      # The router denies every caller that is not listed. `kubectl ate proxy actor` requests its
+      # client certificate as ServiceAccount atenet-client, which install.sh creates.
+      atenetRouter:
+        ingressAllowedSPIFFEIDs:
+          - spiffe://cluster.local/ns/ate-system/sa/atenet-client
+      otel:
+        traces:
+          enabled: false
+        metrics:
+          enabled: false
+        logs:
+          enabled: false

@@ -1,0 +1,79 @@
+# PostgreSQL for Substrate on Kind. Substrate 1.0 ships no database: the chart reads two
+# connection-string Secrets, which install.sh creates after it prepares the roles and schema.
+# trunk-ignore-all(checkov,trivy): local Kind database. The image needs a writable root and its
+# own uid 70, and reads the admin password from the environment.
+apiVersion: v1
+kind: Service
+metadata:
+  name: substrate-postgres
+  namespace: substrate-db
+spec:
+  clusterIP: None
+  selector:
+    app: substrate-postgres
+  ports:
+    - port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: substrate-postgres
+  namespace: substrate-db
+spec:
+  serviceName: substrate-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: substrate-postgres
+  template:
+    metadata:
+      labels:
+        app: substrate-postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+          env:
+            - name: POSTGRES_DB
+              value: substrate
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: substrate-postgres-admin
+                  key: password
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, postgres, -d, substrate]
+            periodSeconds: 2
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 1Gi
