@@ -621,7 +621,8 @@ same transaction, keyed by the create request ID. The `workspace-preparation` lo
   when the vendored kagent API pin moves without them. `InvalidArgument`, `PermissionDenied` and
   `AlreadyExists` replies fail the row; other errors retry with the loop's backoff. The call
   carries the generation id and actor uid from the last `GetSession`, even when the association is
-  not current. kagent answers `FAILED_PRECONDITION` or `ABORTED` when they are stale, and the
+  not current. The generation id is derived from the Session and its Actor, so sleep and wake keep
+  it; only a replaced Actor changes it. kagent answers `FAILED_PRECONDITION` or `ABORTED` when they are stale, and the
   next pass reads the Session again and retries. With no association at all the loop waits.
 
 A row that is not confirmed 30 minutes after creation fails, but only after a last read of the

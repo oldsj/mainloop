@@ -156,7 +156,7 @@ type Server struct {
 	NoAssociation bool
 	asleep        map[string]bool
 	woken         map[string]bool
-	generation    map[string]int
+	wakes         map[string]int
 	forced        []string
 	prepares      []*api.PrepareSessionWorkspaceRequest
 	TamperAgent   func(*api.Agent)
@@ -177,7 +177,7 @@ func New() *Server {
 		byReq:    map[string]string{},
 		first:    map[string]*api.CreateSessionRequest{},
 		tasks:    map[a2a.TaskID]*a2a.Task{},
-		asleep:   map[string]bool{}, woken: map[string]bool{}, generation: map[string]int{},
+		asleep:   map[string]bool{}, woken: map[string]bool{}, wakes: map[string]int{},
 	}
 	mux := http.NewServeMux()
 	handle := func(proc string, h http.Handler) { mux.Handle(proc, s.guard(proc, h)) }
@@ -483,7 +483,7 @@ func (s *Server) Sleep(id string) {
 	s.asleep[id] = true
 }
 
-// Wake starts a sleeping Session's Actor under a new runtime generation, as traffic through the
+// Wake starts a sleeping Session's Actor (same Actor, same generation), as traffic through the
 // Substrate router does (a live attach, a preview).
 func (s *Server) Wake(id string) {
 	s.mu.Lock()
@@ -495,7 +495,7 @@ func (s *Server) Wake(id string) {
 func (s *Server) Wakes(id string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.generation[id]
+	return s.wakes[id]
 }
 
 // wake starts the Actor if it sleeps and reports whether it did; s.mu is held.
@@ -505,7 +505,7 @@ func (s *Server) wake(id string) bool {
 	}
 	s.asleep[id] = false
 	s.woken[id] = true
-	s.generation[id]++
+	s.wakes[id]++
 	return true
 }
 
@@ -556,8 +556,8 @@ func (s *Server) prepare(
 		return nil, err
 	}
 	if s.wake(sess.GetId()) || (s.Actors && (req.Msg.GetGenerationId() != s.generationID(sess.GetId()) || req.Msg.GetActorUid() != "uid-"+sess.GetId())) {
-		// A preparation wakes a sleeping runtime itself. The generation the caller read is then
-		// stale: it reads the Session again and retries.
+		// A preparation wakes a sleeping runtime itself and is refused; the caller reads the Session
+		// again and retries. (Assumed until kagent's preparation port lands.)
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("runtime generation is not current"))
 	}
 	if !s.gitCredentialsCountable(sess.GetId()) {
@@ -939,9 +939,11 @@ func (s *Server) actorRunning(id string) bool {
 	return s.Actors && !s.asleep[id] && (!s.IdleActors || s.woken[id])
 }
 
-// generationID names the Session's current runtime generation; each wake from sleep starts a new one.
+// generationID names the Session's runtime generation. As in kagent (sessions.proto), it is derived
+// from the Session id and the Actor uid, so sleep and wake keep it; only replacing the Actor
+// changes it, which the fake never does.
 func (s *Server) generationID(id string) string {
-	return fmt.Sprintf("gen-%s-%d", id, s.generation[id])
+	return "gen-" + id + "-uid-" + id
 }
 
 // turnRunning reports whether the Session has a task that is not finished; s.mu is held.
