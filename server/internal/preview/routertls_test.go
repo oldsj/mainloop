@@ -55,14 +55,17 @@ func TestAnUntrustedRouterIsNotSentTheRequest(t *testing.T) {
 	}
 }
 
-// The router closes the connection on a client whose SPIFFE ID is not on its allow-list; the
-// owner sees the waking page, and the refusal is retried once like any refusal.
-func TestAClientOffTheAllowListGetsNoTunnel(t *testing.T) {
+// The router accepts the CONNECT of a client whose SPIFFE ID is not on its allow-list and then
+// closes the tunnel. By then the request has been forwarded, so it is a 502 and is not replayed.
+func TestAClientOffTheAllowListGetsABadGateway(t *testing.T) {
 	e := newEnv(t)
 	e.router.allowed.Store("spiffe://cluster.local/ns/elsewhere/sa/someone")
-	wantWaking(t, e)
-	if got := e.router.seenClients(); len(got) != 2 {
-		t.Fatalf("router saw %d handshakes, want 2 (the attempt and its retry)", len(got))
+	rec := e.do("GET", wsHost, "/", nil, nil)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("got %d %q, want 502", rec.Code, rec.Body.String())
+	}
+	if got := e.router.seenClients(); len(got) != 1 {
+		t.Fatalf("router saw %d handshakes, want 1 (no replay after forwarding)", len(got))
 	}
 }
 

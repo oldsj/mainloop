@@ -394,9 +394,13 @@ request id, access log and panic recovery still wrap it. Any other host is the A
   `SUBSTRATE_ROUTER_CLIENT_CREDENTIAL` (signer `podidentity.podcert.ate.dev/identity`, key and
   chain in one file). The kubelet rotates both, so both are read on every connect. The router
   admits only SPIFFE IDs on its allow-list (`atenetRouter.ingressAllowedSPIFFEIDs`); the backend's
-  is `spiffe://cluster.local/ns/<namespace>/sa/mainloop-backend`. The router closes the connection
-  of a client it does not admit, and a missing or unreadable credential file fails the dial. After
-  the one retry, both end in the waking page, logged as "preview tunnel not ready" with the reason. The chart's `substrateRouterAuth.enabled` mounts both files into the API container only.
+  is `spiffe://cluster.local/ns/<namespace>/sa/mainloop-backend`. The router answers a client it
+  does not admit with `200` to the `CONNECT` and then closes the tunnel ("network authorization
+  denied" in the router's log; measured on Substrate 1.0.1 on Kind). By then the request has been
+  forwarded, so it is a `502` and is not replayed. A missing or unreadable credential file, or a
+  router certificate the trust bundle does not sign, fails the dial before anything is sent: after
+  the one retry the owner sees the waking page, logged as "preview tunnel not ready" with the
+  reason. The chart's `substrateRouterAuth.enabled` mounts both files into the API container only.
 - **Tunnel.** `CONNECT actor-upstream:<port>` to `SUBSTRATE_ROUTER_ADDRESS` with
   `ate-target-actor: <atespace>/<actor name>` from the kagent Session's runtime association (read
   per request), current or not. With no association the target is

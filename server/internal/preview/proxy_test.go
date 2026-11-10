@@ -64,9 +64,10 @@ func (f *fakeWaker) counts() (wakes, touches int) {
 	return len(f.wakes), len(f.touches)
 }
 
-// fakeRouter is a Substrate router stand-in: it serves CONNECT over mutual TLS, admits only
-// the SPIFFE ID on its allow-list (closing the connection on anyone else, as the router does),
-// records the target actor and bridges the tunnel to the dev server at devAddr.
+// fakeRouter is a Substrate router stand-in: it serves CONNECT over mutual TLS, records the
+// target actor and bridges the tunnel to the dev server at devAddr. Like the Substrate 1.0.1
+// router (observed on Kind), it answers a client whose SPIFFE ID is not on its allow-list with
+// 200 to the CONNECT and then closes the tunnel.
 type fakeRouter struct {
 	ln      net.Listener
 	devAddr atomic.Value // string
@@ -165,10 +166,13 @@ func (r *fakeRouter) handle(c net.Conn) {
 	r.mu.Lock()
 	r.clients = append(r.clients, id)
 	r.mu.Unlock()
+	br := bufio.NewReader(c)
 	if id != r.allowed.Load().(string) {
+		if _, err := http.ReadRequest(br); err == nil {
+			_, _ = io.WriteString(c, "HTTP/1.1 200 OK\r\n\r\n")
+		}
 		return
 	}
-	br := bufio.NewReader(c)
 	req, err := http.ReadRequest(br)
 	if err != nil {
 		return
