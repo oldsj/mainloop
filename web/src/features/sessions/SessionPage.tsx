@@ -90,6 +90,7 @@ export function SessionPage({ id }: { id: string }) {
   const native = useNativeSession(id);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [chatView, setChatView] = useState(false);
 
   const session = zoomSession(
     id,
@@ -135,7 +136,7 @@ export function SessionPage({ id }: { id: string }) {
   const canCancel = CANCELLABLE.includes(session.status);
   const canArchive = CLEARABLE.includes(session.status);
   // A session whose agent runs the SDK runner is driven live. `?live=1` forces it for local work.
-  const live = !archived && (native.data?.live === true || liveForced());
+  const live = !archived && (native.data?.live === true || liveForced()) && !chatView;
 
   function runStop() {
     setNotice(null);
@@ -210,7 +211,7 @@ export function SessionPage({ id }: { id: string }) {
 
       {live ? (
         <PanelBoundary name="Live session">
-          <LiveSession sessionId={session.id} />
+          <LiveSession sessionId={session.id} onFallback={() => setChatView(true)} />
         </PanelBoundary>
       ) : (
         <>

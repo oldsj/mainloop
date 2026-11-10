@@ -1,10 +1,15 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { ws } from 'msw';
+import { afterEach, describe, expect, it } from 'vitest';
 import { server } from '@/test/msw/server';
 import { createFakeRunner } from './fakeRunner';
 import { LiveSession } from './LiveSession';
-import { LIVE_SUBPROTOCOL, liveUrl } from './useLiveSession';
+import { LIVE_SUBPROTOCOL, LIVE_TIMING, liveUrl } from './useLiveSession';
+
+afterEach(() => {
+  LIVE_TIMING.backoffMs = 500;
+});
 
 function setup(opts?: Parameters<typeof createFakeRunner>[0]) {
   const runner = createFakeRunner(opts);
@@ -150,5 +155,25 @@ describe('live session', () => {
     expect(within(list).getByRole('option', { name: /\/compact/ })).toBeInTheDocument();
     await user.keyboard('{Enter}');
     expect(runner.received).toContainEqual({ k: 'user', text: '/compact' });
+  });
+
+  it('says the live channel is unavailable when the runner never answers, and offers a way out', async () => {
+    LIVE_TIMING.backoffMs = 5;
+    let attempts = 0;
+    server.use(
+      ws.link(/\/sessions\/[^/]+\/live$/).addEventListener('connection', ({ client }) => {
+        attempts += 1;
+        client.close(1011, 'runner unreachable');
+      })
+    );
+    let fellBack = false;
+    render(<LiveSession sessionId="s1" onFallback={() => (fellBack = true)} />);
+    const alert = await screen.findByTestId('live-unavailable');
+    expect(alert).toHaveTextContent('Live view unavailable');
+    expect(screen.getByTestId('live-conn')).toHaveTextContent('unavailable');
+    expect(attempts).toBeGreaterThanOrEqual(5);
+    const user = userEvent.setup();
+    await user.click(within(alert).getByRole('button', { name: 'Use the chat view' }));
+    expect(fellBack).toBe(true);
   });
 });

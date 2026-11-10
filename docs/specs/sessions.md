@@ -182,7 +182,10 @@ up. The send button becomes interrupt while a turn runs and the composer is empt
 too, and Shift+Tab or the mode button below the composer cycles the permission mode. The view
 re-attaches with backoff after a drop and immediately when the page becomes visible again; every
 attach rebuilds the transcript from the runner's `hello` backlog (in memory in Phase 1, so a runner
-restart loses it). `?live=1` on a session URL forces the live view for local work; with
+restart loses it). After five failed attaches in a row with no `hello` (about 15 s, longer than a
+wake's 503s normally last) the view says the live channel is unavailable, keeps retrying every 8 s,
+and offers Retry now and Use the chat view (the regular session view, until the page is reopened).
+`?live=1` on a session URL forces the live view for local work; with
 `VITE_MSW=1 pnpm dev` a scripted fake runner answers (`web/src/features/live/fakeRunner.ts`, also
 used by the tests). Implemented against the fake runner; live proof on mainloop-dev is pending.
 

@@ -4,7 +4,17 @@ import { initialState, LiveModel, type Frame, type LiveState } from './store';
 
 export const LIVE_SUBPROTOCOL = 'kagent.sdk-runner.v1';
 
-export type Conn = 'connecting' | 'attached' | 'reconnecting';
+export type Conn = 'connecting' | 'attached' | 'reconnecting' | 'unavailable';
+
+/**
+ * Failed attaches in a row, with no `hello` between them, after which the view says the live
+ * channel is unavailable (about 15 s with the default backoff). Waking a sleeping session answers 503
+ * for a while, so a few failures are normal. It keeps retrying every 8 s after that.
+ */
+export const UNAVAILABLE_AFTER = 5;
+
+/** The first retry delay; it doubles up to 16 times this. Tests shorten it. */
+export const LIVE_TIMING = { backoffMs: 500 };
 
 /**
  * The WebSocket URL of a session's live channel. A WebSocket upgrade has no place in the generated
@@ -23,6 +33,8 @@ export interface LiveSession {
   /** Sends a client command. False when the socket is not open; a note says so in the log. */
   send: (cmd: Record<string, unknown>) => boolean;
   answer: (permId: string, choice: number) => void;
+  /** Attaches again now, without waiting for the backoff. */
+  retry: () => void;
 }
 
 /**
@@ -35,6 +47,7 @@ export function useLiveSession(sessionId: string): LiveSession {
   const [state, setState] = useState<LiveState>(initialState);
   const [conn, setConn] = useState<Conn>('connecting');
   const frame = useRef(0);
+  const retryNow = useRef<() => void>(() => {});
 
   const flush = useCallback(() => {
     if (frame.current) return;
@@ -50,7 +63,8 @@ export function useLiveSession(sessionId: string): LiveSession {
 
   useEffect(() => {
     let closed = false;
-    let backoff = 500;
+    let backoff = LIVE_TIMING.backoffMs;
+    let failures = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const connect = () => {
@@ -66,7 +80,8 @@ export function useLiveSession(sessionId: string): LiveSession {
         }
         if (!f || typeof f.k !== 'string') return;
         if (f.k === 'hello') {
-          backoff = 500;
+          backoff = LIVE_TIMING.backoffMs;
+          failures = 0;
           setConn('attached');
           model.current.hello(f);
         } else {
@@ -78,9 +93,10 @@ export function useLiveSession(sessionId: string): LiveSession {
       sock.onclose = () => {
         if (ws.current === sock) ws.current = null;
         if (closed) return;
-        setConn('reconnecting');
+        failures += 1;
+        setConn(failures >= UNAVAILABLE_AFTER ? 'unavailable' : 'reconnecting');
         timer = setTimeout(connect, backoff);
-        backoff = Math.min(backoff * 2, 8000);
+        backoff = Math.min(backoff * 2, LIVE_TIMING.backoffMs * 16);
       };
     };
 
@@ -89,9 +105,17 @@ export function useLiveSession(sessionId: string): LiveSession {
       if (document.hidden || closed) return;
       if (!ws.current || ws.current.readyState > WebSocket.OPEN) {
         clearTimeout(timer);
-        backoff = 500;
+        backoff = LIVE_TIMING.backoffMs;
         connect();
       }
+    };
+
+    retryNow.current = () => {
+      if (closed || (ws.current && ws.current.readyState <= WebSocket.OPEN)) return;
+      clearTimeout(timer);
+      backoff = LIVE_TIMING.backoffMs;
+      setConn('connecting');
+      connect();
     };
 
     connect();
@@ -133,5 +157,7 @@ export function useLiveSession(sessionId: string): LiveSession {
     [send, flush]
   );
 
-  return { state, conn, send, answer };
+  const retry = useCallback(() => retryNow.current(), []);
+
+  return { state, conn, send, answer, retry };
 }
