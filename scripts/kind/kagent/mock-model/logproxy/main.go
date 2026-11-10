@@ -1,5 +1,5 @@
-// logproxy runs mockllm on 127.0.0.1:8081 and serves it on :8080. For every request mockllm
-// does not answer with 200, it logs the method, path, status, message roles and last message,
+// logproxy runs mockllm on 127.0.0.1:8081 and serves it on :8080. It drops system-role
+// messages before forwarding. For every request mockllm does not answer with 200, it logs the method, path, status, message roles and last message,
 // so a fixture gap shows what the client actually sent.
 package main
 
@@ -32,13 +32,41 @@ func main() {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		body = dropSystemMessages(body)
 		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		proxy.ServeHTTP(rec, r)
 		if rec.status != http.StatusOK {
 			log.Printf("%s %s -> %d %s", r.Method, r.URL.RequestURI(), rec.status, summarize(body))
 		}
 	})))
+}
+
+// dropSystemMessages removes system-role messages. The Claude CLI appends its environment
+// block as one after the user's message, and mockllm matches only the last message.
+func dropSystemMessages(body []byte) []byte {
+	var req map[string]json.RawMessage
+	var msgs []json.RawMessage
+	if json.Unmarshal(body, &req) != nil || json.Unmarshal(req["messages"], &msgs) != nil {
+		return body
+	}
+	kept := msgs[:0]
+	for _, m := range msgs {
+		var role struct {
+			Role string `json:"role"`
+		}
+		if json.Unmarshal(m, &role) == nil && role.Role == "system" {
+			continue
+		}
+		kept = append(kept, m)
+	}
+	req["messages"] = must(json.Marshal(kept))
+	out, err := json.Marshal(req)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 // summarize returns the roles of all messages and the last message, truncated.
