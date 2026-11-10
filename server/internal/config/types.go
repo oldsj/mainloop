@@ -160,17 +160,15 @@ type ProviderProfile struct {
 	// when the turn starts. Empty means /model lists nothing, but a model may still be set by name.
 	Models []ProviderModel `json:"models"`
 	// DefaultModel is one of Models' ids, required when Models is not empty and empty otherwise.
-	// It is never sent to kagent for its own sake: a Claude override reset to default omits the
-	// metadata key, as empty or absent already means the harness default. Codex is the exception
-	// (see server/internal/sessions): once a session has any override, every turn names a model and
-	// an effort explicitly, this one included, because Codex keeps the last explicit value across
-	// turns and an empty value does not clear it.
+	// Every turn without a model override names it explicitly to kagent (see
+	// server/internal/sessions turnMetadata), so a value carried by the harness from an earlier
+	// turn never outlives a reset to default.
 	DefaultModel string `json:"default_model"`
 	// EffortLevels is the subset of EffortLevels this profile offers; /effort rejects any other
 	// word for a session on this profile.
 	EffortLevels []string `json:"effort_levels"`
 	// DefaultEffort is one of EffortLevels, required when EffortLevels is not empty and empty
-	// otherwise. See DefaultModel for why it is ever sent at all.
+	// otherwise. Sent on every turn without an effort override, like DefaultModel.
 	DefaultEffort string `json:"default_effort"`
 }
 

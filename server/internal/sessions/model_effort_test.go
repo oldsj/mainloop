@@ -228,87 +228,66 @@ func TestSetSessionEffortAcceptsABuiltinLevelWhenOperatorProfileOmitsEffort(t *t
 	}
 }
 
-func TestClaudeTurnMetadataOmitsUntouchedKeys(t *testing.T) {
-	var log metaLog
-	e := newEnv(t, metaOpt(t, &log))
-	e.withProviders()
-	id := e.newSession("start")
-	e.run()
-	e.waitState(e.firstDelivery(id), dbstate.DeliveryCompleted)
-
-	sent := log.last(t)
-	if len(sent.Metadata) != 0 {
-		t.Fatalf("untouched Claude metadata = %+v, want none", sent.Metadata)
+// wantMeta fails unless a send named exactly this model and effort.
+func wantMeta(t *testing.T, label string, sent sentMeta, model, effort string) {
+	t.Helper()
+	if len(sent.Metadata) != 2 || sent.Metadata[kagent.ModelMetadataKey] != model || sent.Metadata[kagent.EffortMetadataKey] != effort {
+		t.Fatalf("%s: metadata = %+v, want model %q and effort %q", label, sent.Metadata, model, effort)
 	}
 }
 
-func TestClaudeTurnMetadataNamesOnlyTheOverriddenKey(t *testing.T) {
-	var log metaLog
-	e := newEnv(t, metaOpt(t, &log))
-	e.withProviders()
-	id := e.newSession("start")
-	e.run()
-	e.waitState(e.firstDelivery(id), dbstate.DeliveryCompleted)
-
-	if _, err := e.setModel(id, strp("claude-opus-5")); err != nil {
-		t.Fatalf("set model: %v", err)
-	}
+func (e *env) sendTurn(id, text string) {
+	e.t.Helper()
 	mid := uuid.NewString()
-	if _, err := e.svc.SendTo(context.Background(), id, mid, "again"); err != nil {
-		t.Fatalf("send: %v", err)
+	if _, err := e.svc.SendTo(context.Background(), id, mid, text); err != nil {
+		e.t.Fatalf("send: %v", err)
 	}
 	e.waitState(mid, dbstate.DeliveryCompleted)
-
-	sent := log.last(t)
-	if len(sent.Metadata) != 1 || sent.Metadata[kagent.ModelMetadataKey] != "claude-opus-5" {
-		t.Fatalf("metadata = %+v", sent.Metadata)
-	}
 }
 
-func TestCodexOnceTouchedNamesBothKeysExplicitlyEvenOnDefault(t *testing.T) {
-	var log metaLog
-	e := newEnv(t, metaOpt(t, &log))
-	e.withProviders()
-	id, err := e.svc.Create(context.Background(), sessions.NewSession{
-		Title: "Fix the thing", Description: "d", Prompt: "start", AgentKind: "codex",
-	})
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	e.run()
-	e.waitState(e.firstDelivery(id), dbstate.DeliveryCompleted)
+// Every turn names both keys, for every provider: the override where one is set, the profile's
+// default otherwise, including the first turn and a turn after a reset to default.
+func TestEveryTurnNamesModelAndEffortExplicitly(t *testing.T) {
+	for _, kind := range []string{"claude", "codex"} {
+		t.Run(kind, func(t *testing.T) {
+			var log metaLog
+			e := newEnv(t, metaOpt(t, &log))
+			e.withProviders()
+			profile, ok := e.svc.Providers.Profile(kind)
+			if !ok || profile.DefaultModel == "" || profile.DefaultEffort == "" || len(profile.EffortLevels) == 0 {
+				t.Fatalf("profile %q has no defaults: %+v", kind, profile)
+			}
+			id, err := e.svc.Create(context.Background(), sessions.NewSession{
+				Title: "Fix the thing", Description: "d", Prompt: "start", AgentKind: kind,
+			})
+			if err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			e.run()
+			e.waitState(e.firstDelivery(id), dbstate.DeliveryCompleted)
+			wantMeta(t, "first turn", log.last(t), profile.DefaultModel, profile.DefaultEffort)
 
-	profile, ok := e.svc.Providers.Profile("codex")
-	if !ok {
-		t.Fatal("no codex profile")
-	}
+			effort := profile.EffortLevels[len(profile.EffortLevels)-1]
+			if _, err := e.setModel(id, strp("some-model")); err != nil {
+				t.Fatalf("set model: %v", err)
+			}
+			e.sendTurn(id, "model only")
+			wantMeta(t, "model override", log.last(t), "some-model", profile.DefaultEffort)
 
-	// Touch the session with a non-default effort.
-	if _, err := e.setEffort(id, effortp("high")); err != nil {
-		t.Fatalf("set effort: %v", err)
-	}
-	firstTurn := uuid.NewString()
-	if _, err := e.svc.SendTo(context.Background(), id, firstTurn, "again"); err != nil {
-		t.Fatalf("send: %v", err)
-	}
-	e.waitState(firstTurn, dbstate.DeliveryCompleted)
-	sent := log.last(t)
-	if sent.Metadata[kagent.ModelMetadataKey] != profile.DefaultModel || sent.Metadata[kagent.EffortMetadataKey] != "high" {
-		t.Fatalf("first touched turn metadata = %+v", sent.Metadata)
-	}
+			if _, err := e.setEffort(id, effortp(effort)); err != nil {
+				t.Fatalf("set effort: %v", err)
+			}
+			e.sendTurn(id, "both")
+			wantMeta(t, "both overrides", log.last(t), "some-model", effort)
 
-	// Reset back to default: the real default values are still sent explicitly, not omitted.
-	if _, err := e.setEffort(id, nil); err != nil {
-		t.Fatalf("reset effort: %v", err)
-	}
-	secondTurn := uuid.NewString()
-	if _, err := e.svc.SendTo(context.Background(), id, secondTurn, "once more"); err != nil {
-		t.Fatalf("send: %v", err)
-	}
-	e.waitState(secondTurn, dbstate.DeliveryCompleted)
-	sent = log.last(t)
-	if sent.Metadata[kagent.ModelMetadataKey] != profile.DefaultModel || sent.Metadata[kagent.EffortMetadataKey] != profile.DefaultEffort {
-		t.Fatalf("reset turn metadata = %+v, want explicit defaults %q/%q",
-			sent.Metadata, profile.DefaultModel, profile.DefaultEffort)
+			if _, err := e.setModel(id, nil); err != nil {
+				t.Fatalf("reset model: %v", err)
+			}
+			if _, err := e.setEffort(id, nil); err != nil {
+				t.Fatalf("reset effort: %v", err)
+			}
+			e.sendTurn(id, "reset")
+			wantMeta(t, "reset to default", log.last(t), profile.DefaultModel, profile.DefaultEffort)
+		})
 	}
 }

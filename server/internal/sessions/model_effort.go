@@ -87,36 +87,33 @@ func (s *Service) requireOwnedBinding(ctx context.Context, sessionID string) (st
 	return kind, nil
 }
 
-// turnMetadata is the A2A message metadata that carries a turn's model and effort override, keyed
-// by the binding's kind (provider profile id). Claude sends only what is actually overridden, and
-// omits a key reset to default: absent already means the harness default to kagent, and Claude's
-// native session carries no override across turns for the key to leave behind. Codex is the
-// exception: once touched is true (the session has had either override, ever, even if later reset)
-// every turn names both keys explicitly, because kagent's Codex harness keeps the last explicit
-// value as a turn/start override for its later turns, and an empty value does not clear it, only a
-// concrete one does — so resetting to default sends the profile's own DefaultModel/DefaultEffort,
-// not an empty string.
-func (s *Service) turnMetadata(kind string, model, effort *string, touched bool) map[string]any {
+// turnMetadata is the A2A message metadata that names a turn's model and effort, keyed by the
+// binding's kind (provider profile id). Every turn, for every provider, names both keys explicitly:
+// the override when one is set, otherwise the profile's DefaultModel/DefaultEffort. Mainloop then
+// does not depend on how a harness treats an absent key or a value from an earlier turn (kagent's
+// re-ported harnesses differ: Codex no longer carries an override across turns, while the Claude
+// SDK driver has kept one), and resetting to default sends the real default, which clears a
+// carried value where an empty or absent key would not. A key is omitted only when there is
+// nothing to name: no override and a profile without that default (an unknown kind, or a profile
+// that offers no models or effort levels), where absent means kagent's harness default.
+func (s *Service) turnMetadata(kind string, model, effort *string) map[string]any {
 	profile, _ := s.profileFor(kind)
-	if profile.NativeProvider == ProviderCodex && touched {
-		resolvedModel, resolvedEffort := profile.DefaultModel, profile.DefaultEffort
-		if model != nil {
-			resolvedModel = *model
-		}
-		if effort != nil {
-			resolvedEffort = *effort
-		}
-		return map[string]any{kagent.ModelMetadataKey: resolvedModel, kagent.EffortMetadataKey: resolvedEffort}
-	}
-	var out map[string]any
+	resolvedModel, resolvedEffort := profile.DefaultModel, profile.DefaultEffort
 	if model != nil {
-		out = map[string]any{kagent.ModelMetadataKey: *model}
+		resolvedModel = *model
 	}
 	if effort != nil {
-		if out == nil {
-			out = map[string]any{}
-		}
-		out[kagent.EffortMetadataKey] = *effort
+		resolvedEffort = *effort
+	}
+	out := map[string]any{}
+	if resolvedModel != "" {
+		out[kagent.ModelMetadataKey] = resolvedModel
+	}
+	if resolvedEffort != "" {
+		out[kagent.EffortMetadataKey] = resolvedEffort
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
