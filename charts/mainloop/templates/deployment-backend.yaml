@@ -123,12 +123,16 @@ spec:
           emptyDir:
             sizeLimit: 3Gi
         {{- if .Values.kagentControlAuth.enabled }}
+        # kagent verifies this ServiceAccount token by TokenReview; the kubelet rotates the file and
+        # the server re-reads it. The principal is the ServiceAccount's UID, so recreating the
+        # ServiceAccount changes who owns the Sessions.
         - name: kagent-control-auth
-          secret:
-            secretName: kagent-control-token
-            items:
-              - key: current
-                path: current
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: {{ .Values.kagentControlAuth.audience }}
+                  expirationSeconds: 3600
+                  path: token
         - name: kagent-control-ca
           emptyDir:
             medium: Memory

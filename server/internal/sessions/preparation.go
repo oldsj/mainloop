@@ -116,6 +116,8 @@ func operationName(o kagentapi.RuntimeOperation) (api.NativePreparationObservati
 		return "resume", true
 	case kagentapi.RuntimeOperation_RUNTIME_OPERATION_DELETE:
 		return "delete", true
+	case kagentapi.RuntimeOperation_RUNTIME_OPERATION_REVERT:
+		return "revert", true
 	case kagentapi.RuntimeOperation_RUNTIME_OPERATION_NONE:
 		return "none", true
 	}

@@ -26,7 +26,8 @@ export function WorkspacePreviews({ workspaceId }: { workspaceId: string }) {
         Previews
       </h2>
       <p className="text-muted-foreground text-sm">
-        Open a declared HTTP port in a new tab. A suspended workspace wakes when you open it.
+        Open a declared HTTP port in a new tab. A sleeping workspace wakes when you open it; a dev
+        server has to be started again after a wake.
       </p>
 
       {reason ? (

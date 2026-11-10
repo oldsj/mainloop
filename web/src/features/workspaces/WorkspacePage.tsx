@@ -12,15 +12,7 @@ import { loadFailure, type Notice } from '@/features/sessions/model';
 import type { TaskView } from '@/lib/contract';
 import { statusLabel, taskForWorkspace } from '@/lib/taskState';
 import { PanelBoundary } from '@/shell/PanelBoundary';
-import {
-  canResume,
-  canSuspend,
-  isWorkspace,
-  loadMessage,
-  stateHint,
-  UNREADABLE,
-  type WorkspaceLifecycle
-} from './model';
+import { isWorkspace, loadMessage, stateHint, UNREADABLE, type WorkspaceLifecycle } from './model';
 import { useTasks, useWorkspace, useWorkspaceActions } from './queries';
 import { ShortId } from './ShortId';
 import { WorkspaceManifest } from './WorkspaceManifest';
@@ -163,8 +155,6 @@ export function WorkspacePage({ id }: { id: string }) {
         notice={notice}
         busy={actions.busy}
         active={actions.active}
-        onSuspend={actions.suspend}
-        onResume={actions.resume}
         onRefresh={actions.refresh}
         onDelete={() => setConfirmDelete(true)}
       />
@@ -198,23 +188,20 @@ interface LifecycleSectionProps {
   notice: Notice | null;
   busy: boolean;
   active: string | null;
-  onSuspend: () => void;
-  onResume: () => void;
   onRefresh: () => void;
   onDelete: () => void;
 }
 
 /**
- * The state, the publication and the four controls. Each control is enabled only when its state
- * allows it, and every control is disabled while any action or its re-read is in flight.
+ * The state, the publication and the two controls, Refresh and Delete. Both are disabled while
+ * either action or its re-read is in flight. There is no suspend or resume: kagent puts an idle
+ * runtime to sleep by itself, and the next use wakes it.
  */
 function LifecycleSection({
   workspace,
   notice,
   busy,
   active,
-  onSuspend,
-  onResume,
   onRefresh,
   onDelete
 }: LifecycleSectionProps) {
@@ -237,24 +224,6 @@ function LifecycleSection({
           </p>
         </div>
         <div className="gap-sm flex flex-wrap">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={busy || !canSuspend(state)}
-            aria-busy={active === 'suspend'}
-            onClick={onSuspend}
-          >
-            {active === 'suspend' ? 'Suspending…' : 'Suspend workspace'}
-          </Button>
-          <Button
-            type="button"
-            variant="default"
-            disabled={busy || !canResume(state)}
-            aria-busy={active === 'resume'}
-            onClick={onResume}
-          >
-            {active === 'resume' ? 'Resuming…' : 'Resume workspace'}
-          </Button>
           <Button
             type="button"
             variant="outline"

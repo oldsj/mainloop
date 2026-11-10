@@ -654,10 +654,23 @@ func TestLiveDev(t *testing.T) {
 	t.Run("control-auth is enabled without Python", func(t *testing.T) {
 		for _, name := range []string{"backend", "mcp", "git"} {
 			env := envByName(containers(pod)[name])
-			if env["KAGENT_USER_ID"].Value != "mainloop" || env["KAGENT_CONTROL_TOKEN_FILE"].Value != "/run/kagent-control-auth/current" ||
+			if env["KAGENT_USER_ID"].Value != "mainloop" || env["KAGENT_CONTROL_TOKEN_FILE"].Value != "/run/kagent-control-auth/token" ||
 				env["SSL_CERT_FILE"].Value != "/run/kagent-control-ca/ca-bundle.crt" {
 				t.Errorf("%s: control-auth env missing: %+v", name, env)
 			}
+		}
+		// The bearer is a projected ServiceAccount token for kagent's audience, not a static Secret.
+		var token *corev1.ServiceAccountTokenProjection
+		for _, v := range pod.Volumes {
+			if v.Name == "kagent-control-auth" && v.Projected != nil && len(v.Projected.Sources) == 1 {
+				token = v.Projected.Sources[0].ServiceAccountToken
+			}
+			if v.Secret != nil && v.Secret.SecretName == "kagent-control-token" {
+				t.Errorf("volume %s still mounts the static kagent-control-token Secret", v.Name)
+			}
+		}
+		if token == nil || token.Audience != "kagent-invocation" || token.Path != "token" {
+			t.Errorf("kagent-control-auth is not a projected ServiceAccount token for kagent-invocation: %+v", token)
 		}
 		var bundle *corev1.Container
 		for i := range pod.InitContainers {

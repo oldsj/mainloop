@@ -7,7 +7,7 @@ import { createSseApplier } from '@/api/invalidation';
 import { workspaceFixture } from '@/test/fixtures';
 import { attempt, view } from '@/test/fixtures/tasks';
 import { server } from '@/test/msw/server';
-import { UNCONFIRMED, UNREADABLE, UNREADABLE_ACTION } from './model';
+import { ASLEEP, UNCONFIRMED, UNREADABLE, UNREADABLE_ACTION } from './model';
 import {
   portsRead,
   problem,
@@ -33,6 +33,8 @@ afterEach(async () => {
 
 const heading = () => screen.findByRole('heading', { level: 1, name: 'Workspace' });
 const button = (name: string) => screen.getByRole('button', { name });
+/** The lifecycle section, which holds the state, its hint and the controls. */
+const lifecycle = () => within(screen.getByRole('region', { name: 'Lifecycle' }));
 /** The value beside a manifest label. */
 const fact = (label: string) =>
   screen.getByText(label, { selector: 'dt' }).nextElementSibling as HTMLElement;
@@ -99,44 +101,51 @@ describe('workspace page', () => {
     renderWorkspace('/workspaces/w1');
     await heading();
     expect(fact('Development environment')).toHaveTextContent('unknown · linux/amd64');
-    expect(button('Suspend workspace')).toBeInTheDocument();
+    expect(button('Refresh status')).toBeInTheDocument();
   });
 
-  it('offers suspend only while running', async () => {
-    server.use(...serveWorkspace(workspaceFixture({ observed_state: 'running' })));
-    renderWorkspace('/workspaces/w1');
-    await heading();
-    expect(button('Suspend workspace')).toBeEnabled();
-    expect(button('Resume workspace')).toBeDisabled();
-    expect(button('Refresh status')).toBeEnabled();
-    expect(button('Delete workspace')).toBeEnabled();
-  });
+  it.each(['running', 'suspended', 'resuming', 'failed'] as const)(
+    'offers Refresh and Delete, and no Suspend or Resume button, while %s',
+    async (observed_state) => {
+      server.use(...serveWorkspace(workspaceFixture({ observed_state })));
+      renderWorkspace('/workspaces/w1');
+      await heading();
+      expect(button('Refresh status')).toBeEnabled();
+      expect(button('Delete workspace')).toBeEnabled();
+      expect(screen.queryByRole('button', { name: /suspend/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /resum/i })).not.toBeInTheDocument();
+    }
+  );
 
-  it('offers resume only while suspended', async () => {
+  it('says a suspended workspace is asleep and wakes on use', async () => {
     server.use(...serveWorkspace(workspaceFixture({ observed_state: 'suspended' })));
     renderWorkspace('/workspaces/w1');
     await heading();
-    expect(button('Resume workspace')).toBeEnabled();
-    expect(button('Suspend workspace')).toBeDisabled();
+    expect(screen.getByText('suspended', { selector: 'span' })).toBeInTheDocument();
+    expect(lifecycle().getByRole('status')).toHaveTextContent(
+      'Asleep. It wakes when you send a message or open a preview.'
+    );
   });
 
-  it('sends one suspend request for a double press', async () => {
-    let suspends = 0;
+  it('sends one refresh request for a double press', async () => {
+    let refreshes = 0;
     server.use(
       ...serveWorkspace(),
-      workspaceAction('suspend', async () => {
-        suspends += 1;
+      workspaceAction('refresh', async () => {
+        refreshes += 1;
         await delay(100);
-        return HttpResponse.json(workspaceFixture({ observed_state: 'suspending' }));
+        return HttpResponse.json(workspaceFixture({ observed_state: 'resuming' }));
       })
     );
     renderWorkspace('/workspaces/w1');
     await heading();
-    const suspend = button('Suspend workspace');
-    fireEvent.click(suspend);
-    fireEvent.click(suspend);
+    const refresh = button('Refresh status');
+    fireEvent.click(refresh);
+    fireEvent.click(refresh);
+    expect(await screen.findByRole('button', { name: 'Refreshing…' })).toBeDisabled();
+    expect(button('Delete workspace')).toBeDisabled();
     await waitFor(() => expect(button('Refresh status')).toBeEnabled());
-    expect(suspends).toBe(1);
+    expect(refreshes).toBe(1);
   });
 
   it('asks before deleting, and cancelling sends nothing', async () => {
@@ -204,7 +213,7 @@ describe('workspace page', () => {
       portsRead(() => HttpResponse.json({ ports: [] })),
       tasksRead([]),
       workspaceAction(
-        'suspend',
+        'refresh',
         problem(409, 'Workspace has an open delivery. Wait for it to finish.')
       )
     );
@@ -212,11 +221,11 @@ describe('workspace page', () => {
     renderWorkspace('/workspaces/w1');
     await heading();
     expect(reads).toBe(1);
-    await user.click(button('Suspend workspace'));
+    await user.click(button('Refresh status'));
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Workspace has an open delivery. Wait for it to finish.'
     );
-    await waitFor(() => expect(button('Suspend workspace')).toBeEnabled());
+    await waitFor(() => expect(button('Refresh status')).toBeEnabled());
     expect(reads).toBe(2);
   });
 
@@ -229,7 +238,7 @@ describe('workspace page', () => {
       }),
       portsRead(() => HttpResponse.json({ ports: [] })),
       tasksRead([]),
-      workspaceAction('suspend', async () => {
+      workspaceAction('refresh', async () => {
         await delay(150);
         return HttpResponse.json({ detail: 'Workspace has an open delivery.' }, { status: 409 });
       })
@@ -238,14 +247,14 @@ describe('workspace page', () => {
     const { queryClient } = renderWorkspace('/workspaces/w1');
     await heading();
     reloading = true;
-    await user.click(button('Suspend workspace'));
+    await user.click(button('Refresh status'));
     // Reset the workspace while the action is in flight. The page goes back to loading, the
     // lifecycle section unmounts, and the 409 arrives into that loading page.
     void queryClient.resetQueries({ queryKey: keys.workspace('w1') });
     expect(await screen.findByRole('alert')).toHaveTextContent('Workspace has an open delivery.');
     expect(screen.getByText('Loading workspace…')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Refresh status' })).not.toBeInTheDocument();
-    await waitFor(() => expect(button('Suspend workspace')).toBeEnabled());
+    await waitFor(() => expect(button('Refresh status')).toBeEnabled());
     expect(screen.getByRole('alert')).toHaveTextContent('Workspace has an open delivery.');
   });
 
@@ -272,7 +281,8 @@ describe('workspace page', () => {
     expect(alert).toHaveTextContent("Couldn't refresh this workspace");
     expect(alert).toHaveTextContent('Mainloop returned a server error.');
     // The data already on screen stays up beside the error.
-    expect(button('Suspend workspace')).toBeInTheDocument();
+    expect(button('Delete workspace')).toBeInTheDocument();
+    expect(screen.getByTestId('workspace-lifecycle-badge')).toBeInTheDocument();
     broken = false;
     await user.click(within(alert).getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
@@ -438,7 +448,7 @@ describe('workspace page', () => {
     );
     await waitFor(() => expect(button('Delete workspace')).toBeEnabled());
     expect(reads).toBe(2);
-    expect(button('Suspend workspace')).toBeEnabled();
+    expect(button('Refresh status')).toBeEnabled();
   });
 
   it('shows the server message for a 500 on delete, then re-reads the workspace', async () => {
@@ -532,8 +542,7 @@ describe('workspace page', () => {
     server.use(...serveWorkspace(workspaceFixture({ observed_state: 'suspending' })));
     const { queryClient } = renderWorkspace('/workspaces/w1');
     await heading();
-    expect(button('Resume workspace')).toBeDisabled();
-    expect(button('Suspend workspace')).toBeDisabled();
+    expect(lifecycle().getByRole('status')).toHaveTextContent(/Changing state/);
 
     // The same path the app's event stream takes: the applier writes the upsert into the cache.
     createSseApplier(queryClient)({
@@ -541,25 +550,27 @@ describe('workspace page', () => {
       data: JSON.stringify({ workspace: workspaceFixture({ observed_state: 'suspended' }) })
     });
 
-    await waitFor(() => expect(button('Resume workspace')).toBeEnabled());
-    expect(button('Suspend workspace')).toBeDisabled();
+    await waitFor(() => expect(lifecycle().getByRole('status')).toHaveTextContent(ASLEEP));
     expect(screen.getByText('suspended', { selector: 'span' })).toBeInTheDocument();
+    expect(screen.queryByText(/Changing state/)).not.toBeInTheDocument();
   });
 
   it('settles a resuming workspace when a live update says it is running', async () => {
     server.use(...serveWorkspace(workspaceFixture({ observed_state: 'resuming' })));
     const { queryClient } = renderWorkspace('/workspaces/w1');
     await heading();
-    expect(button('Resume workspace')).toBeDisabled();
-    expect(button('Suspend workspace')).toBeDisabled();
+    expect(lifecycle().getByRole('status')).toHaveTextContent(/Changing state/);
 
     createSseApplier(queryClient)({
       event: 'workspace:updated',
       data: JSON.stringify({ workspace: workspaceFixture({ observed_state: 'running' }) })
     });
 
-    await waitFor(() => expect(button('Suspend workspace')).toBeEnabled());
-    expect(button('Resume workspace')).toBeDisabled();
+    await waitFor(() =>
+      expect(screen.getByText('running', { selector: 'span' })).toBeInTheDocument()
+    );
+    expect(screen.queryByText(/Changing state/)).not.toBeInTheDocument();
+    expect(lifecycle().queryByRole('status')).not.toBeInTheDocument();
   });
 
   it('keeps the last good workspace on screen when a live update cannot be read', async () => {
@@ -579,7 +590,7 @@ describe('workspace page', () => {
     expect(alert).toHaveTextContent("Couldn't refresh this workspace");
     expect(alert).toHaveTextContent(UNREADABLE);
     expect(screen.getByTestId('workspace-lifecycle-badge')).toHaveTextContent(/WS RUNNING/i);
-    expect(button('Suspend workspace')).toBeEnabled();
+    expect(button('Refresh status')).toBeEnabled();
     expect(
       screen.queryByRole('heading', { level: 1, name: 'Workspace could not be loaded' })
     ).not.toBeInTheDocument();
@@ -591,14 +602,14 @@ describe('workspace page', () => {
   it('does not write an unreadable action result, and keeps the page up', async () => {
     server.use(
       ...serveWorkspace(workspaceFixture({ observed_state: 'running' })),
-      workspaceAction('suspend', () =>
+      workspaceAction('refresh', () =>
         HttpResponse.json({ ...workspaceFixture(), observed_state: 'exploded' })
       )
     );
     const user = userEvent.setup();
     renderWorkspace('/workspaces/w1');
     await heading();
-    await user.click(button('Suspend workspace'));
+    await user.click(button('Refresh status'));
     expect(await screen.findByTestId('workspace-action-notice')).toHaveTextContent(
       UNREADABLE_ACTION
     );

@@ -160,10 +160,12 @@ frontend:
   livenessProbe: {}
   readinessProbe: {}
 
-# Authenticated, TLS calls to kagent's control gateway. Needs Secrets kagent-control-token (key
-# current) and kagent-control-ca (key ca.crt) in the release namespace.
+# Authenticated, TLS calls to kagent's control gateway. The backend sends a projected token of its
+# own ServiceAccount, for the audience below, which kagent verifies by TokenReview. Needs Secret
+# kagent-control-ca (key ca.crt) in the release namespace.
 kagentControlAuth:
   enabled: false
+  audience: kagent-invocation
   gatewayURL: https://kagent-control.kagent.svc.cluster.local
   userID: mainloop
 
