@@ -1,0 +1,36 @@
+# Anthropic-compatible mock model for kind runs: kagent-dev/mockllm with fixture.json.
+# Apply with deploy.sh, which builds the image and loads it into kind.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-mock-model
+  namespace: kagent
+  labels: {app: mainloop-mock-model}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mainloop-mock-model}
+  template:
+    metadata:
+      labels: {app: mainloop-mock-model}
+    spec:
+      containers:
+        - name: mockllm
+          image: mainloop-mock-model:IMAGE_TAG
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mainloop-mock-model
+  namespace: kagent
+spec:
+  selector: {app: mainloop-mock-model}
+  ports:
+    - port: 8080
+      targetPort: 8080

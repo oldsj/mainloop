@@ -1,0 +1,221 @@
+{
+  "anthropic": [
+    {
+      "name": "kind_hello",
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "kind-hello"
+            }
+          ]
+        }
+      },
+      "response": {
+        "id": "msg_kind_hello",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "KIND_HELLO_DONE"
+          }
+        ],
+        "model": "claude-sonnet-4-5",
+        "stop_reason": "end_turn",
+        "usage": {
+          "input_tokens": 12,
+          "output_tokens": 7
+        }
+      }
+    },
+    {
+      "name": "kind_ask",
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "kind-ask"
+            }
+          ]
+        }
+      },
+      "response": {
+        "id": "msg_kind_ask",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_kind_ask",
+            "name": "AskUserQuestion",
+            "input": {
+              "questions": [
+                {
+                  "question": "Which option should the kind run pick?",
+                  "header": "Kind",
+                  "options": [
+                    {
+                      "label": "Alpha",
+                      "description": "First option"
+                    },
+                    {
+                      "label": "Beta",
+                      "description": "Second option"
+                    }
+                  ],
+                  "multiSelect": false
+                }
+              ]
+            }
+          }
+        ],
+        "model": "claude-sonnet-4-5",
+        "stop_reason": "tool_use",
+        "usage": {
+          "input_tokens": 12,
+          "output_tokens": 7
+        }
+      }
+    },
+    {
+      "name": "kind_ask_answer",
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_kind_ask"
+            }
+          ]
+        }
+      },
+      "response": {
+        "id": "msg_kind_ask_done",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "KIND_ASK_DONE"
+          }
+        ],
+        "model": "claude-sonnet-4-5",
+        "stop_reason": "end_turn",
+        "usage": {
+          "input_tokens": 12,
+          "output_tokens": 7
+        }
+      }
+    },
+    {
+      "name": "kind_merge",
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "kind-merge"
+            }
+          ]
+        }
+      },
+      "response": {
+        "id": "msg_kind_merge",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_kind_merge",
+            "name": "mcp__mainloop-merge-approval__merge_pull_request_with_approval",
+            "input": {
+              "repository": "oldsj/kind-test",
+              "pullRequest": 1
+            }
+          }
+        ],
+        "model": "claude-sonnet-4-5",
+        "stop_reason": "tool_use",
+        "usage": {
+          "input_tokens": 12,
+          "output_tokens": 7
+        }
+      }
+    },
+    {
+      "name": "kind_merge_result",
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_kind_merge"
+            }
+          ]
+        }
+      },
+      "response": {
+        "id": "msg_kind_merge_done",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "KIND_MERGE_DONE"
+          }
+        ],
+        "model": "claude-sonnet-4-5",
+        "stop_reason": "end_turn",
+        "usage": {
+          "input_tokens": 12,
+          "output_tokens": 7
+        }
+      }
+    },
+    {
+      "name": "default",
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": ""
+            }
+          ]
+        }
+      },
+      "response": {
+        "id": "msg_default",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "OK"
+          }
+        ],
+        "model": "claude-sonnet-4-5",
+        "stop_reason": "end_turn",
+        "usage": {
+          "input_tokens": 12,
+          "output_tokens": 7
+        }
+      }
+    }
+  ]
+}
