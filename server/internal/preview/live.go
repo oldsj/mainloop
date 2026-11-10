@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -242,9 +243,10 @@ func (l *Live) bootstrap(ctx context.Context, t LiveTarget) error {
 		}
 		return err
 	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusConflict {
-		return fmt.Errorf("runner bootstrap returned HTTP %d", resp.StatusCode)
+		return fmt.Errorf("runner bootstrap on %s returned HTTP %d: %q", t.Actor, resp.StatusCode, body)
 	}
 	l.mu.Lock()
 	l.booted[t.Actor] = true
