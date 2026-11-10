@@ -1,7 +1,12 @@
 package config
 
+import "strings"
+
 // Sessions tunes the native sessions' delivery ledger.
 type Sessions struct {
+	// LiveAgents names the kagent Agents (by name) whose Harness runs the Agent SDK runner
+	// (KAGENT_CLAUDE_DRIVER=sdk). Their sessions get GET /sessions/{id}/live.
+	LiveAgents []string `env:"MAINLOOP_LIVE_AGENTS" envSeparator:","`
 	// UncertainHold is how long a delivery whose send may have reached kagent keeps blocking new
 	// sends while it is looked up. After it, a message that no kagent task shows is marked failed.
 	UncertainHold Seconds `env:"SESSION_UNCERTAIN_HOLD_SECONDS" envDefault:"1800"`
@@ -28,4 +33,14 @@ type Sessions struct {
 	// StallToolAfter replaces StallAfter while the last event started a tool call with no result yet:
 	// a web search or a long build emits nothing until it ends.
 	StallToolAfter Seconds `env:"SESSION_STALL_TOOL_SECONDS" envDefault:"3600"`
+}
+
+// IsLiveAgent reports whether the named Agent runs the Agent SDK runner.
+func (s Sessions) IsLiveAgent(name string) bool {
+	for _, n := range s.LiveAgents {
+		if n = strings.TrimSpace(n); n != "" && n == name {
+			return true
+		}
+	}
+	return false
 }

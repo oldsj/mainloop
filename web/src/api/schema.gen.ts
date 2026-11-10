@@ -1010,6 +1010,32 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/sessions/{session_id}/live': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Live Session WebSocket
+     * @description Upgrades to a WebSocket with subprotocol `kagent.sdk-runner.v1` (the SDK runner's client
+     *     event protocol, one JSON object per text frame) for a session whose `NativeSessionInfo.live`
+     *     is true. The server bootstraps the runner and keeps its token; frames are relayed verbatim
+     *     both ways. A suspended session is woken by connecting.
+     *
+     *     404 when the session is not the owner's, has no kagent session, or its Agent is not live.
+     *     503 while the session cannot be reached yet; the client retries with backoff.
+     */
+    get: operations['getSessionLive'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/sessions/{session_id}/native': {
     parameters: {
       query?: never;
@@ -2078,6 +2104,12 @@ export interface components {
       deliveries: components['schemas']['NativeDeliveryInfo'][];
       /** Note */
       note: string | null;
+      /**
+       * Live
+       * @description Whether the session's Agent runs the Agent SDK runner, so GET /sessions/{session_id}/live serves a live WebSocket view of it.
+       * @default false
+       */
+      live: boolean;
     };
     /**
      * Project
@@ -8600,6 +8632,65 @@ export interface operations {
           'application/json':
             | components['schemas']['HTTPValidationError']
             | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  getSessionLive: {
+    parameters: {
+      query?: {
+        /** @description Resume after this event `seq`; events still in the runner's backlog are replayed in `hello`. */
+        since?: number;
+      };
+      header?: never;
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Switching to the WebSocket protocol `kagent.sdk-runner.v1`. */
+      101: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Not a WebSocket upgrade request. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description The runner refused the connection or failed. */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description The session is waking or unreachable; retry with backoff. */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };

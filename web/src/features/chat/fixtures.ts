@@ -51,6 +51,7 @@ export function nativeFixture(overrides: Partial<NativeSessionInfo> = {}): Nativ
     turn_in_flight: false,
     restartable: false,
     deliveries: [],
+    live: false,
     note: null,
     ...overrides
   };

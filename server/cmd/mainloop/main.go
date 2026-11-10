@@ -178,10 +178,11 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	svc := sessions.NewService(cfg, pool, kc, reg, creds, healthSvc, wsSvc, live, log)
 	hitlSvc := hitl.NewService(cfg, pool, hitl.FromClient(kc), svc, svc, svc, log)
 	schedSvc := schedules.NewService(cfg, pool, kc, reg, log)
-	previews, err := preview.New(cfg, pool, wsSvc, log)
+	previews, err := preview.New(cfg, pool, wsSvc, kc, log)
 	if err != nil {
 		return err
 	}
+	liveRelay := preview.NewLive(previews, svc, []byte(cfg.Identity.AgentTokenKey.Reveal()), cfg.FrontendOrigin(), cfg.IsDev(), log)
 	taskOpts := []tasks.Option{
 		tasks.WithRuntimes(wsSvc, svc),
 		tasks.WithStopObserver(&tasks.KagentStops{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc, Liveness: kc, Workspaces: wsSvc, Deleter: kc}),
@@ -195,7 +196,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 
 	handler, err := app.New(app.Deps{
 		Config: cfg, Log: log, DB: pool, Pool: pool, Hub: hub, Live: live,
-		Providers: reg, Projects: projectSvc, Tasks: taskSvc, Workspaces: wsSvc, Sessions: svc, Preview: previews,
+		Providers: reg, Projects: projectSvc, Tasks: taskSvc, Workspaces: wsSvc, Sessions: svc, Preview: previews, LiveRelay: liveRelay,
 		HITL: hitlSvc, Attention: attn, Health: healthSvc, Schedules: schedSvc, Merge: mergeSvc,
 		Devloop: &devloop.LeaseService{Pool: pool}, DevloopTargets: &devloop.TargetService{Pool: pool},
 	}).Handler()

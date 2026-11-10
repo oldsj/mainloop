@@ -36,6 +36,8 @@ export default defineConfig(({ mode }) => ({
       '/api': {
         target: apiProxy,
         changeOrigin: true,
+        // The live session view opens a WebSocket under /api/sessions/{id}/live.
+        ws: true,
         rewrite: (path) => path.replace(/^\/api/, '')
       }
     }

@@ -65,6 +65,13 @@ func safeMethod(m string) bool {
 	return m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
 }
 
+// OriginAllowed reports whether a browser Origin may call the API: the frontend, the API's own
+// origin, or a loopback origin in development. A WebSocket upgrade is a GET, which OriginGuard
+// lets through, so an upgrade handler checks this itself.
+func OriginAllowed(origin, host, frontendOrigin string, dev bool) bool {
+	return originAllowed(origin, host, frontendOrigin, dev)
+}
+
 func originAllowed(origin, host, frontendOrigin string, dev bool) bool {
 	if origin == frontendOrigin {
 		return true

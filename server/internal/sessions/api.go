@@ -277,6 +277,7 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row nativeBind
 		Kind: row.Kind, Model: row.Model, ParentSessionId: row.ParentSessionID,
 		Role: string(row.Role), SessionId: row.SessionID, TurnInFlight: inFlight, Turns: int(row.Turns),
 		ModelOverride: row.ModelOverride, EffortOverride: (*api.EffortLevel)(row.EffortOverride),
+		Live: row.KagentSessionID != nil && *row.KagentSessionID != "" && a.Svc.IsLiveAgent(agentName),
 	}
 	if row.TopicID != nil {
 		if name, err := q.GetTopicName(ctx, *row.TopicID); err == nil {

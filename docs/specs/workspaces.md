@@ -296,8 +296,10 @@ preview. A host with more labels (`x.<port>--<workspace>--preview.<domain>`) is 
 `http://localhost:8001` (giving `http://3000--<workspace>--preview.localhost:8001`) or
 `https://<domain>` in production. Mainloop checks that the workspace is the configured owner's and
 that the port is one the workspace declares, then opens
-`CONNECT actor-upstream:<port>` through the Substrate router to the Session's actor
-(`kagent/session-<kagent session id>`). The router has no authentication of its own, so the owner
+`CONNECT actor-upstream:<port>` through the Substrate router to the Session's running actor. The
+actor's name carries its runtime generation (`session-<kagent session id>-<suffix>`), so Mainloop
+reads it from the kagent Session's runtime association, which kagent reports only while the actor
+runs. The router has no authentication of its own, so the owner
 check is Mainloop's. With `onQuiesce: Full` on the harness, the CONNECT would wake a suspended actor behind kagent's back,
 so a preview of a suspended workspace first resumes its Session through kagent (the same as the
 resume endpoint), once for any number of concurrent previews, and only then connects. If the resume
@@ -389,7 +391,8 @@ request id, access log and panic recovery still wrap it. Any other host is the A
   waking up" page with `Retry-After: 2`; a workspace that cannot be resumed is `409`; any other
   failure is `502`.
 - **Tunnel.** `CONNECT actor-upstream:<port>` to `SUBSTRATE_ROUTER_ADDRESS` with
-  `ate-target-actor: <KAGENT_ACTOR_ATESPACE>/session-<kagent session id>`, timed by
+  `ate-target-actor: <atespace>/<actor name>` from the kagent Session's runtime association (read
+  per request; no association shows the waking page and the router is not contacted), timed by
   `SUBSTRATE_PREVIEW_CONNECT_TIMEOUT_SECONDS`. A router refusal before anything was sent is retried
   once, then the waking page; a failure after the request was forwarded is `502` and is never
   replayed. One tunnel per request (no pooling), no compression, streaming responses are flushed

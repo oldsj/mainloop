@@ -12,6 +12,7 @@ import { taskForSession } from '@/lib/taskState';
 import { zoomSession } from '@/lib/zoomSession';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { PanelBoundary } from '@/shell/PanelBoundary';
+import { LiveSession, liveForced } from '@/features/live';
 import { IdentityStrip } from './IdentityStrip';
 import {
   actionFailure,
@@ -89,6 +90,7 @@ export function SessionPage({ id }: { id: string }) {
   const native = useNativeSession(id);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [chatView, setChatView] = useState(false);
 
   const session = zoomSession(
     id,
@@ -133,6 +135,8 @@ export function SessionPage({ id }: { id: string }) {
     !archived && turnInFlight && session.status !== 'failed' && session.status !== 'cancelled';
   const canCancel = CANCELLABLE.includes(session.status);
   const canArchive = CLEARABLE.includes(session.status);
+  // A session whose agent runs the SDK runner is driven live. `?live=1` forces it for local work.
+  const live = !archived && (native.data?.live === true || liveForced()) && !chatView;
 
   function runStop() {
     setNotice(null);
@@ -176,8 +180,15 @@ export function SessionPage({ id }: { id: string }) {
       className="flex h-full min-h-0 flex-col"
       style={visibleMaxHeight === null ? undefined : { maxHeight: `${visibleMaxHeight}px` }}
     >
-      <header className="gap-sm border-border p-md flex flex-col border-b">
-        <div className="gap-sm flex items-center">
+      {/* Live, the header is one row, so a phone keeps the screen for the transcript. */}
+      <header
+        className={
+          live
+            ? 'gap-sm border-border px-sm py-xs flex items-center border-b'
+            : 'gap-sm border-border p-md flex flex-col border-b'
+        }
+      >
+        <div className="gap-sm flex flex-none items-center">
           <BackLink taskId={task?.view.task.id ?? null} projectId={session.project_id} />
           <span data-testid="session-status">
             <StatusBadge
@@ -186,125 +197,139 @@ export function SessionPage({ id }: { id: string }) {
             />
           </span>
         </div>
-        <h1 className="text-lg font-medium break-words">{session.title}</h1>
-        {session.description ? (
+        <h1
+          className={
+            live ? 'min-w-0 truncate text-sm font-medium' : 'text-lg font-medium break-words'
+          }
+        >
+          {session.title}
+        </h1>
+        {session.description && !live ? (
           <p className="text-muted-foreground text-sm break-words">{session.description}</p>
         ) : null}
       </header>
 
-      {/* A malformed native payload breaks only this strip; the actions above and below still work. */}
-      <PanelBoundary name="Identity">
-        <IdentityStrip session={session} />
-      </PanelBoundary>
+      {live ? (
+        <PanelBoundary name="Live session">
+          <LiveSession sessionId={session.id} onFallback={() => setChatView(true)} />
+        </PanelBoundary>
+      ) : (
+        <>
+          {/* A malformed native payload breaks only this strip; the actions above and below still work. */}
+          <PanelBoundary name="Identity">
+            <IdentityStrip session={session} />
+          </PanelBoundary>
 
-      {/* Stop turn is offered independently of Cancel, and only while a turn is running. */}
-      <section aria-label="Session actions" className="gap-sm p-md flex flex-wrap items-center">
-        {canStop ? (
-          <Button
-            variant="outline"
-            data-testid="session-stop-turn"
-            onClick={runStop}
-            disabled={offline || actions.stopTurn.isPending}
-          >
-            {actions.stopTurn.isPending ? 'Stopping…' : 'Stop turn'}
-          </Button>
-        ) : null}
-        {canCancel ? (
-          <Button
-            variant="destructive"
-            data-testid="session-cancel"
-            onClick={() => setConfirmCancel(true)}
-            disabled={offline || actions.cancel.isPending}
-          >
-            Cancel session
-          </Button>
-        ) : null}
-        {canArchive ? (
-          <Button
-            variant="outline"
-            data-testid="archive-session"
-            onClick={runArchive}
-            disabled={offline || actions.archive.isPending}
-          >
-            {actions.archive.isPending ? 'Clearing…' : 'Clear'}
-          </Button>
-        ) : null}
-      </section>
+          {/* Stop turn is offered independently of Cancel, and only while a turn is running. */}
+          <section aria-label="Session actions" className="gap-sm p-md flex flex-wrap items-center">
+            {canStop ? (
+              <Button
+                variant="outline"
+                data-testid="session-stop-turn"
+                onClick={runStop}
+                disabled={offline || actions.stopTurn.isPending}
+              >
+                {actions.stopTurn.isPending ? 'Stopping…' : 'Stop turn'}
+              </Button>
+            ) : null}
+            {canCancel ? (
+              <Button
+                variant="destructive"
+                data-testid="session-cancel"
+                onClick={() => setConfirmCancel(true)}
+                disabled={offline || actions.cancel.isPending}
+              >
+                Cancel session
+              </Button>
+            ) : null}
+            {canArchive ? (
+              <Button
+                variant="outline"
+                data-testid="archive-session"
+                onClick={runArchive}
+                disabled={offline || actions.archive.isPending}
+              >
+                {actions.archive.isPending ? 'Clearing…' : 'Clear'}
+              </Button>
+            ) : null}
+          </section>
 
-      {notice ? (
-        <p
-          data-testid="session-action-notice"
-          role="alert"
-          className={`px-md text-sm ${notice.tone === 'warn' ? 'text-term-yellow' : 'text-term-green'}`}
-        >
-          {notice.text}
-        </p>
-      ) : null}
+          {notice ? (
+            <p
+              data-testid="session-action-notice"
+              role="alert"
+              className={`px-md text-sm ${notice.tone === 'warn' ? 'text-term-yellow' : 'text-term-green'}`}
+            >
+              {notice.text}
+            </p>
+          ) : null}
 
-      {task ? (
-        <p className="px-md pt-sm text-sm">
-          Task{' '}
-          <Link
-            to="/tasks/$id"
-            params={{ id: task.view.task.id }}
-            data-testid="session-task-link"
-            className="text-foreground underline"
-          >
-            {task.view.task.title}
-          </Link>
-        </p>
-      ) : null}
-
-      {workspace ? (
-        <section
-          aria-label="Workspace"
-          className="gap-sm p-md border-border flex flex-col border-t"
-        >
-          <div className="gap-sm flex flex-wrap items-center">
-            <WorkspaceLifecycleBadge workspace={workspace} />
-            <WorkspacePublicationBadge workspace={workspace} />
-          </div>
-          <div>
-            <Button asChild variant="outline" size="sm">
-              <Link to="/workspaces/$id" params={{ id: workspace.workspace_id }}>
-                Manage workspace
+          {task ? (
+            <p className="px-md pt-sm text-sm">
+              Task{' '}
+              <Link
+                to="/tasks/$id"
+                params={{ id: task.view.task.id }}
+                data-testid="session-task-link"
+                className="text-foreground underline"
+              >
+                {task.view.task.title}
               </Link>
-            </Button>
+            </p>
+          ) : null}
+
+          {workspace ? (
+            <section
+              aria-label="Workspace"
+              className="gap-sm p-md border-border flex flex-col border-t"
+            >
+              <div className="gap-sm flex flex-wrap items-center">
+                <WorkspaceLifecycleBadge workspace={workspace} />
+                <WorkspacePublicationBadge workspace={workspace} />
+              </div>
+              <div>
+                <Button asChild variant="outline" size="sm">
+                  <Link to="/workspaces/$id" params={{ id: workspace.workspace_id }}>
+                    Manage workspace
+                  </Link>
+                </Button>
+              </div>
+            </section>
+          ) : null}
+
+          {session.status === 'completed' && session.summary ? (
+            <section className="gap-xs p-md flex flex-col">
+              <h3 className="text-sm font-medium">Summary</h3>
+              <p className="text-sm break-words whitespace-pre-wrap">{session.summary}</p>
+            </section>
+          ) : null}
+
+          {session.status === 'failed' && session.error ? (
+            <section className="gap-xs p-md flex flex-col">
+              <h3 className="text-sm font-medium">Error</h3>
+              <p className="text-destructive text-sm break-words">{session.error}</p>
+            </section>
+          ) : null}
+
+          <div className="p-md flex min-h-0 flex-1 flex-col">
+            <SessionChatSlot
+              sessionId={session.id}
+              closedReason={chatClosedReason(session)}
+              cancelled={session.status === 'cancelled'}
+            />
           </div>
-        </section>
-      ) : null}
 
-      {session.status === 'completed' && session.summary ? (
-        <section className="gap-xs p-md flex flex-col">
-          <h3 className="text-sm font-medium">Summary</h3>
-          <p className="text-sm break-words whitespace-pre-wrap">{session.summary}</p>
-        </section>
-      ) : null}
-
-      {session.status === 'failed' && session.error ? (
-        <section className="gap-xs p-md flex flex-col">
-          <h3 className="text-sm font-medium">Error</h3>
-          <p className="text-destructive text-sm break-words">{session.error}</p>
-        </section>
-      ) : null}
-
-      <div className="p-md flex min-h-0 flex-1 flex-col">
-        <SessionChatSlot
-          sessionId={session.id}
-          closedReason={chatClosedReason(session)}
-          cancelled={session.status === 'cancelled'}
-        />
-      </div>
-
-      <footer className="px-md pb-md">
-        <Link
-          to="/health"
-          search={{ session_id: session.id }}
-          className="text-muted-foreground text-sm underline"
-        >
-          Orchestration health
-        </Link>
-      </footer>
+          <footer className="px-md pb-md">
+            <Link
+              to="/health"
+              search={{ session_id: session.id }}
+              className="text-muted-foreground text-sm underline"
+            >
+              Orchestration health
+            </Link>
+          </footer>
+        </>
+      )}
 
       <ConfirmDialog
         open={confirmCancel}

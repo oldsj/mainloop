@@ -168,6 +168,55 @@ dispatch authority. Runtime `ready` alone does not prove preparation; saved rece
 not identify an earlier runtime admission failure's cause. The `web/` client has the generated types
 only; no screen shows the observation yet.
 
+### Live sessions (SDK runner)
+
+When `NativeSessionInfo.live` is true (the session's Agent runs the SDK runner driver), the session
+page replaces the identity strip, actions and chat with a live view attached to
+`GET /sessions/{id}/live` (WebSocket, subprotocol `kagent.sdk-runner.v1`, the runner's Client event
+protocol). It renders the way Claude Code does: assistant text after `●`, tool calls with their first
+output line after `⎿` (tap to expand), edits as diffs, permission prompts with numbered answers, and
+an interrupted turn as `⎿ Interrupted`; a finished turn prints nothing, and there are no status icons
+or cost lines. The composer sends messages as typed, slash commands included (`/model` opens the
+model and effort picker); a message sent while a turn runs shows as queued until the runner picks it
+up. Up on the composer's first line (or in an empty composer) recalls the previous sent message and
+Down on its last line steps forward, back to the unsent draft, which is kept; elsewhere the arrows
+move the caret, so multi-line editing works. History is this session's user messages (the attach
+backlog and those sent since), a repeat kept once. On a phone, a small `↑ history` button below the
+composer lists the last ten to tap into the composer. The send button becomes interrupt while a turn runs and the composer is empty; Esc interrupts
+too, and Shift+Tab or the mode button below the composer cycles the permission mode. The view
+re-attaches with backoff after a drop and immediately when the page becomes visible again; every
+attach rebuilds the transcript from the runner's `hello` backlog (in memory in Phase 1, so a runner
+restart loses it). After five failed attaches in a row with no `hello` (about 15 s, longer than a
+wake's 503s normally last) the view says the live channel is unavailable, keeps retrying every 8 s,
+and offers Retry now and Use the chat view (the regular session view, until the page is reopened).
+`?live=1` on a session URL forces the live view for local work; with
+`VITE_MSW=1 pnpm dev` a scripted fake runner answers (`web/src/features/live/fakeRunner.ts`, also
+used by the tests).
+
+The server relays the WebSocket verbatim to the runner's client port (`:7682/ws`) on the session's
+running actor through the Substrate router, like the workspace preview proxy. `live` is true when the
+session has a kagent Session and its Agent is listed in `MAINLOOP_LIVE_AGENTS`. An attach is the
+owner's only (another owner's session, or one that is not live, is `404`); a cross-origin `Origin` is
+`403` and a request that is not a WebSocket upgrade is `400`. The actor name comes from the kagent
+Session's runtime association. With none (the actor is idle-suspended) the server wakes the Session
+the way a send does: a workspace's session through the workspace service (`Wake`), never directly,
+and a standalone native or main session with kagent's `ResumeSession`. It then reads the association
+again, and answers `503` with `Retry-After: 2` while there is still none. A session started from
+`/agents` (Start session) is a standalone native session. The server bootstraps the
+runner on first attach to each actor (`PUT /bootstrap`, trust on first use; `409` means already set)
+with a token derived from `AGENT_TOKEN_KEY` and the kagent Session id, adds it to the upstream
+request, and strips cookies, credentials and `Origin`; the token never reaches the browser.
+`?since=<seq>` is passed through. A session created before its Agent ran the SDK runner has nothing
+listening on `:7682`: it still reports `live: true`, and the attach is `502` (the view then shows the
+unavailable state above).
+
+Proven live on mainloop-dev (2026-11-10) on a new `claude-workspace-dev` session: the upgrade, the
+runner's `hello` backlog, and use from a phone, through the gateway, the dev frontend's proxy and the
+relay. Tested with fakes only: the relay's bootstrap, refusals and waking paths (a fake runner and
+targets), and the session lookup's wake (the fake kagent with parked actors): a standalone session
+resumed directly, a workspace session woken only through the workspace service. A workspace
+session's live view has not been run on mainloop-dev.
+
 Opening a session follows its URL. Missing sessions show a not-found state. If the backend is unavailable, the page retries instead of treating the session as missing.
 An HTTP 5xx on session or workspace detail shows a server error with an instruction to reload,
 separately from a failed connection or a 404.
