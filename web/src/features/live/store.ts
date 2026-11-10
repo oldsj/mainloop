@@ -4,6 +4,11 @@
  * way Claude Code does: assistant text after a `●`, tool calls with their first output line after
  * `⎿`, edits as diffs, permission prompts with answer buttons, and queued user messages.
  *
+ * Only prompts the runner holds live arrive as `perm` frames: a client's own turn, and prompts
+ * outside the harness's approval boundary (the profile's own permission mode). A protected tool call
+ * or question in an A2A turn is deferred instead (kagent #90): the turn ends with a `tool_deferred`
+ * result and the request is answered through the A2A task, which the page shows beside this log.
+ *
  * SDK messages arrive unchanged (`k: "sdk"`), so this reads the Agent SDK's message shapes
  * loosely: unknown frames and fields are ignored, as the protocol requires.
  */
@@ -114,6 +119,12 @@ export interface LiveState {
   entries: Entry[];
   perms: Record<string, Perm>;
   status: Status;
+  /**
+   * The last turn ended on a deferred tool call (`tool_deferred`): an approval or question in an
+   * A2A turn now waits on the A2A task, not on this channel, and the runner refuses new messages
+   * until it is answered. The view shows the session's requests to answer.
+   */
+  deferred: boolean;
   activity: string | null;
   model: string;
   effort: string;
@@ -132,6 +143,7 @@ export function initialState(): LiveState {
     entries: [],
     perms: {},
     status: 'idle',
+    deferred: false,
     activity: null,
     model: '',
     effort: '',
@@ -281,6 +293,7 @@ export class LiveModel {
       case 'turn':
         if (f.state === 'running') {
           if (s.status === 'idle') s.status = 'running';
+          s.deferred = false;
           this.unqueue(f.uuids);
         } else if (f.state === 'idle') {
           s.status = 'idle';
@@ -427,6 +440,14 @@ export class LiveModel {
       return;
     }
     if (m.type === 'result') {
+      if (m.stop_reason === 'tool_deferred') {
+        // A protected call in an A2A turn: kagent parks it and asks through the A2A task.
+        this.sys('Waiting for your answer to the request below.');
+        s.deferred = true;
+        s.status = 'idle';
+        s.activity = null;
+        return;
+      }
       // Claude Code prints nothing at turn end; only an interrupted or failed turn gets a line.
       if (m.subtype !== 'success' || m.is_error) this.push({ t: 'interrupted' });
       s.status = 'idle';

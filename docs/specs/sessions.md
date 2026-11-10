@@ -183,7 +183,15 @@ Down on its last line steps forward, back to the unsent draft, which is kept; el
 move the caret, so multi-line editing works. History is this session's user messages (the attach
 backlog and those sent since), a repeat kept once. On a phone, a small `↑ history` button below the
 composer lists the last ten to tap into the composer. The send button becomes interrupt while a turn runs and the composer is empty; Esc interrupts
-too, and Shift+Tab or the mode button below the composer cycles the permission mode. The view
+too, and Shift+Tab or the mode button below the composer cycles the permission mode. The runner
+prompts live only for a turn a client started on its port and for prompts outside the harness's
+approval boundary (the profile's own permission mode); those are lost if the session sleeps. A
+protected tool call or question in a turn Mainloop sends (an A2A turn) is deferred instead
+(kagent #90): the live turn ends with a `tool_deferred` result, the log says it is waiting for the
+answer, the status reads "needs you", and the request shows at the end of the transcript as the same
+card the chat view shows, answered through the A2A task. Until it is answered the runner refuses new
+messages, the composer says to answer the request first, and a message sent anyway shows the
+runner's refusal; the answer replays the call and the turn continues. The view
 re-attaches with backoff after a drop and immediately when the page becomes visible again; every
 attach rebuilds the transcript from the runner's `hello` backlog (in memory in Phase 1, so a runner
 restart loses it). After five failed attaches in a row with no `hello` (about 15 s, longer than a

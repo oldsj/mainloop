@@ -5,7 +5,8 @@ import {
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent
+  type KeyboardEvent,
+  type ReactNode
 } from 'react';
 import { Markdown } from '@/components/markdown/markdown';
 import { cn } from '@/components/ui/cn';
@@ -27,17 +28,33 @@ const short = (id: string) => (id || '…').replace(/^claude-/, '');
  * A native Claude session driven live through its SDK runner: the transcript as Claude Code prints
  * it, permission prompts, interrupt, model and effort, permission mode, and a composer whose
  * messages queue while a turn runs. Phone first: one column that fills the page.
+ *
+ * Approvals and questions from an A2A turn do not come through the runner: they are the session's
+ * requests (`requests`, the same cards the chat view shows), placed at the end of the transcript.
  */
 export function LiveSession({
   sessionId,
-  onFallback
+  onFallback,
+  requests,
+  needsAnswer
 }: {
   sessionId: string;
   /** Leaves the live view for the regular one, offered when the live channel is unavailable. */
   onFallback?: () => void;
+  /** The session's pending requests, shown after the transcript. */
+  requests?: ReactNode;
+  /** A request is pending, so the session needs the owner. */
+  needsAnswer?: boolean;
 }) {
   const live = useLiveSession(sessionId);
-  return <LiveSessionView {...live} onFallback={onFallback} />;
+  return (
+    <LiveSessionView
+      {...live}
+      onFallback={onFallback}
+      requests={requests}
+      needsAnswer={needsAnswer}
+    />
+  );
 }
 
 export interface LiveSessionViewProps {
@@ -47,6 +64,8 @@ export interface LiveSessionViewProps {
   answer: (permId: string, choice: number) => void;
   retry: () => void;
   onFallback?: () => void;
+  requests?: ReactNode;
+  needsAnswer?: boolean;
 }
 
 const CONN_LABEL: Record<Conn, string> = {
@@ -62,10 +81,13 @@ export function LiveSessionView({
   send,
   answer,
   retry,
-  onFallback
+  onFallback,
+  requests,
+  needsAnswer = false
 }: LiveSessionViewProps) {
   const [sheet, setSheet] = useState(false);
   const busy = state.status !== 'idle';
+  const waiting = state.status === 'waiting' || state.deferred || needsAnswer;
   const interrupt = () => send({ k: 'interrupt' });
   const cycleMode = () => {
     const i = MODE_IDS.indexOf(state.mode as (typeof MODE_IDS)[number]);
@@ -79,8 +101,11 @@ export function LiveSessionView({
       className="bg-term-bg text-term-fg flex min-h-0 flex-1 flex-col font-mono text-sm"
     >
       <div className="gap-sm px-md py-xs border-border flex items-center border-b text-xs">
-        <span className={cn(statusClass(state.status))} data-testid="live-status">
-          {statusLabel(state)}
+        <span
+          className={cn(statusClass(waiting ? 'waiting' : state.status))}
+          data-testid="live-status"
+        >
+          {waiting && state.runner !== 'starting' ? 'needs you' : statusLabel(state)}
         </span>
         <span className="flex-1" />
         <span
@@ -128,7 +153,7 @@ export function LiveSessionView({
         </div>
       ) : null}
 
-      <Log state={state} answer={answer} />
+      <Log state={state} answer={answer} requests={requests} />
 
       <Composer
         state={state}
@@ -159,7 +184,15 @@ function statusClass(st: string) {
       : 'text-term-fg-muted';
 }
 
-function Log({ state, answer }: { state: LiveState; answer: LiveSessionViewProps['answer'] }) {
+function Log({
+  state,
+  answer,
+  requests
+}: {
+  state: LiveState;
+  answer: LiveSessionViewProps['answer'];
+  requests?: ReactNode;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   useLayoutEffect(() => {
@@ -190,6 +223,7 @@ function Log({ state, answer }: { state: LiveState; answer: LiveSessionViewProps
           ✻ {state.activity}… <span className="text-term-fg-muted text-xs">esc to interrupt</span>
         </div>
       ) : null}
+      {requests ? <div className="font-sans">{requests}</div> : null}
     </div>
   );
 }
@@ -538,7 +572,13 @@ function Composer({
             setSel(0);
           }}
           onKeyDown={onKey}
-          placeholder={busy ? 'Queue a message' : 'Message, or / for commands'}
+          placeholder={
+            state.deferred
+              ? 'Answer the request first'
+              : busy
+                ? 'Queue a message'
+                : 'Message, or / for commands'
+          }
           aria-label="Message"
           className="placeholder:text-term-fg-muted max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 text-base leading-snug outline-none"
         />
