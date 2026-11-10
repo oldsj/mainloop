@@ -17,11 +17,14 @@ import (
 
 type fakeTargets map[string]string
 
-func (f fakeTargets) LiveTarget(_ context.Context, id string) (string, error) {
-	if sid, ok := f[id]; ok {
-		return sid, nil
+func (f fakeTargets) LiveTarget(_ context.Context, id string) (LiveTarget, error) {
+	if id == "asleep" {
+		return LiveTarget{}, ErrLiveWaking
 	}
-	return "", ErrLiveNotFound
+	if sid, ok := f[id]; ok {
+		return LiveTarget{KagentSessionID: sid, Actor: "kagent/session-" + sid + "-ab12"}, nil
+	}
+	return LiveTarget{}, ErrLiveNotFound
 }
 
 // fakeRunner is the runner's client port: PUT /bootstrap (TOFU) and a /ws that echoes raw bytes.
@@ -71,9 +74,9 @@ func newTestLive(t *testing.T, runner http.Handler, dialErr error) (*httptest.Se
 	up := httptest.NewServer(runner)
 	t.Cleanup(up.Close)
 	addr := strings.TrimPrefix(up.URL, "http://")
-	dial := func(ctx context.Context, sid string) (net.Conn, error) {
-		if sid != "kagent-1" {
-			return nil, errors.New("unexpected actor " + sid)
+	dial := func(ctx context.Context, actor string) (net.Conn, error) {
+		if actor != "kagent/session-kagent-1-ab12" {
+			return nil, errors.New("unexpected actor " + actor)
 		}
 		if dialErr != nil {
 			return nil, dialErr
@@ -188,8 +191,10 @@ func TestLiveRefusals(t *testing.T) {
 
 func TestLiveWakingIs503(t *testing.T) {
 	front, _ := newTestLive(t, &fakeRunner{}, errors.New("router CONNECT returned HTTP 503"))
-	resp, _, _ := upgrade(t, front.URL, "/sessions/s1/live", nil)
-	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" {
-		t.Fatalf("status %d", resp.StatusCode)
+	for _, path := range []string{"/sessions/s1/live", "/sessions/asleep/live"} {
+		resp, _, _ := upgrade(t, front.URL, path, nil)
+		if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" {
+			t.Fatalf("%s: status %d", path, resp.StatusCode)
+		}
 	}
 }

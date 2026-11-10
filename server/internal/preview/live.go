@@ -26,7 +26,7 @@ const (
 	RunnerPort = 7682
 	// RunnerSubprotocol is the runner's client event protocol.
 	RunnerSubprotocol = "kagent.sdk-runner.v1"
-	// liveHost marks an outbound live request; the dialer reads the kagent Session from it.
+	// liveHost is the outbound host of a live request; the dialer reads the actor from its context.
 	liveHost = "live-actor"
 	// liveWakeBudget is how long an attach waits for a suspended actor to come back.
 	liveWakeBudget = 30 * time.Second
@@ -36,10 +36,22 @@ const (
 // ErrLiveNotFound is what a LiveTargets returns for a session the owner cannot open live.
 var ErrLiveNotFound = errors.New("session is not live")
 
-// LiveTargets resolves the owner's session to the kagent Session whose actor runs the SDK runner.
-type LiveTargets interface {
-	LiveTarget(ctx context.Context, sessionID string) (string, error)
+// ErrLiveWaking is what a LiveTargets returns while the session has no running actor yet.
+var ErrLiveWaking = errors.New("session is waking")
+
+// LiveTarget is the actor serving a live session: its kagent Session and the router's
+// "<atespace>/<actor>" name for the current runtime generation.
+type LiveTarget struct {
+	KagentSessionID string
+	Actor           string
 }
+
+// LiveTargets resolves the owner's session to the actor that runs its SDK runner.
+type LiveTargets interface {
+	LiveTarget(ctx context.Context, sessionID string) (LiveTarget, error)
+}
+
+var actorSafe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}/[A-Za-z0-9][A-Za-z0-9._-]{0,252}$`)
 
 // Live relays GET /sessions/{id}/live to the SDK runner's WebSocket on the session's actor,
 // through the Substrate router like the preview proxy. The server bootstraps the runner with a
@@ -50,7 +62,7 @@ type Live struct {
 	FrontendOrigin string
 	Dev            bool
 
-	dial     func(ctx context.Context, sessionID string) (net.Conn, error)
+	dial     func(ctx context.Context, actor string) (net.Conn, error)
 	key      []byte
 	retry    time.Duration
 	budget   time.Duration
@@ -63,8 +75,8 @@ type Live struct {
 
 // NewLive builds the relay over the proxy's router tunnel.
 func NewLive(p *Proxy, targets LiveTargets, tokenKey []byte, frontendOrigin string, dev bool, log *slog.Logger) *Live {
-	return newLive(func(ctx context.Context, sid string) (net.Conn, error) {
-		return p.connectActor(ctx, sid, RunnerPort)
+	return newLive(func(ctx context.Context, actor string) (net.Conn, error) {
+		return p.connectActor(ctx, actor, RunnerPort)
 	}, targets, tokenKey, frontendOrigin, dev, log)
 }
 
@@ -85,13 +97,14 @@ func newLive(dial func(context.Context, string) (net.Conn, error), targets LiveT
 	l.boot = &http.Client{Transport: tr, Timeout: liveWakeBudget + 10*time.Second}
 	l.rp = &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			sid, _ := pr.In.Context().Value(liveKey{}).(string)
+			t, _ := pr.In.Context().Value(liveKey{}).(LiveTarget)
+			sid := t.KagentSessionID
 			out := pr.Out
 			q := url.Values{"t": {l.token(sid)}}
 			if s := pr.In.URL.Query().Get("since"); s != "" {
 				q.Set("since", s)
 			}
-			out.URL = &url.URL{Scheme: "http", Host: sid + "." + liveHost + ":" + strconv.Itoa(RunnerPort), Path: "/ws", RawQuery: q.Encode()}
+			out.URL = &url.URL{Scheme: "http", Host: liveHost + ":" + strconv.Itoa(RunnerPort), Path: "/ws", RawQuery: q.Encode()}
 			out.Host = upstreamHost + ":" + strconv.Itoa(RunnerPort)
 			for name := range out.Header {
 				if privateHeader(name) || strings.EqualFold(name, "Origin") {
@@ -103,8 +116,8 @@ func newLive(dial func(context.Context, string) (net.Conn, error), targets LiveT
 			resp.Header.Del("Set-Cookie")
 			if resp.StatusCode == http.StatusForbidden {
 				// The runner holds a different token (a new /data): bootstrap again next time.
-				sid, _ := resp.Request.Context().Value(liveKey{}).(string)
-				l.forget(sid)
+				t, _ := resp.Request.Context().Value(liveKey{}).(LiveTarget)
+				l.forget(t.Actor)
 			}
 			return nil
 		},
@@ -156,8 +169,16 @@ func (l *Live) serve(w http.ResponseWriter, r *http.Request, sessionID string) {
 		httpx.WriteError(w, http.StatusForbidden, "Cross-origin request refused.")
 		return
 	}
-	sid, err := l.Targets.LiveTarget(r.Context(), sessionID)
+	t, err := l.Targets.LiveTarget(r.Context(), sessionID)
 	switch {
+	case errors.Is(err, ErrLiveWaking):
+		w.Header().Set("Retry-After", "2")
+		httpx.WriteError(w, http.StatusServiceUnavailable, "Session is waking; retry shortly")
+		return
+	case err == nil && !actorSafe.MatchString(t.Actor):
+		l.Log.ErrorContext(r.Context(), "live target has an invalid actor name", "session", sessionID, "actor", t.Actor)
+		httpx.WriteError(w, http.StatusBadGateway, "Live session unavailable")
+		return
 	case errors.Is(err, ErrLiveNotFound):
 		httpx.WriteError(w, http.StatusNotFound, "Session not found or not live")
 		return
@@ -166,7 +187,8 @@ func (l *Live) serve(w http.ResponseWriter, r *http.Request, sessionID string) {
 		httpx.WriteError(w, http.StatusBadGateway, "Live session unavailable")
 		return
 	}
-	if err := l.bootstrap(r.Context(), sid); err != nil {
+	ctx := context.WithValue(r.Context(), liveKey{}, t)
+	if err := l.bootstrap(ctx, t); err != nil {
 		var waking *wakingError
 		if errors.As(err, &waking) {
 			w.Header().Set("Retry-After", "2")
@@ -177,7 +199,7 @@ func (l *Live) serve(w http.ResponseWriter, r *http.Request, sessionID string) {
 		httpx.WriteError(w, http.StatusBadGateway, "Live session runner refused bootstrap")
 		return
 	}
-	l.rp.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), liveKey{}, sid)))
+	l.rp.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // token is the runner token for a kagent Session: stable across restarts of this server, never
@@ -188,22 +210,24 @@ func (l *Live) token(sid string) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-func (l *Live) forget(sid string) {
+func (l *Live) forget(actor string) {
 	l.mu.Lock()
-	delete(l.booted, sid)
+	delete(l.booted, actor)
 	l.mu.Unlock()
 }
 
 // bootstrap sets the runner's token on first attach (trust on first use). 409 means a token is
-// already set; if it is not ours, the WebSocket answers 403.
-func (l *Live) bootstrap(ctx context.Context, sid string) error {
+// already set; if it is not ours, the WebSocket answers 403. A new runtime generation is a new
+// actor with a new /data, so it is bootstrapped again. ctx carries the target for the dialer.
+func (l *Live) bootstrap(ctx context.Context, t LiveTarget) error {
+	sid := t.KagentSessionID
 	l.mu.Lock()
-	done := l.booted[sid]
+	done := l.booted[t.Actor]
 	l.mu.Unlock()
 	if done {
 		return nil
 	}
-	u := "http://" + sid + "." + liveHost + ":" + strconv.Itoa(RunnerPort) + "/bootstrap"
+	u := "http://" + liveHost + ":" + strconv.Itoa(RunnerPort) + "/bootstrap"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, http.NoBody)
 	if err != nil {
 		return err
@@ -223,26 +247,22 @@ func (l *Live) bootstrap(ctx context.Context, sid string) error {
 		return fmt.Errorf("runner bootstrap returned HTTP %d", resp.StatusCode)
 	}
 	l.mu.Lock()
-	l.booted[sid] = true
+	l.booted[t.Actor] = true
 	l.mu.Unlock()
 	return nil
 }
 
-// dialLive tunnels to the actor named in the outbound host, retrying while the router wakes it.
+// dialLive tunnels to the actor the request's context names, retrying while the router wakes it.
 // Nothing of the request has been sent before the tunnel opens, so a retry is safe.
 func (l *Live) dialLive(ctx context.Context, _, addr string) (net.Conn, error) {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
-	sid, ok := strings.CutSuffix(host, "."+liveHost)
-	if !ok {
-		return nil, fmt.Errorf("live: unexpected dial address %q", addr)
+	t, ok := ctx.Value(liveKey{}).(LiveTarget)
+	if !ok || t.Actor == "" {
+		return nil, fmt.Errorf("live: no actor for dial address %q", addr)
 	}
 	deadline := time.Now().Add(l.budget)
 	var last error
 	for {
-		conn, err := l.dial(ctx, sid)
+		conn, err := l.dial(ctx, t.Actor)
 		if err == nil {
 			return conn, nil
 		}
