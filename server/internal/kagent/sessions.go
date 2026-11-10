@@ -238,6 +238,10 @@ func AgentOf(s *api.Session) *api.ResourceReference {
 // ActorName is kagent's stable private Actor name for a Session, the same on every wake.
 func ActorName(sessionID string) string { return "session-" + strings.ToLower(sessionID) }
 
+// kagent derives runtime_association.generation_id from the Session's current Actor (the Session id
+// and the Actor's uid); there is no separate durable generation record. Mainloop never interprets
+// the value: it only echoes it, with actor_uid, into PrepareSessionWorkspace.
+//
 // StaleRuntime reports whether a PrepareSessionWorkspace error means the generation or Actor the
 // request named is no longer current (the runtime slept and woke between the read and the call):
 // the caller reads the Session again and retries with the new association.
