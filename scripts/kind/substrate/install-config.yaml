@@ -7,11 +7,24 @@ timeout: 10m
 releases:
   substrate:
     values:
+      # kagent sets a snapshot location on each ActorTemplate and needs golden egress policies.
+      preview:
+        - PerTemplateSnapshotLocation
+        - GoldenEgressPolicy
+      # As in production: the kagent controller creates atespaces, templates and actors. With
+      # its Substrate client certificate it calls the API as its SPIFFE ID.
+      ateApi:
+        authorization:
+          bootstrapOwners:
+            - system:serviceaccount:ate-system:ate-client
+            - system:serviceaccount:kagent:kagent-controller
+            - spiffe://cluster.local/ns/kagent/sa/kagent-controller
       # The router denies every caller that is not listed. `kubectl ate proxy actor` requests its
       # client certificate as ServiceAccount atenet-client, which install.sh creates.
       atenetRouter:
         ingressAllowedSPIFFEIDs:
           - spiffe://cluster.local/ns/ate-system/sa/atenet-client
+          - spiffe://cluster.local/ns/kagent/sa/kagent-controller
       otel:
         traces:
           enabled: false
