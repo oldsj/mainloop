@@ -1,0 +1,6 @@
+# Drops the session policy for E2E suites that create Agents with generated names.
+# Layer it last: helm upgrade ... -f values.yaml -f values-prod-shape.yaml -f no-session-policy.yaml
+config:
+  server:
+    auth:
+      sessionPolicy: null

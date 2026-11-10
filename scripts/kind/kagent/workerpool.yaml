@@ -1,0 +1,25 @@
+apiVersion: ate.dev/v1
+kind: WorkerPool
+metadata:
+  name: kagent-default
+  namespace: kagent
+  labels:
+    kagent.dev/worker-pool-name: kagent-default
+    kagent.dev/worker-pool-namespace: kagent
+spec:
+  replicas: 1
+  workerImage: ghcr.io/kagent-dev/substrate/ateworker-gvisor:v1.0.1@sha256:97ca74cd2cabc3fd28ac67790ed3b1f25b7b4247709a316ff374a428822c420e
+  # No configRef: the pool follows the class default SandboxConfig (gvisor-default).
+  sandboxClasses:
+    - name: gvisor
+  template:
+    nodeSelector:
+      kubernetes.io/arch: arm64
+      kubernetes.io/os: linux
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 2Gi

@@ -1,0 +1,49 @@
+# Kind (kind-substrate-1-0): the ported kagent chart with the settings #673 puts
+# in k8s/apps/kagent/overlays/prod/values.yaml for it. Differences from prod: no UI or tools
+# (prod drops them too), service-account auth instead of the 0.4 service-token, and the chart's
+# default controller image (oldsj/kagent-controller:0.0.0-7945f19) instead of a registry mirror.
+fullnameOverride: kagent
+global:
+  watchNamespaces: [kagent]
+kagent-tools:
+  enabled: false
+ui:
+  replicas: 0
+database:
+  postgres:
+    ownerConnectionStringSecretRef:
+      name: kagent-postgres-schema-owner
+      key: ownerConnectionString
+    readWriteConnectionStringSecretRef:
+      name: kagent-postgres-readwrite
+      key: readWriteConnectionString
+config:
+  server:
+    auth:
+      mode: service-account
+      serviceAccount:
+        authority: kubernetes
+        allowedSubjects:
+          - system:serviceaccount:kagent:kagent-smoke
+  database:
+    owner:
+      role: kagent_owner
+    readWrite:
+      role: kagent_readwrite
+    schema: kagent
+  substrate:
+    routerUrl: https://atenet-router.ate-system.svc:443
+controller:
+  substrateClientCertificate:
+    enabled: true
+  volumes:
+    - name: postgres-ca
+      secret:
+        secretName: kagent-postgres-ca
+        items:
+          - key: ca.crt
+            path: ca.crt
+  volumeMounts:
+    - name: postgres-ca
+      mountPath: /run/kagent-postgres-ca
+      readOnly: true
