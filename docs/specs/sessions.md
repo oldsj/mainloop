@@ -198,8 +198,11 @@ running actor through the Substrate router, like the workspace preview proxy. `l
 session has a kagent Session and its Agent is listed in `MAINLOOP_LIVE_AGENTS`. An attach is the
 owner's only (another owner's session, or one that is not live, is `404`); a cross-origin `Origin` is
 `403` and a request that is not a WebSocket upgrade is `400`. The actor name comes from the kagent
-Session's runtime association; with none (the actor is idle-suspended) the server asks kagent to
-resume the Session, and answers `503` with `Retry-After: 2` while it wakes. The server bootstraps the
+Session's runtime association. With none (the actor is idle-suspended) the server wakes the Session
+the way a send does: a workspace's session through the workspace service (`Wake`), never directly,
+and a standalone native or main session with kagent's `ResumeSession`. It then reads the association
+again, and answers `503` with `Retry-After: 2` while there is still none. A session started from
+`/agents` (Start session) is a standalone native session. The server bootstraps the
 runner on first attach to each actor (`PUT /bootstrap`, trust on first use; `409` means already set)
 with a token derived from `AGENT_TOKEN_KEY` and the kagent Session id, adds it to the upstream
 request, and strips cookies, credentials and `Origin`; the token never reaches the browser.
@@ -210,7 +213,9 @@ unavailable state above).
 Proven live on mainloop-dev (2026-11-10) on a new `claude-workspace-dev` session: the upgrade, the
 runner's `hello` backlog, and use from a phone, through the gateway, the dev frontend's proxy and the
 relay. Tested with fakes only: the relay's bootstrap, refusals and waking paths (a fake runner and
-targets); the resume-and-reread lookup has no unit test.
+targets), and the session lookup's wake (the fake kagent with parked actors): a standalone session
+resumed directly, a workspace session woken only through the workspace service. A workspace
+session's live view has not been run on mainloop-dev.
 
 Opening a session follows its URL. Missing sessions show a not-found state. If the backend is unavailable, the page retries instead of treating the session as missing.
 An HTTP 5xx on session or workspace detail shows a server error with an instruction to reload,
