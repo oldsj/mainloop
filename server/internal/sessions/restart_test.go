@@ -162,7 +162,7 @@ func TestRestartSweepFinishesAnInterruptedRestart(t *testing.T) {
 		rid, id, ksid); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.svc.Kagent.DeleteSession(context.Background(), ksid); err != nil {
+	if _, err := e.svc.Kagent.ForceDeleteSession(context.Background(), ksid); err != nil {
 		t.Fatal(err)
 	}
 	deletes := e.srv.Count(kagent.ProcDeleteSession)
