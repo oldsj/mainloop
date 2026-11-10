@@ -178,7 +178,11 @@ output line after `⎿` (tap to expand), edits as diffs, permission prompts with
 an interrupted turn as `⎿ Interrupted`; a finished turn prints nothing, and there are no status icons
 or cost lines. The composer sends messages as typed, slash commands included (`/model` opens the
 model and effort picker); a message sent while a turn runs shows as queued until the runner picks it
-up. The send button becomes interrupt while a turn runs and the composer is empty; Esc interrupts
+up. Up on the composer's first line (or in an empty composer) recalls the previous sent message and
+Down on its last line steps forward, back to the unsent draft, which is kept; elsewhere the arrows
+move the caret, so multi-line editing works. History is this session's user messages (the attach
+backlog and those sent since), a repeat kept once. On a phone, a small `↑ history` button below the
+composer lists the last ten to tap into the composer. The send button becomes interrupt while a turn runs and the composer is empty; Esc interrupts
 too, and Shift+Tab or the mode button below the composer cycles the permission mode. The view
 re-attaches with backoff after a drop and immediately when the page becomes visible again; every
 attach rebuilds the transcript from the runner's `hello` backlog (in memory in Phase 1, so a runner

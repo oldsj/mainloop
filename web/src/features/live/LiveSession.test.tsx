@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ws } from 'msw';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -28,6 +28,8 @@ const idle = () =>
 
 async function say(user: ReturnType<typeof userEvent.setup>, text: string) {
   await user.type(screen.getByRole('textbox', { name: 'Message' }), `${text}{Enter}`);
+  // Wait for the runner's echo, so a following idle check cannot pass before the turn starts.
+  if (!text.startsWith('/')) await screen.findAllByText(text);
 }
 
 describe('live session', () => {
@@ -175,5 +177,64 @@ describe('live session', () => {
     const user = userEvent.setup();
     await user.click(within(alert).getByRole('button', { name: 'Use the chat view' }));
     expect(fellBack).toBe(true);
+  });
+
+  it('steps through sent messages with Up and Down and keeps the draft', async () => {
+    const { user } = setup({
+      backlog: [{ k: 'user', seq: 1, uuid: 'u0', text: 'from before', origin: 'client' }]
+    });
+    await attached();
+    await say(user, 'first');
+    await idle();
+    await say(user, 'second');
+    await idle();
+    const box = screen.getByRole('textbox', { name: 'Message' });
+    await user.type(box, 'half typed');
+    await user.keyboard('{ArrowUp}');
+    expect(box).toHaveValue('second');
+    await user.keyboard('{ArrowUp}');
+    expect(box).toHaveValue('first');
+    await user.keyboard('{ArrowUp}');
+    expect(box).toHaveValue('from before');
+    await user.keyboard('{ArrowUp}');
+    expect(box).toHaveValue('from before');
+    await user.keyboard('{ArrowDown}{ArrowDown}');
+    expect(box).toHaveValue('second');
+    await user.keyboard('{ArrowDown}');
+    expect(box).toHaveValue('half typed');
+  });
+
+  it('moves within a multi-line message instead of recalling', async () => {
+    const { user } = setup();
+    await attached();
+    await say(user, 'sent');
+    await idle();
+    const box = screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message' });
+    fireEvent.change(box, { target: { value: 'line one\nline two' } });
+    box.setSelectionRange(12, 12);
+    fireEvent.keyDown(box, { key: 'ArrowUp' });
+    expect(box).toHaveValue('line one\nline two');
+    box.setSelectionRange(3, 3);
+    fireEvent.keyDown(box, { key: 'ArrowUp' });
+    expect(box).toHaveValue('sent');
+  });
+
+  it('recalls a sent message from the history button on a phone', async () => {
+    const { user } = setup();
+    await attached();
+    expect(screen.queryByRole('button', { name: 'Sent messages' })).not.toBeInTheDocument();
+    await say(user, 'deploy it');
+    await idle();
+    await say(user, 'check logs');
+    await idle();
+    const box = screen.getByRole('textbox', { name: 'Message' });
+    await user.type(box, 'draft');
+    await user.click(screen.getByRole('button', { name: 'Sent messages' }));
+    const list = screen.getByRole('listbox', { name: 'Sent messages' });
+    await user.click(within(list).getByRole('option', { name: 'deploy it' }));
+    expect(box).toHaveValue('deploy it');
+    expect(screen.queryByRole('listbox', { name: 'Sent messages' })).not.toBeInTheDocument();
+    await user.keyboard('{ArrowDown}{ArrowDown}');
+    expect(box).toHaveValue('draft');
   });
 });

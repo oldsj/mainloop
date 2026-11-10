@@ -1,4 +1,12 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent
+} from 'react';
 import { Markdown } from '@/components/markdown/markdown';
 import { cn } from '@/components/ui/cn';
 import {
@@ -10,6 +18,7 @@ import {
   type LiveState,
   type Perm
 } from './store';
+import { caretOnFirstLine, caretOnLastLine, sentHistory, step } from './history';
 import { useLiveSession, type Conn } from './useLiveSession';
 
 const short = (id: string) => (id || '…').replace(/^claude-/, '');
@@ -363,6 +372,13 @@ function Composer({
   const [text, setText] = useState('');
   const [sel, setSel] = useState(0);
   const ta = useRef<HTMLTextAreaElement>(null);
+  // History: `at` is the recalled message, null while editing the draft; the draft is kept aside
+  // while recalling and comes back when Down steps past the newest message.
+  const history = useMemo(() => sentHistory(state.entries), [state.entries]);
+  const [at, setAt] = useState<number | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const draft = useRef('');
+  const caretToEnd = useRef(false);
   const matches: Command[] = /^\/\S*$/.test(text)
     ? [
         ...state.commands.filter((c) => c.name.startsWith(text)),
@@ -370,20 +386,36 @@ function Composer({
       ]
     : [];
   const picked = matches[Math.min(sel, matches.length - 1)];
-  const open = picked !== undefined && !(matches.length === 1 && picked.name === text);
+  const open =
+    at === null && picked !== undefined && !(matches.length === 1 && picked.name === text);
 
   useEffect(() => {
     const el = ta.current;
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 150) + 'px';
+    if (caretToEnd.current) {
+      caretToEnd.current = false;
+      el.setSelectionRange(el.value.length, el.value.length);
+    }
   }, [text]);
+
+  const recall = (to: number | null) => {
+    if (at === null) draft.current = text;
+    setAt(to);
+    setText(to === null ? draft.current : (history[to] ?? ''));
+    setSel(0);
+    caretToEnd.current = true;
+  };
 
   const submit = (value = text) => {
     const t = value.trim();
     if (!t) return;
     setText('');
     setSel(0);
+    setAt(null);
+    setHistoryOpen(false);
+    draft.current = '';
     if (t === '/model') {
       openModel();
       return;
@@ -395,6 +427,20 @@ function Composer({
     if (open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
       e.preventDefault();
       setSel((s) => (s + (e.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length);
+      return;
+    }
+    // Up on the first line and Down on the last step through sent messages; elsewhere the caret moves.
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.altKey) {
+      const el = e.currentTarget;
+      const up = e.key === 'ArrowUp';
+      const edge = up
+        ? caretOnFirstLine(el.value, el.selectionStart, el.selectionEnd)
+        : caretOnLastLine(el.value, el.selectionStart, el.selectionEnd);
+      const to = edge ? step(at, history.length, up ? 'up' : 'down') : undefined;
+      if (to !== undefined) {
+        e.preventDefault();
+        recall(to);
+      }
       return;
     }
     if (open && e.key === 'Tab' && !e.shiftKey) {
@@ -413,7 +459,8 @@ function Composer({
       return;
     }
     if (e.key === 'Escape') {
-      if (open) setText('');
+      if (historyOpen) setHistoryOpen(false);
+      else if (open) setText('');
       else interrupt();
     }
   };
@@ -421,6 +468,36 @@ function Composer({
   const stop = busy && !text.trim();
   return (
     <div className="px-md pt-sm border-border relative flex flex-col gap-1 border-t pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
+      {historyOpen && history.length ? (
+        <div
+          role="listbox"
+          aria-label="Sent messages"
+          className="bg-term-bg-secondary border-term-border absolute right-0 bottom-full left-0 flex max-h-[46vh] flex-col overflow-y-auto border"
+        >
+          {history.slice(-10).map((h, k, recent) => {
+            const index = history.length - recent.length + k;
+            return (
+              <button
+                key={index}
+                type="button"
+                role="option"
+                aria-selected={index === at}
+                onClick={() => {
+                  recall(index);
+                  setHistoryOpen(false);
+                  ta.current?.focus();
+                }}
+                className={cn(
+                  'px-sm min-h-10 truncate py-2 text-left',
+                  index === at && 'bg-term-selection'
+                )}
+              >
+                {h}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
       {open ? (
         <div
           role="listbox"
@@ -482,7 +559,18 @@ function Composer({
         >
           ⏵⏵ {MODE_LABELS[state.mode] ?? state.mode}
         </button>
-        <span className="truncate">{state.cwd}</span>
+        <span className="min-w-0 flex-1 truncate">{state.cwd}</span>
+        {history.length ? (
+          <button
+            type="button"
+            aria-label="Sent messages"
+            aria-expanded={historyOpen}
+            onClick={() => setHistoryOpen(!historyOpen)}
+            className={cn('px-xs min-h-8 flex-none', historyOpen && 'text-term-fg')}
+          >
+            ↑ history
+          </button>
+        ) : null}
       </div>
     </div>
   );
