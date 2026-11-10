@@ -34,7 +34,7 @@ func previewHandler(t *testing.T, withPreview bool) http.Handler {
 	deps.DB = up()
 	if withPreview {
 		// No pool: these requests are all decided before the database is read.
-		deps.Preview, err = preview.New(cfg, nil, noWake{}, log)
+		deps.Preview, err = preview.New(cfg, nil, noWake{}, nil, log)
 		if err != nil {
 			t.Fatal(err)
 		}

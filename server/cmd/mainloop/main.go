@@ -178,7 +178,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	svc := sessions.NewService(cfg, pool, kc, reg, creds, healthSvc, wsSvc, live, log)
 	hitlSvc := hitl.NewService(cfg, pool, hitl.FromClient(kc), svc, svc, svc, log)
 	schedSvc := schedules.NewService(cfg, pool, kc, reg, log)
-	previews, err := preview.New(cfg, pool, wsSvc, log)
+	previews, err := preview.New(cfg, pool, wsSvc, kc, log)
 	if err != nil {
 		return err
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/testdb"
 	"github.com/oldsj/mainloop/server/internal/workspaces"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
 )
 
 const (
@@ -142,6 +143,15 @@ type env struct {
 	devHandler atomic.Value // http.Handler
 }
 
+// fakeSessions is kagent with every Session running its actor under a generation-suffixed name.
+type fakeSessions struct{}
+
+func (fakeSessions) ObserveSession(_ context.Context, id string) (*kagentapi.Session, error) {
+	return &kagentapi.Session{Id: id, RuntimeAssociation: &kagentapi.RuntimeAssociation{
+		Atespace: "kagent", ActorName: "session-" + id + "-ab12", CurrentActive: true,
+	}}, nil
+}
+
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	e := &env{t: t, waker: &fakeWaker{}, router: newFakeRouter(t)}
@@ -161,7 +171,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	e.pool = testdb.New(t).Pool
-	e.proxy, err = New(cfg, e.pool, e.waker, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	e.proxy, err = New(cfg, e.pool, e.waker, fakeSessions{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +250,7 @@ func TestProxiesThroughTunnelToTheWorkspaceActor(t *testing.T) {
 	if gotHost != "actor-upstream:3000" || gotPath != "/a/b" || gotQuery != "x=1" {
 		t.Fatalf("upstream saw host=%q path=%q query=%q", gotHost, gotPath, gotQuery)
 	}
-	want := "kagent/session-" + sessionID + " actor-upstream:3000 CONNECT"
+	want := "kagent/session-" + sessionID + "-ab12 actor-upstream:3000 CONNECT"
 	if seen := e.router.seen(); len(seen) != 1 || seen[0] != want {
 		t.Fatalf("router saw %v, want [%s]", seen, want)
 	}
@@ -474,6 +484,26 @@ func TestTunnelRetriesOnceThenShowsWakingPage(t *testing.T) {
 	if n := len(e.router.seen()); n != 2+2 {
 		t.Fatalf("router saw %d CONNECTs, want 4 (a refusal and its retry, then two refusals)", n)
 	}
+}
+
+// A Session whose actor is not running (kagent reports no runtime association) is never tunnelled
+// to a guessed name; the owner sees the waking page and reloads.
+func TestNoRunningActorShowsWakingPage(t *testing.T) {
+	e := newEnv(t)
+	e.proxy.Sessions = noActorSessions{}
+	rec := e.do("GET", wsHost, "/", nil, nil)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "waking up") {
+		t.Fatalf("got %d %q", rec.Code, rec.Body.String())
+	}
+	if n := len(e.router.seen()); n != 0 {
+		t.Fatalf("router saw %d CONNECTs, want none", n)
+	}
+}
+
+type noActorSessions struct{}
+
+func (noActorSessions) ObserveSession(_ context.Context, id string) (*kagentapi.Session, error) {
+	return &kagentapi.Session{Id: id}, nil
 }
 
 // A failure after the request was forwarded is never replayed.

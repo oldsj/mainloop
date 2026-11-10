@@ -44,10 +44,12 @@ type Waker interface {
 
 // Proxy serves preview hosts.
 type Proxy struct {
-	Pool    *pgxpool.Pool
-	Waker   Waker
-	OwnerID string
-	Log     *slog.Logger
+	Pool  *pgxpool.Pool
+	Waker Waker
+	// Sessions reads the kagent Session for the name of its running actor.
+	Sessions SessionObserver
+	OwnerID  string
+	Log      *slog.Logger
 
 	base     base
 	router   string // host:port of the Substrate router
@@ -68,7 +70,7 @@ type Proxy struct {
 }
 
 // New builds the proxy from the preview settings.
-func New(cfg *config.Config, pool *pgxpool.Pool, w Waker, log *slog.Logger) (*Proxy, error) {
+func New(cfg *config.Config, pool *pgxpool.Pool, w Waker, sessions SessionObserver, log *slog.Logger) (*Proxy, error) {
 	b, ok := parseBase(cfg.Preview.BaseURL)
 	if !ok {
 		return nil, errors.New("preview: SUBSTRATE_PREVIEW_BASE_URL has no host")
@@ -78,7 +80,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool, w Waker, log *slog.Logger) (*Pr
 		return nil, err
 	}
 	p := &Proxy{
-		Pool: pool, Waker: w, OwnerID: cfg.Identity.OwnerID, Log: log,
+		Pool: pool, Waker: w, Sessions: sessions, OwnerID: cfg.Identity.OwnerID, Log: log,
 		base: b, router: router, atespace: cfg.Kagent.ActorAtespace, connect: cfg.Preview.ConnectTimeout.Duration(),
 		LeaseTTL: 60 * time.Second, RenewEvery: 20 * time.Second, HTTPLeaseWait: 10 * time.Second,
 		holder: uuid.NewString(), now: time.Now, awake: map[string]time.Time{},

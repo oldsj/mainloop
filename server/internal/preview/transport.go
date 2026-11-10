@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -180,9 +179,6 @@ func parseHop(addr string) (hop, bool) {
 	return hop{ws, n}, true
 }
 
-// headerSafe guards values that go into the CONNECT request head.
-var headerSafe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$`)
-
 func (p *Proxy) tunnel(ctx context.Context, h hop) (net.Conn, error) {
 	t, err := p.resolve(ctx, h.workspaceID)
 	if errors.Is(err, pgx.ErrNoRows) || err == nil && !t.ports[h.port] {
@@ -191,10 +187,11 @@ func (p *Proxy) tunnel(ctx context.Context, h hop) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !headerSafe.MatchString(t.sessionID) {
-		return nil, errors.New("preview: session id is not a valid actor name")
+	actor, err := p.actorOf(ctx, t.sessionID)
+	if err != nil {
+		return nil, err
 	}
-	return p.connectActor(ctx, p.atespace+"/session-"+t.sessionID, h.port)
+	return p.connectActor(ctx, actor, h.port)
 }
 
 // connectActor opens a CONNECT tunnel through the router to a port of an actor, named

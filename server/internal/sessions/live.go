@@ -51,11 +51,11 @@ func (s *Service) liveActor(ctx context.Context, kid string) (preview.LiveTarget
 	if err != nil {
 		return preview.LiveTarget{}, false, err
 	}
-	ra := ks.GetRuntimeAssociation()
-	if ra.GetAtespace() == "" || ra.GetActorName() == "" {
+	actor, ok := preview.RuntimeActor(ks)
+	if !ok {
 		return preview.LiveTarget{}, false, nil
 	}
-	return preview.LiveTarget{KagentSessionID: kid, Actor: ra.GetAtespace() + "/" + ra.GetActorName()}, true, nil
+	return preview.LiveTarget{KagentSessionID: kid, Actor: actor}, true, nil
 }
 
 func (s *Service) liveSession(ctx context.Context, sessionID string) (string, error) {
