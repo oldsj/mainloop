@@ -25,6 +25,8 @@ releases:
         ingressAllowedSPIFFEIDs:
           - spiffe://cluster.local/ns/ate-system/sa/atenet-client
           - spiffe://cluster.local/ns/kagent/sa/kagent-controller
+          - spiffe://cluster.local/ns/mainloop/sa/mainloop-backend
+          - spiffe://cluster.local/ns/mainloop-dev/sa/mainloop-backend
       # As in production: kagent Actors may resolve only labeled Secrets in namespace kagent.
       credentialProvider:
         namespacePolicies:
