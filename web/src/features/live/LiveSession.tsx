@@ -19,9 +19,16 @@ const short = (id: string) => (id || '…').replace(/^claude-/, '');
  * it, permission prompts, interrupt, model and effort, permission mode, and a composer whose
  * messages queue while a turn runs. Phone first: one column that fills the page.
  */
-export function LiveSession({ sessionId }: { sessionId: string }) {
+export function LiveSession({
+  sessionId,
+  onFallback
+}: {
+  sessionId: string;
+  /** Leaves the live view for the regular one, offered when the live channel is unavailable. */
+  onFallback?: () => void;
+}) {
   const live = useLiveSession(sessionId);
-  return <LiveSessionView {...live} />;
+  return <LiveSessionView {...live} onFallback={onFallback} />;
 }
 
 export interface LiveSessionViewProps {
@@ -29,9 +36,25 @@ export interface LiveSessionViewProps {
   conn: Conn;
   send: (cmd: Record<string, unknown>) => boolean;
   answer: (permId: string, choice: number) => void;
+  retry: () => void;
+  onFallback?: () => void;
 }
 
-export function LiveSessionView({ state, conn, send, answer }: LiveSessionViewProps) {
+const CONN_LABEL: Record<Conn, string> = {
+  attached: 'live',
+  connecting: 'connecting…',
+  reconnecting: 'reconnecting…',
+  unavailable: 'unavailable'
+};
+
+export function LiveSessionView({
+  state,
+  conn,
+  send,
+  answer,
+  retry,
+  onFallback
+}: LiveSessionViewProps) {
   const [sheet, setSheet] = useState(false);
   const busy = state.status !== 'idle';
   const interrupt = () => send({ k: 'interrupt' });
@@ -55,7 +78,7 @@ export function LiveSessionView({ state, conn, send, answer }: LiveSessionViewPr
           data-testid="live-conn"
           className={conn === 'attached' ? 'text-term-green' : 'text-term-warning'}
         >
-          {conn === 'attached' ? 'live' : conn === 'connecting' ? 'connecting…' : 'reconnecting…'}
+          {CONN_LABEL[conn]}
         </span>
         <button
           type="button"
@@ -67,6 +90,34 @@ export function LiveSessionView({ state, conn, send, answer }: LiveSessionViewPr
           {state.effort ? ` · ${state.effort}` : ''}
         </button>
       </div>
+
+      {conn === 'unavailable' ? (
+        <div
+          role="alert"
+          data-testid="live-unavailable"
+          className="px-md py-sm border-term-warning mx-md mt-sm flex flex-col gap-2 border"
+        >
+          <div className="text-term-warning font-bold">Live view unavailable</div>
+          <div className="text-term-fg-muted text-xs">
+            The session&apos;s runner is not answering. It may be waking, or its agent may not run
+            the SDK runner yet. Still retrying every few seconds.
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={retry} className="border-border px-sm min-h-10 border">
+              Retry now
+            </button>
+            {onFallback ? (
+              <button
+                type="button"
+                onClick={onFallback}
+                className="border-border px-sm min-h-10 border"
+              >
+                Use the chat view
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       <Log state={state} answer={answer} />
 
