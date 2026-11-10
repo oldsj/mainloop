@@ -77,7 +77,7 @@ MAINLOOP_DEV_CONFIG=../infrastructure/mainloop-dev   # values.yaml for charts/ma
 make dev-live          # deploy mainloop-dev, then sync and stream logs (Ctrl-C stops sync)
 make dev-live-status   # pods, database, route and dev agents
 make dev-agents        # apply the *-dev kagent agents (shared kagent namespace)
-make dev-harness       # build arm64 harness images from ../kagent, apply them to the dev agents
+make dev-harness       # build amd64 + arm64 harness images from ../kagent, apply them to the dev agents
 make dev-live-purge    # delete namespace mainloop-dev and the *-dev agents (typed confirmation)
 ```
 
