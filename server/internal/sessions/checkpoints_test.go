@@ -79,6 +79,14 @@ func TestCreateCheckpointIsIdempotent(t *testing.T) {
 	if first.Id == "" || first.SessionId == "" || first.State != api.CheckpointStateReady {
 		t.Fatalf("checkpoint %+v", first)
 	}
+	// session_id is the kagent Session on create, as on every read back.
+	if first.SessionId != e.kagentSessionOf(id) {
+		t.Fatalf("session_id %q, want the kagent Session %q", first.SessionId, e.kagentSessionOf(id))
+	}
+	list, err := e.svc.ListCheckpoints(context.Background(), id)
+	if err != nil || len(list) != 1 || list[0].SessionID != first.SessionId {
+		t.Fatalf("list %+v %v", list, err)
+	}
 	if n := e.srv.Count(kagent.ProcCreateCheckpoint); n != 1 {
 		t.Fatalf("CreateCheckpoint called %d times", n)
 	}

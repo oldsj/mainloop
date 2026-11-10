@@ -317,7 +317,8 @@ func checkpointFailureDetail(cp *kagentapi.Checkpoint) string {
 
 func checkpointResult(r dbq.SessionCheckpoint, state string) CheckpointResult {
 	return CheckpointResult{
-		ID: derefStr(r.CheckpointID), SessionID: r.SessionID, Name: derefStr(r.CheckpointName),
+		// SessionID is the kagent Session, as on a checkpoint read back (the API's Checkpoint.session_id).
+		ID: derefStr(r.CheckpointID), SessionID: r.KagentSessionID, Name: derefStr(r.CheckpointName),
 		HeadTaskID: r.ExpectedHeadTaskID, State: state, RequestedAt: r.RequestedAt, ConfirmedAt: r.ConfirmedAt,
 	}
 }
