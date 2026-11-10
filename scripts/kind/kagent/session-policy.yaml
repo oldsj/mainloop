@@ -7,7 +7,7 @@ config:
     auth:
       sessionPolicy:
         namespace: kagent
-        agents: [mainloop-main, mainloop-main-codex, claude-subscription, codex-subscription-https, claude-workspace, codex-workspace, renovate-steward, alert-triage, claude-smoke, quiesce-full-e2e]
+        agents: [mainloop-main, mainloop-main-codex, claude-subscription, codex-subscription-https, claude-workspace, codex-workspace, renovate-steward, alert-triage, claude-smoke]
         developmentEnvironmentRegistries: [ghcr.io, registry.olds.network, docker.io]
         cleartextMcpOrigins:
           - http://mainloop-mcp.mainloop.svc.cluster.local
