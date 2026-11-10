@@ -40,6 +40,9 @@ config:
   substrate:
     routerUrl: https://atenet-router.ate-system.svc:443
 controller:
+  # As in prod: no AgentTemplate uses the built-in kagent-api tool server. Needs a chart with kagent #91.
+  apiToolServer:
+    enabled: false
   substrateClientCertificate:
     enabled: true
   volumes:
