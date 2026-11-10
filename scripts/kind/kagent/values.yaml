@@ -25,6 +25,11 @@ config:
       serviceAccount:
         authority: kubernetes
         allowedSubjects:
+          # The prod list, plus kagent-smoke for smoke checks.
+          - system:serviceaccount:mainloop:mainloop-backend
+          - system:serviceaccount:mainloop-dev:mainloop-backend
+          - system:serviceaccount:mainloop:renovate-steward
+          - system:serviceaccount:mainloop:alert-triage
           - system:serviceaccount:kagent:kagent-smoke
   database:
     owner:

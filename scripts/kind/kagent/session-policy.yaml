@@ -1,13 +1,25 @@
-# The prod-shaped session policy, applied by upgrade.sh unless SESSION_POLICY=off.
-# claude-smoke is the kind smoke Agent. git-instance-e2e is runner-harness's Git E2E,
-# with the mainloop-dev Git tuples prod also lists. Add an E2E's Agents for its run.
+# The session policy, applied by upgrade.sh unless SESSION_POLICY=off. Agents, credentials and
+# cleartext MCP origins copy config.server.auth.sessionPolicy in the infrastructure repo's
+# k8s/apps/kagent/overlays/prod/values.yaml. Kind adds claude-smoke for smoke checks, and docker.io
+# for E2E development images.
 config:
   server:
     auth:
       sessionPolicy:
         namespace: kagent
-        agents: [claude-smoke, git-instance-e2e]
-        developmentEnvironmentRegistries: [docker.io]
+        agents: [mainloop-main, mainloop-main-codex, claude-subscription, codex-subscription-https, claude-workspace, codex-workspace, renovate-steward, alert-triage, claude-smoke]
+        developmentEnvironmentRegistries: [ghcr.io, registry.olds.network, docker.io]
+        cleartextMcpOrigins:
+          - http://mainloop-mcp.mainloop.svc.cluster.local
+          - http://mainloop-mcp.mainloop-dev.svc.cluster.local
+          - http://renovate-steward.mainloop.svc.cluster.local
+          - http://alert-triage.mainloop.svc.cluster.local
         credentials:
+          - {purpose: mcp, origin: "http://mainloop-mcp.mainloop.svc.cluster.local", secretNamePattern: "mainloop-mcp-*", key: authorization, header: authorization}
+          - {purpose: mcp, origin: "http://mainloop-mcp.mainloop-dev.svc.cluster.local", secretNamePattern: "mainloop-dev-mcp-*", key: authorization, header: authorization}
+          - {purpose: git-read, origin: "http://mainloop-git-read.mainloop.svc.cluster.local", secretNamePattern: "mainloop-git-read-*", key: authorization, header: authorization}
+          - {purpose: git-push, origin: "http://mainloop-git-push.mainloop.svc.cluster.local", secretNamePattern: "mainloop-git-push-*", key: authorization, header: authorization}
           - {purpose: git-read, origin: "http://mainloop-git-read.mainloop-dev.svc.cluster.local", secretNamePattern: "mainloop-dev-git-read-*", key: authorization, header: authorization}
           - {purpose: git-push, origin: "http://mainloop-git-push.mainloop-dev.svc.cluster.local", secretNamePattern: "mainloop-dev-git-push-*", key: authorization, header: authorization}
+          - {purpose: mcp, origin: "http://renovate-steward.mainloop.svc.cluster.local", secretNamePattern: "renovate-steward-mcp", key: authorization, header: authorization}
+          - {purpose: mcp, origin: "http://alert-triage.mainloop.svc.cluster.local", secretNamePattern: "alert-triage-mcp", key: authorization, header: authorization}
