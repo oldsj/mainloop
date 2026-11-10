@@ -18,6 +18,7 @@ import {
   workspacesRead
 } from './test/handlers';
 import { renderSessions } from './test/render';
+import { createFakeRunner } from '@/features/live/fakeRunner';
 
 // The page's reads would otherwise queue behind the app's read limiter, so an action's re-read
 // would take seconds. See fastReads.ts for why this mock sits in each test file.
@@ -34,6 +35,27 @@ afterEach(async () => {
 const heading = (name: string) => screen.findByRole('heading', { level: 1, name });
 
 describe('session page', () => {
+  it('drives a session live when its agent runs the SDK runner', async () => {
+    const runner = createFakeRunner();
+    server.use(
+      runner.handler,
+      ...serveSession(session({ id: 's1' }), native({ session_id: 's1', live: true }))
+    );
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    expect(await screen.findByTestId('live-session')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('live-conn')).toHaveTextContent('live'));
+    expect(screen.queryByTestId('identity-strip')).not.toBeInTheDocument();
+  });
+
+  it('keeps the regular view for a session that is not live', async () => {
+    server.use(...serveSession(session({ id: 's1' }), native({ session_id: 's1', live: false })));
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    expect(await screen.findByTestId('identity-strip')).toBeInTheDocument();
+    expect(screen.queryByTestId('live-session')).not.toBeInTheDocument();
+  });
+
   it('shows the title, description, status and back link', async () => {
     server.use(
       ...serveSession(

@@ -168,6 +168,24 @@ dispatch authority. Runtime `ready` alone does not prove preparation; saved rece
 not identify an earlier runtime admission failure's cause. The `web/` client has the generated types
 only; no screen shows the observation yet.
 
+### Live sessions (SDK runner)
+
+When `NativeSessionInfo.live` is true (the session's Agent runs the SDK runner driver), the session
+page replaces the identity strip, actions and chat with a live view attached to
+`GET /sessions/{id}/live` (WebSocket, subprotocol `kagent.sdk-runner.v1`, the runner's Client event
+protocol). It renders the way Claude Code does: assistant text after `●`, tool calls with their first
+output line after `⎿` (tap to expand), edits as diffs, permission prompts with numbered answers, and
+an interrupted turn as `⎿ Interrupted`; a finished turn prints nothing, and there are no status icons
+or cost lines. The composer sends messages as typed, slash commands included (`/model` opens the
+model and effort picker); a message sent while a turn runs shows as queued until the runner picks it
+up. The send button becomes interrupt while a turn runs and the composer is empty; Esc interrupts
+too, and Shift+Tab or the mode button below the composer cycles the permission mode. The view
+re-attaches with backoff after a drop and immediately when the page becomes visible again; every
+attach rebuilds the transcript from the runner's `hello` backlog (in memory in Phase 1, so a runner
+restart loses it). `?live=1` on a session URL forces the live view for local work; with
+`VITE_MSW=1 pnpm dev` a scripted fake runner answers (`web/src/features/live/fakeRunner.ts`, also
+used by the tests). Implemented against the fake runner; live proof on mainloop-dev is pending.
+
 Opening a session follows its URL. Missing sessions show a not-found state. If the backend is unavailable, the page retries instead of treating the session as missing.
 An HTTP 5xx on session or workspace detail shows a server error with an instruction to reload,
 separately from a failed connection or a 404.
