@@ -179,6 +179,8 @@ type Waker interface {
 
 // Options tunes the ledger. Zero values take the defaults.
 type Options struct {
+	// LiveAgents names the Agents that run the Agent SDK runner (see config.Sessions.LiveAgents).
+	LiveAgents []string
 	// UncertainHold keeps an unresolved delivery blocking new sends, and after it a message that
 	// no task shows is failed.
 	UncertainHold time.Duration
@@ -225,6 +227,7 @@ func OptionsFrom(c config.Sessions) Options {
 		EnsureEvery:       c.EnsureEvery.Duration(),
 		StallAfter:        c.StallAfter.Duration(),
 		StallToolAfter:    c.StallToolAfter.Duration(),
+		LiveAgents:        c.LiveAgents,
 	}
 }
 

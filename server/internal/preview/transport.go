@@ -191,7 +191,13 @@ func (p *Proxy) tunnel(ctx context.Context, h hop) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !headerSafe.MatchString(t.sessionID) {
+	return p.connectActor(ctx, t.sessionID, h.port)
+}
+
+// connectActor opens a CONNECT tunnel through the router to a port of the kagent Session's actor.
+// The router resumes a suspended actor on CONNECT.
+func (p *Proxy) connectActor(ctx context.Context, sessionID string, port int) (net.Conn, error) {
+	if !headerSafe.MatchString(sessionID) {
 		return nil, errors.New("preview: session id is not a valid actor name")
 	}
 	d := net.Dialer{Timeout: p.connect}
@@ -199,10 +205,10 @@ func (p *Proxy) tunnel(ctx context.Context, h hop) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	target := upstreamHost + ":" + strconv.Itoa(h.port)
+	target := upstreamHost + ":" + strconv.Itoa(port)
 	req := &http.Request{
 		Method: http.MethodConnect, URL: &url.URL{Opaque: target}, Host: target,
-		Header: http.Header{"Ate-Target-Actor": {p.atespace + "/session-" + t.sessionID}},
+		Header: http.Header{"Ate-Target-Actor": {p.atespace + "/session-" + sessionID}},
 	}
 	_ = conn.SetDeadline(time.Now().Add(p.connect))
 	if err := req.Write(conn); err != nil {

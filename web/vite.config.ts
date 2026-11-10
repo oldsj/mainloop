@@ -35,6 +35,7 @@ export default defineConfig(({ mode }) => ({
       // VITE_API_URL defaults to /api, which the dev server forwards with the prefix stripped.
       '/api': {
         target: apiProxy,
+        ws: true,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '')
       }

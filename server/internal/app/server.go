@@ -97,6 +97,8 @@ type Deps struct {
 	// Preview routes preview hosts to workspace dev servers. Nil serves no previews, and a
 	// preview host is then refused by the Host guard like any unknown host.
 	Preview *preview.Proxy
+	// Live relays GET /sessions/{id}/live to the session's SDK runner. Nil serves no live sessions.
+	LiveRelay *preview.Live
 	// HITL observes kagent for tasks that wait for the owner and carries the answers back.
 	HITL *hitl.Service
 	// Attention is the owner's inbox.
@@ -192,7 +194,11 @@ func (s *Server) Handler() (http.Handler, error) {
 			httpx.WriteError(w, http.StatusBadRequest, "Invalid request")
 		},
 	})
-	ownerAPI := httpx.Chain(routes,
+	var inner http.Handler = routes
+	if d.LiveRelay != nil {
+		inner = d.LiveRelay.Route(routes)
+	}
+	ownerAPI := httpx.Chain(inner,
 		httpx.HostGuard(cfg.AllowedAPIHosts(), cfg.IsDev(), "/health"),
 		httpx.OriginGuard(cfg.FrontendOrigin(), cfg.IsDev()),
 		httpx.CORS(cfg.FrontendOrigin(), cfg.IsDev()),
