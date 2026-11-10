@@ -48,12 +48,12 @@ const (
 // fails when third_party/kagentproto/SOURCE moves off this commit: re-read the digests at the new
 // commit, update both, and keep the harness image pins in step.
 //
-// Re-verified 2026-11-10 for the provisional v1 pin 61b153c18bfe4c8cb7ffa54ddcc352c417e3c801: that
-// pin is upstream kagent with the fork additions applied by hand, so it has no preparation code of
-// its own. The digests were re-read at oldsj/kagent b785c99d, the newest fork commit carrying
-// go/harness/runtime/workspace/preparation_test.go, and are unchanged from a1164013. Re-read them
-// when the fork's Substrate 1.0 branch exists and SOURCE moves to it.
-const setupDigestsSource = "61b153c18bfe4c8cb7ffa54ddcc352c417e3c801"
+// Re-checked 2026-11-10 for the pin oldsj/kagent df42493b: that commit has no preparation code
+// yet (the Substrate 1.0 port has not landed it; SOURCE's overlay.patch carries the API). The
+// digests are the 0.4 line's, read at oldsj/kagent b785c99d, the newest commit with
+// go/harness/runtime/workspace/preparation_test.go, and unchanged since a1164013. Re-read them
+// when the preparation port lands.
+const setupDigestsSource = "df42493b4b49aad1210e03a16d677e66a3fe270b"
 
 var setupDigests = map[string]string{
 	profileSupervisor: "c9b2c5bf815f6b0dd45ee11f02e343ab6a25d4ce39c93663e6feb25281cb87f6",

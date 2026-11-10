@@ -1,0 +1,171 @@
+--- a/kagent/api/v1/sessions.proto
++++ b/kagent/api/v1/sessions.proto
+@@ -17,6 +17,8 @@
+ // until a client retry completes it. Automatic idle suspension is independent.
+ service SessionService {
+   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
++  // Fork: a fixed model-free workspace preparation. It wakes a sleeping runtime itself.
++  rpc PrepareSessionWorkspace(PrepareSessionWorkspaceRequest) returns (PrepareSessionWorkspaceResponse);
+   rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+   rpc UpdateSessionName(UpdateSessionNameRequest) returns (UpdateSessionNameResponse);
+@@ -53,6 +55,19 @@
+   // Git checkout the runtime establishes before the first turn. Unset means
+   // the Session starts with an empty workspace.
+   Workspace workspace = 16;
++  // Secret references only; forks do not inherit these bindings.
++  repeated SessionCredential credentials = 17;
++  DevelopmentEnvironment development_environment = 18;
++  // Output only. Operator-resolved payload pinned at creation.
++  RuntimeComposition runtime_composition = 19;
++  // Output only. Present only on authorized GetSession for a freshly observed
++  // current active runtime. Never a creation, resume, or fork input.
++  RuntimeAssociation runtime_association = 20;
++  // Output only, historical preparation evidence. GET never refreshes it.
++  WorkspacePreparationReceipt workspace_preparation = 21;
++  // Output only. Set on a fork created with a fresh conversation: its restored
++  // data keeps the workspace, but the runtime discards native conversation state.
++  bool fresh_conversation = 22;
+ }
+ 
+ message AgentProvenance {
+@@ -74,6 +89,9 @@
+   // Optional Git checkout to establish before the first turn. Its host must be
+   // one of the Agent's Git origins.
+   Workspace workspace = 6;
++  // Per-session headers for origins already allowed by the Agent revision.
++  repeated SessionCredential credentials = 7 [(buf.validate.field).repeated.max_items = 4];
++  DevelopmentEnvironment development_environment = 8;
+ }
+ 
+ message CreateSessionResponse {
+@@ -172,3 +190,117 @@
+ }
+ 
+ message RevokeSessionShareResponse {}
++
++// Fork additions (oldsj/kagent mainloop-substrate-1-0), field numbers kept from v1alpha1.
++
++// Output only. A bounded observation, not an atomic cross-system grant.
++// The durable generation must remain active around a fresh lookup of the exact
++// running Actor, and the Session must remain READY with no pending operation.
++// Dispatchers must recheck with their normal fencing/locks before runtime work.
++// Absence means no current active association was verified by this read.
++message RuntimeAssociation {
++  string generation_id = 1;
++  string atespace = 2;
++  string actor_name = 3;
++  string actor_uid = 4;
++  string phase = 5;
++  bool current_active = 6;
++}
++
++// SecretKeyReference identifies a key in the Agent's namespace. The value is
++// the complete HTTP header value, including any authorization scheme prefix.
++message SecretKeyReference {
++  string name = 1 [(buf.validate.field).string = {
++    min_len: 1
++    max_len: 253
++    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
++  }];
++  string key = 2 [(buf.validate.field).string = {
++    min_len: 1
++    max_len: 253
++    pattern: "^[A-Za-z0-9._-]+$"
++  }];
++}
++
++// SessionCredential binds a same-namespace Secret to an existing egress origin.
++// Injection must be supported by the gateway dataplane for the origin's protocol.
++// Stock agentgateway supports HTTP injection; stock Envoy skips it.
++message SessionCredential {
++  string origin = 1 [(buf.validate.field).string = {
++    max_len: 2048
++    pattern: "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$"
++  }];
++  // Header names are case-insensitive and canonicalized to lowercase.
++  string header = 2 [(buf.validate.field).string = {
++    min_len: 1
++    max_len: 256
++    pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
++  }];
++  SecretKeyReference secret_ref = 3 [(buf.validate.field).required = true];
++}
++
++// Trusted controller selection; runtime payloads are operator-owned.
++message DevelopmentEnvironment {
++  string image = 1 [(buf.validate.field).string = {
++    max_len: 512
++    pattern: "^[A-Za-z0-9][A-Za-z0-9./_:-]*@sha256:[a-f0-9]{64}$"
++  }];
++  string platform = 2 [(buf.validate.field).string.in = "linux/amd64", (buf.validate.field).string.in = "linux/arm64"];
++  string policy_identity = 3 [(buf.validate.field).string = {min_len: 1, max_len: 256}];
++}
++
++// Output only. Immutable inputs retained with the native Session.
++message RuntimeComposition {
++  string payload_image = 1;
++  string provider = 2;
++  uint32 schema = 3;
++  string cli_version = 4;
++}
++
++// A fixed model-free action over the original owned Create tuple. Repeating a
++// completed action requests a new read-only challenge; uncertain setup never reissues.
++message PrepareSessionWorkspaceRequest {
++  string session_id = 1 [(buf.validate.field).string.uuid = true];
++  string action_id = 2 [(buf.validate.field).string = {min_len: 1, max_len: 128, pattern: "^[A-Za-z0-9:._-]+$"}];
++  string create_request_id = 3 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
++  string generation_id = 4 [(buf.validate.field).string.uuid = true];
++  string actor_uid = 5 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
++  string prepared_revision = 6 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
++  Workspace workspace = 7 [(buf.validate.field).required = true];
++  DevelopmentEnvironment development_environment = 8 [(buf.validate.field).required = true];
++  RuntimeComposition runtime_composition = 9 [(buf.validate.field).required = true];
++  string setup_profile = 10 [(buf.validate.field).string.in = "supervisor", (buf.validate.field).string.in = "child", (buf.validate.field).string.in = "agent"];
++  string setup_digest = 11 [(buf.validate.field).string = {pattern: "^[a-f0-9]{64}$"}];
++  option (buf.validate.message).cel = {
++    id: "preparation.exact_checkout"
++    message: "preparation requires a full commit SHA and named branch"
++    expression: "this.workspace.ref.matches('^[a-f0-9]{40}$') && this.workspace.branch != ''"
++  };
++}
++
++message PrepareSessionWorkspaceResponse {
++  WorkspacePreparationReceipt receipt = 1;
++}
++
++// Bounded output-only original-action evidence. A pending/uncertain classification
++// or historical=true cannot authorize current native work.
++message WorkspacePreparationReceipt {
++  PrepareSessionWorkspaceRequest original = 1;
++  string request_digest = 2;
++  string execution_id = 3;
++  string context_id = 4;
++  string atespace = 5;
++  string actor_name = 6;
++  string classification = 7;
++  string challenge_id = 8;
++  uint64 observation_sequence = 9;
++  string head = 10;
++  string branch = 11;
++  string transport_digest = 12;
++  string config_digest = 13;
++  string mcp_digest = 14;
++  string native_hook = 15;
++  google.protobuf.Timestamp effect_observed_at = 16;
++  google.protobuf.Timestamp observed_at = 17;
++  bool historical = 18;
++}
+--- a/kagent/api/v1/checkpoints.proto
++++ b/kagent/api/v1/checkpoints.proto
+@@ -85,6 +85,9 @@
+     min_len: 1
+     max_len: 128
+   }];
++  // Fork: keep the workspace and caches but start with no A2A history and no native
++  // agent conversation. False keeps the full conversation up to the checkpoint.
++  bool fresh_conversation = 3;
+ }
+ 
+ message ForkSessionResponse {
