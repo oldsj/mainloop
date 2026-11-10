@@ -1,19 +1,20 @@
 repo: oldsj/kagent (branch mainloop-substrate-1-0), plus overlay.patch
-commit: df42493b4b49aad1210e03a16d677e66a3fe270b
+commit: 912351dc8160b0cc5e99718cd8b6f5d29bf40920
 paths: proto/kagent/api/v1/{common.proto,runtime.proto,sessions.proto,agents.proto,scheduled_runs.proto,checkpoints.proto}
 notes: |
-  The six files are the fork's at the commit above (#63, per-Session Git workspace, is the newest
-  change in them: CreateSessionRequest.workspace = 6, Session.workspace = 16, message Workspace in
-  common.proto). overlay.patch adds the fork API from the 0.4 line that the Substrate 1.0 port has
-  not landed yet, at its 0.4 field numbers, so Mainloop keeps building against it:
-    credentials       CreateSessionRequest.credentials = 7, Session.credentials = 17,
-                      SessionCredential, SecretKeyReference                      (oldsj/kagent#66)
+  The six files are the fork's at the commit above: through #63 (per-Session Git workspace:
+  CreateSessionRequest.workspace = 6, Session.workspace = 16, message Workspace in common.proto)
+  and #66 (per-Session credentials: CreateSessionRequest.credentials = 7, Session.credentials = 17,
+  SessionCredential, SecretKeyReference). overlay.patch adds the fork API from the 0.4 line that
+  the Substrate 1.0 port has not landed yet, at its 0.4 field numbers, so Mainloop keeps building
+  against it:
     environment       CreateSessionRequest.development_environment = 8,
                       Session.development_environment = 18, DevelopmentEnvironment,
                       Session.runtime_composition = 19, RuntimeComposition      (runtime composition)
+    association       Session.runtime_association = 20, RuntimeAssociation       (oldsj/kagent#75)
     preparation       rpc PrepareSessionWorkspace, its request and response,
-                      WorkspacePreparationReceipt, Session.workspace_preparation = 21,
-                      Session.runtime_association = 20, RuntimeAssociation       (preparation port)
+                      WorkspacePreparationReceipt, Session.workspace_preparation = 21
+                                                                                 (preparation port)
     fresh forks       Session.fresh_conversation = 22,
                       ForkSessionRequest.fresh_conversation = 3                  (checkpoint port)
   Against a kagent at this commit those fields are not sent or returned and PrepareSessionWorkspace

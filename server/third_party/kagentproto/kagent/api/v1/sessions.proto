@@ -70,6 +70,38 @@ message Session {
   bool fresh_conversation = 22;
 }
 
+// SecretKeyReference identifies a key in the Agent's namespace. The value is
+// the complete HTTP header value, including any authorization scheme prefix.
+message SecretKeyReference {
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 253
+    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+  }];
+  string key = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 253
+    pattern: "^[A-Za-z0-9._-]+$"
+  }];
+}
+
+// SessionCredential binds a same-namespace Secret to an existing egress origin.
+// Injection must be supported by the gateway dataplane for the origin's protocol.
+// Stock agentgateway supports HTTP injection; stock Envoy skips it.
+message SessionCredential {
+  string origin = 1 [(buf.validate.field).string = {
+    max_len: 2048
+    pattern: "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$"
+  }];
+  // Header names are case-insensitive and canonicalized to lowercase.
+  string header = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 256
+    pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+  }];
+  SecretKeyReference secret_ref = 3 [(buf.validate.field).required = true];
+}
+
 message AgentProvenance {
   ResourceReference ref = 1;
   string uid = 2;
@@ -205,38 +237,6 @@ message RuntimeAssociation {
   string actor_uid = 4;
   string phase = 5;
   bool current_active = 6;
-}
-
-// SecretKeyReference identifies a key in the Agent's namespace. The value is
-// the complete HTTP header value, including any authorization scheme prefix.
-message SecretKeyReference {
-  string name = 1 [(buf.validate.field).string = {
-    min_len: 1
-    max_len: 253
-    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
-  }];
-  string key = 2 [(buf.validate.field).string = {
-    min_len: 1
-    max_len: 253
-    pattern: "^[A-Za-z0-9._-]+$"
-  }];
-}
-
-// SessionCredential binds a same-namespace Secret to an existing egress origin.
-// Injection must be supported by the gateway dataplane for the origin's protocol.
-// Stock agentgateway supports HTTP injection; stock Envoy skips it.
-message SessionCredential {
-  string origin = 1 [(buf.validate.field).string = {
-    max_len: 2048
-    pattern: "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$"
-  }];
-  // Header names are case-insensitive and canonicalized to lowercase.
-  string header = 2 [(buf.validate.field).string = {
-    min_len: 1
-    max_len: 256
-    pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
-  }];
-  SecretKeyReference secret_ref = 3 [(buf.validate.field).required = true];
 }
 
 // Trusted controller selection; runtime payloads are operator-owned.

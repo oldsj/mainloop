@@ -9,12 +9,10 @@
    rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
    rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
    rpc UpdateSessionName(UpdateSessionNameRequest) returns (UpdateSessionNameResponse);
-@@ -53,6 +55,19 @@
-   // Git checkout the runtime establishes before the first turn. Unset means
-   // the Session starts with an empty workspace.
+@@ -55,6 +57,17 @@
    Workspace workspace = 16;
-+  // Secret references only; forks do not inherit these bindings.
-+  repeated SessionCredential credentials = 17;
+   // Secret references only; forks do not inherit these bindings.
+   repeated SessionCredential credentials = 17;
 +  DevelopmentEnvironment development_environment = 18;
 +  // Output only. Operator-resolved payload pinned at creation.
 +  RuntimeComposition runtime_composition = 19;
@@ -28,18 +26,16 @@
 +  bool fresh_conversation = 22;
  }
  
- message AgentProvenance {
-@@ -74,6 +89,9 @@
-   // Optional Git checkout to establish before the first turn. Its host must be
-   // one of the Agent's Git origins.
+ // SecretKeyReference identifies a key in the Agent's namespace. The value is
+@@ -110,6 +123,7 @@
    Workspace workspace = 6;
-+  // Per-session headers for origins already allowed by the Agent revision.
-+  repeated SessionCredential credentials = 7 [(buf.validate.field).repeated.max_items = 4];
+   // Per-session headers for origins already allowed by the Agent revision.
+   repeated SessionCredential credentials = 7 [(buf.validate.field).repeated.max_items = 4];
 +  DevelopmentEnvironment development_environment = 8;
  }
  
  message CreateSessionResponse {
-@@ -172,3 +190,117 @@
+@@ -208,3 +222,85 @@
  }
  
  message RevokeSessionShareResponse {}
@@ -58,38 +54,6 @@
 +  string actor_uid = 4;
 +  string phase = 5;
 +  bool current_active = 6;
-+}
-+
-+// SecretKeyReference identifies a key in the Agent's namespace. The value is
-+// the complete HTTP header value, including any authorization scheme prefix.
-+message SecretKeyReference {
-+  string name = 1 [(buf.validate.field).string = {
-+    min_len: 1
-+    max_len: 253
-+    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
-+  }];
-+  string key = 2 [(buf.validate.field).string = {
-+    min_len: 1
-+    max_len: 253
-+    pattern: "^[A-Za-z0-9._-]+$"
-+  }];
-+}
-+
-+// SessionCredential binds a same-namespace Secret to an existing egress origin.
-+// Injection must be supported by the gateway dataplane for the origin's protocol.
-+// Stock agentgateway supports HTTP injection; stock Envoy skips it.
-+message SessionCredential {
-+  string origin = 1 [(buf.validate.field).string = {
-+    max_len: 2048
-+    pattern: "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$"
-+  }];
-+  // Header names are case-insensitive and canonicalized to lowercase.
-+  string header = 2 [(buf.validate.field).string = {
-+    min_len: 1
-+    max_len: 256
-+    pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
-+  }];
-+  SecretKeyReference secret_ref = 3 [(buf.validate.field).required = true];
 +}
 +
 +// Trusted controller selection; runtime payloads are operator-owned.

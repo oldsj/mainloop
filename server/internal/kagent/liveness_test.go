@@ -63,7 +63,7 @@ func TestObserveLivenessReportsTerminalRuntimeStates(t *testing.T) {
 	}
 	session = marshal(t, &api.Session{
 		Id: "s-1", ContextId: "s-1", State: api.RuntimeState_RUNTIME_STATE_READY,
-		RuntimeAssociation: &api.RuntimeAssociation{GenerationId: "g", Atespace: "ate", ActorName: "session-s-1", ActorUid: "u", Phase: "suspended"},
+		RuntimeAssociation: &api.RuntimeAssociation{GenerationId: "g", Atespace: "ate", ActorName: "session-s-1", ActorUid: "u", Phase: "active"},
 	})
 	live, err = rawSessionServer(t, session).ObserveLiveness(ctx, "s-1")
 	if err != nil || !live.Exists || live.Terminal || !live.Asleep {

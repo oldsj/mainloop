@@ -908,16 +908,12 @@ func (s *Server) out(proc string, sess *api.Session) *api.Session {
 		cp.A2AAuthority = kagent.ActorName(sess.GetId()) + ".ate.actors.resources.substrate.ate.dev"
 	}
 	if s.Actors && !s.NoAssociation && sess.GetState() == api.RuntimeState_RUNTIME_STATE_READY {
-		// A sleeping Session keeps its association, no longer current, until the next wake starts a
-		// new generation.
-		running := s.actorRunning(sess.GetId())
-		phase := "suspended"
-		if running {
-			phase = "active"
-		}
+		// As kagent reports it (oldsj/kagent#75): present whenever the Session has an Actor, phase
+		// "active", and current only while the Actor runs. A sleeping Session keeps it, not current,
+		// until the next wake starts a new generation.
 		cp.RuntimeAssociation = &api.RuntimeAssociation{
 			GenerationId: s.generationID(sess.GetId()), Atespace: "ate", ActorName: kagent.ActorName(sess.GetId()),
-			ActorUid: "uid-" + sess.GetId(), Phase: phase, CurrentActive: running,
+			ActorUid: "uid-" + sess.GetId(), Phase: "active", CurrentActive: s.actorRunning(sess.GetId()),
 		}
 	}
 	if s.TamperSession != nil {
