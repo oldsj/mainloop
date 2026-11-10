@@ -347,10 +347,13 @@ func TestStateMapping(t *testing.T) {
 		want      api.WorkspaceObservedState
 		detail    bool
 		awake     bool
+		asleep    bool
 	}{
 		{state: "RUNTIME_STATE_READY", op: "RUNTIME_OPERATION_NONE", want: api.WorkspaceObservedStateRunning, awake: true},
-		// Asleep: READY with no current Actor.
-		{state: "RUNTIME_STATE_READY", op: "RUNTIME_OPERATION_NONE", want: api.WorkspaceObservedStateSuspended},
+		// Asleep: READY with an association that is not current.
+		{state: "RUNTIME_STATE_READY", op: "RUNTIME_OPERATION_NONE", want: api.WorkspaceObservedStateSuspended, asleep: true},
+		// No association: kagent did not say, and the Session runs on use.
+		{state: "RUNTIME_STATE_READY", op: "RUNTIME_OPERATION_NONE", want: api.WorkspaceObservedStateRunning},
 		// kagent's own lifecycle work is brief: the workspace is on its way to running.
 		{state: "RUNTIME_STATE_READY", op: "RUNTIME_OPERATION_RESUME", want: api.WorkspaceObservedStateResuming},
 		{state: "RUNTIME_STATE_READY", op: "RUNTIME_OPERATION_SUSPEND", want: api.WorkspaceObservedStateResuming},
@@ -364,6 +367,9 @@ func TestStateMapping(t *testing.T) {
 	}
 	for _, c := range cases {
 		sess := &kagentapi.Session{State: kagentapi.RuntimeState(S[c.state]), Operation: kagentapi.RuntimeOperation(O[c.op])}
+		if c.asleep {
+			sess.RuntimeAssociation = &kagentapi.RuntimeAssociation{CurrentActive: false}
+		}
 		if c.awake {
 			sess.RuntimeAssociation = &kagentapi.RuntimeAssociation{CurrentActive: true}
 		}

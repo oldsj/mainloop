@@ -66,8 +66,10 @@ History before `e776537` describes the retired Python backend. Where other text 
   Session. kagent suspends an idle Session's Actor itself, after its own quiesce delay, and wakes
   it on use: the next A2A send, `PrepareSessionWorkspace`, or a connection through the Substrate
   router (a preview request or a live-view attach). A sleeping Session stays `READY`. Asleep or
-  awake is read from `Session.runtime_association.current_active` on `GetSession`: false or
-  absent means no running Actor was verified. `RUNTIME_STATE_SUSPENDED` and the `SUSPEND`,
+  awake is read from `Session.runtime_association.current_active` on `GetSession`: present and
+  false is asleep (shown as `suspended`); absent is not known and shown as `running`, since the
+  Session runs on use either way. The kagent Mainloop is pinned to does not report the association
+  yet (see `server/third_party/kagentproto/SOURCE`), so until it does no workspace shows asleep. `RUNTIME_STATE_SUSPENDED` and the `SUSPEND`,
   `RESUME` and `REVERT` operations can still appear briefly for kagent's own lifecycle work;
   Mainloop treats them as busy and reads again.
 - Processes do not survive sleep: kagent's snapshots are data-only. The checkout is kept, but a
@@ -298,7 +300,7 @@ preview. A host with more labels (`x.<port>--<workspace>--preview.<domain>`) is 
 that the port is one the workspace declares, then opens
 `CONNECT actor-upstream:<port>` through the Substrate router to the Session's actor. The target
 is `<atespace>/<actor name>` from the kagent Session's runtime association when kagent reports one,
-current or not. A sleeping Session may report none; the target is then
+current or not; otherwise from the Session's A2A authority (`<actor>.<atespace>.actors.resources.substrate.ate.dev`, which kagent records when it creates the Actor); failing both,
 `<KAGENT_ACTOR_ATESPACE>/session-<kagent session id, lower case>`, kagent's stable Actor name. The
 router authenticates the backend by its pod certificate (mutual TLS, see "Tunnel" below) but knows
 nothing of owners or ports, so the owner check is Mainloop's. Mainloop does not ask
@@ -403,7 +405,8 @@ request id, access log and panic recovery still wrap it. Any other host is the A
   reason. The chart's `substrateRouterAuth.enabled` mounts both files into the API container only.
 - **Tunnel.** `CONNECT actor-upstream:<port>` to `SUBSTRATE_ROUTER_ADDRESS` with
   `ate-target-actor: <atespace>/<actor name>` from the kagent Session's runtime association (read
-  per request), current or not. With no association the target is
+  per request), current or not. With no association it is the actor the Session's A2A authority
+  names, and with neither
   `<KAGENT_ACTOR_ATESPACE>/session-<kagent session id, lower case>`, kagent's stable Actor name.
   The `CONNECT` is what wakes a sleeping Actor. A Session that is not `READY` shows the waking
   page and the router is not contacted. The connect is timed by

@@ -200,7 +200,7 @@ session has a kagent Session and its Agent is listed in `MAINLOOP_LIVE_AGENTS`. 
 owner's only (another owner's session, or one that is not live, is `404`); a cross-origin `Origin` is
 `403` and a request that is not a WebSocket upgrade is `400`. The relay names the actor the way the preview
 proxy does: from the kagent Session's runtime association when kagent reports one, current or not,
-and otherwise by kagent's stable Actor name (`session-<kagent session id, lower case>` in
+then from the Session's A2A authority, and otherwise by kagent's stable Actor name (`session-<kagent session id, lower case>` in
 `KAGENT_ACTOR_ATESPACE`). It does not wake anything itself: its connection through the router wakes
 a sleeping Session. It answers `503` with `Retry-After: 2` while the tunnel is not up yet or the
 Session is not `READY`. A session started from

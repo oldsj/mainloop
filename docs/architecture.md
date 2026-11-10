@@ -48,8 +48,9 @@ stateDiagram-v2
 ```
 
 A sleeping Session stays `READY`. Mainloop reads asleep or awake from
-`Session.runtime_association.current_active` on `GetSession` (false or absent means no running
-Actor was verified) and shows a sleeping workspace as `suspended`. What wakes it is the next A2A
+`Session.runtime_association.current_active` on `GetSession` and shows a sleeping workspace as
+`suspended`; an absent association is not known, not asleep (the pinned kagent does not report
+one yet). What wakes it is the next A2A
 send, `PrepareSessionWorkspace`, or a connection through the Substrate router (a preview request
 or a live-view attach). Opening a workspace page does not wake its actor. Processes do not survive
 sleep, because snapshots are data-only: the checkout is kept, but a dev server must be started
@@ -130,7 +131,7 @@ flowchart LR
 The preview URL is `https://<port>--<workspace>--preview.<domain>`. The preview proxy checks that
 the workspace is the configured owner's and that the port is declared, then reaches the Session's actor
 through the router. The tunnel target is the actor named in the Session's runtime association
-when kagent reports one, and otherwise kagent's stable Actor name
+when kagent reports one, then the actor its A2A authority names, and otherwise kagent's stable Actor name
 (`session-<kagent session id, lower case>` in `KAGENT_ACTOR_ATESPACE`). The proxy asks kagent to
 wake nothing: the `CONNECT` through the router is what wakes a sleeping Actor. A Session that is
 not `READY` gets the "waking up" page (`503`, `Retry-After: 2`) and the router is not contacted.

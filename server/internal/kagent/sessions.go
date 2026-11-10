@@ -159,7 +159,7 @@ func (c *Client) ObserveLiveness(ctx context.Context, id string) (SessionLivenes
 	return SessionLiveness{
 		Exists: true, Terminal: terminalRuntimeStates(state),
 		Deleting: state == api.RuntimeState_RUNTIME_STATE_DELETING,
-		Asleep:   !terminalRuntimeStates(state) && !Awake(s), LastActivity: updated,
+		Asleep:   !terminalRuntimeStates(state) && Asleep(s), LastActivity: updated,
 	}, nil
 }
 
@@ -212,6 +212,34 @@ func (c *Client) ListSessions(ctx context.Context) ([]*api.Session, error) {
 // asleep or not verified; the next send, workspace preparation or attach through the router wakes it.
 func Awake(s *api.Session) bool {
 	return s.GetRuntimeAssociation().GetCurrentActive()
+}
+
+// Asleep reports whether kagent said, on this read, that the Session has no running Actor. Only a
+// runtime association can say so. Without one (the kagent this is built against does not report
+// it yet, see third_party/kagentproto/SOURCE) sleep is unknown, which is not asleep: a caller must
+// not take a Session it cannot see into for a stopped one.
+func Asleep(s *api.Session) bool {
+	ra := s.GetRuntimeAssociation()
+	return ra != nil && !ra.GetCurrentActive()
+}
+
+// actorHostSuffix ends the A2A authority kagent records for a Session's Actor:
+// "<actor>.<atespace>.actors.resources.substrate.ate.dev".
+const actorHostSuffix = ".actors.resources.substrate.ate.dev"
+
+// ActorOf is the Substrate atespace and name of the Session's Actor, from the A2A authority kagent
+// records when it creates the Actor and clears when it deletes it. ok is false when the Session
+// has none or it is not in that form.
+func ActorOf(s *api.Session) (atespace, name string, ok bool) {
+	host, found := strings.CutSuffix(s.GetA2AAuthority(), actorHostSuffix)
+	if !found {
+		return "", "", false
+	}
+	name, atespace, found = strings.Cut(host, ".")
+	if !found || name == "" || atespace == "" || strings.Contains(atespace, ".") {
+		return "", "", false
+	}
+	return atespace, name, true
 }
 
 // Settling reports whether kagent is doing internal lifecycle work on the Session (a brief

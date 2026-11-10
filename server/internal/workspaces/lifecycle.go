@@ -64,12 +64,13 @@ func stateOf(sess *kagentapi.Session) (api.WorkspaceObservedState, *string) {
 	case kagent.Settling(sess):
 		// kagent's own lifecycle work (settling an idle Actor, waking it, reverting a crash).
 		return api.WorkspaceObservedStateResuming, nil
-	case sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_READY && kagent.Awake(sess):
-		return api.WorkspaceObservedStateRunning, nil
-	case sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_READY:
-		// Asleep: kagent parked the idle Actor. The Session stays READY and the next message,
+	case sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_READY && kagent.Asleep(sess):
+		// kagent parked the idle Actor. The Session stays READY and the next message,
 		// preparation or attach wakes it.
 		return api.WorkspaceObservedStateSuspended, nil
+	case sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_READY:
+		// Awake, or kagent did not say (no runtime association): either way it runs on use.
+		return api.WorkspaceObservedStateRunning, nil
 	}
 	return api.WorkspaceObservedStateUnknown, nil
 }

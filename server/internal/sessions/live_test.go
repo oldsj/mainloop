@@ -45,11 +45,22 @@ func TestLiveTargetNamesTheActorAwakeOrAsleepAndWakesNothing(t *testing.T) {
 	}
 }
 
-// A sleeping Session kagent reports no association for is named by kagent's stable Actor name in
-// the configured atespace.
+// Without a runtime association (kagent at the vendored pin reports none) the Actor is the one the
+// Session's A2A authority names.
+func TestLiveTargetWithoutAnAssociationIsTheA2AAuthoritysActor(t *testing.T) {
+	e, mainID, ksid := liveEnv(t)
+	e.srv.NoAssociation = true
+	got, err := e.svc.LiveTarget(context.Background(), mainID)
+	if err != nil || got.Actor != "ate/"+kagent.ActorName(ksid) {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+// A Session that names its Actor neither way is named by kagent's stable Actor name in the
+// configured atespace.
 func TestLiveTargetFallsBackToTheStableActorName(t *testing.T) {
 	e, mainID, ksid := liveEnv(t)
-	e.srv.TamperSession = func(_ string, s *kagentapi.Session) { s.RuntimeAssociation = nil }
+	e.srv.TamperSession = func(_ string, s *kagentapi.Session) { s.RuntimeAssociation, s.A2AAuthority = nil, "" }
 	got, err := e.svc.LiveTarget(context.Background(), mainID)
 	if err != nil || got.Actor != "kagent/"+kagent.ActorName(ksid) {
 		t.Fatalf("%+v %v", got, err)

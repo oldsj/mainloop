@@ -30,11 +30,11 @@ var actorSafe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}/[A-Za-z0-9][A-Za-z0
 func Valid(actor string) bool { return actorSafe.MatchString(actor) }
 
 // Of is the router's "<atespace>/<actor>" name of the Session's Actor. It comes from the runtime
-// association when kagent reports one, current or not. A sleeping Session may report none: kagent
-// names a Session's Actor "session-<id>" for its whole life, so it is then built from that and
-// defaultAtespace (the atespace Sessions run in). The caller's connection through the Substrate
-// router wakes a sleeping Actor. ok is false for a Session that cannot have an Actor (not READY) or
-// a name that is not safe for the CONNECT request head.
+// association when kagent reports one, current or not; otherwise from the Session's A2A authority,
+// which kagent records when it creates the Actor; and failing both from kagent's stable name
+// "session-<id>" in defaultAtespace (the atespace Sessions run in). The caller's connection through
+// the Substrate router wakes a sleeping Actor. ok is false for a Session that cannot have an Actor
+// (not READY) or a name that is not safe for the CONNECT request head.
 func Of(ks *kagentapi.Session, defaultAtespace string) (string, bool) {
 	if ks.GetState() != kagentapi.RuntimeState_RUNTIME_STATE_READY {
 		return "", false
@@ -42,6 +42,8 @@ func Of(ks *kagentapi.Session, defaultAtespace string) (string, bool) {
 	atespace, name := defaultAtespace, kagent.ActorName(ks.GetId())
 	if ra := ks.GetRuntimeAssociation(); ra.GetAtespace() != "" && ra.GetActorName() != "" {
 		atespace, name = ra.GetAtespace(), ra.GetActorName()
+	} else if a, n, ok := kagent.ActorOf(ks); ok {
+		atespace, name = a, n
 	}
 	if atespace == "" || ks.GetId() == "" {
 		return "", false

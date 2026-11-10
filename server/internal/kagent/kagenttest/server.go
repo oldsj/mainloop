@@ -150,13 +150,16 @@ type Server struct {
 	// IdleActors, with Actors, starts every Session asleep: its Actor is parked until a send, a
 	// workspace preparation or Wake starts it. A sleeping Session stays READY and its runtime
 	// association is not current.
-	IdleActors  bool
-	asleep      map[string]bool
-	woken       map[string]bool
-	generation  map[string]int
-	forced      []string
-	prepares    []*api.PrepareSessionWorkspaceRequest
-	TamperAgent func(*api.Agent)
+	IdleActors bool
+	// NoAssociation withholds the runtime association, as kagent at the vendored pin does (see
+	// third_party/kagentproto/SOURCE): the Session still names its Actor in its A2A authority.
+	NoAssociation bool
+	asleep        map[string]bool
+	woken         map[string]bool
+	generation    map[string]int
+	forced        []string
+	prepares      []*api.PrepareSessionWorkspaceRequest
+	TamperAgent   func(*api.Agent)
 	// TamperSchedule edits a schedule in a ScheduledRunService reply, without changing the stored one.
 	TamperSchedule func(proc string, sc *api.ScheduledRun)
 	// TamperExecution edits the execution a TriggerScheduledRun reply carries.
@@ -902,6 +905,9 @@ func (s *Server) out(proc string, sess *api.Session) *api.Session {
 		cp.RuntimeComposition = &api.RuntimeComposition{PayloadImage: "example.test/harness@sha256:def", Provider: "claude", Schema: 1}
 	}
 	if s.Actors && sess.GetState() == api.RuntimeState_RUNTIME_STATE_READY {
+		cp.A2AAuthority = kagent.ActorName(sess.GetId()) + ".ate.actors.resources.substrate.ate.dev"
+	}
+	if s.Actors && !s.NoAssociation && sess.GetState() == api.RuntimeState_RUNTIME_STATE_READY {
 		// A sleeping Session keeps its association, no longer current, until the next wake starts a
 		// new generation.
 		running := s.actorRunning(sess.GetId())

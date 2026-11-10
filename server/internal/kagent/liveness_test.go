@@ -54,9 +54,18 @@ func TestObserveLivenessReportsTerminalRuntimeStates(t *testing.T) {
 			}
 		})
 	}
-	// A sleeping Session is READY with no current Actor; an awake one carries a current association.
+	// A sleeping Session is READY with an association that is not current; an awake one carries a
+	// current association. Without an association kagent said nothing, which is not asleep.
 	session := marshal(t, &api.Session{Id: "s-1", ContextId: "s-1", State: api.RuntimeState_RUNTIME_STATE_READY})
 	live, err := rawSessionServer(t, session).ObserveLiveness(ctx, "s-1")
+	if err != nil || !live.Exists || live.Terminal || live.Asleep {
+		t.Fatalf("no association: live = %+v, err = %v, want Exists and not Asleep", live, err)
+	}
+	session = marshal(t, &api.Session{
+		Id: "s-1", ContextId: "s-1", State: api.RuntimeState_RUNTIME_STATE_READY,
+		RuntimeAssociation: &api.RuntimeAssociation{GenerationId: "g", Atespace: "ate", ActorName: "session-s-1", ActorUid: "u", Phase: "suspended"},
+	})
+	live, err = rawSessionServer(t, session).ObserveLiveness(ctx, "s-1")
 	if err != nil || !live.Exists || live.Terminal || !live.Asleep {
 		t.Fatalf("asleep: live = %+v, err = %v, want Exists, Asleep and not Terminal", live, err)
 	}
@@ -113,6 +122,22 @@ func TestObserveLivenessSetsDeletingOnlyForTheDeletingState(t *testing.T) {
 		live, err := rawSessionServer(t, session).ObserveLiveness(ctx, "s-1")
 		if err != nil || !live.Terminal || live.Deleting {
 			t.Fatalf("%v: live = %+v, err = %v, want Terminal and not Deleting", state, live, err)
+		}
+	}
+}
+
+// kagent records the Actor's host as its A2A authority; ActorOf reads the atespace and name from it.
+func TestActorOfReadsTheA2AAuthority(t *testing.T) {
+	for authority, want := range map[string][2]string{
+		"session-abc.team-a.actors.resources.substrate.ate.dev": {"team-a", "session-abc"},
+		"": {},
+		"session-abc.actors.resources.substrate.ate.dev":              {},
+		"session-abc.team-a.extra.actors.resources.substrate.ate.dev": {},
+		"session-abc.team-a.example.test":                             {},
+	} {
+		atespace, name, ok := kagent.ActorOf(&api.Session{A2AAuthority: authority})
+		if ok != (want[0] != "") || atespace != want[0] || name != want[1] {
+			t.Errorf("%q: %q %q %v, want %q", authority, atespace, name, ok, want)
 		}
 	}
 }
