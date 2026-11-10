@@ -1,7 +1,8 @@
 # Kind (kind-substrate-1-0): the ported kagent chart with the settings #673 puts
 # in k8s/apps/kagent/overlays/prod/values.yaml for it. Differences from prod: no UI or tools
 # (prod drops them too), service-account auth instead of the 0.4 service-token, and the chart's
-# default controller image (oldsj/kagent-controller:0.0.0-7945f19) instead of a registry mirror.
+# default controller image instead of a registry mirror. upgrade.sh layers values-prod-shape.yaml
+# and session-policy.yaml on top.
 fullnameOverride: kagent
 global:
   watchNamespaces: [kagent]

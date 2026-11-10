@@ -9,11 +9,3 @@ config:
         platform: linux/arm64
         image: ghcr.io/oldsj/kagent-claude-runtime@sha256:70b4613e5103ba1bc278c681a545bf14c4b48c3c5909c7782e0a7687e11a1cd0
         cliVersion: 2.1.285
-  server:
-    auth:
-      # Union of the workers using this install: kagent-sync (claude-smoke, kport-compose).
-      # runner-harness's mainloop-dev Git tuples need a controller with kagent #84.
-      sessionPolicy:
-        namespace: kagent
-        agents: [claude-smoke, kport-compose]
-        developmentEnvironmentRegistries: [docker.io]

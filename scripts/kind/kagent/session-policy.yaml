@@ -1,0 +1,10 @@
+# The prod-shaped session policy, applied by upgrade.sh unless SESSION_POLICY=off.
+# Union of the workers using this install: kagent-sync (claude-smoke, kport-compose).
+# runner-harness's mainloop-dev Git tuples need a controller with kagent #84.
+config:
+  server:
+    auth:
+      sessionPolicy:
+        namespace: kagent
+        agents: [claude-smoke, kport-compose]
+        developmentEnvironmentRegistries: [docker.io]
