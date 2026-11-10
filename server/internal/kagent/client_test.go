@@ -239,6 +239,29 @@ func TestUserIDAuth(t *testing.T) {
 	}
 }
 
+// The ported kagent serves A2A 1.0 only, and a2a-go reads a request without A2A-Version as 0.3
+// and refuses it. Found on kind: every send failed with -32009.
+func TestEveryA2ACallNamesProtocolVersion1(t *testing.T) {
+	c, srv, _ := setup(t)
+	srv.AddAgent("kagent", "mainloop-main")
+	if _, err := send(c, "m1"); err != nil {
+		t.Fatal(err)
+	}
+	var a2aCalls int
+	for _, r := range srv.Requests() {
+		if r.AgentPath == "" {
+			continue
+		}
+		a2aCalls++
+		if got := r.Header.Get("A2A-Version"); got != "1.0" {
+			t.Errorf("%s: A2A-Version %q, want 1.0", r.Key, got)
+		}
+	}
+	if a2aCalls == 0 {
+		t.Fatal("no A2A call recorded")
+	}
+}
+
 func writeToken(t *testing.T, path, token string, mtime time.Time) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(token), 0o600); err != nil {

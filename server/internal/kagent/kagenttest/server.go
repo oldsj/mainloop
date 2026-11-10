@@ -651,6 +651,18 @@ func (s *Server) a2a(w http.ResponseWriter, r *http.Request) {
 	}
 	s.record(rec)
 
+	// As a2a-go's server: a missing A2A-Version means 0.3, which a 1.0 server refuses.
+	if v := r.Header.Get(a2a.SvcParamVersion); v != string(a2a.Version) {
+		if v == "" {
+			v = "0.3"
+		}
+		writeEnvelope(w, call.ID, nil, &RPCError{
+			Code:    -32009,
+			Message: fmt.Sprintf("this version is not supported: requested %q, served %q", v, a2a.Version),
+		})
+		return
+	}
+
 	if f, ok := s.takeFault(call.Method); ok {
 		if applyTransport(w, r, f) {
 			return
