@@ -1,10 +1,13 @@
 # The prod-shaped session policy, applied by upgrade.sh unless SESSION_POLICY=off.
-# Union of the workers using this install: kagent-sync (claude-smoke, kport-compose).
-# runner-harness's mainloop-dev Git tuples need a controller with kagent #84.
+# Union of the workers using this install: kagent-sync (claude-smoke, kport-compose) and
+# runner-harness (git-instance-e2e, with the mainloop-dev Git tuples prod also lists).
 config:
   server:
     auth:
       sessionPolicy:
         namespace: kagent
-        agents: [claude-smoke, kport-compose]
+        agents: [claude-smoke, kport-compose, git-instance-e2e]
         developmentEnvironmentRegistries: [docker.io]
+        credentials:
+          - {purpose: git-read, origin: "http://mainloop-git-read.mainloop-dev.svc.cluster.local", secretNamePattern: "mainloop-dev-git-read-*", key: authorization, header: authorization}
+          - {purpose: git-push, origin: "http://mainloop-git-push.mainloop-dev.svc.cluster.local", secretNamePattern: "mainloop-dev-git-push-*", key: authorization, header: authorization}

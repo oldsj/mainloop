@@ -4,7 +4,7 @@
 # VERSION defaults to the chart the values were written for.
 set -euo pipefail
 dir="$(cd "$(dirname "$0")" && pwd)"
-version="${VERSION:-0.0.0-42d39d4}"
+version="${VERSION:-0.0.0-72431b2}"
 ctx=kind-substrate-1-0
 policy=(-f "$dir/session-policy.yaml")
 [[ "${SESSION_POLICY:-on}" == off ]] && policy=()
