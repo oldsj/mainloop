@@ -401,7 +401,7 @@ and none is required to use it):
 
 - mainloop-dev has its own agent token key, instead of production's.
 - mainloop-dev holds no write-capable GitHub App private key.
-- mainloop-dev has its own kagent control token, not production's.
+- mainloop-dev has its own kagent ServiceAccount token, not production's.
 - The mainloop-dev ServiceAccount has no broad Secret access in the kagent namespace.
 - An egress NetworkPolicy for mainloop-dev, so synced code cannot reach arbitrary destinations.
 - The Role and RoleBinding applied by the `mainloop-dev-config` Application (see the RBAC row).
