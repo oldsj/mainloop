@@ -179,8 +179,15 @@ export function SessionPage({ id }: { id: string }) {
       className="flex h-full min-h-0 flex-col"
       style={visibleMaxHeight === null ? undefined : { maxHeight: `${visibleMaxHeight}px` }}
     >
-      <header className="gap-sm border-border p-md flex flex-col border-b">
-        <div className="gap-sm flex items-center">
+      {/* Live, the header is one row, so a phone keeps the screen for the transcript. */}
+      <header
+        className={
+          live
+            ? 'gap-sm border-border px-sm py-xs flex items-center border-b'
+            : 'gap-sm border-border p-md flex flex-col border-b'
+        }
+      >
+        <div className="gap-sm flex flex-none items-center">
           <BackLink taskId={task?.view.task.id ?? null} projectId={session.project_id} />
           <span data-testid="session-status">
             <StatusBadge
@@ -189,8 +196,14 @@ export function SessionPage({ id }: { id: string }) {
             />
           </span>
         </div>
-        <h1 className="text-lg font-medium break-words">{session.title}</h1>
-        {session.description ? (
+        <h1
+          className={
+            live ? 'min-w-0 truncate text-sm font-medium' : 'text-lg font-medium break-words'
+          }
+        >
+          {session.title}
+        </h1>
+        {session.description && !live ? (
           <p className="text-muted-foreground text-sm break-words">{session.description}</p>
         ) : null}
       </header>
