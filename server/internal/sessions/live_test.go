@@ -9,7 +9,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/liveactor"
 	"github.com/oldsj/mainloop/server/internal/sessions"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // liveEnv is a main session on a live Agent whose actor is parked (idle-suspended): kagent reports

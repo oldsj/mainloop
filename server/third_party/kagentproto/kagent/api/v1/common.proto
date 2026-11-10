@@ -1,11 +1,11 @@
 syntax = "proto3";
 
-package kagent.api.v1alpha1;
+package kagent.api.v1;
 
 import "buf/validate/validate.proto";
 import "google/protobuf/struct.proto";
 
-option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1;apiv1alpha1";
+option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1;apiv1";
 
 message StructuredObject {
   string api_version = 1;

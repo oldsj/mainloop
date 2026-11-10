@@ -2,9 +2,9 @@
 // versions:
 // 	protoc-gen-go v1.36.12
 // 	protoc        (unknown)
-// source: kagent/api/v1alpha1/runtime.proto
+// source: kagent/api/v1/runtime.proto
 
-package apiv1alpha1
+package apiv1
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -68,11 +68,11 @@ func (x RuntimeState) String() string {
 }
 
 func (RuntimeState) Descriptor() protoreflect.EnumDescriptor {
-	return file_kagent_api_v1alpha1_runtime_proto_enumTypes[0].Descriptor()
+	return file_kagent_api_v1_runtime_proto_enumTypes[0].Descriptor()
 }
 
 func (RuntimeState) Type() protoreflect.EnumType {
-	return &file_kagent_api_v1alpha1_runtime_proto_enumTypes[0]
+	return &file_kagent_api_v1_runtime_proto_enumTypes[0]
 }
 
 func (x RuntimeState) Number() protoreflect.EnumNumber {
@@ -81,7 +81,7 @@ func (x RuntimeState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RuntimeState.Descriptor instead.
 func (RuntimeState) EnumDescriptor() ([]byte, []int) {
-	return file_kagent_api_v1alpha1_runtime_proto_rawDescGZIP(), []int{0}
+	return file_kagent_api_v1_runtime_proto_rawDescGZIP(), []int{0}
 }
 
 // RuntimeOperation identifies active lifecycle work.
@@ -95,6 +95,9 @@ const (
 	RuntimeOperation_RUNTIME_OPERATION_DELETE      RuntimeOperation = 4
 	// No lifecycle operation is active.
 	RuntimeOperation_RUNTIME_OPERATION_NONE RuntimeOperation = 5
+	// Restores a crashed runtime to its last durable snapshot. Only a confirmed
+	// crash admits it; the Session stays FAILED until it finishes.
+	RuntimeOperation_RUNTIME_OPERATION_REVERT RuntimeOperation = 6
 )
 
 // Enum value maps for RuntimeOperation.
@@ -106,6 +109,7 @@ var (
 		3: "RUNTIME_OPERATION_RESUME",
 		4: "RUNTIME_OPERATION_DELETE",
 		5: "RUNTIME_OPERATION_NONE",
+		6: "RUNTIME_OPERATION_REVERT",
 	}
 	RuntimeOperation_value = map[string]int32{
 		"RUNTIME_OPERATION_UNSPECIFIED": 0,
@@ -114,6 +118,7 @@ var (
 		"RUNTIME_OPERATION_RESUME":      3,
 		"RUNTIME_OPERATION_DELETE":      4,
 		"RUNTIME_OPERATION_NONE":        5,
+		"RUNTIME_OPERATION_REVERT":      6,
 	}
 )
 
@@ -128,11 +133,11 @@ func (x RuntimeOperation) String() string {
 }
 
 func (RuntimeOperation) Descriptor() protoreflect.EnumDescriptor {
-	return file_kagent_api_v1alpha1_runtime_proto_enumTypes[1].Descriptor()
+	return file_kagent_api_v1_runtime_proto_enumTypes[1].Descriptor()
 }
 
 func (RuntimeOperation) Type() protoreflect.EnumType {
-	return &file_kagent_api_v1alpha1_runtime_proto_enumTypes[1]
+	return &file_kagent_api_v1_runtime_proto_enumTypes[1]
 }
 
 func (x RuntimeOperation) Number() protoreflect.EnumNumber {
@@ -141,14 +146,14 @@ func (x RuntimeOperation) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RuntimeOperation.Descriptor instead.
 func (RuntimeOperation) EnumDescriptor() ([]byte, []int) {
-	return file_kagent_api_v1alpha1_runtime_proto_rawDescGZIP(), []int{1}
+	return file_kagent_api_v1_runtime_proto_rawDescGZIP(), []int{1}
 }
 
-var File_kagent_api_v1alpha1_runtime_proto protoreflect.FileDescriptor
+var File_kagent_api_v1_runtime_proto protoreflect.FileDescriptor
 
-const file_kagent_api_v1alpha1_runtime_proto_rawDesc = "" +
+const file_kagent_api_v1_runtime_proto_rawDesc = "" +
 	"\n" +
-	"!kagent/api/v1alpha1/runtime.proto\x12\x13kagent.api.v1alpha1*\xd0\x01\n" +
+	"\x1bkagent/api/v1/runtime.proto\x12\rkagent.api.v1*\xd0\x01\n" +
 	"\fRuntimeState\x12\x1d\n" +
 	"\x19RUNTIME_STATE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16RUNTIME_STATE_CREATING\x10\x01\x12\x17\n" +
@@ -156,33 +161,34 @@ const file_kagent_api_v1alpha1_runtime_proto_rawDesc = "" +
 	"\x17RUNTIME_STATE_SUSPENDED\x10\x03\x12\x18\n" +
 	"\x14RUNTIME_STATE_FAILED\x10\x04\x12\x1a\n" +
 	"\x16RUNTIME_STATE_DELETING\x10\x05\x12\x19\n" +
-	"\x15RUNTIME_STATE_DELETED\x10\x06*\xca\x01\n" +
+	"\x15RUNTIME_STATE_DELETED\x10\x06*\xe8\x01\n" +
 	"\x10RuntimeOperation\x12!\n" +
 	"\x1dRUNTIME_OPERATION_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18RUNTIME_OPERATION_CREATE\x10\x01\x12\x1d\n" +
 	"\x19RUNTIME_OPERATION_SUSPEND\x10\x02\x12\x1c\n" +
 	"\x18RUNTIME_OPERATION_RESUME\x10\x03\x12\x1c\n" +
 	"\x18RUNTIME_OPERATION_DELETE\x10\x04\x12\x1a\n" +
-	"\x16RUNTIME_OPERATION_NONE\x10\x05BIZGgithub.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1;apiv1alpha1b\x06proto3"
+	"\x16RUNTIME_OPERATION_NONE\x10\x05\x12\x1c\n" +
+	"\x18RUNTIME_OPERATION_REVERT\x10\x06B=Z;github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1;apiv1b\x06proto3"
 
 var (
-	file_kagent_api_v1alpha1_runtime_proto_rawDescOnce sync.Once
-	file_kagent_api_v1alpha1_runtime_proto_rawDescData []byte
+	file_kagent_api_v1_runtime_proto_rawDescOnce sync.Once
+	file_kagent_api_v1_runtime_proto_rawDescData []byte
 )
 
-func file_kagent_api_v1alpha1_runtime_proto_rawDescGZIP() []byte {
-	file_kagent_api_v1alpha1_runtime_proto_rawDescOnce.Do(func() {
-		file_kagent_api_v1alpha1_runtime_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_kagent_api_v1alpha1_runtime_proto_rawDesc), len(file_kagent_api_v1alpha1_runtime_proto_rawDesc)))
+func file_kagent_api_v1_runtime_proto_rawDescGZIP() []byte {
+	file_kagent_api_v1_runtime_proto_rawDescOnce.Do(func() {
+		file_kagent_api_v1_runtime_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_kagent_api_v1_runtime_proto_rawDesc), len(file_kagent_api_v1_runtime_proto_rawDesc)))
 	})
-	return file_kagent_api_v1alpha1_runtime_proto_rawDescData
+	return file_kagent_api_v1_runtime_proto_rawDescData
 }
 
-var file_kagent_api_v1alpha1_runtime_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_kagent_api_v1alpha1_runtime_proto_goTypes = []any{
-	(RuntimeState)(0),     // 0: kagent.api.v1alpha1.RuntimeState
-	(RuntimeOperation)(0), // 1: kagent.api.v1alpha1.RuntimeOperation
+var file_kagent_api_v1_runtime_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_kagent_api_v1_runtime_proto_goTypes = []any{
+	(RuntimeState)(0),     // 0: kagent.api.v1.RuntimeState
+	(RuntimeOperation)(0), // 1: kagent.api.v1.RuntimeOperation
 }
-var file_kagent_api_v1alpha1_runtime_proto_depIdxs = []int32{
+var file_kagent_api_v1_runtime_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
 	0, // [0:0] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
@@ -190,26 +196,26 @@ var file_kagent_api_v1alpha1_runtime_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_kagent_api_v1alpha1_runtime_proto_init() }
-func file_kagent_api_v1alpha1_runtime_proto_init() {
-	if File_kagent_api_v1alpha1_runtime_proto != nil {
+func init() { file_kagent_api_v1_runtime_proto_init() }
+func file_kagent_api_v1_runtime_proto_init() {
+	if File_kagent_api_v1_runtime_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kagent_api_v1alpha1_runtime_proto_rawDesc), len(file_kagent_api_v1alpha1_runtime_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kagent_api_v1_runtime_proto_rawDesc), len(file_kagent_api_v1_runtime_proto_rawDesc)),
 			NumEnums:      2,
 			NumMessages:   0,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_kagent_api_v1alpha1_runtime_proto_goTypes,
-		DependencyIndexes: file_kagent_api_v1alpha1_runtime_proto_depIdxs,
-		EnumInfos:         file_kagent_api_v1alpha1_runtime_proto_enumTypes,
+		GoTypes:           file_kagent_api_v1_runtime_proto_goTypes,
+		DependencyIndexes: file_kagent_api_v1_runtime_proto_depIdxs,
+		EnumInfos:         file_kagent_api_v1_runtime_proto_enumTypes,
 	}.Build()
-	File_kagent_api_v1alpha1_runtime_proto = out.File
-	file_kagent_api_v1alpha1_runtime_proto_goTypes = nil
-	file_kagent_api_v1alpha1_runtime_proto_depIdxs = nil
+	File_kagent_api_v1_runtime_proto = out.File
+	file_kagent_api_v1_runtime_proto_goTypes = nil
+	file_kagent_api_v1_runtime_proto_depIdxs = nil
 }

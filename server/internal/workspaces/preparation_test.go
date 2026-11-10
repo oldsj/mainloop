@@ -17,7 +17,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/sessions"
-	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 const prepSHA = "0123456789abcdef0123456789abcdef01234567"

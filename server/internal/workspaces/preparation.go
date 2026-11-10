@@ -15,7 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/gitref"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
-	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // Workspace preparation. kagent admits no message to a Session that has a workspace and a

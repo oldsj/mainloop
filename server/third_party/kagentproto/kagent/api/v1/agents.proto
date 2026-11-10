@@ -1,11 +1,11 @@
 syntax = "proto3";
 
-package kagent.api.v1alpha1;
+package kagent.api.v1;
 
 import "buf/validate/validate.proto";
-import "kagent/api/v1alpha1/common.proto";
+import "kagent/api/v1/common.proto";
 
-option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1;apiv1alpha1";
+option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1;apiv1";
 
 // AgentService manages runnable definitions pairing templates and harnesses.
 service AgentService {
@@ -24,15 +24,20 @@ message Agent {
 }
 
 message ListAgentsRequest {
-  string namespace = 1 [(buf.validate.field).string = {
-    min_len: 1
-    max_len: 63
-    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+  // Empty lists every namespace.
+  string namespace = 1 [(buf.validate.field) = {
+    ignore: IGNORE_IF_ZERO_VALUE
+    string: {
+      max_len: 63
+      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+    }
   }];
+  PageRequest page = 2;
 }
 
 message ListAgentsResponse {
   repeated Agent agents = 1;
+  PageResponse page = 2;
 }
 
 message GetAgentRequest {

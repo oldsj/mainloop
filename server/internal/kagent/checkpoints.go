@@ -3,7 +3,7 @@ package kagent
 import (
 	"context"
 
-	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // CreateCheckpoint creates a Checkpoint at a Session's terminal task. Calling again with the same

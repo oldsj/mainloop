@@ -1,12 +1,12 @@
 // Command kagentproto generates the Go and Connect clients for the vendored kagent protos under
-// server/third_party/kagentproto/kagent/api/v1alpha1, without buf or network access: it parses and
+// server/third_party/kagentproto/kagent/api/v1, without buf or network access: it parses and
 // links the proto sources with protocompile, resolving buf/validate/validate.proto from the file
 // descriptor already registered by the vendored protovalidate Go package (see the blank import
 // below) and the Google well-known types from protocompile's bundled standard imports, then drives
 // protoc-gen-go and protoc-gen-connect-go (both `go tool` entries in server/go.mod) through the
 // normal protoc plugin stdin/stdout protocol.
 //
-//	go run ./tools/kagentproto -root <dir containing kagent/api/v1alpha1/*.proto>
+//	go run ./tools/kagentproto -root <dir containing kagent/api/v1/*.proto>
 package main
 
 import (
@@ -32,12 +32,12 @@ import (
 // protoFiles are the logical import paths of the vendored kagent protos, relative to -root, in the
 // same spelling their own import statements use.
 var protoFiles = []string{
-	"kagent/api/v1alpha1/common.proto",
-	"kagent/api/v1alpha1/runtime.proto",
-	"kagent/api/v1alpha1/sessions.proto",
-	"kagent/api/v1alpha1/agents.proto",
-	"kagent/api/v1alpha1/scheduled_runs.proto",
-	"kagent/api/v1alpha1/checkpoints.proto",
+	"kagent/api/v1/common.proto",
+	"kagent/api/v1/runtime.proto",
+	"kagent/api/v1/sessions.proto",
+	"kagent/api/v1/agents.proto",
+	"kagent/api/v1/scheduled_runs.proto",
+	"kagent/api/v1/checkpoints.proto",
 }
 
 // kagentGoImportPath is where this repository vendors the generated kagent types, which protoc-gen-go
@@ -45,7 +45,7 @@ var protoFiles = []string{
 // them one package for same-run generation), but which protoc-gen-connect-go's separate "connect"
 // subpackage must import by path: the fork's own go_package option names its own module, so each file
 // needs an explicit M override to this repository's vendored path instead.
-const kagentGoImportPath = "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+const kagentGoImportPath = "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 
 // goPackageMap tells protoc-gen-go and protoc-gen-connect-go which Go package already carries
 // buf/validate/validate.proto's generated types, so the kagent files' field-option extensions
@@ -63,7 +63,7 @@ func mapEachTo(files []string, path string) string {
 }
 
 func main() {
-	root := flag.String("root", "", "directory containing kagent/api/v1alpha1/*.proto")
+	root := flag.String("root", "", "directory containing kagent/api/v1/*.proto")
 	flag.Parse()
 	if *root == "" {
 		fmt.Fprintln(os.Stderr, "kagentproto: -root is required")

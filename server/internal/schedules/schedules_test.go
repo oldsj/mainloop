@@ -23,7 +23,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
 	"github.com/oldsj/mainloop/server/internal/schedules"
 	"github.com/oldsj/mainloop/server/internal/testdb"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }

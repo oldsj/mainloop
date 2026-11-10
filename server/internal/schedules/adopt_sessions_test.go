@@ -16,7 +16,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/sessions"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // adoptedSession creates a real fake-backed native Session, then adopts a running execution on

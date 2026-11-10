@@ -17,7 +17,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/oldsj/mainloop/server/internal/kagent"
-	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // scheduleStore is the ScheduledRunService state. The zero value is ready to use; its fields are

@@ -1,13 +1,13 @@
 syntax = "proto3";
 
-package kagent.api.v1alpha1;
+package kagent.api.v1;
 
 import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
-import "kagent/api/v1alpha1/common.proto";
-import "kagent/api/v1alpha1/sessions.proto";
+import "kagent/api/v1/common.proto";
+import "kagent/api/v1/sessions.proto";
 
-option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1;apiv1alpha1";
+option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1;apiv1";
 
 service CheckpointService {
   rpc CreateCheckpoint(CreateCheckpointRequest) returns (CreateCheckpointResponse);
@@ -85,7 +85,7 @@ message ForkSessionRequest {
     min_len: 1
     max_len: 128
   }];
-  // Keep the workspace and caches but start with no A2A history and no native
+  // Fork: keep the workspace and caches but start with no A2A history and no native
   // agent conversation. False keeps the full conversation up to the checkpoint.
   bool fresh_conversation = 3;
 }
