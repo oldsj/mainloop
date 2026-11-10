@@ -1129,7 +1129,10 @@ export interface paths {
      * @description **Experimental, owner-only.** Checkpoint the session's native kagent Session at its latest
      *     terminal turn. Refuses (409) while a turn is in flight, or before the session has ever
      *     completed one. `request_id` is the idempotency key: repeating it returns the recorded
-     *     outcome, or continues an interrupted attempt. See docs/specs/warm-state.md.
+     *     outcome, or continues an interrupted attempt. Also 409 while kagent is still preparing the
+     *     snapshot (repeat the same `request_id`), and when kagent refuses or fails the checkpoint, for
+     *     example because the runtime is running: that request is settled, so try again with a new
+     *     `request_id`. See docs/specs/warm-state.md.
      */
     post: operations['createSessionCheckpoint'];
     delete?: never;

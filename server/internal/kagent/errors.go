@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 )
 
 // Every call returns one of the error types below, or the caller's own context error before
@@ -38,6 +39,9 @@ const (
 	notReadyMessage = "Session cannot accept work during a lifecycle operation"
 
 	errorInfoType = "google.rpc.ErrorInfo"
+
+	// kagentErrorDomain is the ErrorInfo domain of kagent's own control-API refusals.
+	kagentErrorDomain = "kagent.dev"
 
 	defaultRetryAfter = 100 * time.Millisecond
 )
@@ -83,6 +87,9 @@ type SessionError struct {
 	Op     string
 	Code   connect.Code // equals the gRPC status
 	Detail string
+	// Reason is the google.rpc.ErrorInfo reason kagent attached in its own domain (kagent.dev),
+	// such as [ReasonCheckpointSnapshotPending]; empty when there was none.
+	Reason string
 	// Wire is true when kagent itself sent the status. connect also synthesizes codes on the client,
 	// for example InvalidArgument for a reply it could not decode or that was cut short; those prove
 	// nothing about what kagent did.
@@ -218,7 +225,23 @@ func classifyConnect(op string, err error) error {
 		// connect reports its own cancellation and transport failures this way.
 		return &OutcomeUnknown{Op: op, Detail: errorKind(err), Err: err}
 	}
-	return &SessionError{Op: op, Code: code, Detail: ce.Message(), Wire: connect.IsWireError(err)}
+	return &SessionError{
+		Op: op, Code: code, Detail: ce.Message(), Reason: kagentReason(ce), Wire: connect.IsWireError(err),
+	}
+}
+
+// kagentReason is the reason of the first google.rpc.ErrorInfo in kagent's domain, or "".
+func kagentReason(ce *connect.Error) string {
+	for _, d := range ce.Details() {
+		v, err := d.Value()
+		if err != nil {
+			continue
+		}
+		if info, ok := v.(*errdetails.ErrorInfo); ok && info.GetDomain() == kagentErrorDomain {
+			return info.GetReason()
+		}
+	}
+	return ""
 }
 
 // classifyRPCError turns a JSON-RPC error object into a typed error by its ErrorInfo. A JSON-RPC
