@@ -33,4 +33,6 @@ docker buildx build --load --platform linux/arm64 \
 kind load docker-image --name "$cluster" "$image"
 
 echo "Loaded $image. The kind owner applies it with:"
-echo "  $(dirname "$0")/upgrade.sh --set controller.image.tag=$tag"
+# The controller refuses to start unless the built-in Harness images release
+# matches its own version; the packaged Harness images stay as they are.
+echo "  $(dirname "$0")/upgrade.sh --set controller.image.tag=$tag --set config.harnessImages.release=$tag"
