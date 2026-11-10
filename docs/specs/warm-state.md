@@ -159,7 +159,13 @@ contract `CreateSession` already has, so reconciling an uncertain outcome is a r
 call, not a blind replay of a non-idempotent send: kagent answers from what it already holds for
 that `request_id`. A definite refusal (kagent's invalid argument, not found, failed precondition,
 mapped to this API's 422, 404, 409) is recorded once and never retried, since the frozen request
-would fail the same way again. See `server/internal/sessions/checkpoints.go`.
+would fail the same way again. kagent's replay returns the checkpoint it recorded whatever its
+state, so a checkpoint kagent recorded `FAILED` (it checkpoints only a suspended Actor; asked while
+the Actor runs, it answers Unavailable and records the failure) comes back on the retry as OK with
+state `FAILED`. Mainloop records that as a refusal too (409, with kagent's failure reason), not as
+a checkpoint: kagent hides it from `GetCheckpoint` and `ListCheckpoints`, so it cannot be forked.
+A new `request_id` checkpoints again once the session is asleep. See
+`server/internal/sessions/checkpoints.go`.
 
 ## Mechanism: cache archive now, seed fork later if it measures well
 

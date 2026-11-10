@@ -10,6 +10,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/apierr"
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
@@ -119,6 +120,52 @@ func TestCreateCheckpointRetryAfterUncertainReconciles(t *testing.T) {
 	}
 	if n := e.srv.Count(kagent.ProcCreateCheckpoint); n != 2 {
 		t.Fatalf("CreateCheckpoint called %d times", n)
+	}
+}
+
+// kagent checkpoints only a suspended Actor. Asked while the Actor runs, it records the checkpoint
+// FAILED and answers Unavailable; the resume sweep's replay of the same request then gets OK with
+// state FAILED. Mainloop must settle that as a refusal (409), not as a checkpoint it can fork.
+func TestCreateCheckpointReplayedAsFailedIsARefusal(t *testing.T) {
+	e := newEnv(t)
+	id := e.completedSession()
+	rid := uuid.NewString()
+	b, err := dbq.New(e.pool).GetOwnedSessionBinding(context.Background(),
+		dbq.GetOwnedSessionBindingParams{ID: id, UserID: e.svc.OwnerID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.srv.RefuseNextSnapshot(*b.KagentSessionID)
+
+	_, err = e.createCheckpoint(id, rid)
+	if bad, ok := apierr.As(err); !ok || bad.Status != 502 {
+		t.Fatalf("first attempt: status %v, err %v", bad, err)
+	}
+
+	_, err = e.createCheckpoint(id, rid)
+	bad, ok := apierr.As(err)
+	if !ok || bad.Status != 409 || !strings.Contains(bad.Message, "SnapshotTagFailed: snapshot changed") {
+		t.Fatalf("replay: status %v, err %v", bad, err)
+	}
+	row, err := dbq.New(e.pool).GetSessionCheckpoint(context.Background(), rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.State != dbstate.CheckpointDone || row.FailureReason == nil ||
+		*row.FailureReason != dbstate.FailureFailedPrecondition {
+		t.Fatalf("row %+v", row)
+	}
+
+	// Settled: a third repeat answers from the row, with no further kagent call.
+	if _, err := e.createCheckpoint(id, rid); err == nil {
+		t.Fatal("repeat after the refusal succeeded")
+	}
+	if n := e.srv.Count(kagent.ProcCreateCheckpoint); n != 2 {
+		t.Fatalf("CreateCheckpoint called %d times", n)
+	}
+	list, err := e.svc.ListCheckpoints(context.Background(), id)
+	if err != nil || len(list) != 0 {
+		t.Fatalf("list %+v %v", list, err)
 	}
 }
 

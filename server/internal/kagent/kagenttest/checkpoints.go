@@ -24,6 +24,7 @@ type checkpointStore struct {
 	first       map[string]*api.CreateCheckpointRequest // CreateCheckpoint request id -> its first request
 	forkByReq   map[string]string                       // ForkSession request id -> forked session id
 	forkFirst   map[string]*api.ForkSessionRequest      // ForkSession request id -> its first request
+	refuse      map[string]bool                         // session id -> its next snapshot fails
 	seq         int
 }
 
@@ -34,7 +35,19 @@ func (st *checkpointStore) init() {
 		st.first = map[string]*api.CreateCheckpointRequest{}
 		st.forkByReq = map[string]string{}
 		st.forkFirst = map[string]*api.ForkSessionRequest{}
+		st.refuse = map[string]bool{}
 	}
+}
+
+// RefuseNextSnapshot makes the next CreateCheckpoint for a Session fail as kagent's does when the
+// Actor is not suspended: kagent records the checkpoint FAILED with no snapshot tag and answers
+// Unavailable. Its idempotent replay then returns that FAILED checkpoint with OK, while
+// GetCheckpoint and ListCheckpoints hide it.
+func (s *Server) RefuseNextSnapshot(sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cp.init()
+	s.cp.refuse[sessionID] = true
 }
 
 func (s *Server) registerCheckpoints(handle func(string, http.Handler)) {
@@ -76,10 +89,19 @@ func (s *Server) createCheckpoint(
 		State: api.CheckpointState_CHECKPOINT_STATE_READY, CreatedAt: timestamppb.Now(),
 		Name: fmt.Sprintf("%s at %s", sess.GetName(), m.GetExpectedHeadTaskId()),
 	}
+	refused := st.refuse[m.GetSessionId()]
+	if refused {
+		delete(st.refuse, m.GetSessionId())
+		cp.State = api.CheckpointState_CHECKPOINT_STATE_FAILED
+		cp.Failure = &api.Failure{Reason: "SnapshotTagFailed", Message: "snapshot changed"}
+	}
 	st.checkpoints[cp.Id] = cp
 	st.order = append(st.order, cp.Id)
 	st.byReq[m.GetRequestId()] = cp.Id
 	st.first[m.GetRequestId()] = proto.CloneOf(m)
+	if refused {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("checkpoint %q failed: snapshot changed", cp.Id))
+	}
 	return connect.NewResponse(&api.CreateCheckpointResponse{Checkpoint: proto.CloneOf(cp)}), nil
 }
 
@@ -89,7 +111,7 @@ func (s *Server) getCheckpoint(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp, ok := s.cp.checkpoints[req.Msg.GetCheckpointId()]
-	if !ok {
+	if !ok || cp.GetState() == api.CheckpointState_CHECKPOINT_STATE_FAILED {
 		return nil, connect.NewError(connect.CodeNotFound,
 			fmt.Errorf("checkpoint %q not found", req.Msg.GetCheckpointId()))
 	}
@@ -110,7 +132,8 @@ func (s *Server) listCheckpoints(
 	}
 	var matched []string
 	for _, id := range st.order {
-		if st.checkpoints[id].GetSessionId() == req.Msg.GetSessionId() {
+		if cp := st.checkpoints[id]; cp.GetSessionId() == req.Msg.GetSessionId() &&
+			cp.GetState() != api.CheckpointState_CHECKPOINT_STATE_FAILED {
 			matched = append(matched, id)
 		}
 	}
@@ -156,7 +179,7 @@ func (s *Server) forkSession(
 		return connect.NewResponse(&api.ForkSessionResponse{Session: s.out(kagent.ProcForkSession, s.sessions[id])}), nil
 	}
 	cp, ok := st.checkpoints[m.GetCheckpointId()]
-	if !ok {
+	if !ok || cp.GetState() == api.CheckpointState_CHECKPOINT_STATE_FAILED {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("checkpoint %q not found", m.GetCheckpointId()))
 	}
 	src, ok := s.sessions[cp.GetSessionId()]

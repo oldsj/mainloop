@@ -210,6 +210,18 @@ func (s *Service) continueCheckpoint(ctx context.Context, r dbq.SessionCheckpoin
 		return CheckpointResult{}, &KagentError{Err: err}
 	}
 	id, name := cp.GetId(), cp.GetName()
+	if cp.GetState() == kagentapi.CheckpointState_CHECKPOINT_STATE_FAILED {
+		// kagent's idempotent replay returns the checkpoint it recorded, whatever its state, so an
+		// earlier attempt that kagent failed (an Actor that was not suspended, a snapshot that
+		// changed) comes back as OK with state FAILED. It is a definite refusal: kagent hides it
+		// from GetCheckpoint and ListCheckpoints, and the same request id can never succeed.
+		reason := dbstate.FailureFailedPrecondition
+		detail := safeDetail(checkpointFailureDetail(cp))
+		if _, ferr := s.finishSessionCheckpoint(ctx, r, &id, &name, &reason, &detail); ferr != nil {
+			return CheckpointResult{}, ferr
+		}
+		return CheckpointResult{}, mapFailureReason(reason, detail)
+	}
 	out, err := s.finishSessionCheckpoint(ctx, r, &id, &name, nil, nil)
 	if err != nil {
 		return CheckpointResult{}, err
@@ -245,6 +257,23 @@ func (s *Service) finishSessionCheckpoint(
 		return nil
 	})
 	return out, err
+}
+
+// checkpointFailureDetail is the owner-facing detail for a checkpoint kagent recorded FAILED.
+func checkpointFailureDetail(cp *kagentapi.Checkpoint) string {
+	f := cp.GetFailure()
+	var parts []string
+	for _, p := range []string{f.GetReason(), f.GetMessage()} {
+		if p = strings.TrimSpace(p); p != "" {
+			parts = append(parts, p)
+		}
+	}
+	why := strings.Join(parts, ": ")
+	if why == "" {
+		why = "no reason given"
+	}
+	return "kagent could not checkpoint this session (" + why + "). The runtime may still be running; " +
+		"checkpoint again with a new request once it is asleep."
 }
 
 func checkpointResult(r dbq.SessionCheckpoint, state string) CheckpointResult {
