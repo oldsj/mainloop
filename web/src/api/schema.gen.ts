@@ -1035,7 +1035,8 @@ export interface paths {
     head?: never;
     patch?: never;
     trace?: never;
-  };  '/sessions/{session_id}/native': {
+  };
+  '/sessions/{session_id}/native': {
     parameters: {
       query?: never;
       header?: never;

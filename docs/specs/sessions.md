@@ -191,7 +191,26 @@ wake's 503s normally last) the view says the live channel is unavailable, keeps 
 and offers Retry now and Use the chat view (the regular session view, until the page is reopened).
 `?live=1` on a session URL forces the live view for local work; with
 `VITE_MSW=1 pnpm dev` a scripted fake runner answers (`web/src/features/live/fakeRunner.ts`, also
-used by the tests). Implemented against the fake runner; live proof on mainloop-dev is pending.
+used by the tests).
+
+The server relays the WebSocket verbatim to the runner's client port (`:7682/ws`) on the session's
+running actor through the Substrate router, like the workspace preview proxy. `live` is true when the
+session has a kagent Session and its Agent is listed in `MAINLOOP_LIVE_AGENTS`. An attach is the
+owner's only (another owner's session, or one that is not live, is `404`); a cross-origin `Origin` is
+`403` and a request that is not a WebSocket upgrade is `400`. The actor name comes from the kagent
+Session's runtime association; with none (the actor is idle-suspended) the server asks kagent to
+resume the Session, and answers `503` with `Retry-After: 2` while it wakes. The server bootstraps the
+runner on first attach to each actor (`PUT /bootstrap`, trust on first use; `409` means already set)
+with a token derived from `AGENT_TOKEN_KEY` and the kagent Session id, adds it to the upstream
+request, and strips cookies, credentials and `Origin`; the token never reaches the browser.
+`?since=<seq>` is passed through. A session created before its Agent ran the SDK runner has nothing
+listening on `:7682`: it still reports `live: true`, and the attach is `502` (the view then shows the
+unavailable state above).
+
+Proven live on mainloop-dev (2026-11-10) on a new `claude-workspace-dev` session: the upgrade, the
+runner's `hello` backlog, and use from a phone, through the gateway, the dev frontend's proxy and the
+relay. Tested with fakes only: the relay's bootstrap, refusals and waking paths (a fake runner and
+targets); the resume-and-reread lookup has no unit test.
 
 Opening a session follows its URL. Missing sessions show a not-found state. If the backend is unavailable, the page retries instead of treating the session as missing.
 An HTTP 5xx on session or workspace detail shows a server error with an instruction to reload,

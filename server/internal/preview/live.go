@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/liveactor"
 )
 
 const (
@@ -35,24 +36,18 @@ const (
 )
 
 // ErrLiveNotFound is what a LiveTargets returns for a session the owner cannot open live.
-var ErrLiveNotFound = errors.New("session is not live")
+var ErrLiveNotFound = liveactor.ErrNotFound
 
 // ErrLiveWaking is what a LiveTargets returns while the session has no running actor yet.
-var ErrLiveWaking = errors.New("session is waking")
+var ErrLiveWaking = liveactor.ErrWaking
 
-// LiveTarget is the actor serving a live session: its kagent Session and the router's
-// "<atespace>/<actor>" name for the current runtime generation.
-type LiveTarget struct {
-	KagentSessionID string
-	Actor           string
-}
+// LiveTarget is the actor serving a live session.
+type LiveTarget = liveactor.Target
 
 // LiveTargets resolves the owner's session to the actor that runs its SDK runner.
 type LiveTargets interface {
 	LiveTarget(ctx context.Context, sessionID string) (LiveTarget, error)
 }
-
-var actorSafe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}/[A-Za-z0-9][A-Za-z0-9._-]{0,252}$`)
 
 // Live relays GET /sessions/{id}/live to the SDK runner's WebSocket on the session's actor,
 // through the Substrate router like the preview proxy. The server bootstraps the runner with a
@@ -176,7 +171,7 @@ func (l *Live) serve(w http.ResponseWriter, r *http.Request, sessionID string) {
 		w.Header().Set("Retry-After", "2")
 		httpx.WriteError(w, http.StatusServiceUnavailable, "Session is waking; retry shortly")
 		return
-	case err == nil && !actorSafe.MatchString(t.Actor):
+	case err == nil && !liveactor.Valid(t.Actor):
 		l.Log.ErrorContext(r.Context(), "live target has an invalid actor name", "session", sessionID, "actor", t.Actor)
 		httpx.WriteError(w, http.StatusBadGateway, "Live session unavailable")
 		return

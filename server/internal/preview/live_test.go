@@ -60,7 +60,7 @@ func (f *fakeRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_, _ = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Protocol: " + RunnerSubprotocol + "\r\n\r\n")
 		_ = brw.Flush()
 		buf := make([]byte, 64)
@@ -91,9 +91,12 @@ func newTestLive(t *testing.T, runner http.Handler, dialErr error) (*httptest.Se
 	return front, l
 }
 
-func upgrade(t *testing.T, base, path string, hdr map[string]string) (*http.Response, net.Conn, *bufio.Reader) {
+// upgrade sends a raw WebSocket handshake and returns the response status and headers; on a 101 the
+// connection then carries the relayed bytes.
+func upgrade(t *testing.T, base, path string, hdr map[string]string) (int, http.Header, net.Conn, *bufio.Reader) {
 	t.Helper()
-	conn, err := net.Dial("tcp", strings.TrimPrefix(base, "http://"))
+	var d net.Dialer
+	conn, err := d.DialContext(t.Context(), "tcp", strings.TrimPrefix(base, "http://"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,20 +114,23 @@ func upgrade(t *testing.T, base, path string, hdr map[string]string) (*http.Resp
 	if err != nil {
 		t.Fatal(err)
 	}
-	return resp, conn, br
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		_ = resp.Body.Close()
+	}
+	return resp.StatusCode, resp.Header, conn, br
 }
 
 func TestLiveRelaysWebSocketAndBootstrapsOnce(t *testing.T) {
 	runner := &fakeRunner{}
 	front, l := newTestLive(t, runner, nil)
 	for i := range 2 {
-		resp, conn, br := upgrade(t, front.URL, "/sessions/s1/live?since=7", map[string]string{
+		code, hdr, conn, br := upgrade(t, front.URL, "/sessions/s1/live?since=7", map[string]string{
 			"Cookie": "session=secret", "Origin": "https://app.example",
 		})
-		if resp.StatusCode != http.StatusSwitchingProtocols {
-			t.Fatalf("attach %d: status %d", i, resp.StatusCode)
+		if code != http.StatusSwitchingProtocols {
+			t.Fatalf("attach %d: status %d", i, code)
 		}
-		if got := resp.Header.Get("Sec-WebSocket-Protocol"); got != RunnerSubprotocol {
+		if got := hdr.Get("Sec-WebSocket-Protocol"); got != RunnerSubprotocol {
 			t.Fatalf("subprotocol %q", got)
 		}
 		if _, err := conn.Write([]byte("frame")); err != nil {
@@ -155,9 +161,8 @@ func TestLiveBootstrapConflictStillAttaches(t *testing.T) {
 	runner := &fakeRunner{}
 	front, l := newTestLive(t, runner, nil)
 	runner.token = l.token("kagent-1") // set by an earlier server process
-	resp, _, _ := upgrade(t, front.URL, "/sessions/s1/live", nil)
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		t.Fatalf("status %d", resp.StatusCode)
+	if code, _, _, _ := upgrade(t, front.URL, "/sessions/s1/live", nil); code != http.StatusSwitchingProtocols {
+		t.Fatalf("status %d", code)
 	}
 }
 
@@ -173,13 +178,16 @@ func TestLiveRefusals(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			resp, _, _ := upgrade(t, front.URL, c.path, c.hdr)
-			if resp.StatusCode != c.want {
-				t.Fatalf("status %d, want %d", resp.StatusCode, c.want)
+			if code, _, _, _ := upgrade(t, front.URL, c.path, c.hdr); code != c.want {
+				t.Fatalf("status %d, want %d", code, c.want)
 			}
 		})
 	}
-	resp, err := http.Get(front.URL + "/sessions/s1/live")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, front.URL+"/sessions/s1/live", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,9 +200,9 @@ func TestLiveRefusals(t *testing.T) {
 func TestLiveWakingIs503(t *testing.T) {
 	front, _ := newTestLive(t, &fakeRunner{}, errors.New("router CONNECT returned HTTP 503"))
 	for _, path := range []string{"/sessions/s1/live", "/sessions/asleep/live"} {
-		resp, _, _ := upgrade(t, front.URL, path, nil)
-		if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" {
-			t.Fatalf("%s: status %d", path, resp.StatusCode)
+		code, hdr, _, _ := upgrade(t, front.URL, path, nil)
+		if code != http.StatusServiceUnavailable || hdr.Get("Retry-After") == "" {
+			t.Fatalf("%s: status %d", path, code)
 		}
 	}
 }

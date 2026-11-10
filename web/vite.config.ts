@@ -35,7 +35,6 @@ export default defineConfig(({ mode }) => ({
       // VITE_API_URL defaults to /api, which the dev server forwards with the prefix stripped.
       '/api': {
         target: apiProxy,
-        ws: true,
         changeOrigin: true,
         // The live session view opens a WebSocket under /api/sessions/{id}/live.
         ws: true,

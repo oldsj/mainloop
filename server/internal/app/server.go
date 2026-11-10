@@ -194,7 +194,7 @@ func (s *Server) Handler() (http.Handler, error) {
 			httpx.WriteError(w, http.StatusBadRequest, "Invalid request")
 		},
 	})
-	var inner http.Handler = routes
+	inner := routes
 	if d.LiveRelay != nil {
 		inner = d.LiveRelay.Route(routes)
 	}
