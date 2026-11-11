@@ -5,7 +5,7 @@
 # upgrade kagent, such as the --set that load-local.sh prints.
 set -euo pipefail
 dir="$(cd "$(dirname "$0")" && pwd)"
-version="${VERSION:-0.0.0-58a5957}"
+version="${VERSION:-0.0.0-7988e65}"
 ctx=kind-substrate-1-0
 policy=(-f "$dir/session-policy.yaml")
 [[ "${SESSION_POLICY:-on}" == off ]] && policy=()

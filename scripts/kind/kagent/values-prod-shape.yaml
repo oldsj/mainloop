@@ -1,11 +1,11 @@
-# Prod-shaped delta over values.yaml for chart 0.0.0-58a5957. Apply with upgrade.sh.
+# Prod-shaped delta over values.yaml for chart 0.0.0-7988e65. Apply with upgrade.sh.
 controller:
   image:
-    tag: 0.0.0-58a5957
+    tag: 0.0.0-7988e65
 config:
   runtimePayloads:
     payloads:
       - provider: claude
         platform: linux/arm64
-        image: ghcr.io/oldsj/kagent-claude-runtime@sha256:70b4613e5103ba1bc278c681a545bf14c4b48c3c5909c7782e0a7687e11a1cd0
+        image: ghcr.io/oldsj/kagent-claude-runtime@sha256:fdb74962d254a4d94037210b919f0f2fa421f97a7312ec7893133fa3967859d4
         cliVersion: 2.1.285
