@@ -319,7 +319,7 @@ func TestCreateValidatesModelAndEffort(t *testing.T) {
 	}
 
 	// A model the resolved profile does not offer is refused with the allowed models.
-	_, err := e.create(e.own, tasks.CreateInput{ProjectID: "p1", Model: "gpt-5.1-codex"})
+	_, err := e.create(e.own, tasks.CreateInput{ProjectID: "p1", Model: "gpt-6.1-sol"})
 	var refused *tasks.Error
 	if !errors.As(err, &refused) || refused.Status != 422 || refused.Reason != tasks.ReasonModelUnavailable {
 		t.Fatalf("err = %v", err)

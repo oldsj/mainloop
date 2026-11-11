@@ -259,8 +259,8 @@ export const CLAUDE_PROFILE = profile({
   default_effort: 'medium'
 });
 export const CODEX_PROFILE = profile({
-  models: [{ id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex' }],
-  default_model: 'gpt-5.1-codex',
+  models: [{ id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' }],
+  default_model: 'gpt-6.1-sol',
   effort_levels: ['minimal', 'low', 'medium', 'high'],
   default_effort: 'medium'
 });

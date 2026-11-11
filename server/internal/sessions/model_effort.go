@@ -87,33 +87,28 @@ func (s *Service) requireOwnedBinding(ctx context.Context, sessionID string) (st
 	return kind, nil
 }
 
-// turnMetadata is the A2A message metadata that names a turn's model and effort, keyed by the
-// binding's kind (provider profile id). Every turn, for every provider, names both keys explicitly:
-// the override when one is set, otherwise the profile's DefaultModel/DefaultEffort. Mainloop then
-// does not depend on how a harness treats an absent key or a value from an earlier turn (kagent's
-// re-ported harnesses differ: Codex no longer carries an override across turns, while the Claude
-// SDK driver has kept one), and resetting to default sends the real default, which clears a
-// carried value where an empty or absent key would not. A key is omitted only when there is
-// nothing to name: no override and a profile without that default (an unknown kind, or a profile
-// that offers no models or effort levels), where absent means kagent's harness default.
-func (s *Service) turnMetadata(kind string, model, effort *string) map[string]any {
-	profile, _ := s.profileFor(kind)
-	resolvedModel, resolvedEffort := profile.DefaultModel, profile.DefaultEffort
+// turnMetadata is the A2A message metadata that names a turn's model and effort. A key is sent only
+// when the owner or a supervisor chose a value for the session (its override); otherwise it is
+// absent and kagent runs the turn on the Agent's own ModelConfig model and the harness's default
+// effort. Mainloop does not name a profile default: its built-in model list goes stale, and a
+// default kagent cannot serve fails every turn (found on prod with Codex: gpt-5.1-codex against a
+// gpt-6.1-sol ModelConfig).
+//
+// Known gap: clearing an override sends nothing, so a harness that carries an explicit value across
+// turns (the Claude SDK driver) keeps the old one until the session is replaced.
+func turnMetadata(model, effort *string) map[string]any {
+	var out map[string]any
+	set := func(k, v string) {
+		if out == nil {
+			out = map[string]any{}
+		}
+		out[k] = v
+	}
 	if model != nil {
-		resolvedModel = *model
+		set(kagent.ModelMetadataKey, *model)
 	}
 	if effort != nil {
-		resolvedEffort = *effort
-	}
-	out := map[string]any{}
-	if resolvedModel != "" {
-		out[kagent.ModelMetadataKey] = resolvedModel
-	}
-	if resolvedEffort != "" {
-		out[kagent.EffortMetadataKey] = resolvedEffort
-	}
-	if len(out) == 0 {
-		return nil
+		set(kagent.EffortMetadataKey, *effort)
 	}
 	return out
 }

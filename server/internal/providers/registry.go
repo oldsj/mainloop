@@ -120,8 +120,9 @@ func inheritBuiltinModelAndEffort(operator, builtin config.ProviderProfile) conf
 // Anthropic's and OpenAI's published model catalogs as corroborated across multiple independent
 // sources found via web search: Claude's current family is Opus 5.5 (claude-opus-5-5), Sonnet 5.5
 // (claude-sonnet-5-5), Haiku 5.5 (claude-haiku-5-5) and Fable 5.1 (claude-fable-5-1, unchanged);
-// Codex's is still gpt-5.1-codex and gpt-5.1-codex-mini, as the 0.148.0 release notes (Aug 18,
-// 2026: /export, session forking, Bedrock provider support) list no model-catalog change. Several
+// Codex's list is gpt-6.1-sol, the model production's Codex ModelConfig runs (2026-11-11). These
+// lists are only what /model offers and shows as the default; Mainloop sends a model to kagent only
+// when one was chosen (sessions turnMetadata). Several
 // sources place Opus 5.5's "default on Pro/Team Standard" switch in a later Claude Code release
 // than 2.1.260, so the CLI's own live default for that pinned version could not be confirmed;
 // per the task, the default stays with the Sonnet family rather than moving to Opus.
@@ -134,8 +135,7 @@ var (
 	}
 	claudeEffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
 	codexModels        = []config.ProviderModel{
-		{ID: "gpt-5.1-codex", Label: "GPT-5.1 Codex"},
-		{ID: "gpt-5.1-codex-mini", Label: "GPT-5.1 Codex Mini"},
+		{ID: "gpt-6.1-sol", Label: "GPT-6.1 Sol"},
 	}
 	codexEffortLevels = []string{"minimal", "low", "medium", "high"}
 )

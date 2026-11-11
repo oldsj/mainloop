@@ -228,11 +228,23 @@ func TestSetSessionEffortAcceptsABuiltinLevelWhenOperatorProfileOmitsEffort(t *t
 	}
 }
 
-// wantMeta fails unless a send named exactly this model and effort.
+// wantMeta fails unless a send named exactly the given keys (an empty value means absent).
 func wantMeta(t *testing.T, label string, sent sentMeta, model, effort string) {
 	t.Helper()
-	if len(sent.Metadata) != 2 || sent.Metadata[kagent.ModelMetadataKey] != model || sent.Metadata[kagent.EffortMetadataKey] != effort {
-		t.Fatalf("%s: metadata = %+v, want model %q and effort %q", label, sent.Metadata, model, effort)
+	want := map[string]any{}
+	if model != "" {
+		want[kagent.ModelMetadataKey] = model
+	}
+	if effort != "" {
+		want[kagent.EffortMetadataKey] = effort
+	}
+	if len(sent.Metadata) != len(want) {
+		t.Fatalf("%s: metadata = %+v, want %+v", label, sent.Metadata, want)
+	}
+	for k, v := range want {
+		if sent.Metadata[k] != v {
+			t.Fatalf("%s: metadata = %+v, want %+v", label, sent.Metadata, want)
+		}
 	}
 }
 
@@ -245,9 +257,9 @@ func (e *env) sendTurn(id, text string) {
 	e.waitState(mid, dbstate.DeliveryCompleted)
 }
 
-// Every turn names both keys, for every provider: the override where one is set, the profile's
-// default otherwise, including the first turn and a turn after a reset to default.
-func TestEveryTurnNamesModelAndEffortExplicitly(t *testing.T) {
+// A turn names a model or effort only when one was chosen, for every provider: never the profile's
+// default, on the first turn or after a reset, so kagent runs the Agent's ModelConfig model.
+func TestTurnsNameOnlyChosenModelAndEffort(t *testing.T) {
 	for _, kind := range []string{"claude", "codex"} {
 		t.Run(kind, func(t *testing.T) {
 			var log metaLog
@@ -265,14 +277,14 @@ func TestEveryTurnNamesModelAndEffortExplicitly(t *testing.T) {
 			}
 			e.run()
 			e.waitState(e.firstDelivery(id), dbstate.DeliveryCompleted)
-			wantMeta(t, "first turn", log.last(t), profile.DefaultModel, profile.DefaultEffort)
+			wantMeta(t, "first turn", log.last(t), "", "")
 
 			effort := profile.EffortLevels[len(profile.EffortLevels)-1]
 			if _, err := e.setModel(id, strp("some-model")); err != nil {
 				t.Fatalf("set model: %v", err)
 			}
 			e.sendTurn(id, "model only")
-			wantMeta(t, "model override", log.last(t), "some-model", profile.DefaultEffort)
+			wantMeta(t, "model override", log.last(t), "some-model", "")
 
 			if _, err := e.setEffort(id, effortp(effort)); err != nil {
 				t.Fatalf("set effort: %v", err)
@@ -287,7 +299,7 @@ func TestEveryTurnNamesModelAndEffortExplicitly(t *testing.T) {
 				t.Fatalf("reset effort: %v", err)
 			}
 			e.sendTurn(id, "reset")
-			wantMeta(t, "reset to default", log.last(t), profile.DefaultModel, profile.DefaultEffort)
+			wantMeta(t, "reset to default", log.last(t), "", "")
 		})
 	}
 }

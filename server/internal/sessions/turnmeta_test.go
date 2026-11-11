@@ -7,16 +7,21 @@ import (
 	"github.com/oldsj/mainloop/server/internal/kagent"
 )
 
-// Without a profile there is no default to name: only an override is sent, and with none the turn
-// carries no model or effort, so kagent's harness default applies.
-func TestTurnMetadataWithoutAProfileNamesOnlyOverrides(t *testing.T) {
-	s := &Service{}
-	if got := s.turnMetadata("unknown", nil, nil); got != nil {
+// Only what was chosen is sent: with no override the turn names no model or effort, so kagent uses
+// the Agent's ModelConfig and the harness default.
+func TestTurnMetadataNamesOnlyOverrides(t *testing.T) {
+	if got := turnMetadata(nil, nil); got != nil {
 		t.Fatalf("no override: %+v, want nil", got)
 	}
-	model := "some-model"
-	want := map[string]any{kagent.ModelMetadataKey: model}
-	if got := s.turnMetadata("unknown", &model, nil); !maps.Equal(got, want) {
+	model, effort := "some-model", "high"
+	if got, want := turnMetadata(&model, nil), map[string]any{kagent.ModelMetadataKey: model}; !maps.Equal(got, want) {
 		t.Fatalf("model override: %+v, want %+v", got, want)
+	}
+	if got, want := turnMetadata(nil, &effort), map[string]any{kagent.EffortMetadataKey: effort}; !maps.Equal(got, want) {
+		t.Fatalf("effort override: %+v, want %+v", got, want)
+	}
+	want := map[string]any{kagent.ModelMetadataKey: model, kagent.EffortMetadataKey: effort}
+	if got := turnMetadata(&model, &effort); !maps.Equal(got, want) {
+		t.Fatalf("both: %+v, want %+v", got, want)
 	}
 }
