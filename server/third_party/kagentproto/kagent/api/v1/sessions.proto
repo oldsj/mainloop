@@ -17,9 +17,13 @@ option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1;apiv1
 // until a client retry completes it. Automatic idle suspension is independent.
 service SessionService {
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
-  // Fork: a fixed model-free workspace preparation. It wakes a sleeping runtime itself.
-  rpc PrepareSessionWorkspace(PrepareSessionWorkspaceRequest) returns (PrepareSessionWorkspaceResponse);
   rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  // PrepareSessionWorkspace checks out the Session's exact workspace commit and
+  // installs its fixed setup in the current runtime generation, then returns a
+  // receipt of what the runtime observed. A stale generation_id or actor_uid
+  // fails with FAILED_PRECONDITION or ABORTED (a sleeping runtime is woken
+  // first); the caller re-reads the Session and retries with the same action_id.
+  rpc PrepareSessionWorkspace(PrepareSessionWorkspaceRequest) returns (PrepareSessionWorkspaceResponse);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc UpdateSessionName(UpdateSessionNameRequest) returns (UpdateSessionNameResponse);
   // Restores a crashed runtime to its last snapshot without replaying its turn.
@@ -68,7 +72,7 @@ message Session {
   // Session's runtime Actor. Absent means no association was verified by this
   // read; it is never a creation or fork input.
   RuntimeAssociation runtime_association = 20;
-  // Output only, historical preparation evidence. GET never refreshes it.
+  // Output only. The latest workspace preparation receipt, if one was issued.
   WorkspacePreparationReceipt workspace_preparation = 21;
   // Output only. Set on a fork created with a fresh conversation: its restored
   // data keeps the workspace, but the runtime discards native conversation state.
@@ -283,21 +287,22 @@ message RevokeSessionShareRequest {
 
 message RevokeSessionShareResponse {}
 
-// Fork additions (oldsj/kagent mainloop-substrate-1-0), field numbers kept from v1alpha1.
-
-// A fixed model-free action over the original owned Create tuple. Repeating a
-// completed action requests a new read-only challenge; uncertain setup never reissues.
 message PrepareSessionWorkspaceRequest {
   string session_id = 1 [(buf.validate.field).string.uuid = true];
+  // Idempotency key: retries with the same request bytes join one preparation.
   string action_id = 2 [(buf.validate.field).string = {min_len: 1, max_len: 128, pattern: "^[A-Za-z0-9:._-]+$"}];
+  // The CreateSession request_id that created this Session (not a fork).
   string create_request_id = 3 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  // From Session.runtime_association.
   string generation_id = 4 [(buf.validate.field).string.uuid = true];
   string actor_uid = 5 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  // The Session's own prepared_revision, workspace, environment and composition.
   string prepared_revision = 6 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
   Workspace workspace = 7 [(buf.validate.field).required = true];
   DevelopmentEnvironment development_environment = 8 [(buf.validate.field).required = true];
   RuntimeComposition runtime_composition = 9 [(buf.validate.field).required = true];
-  string setup_profile = 10 [(buf.validate.field).string.in = "supervisor", (buf.validate.field).string.in = "child", (buf.validate.field).string.in = "agent"];
+  string setup_profile = 10 [(buf.validate.field).string = {in: ["supervisor", "child", "agent"]}];
+  // SHA-256 of the fixed standing-context text for setup_profile.
   string setup_digest = 11 [(buf.validate.field).string = {pattern: "^[a-f0-9]{64}$"}];
   option (buf.validate.message).cel = {
     id: "preparation.exact_checkout"
@@ -310,25 +315,32 @@ message PrepareSessionWorkspaceResponse {
   WorkspacePreparationReceipt receipt = 1;
 }
 
-// Bounded output-only original-action evidence. A pending/uncertain classification
-// or historical=true cannot authorize current native work.
+// WorkspacePreparationReceipt is bounded evidence of one preparation. It never
+// contains command output, prompt text or configuration documents.
 message WorkspacePreparationReceipt {
   PrepareSessionWorkspaceRequest original = 1;
+  // SHA-256 of the deterministic encoding of original.
   string request_digest = 2;
   string execution_id = 3;
   string context_id = 4;
   string atespace = 5;
   string actor_name = 6;
+  // pending, uncertain, confirmed or definite-failure.
   string classification = 7;
+  // Identifies the latest observation of an already confirmed preparation.
   string challenge_id = 8;
   uint64 observation_sequence = 9;
+  // Runtime-observed checkout and setup facts.
   string head = 10;
   string branch = 11;
   string transport_digest = 12;
   string config_digest = 13;
   string mcp_digest = 14;
   string native_hook = 15;
+  // When the checkout and setup effect was first observed.
   google.protobuf.Timestamp effect_observed_at = 16;
+  // When the latest observation committed; unset while it is pending.
   google.protobuf.Timestamp observed_at = 17;
+  // True when the receipt describes an earlier runtime generation.
   bool historical = 18;
 }

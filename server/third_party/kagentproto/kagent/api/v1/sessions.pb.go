@@ -110,7 +110,7 @@ type Session struct {
 	// Session's runtime Actor. Absent means no association was verified by this
 	// read; it is never a creation or fork input.
 	RuntimeAssociation *RuntimeAssociation `protobuf:"bytes,20,opt,name=runtime_association,json=runtimeAssociation,proto3" json:"runtime_association,omitempty"`
-	// Output only, historical preparation evidence. GET never refreshes it.
+	// Output only. The latest workspace preparation receipt, if one was issued.
 	WorkspacePreparation *WorkspacePreparationReceipt `protobuf:"bytes,21,opt,name=workspace_preparation,json=workspacePreparation,proto3" json:"workspace_preparation,omitempty"`
 	// Output only. Set on a fork created with a fresh conversation: its restored
 	// data keeps the workspace, but the runtime discards native conversation state.
@@ -1665,23 +1665,26 @@ func (*RevokeSessionShareResponse) Descriptor() ([]byte, []int) {
 	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{26}
 }
 
-// A fixed model-free action over the original owned Create tuple. Repeating a
-// completed action requests a new read-only challenge; uncertain setup never reissues.
 type PrepareSessionWorkspaceRequest struct {
-	state                  protoimpl.MessageState  `protogen:"open.v1"`
-	SessionId              string                  `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	ActionId               string                  `protobuf:"bytes,2,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
-	CreateRequestId        string                  `protobuf:"bytes,3,opt,name=create_request_id,json=createRequestId,proto3" json:"create_request_id,omitempty"`
-	GenerationId           string                  `protobuf:"bytes,4,opt,name=generation_id,json=generationId,proto3" json:"generation_id,omitempty"`
-	ActorUid               string                  `protobuf:"bytes,5,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Idempotency key: retries with the same request bytes join one preparation.
+	ActionId string `protobuf:"bytes,2,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
+	// The CreateSession request_id that created this Session (not a fork).
+	CreateRequestId string `protobuf:"bytes,3,opt,name=create_request_id,json=createRequestId,proto3" json:"create_request_id,omitempty"`
+	// From Session.runtime_association.
+	GenerationId string `protobuf:"bytes,4,opt,name=generation_id,json=generationId,proto3" json:"generation_id,omitempty"`
+	ActorUid     string `protobuf:"bytes,5,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// The Session's own prepared_revision, workspace, environment and composition.
 	PreparedRevision       string                  `protobuf:"bytes,6,opt,name=prepared_revision,json=preparedRevision,proto3" json:"prepared_revision,omitempty"`
 	Workspace              *Workspace              `protobuf:"bytes,7,opt,name=workspace,proto3" json:"workspace,omitempty"`
 	DevelopmentEnvironment *DevelopmentEnvironment `protobuf:"bytes,8,opt,name=development_environment,json=developmentEnvironment,proto3" json:"development_environment,omitempty"`
 	RuntimeComposition     *RuntimeComposition     `protobuf:"bytes,9,opt,name=runtime_composition,json=runtimeComposition,proto3" json:"runtime_composition,omitempty"`
 	SetupProfile           string                  `protobuf:"bytes,10,opt,name=setup_profile,json=setupProfile,proto3" json:"setup_profile,omitempty"`
-	SetupDigest            string                  `protobuf:"bytes,11,opt,name=setup_digest,json=setupDigest,proto3" json:"setup_digest,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// SHA-256 of the fixed standing-context text for setup_profile.
+	SetupDigest   string `protobuf:"bytes,11,opt,name=setup_digest,json=setupDigest,proto3" json:"setup_digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PrepareSessionWorkspaceRequest) Reset() {
@@ -1835,30 +1838,37 @@ func (x *PrepareSessionWorkspaceResponse) GetReceipt() *WorkspacePreparationRece
 	return nil
 }
 
-// Bounded output-only original-action evidence. A pending/uncertain classification
-// or historical=true cannot authorize current native work.
+// WorkspacePreparationReceipt is bounded evidence of one preparation. It never
+// contains command output, prompt text or configuration documents.
 type WorkspacePreparationReceipt struct {
-	state               protoimpl.MessageState          `protogen:"open.v1"`
-	Original            *PrepareSessionWorkspaceRequest `protobuf:"bytes,1,opt,name=original,proto3" json:"original,omitempty"`
-	RequestDigest       string                          `protobuf:"bytes,2,opt,name=request_digest,json=requestDigest,proto3" json:"request_digest,omitempty"`
-	ExecutionId         string                          `protobuf:"bytes,3,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
-	ContextId           string                          `protobuf:"bytes,4,opt,name=context_id,json=contextId,proto3" json:"context_id,omitempty"`
-	Atespace            string                          `protobuf:"bytes,5,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName           string                          `protobuf:"bytes,6,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	Classification      string                          `protobuf:"bytes,7,opt,name=classification,proto3" json:"classification,omitempty"`
-	ChallengeId         string                          `protobuf:"bytes,8,opt,name=challenge_id,json=challengeId,proto3" json:"challenge_id,omitempty"`
-	ObservationSequence uint64                          `protobuf:"varint,9,opt,name=observation_sequence,json=observationSequence,proto3" json:"observation_sequence,omitempty"`
-	Head                string                          `protobuf:"bytes,10,opt,name=head,proto3" json:"head,omitempty"`
-	Branch              string                          `protobuf:"bytes,11,opt,name=branch,proto3" json:"branch,omitempty"`
-	TransportDigest     string                          `protobuf:"bytes,12,opt,name=transport_digest,json=transportDigest,proto3" json:"transport_digest,omitempty"`
-	ConfigDigest        string                          `protobuf:"bytes,13,opt,name=config_digest,json=configDigest,proto3" json:"config_digest,omitempty"`
-	McpDigest           string                          `protobuf:"bytes,14,opt,name=mcp_digest,json=mcpDigest,proto3" json:"mcp_digest,omitempty"`
-	NativeHook          string                          `protobuf:"bytes,15,opt,name=native_hook,json=nativeHook,proto3" json:"native_hook,omitempty"`
-	EffectObservedAt    *timestamppb.Timestamp          `protobuf:"bytes,16,opt,name=effect_observed_at,json=effectObservedAt,proto3" json:"effect_observed_at,omitempty"`
-	ObservedAt          *timestamppb.Timestamp          `protobuf:"bytes,17,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
-	Historical          bool                            `protobuf:"varint,18,opt,name=historical,proto3" json:"historical,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state    protoimpl.MessageState          `protogen:"open.v1"`
+	Original *PrepareSessionWorkspaceRequest `protobuf:"bytes,1,opt,name=original,proto3" json:"original,omitempty"`
+	// SHA-256 of the deterministic encoding of original.
+	RequestDigest string `protobuf:"bytes,2,opt,name=request_digest,json=requestDigest,proto3" json:"request_digest,omitempty"`
+	ExecutionId   string `protobuf:"bytes,3,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
+	ContextId     string `protobuf:"bytes,4,opt,name=context_id,json=contextId,proto3" json:"context_id,omitempty"`
+	Atespace      string `protobuf:"bytes,5,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName     string `protobuf:"bytes,6,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// pending, uncertain, confirmed or definite-failure.
+	Classification string `protobuf:"bytes,7,opt,name=classification,proto3" json:"classification,omitempty"`
+	// Identifies the latest observation of an already confirmed preparation.
+	ChallengeId         string `protobuf:"bytes,8,opt,name=challenge_id,json=challengeId,proto3" json:"challenge_id,omitempty"`
+	ObservationSequence uint64 `protobuf:"varint,9,opt,name=observation_sequence,json=observationSequence,proto3" json:"observation_sequence,omitempty"`
+	// Runtime-observed checkout and setup facts.
+	Head            string `protobuf:"bytes,10,opt,name=head,proto3" json:"head,omitempty"`
+	Branch          string `protobuf:"bytes,11,opt,name=branch,proto3" json:"branch,omitempty"`
+	TransportDigest string `protobuf:"bytes,12,opt,name=transport_digest,json=transportDigest,proto3" json:"transport_digest,omitempty"`
+	ConfigDigest    string `protobuf:"bytes,13,opt,name=config_digest,json=configDigest,proto3" json:"config_digest,omitempty"`
+	McpDigest       string `protobuf:"bytes,14,opt,name=mcp_digest,json=mcpDigest,proto3" json:"mcp_digest,omitempty"`
+	NativeHook      string `protobuf:"bytes,15,opt,name=native_hook,json=nativeHook,proto3" json:"native_hook,omitempty"`
+	// When the checkout and setup effect was first observed.
+	EffectObservedAt *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=effect_observed_at,json=effectObservedAt,proto3" json:"effect_observed_at,omitempty"`
+	// When the latest observation committed; unset while it is pending.
+	ObservedAt *timestamppb.Timestamp `protobuf:"bytes,17,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	// True when the receipt describes an earlier runtime generation.
+	Historical    bool `protobuf:"varint,18,opt,name=historical,proto3" json:"historical,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WorkspacePreparationReceipt) Reset() {
@@ -2192,10 +2202,10 @@ const file_kagent_api_v1_sessions_proto_rawDesc = "" +
 	"historical\x18\x12 \x01(\bR\n" +
 	"historical2\xf0\a\n" +
 	"\x0eSessionService\x12Z\n" +
-	"\rCreateSession\x12#.kagent.api.v1.CreateSessionRequest\x1a$.kagent.api.v1.CreateSessionResponse\x12x\n" +
-	"\x17PrepareSessionWorkspace\x12-.kagent.api.v1.PrepareSessionWorkspaceRequest\x1a..kagent.api.v1.PrepareSessionWorkspaceResponse\x12Q\n" +
+	"\rCreateSession\x12#.kagent.api.v1.CreateSessionRequest\x1a$.kagent.api.v1.CreateSessionResponse\x12Q\n" +
 	"\n" +
-	"GetSession\x12 .kagent.api.v1.GetSessionRequest\x1a!.kagent.api.v1.GetSessionResponse\x12W\n" +
+	"GetSession\x12 .kagent.api.v1.GetSessionRequest\x1a!.kagent.api.v1.GetSessionResponse\x12x\n" +
+	"\x17PrepareSessionWorkspace\x12-.kagent.api.v1.PrepareSessionWorkspaceRequest\x1a..kagent.api.v1.PrepareSessionWorkspaceResponse\x12W\n" +
 	"\fListSessions\x12\".kagent.api.v1.ListSessionsRequest\x1a#.kagent.api.v1.ListSessionsResponse\x12f\n" +
 	"\x11UpdateSessionName\x12'.kagent.api.v1.UpdateSessionNameRequest\x1a(.kagent.api.v1.UpdateSessionNameResponse\x12Z\n" +
 	"\rRevertSession\x12#.kagent.api.v1.RevertSessionRequest\x1a$.kagent.api.v1.RevertSessionResponse\x12Z\n" +
@@ -2300,8 +2310,8 @@ var file_kagent_api_v1_sessions_proto_depIdxs = []int32{
 	32, // 39: kagent.api.v1.WorkspacePreparationReceipt.effect_observed_at:type_name -> google.protobuf.Timestamp
 	32, // 40: kagent.api.v1.WorkspacePreparationReceipt.observed_at:type_name -> google.protobuf.Timestamp
 	6,  // 41: kagent.api.v1.SessionService.CreateSession:input_type -> kagent.api.v1.CreateSessionRequest
-	27, // 42: kagent.api.v1.SessionService.PrepareSessionWorkspace:input_type -> kagent.api.v1.PrepareSessionWorkspaceRequest
-	10, // 43: kagent.api.v1.SessionService.GetSession:input_type -> kagent.api.v1.GetSessionRequest
+	10, // 42: kagent.api.v1.SessionService.GetSession:input_type -> kagent.api.v1.GetSessionRequest
+	27, // 43: kagent.api.v1.SessionService.PrepareSessionWorkspace:input_type -> kagent.api.v1.PrepareSessionWorkspaceRequest
 	12, // 44: kagent.api.v1.SessionService.ListSessions:input_type -> kagent.api.v1.ListSessionsRequest
 	14, // 45: kagent.api.v1.SessionService.UpdateSessionName:input_type -> kagent.api.v1.UpdateSessionNameRequest
 	16, // 46: kagent.api.v1.SessionService.RevertSession:input_type -> kagent.api.v1.RevertSessionRequest
@@ -2310,8 +2320,8 @@ var file_kagent_api_v1_sessions_proto_depIdxs = []int32{
 	23, // 49: kagent.api.v1.SessionService.ListSessionShares:input_type -> kagent.api.v1.ListSessionSharesRequest
 	25, // 50: kagent.api.v1.SessionService.RevokeSessionShare:input_type -> kagent.api.v1.RevokeSessionShareRequest
 	9,  // 51: kagent.api.v1.SessionService.CreateSession:output_type -> kagent.api.v1.CreateSessionResponse
-	28, // 52: kagent.api.v1.SessionService.PrepareSessionWorkspace:output_type -> kagent.api.v1.PrepareSessionWorkspaceResponse
-	11, // 53: kagent.api.v1.SessionService.GetSession:output_type -> kagent.api.v1.GetSessionResponse
+	11, // 52: kagent.api.v1.SessionService.GetSession:output_type -> kagent.api.v1.GetSessionResponse
+	28, // 53: kagent.api.v1.SessionService.PrepareSessionWorkspace:output_type -> kagent.api.v1.PrepareSessionWorkspaceResponse
 	13, // 54: kagent.api.v1.SessionService.ListSessions:output_type -> kagent.api.v1.ListSessionsResponse
 	15, // 55: kagent.api.v1.SessionService.UpdateSessionName:output_type -> kagent.api.v1.UpdateSessionNameResponse
 	17, // 56: kagent.api.v1.SessionService.RevertSession:output_type -> kagent.api.v1.RevertSessionResponse

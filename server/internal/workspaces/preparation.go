@@ -43,17 +43,15 @@ const (
 )
 
 // setupDigestsSource is the oldsj/kagent commit the digests below were read at
-// (go/harness/runtime/workspace/preparation_test.go). A digest hashes kagent's standing-context
-// text, and a mismatch makes the controller refuse every preparation. TestSetupDigestsMatchTheKagentPin
-// fails when third_party/kagentproto/SOURCE moves off this commit: re-read the digests at the new
-// commit, update both, and keep the harness image pins in step.
+// (go/api/workspace/preparation_test.go, from Standing in preparation.go). A digest hashes kagent's
+// standing-context text, and a mismatch makes kagent refuse every preparation (InvalidArgument,
+// "Workspace setup digest differs"). TestSetupDigestsMatchTheKagentPin fails when
+// third_party/kagentproto/SOURCE moves off this commit: re-read the digests at the new commit,
+// update both, and keep the harness image pins in step.
 //
-// Re-checked 2026-11-10 for the pin oldsj/kagent 58ac4549: that commit has no preparation code
-// yet (the Substrate 1.0 port has not landed it; SOURCE's overlay.patch carries the API). The
-// digests are the 0.4 line's, read at oldsj/kagent b785c99d, the newest commit with
-// go/harness/runtime/workspace/preparation_test.go, and unchanged since a1164013. Re-read them
-// when the preparation port lands.
-const setupDigestsSource = "58ac4549fc55ba95aad995366b39fda3305fce01"
+// Re-read 2026-11-11 at oldsj/kagent 7988e65b, the merge of #87 (the preparation port): unchanged
+// from the 0.4 line's (b785c99d, a1164013).
+const setupDigestsSource = "7988e65bf90aecd84d537e58dec585527e75942b"
 
 var setupDigests = map[string]string{
 	profileSupervisor: "c9b2c5bf815f6b0dd45ee11f02e343ab6a25d4ce39c93663e6feb25281cb87f6",

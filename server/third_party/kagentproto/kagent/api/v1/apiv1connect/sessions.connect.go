@@ -36,12 +36,12 @@ const (
 	// SessionServiceCreateSessionProcedure is the fully-qualified name of the SessionService's
 	// CreateSession RPC.
 	SessionServiceCreateSessionProcedure = "/kagent.api.v1.SessionService/CreateSession"
-	// SessionServicePrepareSessionWorkspaceProcedure is the fully-qualified name of the
-	// SessionService's PrepareSessionWorkspace RPC.
-	SessionServicePrepareSessionWorkspaceProcedure = "/kagent.api.v1.SessionService/PrepareSessionWorkspace"
 	// SessionServiceGetSessionProcedure is the fully-qualified name of the SessionService's GetSession
 	// RPC.
 	SessionServiceGetSessionProcedure = "/kagent.api.v1.SessionService/GetSession"
+	// SessionServicePrepareSessionWorkspaceProcedure is the fully-qualified name of the
+	// SessionService's PrepareSessionWorkspace RPC.
+	SessionServicePrepareSessionWorkspaceProcedure = "/kagent.api.v1.SessionService/PrepareSessionWorkspace"
 	// SessionServiceListSessionsProcedure is the fully-qualified name of the SessionService's
 	// ListSessions RPC.
 	SessionServiceListSessionsProcedure = "/kagent.api.v1.SessionService/ListSessions"
@@ -68,9 +68,13 @@ const (
 // SessionServiceClient is a client for the kagent.api.v1.SessionService service.
 type SessionServiceClient interface {
 	CreateSession(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.CreateSessionResponse], error)
-	// Fork: a fixed model-free workspace preparation. It wakes a sleeping runtime itself.
-	PrepareSessionWorkspace(context.Context, *connect.Request[v1.PrepareSessionWorkspaceRequest]) (*connect.Response[v1.PrepareSessionWorkspaceResponse], error)
 	GetSession(context.Context, *connect.Request[v1.GetSessionRequest]) (*connect.Response[v1.GetSessionResponse], error)
+	// PrepareSessionWorkspace checks out the Session's exact workspace commit and
+	// installs its fixed setup in the current runtime generation, then returns a
+	// receipt of what the runtime observed. A stale generation_id or actor_uid
+	// fails with FAILED_PRECONDITION or ABORTED (a sleeping runtime is woken
+	// first); the caller re-reads the Session and retries with the same action_id.
+	PrepareSessionWorkspace(context.Context, *connect.Request[v1.PrepareSessionWorkspaceRequest]) (*connect.Response[v1.PrepareSessionWorkspaceResponse], error)
 	ListSessions(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error)
 	UpdateSessionName(context.Context, *connect.Request[v1.UpdateSessionNameRequest]) (*connect.Response[v1.UpdateSessionNameResponse], error)
 	// Restores a crashed runtime to its last snapshot without replaying its turn.
@@ -98,16 +102,16 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("CreateSession")),
 			connect.WithClientOptions(opts...),
 		),
-		prepareSessionWorkspace: connect.NewClient[v1.PrepareSessionWorkspaceRequest, v1.PrepareSessionWorkspaceResponse](
-			httpClient,
-			baseURL+SessionServicePrepareSessionWorkspaceProcedure,
-			connect.WithSchema(sessionServiceMethods.ByName("PrepareSessionWorkspace")),
-			connect.WithClientOptions(opts...),
-		),
 		getSession: connect.NewClient[v1.GetSessionRequest, v1.GetSessionResponse](
 			httpClient,
 			baseURL+SessionServiceGetSessionProcedure,
 			connect.WithSchema(sessionServiceMethods.ByName("GetSession")),
+			connect.WithClientOptions(opts...),
+		),
+		prepareSessionWorkspace: connect.NewClient[v1.PrepareSessionWorkspaceRequest, v1.PrepareSessionWorkspaceResponse](
+			httpClient,
+			baseURL+SessionServicePrepareSessionWorkspaceProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("PrepareSessionWorkspace")),
 			connect.WithClientOptions(opts...),
 		),
 		listSessions: connect.NewClient[v1.ListSessionsRequest, v1.ListSessionsResponse](
@@ -158,8 +162,8 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 // sessionServiceClient implements SessionServiceClient.
 type sessionServiceClient struct {
 	createSession           *connect.Client[v1.CreateSessionRequest, v1.CreateSessionResponse]
-	prepareSessionWorkspace *connect.Client[v1.PrepareSessionWorkspaceRequest, v1.PrepareSessionWorkspaceResponse]
 	getSession              *connect.Client[v1.GetSessionRequest, v1.GetSessionResponse]
+	prepareSessionWorkspace *connect.Client[v1.PrepareSessionWorkspaceRequest, v1.PrepareSessionWorkspaceResponse]
 	listSessions            *connect.Client[v1.ListSessionsRequest, v1.ListSessionsResponse]
 	updateSessionName       *connect.Client[v1.UpdateSessionNameRequest, v1.UpdateSessionNameResponse]
 	revertSession           *connect.Client[v1.RevertSessionRequest, v1.RevertSessionResponse]
@@ -174,14 +178,14 @@ func (c *sessionServiceClient) CreateSession(ctx context.Context, req *connect.R
 	return c.createSession.CallUnary(ctx, req)
 }
 
-// PrepareSessionWorkspace calls kagent.api.v1.SessionService.PrepareSessionWorkspace.
-func (c *sessionServiceClient) PrepareSessionWorkspace(ctx context.Context, req *connect.Request[v1.PrepareSessionWorkspaceRequest]) (*connect.Response[v1.PrepareSessionWorkspaceResponse], error) {
-	return c.prepareSessionWorkspace.CallUnary(ctx, req)
-}
-
 // GetSession calls kagent.api.v1.SessionService.GetSession.
 func (c *sessionServiceClient) GetSession(ctx context.Context, req *connect.Request[v1.GetSessionRequest]) (*connect.Response[v1.GetSessionResponse], error) {
 	return c.getSession.CallUnary(ctx, req)
+}
+
+// PrepareSessionWorkspace calls kagent.api.v1.SessionService.PrepareSessionWorkspace.
+func (c *sessionServiceClient) PrepareSessionWorkspace(ctx context.Context, req *connect.Request[v1.PrepareSessionWorkspaceRequest]) (*connect.Response[v1.PrepareSessionWorkspaceResponse], error) {
+	return c.prepareSessionWorkspace.CallUnary(ctx, req)
 }
 
 // ListSessions calls kagent.api.v1.SessionService.ListSessions.
@@ -222,9 +226,13 @@ func (c *sessionServiceClient) RevokeSessionShare(ctx context.Context, req *conn
 // SessionServiceHandler is an implementation of the kagent.api.v1.SessionService service.
 type SessionServiceHandler interface {
 	CreateSession(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.CreateSessionResponse], error)
-	// Fork: a fixed model-free workspace preparation. It wakes a sleeping runtime itself.
-	PrepareSessionWorkspace(context.Context, *connect.Request[v1.PrepareSessionWorkspaceRequest]) (*connect.Response[v1.PrepareSessionWorkspaceResponse], error)
 	GetSession(context.Context, *connect.Request[v1.GetSessionRequest]) (*connect.Response[v1.GetSessionResponse], error)
+	// PrepareSessionWorkspace checks out the Session's exact workspace commit and
+	// installs its fixed setup in the current runtime generation, then returns a
+	// receipt of what the runtime observed. A stale generation_id or actor_uid
+	// fails with FAILED_PRECONDITION or ABORTED (a sleeping runtime is woken
+	// first); the caller re-reads the Session and retries with the same action_id.
+	PrepareSessionWorkspace(context.Context, *connect.Request[v1.PrepareSessionWorkspaceRequest]) (*connect.Response[v1.PrepareSessionWorkspaceResponse], error)
 	ListSessions(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error)
 	UpdateSessionName(context.Context, *connect.Request[v1.UpdateSessionNameRequest]) (*connect.Response[v1.UpdateSessionNameResponse], error)
 	// Restores a crashed runtime to its last snapshot without replaying its turn.
@@ -248,16 +256,16 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("CreateSession")),
 		connect.WithHandlerOptions(opts...),
 	)
-	sessionServicePrepareSessionWorkspaceHandler := connect.NewUnaryHandler(
-		SessionServicePrepareSessionWorkspaceProcedure,
-		svc.PrepareSessionWorkspace,
-		connect.WithSchema(sessionServiceMethods.ByName("PrepareSessionWorkspace")),
-		connect.WithHandlerOptions(opts...),
-	)
 	sessionServiceGetSessionHandler := connect.NewUnaryHandler(
 		SessionServiceGetSessionProcedure,
 		svc.GetSession,
 		connect.WithSchema(sessionServiceMethods.ByName("GetSession")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServicePrepareSessionWorkspaceHandler := connect.NewUnaryHandler(
+		SessionServicePrepareSessionWorkspaceProcedure,
+		svc.PrepareSessionWorkspace,
+		connect.WithSchema(sessionServiceMethods.ByName("PrepareSessionWorkspace")),
 		connect.WithHandlerOptions(opts...),
 	)
 	sessionServiceListSessionsHandler := connect.NewUnaryHandler(
@@ -306,10 +314,10 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		switch r.URL.Path {
 		case SessionServiceCreateSessionProcedure:
 			sessionServiceCreateSessionHandler.ServeHTTP(w, r)
-		case SessionServicePrepareSessionWorkspaceProcedure:
-			sessionServicePrepareSessionWorkspaceHandler.ServeHTTP(w, r)
 		case SessionServiceGetSessionProcedure:
 			sessionServiceGetSessionHandler.ServeHTTP(w, r)
+		case SessionServicePrepareSessionWorkspaceProcedure:
+			sessionServicePrepareSessionWorkspaceHandler.ServeHTTP(w, r)
 		case SessionServiceListSessionsProcedure:
 			sessionServiceListSessionsHandler.ServeHTTP(w, r)
 		case SessionServiceUpdateSessionNameProcedure:
@@ -337,12 +345,12 @@ func (UnimplementedSessionServiceHandler) CreateSession(context.Context, *connec
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kagent.api.v1.SessionService.CreateSession is not implemented"))
 }
 
-func (UnimplementedSessionServiceHandler) PrepareSessionWorkspace(context.Context, *connect.Request[v1.PrepareSessionWorkspaceRequest]) (*connect.Response[v1.PrepareSessionWorkspaceResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kagent.api.v1.SessionService.PrepareSessionWorkspace is not implemented"))
-}
-
 func (UnimplementedSessionServiceHandler) GetSession(context.Context, *connect.Request[v1.GetSessionRequest]) (*connect.Response[v1.GetSessionResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kagent.api.v1.SessionService.GetSession is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) PrepareSessionWorkspace(context.Context, *connect.Request[v1.PrepareSessionWorkspaceRequest]) (*connect.Response[v1.PrepareSessionWorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kagent.api.v1.SessionService.PrepareSessionWorkspace is not implemented"))
 }
 
 func (UnimplementedSessionServiceHandler) ListSessions(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {

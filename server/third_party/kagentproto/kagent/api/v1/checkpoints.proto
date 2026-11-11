@@ -85,7 +85,7 @@ message ForkSessionRequest {
     min_len: 1
     max_len: 128
   }];
-  // Fork: keep the workspace and caches but start with no A2A history and no native
+  // Keep the workspace and caches but start with no A2A history and no native
   // agent conversation. False keeps the full conversation up to the checkpoint.
   bool fresh_conversation = 3;
 }

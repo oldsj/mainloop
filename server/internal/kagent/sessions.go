@@ -270,9 +270,12 @@ func ActorName(sessionID string) string { return "session-" + strings.ToLower(se
 // and the Actor's uid); there is no separate durable generation record. Mainloop never interprets
 // the value: it only echoes it, with actor_uid, into PrepareSessionWorkspace.
 //
-// StaleRuntime reports whether a PrepareSessionWorkspace error means the generation or Actor the
-// request named is no longer current (the runtime slept and woke between the read and the call):
-// the caller reads the Session again and retries with the new association.
+// StaleRuntime reports whether a PrepareSessionWorkspace error means the runtime the request named
+// is not ready for it: the generation or Actor is no longer current, or the runtime is asleep
+// (kagent wakes it and refuses). The caller reads the Session again and retries with the new
+// association. kagent answers FailedPrecondition "Current prepared runtime identity is
+// unavailable" for all of these, and also for a few definite refusals it does not tell apart on
+// the wire ("Preparation does not match the Session"); those end at the preparation window.
 func StaleRuntime(err error) bool {
 	var se *SessionError
 	return errors.As(err, &se) && (se.Code == connect.CodeFailedPrecondition || se.Code == connect.CodeAborted)

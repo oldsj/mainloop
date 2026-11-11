@@ -556,9 +556,10 @@ func (s *Server) prepare(
 		return nil, err
 	}
 	if s.wake(sess.GetId()) || (s.Actors && (req.Msg.GetGenerationId() != s.generationID(sess.GetId()) || req.Msg.GetActorUid() != "uid-"+sess.GetId())) {
-		// A preparation wakes a sleeping runtime itself and is refused; the caller reads the Session
-		// again and retries. (Assumed until kagent's preparation port lands.)
-		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("runtime generation is not current"))
+		// A preparation wakes a sleeping runtime itself and is refused, as is a stale generation or
+		// Actor; the caller reads the Session again and retries (kagent #87).
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			errors.New("Current prepared runtime identity is unavailable")) //nolint:staticcheck // kagent's own wording
 	}
 	if !s.gitCredentialsCountable(sess.GetId()) {
 		// kagent's preparation check needs exactly one read and one push Git proxy credential, each

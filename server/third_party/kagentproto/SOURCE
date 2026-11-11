@@ -1,23 +1,18 @@
-repo: oldsj/kagent (branch mainloop-substrate-1-0), plus overlay.patch
-commit: 58ac4549fc55ba95aad995366b39fda3305fce01
+repo: oldsj/kagent (branch mainloop-substrate-1-0)
+commit: 7988e65bf90aecd84d537e58dec585527e75942b
 paths: proto/kagent/api/v1/{common.proto,runtime.proto,sessions.proto,agents.proto,scheduled_runs.proto,checkpoints.proto}
 notes: |
-  The six files are the fork's at the commit above: through #63 (per-Session Git workspace:
-  CreateSessionRequest.workspace = 6, Session.workspace = 16, message Workspace in common.proto)
-  and #66 (per-Session credentials: CreateSessionRequest.credentials = 7, Session.credentials = 17,
-  SessionCredential, SecretKeyReference), #73 (runtime composition: CreateSessionRequest.
-  development_environment = 8, Session.development_environment = 18, Session.runtime_composition
-  = 19, DevelopmentEnvironment, RuntimeComposition) and #75 (Session.runtime_association = 20,
-  RuntimeAssociation); #65, #67 and #69 to #72 changed no proto in this set. overlay.patch adds
-  the fork API from the 0.4 line that the Substrate 1.0 port has not landed yet, at its 0.4 field
-  numbers, so Mainloop keeps building against it:
-    preparation       rpc PrepareSessionWorkspace, its request and response,
-                      WorkspacePreparationReceipt, Session.workspace_preparation = 21
-                                                                                 (preparation port)
-    fresh forks       Session.fresh_conversation = 22,
-                      ForkSessionRequest.fresh_conversation = 3                  (checkpoint port)
-  Against a kagent at this commit those fields are not sent or returned and PrepareSessionWorkspace
-  answers Unimplemented. Remove each hunk when its port lands, with this list.
+  The six files are the fork's at the commit above, the merge of #87, with no overlay: through #63
+  (per-Session Git workspace: CreateSessionRequest.workspace = 6, Session.workspace = 16, message
+  Workspace in common.proto) and #66 (per-Session credentials: CreateSessionRequest.credentials = 7,
+  Session.credentials = 17, SessionCredential, SecretKeyReference), #73 (runtime composition:
+  CreateSessionRequest.development_environment = 8, Session.development_environment = 18,
+  Session.runtime_composition = 19, DevelopmentEnvironment, RuntimeComposition), #75
+  (Session.runtime_association = 20, RuntimeAssociation), #86 (fresh-conversation forks:
+  Session.fresh_conversation = 22, ForkSessionRequest.fresh_conversation = 3) and #87 (workspace
+  preparation: rpc PrepareSessionWorkspace, its request and response, WorkspacePreparationReceipt,
+  Session.workspace_preparation = 21). The field numbers are the 0.4 line's, which the overlay
+  that carried them until #87 used too.
 
   To re-vendor: scripts/sync-kagent-protos.sh <oldsj/kagent checkout> <commit>, then update the
   commit above and deployedSourceRevision in source_test.go. Go and Connect clients are generated

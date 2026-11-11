@@ -563,7 +563,7 @@ type ForkSessionRequest struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	CheckpointId string                 `protobuf:"bytes,1,opt,name=checkpoint_id,json=checkpointId,proto3" json:"checkpoint_id,omitempty"`
 	RequestId    string                 `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	// Fork: keep the workspace and caches but start with no A2A history and no native
+	// Keep the workspace and caches but start with no A2A history and no native
 	// agent conversation. False keeps the full conversation up to the checkpoint.
 	FreshConversation bool `protobuf:"varint,3,opt,name=fresh_conversation,json=freshConversation,proto3" json:"fresh_conversation,omitempty"`
 	unknownFields     protoimpl.UnknownFields
