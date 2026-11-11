@@ -20,6 +20,10 @@ export interface FakeRunner {
   backlog: Out[];
   /** Answers the deferred call through the A2A task: the call is replayed and its turn finishes. */
   answerDeferred: (allow: boolean) => void;
+  /** The URL of every attach, oldest first. */
+  attaches: string[];
+  /** Drops every attached client, as kagent suspending the actor does. */
+  drop: () => void;
 }
 
 const MODELS = [
@@ -39,8 +43,13 @@ export function createFakeRunner(opts: { step?: number; backlog?: Out[] } = {}):
     handler: null as unknown as WebSocketHandler,
     received: [],
     backlog: opts.backlog ?? [],
-    answerDeferred: () => {}
+    answerDeferred: () => {},
+    attaches: [],
+    drop: () => {
+      for (const c of clients.splice(0)) c.close(1001, 'actor suspended');
+    }
   };
+  const clients: { close: (code?: number, reason?: string) => void }[] = [];
   let seq = runner.backlog.length;
   const meta = {
     sessionId: 'f00dcafe-0000-4000-8000-000000000001',
@@ -59,6 +68,8 @@ export function createFakeRunner(opts: { step?: number; backlog?: Out[] } = {}):
   };
 
   runner.handler = link.addEventListener('connection', ({ client }) => {
+    runner.attaches.push(client.url.toString());
+    clients.push(client);
     const send = (f: Out) => client.send(JSON.stringify({ ...f, seq: ++seq, ts: Date.now() }));
     const sdk = (m: Out) => send({ k: 'sdk', m });
     let running = false;

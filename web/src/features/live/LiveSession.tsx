@@ -20,7 +20,7 @@ import {
   type Perm
 } from './store';
 import { caretOnFirstLine, caretOnLastLine, sentHistory, step } from './history';
-import { useLiveSession, type Conn } from './useLiveSession';
+import { liveDeps, useLiveSession, type Conn, type LiveDeps } from './useLiveSession';
 
 const short = (id: string) => (id || '…').replace(/^claude-/, '');
 
@@ -36,7 +36,8 @@ export function LiveSession({
   sessionId,
   onFallback,
   requests,
-  needsAnswer
+  needsAnswer,
+  deps
 }: {
   sessionId: string;
   /** Leaves the live view for the regular one, offered when the live channel is unavailable. */
@@ -45,8 +46,10 @@ export function LiveSession({
   requests?: ReactNode;
   /** A request is pending, so the session needs the owner. */
   needsAnswer?: boolean;
+  /** The reads outside the live channel; tests replace them. Keep it stable across renders. */
+  deps?: LiveDeps;
 }) {
-  const live = useLiveSession(sessionId);
+  const live = useLiveSession(sessionId, deps ?? liveDeps);
   return (
     <LiveSessionView
       {...live}
@@ -72,6 +75,8 @@ const CONN_LABEL: Record<Conn, string> = {
   attached: 'live',
   connecting: 'connecting…',
   reconnecting: 'reconnecting…',
+  asleep: 'asleep',
+  waking: 'waking…',
   unavailable: 'unavailable'
 };
 
@@ -110,7 +115,13 @@ export function LiveSessionView({
         <span className="flex-1" />
         <span
           data-testid="live-conn"
-          className={conn === 'attached' ? 'text-term-green' : 'text-term-warning'}
+          className={
+            conn === 'attached'
+              ? 'text-term-green'
+              : conn === 'asleep'
+                ? 'text-term-fg-muted'
+                : 'text-term-warning'
+          }
         >
           {CONN_LABEL[conn]}
         </span>
@@ -124,6 +135,20 @@ export function LiveSessionView({
           {state.effort ? ` · ${state.effort}` : ''}
         </button>
       </div>
+
+      {conn === 'asleep' ? (
+        <div
+          data-testid="live-asleep"
+          className="px-md py-sm border-border mx-md mt-sm flex flex-wrap items-center gap-2 border text-xs"
+        >
+          <span className="text-term-fg-muted flex-1">
+            Asleep. It wakes when you send a message; the view attaches when it is up.
+          </span>
+          <button type="button" onClick={retry} className="border-border px-sm min-h-10 border">
+            Wake now
+          </button>
+        </div>
+      ) : null}
 
       {conn === 'unavailable' ? (
         <div
@@ -157,6 +182,7 @@ export function LiveSessionView({
 
       <Composer
         state={state}
+        asleep={conn === 'asleep'}
         busy={busy}
         send={send}
         interrupt={interrupt}
@@ -390,6 +416,7 @@ function PermCard({ perm, answer }: { perm: Perm; answer: LiveSessionViewProps['
 
 function Composer({
   state,
+  asleep,
   busy,
   send,
   interrupt,
@@ -397,6 +424,7 @@ function Composer({
   openModel
 }: {
   state: LiveState;
+  asleep: boolean;
   busy: boolean;
   send: LiveSessionViewProps['send'];
   interrupt: () => void;
@@ -575,9 +603,11 @@ function Composer({
           placeholder={
             state.deferred
               ? 'Answer the request first'
-              : busy
-                ? 'Queue a message'
-                : 'Message, or / for commands'
+              : asleep
+                ? 'Message to wake the session'
+                : busy
+                  ? 'Queue a message'
+                  : 'Message, or / for commands'
           }
           aria-label="Message"
           className="placeholder:text-term-fg-muted max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 text-base leading-snug outline-none"

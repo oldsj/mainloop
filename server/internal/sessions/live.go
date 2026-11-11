@@ -22,8 +22,11 @@ func (s *Service) IsLiveAgent(name string) bool {
 // the kagent Session (see liveactor.Of).
 // liveactor.ErrNotFound covers another owner's session, one without a kagent Session, and one
 // whose Agent is not live. liveactor.ErrWaking is a Session whose actor cannot be named yet; the
-// client retries.
-func (s *Service) LiveTarget(ctx context.Context, sessionID string) (liveactor.Target, error) {
+// client retries. Without wake, a Session whose runtime association kagent reports as not current
+// is liveactor.ErrAsleep: connecting through the router would wake it, and only an owner action may
+// (an open page reconnecting after the actor slept must not keep it awake). An absent association is
+// unknown, not asleep, and is let through.
+func (s *Service) LiveTarget(ctx context.Context, sessionID string, wake bool) (liveactor.Target, error) {
 	ls, err := s.liveSession(ctx, sessionID)
 	if err != nil {
 		return liveactor.Target{}, err
@@ -34,6 +37,9 @@ func (s *Service) LiveTarget(ctx context.Context, sessionID string) (liveactor.T
 	}
 	// A sleeping Session is not resumed here: kagent has no resume call, and the relay's connection
 	// through the Substrate router is what wakes its Actor.
+	if ra := ks.GetRuntimeAssociation(); !wake && ra != nil && !ra.GetCurrentActive() {
+		return liveactor.Target{}, liveactor.ErrAsleep
+	}
 	actor, ok := liveactor.Of(ks, s.ActorAtespace)
 	if !ok {
 		return liveactor.Target{}, liveactor.ErrWaking

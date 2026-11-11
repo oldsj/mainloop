@@ -17,6 +17,9 @@ var ErrNotFound = errors.New("session is not live")
 // ErrWaking is a session whose actor is not running yet.
 var ErrWaking = errors.New("session is waking")
 
+// ErrAsleep is a session whose actor kagent reports asleep, looked up without asking to wake it.
+var ErrAsleep = errors.New("session is asleep")
+
 // Target is the actor serving a live session: its kagent Session and the router's
 // "<atespace>/<actor>" name for the current runtime generation.
 type Target struct {

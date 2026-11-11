@@ -17,9 +17,15 @@ import (
 
 type fakeTargets map[string]string
 
-func (f fakeTargets) LiveTarget(_ context.Context, id string) (LiveTarget, error) {
+func (f fakeTargets) LiveTarget(_ context.Context, id string, wake bool) (LiveTarget, error) {
 	if id == "asleep" {
 		return LiveTarget{}, ErrLiveWaking
+	}
+	if id == "sleeping" && !wake {
+		return LiveTarget{}, ErrLiveAsleep
+	}
+	if id == "sleeping" {
+		id = "s1"
 	}
 	if sid, ok := f[id]; ok {
 		return LiveTarget{KagentSessionID: sid, Actor: "kagent/session-" + sid + "-ab12"}, nil
@@ -204,5 +210,29 @@ func TestLiveWakingIs503(t *testing.T) {
 		if code != http.StatusServiceUnavailable || hdr.Get("Retry-After") == "" {
 			t.Fatalf("%s: status %d", path, code)
 		}
+	}
+}
+
+// A sleeping session is refused without wake=1 and never dialled; with it, the relay attaches (the
+// router connection is the wake), and wake is not forwarded to the runner.
+func TestLiveSleepingNeedsWake(t *testing.T) {
+	runner := &fakeRunner{}
+	front, _ := newTestLive(t, runner, nil)
+	if code, _, _, _ := upgrade(t, front.URL, "/sessions/sleeping/live", nil); code != http.StatusConflict {
+		t.Fatalf("without wake: status %d, want 409", code)
+	}
+	runner.mu.Lock()
+	boots := runner.boots
+	runner.mu.Unlock()
+	if boots != 0 {
+		t.Fatalf("a refused attach reached the runner (%d bootstraps)", boots)
+	}
+	if code, _, _, _ := upgrade(t, front.URL, "/sessions/sleeping/live?wake=1&since=3", nil); code != http.StatusSwitchingProtocols {
+		t.Fatalf("with wake: status %d, want 101", code)
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if strings.Contains(runner.wsQuery, "wake") || !strings.Contains(runner.wsQuery, "since=3") {
+		t.Fatalf("runner query %q", runner.wsQuery)
 	}
 }

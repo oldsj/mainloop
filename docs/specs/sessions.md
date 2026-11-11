@@ -191,12 +191,29 @@ protected tool call or question in a turn Mainloop sends (an A2A turn) is deferr
 answer, the status reads "needs you", and the request shows at the end of the transcript as the same
 card the chat view shows, answered through the A2A task. Until it is answered the runner refuses new
 messages, the composer says to answer the request first, and a message sent anyway shows the
-runner's refusal; the answer replays the call and the turn continues. The view
-re-attaches with backoff after a drop and immediately when the page becomes visible again; every
-attach rebuilds the transcript from the runner's `hello` backlog (in memory in Phase 1, so a runner
-restart loses it). After five failed attaches in a row with no `hello` (about 15 s, longer than a
-wake's 503s normally last) the view says the live channel is unavailable, keeps retrying every 8 s,
-and offers Retry now and Use the chat view (the regular session view, until the page is reopened).
+runner's refusal; the answer replays the call and the turn continues.
+
+The view never wakes a sleeping session on its own (#348): an attach goes through the Substrate
+router, which wakes the actor, so a view that reconnected whenever kagent suspended the actor would
+keep it awake for as long as the page is open. Before every attach the owner did not ask for, it
+reads `GET /sessions/{id}/native`; when the runtime association says the actor is not current, the
+view shows "asleep" with a Wake now button and does not attach (an absent association is unknown
+and attaches as before). Opening the page of a sleeping session therefore does not wake it. A
+message sent from the composer while asleep, Wake now, and Retry now are owner actions: they attach
+with `wake=1`, and a message waits until the runner says `hello`, then goes. Asleep, the view reads
+the native state every 10 s and attaches without waking once something else woke the session (a
+turn Mainloop sends, or an answered request that replays the call). A drop while the session is awake
+re-attaches with backoff (at least 1.5 s after an attached socket drops, so a suspend can show first)
+and immediately when the page becomes visible again. The transcript is seeded from Mainloop's
+conversation (`GET /sessions/{id}/conversation`), which survives sleep: it is shown above the live
+entries under "Earlier in this session, from Mainloop's record", and stops before the last copy of
+the user message the runner's `hello` backlog starts with, so a turn is not shown twice. Every attach
+rebuilds the live part from the backlog, which is in the runner's memory and starts empty after a
+sleep or a replayed answer; the record is read again on each `hello` and each sleep. The record holds
+messages and replies only, so tool calls from earlier runner processes are not shown. After five
+failed attaches in a row with no `hello` (about 15 s, longer than a wake's 503s normally last) the
+view says the live channel is unavailable, keeps retrying every 8 s, and offers Retry now and Use the
+chat view (the regular session view, until the page is reopened).
 `?live=1` on a session URL forces the live view for local work; with
 `VITE_MSW=1 pnpm dev` a scripted fake runner answers (`web/src/features/live/fakeRunner.ts`, also
 used by the tests).
@@ -210,8 +227,9 @@ owner's only (another owner's session, or one that is not live, is `404`); a cro
 proxy does: from the kagent Session's runtime association when kagent reports one, current or not,
 then from the Session's A2A authority, and otherwise by kagent's stable Actor name (`session-<kagent session id, lower case>` in
 `KAGENT_ACTOR_ATESPACE`). It does not wake anything itself: its connection through the router wakes
-a sleeping Session. It answers `503` with `Retry-After: 2` while the tunnel is not up yet or the
-Session is not `READY`. A session started from
+a sleeping Session, so it connects to one only with `wake=1`; without it, a Session whose runtime
+association kagent reports as not current is `409` and nothing is dialled. It answers `503` with
+`Retry-After: 2` while the tunnel is not up yet or the Session is not `READY`. A session started from
 `/agents` (Start session) is a standalone native session. The server bootstraps the
 runner on first attach to each actor (`PUT /bootstrap`, trust on first use; `409` means already set)
 with a token derived from `AGENT_TOKEN_KEY` and the kagent Session id, adds it to the upstream
