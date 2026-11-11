@@ -146,7 +146,7 @@ arguments. A response that was rejected in transport withdraws the consent (`con
 The decision must have been recorded for the session's current runtime: the session is not archived,
 its runtime is not deleted, and the kagent Session the request was recorded for is the one the
 binding holds now. The tool name is then checked against a trusted mapping read from kagent: the
-Session must run on the Agent the request recorded, and that Agent's named `templateRef` and the
+Session must run on the Agent the request recorded, and that Agent's named template reference (`spec.template.ref`) and the
 session's provider must select exactly one entry of `MAINLOOP_MERGE_CONFIGURATIONS`. An inline
 template, an unknown or duplicate template/provider pair, a Session that is not on the recorded
 Agent, a public-name mismatch and a failed read give no authority. The mapping (provider, template
@@ -385,7 +385,7 @@ array keyed by `template_name` and `provider`, with the compiled alias, endpoint
 protected tool, `require_approval: true`, and canonical operation. It contains no
 binding, Session, or prepared-revision IDs; the default is empty. Before resolving
 authority, Mainloop reads the owned kagent Session and its Agent through the trusted
-client and uses the Agent's named `templateRef`. Inline templates, unknown or duplicate
+client and uses the Agent's named template reference (`spec.template.ref`). Inline templates, unknown or duplicate
 template/provider entries, public-name mismatches, and failed reads mint no authority.
 Claude and Codex public tool names are derived exactly from the configured alias.
 

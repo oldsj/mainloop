@@ -142,7 +142,7 @@ or prepared-revision IDs. The base ConfigMap keeps the merge gate false and this
 
 When resolving a pending owner decision, Mainloop reads the bound kagent Session through its
 trusted client, verifies its configured creator, Session identity, Agent reference, and live
-Mainloop binding, then reads that Agent and uses only its named `templateRef`. Inline-template
+Mainloop binding, then reads that Agent and uses only its named template reference (`spec.template.ref`). Inline-template
 Agents and unknown or ambiguous `(template, provider)` entries receive no merge authority.
 `canonical_operation(public_name, configuration)` requires the exact provider-qualified public
 tool name derived from the configured alias, along with the configured endpoint, tool, approval

@@ -11,7 +11,7 @@ import (
 
 // ErrNoTemplate means an Agent has no named template reference: it carries an inline template, both
 // forms, or neither. Such an Agent is not one the operator reviewed by name.
-var ErrNoTemplate = errors.New("kagent: agent has no named templateRef")
+var ErrNoTemplate = errors.New("kagent: agent has no named template ref")
 
 // SessionAgent reads a Session and returns the Agent it runs on.
 func (c *Client) SessionAgent(ctx context.Context, sessionID string) (AgentRef, error) {
@@ -26,8 +26,8 @@ func (c *Client) SessionAgent(ctx context.Context, sessionID string) (AgentRef, 
 	return AgentRef{Namespace: a.GetNamespace(), Name: a.GetName()}, nil
 }
 
-// AgentTemplate reads an Agent and returns the name of its templateRef. An inline template, both
-// forms, or neither return ErrNoTemplate.
+// AgentTemplate reads an Agent and returns the name of the AgentTemplate it references
+// (spec.template.ref.name). An inline template, both forms, or neither return ErrNoTemplate.
 func (c *Client) AgentTemplate(ctx context.Context, ref AgentRef) (string, error) {
 	a, err := c.GetAgent(ctx, ref)
 	if err != nil {
@@ -41,8 +41,14 @@ func templateName(a *api.Agent) (string, error) {
 	if spec == nil {
 		return "", ErrNoTemplate
 	}
-	inline := spec.GetFields()["template"]
-	ref := spec.GetFields()["templateRef"]
+	// kagent v1alpha3: spec.template holds exactly one of inline and ref. The 0.4 spec.templateRef
+	// is gone.
+	template := spec.GetFields()["template"].GetStructValue()
+	if template == nil {
+		return "", ErrNoTemplate
+	}
+	inline := template.GetFields()["inline"]
+	ref := template.GetFields()["ref"]
 	if isSet(inline) == isSet(ref) {
 		return "", ErrNoTemplate
 	}
