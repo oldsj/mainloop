@@ -36,6 +36,9 @@ afterEach(() => {
   LIVE_TIMING.backoffMs = 500;
   LIVE_TIMING.settleMs = 1500;
   LIVE_TIMING.asleepPollMs = 10_000;
+  LIVE_TIMING.idleDetachMs = 120_000;
+  LIVE_TIMING.hiddenDetachMs = 15_000;
+  setHidden(false);
 });
 
 const conn = (text: string) =>
@@ -47,6 +50,11 @@ function setup(opts?: Parameters<typeof createFakeRunner>[0]) {
   server.use(runner.handler);
   render(<LiveSession sessionId="s1" deps={deps} />);
   return { runner, user: userEvent.setup() };
+}
+
+function setHidden(hidden: boolean) {
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+  document.dispatchEvent(new Event('visibilitychange'));
 }
 
 const attached = () =>
@@ -374,6 +382,52 @@ describe('live session', () => {
       await attached();
       expect(runner.attaches).toHaveLength(1);
       expect(runner.attaches[0]).not.toContain('wake=');
+    });
+
+    it('detaches when idle so the actor can sleep, and waits for it to sleep before attaching again', async () => {
+      LIVE_TIMING.idleDetachMs = 60;
+      const { runner } = setup();
+      await attached();
+      await conn('paused');
+      expect(screen.getByTestId('live-asleep')).toHaveTextContent('Paused while idle');
+      await pause(200); // still awake: the view does not take the actor back
+      expect(runner.attaches).toHaveLength(1);
+      world.active = false;
+      await conn('asleep');
+      world.active = true; // something else woke it
+      await attached();
+      expect(runner.attaches).toHaveLength(2);
+      expect(runner.attaches[1]).not.toContain('wake=');
+    });
+
+    it('resumes from the paused banner', async () => {
+      LIVE_TIMING.idleDetachMs = 60;
+      const { runner, user } = setup();
+      await attached();
+      await conn('paused');
+      await user.click(screen.getByRole('button', { name: 'Resume' }));
+      await attached();
+      expect(runner.attaches[1]).toContain('wake=1');
+    });
+
+    it('stays attached while a turn runs, and detaches once it ends', async () => {
+      LIVE_TIMING.idleDetachMs = 60;
+      const { runner, user } = setup({ step: 120 });
+      await attached();
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'hello{Enter}');
+      await waitFor(() => expect(screen.getByTestId('live-status')).not.toHaveTextContent('idle'));
+      await pause(250);
+      expect(screen.getByTestId('live-conn')).toHaveTextContent('live');
+      await conn('paused');
+      expect(runner.attaches).toHaveLength(1);
+    });
+
+    it('detaches sooner when the page is hidden', async () => {
+      LIVE_TIMING.hiddenDetachMs = 30;
+      setup();
+      await attached();
+      setHidden(true);
+      await conn('paused');
     });
 
     it('treats an unknown association as awake', async () => {

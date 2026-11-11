@@ -8,9 +8,17 @@ export const LIVE_SUBPROTOCOL = 'kagent.sdk-runner.v1';
 /**
  * `asleep`: kagent reports the session's actor asleep, and nothing attaches until the owner acts
  * (sends a message or presses wake) or something else wakes it (an A2A turn, an answered request).
- * `waking`: the owner asked, and the attach that wakes it is under way.
+ * `paused`: the view detached itself, idle or hidden, so the actor can sleep; it is asleep once
+ * kagent says so. `waking`: the owner asked, and the attach that wakes it is under way.
  */
-export type Conn = 'connecting' | 'attached' | 'reconnecting' | 'asleep' | 'waking' | 'unavailable';
+export type Conn =
+  | 'connecting'
+  | 'attached'
+  | 'reconnecting'
+  | 'paused'
+  | 'asleep'
+  | 'waking'
+  | 'unavailable';
 
 /**
  * Failed attaches in a row, with no `hello` between them, after which the view says the live
@@ -23,9 +31,17 @@ export const UNAVAILABLE_AFTER = 5;
  * `backoffMs` is the first retry delay; it doubles up to 16 times this. `settleMs` is the least wait
  * after an attached socket drops, so kagent can report a suspend before the view decides whether to
  * reattach. `asleepPollMs` is how often an asleep view reads whether something else woke the
- * session. Tests shorten them.
+ * session. An attached client keeps the runner busy, so its actor never sleeps: the view detaches
+ * after `idleDetachMs` with nothing happening (no turn running, no prompt unanswered, nothing
+ * received, sent or typed), or `hiddenDetachMs` after the page is hidden. Tests shorten them.
  */
-export const LIVE_TIMING = { backoffMs: 500, settleMs: 1500, asleepPollMs: 10_000 };
+export const LIVE_TIMING = {
+  backoffMs: 500,
+  settleMs: 1500,
+  asleepPollMs: 10_000,
+  idleDetachMs: 120_000,
+  hiddenDetachMs: 15_000
+};
 
 /** What the view reads from Mainloop, outside the live channel. Neither read wakes the session. */
 export interface LiveDeps {
@@ -88,6 +104,8 @@ export interface LiveSession {
   answer: (permId: string, choice: number) => void;
   /** Attaches now, waking the session if it sleeps: an owner action. */
   retry: () => void;
+  /** The owner is typing: an attached view is not idle. */
+  touch: () => void;
 }
 
 /**
@@ -110,6 +128,7 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
   const wakeNow = useRef<() => void>(() => {});
   const asleepNow = useRef(false);
   const pending = useRef<Record<string, unknown>[]>([]);
+  const bump = useRef<() => void>(() => {});
 
   const flush = useCallback(() => {
     if (frame.current) return;
@@ -129,8 +148,14 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
     let failures = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let poll: ReturnType<typeof setTimeout> | undefined;
+    let idle: ReturnType<typeof setTimeout> | undefined;
     // The owner asked to wake the session; it holds until a runner says hello.
     let wanted = false;
+    // Whether an awake read attaches. A view that detached itself waits until kagent reports the
+    // actor asleep first, or it would attach again before the actor had a chance to sleep.
+    let armed = true;
+    // The socket being closed is one the view detached on purpose.
+    let detaching: WebSocket | null = null;
     model.current = new LiveModel();
     pending.current = [];
 
@@ -142,33 +167,63 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
       });
     };
 
-    const sleep = () => {
+    const sleep = (paused = false) => {
       asleepNow.current = true;
+      armed = !paused;
       failures = 0;
       backoff = LIVE_TIMING.backoffMs;
-      setConn('asleep');
+      setConn(paused ? 'paused' : 'asleep');
       loadHistory();
       watch();
     };
 
-    // Asleep, the view only reads; it attaches when something else woke the session.
+    // Asleep or paused, the view only reads; it attaches when something else woke the session.
     const watch = () => {
       clearTimeout(poll);
       poll = setTimeout(() => {
         if (closed || !asleepNow.current) return;
         void deps.awake(sessionId).then((awake) => {
           if (closed || !asleepNow.current) return;
-          if (awake === true) connect(false);
+          if (awake === false && !armed) {
+            armed = true;
+            setConn('asleep');
+          }
+          if (awake === true && armed) connect(false);
           else watch();
         });
       }, LIVE_TIMING.asleepPollMs);
     };
+
+    // An attached view holds the runner busy; let go when nothing needs it.
+    const quiet = () =>
+      model.current.state.status === 'idle' &&
+      !Object.values(model.current.state.perms).some((p) => p.chosen == null) &&
+      pending.current.length === 0;
+    const arm = () => {
+      clearTimeout(idle);
+      const sock = ws.current;
+      if (closed || !sock || sock.readyState !== WebSocket.OPEN) return;
+      idle = setTimeout(
+        () => {
+          if (closed || ws.current !== sock) return;
+          if (!quiet()) {
+            arm();
+            return;
+          }
+          detaching = sock;
+          sock.close(1000, 'idle');
+        },
+        document.hidden ? LIVE_TIMING.hiddenDetachMs : LIVE_TIMING.idleDetachMs
+      );
+    };
+    bump.current = arm;
 
     const connect = (wake: boolean) => {
       if (closed) return;
       clearTimeout(timer);
       clearTimeout(poll);
       asleepNow.current = false;
+      armed = true;
       if (ws.current && ws.current.readyState <= WebSocket.OPEN) return;
       if (failures < UNAVAILABLE_AFTER)
         setConn(wake ? 'waking' : failures ? 'reconnecting' : 'connecting');
@@ -192,7 +247,9 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
           model.current.hello(f);
           loadHistory();
           for (const cmd of pending.current.splice(0)) sock.send(JSON.stringify(cmd));
+          arm();
         } else {
+          arm();
           model.current.apply(f);
           if (f.k === 'perm' && document.hidden && 'vibrate' in navigator) navigator.vibrate(80);
         }
@@ -201,6 +258,12 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
       sock.onclose = () => {
         if (ws.current === sock) ws.current = null;
         if (closed) return;
+        clearTimeout(idle);
+        if (detaching === sock) {
+          detaching = null;
+          sleep(true);
+          return;
+        }
         failures += 1;
         if (failures >= UNAVAILABLE_AFTER) setConn('unavailable');
         else if (!wanted) setConn('reconnecting');
@@ -233,7 +296,9 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
     // A phone that slept drops the socket; coming back attaches at once instead of after the backoff,
     // still only if the session is awake.
     const onVisible = () => {
-      if (document.hidden || closed) return;
+      if (closed) return;
+      arm();
+      if (document.hidden) return;
       if (asleepNow.current) {
         void deps.awake(sessionId).then((awake) => {
           if (!closed && asleepNow.current && awake === true) connect(false);
@@ -262,6 +327,7 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
       closed = true;
       clearTimeout(timer);
       clearTimeout(poll);
+      clearTimeout(idle);
       document.removeEventListener('visibilitychange', onVisible);
       ws.current?.close();
       ws.current = null;
@@ -273,6 +339,7 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
       const sock = ws.current;
       if (sock && sock.readyState === WebSocket.OPEN) {
         sock.send(JSON.stringify(cmd));
+        bump.current();
         return true;
       }
       if (cmd.k === 'user') {
@@ -312,6 +379,7 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
   );
 
   const retry = useCallback(() => wakeNow.current(), []);
+  const touch = useCallback(() => bump.current(), []);
 
-  return { state, conn, send, answer, retry };
+  return { state, conn, send, answer, retry, touch };
 }

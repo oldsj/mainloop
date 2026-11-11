@@ -202,7 +202,15 @@ and attaches as before). Opening the page of a sleeping session therefore does n
 message sent from the composer while asleep, Wake now, and Retry now are owner actions: they attach
 with `wake=1`, and a message waits until the runner says `hello`, then goes. Asleep, the view reads
 the native state every 10 s and attaches without waking once something else woke the session (a
-turn Mainloop sends, or an answered request that replays the call). A drop while the session is awake
+turn Mainloop sends, or an answered request that replays the call). An attached view also keeps the
+actor awake by itself: the runner counts every open client as busy (kagent's SDK runner), and kagent
+suspends the actor only about 30 s after the last one detaches. So the view detaches on purpose
+after 2 minutes with nothing happening (no turn running, no prompt unanswered, nothing received,
+sent or typed), or 15 s after the page is hidden, and shows "paused" with a Resume button. A paused
+view does not attach again while the actor is still awake: it waits until kagent reports it asleep
+and then behaves as asleep, so it attaches by itself only after something else woke the session.
+A permission prompt the runner holds live is lost if the session sleeps, so the view does not
+detach while one is unanswered, hidden or not (the phone dropping the socket still can). A drop while the session is awake
 re-attaches with backoff (at least 1.5 s after an attached socket drops, so a suspend can show first)
 and immediately when the page becomes visible again. The transcript is seeded from Mainloop's
 conversation (`GET /sessions/{id}/conversation`), which survives sleep: it is shown above the live
@@ -210,7 +218,9 @@ entries under "Earlier in this session, from Mainloop's record", and stops befor
 the user message the runner's `hello` backlog starts with, so a turn is not shown twice. Every attach
 rebuilds the live part from the backlog, which is in the runner's memory and starts empty after a
 sleep or a replayed answer; the record is read again on each `hello` and each sleep. The record holds
-messages and replies only, so tool calls from earlier runner processes are not shown. After five
+the messages and replies of turns Mainloop sent (A2A turns), so tool calls from earlier runner
+processes are not shown, and a turn sent from the live view itself is not in the record at all: it
+is in the view only until the actor sleeps (measured on kind, #348). After five
 failed attaches in a row with no `hello` (about 15 s, longer than a wake's 503s normally last) the
 view says the live channel is unavailable, keeps retrying every 8 s, and offers Retry now and Use the
 chat view (the regular session view, until the page is reopened).

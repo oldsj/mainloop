@@ -66,6 +66,8 @@ export interface LiveSessionViewProps {
   send: (cmd: Record<string, unknown>) => boolean;
   answer: (permId: string, choice: number) => void;
   retry: () => void;
+  /** The owner is typing; keeps an attached view from detaching as idle. */
+  touch?: () => void;
   onFallback?: () => void;
   requests?: ReactNode;
   needsAnswer?: boolean;
@@ -75,6 +77,7 @@ const CONN_LABEL: Record<Conn, string> = {
   attached: 'live',
   connecting: 'connecting…',
   reconnecting: 'reconnecting…',
+  paused: 'paused',
   asleep: 'asleep',
   waking: 'waking…',
   unavailable: 'unavailable'
@@ -86,10 +89,12 @@ export function LiveSessionView({
   send,
   answer,
   retry,
+  touch,
   onFallback,
   requests,
   needsAnswer = false
 }: LiveSessionViewProps) {
+  const resting = conn === 'asleep' || conn === 'paused';
   const [sheet, setSheet] = useState(false);
   const busy = state.status !== 'idle';
   const waiting = state.status === 'waiting' || state.deferred || needsAnswer;
@@ -118,7 +123,7 @@ export function LiveSessionView({
           className={
             conn === 'attached'
               ? 'text-term-green'
-              : conn === 'asleep'
+              : resting
                 ? 'text-term-fg-muted'
                 : 'text-term-warning'
           }
@@ -136,16 +141,18 @@ export function LiveSessionView({
         </button>
       </div>
 
-      {conn === 'asleep' ? (
+      {resting ? (
         <div
           data-testid="live-asleep"
           className="px-md py-sm border-border mx-md mt-sm flex flex-wrap items-center gap-2 border text-xs"
         >
           <span className="text-term-fg-muted flex-1">
-            Asleep. It wakes when you send a message; the view attaches when it is up.
+            {conn === 'paused'
+              ? 'Paused while idle, so the session can sleep. Send a message or resume to attach again.'
+              : 'Asleep. It wakes when you send a message; the view attaches when it is up.'}
           </span>
           <button type="button" onClick={retry} className="border-border px-sm min-h-10 border">
-            Wake now
+            {conn === 'paused' ? 'Resume' : 'Wake now'}
           </button>
         </div>
       ) : null}
@@ -182,9 +189,10 @@ export function LiveSessionView({
 
       <Composer
         state={state}
-        asleep={conn === 'asleep'}
+        asleep={resting}
         busy={busy}
         send={send}
+        touch={touch}
         interrupt={interrupt}
         cycleMode={cycleMode}
         openModel={() => setSheet(true)}
@@ -419,6 +427,7 @@ function Composer({
   asleep,
   busy,
   send,
+  touch,
   interrupt,
   cycleMode,
   openModel
@@ -427,6 +436,7 @@ function Composer({
   asleep: boolean;
   busy: boolean;
   send: LiveSessionViewProps['send'];
+  touch?: () => void;
   interrupt: () => void;
   cycleMode: () => void;
   openModel: () => void;
@@ -598,6 +608,7 @@ function Composer({
           onChange={(e) => {
             setText(e.target.value);
             setSel(0);
+            touch?.();
           }}
           onKeyDown={onKey}
           placeholder={
