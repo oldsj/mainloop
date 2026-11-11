@@ -9,7 +9,7 @@ port, actor template, and 30-minute idle timeout. Build the image from this dire
 `docker build -t mainloop-devenv-sample:latest .` in an environment with Docker available.
 
 The image declares a real non-root `app` user and checks the app's `/` HTTP route with a
-container health check. Mainloop's pinned Substrate fork runs actors as the image's `USER` in
+container health check. Substrate 1.0 runs actors as the image's `USER` in
 its `WORKDIR`. This sample does not claim to validate non-root actor execution or live
 multi-container connectivity. Sample credentials are fixture-only; use secret-backed values
 for real projects.
