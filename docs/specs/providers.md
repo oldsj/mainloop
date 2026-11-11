@@ -16,8 +16,10 @@ aliases. Task schemas reject the old `kind` payload.
 is empty). `effort_levels` is a subset of `minimal`, `low`, `medium`, `high`, `xhigh`, `max`;
 `default_effort` names one of them (or is unset when `effort_levels` is empty). Mainloop's built-in
 Claude profile lists Sonnet 5.5, Opus 5.5, Haiku 5.5 and Fable 5.1, defaulting to Sonnet 5.5, and
-effort `low`/`medium`/`high`/`xhigh`/`max`, defaulting to `medium`. Its built-in Codex profile lists two
-models defaulting to the first, and effort `minimal`/`low`/`medium`/`high`, defaulting to `medium`.
+effort `low`/`medium`/`high`/`xhigh`/`max`, defaulting to `medium`. Its built-in Codex profile lists `gpt-6.1-sol`
+(the model production's Codex ModelConfig runs), and effort `minimal`/`low`/`medium`/`high`, defaulting
+to `medium`. The defaults are what `/model` and `/effort` show; a turn without an override names
+neither, and kagent uses the Agent's ModelConfig (see [Chat](chat.md)).
 An operator profile sets its own `models` and `effort_levels` in `PROVIDER_PROFILES`, or leaves them
 empty: `/model` still accepts a model by name against an empty list (kagent is the real gate on
 whether it exists), but `/effort` has nothing to offer or accept. The one exception is a profile

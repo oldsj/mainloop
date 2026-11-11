@@ -160,15 +160,15 @@ type ProviderProfile struct {
 	// when the turn starts. Empty means /model lists nothing, but a model may still be set by name.
 	Models []ProviderModel `json:"models"`
 	// DefaultModel is one of Models' ids, required when Models is not empty and empty otherwise.
-	// Every turn without a model override names it explicitly to kagent (see
-	// server/internal/sessions turnMetadata), so a value carried by the harness from an earlier
-	// turn never outlives a reset to default.
+	// It is what /model shows as the default; it is never sent to kagent. A turn without a model
+	// override names no model, and kagent uses the Agent's ModelConfig (see
+	// server/internal/sessions turnMetadata).
 	DefaultModel string `json:"default_model"`
 	// EffortLevels is the subset of EffortLevels this profile offers; /effort rejects any other
 	// word for a session on this profile.
 	EffortLevels []string `json:"effort_levels"`
 	// DefaultEffort is one of EffortLevels, required when EffortLevels is not empty and empty
-	// otherwise. Sent on every turn without an effort override, like DefaultModel.
+	// otherwise. Shown as the default, never sent, like DefaultModel.
 	DefaultEffort string `json:"default_effort"`
 }
 

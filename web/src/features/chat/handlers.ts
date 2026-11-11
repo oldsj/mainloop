@@ -48,11 +48,8 @@ export const CODEX_PROFILE: ProviderProfile = {
   id: 'codex',
   display_name: 'Codex',
   native_provider: 'codex',
-  models: [
-    { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex' },
-    { id: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini' }
-  ],
-  default_model: 'gpt-5.1-codex',
+  models: [{ id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' }],
+  default_model: 'gpt-6.1-sol',
   effort_levels: ['minimal', 'low', 'medium', 'high']
 };
 
