@@ -64,6 +64,12 @@ export interface Command {
 
 export type Frame = { k: string; seq?: number; ts?: number } & Record<string, unknown>;
 
+/** One message of Mainloop's record of the conversation, which outlives the runner process. */
+export interface HistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
@@ -169,6 +175,8 @@ export class LiveModel {
   private cur = new Map<number, number>(); // content block index -> text entry id
   private streamed = new Set<string>(); // assistant message ids seen as stream events
   private queued = new Map<string, number>(); // user uuid -> entry id
+  private history: HistoryMessage[] = [];
+  private historyIds = new Set<number>(); // entries placed from the history
 
   reset() {
     this.state = initialState();
@@ -176,6 +184,46 @@ export class LiveModel {
     this.cur.clear();
     this.streamed.clear();
     this.queued.clear();
+    this.historyIds.clear();
+  }
+
+  /**
+   * Seeds the transcript from Mainloop's record, which survives the actor sleeping: the runner's
+   * backlog lives in its process and starts empty after a sleep or a replayed answer. It is placed
+   * above the live entries, up to the turn the live backlog starts with.
+   */
+  setHistory(messages: readonly HistoryMessage[]) {
+    this.history = messages.filter((m) => m.content.trim());
+    this.placeHistory();
+  }
+
+  /**
+   * Puts the history before the live entries. Where the backlog starts with a user message that the
+   * record also holds, the record stops before its last copy, so a turn is not shown twice.
+   */
+  private placeHistory() {
+    const live = this.state.entries.filter((e) => !this.historyIds.has(e.id));
+    this.historyIds.clear();
+    const first = live.find((e) => e.t === 'user');
+    let past = this.history;
+    if (first && first.t === 'user') {
+      const text = first.text.trim();
+      const at = past.findLastIndex((m) => m.role === 'user' && m.content.trim() === text);
+      if (at >= 0) past = past.slice(0, at);
+    }
+    const placed: Entry[] = [];
+    const add = (e: NewEntry) => {
+      const id = this.nextId++;
+      this.historyIds.add(id);
+      placed.push({ ...e, id } as Entry);
+    };
+    if (past.length) add({ t: 'sys', text: "Earlier in this session, from Mainloop's record" });
+    for (const m of past) {
+      if (m.role === 'user') add({ t: 'user', text: m.content, queued: false, origin: 'history' });
+      else add({ t: 'text', text: m.content });
+    }
+    if (past.length && live.length) add({ t: 'sys', text: 'Live' });
+    this.state.entries = [...placed, ...live];
   }
 
   /** The first frame of every attach: it replaces everything the view held. */
@@ -193,6 +241,7 @@ export class LiveModel {
         if (isObj(p) && !this.state.perms[str(p.id)]) this.apply({ ...p, k: 'perm' } as Frame);
       }
     }
+    this.placeHistory();
   }
 
   private push(e: NewEntry): number {

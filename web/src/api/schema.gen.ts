@@ -1022,9 +1022,12 @@ export interface paths {
      * @description Upgrades to a WebSocket with subprotocol `kagent.sdk-runner.v1` (the SDK runner's client
      *     event protocol, one JSON object per text frame) for a session whose `NativeSessionInfo.live`
      *     is true. The server bootstraps the runner and keeps its token; frames are relayed verbatim
-     *     both ways. A sleeping session is woken by connecting.
+     *     both ways. Connecting to a sleeping session wakes it, so that needs `wake=1`, which the client
+     *     sends only on an owner action (sending, or pressing wake); a reconnect of its own is refused
+     *     with 409 while kagent reports the session asleep.
      *
      *     404 when the session is not the owner's, has no kagent session, or its Agent is not live.
+     *     409 when the session is asleep and `wake` was not asked for.
      *     503 while the session cannot be reached yet; the client retries with backoff.
      */
     get: operations['getSessionLive'];
@@ -8614,6 +8617,8 @@ export interface operations {
   getSessionLive: {
     parameters: {
       query?: {
+        /** @description `1` wakes a sleeping session (an owner action). Without it a sleeping session is 409. */
+        wake?: '1';
         /** @description Resume after this event `seq`; events still in the runner's backlog are replayed in `hello`. */
         since?: number;
       };
@@ -8643,6 +8648,15 @@ export interface operations {
       };
       /** @description Not Found */
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description The session is asleep and `wake` was not asked for. */
+      409: {
         headers: {
           [name: string]: unknown;
         };

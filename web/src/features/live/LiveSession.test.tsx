@@ -1,21 +1,60 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { ws } from 'msw';
-import { afterEach, describe, expect, it } from 'vitest';
+import { http, HttpResponse, ws } from 'msw';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { API_URL } from '@/api/config';
 import { server } from '@/test/msw/server';
 import { createFakeRunner } from './fakeRunner';
 import { LiveSession } from './LiveSession';
-import { LIVE_SUBPROTOCOL, LIVE_TIMING, liveUrl } from './useLiveSession';
+import { LIVE_SUBPROTOCOL, LIVE_TIMING, liveDeps, liveUrl, type LiveDeps } from './useLiveSession';
+
+/** What Mainloop reports about session s1: kagent's current_active (null: no association) and its record. */
+const world: {
+  active: boolean | null;
+  messages: { role: 'user' | 'assistant'; content: string }[];
+  nativeReads: number;
+} = { active: true, messages: [], nativeReads: 0 };
+
+/** The reads outside the live channel, from `world`; the real ones are tested once, below. */
+const deps: LiveDeps = {
+  awake: async () => {
+    world.nativeReads += 1;
+    return world.active;
+  },
+  history: async () => world.messages
+};
+
+beforeEach(() => {
+  world.active = true;
+  world.messages = [];
+  world.nativeReads = 0;
+  LIVE_TIMING.settleMs = 20;
+  LIVE_TIMING.asleepPollMs = 40;
+});
 
 afterEach(() => {
   LIVE_TIMING.backoffMs = 500;
+  LIVE_TIMING.settleMs = 1500;
+  LIVE_TIMING.asleepPollMs = 10_000;
+  LIVE_TIMING.idleDetachMs = 120_000;
+  LIVE_TIMING.hiddenDetachMs = 15_000;
+  setHidden(false);
 });
+
+const conn = (text: string) =>
+  waitFor(() => expect(screen.getByTestId('live-conn')).toHaveTextContent(text));
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function setup(opts?: Parameters<typeof createFakeRunner>[0]) {
   const runner = createFakeRunner(opts);
   server.use(runner.handler);
-  render(<LiveSession sessionId="s1" />);
+  render(<LiveSession sessionId="s1" deps={deps} />);
   return { runner, user: userEvent.setup() };
+}
+
+function setHidden(hidden: boolean) {
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+  document.dispatchEvent(new Event('visibilitychange'));
 }
 
 const attached = () =>
@@ -206,7 +245,7 @@ describe('live session', () => {
       })
     );
     let fellBack = false;
-    render(<LiveSession sessionId="s1" onFallback={() => (fellBack = true)} />);
+    render(<LiveSession sessionId="s1" deps={deps} onFallback={() => (fellBack = true)} />);
     const alert = await screen.findByTestId('live-unavailable');
     expect(alert).toHaveTextContent('Live view unavailable');
     expect(screen.getByTestId('live-conn')).toHaveTextContent('unavailable');
@@ -273,5 +312,190 @@ describe('live session', () => {
     expect(screen.queryByRole('listbox', { name: 'Sent messages' })).not.toBeInTheDocument();
     await user.keyboard('{ArrowDown}{ArrowDown}');
     expect(box).toHaveValue('draft');
+  });
+
+  describe('sleep (#348)', () => {
+    it('stays asleep when the actor sleeps, and never reattaches on its own', async () => {
+      const { runner } = setup();
+      await attached();
+      world.active = false;
+      runner.drop();
+      await conn('asleep');
+      expect(screen.getByTestId('live-asleep')).toHaveTextContent('wakes when you send');
+      await pause(300); // several asleep polls
+      expect(runner.attaches).toHaveLength(1);
+      expect(world.nativeReads).toBeGreaterThan(2);
+    });
+
+    it('still reconnects after a drop while the session is awake', async () => {
+      const { runner } = setup();
+      await attached();
+      runner.drop();
+      await waitFor(() => expect(runner.attaches).toHaveLength(2));
+      expect(runner.attaches[1]).not.toContain('wake=');
+      await attached();
+    });
+
+    it("opens a sleeping session without attaching, showing Mainloop's record", async () => {
+      world.active = false;
+      world.messages = [
+        { role: 'user', content: 'what changed?' },
+        { role: 'assistant', content: 'Two files changed.' }
+      ];
+      const { runner } = setup();
+      await conn('asleep');
+      expect(await screen.findByText('what changed?')).toBeInTheDocument();
+      expect(screen.getByText('Two files changed.')).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'Message' })).toHaveAttribute(
+        'placeholder',
+        'Message to wake the session'
+      );
+      await pause(200);
+      expect(runner.attaches).toHaveLength(0);
+    });
+
+    it('wakes on a message: it attaches with wake=1 and sends the message once the runner is up', async () => {
+      world.active = false;
+      const { runner, user } = setup();
+      await conn('asleep');
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'carry on{Enter}');
+      await waitFor(() => expect(runner.received).toContainEqual({ k: 'user', text: 'carry on' }));
+      expect(runner.attaches).toHaveLength(1);
+      expect(runner.attaches[0]).toContain('wake=1');
+      await attached();
+    });
+
+    it('wakes from the button', async () => {
+      world.active = false;
+      const { runner, user } = setup();
+      await conn('asleep');
+      await user.click(screen.getByRole('button', { name: 'Wake now' }));
+      await attached();
+      expect(runner.attaches[0]).toContain('wake=1');
+    });
+
+    it('attaches without waking once something else woke the session', async () => {
+      world.active = false;
+      const { runner } = setup();
+      await conn('asleep');
+      world.active = true; // an A2A turn, or an answered request replayed
+      await attached();
+      expect(runner.attaches).toHaveLength(1);
+      expect(runner.attaches[0]).not.toContain('wake=');
+    });
+
+    it('detaches when idle so the actor can sleep, and waits for it to sleep before attaching again', async () => {
+      LIVE_TIMING.idleDetachMs = 60;
+      const { runner } = setup();
+      await attached();
+      await conn('paused');
+      expect(screen.getByTestId('live-asleep')).toHaveTextContent('Paused while idle');
+      await pause(200); // still awake: the view does not take the actor back
+      expect(runner.attaches).toHaveLength(1);
+      world.active = false;
+      await conn('asleep');
+      world.active = true; // something else woke it
+      await attached();
+      expect(runner.attaches).toHaveLength(2);
+      expect(runner.attaches[1]).not.toContain('wake=');
+    });
+
+    it('resumes from the paused banner', async () => {
+      LIVE_TIMING.idleDetachMs = 60;
+      const { runner, user } = setup();
+      await attached();
+      await conn('paused');
+      await user.click(screen.getByRole('button', { name: 'Resume' }));
+      await attached();
+      expect(runner.attaches[1]).toContain('wake=1');
+    });
+
+    it('stays attached while a turn runs, and detaches once it ends', async () => {
+      LIVE_TIMING.idleDetachMs = 60;
+      const { runner, user } = setup({ step: 120 });
+      await attached();
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'hello{Enter}');
+      await waitFor(() => expect(screen.getByTestId('live-status')).not.toHaveTextContent('idle'));
+      await pause(250);
+      expect(screen.getByTestId('live-conn')).toHaveTextContent('live');
+      await conn('paused');
+      expect(runner.attaches).toHaveLength(1);
+    });
+
+    it('detaches sooner when the page is hidden', async () => {
+      LIVE_TIMING.hiddenDetachMs = 30;
+      setup();
+      await attached();
+      setHidden(true);
+      await conn('paused');
+    });
+
+    it('treats an unknown association as awake', async () => {
+      world.active = null;
+      const { runner } = setup();
+      await attached();
+      expect(runner.attaches[0]).not.toContain('wake=');
+    });
+
+    it('puts the record above the live backlog without showing a turn twice', async () => {
+      world.messages = [
+        { role: 'user', content: 'first question' },
+        { role: 'assistant', content: 'First answer.' },
+        { role: 'user', content: 'second question' },
+        { role: 'assistant', content: 'Second answer.' }
+      ];
+      setup({
+        backlog: [
+          { k: 'user', text: 'second question', uuid: 'u2' },
+          {
+            k: 'sdk',
+            m: {
+              type: 'assistant',
+              message: { id: 'a2', content: [{ type: 'text', text: 'Second answer.' }] }
+            }
+          },
+          { k: 'turn', state: 'idle' }
+        ]
+      });
+      await attached();
+      await screen.findByText('first question');
+      expect(screen.getAllByText('second question')).toHaveLength(1);
+      expect(screen.getAllByText('Second answer.')).toHaveLength(1);
+      const log = screen.getByTestId('live-log').textContent ?? '';
+      expect(log.indexOf('First answer.')).toBeLessThan(log.indexOf('second question'));
+    });
+  });
+
+  it('reads asleep from the runtime association and the record from the conversation', async () => {
+    let active: boolean | undefined = false;
+    server.use(
+      http.get(`${API_URL}/sessions/:id/native`, () =>
+        HttpResponse.json({
+          preparation_observation:
+            active === undefined
+              ? {}
+              : {
+                  runtime_association: {
+                    generation_id: 'g',
+                    actor_uid: 'a',
+                    phase: 'Running',
+                    current_active: active
+                  }
+                }
+        })
+      ),
+      http.get(`${API_URL}/sessions/:id/conversation`, () =>
+        HttpResponse.json({
+          session: { id: 's1' },
+          messages: [{ id: 'm1', conversation_id: 'c', role: 'user', content: 'hi' }]
+        })
+      )
+    );
+    expect(await liveDeps.awake('s1')).toBe(false);
+    active = true;
+    expect(await liveDeps.awake('s1')).toBe(true);
+    active = undefined;
+    expect(await liveDeps.awake('s1')).toBeNull();
+    expect(await liveDeps.history('s1')).toEqual([{ role: 'user', content: 'hi' }]);
   });
 });

@@ -41,12 +41,16 @@ var ErrLiveNotFound = liveactor.ErrNotFound
 // ErrLiveWaking is what a LiveTargets returns while the session has no running actor yet.
 var ErrLiveWaking = liveactor.ErrWaking
 
+// ErrLiveAsleep is what a LiveTargets returns for a sleeping session the client did not ask to wake.
+var ErrLiveAsleep = liveactor.ErrAsleep
+
 // LiveTarget is the actor serving a live session.
 type LiveTarget = liveactor.Target
 
-// LiveTargets resolves the owner's session to the actor that runs its SDK runner.
+// LiveTargets resolves the owner's session to the actor that runs its SDK runner. wake allows a
+// sleeping session; without it a sleeping one is ErrLiveAsleep.
 type LiveTargets interface {
-	LiveTarget(ctx context.Context, sessionID string) (LiveTarget, error)
+	LiveTarget(ctx context.Context, sessionID string, wake bool) (LiveTarget, error)
 }
 
 // Live relays GET /sessions/{id}/live to the SDK runner's WebSocket on the session's actor,
@@ -165,8 +169,13 @@ func (l *Live) serve(w http.ResponseWriter, r *http.Request, sessionID string) {
 		httpx.WriteError(w, http.StatusForbidden, "Cross-origin request refused.")
 		return
 	}
-	t, err := l.Targets.LiveTarget(r.Context(), sessionID)
+	// Only an owner action wakes a sleeping session: the client asks with wake=1 when the owner
+	// sends, answers or presses wake, never on its own reconnect.
+	t, err := l.Targets.LiveTarget(r.Context(), sessionID, r.URL.Query().Get("wake") == "1")
 	switch {
+	case errors.Is(err, ErrLiveAsleep):
+		httpx.WriteError(w, http.StatusConflict, "Session is asleep; connect with wake=1 to wake it")
+		return
 	case errors.Is(err, ErrLiveWaking):
 		w.Header().Set("Retry-After", "2")
 		httpx.WriteError(w, http.StatusServiceUnavailable, "Session is waking; retry shortly")
