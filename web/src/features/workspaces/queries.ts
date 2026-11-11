@@ -59,8 +59,6 @@ export function useWorkspaceActions(workspaceId: string, notify: Notify, onDelet
     onSettled: reread
   };
 
-  const suspend = $api.useMutation('post', '/workspaces/{workspace_id}/suspend', lifecycle);
-  const resume = $api.useMutation('post', '/workspaces/{workspace_id}/resume', lifecycle);
   const refresh = $api.useMutation('post', '/workspaces/{workspace_id}/refresh', lifecycle);
   const remove = $api.useMutation('delete', '/workspaces/{workspace_id}', {
     onMutate: () => notify(null),
@@ -76,15 +74,11 @@ export function useWorkspaceActions(workspaceId: string, notify: Notify, onDelet
     }
   });
 
-  const active: WorkspaceAction | null = suspend.isPending
-    ? 'suspend'
-    : resume.isPending
-      ? 'resume'
-      : refresh.isPending
-        ? 'refresh'
-        : remove.isPending
-          ? 'delete'
-          : null;
+  const active: WorkspaceAction | null = refresh.isPending
+    ? 'refresh'
+    : remove.isPending
+      ? 'delete'
+      : null;
 
   const start = (run: () => Promise<unknown>) => {
     if (inFlight.current) return;
@@ -100,8 +94,6 @@ export function useWorkspaceActions(workspaceId: string, notify: Notify, onDelet
   return {
     active,
     busy: active !== null,
-    suspend: () => start(() => suspend.mutateAsync(path)),
-    resume: () => start(() => resume.mutateAsync(path)),
     refresh: () => start(() => refresh.mutateAsync(path)),
     remove: () => start(() => remove.mutateAsync(path).then(onDeleted))
   };

@@ -160,12 +160,23 @@ frontend:
   livenessProbe: {}
   readinessProbe: {}
 
-# Authenticated, TLS calls to kagent's control gateway. Needs Secrets kagent-control-token (key
-# current) and kagent-control-ca (key ca.crt) in the release namespace.
+# Authenticated, TLS calls to kagent's control gateway. The backend sends a projected token of its
+# own ServiceAccount, for the audience below, which kagent verifies by TokenReview. Needs Secret
+# kagent-control-ca (key ca.crt) in the release namespace.
 kagentControlAuth:
   enabled: false
+  audience: kagent-invocation
   gatewayURL: https://kagent-control.kagent.svc.cluster.local
   userID: mainloop
+
+# Mutual TLS to the Substrate 1.0 router, which the preview proxy and the live relay reach with
+# CONNECT on port 8444 (SUBSTRATE_ROUTER_ADDRESS). The backend container gets a pod certificate
+# from signer podidentity.podcert.ate.dev/identity and the servicedns.podcert.ate.dev/identity
+# trust bundle for the router's serving certificate. The router admits only SPIFFE IDs in the
+# Substrate chart's atenetRouter.ingressAllowedSPIFFEIDs, so
+# spiffe://cluster.local/ns/<release namespace>/sa/mainloop-backend must be listed there.
+substrateRouterAuth:
+  enabled: false
 
 networkPolicy:
   # Ingress to the REST and MCP listeners. The git listeners have their own fixed policy, open only

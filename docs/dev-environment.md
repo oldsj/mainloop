@@ -157,14 +157,13 @@ The Go server keeps its tables in the `mainloop` schema. A database first used b
 
 Settings (as in `charts/mainloop/ci/live-dev-values.yaml`): `DEV_MODE=true`; merge tools and owner policy writes are off; Git transport and the push gate are on, owner-approved for dev, through mainloop-dev's own read/push proxies; every kagent role uses `claude-workspace-dev` or `codex-workspace-dev`; `MAINLOOP_MCP_HOSTS` lists the `mainloop-mcp` Service names in `mainloop-dev`; the `control-auth` component is on. Dev work targets `oldsj/testrepo` only through the dev agents' instructions: Mainloop has no repository allowlist, and the shared production GitHub App can reach every repository it is installed on, so a dev task can push to any repository the App is installed on. The push gate still refuses pushes to default and protected branches, and merge tools stay off, so nothing here merges on its own.
 
-Secrets are not in this repository. The infrastructure repository supplies them from production's existing items (mainloop-dev shares production's GitHub App, agent token key and kagent control principal). The server needs `agent-token-key` and the kagent control Secrets to start, because it has no fallback for the token key; the GitHub App keys are optional, so without them the instance runs with GitHub unavailable:
+Secrets are not in this repository. The infrastructure repository supplies them from production's existing items (mainloop-dev shares production's GitHub App and agent token key; its kagent principal is its own ServiceAccount, so kagent's policy must admit it separately). The server needs `agent-token-key` and the kagent control CA Secret to start, because it has no fallback for the token key; the GitHub App keys are optional, so without them the instance runs with GitHub unavailable:
 
 | Secret in `mainloop-dev` | Keys                                      | Without it                                              |
 | ------------------------ | ----------------------------------------- | ------------------------------------------------------- |
 | `mainloop-secrets`       | `agent-token-key`                         | The backend, MCP and Git containers do not start        |
 | `mainloop-secrets`       | `github-app-id`, `github-app-private-key` | No GitHub access (set both or neither)                  |
-| `kagent-control-token`   | `current`                                 | The pods wait on the missing volume; no kagent sessions |
-| `kagent-control-ca`      | `ca.crt` (cert-manager)                   | As above                                                |
+| `kagent-control-ca`      | `ca.crt` (cert-manager)                   | The pods wait on the missing volume; no kagent sessions |
 
 Agent paths are per namespace. `MAINLOOP_NAMESPACE` (default `mainloop`, set to `mainloop-dev` here) sets the origins agents call, `http://mainloop-mcp.<ns>.svc.cluster.local` and `http://mainloop-git-{read,push}.<ns>.svc.cluster.local`, the MCP server's accepted Host, and the prefix of the per-binding credential Secrets Mainloop writes in the shared `kagent` namespace. The prefix is the namespace itself, so production keeps `mainloop-mcp-*` and `mainloop-git-{read,push}-*`, and mainloop-dev writes `mainloop-dev-mcp-*` and `mainloop-dev-git-{read,push}-*`. Secrets are deleted only by exact name. The Git origin settings accept only the configured namespace's two origins.
 
@@ -208,11 +207,12 @@ Teardown: `make dev-live-purge` deletes everything DevSpace deployed, including 
 
 Previews do not work on this instance. The overlay sets no `SUBSTRATE_PREVIEW_BASE_URL`, so
 the ports API returns `http://<port>--<workspace>--preview.localhost:8001` links. No gateway
-route serves a preview wildcard for the dev host. The `atenet-router-ingress` NetworkPolicy in
-`ate-system` admits port 8081 only from the `mainloop` namespace's backend, so the proxy's
-tunnel dial from `mainloop-dev` times out and the proxy answers 503 "Workspace waking up" on
-every request. Proving previews needs an infra change (a base domain, a wildcard route and a
-policy entry for `mainloop-dev`); until then they are proven in production.
+route serves a preview wildcard for the dev host, so previews are proven in production. The
+live view does reach the router from this instance: the overlay enables `substrateRouterAuth`,
+and the Substrate 1.0 router's allow-list carries
+`spiffe://cluster.local/ns/mainloop-dev/sa/mainloop-backend`. Whether the router's
+NetworkPolicy admits `mainloop-dev` on `:8444` is the infrastructure repository's to set; if it
+does not, the dial times out and the live view answers 503.
 
 ### Testing approvals on dev
 

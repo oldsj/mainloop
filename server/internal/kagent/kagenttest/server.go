@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/oldsj/mainloop/server/internal/kagent"
-	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // Request is one request the fake received.
@@ -147,12 +147,19 @@ type Server struct {
 	// Actors gives every READY Session a running Actor, and so a runtime association. Without it no
 	// Session carries one.
 	Actors bool
-	// IdleActors, with Actors, parks a Session's Actor until it is resumed: an idle Session carries no
-	// runtime association, and a workspace cannot be prepared.
-	IdleActors  bool
-	active      map[string]bool
-	prepares    []*api.PrepareSessionWorkspaceRequest
-	TamperAgent func(*api.Agent)
+	// IdleActors, with Actors, starts every Session asleep: its Actor is parked until a send, a
+	// workspace preparation or Wake starts it. A sleeping Session stays READY and its runtime
+	// association is not current.
+	IdleActors bool
+	// NoAssociation withholds the runtime association, as kagent does on a read that verified no
+	// Actor: the Session still names its Actor in its A2A authority.
+	NoAssociation bool
+	asleep        map[string]bool
+	woken         map[string]bool
+	wakes         map[string]int
+	forced        []string
+	prepares      []*api.PrepareSessionWorkspaceRequest
+	TamperAgent   func(*api.Agent)
 	// TamperSchedule edits a schedule in a ScheduledRunService reply, without changing the stored one.
 	TamperSchedule func(proc string, sc *api.ScheduledRun)
 	// TamperExecution edits the execution a TriggerScheduledRun reply carries.
@@ -170,6 +177,7 @@ func New() *Server {
 		byReq:    map[string]string{},
 		first:    map[string]*api.CreateSessionRequest{},
 		tasks:    map[a2a.TaskID]*a2a.Task{},
+		asleep:   map[string]bool{}, woken: map[string]bool{}, wakes: map[string]int{},
 	}
 	mux := http.NewServeMux()
 	handle := func(proc string, h http.Handler) { mux.Handle(proc, s.guard(proc, h)) }
@@ -178,8 +186,6 @@ func New() *Server {
 		connect.NewUnaryHandler(kagent.ProcPrepareSessionWorkspace, s.prepare))
 	handle(kagent.ProcGetSession, connect.NewUnaryHandler(kagent.ProcGetSession, s.getSession))
 	handle(kagent.ProcListSessions, connect.NewUnaryHandler(kagent.ProcListSessions, s.listSessions))
-	handle(kagent.ProcSuspendSession, connect.NewUnaryHandler(kagent.ProcSuspendSession, s.suspend))
-	handle(kagent.ProcResumeSession, connect.NewUnaryHandler(kagent.ProcResumeSession, s.resume))
 	handle(kagent.ProcDeleteSession, connect.NewUnaryHandler(kagent.ProcDeleteSession, s.deleteSession))
 	handle(kagent.ProcGetAgent, connect.NewUnaryHandler(kagent.ProcGetAgent, s.getAgent))
 	s.registerSchedules(handle)
@@ -416,7 +422,7 @@ func (s *Server) createSession(
 	id := fmt.Sprintf("session-%d", s.sessSeq)
 	sess := &api.Session{
 		Id: id, ContextId: id, Creator: "mainloop", Name: m.GetName(),
-		Agent: proto.CloneOf(m.GetAgent()), Workspace: proto.CloneOf(m.GetWorkspace()),
+		Agent: provenance(m.GetAgent()), Workspace: proto.CloneOf(m.GetWorkspace()),
 		DevelopmentEnvironment: proto.CloneOf(m.GetDevelopmentEnvironment()),
 		State:                  api.RuntimeState_RUNTIME_STATE_READY,
 		CreatedAt:              timestamppb.Now(), UpdatedAt: timestamppb.Now(),
@@ -469,34 +475,38 @@ func (s *Server) listSessions(
 	return connect.NewResponse(resp), nil
 }
 
-func (s *Server) suspend(
-	_ context.Context, req *connect.Request[api.SuspendSessionRequest],
-) (*connect.Response[api.SuspendSessionResponse], error) {
+// Sleep parks a Session's Actor, as kagent's idle settlement does: the Session stays READY and its
+// runtime association stops being current. It needs Actors.
+func (s *Server) Sleep(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sess, err := s.lookup(req.Msg.GetSessionId())
-	if err != nil {
-		return nil, err
-	}
-	sess.State = api.RuntimeState_RUNTIME_STATE_SUSPENDED
-	return connect.NewResponse(&api.SuspendSessionResponse{Session: s.out(kagent.ProcSuspendSession, sess)}), nil
+	s.asleep[id] = true
 }
 
-func (s *Server) resume(
-	_ context.Context, req *connect.Request[api.ResumeSessionRequest],
-) (*connect.Response[api.ResumeSessionResponse], error) {
+// Wake starts a sleeping Session's Actor (same Actor, same generation), as traffic through the
+// Substrate router does (a live attach, a preview).
+func (s *Server) Wake(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sess, err := s.lookup(req.Msg.GetSessionId())
-	if err != nil {
-		return nil, err
+	s.wake(id)
+}
+
+// Wakes counts how often a Session's Actor was woken from sleep.
+func (s *Server) Wakes(id string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.wakes[id]
+}
+
+// wake starts the Actor if it sleeps and reports whether it did; s.mu is held.
+func (s *Server) wake(id string) bool {
+	if s.actorRunning(id) || !s.Actors {
+		return false
 	}
-	sess.State = api.RuntimeState_RUNTIME_STATE_READY
-	if s.active == nil {
-		s.active = map[string]bool{}
-	}
-	s.active[sess.GetId()] = true
-	return connect.NewResponse(&api.ResumeSessionResponse{Session: s.out(kagent.ProcResumeSession, sess)}), nil
+	s.asleep[id] = false
+	s.woken[id] = true
+	s.wakes[id]++
+	return true
 }
 
 func (s *Server) deleteSession(
@@ -508,6 +518,18 @@ func (s *Server) deleteSession(
 	sess, err := s.lookup(id)
 	if err != nil {
 		return nil, err
+	}
+	if !req.Msg.GetForce() && s.turnRunning(id) {
+		// kagent refuses to delete a Session with a running turn unless the delete is forced.
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("session has an active turn"))
+	}
+	if req.Msg.GetForce() {
+		s.forced = append(s.forced, id)
+		for _, t := range s.tasks {
+			if t.ContextID == id && !t.Status.State.Terminal() {
+				t.Status = a2a.TaskStatus{State: a2a.TaskStateCanceled}
+			}
+		}
 	}
 	delete(s.sessions, id)
 	s.order = removeString(s.order, id)
@@ -533,8 +555,11 @@ func (s *Server) prepare(
 	if err != nil {
 		return nil, err
 	}
-	if s.Actors && !s.actorRunning(sess.GetId()) {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("no running actor"))
+	if s.wake(sess.GetId()) || (s.Actors && (req.Msg.GetGenerationId() != s.generationID(sess.GetId()) || req.Msg.GetActorUid() != "uid-"+sess.GetId())) {
+		// A preparation wakes a sleeping runtime itself and is refused, as is a stale generation or
+		// Actor; the caller reads the Session again and retries (kagent #87).
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			errors.New("Current prepared runtime identity is unavailable")) //nolint:staticcheck // kagent's own wording
 	}
 	if !s.gitCredentialsCountable(sess.GetId()) {
 		// kagent's preparation check needs exactly one read and one push Git proxy credential, each
@@ -626,6 +651,18 @@ func (s *Server) a2a(w http.ResponseWriter, r *http.Request) {
 		rec.Metadata, rec.Extensions = send.Message.Metadata, send.Message.Extensions
 	}
 	s.record(rec)
+
+	// As a2a-go's server: a missing A2A-Version means 0.3, which a 1.0 server refuses.
+	if v := r.Header.Get(a2a.SvcParamVersion); v != string(a2a.Version) {
+		if v == "" {
+			v = "0.3"
+		}
+		writeEnvelope(w, call.ID, nil, &RPCError{
+			Code:    -32009,
+			Message: fmt.Sprintf("this version is not supported: requested %q, served %q", v, a2a.Version),
+		})
+		return
+	}
 
 	if f, ok := s.takeFault(call.Method); ok {
 		if applyTransport(w, r, f) {
@@ -749,6 +786,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request, call rpcCall, msg 
 		writeEnvelope(w, call.ID, nil, &RPCError{Code: -32600, Message: "reply does not match the pending input request"})
 		return
 	}
+	s.wake(msg.ContextID) // any A2A message wakes a sleeping Actor
 	var steps []Step
 	scripted := len(s.scripts) > 0
 	if scripted {
@@ -879,10 +917,16 @@ func (s *Server) out(proc string, sess *api.Session) *api.Session {
 		cp.PreparedRevision = "revision-" + sess.GetId()
 		cp.RuntimeComposition = &api.RuntimeComposition{PayloadImage: "example.test/harness@sha256:def", Provider: "claude", Schema: 1}
 	}
-	if sess.GetState() == api.RuntimeState_RUNTIME_STATE_READY && s.actorRunning(sess.GetId()) {
+	if s.Actors && sess.GetState() == api.RuntimeState_RUNTIME_STATE_READY {
+		cp.A2AAuthority = kagent.ActorName(sess.GetId()) + ".ate.actors.resources.substrate.ate.dev"
+	}
+	if s.Actors && !s.NoAssociation && sess.GetState() == api.RuntimeState_RUNTIME_STATE_READY {
+		// As kagent reports it (oldsj/kagent#75): present whenever the Session has an Actor, phase
+		// "active", and current only while the Actor runs. A sleeping Session keeps it, not current,
+		// until the next wake starts a new generation.
 		cp.RuntimeAssociation = &api.RuntimeAssociation{
-			GenerationId: "gen-" + sess.GetId(), Atespace: "ate", ActorName: "actor-" + sess.GetId(),
-			ActorUid: "uid-" + sess.GetId(), Phase: "active", CurrentActive: true,
+			GenerationId: s.generationID(sess.GetId()), Atespace: "ate", ActorName: kagent.ActorName(sess.GetId()),
+			ActorUid: "uid-" + sess.GetId(), Phase: "active", CurrentActive: s.actorRunning(sess.GetId()),
 		}
 	}
 	if s.TamperSession != nil {
@@ -892,7 +936,33 @@ func (s *Server) out(proc string, sess *api.Session) *api.Session {
 }
 
 // actorRunning reports whether the Session's Actor is running; s.mu is held.
-func (s *Server) actorRunning(id string) bool { return s.Actors && (!s.IdleActors || s.active[id]) }
+func (s *Server) actorRunning(id string) bool {
+	return s.Actors && !s.asleep[id] && (!s.IdleActors || s.woken[id])
+}
+
+// generationID names the Session's runtime generation. As in kagent (sessions.proto), it is derived
+// from the Session id and the Actor uid, so sleep and wake keep it; only replacing the Actor
+// changes it, which the fake never does.
+func (s *Server) generationID(id string) string {
+	return "gen-" + id + "-uid-" + id
+}
+
+// turnRunning reports whether the Session has a task that is not finished; s.mu is held.
+func (s *Server) turnRunning(id string) bool {
+	for _, t := range s.tasks {
+		if t.ContextID == id && !t.Status.State.Terminal() && t.Status.State != a2a.TaskStateInputRequired && t.Status.State != a2a.TaskStateAuthRequired {
+			return true
+		}
+	}
+	return false
+}
+
+// ForcedDeletes lists the Sessions deleted with force, in order.
+func (s *Server) ForcedDeletes() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.forced...)
+}
 
 // sameContract reports whether a replayed create matches the request that made the Session for the
 // same request id: the Agent, the workspace, the environment and the credentials all have to match,
@@ -932,4 +1002,12 @@ func proxyOrigin(origin, service string) bool {
 	}
 	ns, ok = strings.CutSuffix(ns, ".svc.cluster.local")
 	return ok && ns != "" && !strings.ContainsAny(ns, "./:")
+}
+
+// provenance is how kagent reports a Session's Agent: the reference and the Agent's uid.
+func provenance(ref *api.ResourceReference) *api.AgentProvenance {
+	if ref == nil {
+		return nil
+	}
+	return &api.AgentProvenance{Ref: proto.CloneOf(ref), Uid: "uid-" + ref.GetNamespace() + "-" + ref.GetName()}
 }

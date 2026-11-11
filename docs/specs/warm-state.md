@@ -159,7 +159,24 @@ contract `CreateSession` already has, so reconciling an uncertain outcome is a r
 call, not a blind replay of a non-idempotent send: kagent answers from what it already holds for
 that `request_id`. A definite refusal (kagent's invalid argument, not found, failed precondition,
 mapped to this API's 422, 404, 409) is recorded once and never retried, since the frozen request
-would fail the same way again. See `server/internal/sessions/checkpoints.go`.
+would fail the same way again.
+
+kagent (#94) acknowledges only a `READY` checkpoint and names each `FailedPrecondition` with an
+`ErrorInfo` reason in domain `kagent.dev`. Mainloop reads the reason:
+
+- `KAGENT_CHECKPOINT_SNAPSHOT_PENDING`: not a refusal. The intent stays open; the API answers 409
+  asking for a repeat of the same `request_id`, and the resume sweep also repeats it.
+- `KAGENT_CHECKPOINT_RUNTIME_NOT_SUSPENDED` (the Actor was running, so there was no stable
+  snapshot), `KAGENT_CHECKPOINT_FAILED` (the copy failed, or a replay of a failed request) and
+  `KAGENT_CHECKPOINT_CONVERSATION_ADVANCED`: a definite refusal, recorded once (409). kagent
+  records the request failed, so trying again takes a new `request_id`; for a running Actor, once
+  the session is asleep.
+- `Unavailable` means kagent left the attempt `CREATING`; it is uncertain, and the same
+  `request_id` resumes it.
+
+A kagent before #94 answered a running Actor with `Unavailable` and replayed the request as OK
+with state `FAILED` (seen on kind); Mainloop records a `FAILED` acknowledgement as a refusal too.
+See `server/internal/sessions/checkpoints.go`.
 
 ## Mechanism: cache archive now, seed fork later if it measures well
 

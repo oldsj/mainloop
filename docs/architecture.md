@@ -3,7 +3,7 @@
 Mainloop keeps project conversations, agent work, and workspace state together. The control
 plane stores messages and delivery state; native Claude Code and Codex sessions run as kagent
 Sessions. Branch workspace Sessions have their own git checkout. Mainloop uses attention as a compute
-budget: active workspaces run, while inactive workspaces are suspended until needed.
+budget: active workspaces run, while kagent puts inactive ones to sleep until they are used again.
 
 Production has run the Go/React stack since 2026-10-12, and read-only smoke run 11 passed. These
 diagrams describe implemented code paths; they do not claim further live cluster proof. Known
@@ -35,39 +35,36 @@ owner and allowed ports before sending traffic through the router.
 ## Attention and parking
 
 Think of workspace compute like foveated rendering in VR: what needs attention is loaded and
-running; the rest is parked. Here, parking means that Mainloop asks kagent to suspend the Session.
-An `idle` workspace is still present in Mainloop; `idle` is the waiting period before suspension,
-not a separate kagent state.
+running; the rest is parked. Here, parking is kagent's work, not Mainloop's. kagent's control
+API (`kagent.api.v1`, Substrate 1.0) has no suspend or resume call: kagent suspends an idle
+Session's Actor itself, after its own quiesce delay, and wakes it on use. Mainloop never asks for
+either.
 
 ```mermaid
 stateDiagram-v2
   [*] --> Running: workspace created
-  Running --> Idle: no turn or preview activity
-  Idle --> Running: new turn or preview activity
-  Idle --> Parked: configured idle timeout expires
-  Parked --> Waking: message, preview request, or resume action
-  Waking --> Running: actor restored and healthy
-  Waking --> Parked: actor confirmed still suspended
-  Waking --> Unknown: wake result is not confirmed
+  Running --> Asleep: kagent's quiesce delay passes with no use
+  Asleep --> Running: message, workspace preparation, preview request or live-view attach
 ```
 
-Each workspace sets its idle timeout (`dev.idle_timeout_minutes`); the default is 30 minutes.
-Mainloop checks for expired workspaces about once a minute. Turns, resumes and preview requests
-count as activity. Opening a workspace page does not wake its actor. Deliveries in `recorded`,
-`queued` (unless held after stop), `sending` or `delivered` states block parking. The check runs under the per-session
-lock of the REST process, which orders it with that process's own deliveries. That lock does not
-reach the MCP container, a second writer in the same pod, so a message it records during a
-suspend can still arrive. Delivery handles that case: a turn that finds the Session suspended
-resumes it before sending. A new message resumes a suspended Session, and so does a preview
-request (below).
+A sleeping Session stays `READY`. Mainloop reads asleep or awake from
+`Session.runtime_association.current_active` on `GetSession` and shows a sleeping workspace as
+`suspended`; an absent association (no Actor verified on that read) is not known, not asleep.
+What wakes it is the next A2A
+send, `PrepareSessionWorkspace`, or a connection through the Substrate router (a preview request
+or a live-view attach). Opening a workspace page does not wake its actor. Processes do not survive
+sleep, because snapshots are data-only: the checkout is kept, but a dev server must be started
+again after a wake. The workspace's `dev.idle_timeout_minutes` is still stored and returned but is
+no longer enforced.
 
 **One open turn per session** is enforced in PostgreSQL, not in memory. Recording a message takes
 a transaction-scoped PostgreSQL advisory lock (`pg_advisory_xact_lock`) on the session's key, then decides `recorded` or `queued` from
 the open deliveries in the same transaction. The REST and MCP containers both write the ledger,
 so the in-process lock only orders work inside one process.
 
-No wake or suspend latency has been measured against kagent. The live checks that are still
-owed are listed in `docs/specs/workspaces.md`.
+No sleep or wake latency has been measured against kagent, and the behaviour above is implemented
+and tested with fakes only on this API. The live checks that are still owed are listed in
+`docs/specs/workspaces.md`.
 
 ## Sending a message
 
@@ -83,7 +80,7 @@ sequenceDiagram
   Owner->>UI: Send a message
   UI->>Mainloop: Submit message
   Mainloop->>DB: Record message and delivery under workspace lock
-  Mainloop->>Kagent: Create or resume the Session
+  Mainloop->>Kagent: Create the Session on first use
   Mainloop->>Kagent: A2A SendStreamingMessage (messageId = delivery id)
   Kagent->>Agent: Run the turn in the native session
   Agent-->>Kagent: Task status and artifacts
@@ -98,9 +95,12 @@ current task (`GetTask`, or the first event of `SubscribeToTask`) and replaces i
 with it. `KAGENT_SEND_NOT_ACCEPTED` is retried with the same `messageId`; any other uncertain
 outcome is resolved by finding the task that holds that `messageId`, never by sending again.
 
-Mainloop calls kagent as the fixed service principal `mainloop`. With
-`KAGENT_CONTROL_TOKEN_FILE` configured, the backend validates a bounded mounted Secret file
-at startup and rereads it for every lifecycle, discovery and A2A request/reconnect. It sends
+Mainloop calls kagent as its own Kubernetes ServiceAccount: the pod mounts a projected token
+for the audience `kagent-invocation`, which kagent verifies by TokenReview (its principal is
+the ServiceAccount's UID, so recreating the ServiceAccount changes who owns the Sessions). With
+`KAGENT_CONTROL_TOKEN_FILE` naming that file, the backend validates a bounded token file
+at startup and rereads it for every lifecycle, discovery and A2A request/reconnect, so the
+kubelet's rotation is picked up. It sends
 only a bearer Authorization header, and requires `KAGENT_USER_ID=mainloop` as expected
 principal configuration. Auth refusals are service configuration failures: they never mean
 a Session was deleted, and cannot cause replacement or turn resend. Unknown delivery still
@@ -130,27 +130,30 @@ flowchart LR
 
 The preview URL is `https://<port>--<workspace>--preview.<domain>`. The preview proxy checks that
 the workspace is the configured owner's and that the port is declared, then reaches the Session's actor
-through the router. With `onQuiesce: Full` on the harness, the router would wake a suspended
-actor without telling kagent, leaving the Session `suspended` and invisible to idle-out. So before
-connecting, the proxy resumes a suspended Session through kagent (`ResumeSession`, the same path as
-the resume endpoint), once however many previews arrive together. If kagent cannot be asked, the
-preview fails (`502`, WebSocket close `1013`) without touching the router. Idle-out then suspends
-the workspace again after its idle timeout.
+through the router. The tunnel target is the actor named in the Session's runtime association
+when kagent reports one, then the actor its A2A authority names, and otherwise kagent's stable Actor name
+(`session-<kagent session id, lower case>` in `KAGENT_ACTOR_ATESPACE`). The proxy asks kagent to
+wake nothing: the `CONNECT` through the router is what wakes a sleeping Actor. A Session that is
+not `READY` gets the "waking up" page (`503`, `Retry-After: 2`) and the router is not contacted.
+A preview of a just-woken workspace can fail until the agent has started the dev server again.
 
 ## Isolation and known gaps
 
-- Preview CONNECT traffic goes through the Substrate router, which has no authentication of its
-  own; the owner and port checks live in Mainloop.
+- Preview and live-view CONNECT traffic goes through the Substrate router over mutual TLS: the
+  backend presents a pod certificate whose SPIFFE ID must be on the router's allow-list, and
+  verifies the router against the servicedns trust bundle. The router knows nothing of owners or
+  ports; those checks live in Mainloop.
 - The backend reaches Substrate only through the router CONNECT path.
-- Workspace lifecycle, preview and idle-out have fake-backed and Postgres-backed tests. They were
-  also verified live on a Kind cluster before the Go/React cutover, on the retired Python backend:
-  create, first and second turn, idle-out, a message to a suspended workspace, a suspend racing a
-  message, wake-on-preview from a suspended workspace (one `ResumeSession` for concurrent previews)
-  and stopping a turn. Still unverified live: the cold-clone first turn against the client's 30
-  second timeout, the K1 negative cases, stopping a parked turn, WebSocket previews of a suspended
+- Workspace lifecycle and preview have fake-backed and Postgres-backed tests. Sleep and wake on
+  the current kagent API (Substrate 1.0) are tested with fakes only; a live check on a Kind stack
+  is pending. Create, first and second turn and stopping a turn were verified live on a Kind
+  cluster before the Go/React cutover, on the retired Python backend and the previous kagent API
+  (Substrate 0.4); the suspend, resume and idle-out checks of that run describe calls that no
+  longer exist. Still unverified live: the cold-clone first turn against the client's 30
+  second timeout, the K1 negative cases, stopping a parked turn, WebSocket previews of a sleeping
   workspace, and the review repairs (they were not redeployed). `docs/specs/workspaces.md` lists
   both. No live write-path run of the Go server is recorded here yet.
-- The Agent Harness's git origins and `onQuiesce: Full` are kagent installation settings.
+- The Agent Harness's git origins are a kagent installation setting.
 
 ## Glossary
 
@@ -160,7 +163,7 @@ the workspace again after its idle timeout.
 | **Workspace** | The git checkout a Session is created with, plus its preview ports and idle timeout. |
 | **Actor**     | The Substrate sandbox kagent runs a Session in.                                      |
 | **Router**    | Substrate's control path for connecting Mainloop to an actor.                        |
-| **Park**      | Suspend an idle Session so its compute is not running until needed.                  |
+| **Park**      | kagent puts an idle Session's Actor to sleep; the next use wakes it.                 |
 
 ## Agent tools and network isolation
 
@@ -195,7 +198,7 @@ and `mainloop.dev/purpose=mcp`. Terminal or archived bindings lose tool access; 
 deletes their Secret.
 Ordinary bindings use the binding ID as their credential identity. An explicit idle
 main-provider switch rotates that identity while retaining the product session, child
-ownership and report routing. It suspends and records the old native Session in
+ownership and report routing. It leaves the old native Session as it is (kagent puts it to sleep), records it in
 `main_native_history`, then provisions the persisted new native create contract. Main's
 Agent reference is pinned with that contract. Chat is blocked and reports are held during
 preparation; an owner repeats the same selection to recover an interrupted operation.
@@ -232,18 +235,18 @@ Main and child AgentTemplates must bind that RemoteMCPServer.
 Mainloop uses three kinds of kagent Agent, named by settings. Agent templates and harnesses
 remain owned by the kagent installation.
 
-| Setting                                           | Runs                                      | Harness requirements                                                                         |
-| ------------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `KAGENT_MAIN_AGENT` (`mainloop-main`)             | the Claude main thread                    | `sessionIdleTTL: 0s`                                                                         |
-| `KAGENT_MAIN_CODEX_AGENT` (`mainloop-main-codex`) | the Codex main thread                     | `sessionIdleTTL: 0s`                                                                         |
-| `KAGENT_WORKSPACE_CLAUDE_AGENT` / `_CODEX_AGENT`  | workspaces and sessions the owner starts  | `sessionIdleTTL: 0s`, `git.origins` (the repository hosts), `snapshotPolicy.onQuiesce: Full` |
-| `KAGENT_CLAUDE_AGENT` / `KAGENT_CODEX_AGENT`      | child agents the main thread delegates to | default TTL and snapshot scope                                                               |
+| Setting                                           | Runs                                      | Harness requirements                                       |
+| ------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------- |
+| `KAGENT_MAIN_AGENT` (`mainloop-main`)             | the Claude main thread                    | `sessionIdleTTL: 0s`                                       |
+| `KAGENT_MAIN_CODEX_AGENT` (`mainloop-main-codex`) | the Codex main thread                     | `sessionIdleTTL: 0s`                                       |
+| `KAGENT_WORKSPACE_CLAUDE_AGENT` / `_CODEX_AGENT`  | workspaces and sessions the owner starts  | `sessionIdleTTL: 0s`, `git.origins` (the repository hosts) |
+| `KAGENT_CLAUDE_AGENT` / `KAGENT_CODEX_AGENT`      | child agents the main thread delegates to | default TTL and snapshot scope                             |
 
 A workspace needs its own Agents because kagent measures idle time from the last A2A event
-(previews and `ResumeSession` do not count) and deletes the Session and its actor on expiry,
-along with uncommitted and unpushed work. `onQuiesce: Full` keeps files and the dev server across
-a suspend, which previews need, but costs a full snapshot at every quiesce, which children should
-not pay. The main thread is exempt from Mainloop idle-out. Mainloop parks idle workspace compute itself (`SuspendSession`); archiving or deleting ends the
+(previews do not count) and deletes the Session and its actor on expiry,
+along with uncommitted and unpushed work. kagent puts idle compute to sleep by itself (Mainloop
+makes no suspend or resume call); snapshots are data-only, so files survive sleep and processes
+such as a dev server do not. Archiving or deleting ends the
 Session. Main and child templates bind the `mainloop` RemoteMCPServer. Standalone workspace Agents
 have no Mainloop tool identity and do not bind that server. Gateway port 8083 must admit only
 Mainloop, and TaskStore must admit only actors, using installation-specific policies.

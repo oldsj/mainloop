@@ -2,9 +2,9 @@
 // versions:
 // 	protoc-gen-go v1.36.12
 // 	protoc        (unknown)
-// source: kagent/api/v1alpha1/common.proto
+// source: kagent/api/v1/common.proto
 
-package apiv1alpha1
+package apiv1
 
 import (
 	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
@@ -34,7 +34,7 @@ type StructuredObject struct {
 
 func (x *StructuredObject) Reset() {
 	*x = StructuredObject{}
-	mi := &file_kagent_api_v1alpha1_common_proto_msgTypes[0]
+	mi := &file_kagent_api_v1_common_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -46,7 +46,7 @@ func (x *StructuredObject) String() string {
 func (*StructuredObject) ProtoMessage() {}
 
 func (x *StructuredObject) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1alpha1_common_proto_msgTypes[0]
+	mi := &file_kagent_api_v1_common_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -59,7 +59,7 @@ func (x *StructuredObject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StructuredObject.ProtoReflect.Descriptor instead.
 func (*StructuredObject) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1alpha1_common_proto_rawDescGZIP(), []int{0}
+	return file_kagent_api_v1_common_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *StructuredObject) GetApiVersion() string {
@@ -93,7 +93,7 @@ type ResourceReference struct {
 
 func (x *ResourceReference) Reset() {
 	*x = ResourceReference{}
-	mi := &file_kagent_api_v1alpha1_common_proto_msgTypes[1]
+	mi := &file_kagent_api_v1_common_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -105,7 +105,7 @@ func (x *ResourceReference) String() string {
 func (*ResourceReference) ProtoMessage() {}
 
 func (x *ResourceReference) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1alpha1_common_proto_msgTypes[1]
+	mi := &file_kagent_api_v1_common_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -118,7 +118,7 @@ func (x *ResourceReference) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResourceReference.ProtoReflect.Descriptor instead.
 func (*ResourceReference) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1alpha1_common_proto_rawDescGZIP(), []int{1}
+	return file_kagent_api_v1_common_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *ResourceReference) GetNamespace() string {
@@ -145,7 +145,7 @@ type PageRequest struct {
 
 func (x *PageRequest) Reset() {
 	*x = PageRequest{}
-	mi := &file_kagent_api_v1alpha1_common_proto_msgTypes[2]
+	mi := &file_kagent_api_v1_common_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -157,7 +157,7 @@ func (x *PageRequest) String() string {
 func (*PageRequest) ProtoMessage() {}
 
 func (x *PageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1alpha1_common_proto_msgTypes[2]
+	mi := &file_kagent_api_v1_common_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -170,7 +170,7 @@ func (x *PageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PageRequest.ProtoReflect.Descriptor instead.
 func (*PageRequest) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1alpha1_common_proto_rawDescGZIP(), []int{2}
+	return file_kagent_api_v1_common_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *PageRequest) GetLimit() int32 {
@@ -196,7 +196,7 @@ type PageResponse struct {
 
 func (x *PageResponse) Reset() {
 	*x = PageResponse{}
-	mi := &file_kagent_api_v1alpha1_common_proto_msgTypes[3]
+	mi := &file_kagent_api_v1_common_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -208,7 +208,7 @@ func (x *PageResponse) String() string {
 func (*PageResponse) ProtoMessage() {}
 
 func (x *PageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1alpha1_common_proto_msgTypes[3]
+	mi := &file_kagent_api_v1_common_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -221,7 +221,7 @@ func (x *PageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PageResponse.ProtoReflect.Descriptor instead.
 func (*PageResponse) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1alpha1_common_proto_rawDescGZIP(), []int{3}
+	return file_kagent_api_v1_common_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *PageResponse) GetNextPageToken() string {
@@ -251,7 +251,7 @@ type Workspace struct {
 
 func (x *Workspace) Reset() {
 	*x = Workspace{}
-	mi := &file_kagent_api_v1alpha1_common_proto_msgTypes[4]
+	mi := &file_kagent_api_v1_common_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -263,7 +263,7 @@ func (x *Workspace) String() string {
 func (*Workspace) ProtoMessage() {}
 
 func (x *Workspace) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1alpha1_common_proto_msgTypes[4]
+	mi := &file_kagent_api_v1_common_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -276,7 +276,7 @@ func (x *Workspace) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Workspace.ProtoReflect.Descriptor instead.
 func (*Workspace) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1alpha1_common_proto_rawDescGZIP(), []int{4}
+	return file_kagent_api_v1_common_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Workspace) GetRepo() string {
@@ -307,11 +307,11 @@ func (x *Workspace) GetDepth() int32 {
 	return 0
 }
 
-var File_kagent_api_v1alpha1_common_proto protoreflect.FileDescriptor
+var File_kagent_api_v1_common_proto protoreflect.FileDescriptor
 
-const file_kagent_api_v1alpha1_common_proto_rawDesc = "" +
+const file_kagent_api_v1_common_proto_rawDesc = "" +
 	"\n" +
-	" kagent/api/v1alpha1/common.proto\x12\x13kagent.api.v1alpha1\x1a\x1bbuf/validate/validate.proto\x1a\x1cgoogle/protobuf/struct.proto\"v\n" +
+	"\x1akagent/api/v1/common.proto\x12\rkagent.api.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1cgoogle/protobuf/struct.proto\"v\n" +
 	"\x10StructuredObject\x12\x1f\n" +
 	"\vapi_version\x18\x01 \x01(\tR\n" +
 	"apiVersion\x12\x12\n" +
@@ -332,31 +332,31 @@ const file_kagent_api_v1alpha1_common_proto_rawDesc = "" +
 	"\x03ref\x18\x02 \x01(\tB.\xbaH+r)\x18\xff\x012$^(?:$|[A-Za-z0-9_][A-Za-z0-9._/-]*)$R\x03ref\x12F\n" +
 	"\x06branch\x18\x03 \x01(\tB.\xbaH+r)\x18\xff\x012$^(?:$|[A-Za-z0-9_][A-Za-z0-9._/-]*)$R\x06branch\x12 \n" +
 	"\x05depth\x18\x04 \x01(\x05B\n" +
-	"\xbaH\a\x1a\x05\x18\xe8\a(\x00R\x05depthBIZGgithub.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1;apiv1alpha1b\x06proto3"
+	"\xbaH\a\x1a\x05\x18\xe8\a(\x00R\x05depthB=Z;github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1;apiv1b\x06proto3"
 
 var (
-	file_kagent_api_v1alpha1_common_proto_rawDescOnce sync.Once
-	file_kagent_api_v1alpha1_common_proto_rawDescData []byte
+	file_kagent_api_v1_common_proto_rawDescOnce sync.Once
+	file_kagent_api_v1_common_proto_rawDescData []byte
 )
 
-func file_kagent_api_v1alpha1_common_proto_rawDescGZIP() []byte {
-	file_kagent_api_v1alpha1_common_proto_rawDescOnce.Do(func() {
-		file_kagent_api_v1alpha1_common_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_kagent_api_v1alpha1_common_proto_rawDesc), len(file_kagent_api_v1alpha1_common_proto_rawDesc)))
+func file_kagent_api_v1_common_proto_rawDescGZIP() []byte {
+	file_kagent_api_v1_common_proto_rawDescOnce.Do(func() {
+		file_kagent_api_v1_common_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_kagent_api_v1_common_proto_rawDesc), len(file_kagent_api_v1_common_proto_rawDesc)))
 	})
-	return file_kagent_api_v1alpha1_common_proto_rawDescData
+	return file_kagent_api_v1_common_proto_rawDescData
 }
 
-var file_kagent_api_v1alpha1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
-var file_kagent_api_v1alpha1_common_proto_goTypes = []any{
-	(*StructuredObject)(nil),  // 0: kagent.api.v1alpha1.StructuredObject
-	(*ResourceReference)(nil), // 1: kagent.api.v1alpha1.ResourceReference
-	(*PageRequest)(nil),       // 2: kagent.api.v1alpha1.PageRequest
-	(*PageResponse)(nil),      // 3: kagent.api.v1alpha1.PageResponse
-	(*Workspace)(nil),         // 4: kagent.api.v1alpha1.Workspace
+var file_kagent_api_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_kagent_api_v1_common_proto_goTypes = []any{
+	(*StructuredObject)(nil),  // 0: kagent.api.v1.StructuredObject
+	(*ResourceReference)(nil), // 1: kagent.api.v1.ResourceReference
+	(*PageRequest)(nil),       // 2: kagent.api.v1.PageRequest
+	(*PageResponse)(nil),      // 3: kagent.api.v1.PageResponse
+	(*Workspace)(nil),         // 4: kagent.api.v1.Workspace
 	(*structpb.Struct)(nil),   // 5: google.protobuf.Struct
 }
-var file_kagent_api_v1alpha1_common_proto_depIdxs = []int32{
-	5, // 0: kagent.api.v1alpha1.StructuredObject.value:type_name -> google.protobuf.Struct
+var file_kagent_api_v1_common_proto_depIdxs = []int32{
+	5, // 0: kagent.api.v1.StructuredObject.value:type_name -> google.protobuf.Struct
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
@@ -364,26 +364,26 @@ var file_kagent_api_v1alpha1_common_proto_depIdxs = []int32{
 	0, // [0:1] is the sub-list for field type_name
 }
 
-func init() { file_kagent_api_v1alpha1_common_proto_init() }
-func file_kagent_api_v1alpha1_common_proto_init() {
-	if File_kagent_api_v1alpha1_common_proto != nil {
+func init() { file_kagent_api_v1_common_proto_init() }
+func file_kagent_api_v1_common_proto_init() {
+	if File_kagent_api_v1_common_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kagent_api_v1alpha1_common_proto_rawDesc), len(file_kagent_api_v1alpha1_common_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kagent_api_v1_common_proto_rawDesc), len(file_kagent_api_v1_common_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_kagent_api_v1alpha1_common_proto_goTypes,
-		DependencyIndexes: file_kagent_api_v1alpha1_common_proto_depIdxs,
-		MessageInfos:      file_kagent_api_v1alpha1_common_proto_msgTypes,
+		GoTypes:           file_kagent_api_v1_common_proto_goTypes,
+		DependencyIndexes: file_kagent_api_v1_common_proto_depIdxs,
+		MessageInfos:      file_kagent_api_v1_common_proto_msgTypes,
 	}.Build()
-	File_kagent_api_v1alpha1_common_proto = out.File
-	file_kagent_api_v1alpha1_common_proto_goTypes = nil
-	file_kagent_api_v1alpha1_common_proto_depIdxs = nil
+	File_kagent_api_v1_common_proto = out.File
+	file_kagent_api_v1_common_proto_goTypes = nil
+	file_kagent_api_v1_common_proto_depIdxs = nil
 }

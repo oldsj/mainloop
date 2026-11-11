@@ -16,8 +16,8 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/oldsj/mainloop/server/internal/config"
-	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
-	apiconnect "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1/apiv1alpha1connect"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
+	apiconnect "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1/apiv1connect"
 )
 
 // Procedure names, generated from the fork's own service definitions (see third_party/kagentproto).
@@ -27,8 +27,6 @@ const (
 	ProcPrepareSessionWorkspace = apiconnect.SessionServicePrepareSessionWorkspaceProcedure
 	ProcGetSession              = apiconnect.SessionServiceGetSessionProcedure
 	ProcListSessions            = apiconnect.SessionServiceListSessionsProcedure
-	ProcSuspendSession          = apiconnect.SessionServiceSuspendSessionProcedure
-	ProcResumeSession           = apiconnect.SessionServiceResumeSessionProcedure
 	ProcDeleteSession           = apiconnect.SessionServiceDeleteSessionProcedure
 	ProcGetAgent                = apiconnect.AgentServiceGetAgentProcedure
 

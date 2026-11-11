@@ -1,13 +1,13 @@
 syntax = "proto3";
 
-package kagent.api.v1alpha1;
+package kagent.api.v1;
 
 import "buf/validate/validate.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
-import "kagent/api/v1alpha1/common.proto";
+import "kagent/api/v1/common.proto";
 
-option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1;apiv1alpha1";
+option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1;apiv1";
 
 // Creator-owned automation stored in PostgreSQL. Each occurrence creates a fresh
 // Session; Task state and history belong to upstream A2A.

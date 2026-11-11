@@ -19,7 +19,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
-	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 var (
@@ -100,22 +100,20 @@ func notType[T error](t *testing.T, err error) {
 
 func TestProcedureNamesMatchTheForkDefinitions(t *testing.T) {
 	want := map[string]string{
-		kagent.ProcCreateSession:              "/kagent.api.v1alpha1.SessionService/CreateSession",
-		kagent.ProcPrepareSessionWorkspace:    "/kagent.api.v1alpha1.SessionService/PrepareSessionWorkspace",
-		kagent.ProcGetSession:                 "/kagent.api.v1alpha1.SessionService/GetSession",
-		kagent.ProcListSessions:               "/kagent.api.v1alpha1.SessionService/ListSessions",
-		kagent.ProcSuspendSession:             "/kagent.api.v1alpha1.SessionService/SuspendSession",
-		kagent.ProcResumeSession:              "/kagent.api.v1alpha1.SessionService/ResumeSession",
-		kagent.ProcDeleteSession:              "/kagent.api.v1alpha1.SessionService/DeleteSession",
-		kagent.ProcGetAgent:                   "/kagent.api.v1alpha1.AgentService/GetAgent",
-		kagent.ProcCreateScheduledRun:         "/kagent.api.v1alpha1.ScheduledRunService/CreateScheduledRun",
-		kagent.ProcGetScheduledRun:            "/kagent.api.v1alpha1.ScheduledRunService/GetScheduledRun",
-		kagent.ProcListScheduledRuns:          "/kagent.api.v1alpha1.ScheduledRunService/ListScheduledRuns",
-		kagent.ProcUpdateScheduledRun:         "/kagent.api.v1alpha1.ScheduledRunService/UpdateScheduledRun",
-		kagent.ProcDeleteScheduledRun:         "/kagent.api.v1alpha1.ScheduledRunService/DeleteScheduledRun",
-		kagent.ProcTriggerScheduledRun:        "/kagent.api.v1alpha1.ScheduledRunService/TriggerScheduledRun",
-		kagent.ProcGetScheduledRunExecution:   "/kagent.api.v1alpha1.ScheduledRunService/GetScheduledRunExecution",
-		kagent.ProcListScheduledRunExecutions: "/kagent.api.v1alpha1.ScheduledRunService/ListScheduledRunExecutions",
+		kagent.ProcCreateSession:              "/kagent.api.v1.SessionService/CreateSession",
+		kagent.ProcPrepareSessionWorkspace:    "/kagent.api.v1.SessionService/PrepareSessionWorkspace",
+		kagent.ProcGetSession:                 "/kagent.api.v1.SessionService/GetSession",
+		kagent.ProcListSessions:               "/kagent.api.v1.SessionService/ListSessions",
+		kagent.ProcDeleteSession:              "/kagent.api.v1.SessionService/DeleteSession",
+		kagent.ProcGetAgent:                   "/kagent.api.v1.AgentService/GetAgent",
+		kagent.ProcCreateScheduledRun:         "/kagent.api.v1.ScheduledRunService/CreateScheduledRun",
+		kagent.ProcGetScheduledRun:            "/kagent.api.v1.ScheduledRunService/GetScheduledRun",
+		kagent.ProcListScheduledRuns:          "/kagent.api.v1.ScheduledRunService/ListScheduledRuns",
+		kagent.ProcUpdateScheduledRun:         "/kagent.api.v1.ScheduledRunService/UpdateScheduledRun",
+		kagent.ProcDeleteScheduledRun:         "/kagent.api.v1.ScheduledRunService/DeleteScheduledRun",
+		kagent.ProcTriggerScheduledRun:        "/kagent.api.v1.ScheduledRunService/TriggerScheduledRun",
+		kagent.ProcGetScheduledRunExecution:   "/kagent.api.v1.ScheduledRunService/GetScheduledRunExecution",
+		kagent.ProcListScheduledRunExecutions: "/kagent.api.v1.ScheduledRunService/ListScheduledRunExecutions",
 	}
 	for got, exact := range want {
 		if got != exact {
@@ -146,12 +144,6 @@ func TestSessionLifecycle(t *testing.T) {
 	if err != nil || got.GetId() != created.GetId() {
 		t.Fatalf("get: %v, %v", got, err)
 	}
-	if s, err := c.SuspendSession(ctx, created.GetId()); err != nil || s.GetState() != api.RuntimeState_RUNTIME_STATE_SUSPENDED {
-		t.Fatalf("suspend: %v, %v", s, err)
-	}
-	if s, err := c.ResumeSession(ctx, created.GetId()); err != nil || s.GetState() != api.RuntimeState_RUNTIME_STATE_READY {
-		t.Fatalf("resume: %v, %v", s, err)
-	}
 	if r, err := c.PrepareSessionWorkspace(ctx, &api.PrepareSessionWorkspaceRequest{SessionId: created.GetId()}); err != nil || r == nil {
 		t.Fatalf("prepare: %v, %v", r, err)
 	}
@@ -163,12 +155,10 @@ func TestSessionLifecycle(t *testing.T) {
 	}
 
 	for _, key := range []string{
-		"/kagent.api.v1alpha1.SessionService/CreateSession",
-		"/kagent.api.v1alpha1.SessionService/GetSession",
-		"/kagent.api.v1alpha1.SessionService/SuspendSession",
-		"/kagent.api.v1alpha1.SessionService/ResumeSession",
-		"/kagent.api.v1alpha1.SessionService/PrepareSessionWorkspace",
-		"/kagent.api.v1alpha1.SessionService/DeleteSession",
+		"/kagent.api.v1.SessionService/CreateSession",
+		"/kagent.api.v1.SessionService/GetSession",
+		"/kagent.api.v1.SessionService/PrepareSessionWorkspace",
+		"/kagent.api.v1.SessionService/DeleteSession",
 	} {
 		if srv.Count(key) == 0 {
 			t.Errorf("no request reached %s", key)
@@ -246,6 +236,29 @@ func TestUserIDAuth(t *testing.T) {
 		if got := r.Header.Get("A2A-Extensions"); got != "https://kagent.dev/extensions/hitl/v1" {
 			t.Errorf("%s: A2A-Extensions %q", r.Key, got)
 		}
+	}
+}
+
+// The ported kagent serves A2A 1.0 only, and a2a-go reads a request without A2A-Version as 0.3
+// and refuses it. Found on kind: every send failed with -32009.
+func TestEveryA2ACallNamesProtocolVersion1(t *testing.T) {
+	c, srv, _ := setup(t)
+	srv.AddAgent("kagent", "mainloop-main")
+	if _, err := send(c, "m1"); err != nil {
+		t.Fatal(err)
+	}
+	var a2aCalls int
+	for _, r := range srv.Requests() {
+		if r.AgentPath == "" {
+			continue
+		}
+		a2aCalls++
+		if got := r.Header.Get("A2A-Version"); got != "1.0" {
+			t.Errorf("%s: A2A-Version %q, want 1.0", r.Key, got)
+		}
+	}
+	if a2aCalls == 0 {
+		t.Fatal("no A2A call recorded")
 	}
 }
 

@@ -1,8 +1,11 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { HttpResponse } from 'msw';
+import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection } from '@/api';
+import { API_URL } from '@/api/config';
+import { createFakeHITL } from '@/features/hitl/handlers';
+import { hitlView } from '@/test/fixtures/hitl';
 import { server } from '@/test/msw/server';
 import { workspaceFixture } from '@/test/fixtures';
 import { attempt, view } from '@/test/fixtures/tasks';
@@ -46,6 +49,22 @@ describe('session page', () => {
     expect(await screen.findByTestId('live-session')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId('live-conn')).toHaveTextContent('live'));
     expect(screen.queryByTestId('identity-strip')).not.toBeInTheDocument();
+  });
+
+  it('shows a pending A2A request in the live view, since the runner no longer prompts for it', async () => {
+    server.use(
+      createFakeRunner().handler,
+      ...serveSession(session({ id: 's1' }), native({ session_id: 's1', live: true })),
+      http.get(`${API_URL}/sessions/s1/hitl`, () => HttpResponse.json(['req-s1'])),
+      ...createFakeHITL({ 'req-s1': hitlView('req-s1', { context: { session_id: 's1' } }) })
+        .handlers
+    );
+    renderSessions('/sessions/s1');
+    const log = await screen.findByTestId('live-log');
+    expect(
+      await within(log).findByRole('heading', { name: 'Session needs input' })
+    ).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('live-status')).toHaveTextContent('needs you'));
   });
 
   it('keeps the regular view for a session that is not live', async () => {

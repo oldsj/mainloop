@@ -101,7 +101,7 @@ env:
   - name: KAGENT_USER_ID
     value: {{ .Values.kagentControlAuth.userID }}
   - name: KAGENT_CONTROL_TOKEN_FILE
-    value: /run/kagent-control-auth/current
+    value: /run/kagent-control-auth/token
   - name: SSL_CERT_FILE
     value: /run/kagent-control-ca/ca-bundle.crt
   {{- end }}

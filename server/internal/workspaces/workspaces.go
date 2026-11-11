@@ -26,15 +26,13 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/providers"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // Kagent is the part of the kagent client the lifecycle uses. *kagent.Client satisfies it.
 type Kagent interface {
 	CreateSession(ctx context.Context, req *kagentapi.CreateSessionRequest) (*kagentapi.Session, error)
 	GetSession(ctx context.Context, id string) (*kagentapi.Session, error)
-	SuspendSession(ctx context.Context, id string) (*kagentapi.Session, error)
-	ResumeSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	DeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	ListSessions(ctx context.Context) ([]*kagentapi.Session, error)
 	PrepareSessionWorkspace(ctx context.Context, req *kagentapi.PrepareSessionWorkspaceRequest) (*kagentapi.WorkspacePreparationReceipt, error)

@@ -16,7 +16,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/pushgate"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
-	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // GitPush supplies metadata and enrollment after a creation-time reference is reserved. The
@@ -247,11 +247,9 @@ func (s *Service) enrollPush(ctx context.Context, c reconcile.Claim) (reconcile.
 		return reconcile.Retry(), nil
 	}
 	// The push gate attests the runtime only while kagent has an Actor running for the Session, and
-	// kagent parks an idle Actor. Wake it (resume joins an operation under way) and look again.
+	// kagent parks an idle Actor. Nothing here wakes it (kagent has no resume call): the workspace's
+	// preparation or its first message does, so look again until then.
 	if ra := n.GetRuntimeAssociation(); ra.GetGenerationId() == "" || ra.GetActorUid() == "" || !ra.GetCurrentActive() {
-		if _, err := s.Kagent.ResumeSession(ctx, *w.KagentSessionID); err != nil && !notFoundErr(err) {
-			return reconcile.Retry(), err
-		}
 		return reconcile.RetryAfter(preparationRecheck), nil
 	}
 	ref, err := frozenReference(w.GitPushCredential)

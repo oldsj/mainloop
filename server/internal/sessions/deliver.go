@@ -25,7 +25,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/progress"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 const (
@@ -447,13 +447,13 @@ func (t *turn) replaceKagentSession(ctx context.Context) error {
 	return nil
 }
 
-// readyKagentSession returns the Session's id once kagent reports it ready: it resumes a suspended
-// Session once, and polls one that is starting, resuming or suspending until Opts.ReadyWait.
+// readyKagentSession returns the Session's id once kagent reports it ready, polling one that is
+// starting or that kagent is settling until Opts.ReadyWait. A sleeping Session is READY: kagent parks
+// an idle Actor itself and the send wakes it, so nothing is resumed here.
 func (t *turn) readyKagentSession(ctx context.Context, sess *kagentapi.Session) (string, error) {
 	wait := t.s.opts().ReadyWait
 	poll := min(max(wait/20, 10*time.Millisecond), time.Second)
 	deadline := time.Now().Add(wait)
-	resumed := false
 	for {
 		if err := t.checkSendFence(ctx); err != nil {
 			return "", err
@@ -465,29 +465,6 @@ func (t *turn) readyKagentSession(ctx context.Context, sess *kagentapi.Session) 
 			return "", errors.New("the kagent session has failed")
 		case st == kagentapi.RuntimeState_RUNTIME_STATE_DELETING, st == kagentapi.RuntimeState_RUNTIME_STATE_DELETED:
 			return "", errors.New("the kagent session is being deleted")
-		case st == kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED && !resumed:
-			resumed = true
-			var err error
-			if t.d.WorkspaceID != nil {
-				// A workspace is resumed through its operation ledger, never directly: wake it again
-				// (something suspended it after the first wake) and read the Session once more.
-				if t.s.Waker == nil {
-					return "", errors.New("the workspace's kagent session is suspended")
-				}
-				if err = t.s.Waker.Wake(ctx, *t.d.WorkspaceID); err != nil {
-					return "", fmt.Errorf("wake the workspace: %w", err)
-				}
-				if err := t.checkSendFence(ctx); err != nil {
-					return "", err
-				}
-				sess, err = t.s.Kagent.GetSession(ctx, t.ksid)
-			} else {
-				sess, err = t.s.Kagent.ResumeSession(ctx, t.ksid)
-			}
-			if err != nil {
-				return "", err
-			}
-			continue
 		}
 		if !time.Now().Before(deadline) {
 			return "", fmt.Errorf("the kagent session is not ready after %s (%s)", wait, sess.GetState())
@@ -519,8 +496,8 @@ func sessionName(title string) string {
 	return title
 }
 
-// changing reports a Session with an operation in progress (creating, suspending, resuming or
-// deleting): a READY Session is not settled until the operation is over, as in the Python path.
+// changing reports a Session with an operation in progress (creating, deleting, or kagent's own
+// suspend, resume or revert): a READY Session is not settled until the operation is over, as in the Python path.
 func changing(s *kagentapi.Session) bool {
 	switch s.GetOperation() {
 	case kagentapi.RuntimeOperation_RUNTIME_OPERATION_UNSPECIFIED, kagentapi.RuntimeOperation_RUNTIME_OPERATION_NONE:
@@ -604,7 +581,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 		return reconcile.Retry(), err
 	}
 	t.cur, t.ksid = dbstate.DeliverySending, ksid
-	metadata := t.s.turnMetadata(derefStr(t.d.BindingKind), t.d.ModelOverride, t.d.EffortOverride, t.d.ModelEffortTouched)
+	metadata := t.s.turnMetadata(derefStr(t.d.BindingKind), t.d.ModelOverride, t.d.EffortOverride)
 	var sendErr error
 	t.s.Progress.Begin(t.progressRef())
 	for ev, err := range t.s.Kagent.SendMessage(ctx, t.agent, kagent.SendParams{

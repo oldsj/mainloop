@@ -85,6 +85,9 @@ func (c *Client) newRPCRequest(
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// a2a-go's server reads a request without A2A-Version as protocol 0.3 and refuses it
+	// (-32009) when it serves only 1.0, as the ported kagent does.
+	req.Header.Set(a2a.SvcParamVersion, string(a2a.Version))
 	if stream {
 		req.Header.Set("Accept", "text/event-stream, application/json")
 	}

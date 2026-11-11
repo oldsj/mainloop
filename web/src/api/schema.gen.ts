@@ -1022,7 +1022,7 @@ export interface paths {
      * @description Upgrades to a WebSocket with subprotocol `kagent.sdk-runner.v1` (the SDK runner's client
      *     event protocol, one JSON object per text frame) for a session whose `NativeSessionInfo.live`
      *     is true. The server bootstraps the runner and keeps its token; frames are relayed verbatim
-     *     both ways. A suspended session is woken by connecting.
+     *     both ways. A sleeping session is woken by connecting.
      *
      *     404 when the session is not the owner's, has no kagent session, or its Agent is not live.
      *     503 while the session cannot be reached yet; the client retries with backoff.
@@ -1129,7 +1129,10 @@ export interface paths {
      * @description **Experimental, owner-only.** Checkpoint the session's native kagent Session at its latest
      *     terminal turn. Refuses (409) while a turn is in flight, or before the session has ever
      *     completed one. `request_id` is the idempotency key: repeating it returns the recorded
-     *     outcome, or continues an interrupted attempt. See docs/specs/warm-state.md.
+     *     outcome, or continues an interrupted attempt. Also 409 while kagent is still preparing the
+     *     snapshot (repeat the same `request_id`), and when kagent refuses or fails the checkpoint, for
+     *     example because the runtime is running: that request is settled, so try again with a new
+     *     `request_id`. See docs/specs/warm-state.md.
      */
     post: operations['createSessionCheckpoint'];
     delete?: never;
@@ -1360,40 +1363,6 @@ export interface paths {
     put?: never;
     /** Refresh Workspace */
     post: operations['refreshWorkspace'];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  '/workspaces/{workspace_id}/resume': {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    /** Resume Workspace */
-    post: operations['resumeWorkspace'];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  '/workspaces/{workspace_id}/suspend': {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    /** Suspend Workspace */
-    post: operations['suspendWorkspace'];
     delete?: never;
     options?: never;
     head?: never;
@@ -2031,7 +2000,7 @@ export interface components {
        * Operation
        * @enum {string}
        */
-      operation: 'unspecified' | 'create' | 'suspend' | 'resume' | 'delete' | 'none';
+      operation: 'unspecified' | 'create' | 'suspend' | 'resume' | 'delete' | 'revert' | 'none';
       /** Prepared Revision */
       prepared_revision?: string;
       runtime_association?: components['schemas']['NativeRuntimeAssociationInfo'];
@@ -3098,6 +3067,7 @@ export interface components {
       ports: components['schemas']['WorkspacePort'][];
       /**
        * Idle Timeout Minutes
+       * @description Recorded only. kagent decides when an idle runtime sleeps; Mainloop no longer suspends a workspace after this time.
        * @default 30
        */
       idle_timeout_minutes: number;
@@ -3188,6 +3158,10 @@ export interface components {
     };
     /**
      * WorkspaceObservedState
+     * @description `running`: the Session is ready and its runtime is awake. `suspended`: the Session is ready
+     *     and asleep; kagent parks an idle runtime itself, and the next message, preview or live attach
+     *     wakes it (there is no suspend or resume request). `resuming`: starting, or kagent is doing its
+     *     own brief lifecycle work. `suspending` is no longer reported.
      * @enum {string}
      */
     WorkspaceObservedState:
@@ -5331,6 +5305,7 @@ export interface components {
       ports: components['schemas']['WorkspacePort'][];
       /**
        * Idle Timeout Minutes
+       * @description Recorded only. kagent decides when an idle runtime sleeps; Mainloop no longer suspends a workspace after this time.
        * @default 30
        */
       idle_timeout_minutes: number;
@@ -10014,162 +9989,6 @@ export interface operations {
     };
   };
   refreshWorkspace: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        workspace_id: string;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['WorkspaceLifecycle'];
-        };
-      };
-      /** @description Forbidden */
-      403: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['HTTPError'];
-        };
-      };
-      /** @description Not Found */
-      404: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['HTTPError'];
-        };
-      };
-      /** @description Conflict */
-      409: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['HTTPError'];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json':
-            | components['schemas']['HTTPValidationError']
-            | components['schemas']['HTTPError'];
-        };
-      };
-      /** @description Bad Gateway */
-      502: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['HTTPError'];
-        };
-      };
-      /** @description Service Unavailable */
-      503: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['HTTPError'];
-        };
-      };
-    };
-  };
-  resumeWorkspace: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        workspace_id: string;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['WorkspaceLifecycle'];
-        };
-      };
-      /** @description Forbidden */
-      403: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['HTTPError'];
-        };
-      };
-      /** @description Not Found */
-      404: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['HTTPError'];
-        };
-      };
-      /** @description Conflict */
-      409: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['HTTPError'];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json':
-            | components['schemas']['HTTPValidationError']
-            | components['schemas']['HTTPError'];
-        };
-      };
-      /** @description Bad Gateway */
-      502: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['HTTPError'];
-        };
-      };
-      /** @description Service Unavailable */
-      503: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['HTTPError'];
-        };
-      };
-    };
-  };
-  suspendWorkspace: {
     parameters: {
       query?: never;
       header?: never;

@@ -13,7 +13,7 @@ import { httpUrl } from '@/lib/url';
 type Schemas = components['schemas'];
 export type WorkspaceLifecycle = Schemas['WorkspaceLifecycle'];
 export type ObservedState = WorkspaceLifecycle['observed_state'];
-export type WorkspaceAction = 'suspend' | 'resume' | 'refresh' | 'delete';
+export type WorkspaceAction = 'refresh' | 'delete';
 
 export const UNCONFIRMED =
   'kagent has not confirmed this lifecycle state. Refresh status before retrying.';
@@ -152,15 +152,18 @@ export function previewLinks(list: unknown[]): { links: PreviewLink[]; dropped: 
   return { links, dropped };
 }
 
-/** Suspend is offered only from running, and resume only from suspended. */
-export const canSuspend = (state: ObservedState) => state === 'running';
-export const canResume = (state: ObservedState) => state === 'suspended';
+/** Shown for `suspended`. kagent puts an idle runtime to sleep by itself, and the next use wakes it. */
+export const ASLEEP = 'Asleep. It wakes when you send a message or open a preview.';
 
-/** Why the page is waiting on the runtime, when the owner should know. Null when the state is settled. */
+/**
+ * What the owner should know about a state that is not plainly running: asleep, waiting on the
+ * runtime, or unconfirmed. Null when the state needs no explanation.
+ */
 export function stateHint(state: ObservedState): string | null {
   if (state === 'suspending' || state === 'resuming') {
     return 'Changing state. Refresh status to see where it settles.';
   }
+  if (state === 'suspended') return ASLEEP;
   if (state === 'unknown') return UNCONFIRMED;
   return null;
 }

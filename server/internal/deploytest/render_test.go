@@ -654,10 +654,23 @@ func TestLiveDev(t *testing.T) {
 	t.Run("control-auth is enabled without Python", func(t *testing.T) {
 		for _, name := range []string{"backend", "mcp", "git"} {
 			env := envByName(containers(pod)[name])
-			if env["KAGENT_USER_ID"].Value != "mainloop" || env["KAGENT_CONTROL_TOKEN_FILE"].Value != "/run/kagent-control-auth/current" ||
+			if env["KAGENT_USER_ID"].Value != "mainloop" || env["KAGENT_CONTROL_TOKEN_FILE"].Value != "/run/kagent-control-auth/token" ||
 				env["SSL_CERT_FILE"].Value != "/run/kagent-control-ca/ca-bundle.crt" {
 				t.Errorf("%s: control-auth env missing: %+v", name, env)
 			}
+		}
+		// The bearer is a projected ServiceAccount token for kagent's audience, not a static Secret.
+		var token *corev1.ServiceAccountTokenProjection
+		for _, v := range pod.Volumes {
+			if v.Name == "kagent-control-auth" && v.Projected != nil && len(v.Projected.Sources) == 1 {
+				token = v.Projected.Sources[0].ServiceAccountToken
+			}
+			if v.Secret != nil && v.Secret.SecretName == "kagent-control-token" {
+				t.Errorf("volume %s still mounts the static kagent-control-token Secret", v.Name)
+			}
+		}
+		if token == nil || token.Audience != "kagent-invocation" || token.Path != "token" {
+			t.Errorf("kagent-control-auth is not a projected ServiceAccount token for kagent-invocation: %+v", token)
 		}
 		var bundle *corev1.Container
 		for i := range pod.InitContainers {
@@ -756,5 +769,51 @@ func TestKindBootsWithoutKagentOrGitHubApp(t *testing.T) {
 	// `make dev-reset` wipes this database, and only this one.
 	if data["MAINLOOP_ALLOW_RESET"] != "1" {
 		t.Errorf("MAINLOOP_ALLOW_RESET %q, want 1 for dev-reset", data["MAINLOOP_ALLOW_RESET"])
+	}
+}
+
+// The preview proxy and the live relay reach the Substrate 1.0 router over mutual TLS: the API
+// container, and only it, gets a podidentity pod certificate and the servicedns trust bundle at
+// the paths the server reads by default.
+func TestTheAPIGetsTheSubstrateRouterCredentials(t *testing.T) {
+	for _, path := range []string{"production", "live-dev"} {
+		t.Run(path, func(t *testing.T) {
+			r := render(t, path)
+			if got := r.configMaps["mainloop-config"].Data["SUBSTRATE_ROUTER_ADDRESS"]; got != "" &&
+				got != "https://atenet-router.ate-system.svc.cluster.local:8444" {
+				t.Errorf("SUBSTRATE_ROUTER_ADDRESS=%q, want the router's CONNECT-over-TLS listener", got)
+			}
+			pod := r.backend(t)
+			var cert *corev1.PodCertificateProjection
+			var bundle *corev1.ClusterTrustBundleProjection
+			for _, v := range pod.Volumes {
+				if v.Projected == nil || len(v.Projected.Sources) != 1 {
+					continue
+				}
+				switch v.Name {
+				case "substrate-router-identity":
+					cert = v.Projected.Sources[0].PodCertificate
+				case "substrate-router-ca":
+					bundle = v.Projected.Sources[0].ClusterTrustBundle
+				}
+			}
+			if cert == nil || cert.SignerName != "podidentity.podcert.ate.dev/identity" || cert.CredentialBundlePath != "credential-bundle.pem" {
+				t.Errorf("substrate-router-identity is not a podidentity pod certificate: %+v", cert)
+			}
+			if bundle == nil || bundle.SignerName == nil || *bundle.SignerName != "servicedns.podcert.ate.dev/identity" || bundle.Path != "trust-bundle.pem" {
+				t.Errorf("substrate-router-ca is not the servicedns trust bundle: %+v", bundle)
+			}
+			for name, c := range containers(pod) {
+				mounts := map[string]string{}
+				for _, m := range c.VolumeMounts {
+					mounts[m.Name] = m.MountPath
+				}
+				want := name == "backend"
+				if got := mounts["substrate-router-identity"] == "/run/substrate-router/identity" &&
+					mounts["substrate-router-ca"] == "/run/substrate-router/ca"; got != want {
+					t.Errorf("%s: router credentials mounted = %v, want %v (%v)", name, got, want, mounts)
+				}
+			}
+		})
 	}
 }

@@ -2,87 +2,14 @@ package workspaces
 
 import (
 	"bytes"
-	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/kagent"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
-
-func (h *harness) backdate(id string) {
-	h.t.Helper()
-	h.exec(`UPDATE workspaces SET last_active_at = now() - interval '2 hours', created_at = now() - interval '3 hours' WHERE id = $1`, id)
-}
-
-func (h *harness) suspendOps() int {
-	h.t.Helper()
-	var n int
-	if err := h.svc.Pool.QueryRow(bg, `SELECT count(*) FROM workspace_ops WHERE kind = 'suspend'`).Scan(&n); err != nil {
-		h.t.Fatal(err)
-	}
-	return n
-}
-
-// Mined: test_a_quiet_ready_session_is_suspended, test_an_already_suspended_session_is_not_suspended_again.
-func TestIdleWorkspaceIsSuspendedOnce(t *testing.T) {
-	h := newHarness(t, nil)
-	w := h.running()
-	if err := h.svc.SuspendIdle(bg); err != nil || h.suspendOps() != 0 {
-		t.Fatalf("a fresh workspace was picked: %v", err)
-	}
-	h.backdate(w.WorkspaceId)
-	h.run()
-	if err := h.svc.SuspendIdle(bg); err != nil {
-		t.Fatal(err)
-	}
-	eventually(t, "suspended", func() bool {
-		got, _ := h.svc.Get(bg, w.WorkspaceId)
-		return got.ObservedState == api.WorkspaceObservedStateSuspended
-	})
-	if err := h.svc.SuspendIdle(bg); err != nil || h.suspendOps() != 1 {
-		t.Fatalf("suspended again: ops %d, %v", h.suspendOps(), err)
-	}
-}
-
-// Mined: test_activity_after_the_idle_check_picked_it_is_not_suspended.
-func TestActivityAfterTheIdleCheckKeepsItRunning(t *testing.T) {
-	h := newHarness(t, nil)
-	w := h.running()
-	h.backdate(w.WorkspaceId)
-	if err := h.svc.SuspendIdle(bg); err != nil || h.suspendOps() != 1 {
-		t.Fatalf("%v, ops %d", err, h.suspendOps())
-	}
-	if err := h.svc.Touch(bg, w.WorkspaceId); err != nil { // traffic arrives before the op runs
-		t.Fatal(err)
-	}
-	h.run()
-	eventually(t, "cancelled", func() bool { return h.op(w.WorkspaceId, "suspend").State == "cancelled" })
-	if h.fake.Count(kagent.ProcSuspendSession) != 0 {
-		t.Fatal("suspend reached kagent")
-	}
-}
-
-// Mined: test_an_active_turn_is_left_alone, test_a_message_arriving_during_suspend_waits_then_resumes_before_sending.
-func TestIdleCheckSkipsBusyWorkspaces(t *testing.T) {
-	h := newHarness(t, nil)
-	w := h.running()
-	h.backdate(w.WorkspaceId)
-	h.dl.setOpen(w.WorkspaceId, true)
-	if err := h.svc.SuspendIdle(bg); err != nil || h.suspendOps() != 0 {
-		t.Fatalf("an open turn was suspended: %v", err)
-	}
-	h.dl.setOpen(w.WorkspaceId, false)
-	h.dl.mu.Lock()
-	h.dl.active[w.WorkspaceId] = time.Now() // a delivery finished just now
-	h.dl.mu.Unlock()
-	if err := h.svc.SuspendIdle(bg); err != nil || h.suspendOps() != 0 {
-		t.Fatalf("recent delivery activity was ignored: %v", err)
-	}
-}
 
 // Mined: test_archive_deletes_the_kagent_session, test_archive_waits_for_an_open_turn_and_the_reconcile_pass_deletes_after,
 // test_an_unconfirmed_archive_delete_is_retried_by_the_reconcile_pass.
@@ -209,67 +136,6 @@ func TestOrphanDeleteFailureIsReported(t *testing.T) {
 	if code := printOrphans(OrphanReport{Orphans: []string{orphan}}, nil, false, &dry, &errb); code != 0 ||
 		!bytes.Contains(dry.Bytes(), []byte("orphan  "+orphan)) || !bytes.Contains(dry.Bytes(), []byte("nothing deleted")) {
 		t.Fatalf("code %d out %q", code, dry.String())
-	}
-}
-
-// Mined (wake on preview): test_a_suspended_workspace_is_resumed_and_published,
-// test_a_running_workspace_is_left_alone, test_concurrent_previews_resume_once.
-func TestWakeForPreviewResumesOnce(t *testing.T) {
-	h := newHarness(t, nil)
-	w := h.running()
-	h.run()
-	if err := h.svc.WakeForPreview(bg, w.WorkspaceId); err != nil || h.fake.Count(kagent.ProcResumeSession) != 0 {
-		t.Fatalf("a running workspace was resumed: %v", err)
-	}
-	if _, err := h.svc.Suspend(bg, w.WorkspaceId); err != nil {
-		t.Fatal(err)
-	}
-	events := h.events()
-	var wg sync.WaitGroup
-	errs := make(chan error, 8)
-	for range 8 {
-		wg.Go(func() { errs <- h.svc.WakeForPreview(bg, w.WorkspaceId) })
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	if n := h.fake.Count(kagent.ProcResumeSession); n != 1 {
-		t.Fatalf("resume calls: %d", n)
-	}
-	got, _ := h.svc.Get(bg, w.WorkspaceId)
-	if got.ObservedState != api.WorkspaceObservedStateRunning || h.events() != events+1 {
-		t.Fatalf("%+v events %d -> %d", got, events, h.events())
-	}
-}
-
-// Mined: test_a_failed_resume_raises_and_the_next_preview_retries.
-func TestFailedWakeIsRetried(t *testing.T) {
-	h := newHarness(t, slow)
-	w := h.running()
-	h.run()
-	restore := h.patient(15 * time.Second) // the suspend must finish; only the failed wake below is meant to stay unconfirmed
-	if _, err := h.svc.Suspend(bg, w.WorkspaceId); err != nil {
-		t.Fatal(err)
-	}
-	restore()
-	h.fake.FailNext(kagent.ProcResumeSession, kagenttestDrop)
-	var unc *UnconfirmedError
-	if err := h.svc.WakeForPreview(bg, w.WorkspaceId); !errors.As(err, &unc) {
-		t.Fatalf("%v", err)
-	}
-	// As in TestDeleteWithKagentUnreachableKeepsRows: the failed attempt must happen before due().
-	eventually(t, "failure recorded", func() bool { return h.op(w.WorkspaceId, "resume").Failures == 1 })
-	h.due()
-	eventually(t, "running", func() bool {
-		got, _ := h.svc.Get(bg, w.WorkspaceId)
-		return got.ObservedState == api.WorkspaceObservedStateRunning
-	})
-	if err := h.svc.WakeForPreview(bg, w.WorkspaceId); err != nil {
-		t.Fatal(err)
 	}
 }
 

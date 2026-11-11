@@ -11,7 +11,8 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	"github.com/oldsj/mainloop/server/internal/kagent"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 const (
@@ -20,48 +21,15 @@ const (
 	opRetention = 24 * time.Hour
 )
 
-// SuspendIdle queues a suspend for every workspace that has been quiet for its idle timeout. The
-// suspend operation re-checks activity against quiet_since right before it calls kagent, so a
-// message that arrives after this pass picked the workspace keeps it running.
-func (s *Service) SuspendIdle(ctx context.Context) error {
-	q := dbq.New(s.Pool)
-	if _, err := q.PruneWorkspaceOps(ctx, opRetention.Seconds()); err != nil {
-		s.Log.WarnContext(ctx, "could not prune workspace operations", "error", err)
-	}
-	cands, err := q.ListIdleWorkspaceCandidates(ctx, sweepBatch)
-	if err != nil {
-		return err
-	}
-	var errs []error
-	for _, c := range cands {
-		w := wsRow{ID: c.ID}
-		if open, err := s.turnOpen(ctx, w); err != nil {
-			errs = append(errs, err)
-			continue
-		} else if open {
-			continue
-		}
-		activity, err := s.activity(ctx, w)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if s.now().Sub(activity) < time.Duration(c.IdleTimeoutMinutes)*time.Minute {
-			continue
-		}
-		if _, err := s.enqueue(ctx, c.ID, dbstate.OpSuspend, &activity); err != nil && !errors.Is(err, ErrBusy) {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
-}
-
 // DeleteArchived deletes the kagent Session of every archived session and marks the binding.
 // The binding columns are the durable intent: a failed or unconfirmed delete leaves it pending
 // and the next pass retries, so a Session is never forgotten. An archived workspace with no
 // recorded Session id gets a delete operation, which finds the Session its create may have made.
 func (s *Service) DeleteArchived(ctx context.Context) error {
 	q := dbq.New(s.Pool)
+	if _, err := q.PruneWorkspaceOps(ctx, opRetention.Seconds()); err != nil {
+		s.Log.WarnContext(ctx, "could not prune workspace operations", "error", err)
+	}
 	rows, err := q.ListArchivedUndeletedBindings(ctx, sweepBatch)
 	if err != nil {
 		return err
@@ -181,7 +149,7 @@ func (s *Service) SweepOrphans(ctx context.Context, opt OrphanOptions) (OrphanRe
 		if id == "" || boundSet[id] || sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_DELETED {
 			continue
 		}
-		if sess.GetCreator() != s.Config.Kagent.UserID || !ours[agentKey(sess.GetAgent())] {
+		if sess.GetCreator() != s.Config.Kagent.UserID || !ours[agentKey(kagent.AgentOf(sess))] {
 			continue
 		}
 		if at := sess.GetCreatedAt(); at == nil || at.AsTime().After(cutoff) {

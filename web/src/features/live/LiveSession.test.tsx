@@ -82,6 +82,43 @@ describe('live session', () => {
     await idle();
   });
 
+  it('waits on the A2A request when a turn defers its tool call, and refuses messages meanwhile', async () => {
+    const { runner, user } = setup();
+    await attached();
+    await say(user, 'defer this');
+    expect(
+      await screen.findByText(/Waiting for your answer to the request below/)
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('live-status')).toHaveTextContent('needs you');
+    // No live prompt: the approval is the A2A task's, and a deferred turn is not an interruption.
+    expect(screen.queryByTestId('live-perm')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Interrupted/)).not.toBeInTheDocument();
+    const box = screen.getByRole('textbox', { name: 'Message' });
+    expect(box).toHaveAttribute('placeholder', 'Answer the request first');
+    await user.type(box, 'carry on{Enter}');
+    expect(
+      await screen.findByText(/waiting for an answer to a pending approval or question/)
+    ).toBeInTheDocument();
+    runner.answerDeferred(true);
+    await waitFor(() => expect(screen.getByTestId('live-tool')).toHaveTextContent('⎿ README.md'));
+    await idle();
+    expect(box).toHaveAttribute('placeholder', 'Message, or / for commands');
+  });
+
+  it('shows the session requests after the transcript and needs the owner while one is pending', async () => {
+    server.use(createFakeRunner().handler);
+    render(
+      <LiveSession
+        sessionId="s1"
+        needsAnswer
+        requests={<div data-testid="request-card">Approve the deploy?</div>}
+      />
+    );
+    await attached();
+    expect(within(screen.getByTestId('live-log')).getByTestId('request-card')).toBeInTheDocument();
+    expect(screen.getByTestId('live-status')).toHaveTextContent('needs you');
+  });
+
   it('queues a message sent during a turn and runs it next', async () => {
     const { user } = setup({ step: 30 });
     await attached();

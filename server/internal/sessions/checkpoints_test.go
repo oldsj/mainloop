@@ -10,6 +10,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/apierr"
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
@@ -78,6 +79,14 @@ func TestCreateCheckpointIsIdempotent(t *testing.T) {
 	if first.Id == "" || first.SessionId == "" || first.State != api.CheckpointStateReady {
 		t.Fatalf("checkpoint %+v", first)
 	}
+	// session_id is the kagent Session on create, as on every read back.
+	if first.SessionId != e.kagentSessionOf(id) {
+		t.Fatalf("session_id %q, want the kagent Session %q", first.SessionId, e.kagentSessionOf(id))
+	}
+	list, err := e.svc.ListCheckpoints(context.Background(), id)
+	if err != nil || len(list) != 1 || list[0].SessionID != first.SessionId {
+		t.Fatalf("list %+v %v", list, err)
+	}
 	if n := e.srv.Count(kagent.ProcCreateCheckpoint); n != 1 {
 		t.Fatalf("CreateCheckpoint called %d times", n)
 	}
@@ -119,6 +128,121 @@ func TestCreateCheckpointRetryAfterUncertainReconciles(t *testing.T) {
 	}
 	if n := e.srv.Count(kagent.ProcCreateCheckpoint); n != 2 {
 		t.Fatalf("CreateCheckpoint called %d times", n)
+	}
+}
+
+// kagentSessionOf is the kagent Session bound to a Mainloop session.
+func (e *env) kagentSessionOf(id string) string {
+	e.t.Helper()
+	b, err := dbq.New(e.pool).GetOwnedSessionBinding(context.Background(),
+		dbq.GetOwnedSessionBindingParams{ID: id, UserID: e.svc.OwnerID})
+	if err != nil || b.KagentSessionID == nil {
+		e.t.Fatalf("binding of %s: %v", id, err)
+	}
+	return *b.KagentSessionID
+}
+
+// kagent (#94) checkpoints only a suspended Actor. Asked while it runs, it answers
+// FailedPrecondition KAGENT_CHECKPOINT_RUNTIME_NOT_SUSPENDED and records the request failed, so
+// Mainloop settles the intent as a refusal and a new attempt takes a new request id.
+func TestCreateCheckpointOfARunningRuntimeIsARefusal(t *testing.T) {
+	e := newEnv(t)
+	id := e.completedSession()
+	rid := uuid.NewString()
+	e.srv.RefuseNextSnapshot(e.kagentSessionOf(id))
+
+	_, err := e.createCheckpoint(id, rid)
+	bad, ok := apierr.As(err)
+	if !ok || bad.Status != 409 || !strings.Contains(bad.Message, "once the session is asleep") {
+		t.Fatalf("status %v, err %v", bad, err)
+	}
+	row, err := dbq.New(e.pool).GetSessionCheckpoint(context.Background(), rid)
+	if err != nil || row.State != dbstate.CheckpointDone || row.FailureReason == nil ||
+		*row.FailureReason != dbstate.FailureFailedPrecondition {
+		t.Fatalf("row %+v %v", row, err)
+	}
+
+	// The same request id answers from the row; kagent would only repeat KAGENT_CHECKPOINT_FAILED.
+	if _, err := e.createCheckpoint(id, rid); err == nil {
+		t.Fatal("repeat of the refused request succeeded")
+	}
+	if n := e.srv.Count(kagent.ProcCreateCheckpoint); n != 1 {
+		t.Fatalf("CreateCheckpoint called %d times", n)
+	}
+	// A new request id is a new attempt.
+	out, err := e.createCheckpoint(id, uuid.NewString())
+	if err != nil || out.State != api.CheckpointStateReady {
+		t.Fatalf("new attempt %+v %v", out, err)
+	}
+}
+
+// KAGENT_CHECKPOINT_SNAPSHOT_PENDING is not a refusal: the intent stays open and the same request
+// id completes the checkpoint.
+func TestCreateCheckpointSnapshotPendingKeepsTheRequestOpen(t *testing.T) {
+	e := newEnv(t)
+	id := e.completedSession()
+	rid := uuid.NewString()
+	e.srv.PendNextSnapshot(e.kagentSessionOf(id))
+
+	_, err := e.createCheckpoint(id, rid)
+	bad, ok := apierr.As(err)
+	if !ok || bad.Status != 409 || !strings.Contains(bad.Message, "same request_id") {
+		t.Fatalf("status %v, err %v", bad, err)
+	}
+	row, err := dbq.New(e.pool).GetSessionCheckpoint(context.Background(), rid)
+	if err != nil || row.State == dbstate.CheckpointDone {
+		t.Fatalf("row %+v %v", row, err)
+	}
+
+	out, err := e.createCheckpoint(id, rid)
+	if err != nil || out.Id == "" || out.State != api.CheckpointStateReady {
+		t.Fatalf("repeat %+v %v", out, err)
+	}
+	if n := e.srv.Count(kagent.ProcCreateCheckpoint); n != 2 {
+		t.Fatalf("CreateCheckpoint called %d times", n)
+	}
+}
+
+// A kagent before #94 answered a not-suspended Actor with Unavailable, recorded the checkpoint
+// FAILED, and replayed that request id as OK with state FAILED (seen on kind). Mainloop must
+// settle that as a refusal (409), not as a checkpoint it can fork.
+func TestCreateCheckpointReplayedAsFailedIsARefusal(t *testing.T) {
+	e := newEnv(t)
+	id := e.completedSession()
+	rid := uuid.NewString()
+	e.srv.LegacyCheckpointReplay()
+	e.srv.RefuseNextSnapshot(e.kagentSessionOf(id))
+	var err error
+
+	_, err = e.createCheckpoint(id, rid)
+	if bad, ok := apierr.As(err); !ok || bad.Status != 502 {
+		t.Fatalf("first attempt: status %v, err %v", bad, err)
+	}
+
+	_, err = e.createCheckpoint(id, rid)
+	bad, ok := apierr.As(err)
+	if !ok || bad.Status != 409 || !strings.Contains(bad.Message, "SnapshotTagFailed: snapshot changed") {
+		t.Fatalf("replay: status %v, err %v", bad, err)
+	}
+	row, err := dbq.New(e.pool).GetSessionCheckpoint(context.Background(), rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.State != dbstate.CheckpointDone || row.FailureReason == nil ||
+		*row.FailureReason != dbstate.FailureFailedPrecondition {
+		t.Fatalf("row %+v", row)
+	}
+
+	// Settled: a third repeat answers from the row, with no further kagent call.
+	if _, err := e.createCheckpoint(id, rid); err == nil {
+		t.Fatal("repeat after the refusal succeeded")
+	}
+	if n := e.srv.Count(kagent.ProcCreateCheckpoint); n != 2 {
+		t.Fatalf("CreateCheckpoint called %d times", n)
+	}
+	list, err := e.svc.ListCheckpoints(context.Background(), id)
+	if err != nil || len(list) != 0 {
+		t.Fatalf("list %+v %v", list, err)
 	}
 }
 

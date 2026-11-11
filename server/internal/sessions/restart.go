@@ -205,7 +205,9 @@ func (s *Service) deleteNative(ctx context.Context, ksid string) error {
 	case sessionEnded(sess):
 		return nil
 	}
-	sess, err = s.Kagent.DeleteSession(ctx, ksid)
+	// Forced: a restart is the way out of a turn that never answers a cancel, and kagent refuses
+	// an ordinary delete while a turn is running.
+	sess, err = s.Kagent.ForceDeleteSession(ctx, ksid)
 	switch {
 	case nativeAbsent(err):
 		return nil

@@ -18,7 +18,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
 	"github.com/oldsj/mainloop/server/internal/sessions"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // codeOf is the stable `code` of a 409 as the HTTP layer writes it ("" when there is none).
@@ -68,7 +68,7 @@ func (e *env) liveSessionsOn(name string) (n int) {
 		e.t.Fatal(err)
 	}
 	for _, s := range all {
-		if s.GetAgent().GetName() == name && s.GetState() != kagentapi.RuntimeState_RUNTIME_STATE_DELETED {
+		if s.GetAgent().GetRef().GetName() == name && s.GetState() != kagentapi.RuntimeState_RUNTIME_STATE_DELETED {
 			n++
 		}
 	}
@@ -251,20 +251,20 @@ func TestACreateThatLandedWithItsReplyLostIsBoundByTheRepeat(t *testing.T) {
 	}
 }
 
-// The old Session was suspended and the process died before the intent committed. Nothing durable
+// The old Session was confirmed idle and the process died before the intent committed. Nothing durable
 // moved, the main is still on its old provider, and a repeat finishes the switch.
-func TestACrashAfterTheSuspendAndBeforeTheIntentLeavesTheOldProviderAndARepeatRecovers(t *testing.T) {
+func TestACrashAfterTheIdleCheckAndBeforeTheIntentLeavesTheOldProviderAndARepeatRecovers(t *testing.T) {
 	e := providerEnv(t)
 	stop, claudeKsid := e.warm()
 	stop()
 	before := e.bindingRow()
-	errCrash := errors.New("crash after the suspend")
+	errCrash := errors.New("crash after the idle check")
 	e.svc.AfterSuspend = func(context.Context) error { return errCrash }
 	if _, err := e.selectProvider("codex", false); !errors.Is(err, errCrash) {
 		t.Fatalf("err = %v, want the crash", err)
 	}
 	e.svc.AfterSuspend = nil
-	if e.ksState(claudeKsid) != kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED {
+	if e.ksState(claudeKsid) != kagentapi.RuntimeState_RUNTIME_STATE_READY {
 		t.Fatalf("old Session is %s", e.ksState(claudeKsid))
 	}
 	now := e.bindingRow()

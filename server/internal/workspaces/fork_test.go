@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/oldsj/mainloop/server/internal/kagent"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // A forked session (checkpoints.go's commitFork, issue #311) inserts a workspace row already

@@ -37,7 +37,6 @@ WHERE s.id = sqlc.arg(session_id) AND s.user_id = sqlc.arg(user_id);
 -- name: SetBindingModelOverride :one
 UPDATE agent_bindings
 SET model_override = sqlc.narg(model_override)::text,
-    model_effort_touched = model_effort_touched OR sqlc.narg(model_override)::text IS NOT NULL,
     updated_at = now()
 WHERE session_id = sqlc.arg(session_id)
 RETURNING session_id, model_override, effort_override;
@@ -46,7 +45,6 @@ RETURNING session_id, model_override, effort_override;
 -- name: SetBindingEffortOverride :one
 UPDATE agent_bindings
 SET effort_override = sqlc.narg(effort_override)::text,
-    model_effort_touched = model_effort_touched OR sqlc.narg(effort_override)::text IS NOT NULL,
     updated_at = now()
 WHERE session_id = sqlc.arg(session_id)
 RETURNING session_id, model_override, effort_override;
@@ -234,7 +232,7 @@ SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.u
        b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id,
        b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
        b.credential_identity,
-       b.model_override, b.effort_override, coalesce(b.model_effort_touched, false) AS model_effort_touched,
+       b.model_override, b.effort_override,
        coalesce(b.mcp_grant_kind::text, '')::text AS binding_grant, s.user_id, s.title AS session_title,
        w.id AS workspace_id,
        coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,

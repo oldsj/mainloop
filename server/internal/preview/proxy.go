@@ -51,10 +51,11 @@ type Proxy struct {
 	OwnerID  string
 	Log      *slog.Logger
 
-	base     base
-	router   string // host:port of the Substrate router
-	atespace string
-	connect  time.Duration
+	base      base
+	router    string // host:port of the Substrate router's CONNECT-over-TLS listener
+	routerTLS routerTLS
+	atespace  string
+	connect   time.Duration
 
 	// Timings of the keep-awake leases; New sets production values and tests shorten them.
 	LeaseTTL      time.Duration
@@ -81,7 +82,9 @@ func New(cfg *config.Config, pool *pgxpool.Pool, w Waker, sessions SessionObserv
 	}
 	p := &Proxy{
 		Pool: pool, Waker: w, Sessions: sessions, OwnerID: cfg.Identity.OwnerID, Log: log,
-		base: b, router: router, atespace: cfg.Kagent.ActorAtespace, connect: cfg.Preview.ConnectTimeout.Duration(),
+		base: b, router: router,
+		routerTLS: routerTLS{serverName: cfg.Preview.RouterServerName, credential: cfg.Preview.RouterClientCredential, ca: cfg.Preview.RouterCA},
+		atespace:  cfg.Kagent.ActorAtespace, connect: cfg.Preview.ConnectTimeout.Duration(),
 		LeaseTTL: 60 * time.Second, RenewEvery: 20 * time.Second, HTTPLeaseWait: 10 * time.Second,
 		holder: uuid.NewString(), now: time.Now, awake: map[string]time.Time{},
 	}

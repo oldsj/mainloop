@@ -17,7 +17,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
-	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // ---- redirects -------------------------------------------------------------------------------
@@ -147,10 +147,8 @@ func TestSubscribeSequenceIsSingleUse(t *testing.T) {
 
 func TestRepliesForAnotherSessionAreOutcomeUnknown(t *testing.T) {
 	calls := map[string]func(c *kagent.Client, id string) error{
-		kagent.ProcGetSession:     func(c *kagent.Client, id string) error { _, err := c.GetSession(ctx, id); return err },
-		kagent.ProcSuspendSession: func(c *kagent.Client, id string) error { _, err := c.SuspendSession(ctx, id); return err },
-		kagent.ProcResumeSession:  func(c *kagent.Client, id string) error { _, err := c.ResumeSession(ctx, id); return err },
-		kagent.ProcDeleteSession:  func(c *kagent.Client, id string) error { _, err := c.DeleteSession(ctx, id); return err },
+		kagent.ProcGetSession:    func(c *kagent.Client, id string) error { _, err := c.GetSession(ctx, id); return err },
+		kagent.ProcDeleteSession: func(c *kagent.Client, id string) error { _, err := c.DeleteSession(ctx, id); return err },
 	}
 	tampers := map[string]func(*api.Session){
 		"other id":         func(s *api.Session) { s.Id = "someone-else" },
@@ -257,7 +255,7 @@ func TestCreateEchoIgnoresFieldsTheClientDoesNotKnow(t *testing.T) {
 		"depth":    func(s *api.Session) { s.Workspace.Depth = 2 },
 		"image":    func(s *api.Session) { s.DevelopmentEnvironment.Image = "other" },
 		"policy":   func(s *api.Session) { s.DevelopmentEnvironment.PolicyIdentity = "other" },
-		"agent":    func(s *api.Session) { s.Agent.Name = "other" },
+		"agent":    func(s *api.Session) { s.Agent.Ref.Name = "other" },
 		"platform": func(s *api.Session) { s.DevelopmentEnvironment.Platform = "linux/arm64" },
 	} {
 		t.Run(name, func(t *testing.T) {

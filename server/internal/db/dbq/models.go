@@ -43,7 +43,6 @@ type AgentBinding struct {
 	GuidanceDeliveryID         *string
 	ModelOverride              *string
 	EffortOverride             *string
-	ModelEffortTouched         bool
 }
 
 type AttentionItem struct {

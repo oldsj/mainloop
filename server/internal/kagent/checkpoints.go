@@ -3,12 +3,30 @@ package kagent
 import (
 	"context"
 
-	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // CreateCheckpoint creates a Checkpoint at a Session's terminal task. Calling again with the same
 // RequestID is safe: kagent dedupes on it and returns the Checkpoint it already made, the same way
 // CreateSession does (see [Client.CreateSession]).
+// CreateCheckpoint's FailedPrecondition reasons (kagent #94, ErrorInfo domain kagent.dev). Only a
+// READY checkpoint is acknowledged; Unavailable is reserved for an attempt left CREATING, which the
+// same request id resumes.
+const (
+	// ReasonCheckpointSnapshotPending: the snapshot is not ready yet. Retry the same request id
+	// and head task.
+	ReasonCheckpointSnapshotPending = "KAGENT_CHECKPOINT_SNAPSHOT_PENDING"
+	// ReasonCheckpointConversationAdvanced: the conversation moved past the expected head task.
+	// Choose a new boundary.
+	ReasonCheckpointConversationAdvanced = "KAGENT_CHECKPOINT_CONVERSATION_ADVANCED"
+	// ReasonCheckpointRuntimeNotSuspended: the Actor was running, so there was no stable snapshot.
+	// The request is recorded failed; a new attempt needs a new request id.
+	ReasonCheckpointRuntimeNotSuspended = "KAGENT_CHECKPOINT_RUNTIME_NOT_SUSPENDED"
+	// ReasonCheckpointFailed: the snapshot copy failed, or a replay of a failed request id. A new
+	// attempt needs a new request id.
+	ReasonCheckpointFailed = "KAGENT_CHECKPOINT_FAILED"
+)
+
 func (c *Client) CreateCheckpoint(ctx context.Context, req *api.CreateCheckpointRequest) (*api.Checkpoint, error) {
 	const op = "CheckpointService CreateCheckpoint"
 	resp, err := unary(ctx, c, op, c.checkpointCl.CreateCheckpoint, req)

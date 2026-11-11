@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/oldsj/mainloop/server/internal/api"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // The preparation observation is a bounded projection of the kagent Session that GetSession already
@@ -116,6 +116,8 @@ func operationName(o kagentapi.RuntimeOperation) (api.NativePreparationObservati
 		return "resume", true
 	case kagentapi.RuntimeOperation_RUNTIME_OPERATION_DELETE:
 		return "delete", true
+	case kagentapi.RuntimeOperation_RUNTIME_OPERATION_REVERT:
+		return "revert", true
 	case kagentapi.RuntimeOperation_RUNTIME_OPERATION_NONE:
 		return "none", true
 	}

@@ -47,7 +47,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/progress"
 	"github.com/oldsj/mainloop/server/internal/providers"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // DeliveryChannel is the notification channel that wakes the delivery loop.
@@ -145,8 +145,7 @@ type Kagent interface {
 	// ObserveSession is GetSession for display: a Session without a confirmed context is returned.
 	ObserveSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	DeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
-	ResumeSession(ctx context.Context, id string) (*kagentapi.Session, error)
-	SuspendSession(ctx context.Context, id string) (*kagentapi.Session, error)
+	ForceDeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	GetAgent(ctx context.Context, ref kagent.AgentRef) (*kagentapi.Agent, error)
 	SendMessage(ctx context.Context, agent kagent.AgentRef, p kagent.SendParams) iter.Seq2[a2a.Event, error]
 	GetTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)
@@ -275,12 +274,16 @@ type Service struct {
 	// AfterIntent is a test seam: it runs after a main switch intent commits and before the create;
 	// an error it returns ends the request there, as a crash would.
 	AfterIntent func(ctx context.Context) error
-	// AfterSuspend is a test seam: it runs after a switch suspended the old native Session and before
+	// AfterSuspend is a test seam: it runs after a switch confirmed the old native Session idle and before
 	// the intent commits; an error it returns ends the request there, as a crash would.
 	AfterSuspend func(ctx context.Context) error
 	// Providers resolves a session's Agent from its binding, and a new session's provider.
 	Providers *providers.Registry
-	// Waker, when set, readies a workspace session's runtime before each send.
+	// ActorAtespace is the Substrate atespace Sessions' Actors run in, for naming a sleeping
+	// Session's Actor (see liveactor.Of).
+	ActorAtespace string
+	// Waker, when set, admits a send to a workspace session (it refuses a workspace being deleted)
+	// and records the use.
 	Waker Waker
 	// Credentials publishes the MCP credential of a binding that needs one before its kagent Session
 	// is created, and revokes it when the session ends. Nil creates sessions without MCP tools.
@@ -717,7 +720,7 @@ func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, reg *providers
 	health HealthSink, waker Waker, prog *progress.Tracker, log *slog.Logger) *Service {
 	return &Service{
 		Pool: pool, Kagent: k, OwnerID: cfg.Identity.OwnerID, Log: log,
-		Providers: reg, Credentials: creds, Health: health, Waker: waker, Progress: prog,
+		Providers: reg, Credentials: creds, Health: health, Waker: waker, Progress: prog, ActorAtespace: cfg.Kagent.ActorAtespace,
 		Agent:          kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainAgent},
 		MainProvider:   cfg.Main.Provider,
 		MainCodexAgent: kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainCodexAgent},

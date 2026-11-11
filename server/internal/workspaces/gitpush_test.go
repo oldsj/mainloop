@@ -26,7 +26,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/pushgate"
-	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // This upstream uses real Git and a bare repository; no GitHub or live native agent is contacted.
@@ -567,7 +567,9 @@ func TestWorkspacePushReservationBeforeRPCAndNoTransactionAcrossIO(t *testing.T)
 
 // kagent parks an idle Actor and attests the runtime only while one runs, so enrollment wakes the
 // Session and waits for the Actor instead of looping on an unattested runtime.
-func TestWorkspacePushEnrollmentWakesAnIdleActor(t *testing.T) {
+// kagent has no resume call: enrollment waits for the workspace's preparation or first message to
+// wake the Actor.
+func TestWorkspacePushEnrollmentWaitsForAnAwakeActor(t *testing.T) {
 	h := newHarness(t, nil)
 	w, _, u := queuedPushWorkspace(t, h, "feature/test", true)
 	createPushSession(t, h)
@@ -583,8 +585,8 @@ func TestWorkspacePushEnrollmentWakesAnIdleActor(t *testing.T) {
 	if err := reconcilePush(t, h, w.ID); err != nil {
 		t.Fatal(err)
 	}
-	if h.fake.Count(kagent.ProcResumeSession) != 1 || u.metadata != 0 || pushCredentials(h, w.ID) != 0 {
-		t.Fatalf("idle Actor: resumes=%d metadata=%d credentials=%d", h.fake.Count(kagent.ProcResumeSession), u.metadata, pushCredentials(h, w.ID))
+	if u.metadata != 0 || pushCredentials(h, w.ID) != 0 {
+		t.Fatalf("idle Actor: metadata=%d credentials=%d", u.metadata, pushCredentials(h, w.ID))
 	}
 	awake = true
 	if err := reconcilePush(t, h, w.ID); err != nil {

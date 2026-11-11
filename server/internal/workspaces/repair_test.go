@@ -12,7 +12,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // A refusal that lands after Create already returned keeps the rows (an earlier attempt's outcome
@@ -174,67 +174,20 @@ func TestScheduledOrphanSweepLogsWhenBlocked(t *testing.T) {
 	}
 }
 
-// Interim: without the delivery ledger a running turn is invisible, so idle suspend stays off.
-func TestIdleSweepIsOffWithoutADeliveryLedger(t *testing.T) {
-	names := func(h *harness) map[string]bool {
-		out := map[string]bool{}
+// kagent parks idle workspaces itself, so there is no idle sweep, with or without a delivery ledger.
+func TestThereIsNoIdleSweep(t *testing.T) {
+	h := newHarness(t, nil)
+	for _, ledger := range []bool{true, false} {
+		if !ledger {
+			h.svc.Deliveries = nil
+		}
+		got := map[string]bool{}
 		for _, sw := range h.svc.sweeps() {
-			out[sw.Name] = true
+			got[sw.Name] = true
 		}
-		return out
-	}
-	h := newHarness(t, nil)
-	if got := names(h); !got["workspace-idle"] || !got["workspace-archived"] || !got["workspace-orphans"] {
-		t.Fatalf("%v", got)
-	}
-	h.svc.Deliveries = nil
-	got := names(h)
-	if got["workspace-idle"] || !got["workspace-archived"] || !got["workspace-orphans"] {
-		t.Fatalf("%v", got)
-	}
-	if !strings.Contains(h.logs.String(), "idle suspend is off") {
-		t.Fatalf("not logged: %s", h.logs.String())
-	}
-}
-
-// A session kagent cannot suspend marks the workspace, so later passes do not queue it again.
-func TestIdleSuspendOfAFailedSessionDoesNotChurn(t *testing.T) {
-	h := newHarness(t, nil)
-	w := h.running()
-	h.backdate(w.WorkspaceId)
-	h.getState.Store(int32(kagentapi.RuntimeState_RUNTIME_STATE_FAILED))
-	h.run()
-	for range 3 {
-		if err := h.svc.SuspendIdle(bg); err != nil {
-			t.Fatal(err)
+		if got["workspace-idle"] || !got["workspace-archived"] || !got["workspace-orphans"] {
+			t.Fatalf("ledger=%v: %v", ledger, got)
 		}
-		eventually(t, "settled", func() bool { return h.op(w.WorkspaceId, "suspend").State != dbstate.OpPending })
-	}
-	if n := h.suspendOps(); n != 1 {
-		t.Fatalf("%d suspend ops", n)
-	}
-	if h.fake.Count(kagent.ProcSuspendSession) != 0 {
-		t.Fatal("suspended a failed session")
-	}
-	if st := h.op(w.WorkspaceId, "suspend").State; st != dbstate.OpRejected {
-		t.Fatalf("op %s", st)
-	}
-}
-
-func TestIdleSuspendOfAVanishedSessionDoesNotChurn(t *testing.T) {
-	h := newHarness(t, nil)
-	w := h.running()
-	h.backdate(w.WorkspaceId)
-	h.fake.FailNext(kagent.ProcGetSession, grpcFault(connect.CodeNotFound))
-	h.run()
-	for range 2 {
-		if err := h.svc.SuspendIdle(bg); err != nil {
-			t.Fatal(err)
-		}
-		eventually(t, "settled", func() bool { return h.op(w.WorkspaceId, "suspend").State != dbstate.OpPending })
-	}
-	if n := h.suspendOps(); n != 1 {
-		t.Fatalf("%d suspend ops", n)
 	}
 }
 

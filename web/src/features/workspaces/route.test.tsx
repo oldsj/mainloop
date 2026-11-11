@@ -67,14 +67,14 @@ describe('workspace route', () => {
       ),
       portsRead(() => HttpResponse.json({ ports: [] })),
       tasksRead([]),
-      workspaceAction('suspend', problem(409, 'Workspace has an open delivery.'))
+      workspaceAction('refresh', problem(409, 'Workspace has an open delivery.'))
     );
     const user = userEvent.setup();
     const { router } = renderRoute('/workspaces/w1');
 
     // Longer than the default: the app's first render through the real router is slow under a full run.
     await user.click(
-      await screen.findByRole('button', { name: 'Suspend workspace' }, { timeout: 8000 })
+      await screen.findByRole('button', { name: 'Refresh status' }, { timeout: 8000 })
     );
     expect(await screen.findByTestId('workspace-action-notice')).toHaveTextContent(
       'Workspace has an open delivery.'

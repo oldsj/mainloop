@@ -6,10 +6,12 @@ import (
 	"testing"
 )
 
-// deployedSourceRevision is oldsj/infrastructure's k8s/apps/kagent/source-lock.yaml
-// controllerRuntime sourceRevision, as of infra PR #218. Update it, and SOURCE's commit, together
-// when infra re-pins kagent.
-const deployedSourceRevision = "a1164013675c2ad49ec4cc2b6b12d3dfa4a456d6"
+// deployedSourceRevision is the kagent revision the vendored protos are pinned to: the tip of
+// oldsj/kagent mainloop-substrate-1-0 when it was vendored (see SOURCE).
+// It is not yet a revision infra deploys. Update it, and SOURCE's commit, together when the fork
+// moves, and when infra pins the ported fork in oldsj/infrastructure's
+// k8s/apps/kagent/source-lock.yaml.
+const deployedSourceRevision = "7988e65bf90aecd84d537e58dec585527e75942b"
 
 // TestSourcePinnedToDeployedRevision fails if the vendored protos (and the generated clients built
 // from them) drift from the kagent commit actually deployed, which SOURCE and this test must agree

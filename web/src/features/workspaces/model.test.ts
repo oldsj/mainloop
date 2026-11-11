@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { workspaceFixture } from '@/test/fixtures';
 import {
-  canResume,
-  canSuspend,
+  ASLEEP,
   declaredPorts,
   digestPrefix,
   isWorkspace,
@@ -79,12 +78,9 @@ describe('previewLinks', () => {
 });
 
 describe('lifecycle rules', () => {
-  it('offers suspend only from running, and resume only from suspended', () => {
-    expect(canSuspend('running')).toBe(true);
-    expect(canSuspend('suspended')).toBe(false);
-    expect(canResume('suspended')).toBe(true);
-    expect(canResume('running')).toBe(false);
-    expect(canResume('failed')).toBe(false);
+  it('says a suspended workspace is asleep and wakes on use', () => {
+    expect(stateHint('suspended')).toBe(ASLEEP);
+    expect(ASLEEP).toBe('Asleep. It wakes when you send a message or open a preview.');
   });
 
   it('says so while a state change is in flight, and when kagent has not confirmed', () => {
@@ -92,6 +88,7 @@ describe('lifecycle rules', () => {
     expect(stateHint('resuming')).toMatch(/Changing state/);
     expect(stateHint('unknown')).toBe(UNCONFIRMED);
     expect(stateHint('running')).toBeNull();
+    expect(stateHint('failed')).toBeNull();
   });
 
   it('turns an unconfirmed result from an action into a warning, never a success', () => {

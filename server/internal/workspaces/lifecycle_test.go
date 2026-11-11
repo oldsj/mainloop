@@ -15,7 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 var bg = context.Background()
@@ -55,7 +55,7 @@ func TestCreateBindsOneSessionAndPublishes(t *testing.T) {
 	if row.KagentSessionID == nil || *row.KagentSessionID != ss[0].GetId() {
 		t.Fatalf("binding %v, kagent %s", row.KagentSessionID, ss[0].GetId())
 	}
-	if ss[0].GetAgent().GetName() != h.cfg.Kagent.WorkspaceClaudeAgent {
+	if ss[0].GetAgent().GetRef().GetName() != h.cfg.Kagent.WorkspaceClaudeAgent {
 		t.Fatalf("agent %v", ss[0].GetAgent())
 	}
 	if w.SessionId != w.WorkspaceId || w.PublicationMode != api.ReadOnly || *w.PublicationReason != api.Disabled {
@@ -224,63 +224,18 @@ func TestRefreshRacingTheLoopCreatesOneSession(t *testing.T) {
 	}
 }
 
-func TestSuspendResumeAndEvents(t *testing.T) {
-	h := newHarness(t, nil)
-	w := h.running()
-	h.run()
-	before := h.events()
-	got, err := h.svc.Suspend(bg, w.WorkspaceId)
-	if err != nil || got.ObservedState != api.WorkspaceObservedStateSuspended {
-		t.Fatalf("%v %+v", err, got)
-	}
-	if h.row(w.WorkspaceId).IdleSuspendedAt == nil {
-		t.Fatal("idle_suspended_at not set")
-	}
-	if h.events() != before+1 {
-		t.Fatalf("events %d -> %d", before, h.events())
-	}
-	if _, err := h.svc.Suspend(bg, w.WorkspaceId); err != nil { // already suspended: no-op
-		t.Fatal(err)
-	}
-	got, err = h.svc.Resume(bg, w.WorkspaceId)
-	if err != nil || got.ObservedState != api.WorkspaceObservedStateRunning || got.LastActivityAt == nil {
-		t.Fatalf("%v %+v", err, got)
-	}
-	if n := h.fake.Count(kagent.ProcSuspendSession); n != 1 {
-		t.Fatalf("suspend calls %d", n)
-	}
-	if _, err := h.svc.Resume(bg, w.WorkspaceId); err != nil || h.fake.Count(kagent.ProcResumeSession) != 1 {
-		t.Fatalf("%v, resume calls %d", err, h.fake.Count(kagent.ProcResumeSession))
-	}
-}
-
-// Mined: test_suspend_refuses_while_a_turn_is_sending_or_delivered_or_queued.
-func TestSuspendRefusesWhileATurnIsOpen(t *testing.T) {
-	h := newHarness(t, nil)
-	w := h.running()
-	h.run()
-	h.dl.setOpen(w.WorkspaceId, true)
-	_, err := h.svc.Suspend(bg, w.WorkspaceId)
-	var rej *RejectedError
-	if !errors.As(err, &rej) {
-		t.Fatalf("%v", err)
-	}
-	if h.fake.Count(kagent.ProcSuspendSession) != 0 {
-		t.Fatal("suspend reached kagent")
-	}
-	h.dl.setOpen(w.WorkspaceId, false)
-	if _, err := h.svc.Suspend(bg, w.WorkspaceId); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestAnotherOperationOpenIsBusy(t *testing.T) {
 	h := newHarness(t, map[string]string{"WORKSPACE_OPERATION_WAIT_SECONDS": "0.1"})
 	w, err := h.create(api.CreateWorkspaceRequest{}) // create stays queued: no runner
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.svc.Suspend(bg, w.WorkspaceId); !errors.Is(err, ErrBusy) {
+	// Preview traffic is not held while the workspace is still being created.
+	if err := h.svc.WakeForPreview(bg, w.WorkspaceId); !errors.Is(err, ErrBusy) {
+		t.Fatalf("%v", err)
+	}
+	// A second create joins nothing: one operation at a time.
+	if _, err := h.svc.enqueue(bg, w.WorkspaceId, dbstate.OpResume, nil); !errors.Is(err, ErrBusy) {
 		t.Fatalf("%v", err)
 	}
 }
@@ -378,19 +333,6 @@ func TestDeleteOfAnUnknownCreateDeletesTheSession(t *testing.T) {
 	}
 }
 
-// Mined: test_a_resume_restarts_the_debounce_but_a_ready_session_is_not_resumed,
-// test_a_refused_resume_is_a_conflict.
-func TestResumeRefusedForAFailedSession(t *testing.T) {
-	h := newHarness(t, nil)
-	w := h.running()
-	h.run()
-	h.getState.Store(int32(kagentapi.RuntimeState_RUNTIME_STATE_FAILED))
-	var rej *RejectedError
-	if _, err := h.svc.Resume(bg, w.WorkspaceId); !errors.As(err, &rej) {
-		t.Fatalf("%v", err)
-	}
-}
-
 func cmpOr(a, b string) string {
 	if a != "" {
 		return a
@@ -404,19 +346,34 @@ func TestStateMapping(t *testing.T) {
 		state, op string
 		want      api.WorkspaceObservedState
 		detail    bool
+		awake     bool
+		asleep    bool
 	}{
-		{"RUNTIME_STATE_READY", "RUNTIME_OPERATION_NONE", api.WorkspaceObservedStateRunning, false},
-		{"RUNTIME_STATE_READY", "RUNTIME_OPERATION_RESUME", api.WorkspaceObservedStateResuming, true},
-		{"RUNTIME_STATE_READY", "RUNTIME_OPERATION_SUSPEND", api.WorkspaceObservedStateSuspending, false},
-		{"RUNTIME_STATE_CREATING", "RUNTIME_OPERATION_CREATE", api.WorkspaceObservedStateResuming, true},
-		{"RUNTIME_STATE_SUSPENDED", "RUNTIME_OPERATION_NONE", api.WorkspaceObservedStateSuspended, false},
-		{"RUNTIME_STATE_FAILED", "RUNTIME_OPERATION_NONE", api.WorkspaceObservedStateFailed, true},
-		{"RUNTIME_STATE_DELETING", "RUNTIME_OPERATION_DELETE", api.WorkspaceObservedStateUnknown, false},
-		{"RUNTIME_STATE_DELETED", "RUNTIME_OPERATION_NONE", api.WorkspaceObservedStateUnknown, false},
-		{"RUNTIME_STATE_UNSPECIFIED", "RUNTIME_OPERATION_UNSPECIFIED", api.WorkspaceObservedStateUnknown, false},
+		{state: "RUNTIME_STATE_READY", op: "RUNTIME_OPERATION_NONE", want: api.WorkspaceObservedStateRunning, awake: true},
+		// Asleep: READY with an association that is not current.
+		{state: "RUNTIME_STATE_READY", op: "RUNTIME_OPERATION_NONE", want: api.WorkspaceObservedStateSuspended, asleep: true},
+		// No association: kagent did not say, and the Session runs on use.
+		{state: "RUNTIME_STATE_READY", op: "RUNTIME_OPERATION_NONE", want: api.WorkspaceObservedStateRunning},
+		// kagent's own lifecycle work is brief: the workspace is on its way to running.
+		{state: "RUNTIME_STATE_READY", op: "RUNTIME_OPERATION_RESUME", want: api.WorkspaceObservedStateResuming},
+		{state: "RUNTIME_STATE_READY", op: "RUNTIME_OPERATION_SUSPEND", want: api.WorkspaceObservedStateResuming},
+		{state: "RUNTIME_STATE_READY", op: "RUNTIME_OPERATION_REVERT", want: api.WorkspaceObservedStateResuming},
+		{state: "RUNTIME_STATE_SUSPENDED", op: "RUNTIME_OPERATION_NONE", want: api.WorkspaceObservedStateResuming},
+		{state: "RUNTIME_STATE_CREATING", op: "RUNTIME_OPERATION_CREATE", want: api.WorkspaceObservedStateResuming, detail: true},
+		{state: "RUNTIME_STATE_FAILED", op: "RUNTIME_OPERATION_NONE", want: api.WorkspaceObservedStateFailed, detail: true},
+		{state: "RUNTIME_STATE_DELETING", op: "RUNTIME_OPERATION_DELETE", want: api.WorkspaceObservedStateUnknown, detail: false},
+		{state: "RUNTIME_STATE_DELETED", op: "RUNTIME_OPERATION_NONE", want: api.WorkspaceObservedStateUnknown, detail: false},
+		{state: "RUNTIME_STATE_UNSPECIFIED", op: "RUNTIME_OPERATION_UNSPECIFIED", want: api.WorkspaceObservedStateUnknown, detail: false},
 	}
 	for _, c := range cases {
-		got, detail := stateOf(&kagentapi.Session{State: kagentapi.RuntimeState(S[c.state]), Operation: kagentapi.RuntimeOperation(O[c.op])})
+		sess := &kagentapi.Session{State: kagentapi.RuntimeState(S[c.state]), Operation: kagentapi.RuntimeOperation(O[c.op])}
+		if c.asleep {
+			sess.RuntimeAssociation = &kagentapi.RuntimeAssociation{CurrentActive: false}
+		}
+		if c.awake {
+			sess.RuntimeAssociation = &kagentapi.RuntimeAssociation{CurrentActive: true}
+		}
+		got, detail := stateOf(sess)
 		if got != c.want || (detail != nil) != c.detail {
 			t.Errorf("%s/%s: %s %v", c.state, c.op, got, detail)
 		}

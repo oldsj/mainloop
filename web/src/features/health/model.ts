@@ -280,7 +280,7 @@ export function stopText(stop: HealthStop): string {
 }
 
 export const STOPS_NOTE =
-  'Mainloop asked these runtimes to stop, then tried to suspend and delete them, and still cannot confirm they stopped. Each keeps its capacity and writer claim until it does.';
+  'Mainloop asked these runtimes to stop, then tried to delete them, and still cannot confirm they stopped. Each keeps its capacity and writer claim until it does.';
 
 export function unreadableStopsText(count: number): string {
   return count === 1

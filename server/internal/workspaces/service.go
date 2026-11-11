@@ -296,24 +296,6 @@ func (s *Service) change(ctx context.Context, id string, kind dbstate.WorkspaceO
 	return s.lookup(ctx, id)
 }
 
-// Suspend parks the workspace and returns it once kagent confirms.
-func (s *Service) Suspend(ctx context.Context, id string) (api.WorkspaceLifecycle, error) {
-	w, err := s.change(ctx, id, dbstate.OpSuspend)
-	if err != nil {
-		return api.WorkspaceLifecycle{}, err
-	}
-	return s.lifecycle(ctx, w), nil
-}
-
-// Resume wakes the workspace and returns it once kagent confirms. Resuming counts as activity.
-func (s *Service) Resume(ctx context.Context, id string) (api.WorkspaceLifecycle, error) {
-	w, err := s.change(ctx, id, dbstate.OpResume)
-	if err != nil {
-		return api.WorkspaceLifecycle{}, err
-	}
-	return s.lifecycle(ctx, w), nil
-}
-
 // Delete removes the workspace's kagent Session and then its rows. The rows stay until kagent
 // confirms the Session is gone.
 func (s *Service) Delete(ctx context.Context, id string) error {
@@ -347,59 +329,27 @@ func (s *Service) Refresh(ctx context.Context, id string) (api.WorkspaceLifecycl
 	return s.lifecycle(ctx, w), nil
 }
 
-// wakeRounds bounds how often Wake starts over because another operation took the workspace
-// between its checks.
-const wakeRounds = 4
-
-// Wake makes sure the workspace is running before something talks to it (preview traffic, a
-// message for its session). A running workspace is only touched. One that is being suspended is
-// waited for, and then resumed; a suspended one is resumed through kagent and the call returns
-// once kagent confirms. Concurrent calls share one resume operation. A caller whose context ends
-// does not cancel the resume; the lifecycle loop finishes it. It returns a *RejectedError for a
-// workspace that cannot be resumed and an *UnconfirmedError when kagent has not confirmed in time,
-// so the caller can retry.
+// Wake admits something that is about to talk to the workspace (a message for its session) and
+// records the use. kagent suspends an idle Session's Actor itself and wakes it on the next send,
+// workspace preparation or attach, so there is nothing to resume: this only refuses a workspace
+// that is being deleted, with a *RejectedError.
 func (s *Service) Wake(ctx context.Context, workspaceID string) error {
-	for range wakeRounds {
-		w, err := s.lookup(ctx, workspaceID)
-		if err != nil {
-			return err
-		}
-		open, err := dbq.New(s.Pool).GetOpenWorkspaceOp(ctx, workspaceID)
-		switch {
-		case err == nil && open.Kind == dbstate.OpDelete:
-			return &RejectedError{Detail: "The workspace is being deleted"}
-		case err == nil && open.Kind == dbstate.OpSuspend:
-			// A suspend that started before the message is let finish; then the workspace is resumed.
-			// One that starts after the message was recorded finds the open turn and stands down.
-			if _, err := s.await(ctx, open); err != nil {
-				return err
-			}
-			continue
-		case err != nil && !errors.Is(err, pgx.ErrNoRows):
-			return err
-		}
-		if w.KagentSessionID != nil {
-			if sess := s.observe(ctx, w.sessionID()); sess != nil {
-				if state, _ := stateOf(sess); state == api.WorkspaceObservedStateRunning {
-					return s.Touch(ctx, workspaceID)
-				}
-			}
-		}
-		if _, err := s.change(ctx, workspaceID, dbstate.OpResume); !errors.Is(err, ErrBusy) {
-			return err
-		}
+	if _, err := s.lookup(ctx, workspaceID); err != nil {
+		return err
 	}
-	return ErrBusy
+	open, err := dbq.New(s.Pool).GetOpenWorkspaceOp(ctx, workspaceID)
+	switch {
+	case err == nil && open.Kind == dbstate.OpDelete:
+		return &RejectedError{Detail: "The workspace is being deleted"}
+	case err != nil && !errors.Is(err, pgx.ErrNoRows):
+		return err
+	}
+	return s.Touch(ctx, workspaceID)
 }
 
-// WakeForPreview makes sure the workspace is running before preview traffic reaches it, without
-// waiting out other work. A running workspace is only touched. If a suspend (or a create) is open
-// it answers ErrBusy at once, and the proxy shows its waking page with Retry-After instead of
-// holding the request; a delete is a *RejectedError. Otherwise a suspended workspace has its resume
-// queued once (concurrent calls share the open one) and the call returns once kagent confirms, for
-// a bounded wait. A caller whose context ends does not cancel the resume; the lifecycle loop
-// finishes it. It returns an *UnconfirmedError when kagent has not confirmed in time, so the caller
-// can retry. [Service.Wake] is the variant that waits out an open suspend, for the delivery path.
+// WakeForPreview admits preview traffic the same way, and answers ErrBusy while the workspace is
+// still being created, so the proxy shows its waking page with Retry-After. The proxy's connection
+// through the Substrate router is what wakes a sleeping Actor.
 func (s *Service) WakeForPreview(ctx context.Context, workspaceID string) error {
 	w, err := s.lookup(ctx, workspaceID)
 	if err != nil {
@@ -409,23 +359,15 @@ func (s *Service) WakeForPreview(ctx context.Context, workspaceID string) error 
 	switch {
 	case err == nil && open.Kind == dbstate.OpDelete:
 		return &RejectedError{Detail: "The workspace is being deleted"}
-	case err == nil && open.Kind != dbstate.OpResume:
+	case err == nil && open.Kind == dbstate.OpCreate, w.KagentSessionID == nil:
 		return ErrBusy
 	case err != nil && !errors.Is(err, pgx.ErrNoRows):
 		return err
 	}
-	if w.KagentSessionID != nil {
-		if sess := s.observe(ctx, w.sessionID()); sess != nil {
-			if state, _ := stateOf(sess); state == api.WorkspaceObservedStateRunning {
-				return s.Touch(ctx, workspaceID)
-			}
-		}
-	}
-	_, err = s.change(ctx, workspaceID, dbstate.OpResume)
-	return err
+	return s.Touch(ctx, workspaceID)
 }
 
-// Touch records owner activity (preview traffic), which defers the idle suspend.
+// Touch records owner activity (preview traffic, a message) for the workspace's last-activity time.
 func (s *Service) Touch(ctx context.Context, workspaceID string) error {
 	_, err := dbq.New(s.Pool).TouchWorkspace(ctx, workspaceID)
 	return err

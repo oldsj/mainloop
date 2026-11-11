@@ -111,8 +111,8 @@ func TestAReplacementSessionInTheTurnStaysOnThePinnedAgent(t *testing.T) {
 	if !ok {
 		t.Fatal("replacement missing")
 	}
-	if sess.GetAgent().GetNamespace() != e.svc.Agent.Namespace || sess.GetAgent().GetName() != "mainloop-main" {
-		t.Fatalf("replacement created on %s/%s, want the pinned mainloop-main", sess.GetAgent().GetNamespace(), sess.GetAgent().GetName())
+	if sess.GetAgent().GetRef().GetNamespace() != e.svc.Agent.Namespace || sess.GetAgent().GetRef().GetName() != "mainloop-main" {
+		t.Fatalf("replacement created on %s/%s, want the pinned mainloop-main", sess.GetAgent().GetRef().GetNamespace(), sess.GetAgent().GetRef().GetName())
 	}
 }
 

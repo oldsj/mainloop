@@ -403,8 +403,8 @@ before its brief is delivered) answers unknown, and the sweep applies only the r
 rather than judging it lost. With a kagent session resolved, `kagent.Client.ObserveLiveness`, through `ObserveSession`,
 answers whether it exists at all (`connect.CodeNotFound` reports it does not) and whether its
 `RuntimeState` is terminal (failed, deleting or deleted). Activity is not kagent's own
-`Session.updated_at`: that field only moves on a lifecycle operation (create, rename, resume,
-suspend, delete), never a turn, so a long working turn would otherwise read as idle. Instead
+`Session.updated_at`: that field only moves on a lifecycle operation (create, rename,
+delete), never a turn, so a long working turn would otherwise read as idle. Instead
 `KagentLiveness` lists the A2A tasks of every native context the session has used (the same
 contexts the stop observer lists); a task waiting on the owner counts as activity right
 now, and otherwise the later of the newest task status timestamp, the sessions delivery ledger's
@@ -453,8 +453,11 @@ Status: **implemented**. See `docs/specs/tasks.md` (capacity and the runtime sto
 itself; this section is the signal that a stop did not settle.
 
 Asking a task's runtime to stop is confirmed by the stop observer, which also forces a runtime that
-never answers: it suspends one with no open turn, and deletes the native session of one whose turn is
-still working (kagent will not suspend a working turn), with its workspace and unpushed work. When 8 looks pass with no confirmation the attempt's
+never answers. kagent has no suspend call, so nothing is pressed at the first grace
+(`ForceSuspendAfter`, default 2 minutes): a runtime kagent has put to sleep (no current Actor)
+counts as stopped, as does one that is gone or settled terminal. At the delete grace (default 5
+minutes) the observer deletes the native session with kagent's `DeleteSession(force=true)`, which
+terminates a running turn, with its workspace and unpushed work. When 8 looks pass with no confirmation the attempt's
 `stop_state` becomes `unresolved`. A task that is still open is blocked for reconciliation and the
 owner sees it as a normal attention card. A task that has already ended (cancelled by the owner
 or with its parent) deliberately gets no owner card: it is internal cleanup, and the owner decided

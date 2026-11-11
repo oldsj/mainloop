@@ -1,10 +1,6 @@
-// A runtime that never answers a cancel (crashed, suspended, or wedged inside a turn) must not hold its
-// attempt's claim and capacity, or the owner's attention, for good. Once a requested stop has waited
-// long enough the resolver has the observer suspend the runtime, and when that does not settle it
-// delete the native session. How long it has waited is time since the request, not a number of looks.
-// A turn that is still open cannot be suspended: kagent refuses a suspend while a task is working, so
-// an unresponsive running turn is deleted, and only a runtime with no open turn is suspended.
-
+// A runtime that never answers a cancel (crashed or wedged inside a turn) must not hold its claim
+// and capacity for ever. kagent parks an idle runtime itself, and a sleeping one counts as stopped.
+// One that stays awake past the delete grace has its native session deleted by force.
 package tasks_test
 
 import (
@@ -18,11 +14,10 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
 
-	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/tasks"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // fakeNativeSession is the kagent session the observer checks and deletes. Deleting moves it to
@@ -41,7 +36,7 @@ func (f *fakeNativeSession) ObserveLiveness(context.Context, string) (kagent.Ses
 	return f.live, nil
 }
 
-func (f *fakeNativeSession) DeleteSession(context.Context, string) (*kagentapi.Session, error) {
+func (f *fakeNativeSession) ForceDeleteSession(context.Context, string) (*kagentapi.Session, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.deletes++
@@ -70,39 +65,9 @@ func (f *fakeNativeSession) deleteCount() int {
 	return f.deletes
 }
 
-// fakeSuspender is the workspace service's suspend. It parks the native session, or refuses the way
-// kagent does while one of the session's tasks is still working (admitAgentLifecycle answers
-// Aborted); any task that is not working lets the suspend through.
-type fakeSuspender struct {
-	mu      sync.Mutex
-	native  *fakeNativeSession
-	k       *fakeKagent
-	suspend int
-}
-
-func (f *fakeSuspender) Suspend(context.Context, string) (api.WorkspaceLifecycle, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.suspend++
-	if f.k.working() {
-		return api.WorkspaceLifecycle{}, &kagent.SessionError{
-			Op: "AgentService SuspendAgent", Code: connect.CodeAborted, Detail: "a task is working", Wire: true,
-		}
-	}
-	f.native.set(kagent.SessionLiveness{Exists: true, Suspended: true})
-	return api.WorkspaceLifecycle{}, nil
-}
-
-func (f *fakeSuspender) suspends() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.suspend
-}
-
 type stuck struct {
 	r       *rig
 	native  *fakeNativeSession
-	suspend *fakeSuspender
 	client  *stopProbeClient
 	k       *fakeKagent
 	child   string
@@ -111,9 +76,8 @@ type stuck struct {
 }
 
 // stuckStop provisions a cancelled child whose native runtime never answers: every cancel is an
-// uncertain timeout, as in prod, and the session reads present and not terminal until suspended or
-// deleted. The turn is working, so the workspace service's suspend refuses, as kagent does while a
-// turn is open, unless a test lands the turn in another state.
+// uncertain timeout, as in prod, and the session reads present, awake and not terminal until kagent
+// parks it or it is deleted.
 func stuckStop(t *testing.T) *stuck {
 	t.Helper()
 	r, _, _, child, attempt, session := stopProbeProvision(t)
@@ -122,15 +86,14 @@ func stuckStop(t *testing.T) *stuck {
 	c := &stopProbeClient{k: k}
 	c.setCancelError(true)
 	native := &fakeNativeSession{live: kagent.SessionLiveness{Exists: true}}
-	susp := &fakeSuspender{native: native, k: k}
 	r.ses.Kagent = c
 	r.svc.Sessions = r.ses.Service
 	r.svc.StopObserver = &tasks.KagentStops{
-		Pool: r.pool, OwnerID: owner, Sessions: r.ses.Service, Kagent: c, Liveness: native, Workspaces: susp, Deleter: native,
+		Pool: r.pool, OwnerID: owner, Sessions: r.ses.Service, Kagent: c, Liveness: native, Deleter: native,
 	}
 	r.exec(`UPDATE agent_bindings SET kagent_session_id = 'ks-native' WHERE session_id = $1`, session)
 	r.briefRow(attempt, `state='delivered', task_id='task-1', kagent_session_id='ks-native'`)
-	return &stuck{r: r, native: native, suspend: susp, client: c, k: k, child: child, attempt: attempt, session: session}
+	return &stuck{r: r, native: native, client: c, k: k, child: child, attempt: attempt, session: session}
 }
 
 func cancelChild(t *testing.T, r *rig, child string) {
@@ -188,49 +151,43 @@ func (s *stuck) nativeDeleted() (attempt, binding bool) {
 	return attempt, binding
 }
 
-// A runtime with no open turn is stopped by suspending it, which keeps its workspace. Within the
-// default grace nothing is forced however often the resolver looks; after it, the runtime is
-// suspended and the suspended session counts as stopped. This is the narrow case: the turn is no
-// longer working (here it waits for input), so kagent lets the suspend through.
-func TestStopOfARuntimeWithNoOpenTurnIsSuspendedAfterTheDefaultGrace(t *testing.T) {
+// Nothing suspends a runtime any more: kagent parks an idle Actor itself. A stop whose turn is no
+// longer working (here it waits for input) is not forced at the old suspend grace, and it settles
+// without a delete once kagent has put the runtime to sleep.
+func TestStopOfARuntimeWithNoOpenTurnSettlesWhenKagentParksIt(t *testing.T) {
 	s := stuckStop(t)
 	s.k.land(a2a.TaskStateInputRequired)
 	s.cancelAndWait(t)
 
-	s.looked(4)
-	s.waited(110) // just inside the two-minute default
+	s.waited(130) // past the old suspend grace, short of the delete grace
 	s.looked(8)
-	if n, d := s.suspend.suspends(), s.native.deleteCount(); n != 0 || d != 0 {
-		t.Fatalf("suspended %d and deleted %d times inside the grace", n, d)
+	if d := s.native.deleteCount(); d != 0 {
+		t.Fatalf("deleted %d times before the delete grace", d)
 	}
-	s.held(t, "inside the grace")
+	s.held(t, "while the runtime is awake")
 
-	s.waited(130)
+	s.native.set(kagent.SessionLiveness{Exists: true, Asleep: true})
 	s.r.eventually("stop confirmed", func() bool { return s.r.attemptState(s.child) == "cancelled" })
 	s.released(t)
-	if n := s.suspend.suspends(); n != 1 {
-		t.Fatalf("suspended %d times, want exactly once", n)
-	}
 	if d := s.native.deleteCount(); d != 0 {
-		t.Fatalf("deleted the session %d times although suspending settled the stop", d)
+		t.Fatalf("deleted the session %d times although it was asleep", d)
 	}
 	if a, b := s.nativeDeleted(); a || b {
-		t.Fatalf("a suspend was recorded as a delete: attempt=%v binding=%v", a, b)
+		t.Fatalf("a sleeping runtime was recorded as deleted: attempt=%v binding=%v", a, b)
 	}
 }
 
 // Regression for five cancelled prod tasks that stayed "draining" for days: every CancelTask timed
 // out, so the stop was never confirmed and the owner was asked to reconcile it by hand. A turn that
-// is still working cannot be suspended — kagent refuses — so once the longer delete grace has passed
-// the native session is deleted, with its workspace and any unpushed work. Delete is not tried
-// earlier, and the refused suspend does not release anything.
-func TestStopDeletesTheNativeSessionOfAWorkingTurnThatSuspendCannotEnd(t *testing.T) {
-	s := stuckStop(t) // the turn is working, so suspend is refused
+// is still working keeps its Actor awake, so once the delete grace has passed the native session is
+// deleted by force (kagent refuses an ordinary delete while a turn runs), with its workspace and any
+// unpushed work. Delete is not tried earlier.
+func TestStopForceDeletesTheNativeSessionOfAWorkingTurn(t *testing.T) {
+	s := stuckStop(t)
 	s.native.afterDelete = kagent.SessionLiveness{Exists: true, Terminal: true, Deleting: true}
 	s.cancelAndWait(t)
 
-	s.waited(200) // past suspend, short of delete
-	s.r.eventually("suspend tried", func() bool { return s.suspend.suspends() >= 1 })
+	s.waited(200) // short of the delete grace
 	s.looked(8)
 	if d := s.native.deleteCount(); d != 0 {
 		t.Fatalf("deleted %d times before the delete grace", d)
@@ -253,8 +210,7 @@ func TestStopDeletesTheNativeSessionOfAWorkingTurnThatSuspendCannotEnd(t *testin
 	}
 }
 
-// A cancel that lands just before the grace ends settles the stop; the runtime is neither suspended
-// nor deleted.
+// A cancel that lands just before the grace ends settles the stop; the runtime is not deleted.
 func TestStopSettledByCancelJustBeforeTheGraceIsNotForced(t *testing.T) {
 	s := stuckStop(t)
 	s.cancelAndWait(t)
@@ -264,20 +220,20 @@ func TestStopSettledByCancelJustBeforeTheGraceIsNotForced(t *testing.T) {
 	s.client.setCancelError(false)
 	s.r.eventually("stop confirmed", func() bool { return s.r.attemptState(s.child) == "cancelled" })
 	s.released(t)
-	if n, d := s.suspend.suspends(), s.native.deleteCount(); n != 0 || d != 0 {
-		t.Fatalf("suspended %d and deleted %d times for a stop the cancel settled", n, d)
+	if d := s.native.deleteCount(); d != 0 {
+		t.Fatalf("deleted %d times for a stop the cancel settled", d)
 	}
 }
 
-// A runtime that is already suspended is stopped: nothing is cancelled, suspended or deleted.
-func TestStopOfAnAlreadySuspendedRuntimeForcesNothing(t *testing.T) {
+// A runtime that is already asleep is stopped: nothing is cancelled or deleted.
+func TestStopOfAnAlreadySleepingRuntimeForcesNothing(t *testing.T) {
 	s := stuckStop(t)
-	s.native.set(kagent.SessionLiveness{Exists: true, Suspended: true})
+	s.native.set(kagent.SessionLiveness{Exists: true, Asleep: true})
 	s.cancelAndWait(t)
 	s.r.eventually("stop confirmed", func() bool { return s.r.attemptState(s.child) == "cancelled" })
 	s.released(t)
-	if n, d := s.suspend.suspends(), s.native.deleteCount(); n != 0 || d != 0 {
-		t.Fatalf("suspended %d and deleted %d times a runtime that was already suspended", n, d)
+	if d := s.native.deleteCount(); d != 0 {
+		t.Fatalf("deleted %d times a runtime that was already asleep", d)
 	}
 }
 
@@ -341,14 +297,14 @@ func TestStopWhoseDeleteIsRefusedIsListedUnresolved(t *testing.T) {
 	}
 }
 
-// A session kagent already lost is stopped without suspending or deleting anything.
+// A session kagent already lost is stopped without deleting anything.
 func TestStopOfAnAlreadyGoneRuntimeForcesNothing(t *testing.T) {
 	s := stuckStop(t)
 	s.native.set(kagent.SessionLiveness{})
 	s.cancelAndWait(t)
 	s.r.eventually("stop confirmed", func() bool { return s.r.attemptState(s.child) == "cancelled" })
-	if n, d := s.suspend.suspends(), s.native.deleteCount(); n != 0 || d != 0 {
-		t.Fatalf("suspended %d and deleted %d times a session kagent had already lost", n, d)
+	if d := s.native.deleteCount(); d != 0 {
+		t.Fatalf("deleted %d times a session kagent had already lost", d)
 	}
 	s.released(t)
 }

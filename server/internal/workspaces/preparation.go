@@ -15,7 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/gitref"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
-	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	ka "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // Workspace preparation. kagent admits no message to a Session that has a workspace and a
@@ -43,15 +43,15 @@ const (
 )
 
 // setupDigestsSource is the oldsj/kagent commit the digests below were read at
-// (go/harness/runtime/workspace/preparation_test.go). A digest hashes kagent's standing-context
-// text, and a mismatch makes the controller refuse every preparation. TestSetupDigestsMatchTheKagentPin
-// fails when third_party/kagentproto/SOURCE moves off this commit: re-read the digests at the new
-// commit, update both, and keep the harness image pins in step.
+// (go/api/workspace/preparation_test.go, from Standing in preparation.go). A digest hashes kagent's
+// standing-context text, and a mismatch makes kagent refuse every preparation (InvalidArgument,
+// "Workspace setup digest differs"). TestSetupDigestsMatchTheKagentPin fails when
+// third_party/kagentproto/SOURCE moves off this commit: re-read the digests at the new commit,
+// update both, and keep the harness image pins in step.
 //
-// Re-verified 2026-10-20 at a1164013675c2ad49ec4cc2b6b12d3dfa4a456d6: go/harness/runtime/workspace/
-// preparation.go and preparation_test.go are byte-identical to this commit, and the digests below
-// are unchanged.
-const setupDigestsSource = "a1164013675c2ad49ec4cc2b6b12d3dfa4a456d6"
+// Re-read 2026-11-11 at oldsj/kagent 7988e65b, the merge of #87 (the preparation port): unchanged
+// from the 0.4 line's (b785c99d, a1164013).
+const setupDigestsSource = "7988e65bf90aecd84d537e58dec585527e75942b"
 
 var setupDigests = map[string]string{
 	profileSupervisor: "c9b2c5bf815f6b0dd45ee11f02e343ab6a25d4ce39c93663e6feb25281cb87f6",
@@ -178,17 +178,12 @@ func (s *Service) prepare(ctx context.Context, c reconcile.Claim) (reconcile.Out
 	if !gitref.IsSHA(w.Ref) {
 		return s.failPreparation(ctx, c.ID, "the checkout ref is not a commit SHA")
 	}
-	// kagent prepares an Actor that is running. An idle Session has none, so wake it: resume joins
-	// an operation already under way and is safe to repeat.
+	// The preparation names the runtime generation and Actor it was read against. kagent wakes a
+	// sleeping runtime for it, so an association that is not current is sent as it is: kagent then
+	// answers that it is stale (see kagent.StaleRuntime below) and the next pass reads the new one.
+	// With no association at all there is nothing to name yet; look again.
 	ra := n.GetRuntimeAssociation()
-	if ra.GetGenerationId() == "" || ra.GetActorUid() == "" || !ra.GetCurrentActive() {
-		if _, err := s.Kagent.ResumeSession(ctx, *w.KagentSessionID); err != nil && !notFoundErr(err) {
-			if late() {
-				return timedOut()
-			}
-			// The loop's backoff spaces the retries and logs the error.
-			return reconcile.Retry(), fmt.Errorf("wake the session to prepare its workspace: %w", err)
-		}
+	if ra.GetGenerationId() == "" || ra.GetActorUid() == "" {
 		return wait()
 	}
 
@@ -229,6 +224,9 @@ func (s *Service) prepare(ctx context.Context, c reconcile.Claim) (reconcile.Out
 		// kagent keeps one preparation per Session: other bytes for it are a conflict no retry fixes.
 		if errors.As(err, &se) && se.Wire && se.Code == connect.CodeAlreadyExists {
 			return s.failPreparation(ctx, c.ID, "kagent holds a different preparation for this session")
+		}
+		if errors.As(err, &se) && se.Wire && kagent.StaleRuntime(err) {
+			return wait() // the runtime woke under a new generation: read it again
 		}
 		// The outcome is unknown or transient: the next pass reads the Session for a receipt before
 		// anything is sent again, and the loop's backoff spaces the retries.

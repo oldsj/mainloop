@@ -6,7 +6,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // Schedule failures that callers tell apart come back as a *SessionError with these codes:

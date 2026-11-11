@@ -34,6 +34,9 @@ database:
 kagentControlAuth:
   enabled: true
 
+substrateRouterAuth:
+  enabled: true
+
 # Each server container runs watchexec over `go run` from /src, which DevSpace syncs server/ into;
 # the same commands run when the pods start without `devspace dev`. Each container rebuilds into
 # its own Go build cache, on top of the warm cache baked into the image, so each gets its own

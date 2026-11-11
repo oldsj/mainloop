@@ -37,7 +37,7 @@ You (phone/laptop)
 - **Sessions**: Native Claude Code or Codex work with their own conversations; appear as colored threads in your timeline
 - **Notifications**: Slack-style thread replies notify you when sessions need attention or complete
 - **Persistence**: Mainloop stores conversations, delivery records, and workspace lifecycle state in PostgreSQL; native history remains with the provider CLI in its kagent Session
-- **Workspaces**: Each branch workspace is a kagent Session with its own git checkout; previews and idle suspension are described in [Workspaces](docs/specs/workspaces.md)
+- **Workspaces**: Each branch workspace is a kagent Session with its own git checkout; previews and sleep are described in [Workspaces](docs/specs/workspaces.md)
 
 ## Quick Start
 
@@ -203,18 +203,18 @@ Main and child AgentTemplates must bind that RemoteMCPServer.
 Mainloop uses three kinds of kagent Agent, named by settings. Agent templates and harnesses
 remain owned by the kagent installation.
 
-| Setting                                           | Runs                                      | Harness requirements                                                                         |
-| ------------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `KAGENT_MAIN_AGENT` (`mainloop-main`)             | the Claude main thread                    | `sessionIdleTTL: 0s`                                                                         |
-| `KAGENT_MAIN_CODEX_AGENT` (`mainloop-main-codex`) | the Codex main thread                     | `sessionIdleTTL: 0s`                                                                         |
-| `KAGENT_WORKSPACE_CLAUDE_AGENT` / `_CODEX_AGENT`  | workspaces and sessions the owner starts  | `sessionIdleTTL: 0s`, `git.origins` (the repository hosts), `snapshotPolicy.onQuiesce: Full` |
-| `KAGENT_CLAUDE_AGENT` / `KAGENT_CODEX_AGENT`      | child agents the main thread delegates to | default TTL and snapshot scope                                                               |
+| Setting                                           | Runs                                      | Harness requirements                                       |
+| ------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------- |
+| `KAGENT_MAIN_AGENT` (`mainloop-main`)             | the Claude main thread                    | `sessionIdleTTL: 0s`                                       |
+| `KAGENT_MAIN_CODEX_AGENT` (`mainloop-main-codex`) | the Codex main thread                     | `sessionIdleTTL: 0s`                                       |
+| `KAGENT_WORKSPACE_CLAUDE_AGENT` / `_CODEX_AGENT`  | workspaces and sessions the owner starts  | `sessionIdleTTL: 0s`, `git.origins` (the repository hosts) |
+| `KAGENT_CLAUDE_AGENT` / `KAGENT_CODEX_AGENT`      | child agents the main thread delegates to | default TTL and snapshot scope                             |
 
 A workspace needs its own Agents because kagent measures idle time from the last A2A event
-(previews and `ResumeSession` do not count) and deletes the Session and its actor on expiry,
-along with uncommitted and unpushed work. `onQuiesce: Full` keeps files and the dev server across
-a suspend, which previews need, but costs a full snapshot at every quiesce, which children should
-not pay. Mainloop parks idle compute itself (`SuspendSession`); archiving or deleting ends the
+(previews do not count) and deletes the Session and its actor on expiry,
+along with uncommitted and unpushed work. kagent puts idle compute to sleep by itself (Mainloop
+makes no suspend or resume call); snapshots are data-only, so files survive sleep and processes
+such as a dev server do not. Archiving or deleting ends the
 Session. Main and child templates bind the `mainloop` RemoteMCPServer. Standalone workspace Agents
 have no Mainloop tool identity and do not bind that server. Gateway port 8083 must admit only
 Mainloop, and TaskStore must admit only actors, using installation-specific policies.

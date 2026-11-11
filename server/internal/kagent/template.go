@@ -6,7 +6,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/structpb"
 
-	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // ErrNoTemplate means an Agent has no named template reference: it carries an inline template, both
@@ -19,7 +19,7 @@ func (c *Client) SessionAgent(ctx context.Context, sessionID string) (AgentRef, 
 	if err != nil {
 		return AgentRef{}, err
 	}
-	a := s.GetAgent()
+	a := AgentOf(s)
 	if a.GetNamespace() == "" || a.GetName() == "" {
 		return AgentRef{}, errors.New("kagent: session names no agent")
 	}

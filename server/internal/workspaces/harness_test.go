@@ -21,7 +21,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/testdb"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }
@@ -105,6 +105,7 @@ func newHarness(t *testing.T, extra map[string]string) *harness {
 	}
 	fake := kagenttest.New()
 	t.Cleanup(fake.Close)
+	fake.Actors = true // a READY Session has a running Actor unless a test puts it to sleep
 	h := &harness{t: t, fake: fake, cfg: cfg, dl: &deliveries{open: map[string]bool{}, active: map[string]time.Time{}}}
 	h.deleteState.Store(int32(kagentapi.RuntimeState_RUNTIME_STATE_DELETED))
 	fake.TamperSession = func(proc string, s *kagentapi.Session) {

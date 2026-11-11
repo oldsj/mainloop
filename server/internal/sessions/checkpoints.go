@@ -29,7 +29,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // checkpointCallTimeout bounds one kagent CheckpointService call.
@@ -191,8 +191,20 @@ func (s *Service) continueCheckpoint(ctx context.Context, r dbq.SessionCheckpoin
 	cp, err := s.Kagent.CreateCheckpoint(cctx, &kagentapi.CreateCheckpointRequest{
 		SessionId: r.KagentSessionID, RequestId: r.ID, ExpectedHeadTaskId: r.ExpectedHeadTaskID,
 	})
-	if reason := classifyKagentFailure(err); reason != "" {
+	if kagentReasonIs(err, kagent.ReasonCheckpointSnapshotPending) {
+		// Not a refusal: kagent asks for the same request id again once the snapshot is ready. The
+		// intent stays open for the caller's repeat or the resume sweep.
 		detail := safeDetail(err.Error())
+		if nerr := dbq.New(s.Pool).NoteSessionCheckpointAttempt(ctx, dbq.NoteSessionCheckpointAttemptParams{
+			ID: r.ID, Detail: &detail,
+		}); nerr != nil {
+			return CheckpointResult{}, nerr
+		}
+		return CheckpointResult{}, conflict("kagent is still preparing this session's snapshot. " +
+			"Repeat the request with the same request_id to continue; Mainloop also retries it.")
+	}
+	if reason := classifyKagentFailure(err); reason != "" {
+		detail := safeDetail(checkpointRefusalDetail(err))
 		if _, ferr := s.finishSessionCheckpoint(ctx, r, nil, nil, &reason, &detail); ferr != nil {
 			return CheckpointResult{}, ferr
 		}
@@ -210,6 +222,18 @@ func (s *Service) continueCheckpoint(ctx context.Context, r dbq.SessionCheckpoin
 		return CheckpointResult{}, &KagentError{Err: err}
 	}
 	id, name := cp.GetId(), cp.GetName()
+	if cp.GetState() == kagentapi.CheckpointState_CHECKPOINT_STATE_FAILED {
+		// kagent from #94 on acknowledges only READY and answers a failed request id with
+		// KAGENT_CHECKPOINT_FAILED. An earlier kagent's replay returned the recorded checkpoint
+		// whatever its state, so a failed attempt came back as OK with state FAILED, hidden from
+		// GetCheckpoint and ListCheckpoints. Either way it is a definite refusal.
+		reason := dbstate.FailureFailedPrecondition
+		detail := safeDetail(checkpointFailureDetail(cp))
+		if _, ferr := s.finishSessionCheckpoint(ctx, r, &id, &name, &reason, &detail); ferr != nil {
+			return CheckpointResult{}, ferr
+		}
+		return CheckpointResult{}, mapFailureReason(reason, detail)
+	}
 	out, err := s.finishSessionCheckpoint(ctx, r, &id, &name, nil, nil)
 	if err != nil {
 		return CheckpointResult{}, err
@@ -247,9 +271,54 @@ func (s *Service) finishSessionCheckpoint(
 	return out, err
 }
 
+// kagentReasonIs reports whether err is a kagent refusal carrying the given ErrorInfo reason.
+func kagentReasonIs(err error, reason string) bool {
+	var se *kagent.SessionError
+	return errors.As(err, &se) && se.Reason == reason
+}
+
+// checkpointRefusalDetail is the owner-facing detail for a definite CreateCheckpoint refusal. Each
+// kagent #94 failure records the request as failed, so trying again needs a new request id.
+func checkpointRefusalDetail(err error) string {
+	var se *kagent.SessionError
+	if !errors.As(err, &se) {
+		return err.Error()
+	}
+	switch se.Reason {
+	case kagent.ReasonCheckpointRuntimeNotSuspended:
+		return "The session's runtime was running, so kagent had no stable snapshot to capture. " +
+			"Checkpoint again with a new request_id once the session is asleep."
+	case kagent.ReasonCheckpointConversationAdvanced:
+		return "The conversation moved past the turn this checkpoint named. " +
+			"Checkpoint again with a new request_id."
+	case kagent.ReasonCheckpointFailed:
+		return "kagent could not checkpoint this session (" + se.Detail + "). " +
+			"Checkpoint again with a new request_id."
+	}
+	return err.Error()
+}
+
+// checkpointFailureDetail is the owner-facing detail for a checkpoint kagent recorded FAILED.
+func checkpointFailureDetail(cp *kagentapi.Checkpoint) string {
+	f := cp.GetFailure()
+	var parts []string
+	for _, p := range []string{f.GetReason(), f.GetMessage()} {
+		if p = strings.TrimSpace(p); p != "" {
+			parts = append(parts, p)
+		}
+	}
+	why := strings.Join(parts, ": ")
+	if why == "" {
+		why = "no reason given"
+	}
+	return "kagent could not checkpoint this session (" + why + "). " +
+		"Checkpoint again with a new request_id once the session is asleep."
+}
+
 func checkpointResult(r dbq.SessionCheckpoint, state string) CheckpointResult {
 	return CheckpointResult{
-		ID: derefStr(r.CheckpointID), SessionID: r.SessionID, Name: derefStr(r.CheckpointName),
+		// SessionID is the kagent Session, as on a checkpoint read back (the API's Checkpoint.session_id).
+		ID: derefStr(r.CheckpointID), SessionID: r.KagentSessionID, Name: derefStr(r.CheckpointName),
 		HeadTaskID: r.ExpectedHeadTaskID, State: state, RequestedAt: r.RequestedAt, ConfirmedAt: r.ConfirmedAt,
 	}
 }
@@ -598,7 +667,7 @@ func (s *Service) commitFork(ctx context.Context, r dbq.CheckpointFork, forked *
 		}); err != nil {
 			return fmt.Errorf("create forked session: %w", err)
 		}
-		ref := forked.GetAgent()
+		ref := kagent.AgentOf(forked)
 		var ns, name *string
 		if v := ref.GetNamespace(); v != "" {
 			ns = &v

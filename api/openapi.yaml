@@ -2838,7 +2838,7 @@ paths:
         Upgrades to a WebSocket with subprotocol `kagent.sdk-runner.v1` (the SDK runner's client
         event protocol, one JSON object per text frame) for a session whose `NativeSessionInfo.live`
         is true. The server bootstraps the runner and keeps its token; frames are relayed verbatim
-        both ways. A suspended session is woken by connecting.
+        both ways. A sleeping session is woken by connecting.
 
         404 when the session is not the owner's, has no kagent session, or its Agent is not live.
         503 while the session cannot be reached yet; the client retries with backoff.
@@ -3106,7 +3106,10 @@ paths:
         **Experimental, owner-only.** Checkpoint the session's native kagent Session at its latest
         terminal turn. Refuses (409) while a turn is in flight, or before the session has ever
         completed one. `request_id` is the idempotency key: repeating it returns the recorded
-        outcome, or continues an interrupted attempt. See docs/specs/warm-state.md.
+        outcome, or continues an interrupted attempt. Also 409 while kagent is still preparing the
+        snapshot (repeat the same `request_id`), and when kagent refuses or fails the checkpoint, for
+        example because the runtime is running: that request is settled, so try again with a new
+        `request_id`. See docs/specs/warm-state.md.
       operationId: createSessionCheckpoint
       parameters:
         - name: session_id
@@ -3950,122 +3953,6 @@ paths:
         - workspaces
       summary: Refresh Workspace
       operationId: refreshWorkspace
-      parameters:
-        - name: workspace_id
-          in: path
-          required: true
-          schema:
-            type: string
-            title: Workspace Id
-      responses:
-        '503':
-          description: Service Unavailable
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPError'
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/WorkspaceLifecycle'
-        '403':
-          description: Forbidden
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPError'
-        '404':
-          description: Not Found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPError'
-        '409':
-          description: Conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPError'
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                oneOf:
-                  - $ref: '#/components/schemas/HTTPValidationError'
-                  - $ref: '#/components/schemas/HTTPError'
-        '502':
-          description: Bad Gateway
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPError'
-  /workspaces/{workspace_id}/resume:
-    post:
-      tags:
-        - workspaces
-      summary: Resume Workspace
-      operationId: resumeWorkspace
-      parameters:
-        - name: workspace_id
-          in: path
-          required: true
-          schema:
-            type: string
-            title: Workspace Id
-      responses:
-        '503':
-          description: Service Unavailable
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPError'
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/WorkspaceLifecycle'
-        '403':
-          description: Forbidden
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPError'
-        '404':
-          description: Not Found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPError'
-        '409':
-          description: Conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPError'
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                oneOf:
-                  - $ref: '#/components/schemas/HTTPValidationError'
-                  - $ref: '#/components/schemas/HTTPError'
-        '502':
-          description: Bad Gateway
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPError'
-  /workspaces/{workspace_id}/suspend:
-    post:
-      tags:
-        - workspaces
-      summary: Suspend Workspace
-      operationId: suspendWorkspace
       parameters:
         - name: workspace_id
           in: path
@@ -5153,6 +5040,7 @@ components:
             - suspend
             - resume
             - delete
+            - revert
             - none
           title: Operation
         prepared_revision:
@@ -6844,6 +6732,7 @@ components:
           default: []
         idle_timeout_minutes:
           type: integer
+          description: Recorded only. kagent decides when an idle runtime sleeps; Mainloop no longer suspends a workspace after this time.
           maximum: 1440.0
           minimum: 1.0
           title: Idle Timeout Minutes
@@ -7003,6 +6892,11 @@ components:
         unchanged if the Session is replaced.
     WorkspaceObservedState:
       type: string
+      description: |-
+        `running`: the Session is ready and its runtime is awake. `suspended`: the Session is ready
+        and asleep; kagent parks an idle runtime itself, and the next message, preview or live attach
+        wakes it (there is no suspend or resume request). `resuming`: starting, or kagent is doing its
+        own brief lifecycle work. `suspending` is no longer reported.
       enum:
         - running
         - suspending
@@ -11500,6 +11394,7 @@ components:
           default: []
         idle_timeout_minutes:
           type: integer
+          description: Recorded only. kagent decides when an idle runtime sleeps; Mainloop no longer suspends a workspace after this time.
           maximum: 1440.0
           minimum: 1.0
           title: Idle Timeout Minutes

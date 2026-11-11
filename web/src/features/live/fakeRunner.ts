@@ -3,7 +3,9 @@
  * and so does the local stack (`VITE_MSW=1 pnpm dev`, then open a session with `?live=1`).
  *
  * Each message runs a short scripted turn: streamed text, a Bash call and its output. A message
- * containing "perm" asks for permission first and waits for the answer. Messages sent while a turn
+ * containing "perm" asks for permission first and waits for the answer. A message containing "defer"
+ * ends its turn on a deferred call, as an A2A turn does with a protected tool (kagent #90): the
+ * runner then refuses messages until `answerDeferred` replays the call. Messages sent while a turn
  * runs are echoed as queued and picked up when the turn ends, as the real runner folds them.
  */
 import { ws, type WebSocketHandler } from 'msw';
@@ -16,6 +18,8 @@ export interface FakeRunner {
   received: Out[];
   /** Frames sent before any command, as the attach backlog. */
   backlog: Out[];
+  /** Answers the deferred call through the A2A task: the call is replayed and its turn finishes. */
+  answerDeferred: (allow: boolean) => void;
 }
 
 const MODELS = [
@@ -34,7 +38,8 @@ export function createFakeRunner(opts: { step?: number; backlog?: Out[] } = {}):
   const runner: FakeRunner = {
     handler: null as unknown as WebSocketHandler,
     received: [],
-    backlog: opts.backlog ?? []
+    backlog: opts.backlog ?? [],
+    answerDeferred: () => {}
   };
   let seq = runner.backlog.length;
   const meta = {
@@ -59,6 +64,7 @@ export function createFakeRunner(opts: { step?: number; backlog?: Out[] } = {}):
     let running = false;
     let pendingPerm: { id: string; resolve: (allow: boolean) => void } | null = null;
     let interrupted = false;
+    let deferred: string | null = null; // the deferred tool_use id
     const queue: { uuid: string; text: string }[] = [];
     const wait = () => new Promise((r) => setTimeout(r, step));
     let n = 0;
@@ -117,6 +123,14 @@ export function createFakeRunner(opts: { step?: number; backlog?: Out[] } = {}):
           ]
         }
       });
+      if (first.text.includes('defer')) {
+        await wait();
+        sdk({ type: 'result', subtype: 'success', stop_reason: 'tool_deferred', is_error: false });
+        running = false;
+        deferred = tool;
+        send({ k: 'turn', state: 'idle', uuids: [] });
+        return;
+      }
       let allowed = true;
       if (first.text.includes('perm')) {
         const permId = `perm_${n}`;
@@ -154,6 +168,28 @@ export function createFakeRunner(opts: { step?: number; backlog?: Out[] } = {}):
       finish('success');
     };
 
+    runner.answerDeferred = (allow: boolean) => {
+      const tool = deferred;
+      if (!tool) return;
+      deferred = null;
+      running = true;
+      send({ k: 'turn', state: 'running', uuids: [] });
+      sdk({
+        type: 'user',
+        message: {
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: tool,
+              is_error: !allow,
+              content: allow ? 'README.md\nserver\nweb' : 'Denied by the owner'
+            }
+          ]
+        }
+      });
+      finish('success');
+    };
+
     const finish = (subtype: string) => {
       sdk({
         type: 'result',
@@ -178,6 +214,14 @@ export function createFakeRunner(opts: { step?: number; backlog?: Out[] } = {}):
       runner.received.push(c);
       switch (c.k) {
         case 'user': {
+          if (deferred) {
+            send({
+              k: 'err',
+              text: 'the conversation is waiting for an answer to a pending approval or question',
+              ref: c.id
+            });
+            return;
+          }
           const msg = { uuid: String(c.uuid ?? `u_${seq + 1}`), text: String(c.text ?? '') };
           send({ k: 'user', uuid: msg.uuid, text: msg.text, origin: 'client' });
           if (running) queue.push(msg);

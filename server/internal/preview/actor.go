@@ -6,7 +6,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/liveactor"
 
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // SessionObserver reads a kagent Session; *kagent.Client satisfies it.
@@ -23,7 +23,7 @@ func (p *Proxy) actorOf(ctx context.Context, kagentSessionID string) (string, er
 	if err != nil {
 		return "", err
 	}
-	actor, ok := liveactor.Of(ks)
+	actor, ok := liveactor.Of(ks, p.atespace)
 	if !ok {
 		return "", errNoActor
 	}

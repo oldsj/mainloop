@@ -12,6 +12,8 @@ import { taskForSession } from '@/lib/taskState';
 import { zoomSession } from '@/lib/zoomSession';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { PanelBoundary } from '@/shell/PanelBoundary';
+import { SessionRequests } from '@/features/chat/SessionRequests';
+import { useSessionRequests } from '@/features/hitl/session-requests';
 import { LiveSession, liveForced } from '@/features/live';
 import { IdentityStrip } from './IdentityStrip';
 import {
@@ -35,6 +37,29 @@ import {
 } from './queries';
 import { SessionChatSlot } from './SessionChatSlot';
 import { WorkspaceLifecycleBadge, WorkspacePublicationBadge } from './WorkspaceBadges';
+
+/**
+ * The live view with the session's requests at the end of its transcript. An approval or question
+ * in an A2A turn is answered through the A2A task, not the runner (kagent #90), so it shows here as
+ * the same card the chat view shows.
+ */
+function LiveWithRequests({
+  sessionId,
+  onFallback
+}: {
+  sessionId: string;
+  onFallback: () => void;
+}) {
+  const { pending } = useSessionRequests(sessionId);
+  return (
+    <LiveSession
+      sessionId={sessionId}
+      onFallback={onFallback}
+      requests={<SessionRequests sessionId={sessionId} />}
+      needsAnswer={pending.length > 0}
+    />
+  );
+}
 
 /** A session can be cancelled while it is live. Finished sessions cannot be cancelled again. */
 const CANCELLABLE: SessionStatus[] = ['active', 'pending', 'idle', 'waiting_on_user'];
@@ -211,7 +236,7 @@ export function SessionPage({ id }: { id: string }) {
 
       {live ? (
         <PanelBoundary name="Live session">
-          <LiveSession sessionId={session.id} onFallback={() => setChatView(true)} />
+          <LiveWithRequests sessionId={session.id} onFallback={() => setChatView(true)} />
         </PanelBoundary>
       ) : (
         <>

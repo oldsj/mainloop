@@ -2,17 +2,19 @@ package kagenttest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 
 	"connectrpc.com/connect"
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/oldsj/mainloop/server/internal/kagent"
-	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	api "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // checkpointStore is the CheckpointService state. The zero value is ready to use; its fields are
@@ -24,6 +26,9 @@ type checkpointStore struct {
 	first       map[string]*api.CreateCheckpointRequest // CreateCheckpoint request id -> its first request
 	forkByReq   map[string]string                       // ForkSession request id -> forked session id
 	forkFirst   map[string]*api.ForkSessionRequest      // ForkSession request id -> its first request
+	refuse      map[string]bool                         // session id -> its next snapshot fails
+	pend        map[string]bool                         // session id -> its next snapshot is pending
+	legacy      bool                                    // behave as kagent before #94
 	seq         int
 }
 
@@ -34,7 +39,49 @@ func (st *checkpointStore) init() {
 		st.first = map[string]*api.CreateCheckpointRequest{}
 		st.forkByReq = map[string]string{}
 		st.forkFirst = map[string]*api.ForkSessionRequest{}
+		st.refuse = map[string]bool{}
+		st.pend = map[string]bool{}
 	}
+}
+
+// RefuseNextSnapshot makes the next CreateCheckpoint for a Session fail as kagent's does when the
+// Actor is not suspended (#94): FailedPrecondition with reason
+// KAGENT_CHECKPOINT_RUNTIME_NOT_SUSPENDED, the request recorded failed, and a replay of the same
+// request id answered with KAGENT_CHECKPOINT_FAILED. After [Server.LegacyCheckpointReplay], it behaves
+// as kagent before #94 instead: Unavailable, and a replay answers OK with the FAILED checkpoint.
+// Either way GetCheckpoint and ListCheckpoints hide the failed checkpoint.
+func (s *Server) RefuseNextSnapshot(sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cp.init()
+	s.cp.refuse[sessionID] = true
+}
+
+// LegacyCheckpointReplay makes CheckpointService behave as kagent before #94: a refused snapshot
+// answers Unavailable, and a replay of its request id answers OK with the FAILED checkpoint.
+func (s *Server) LegacyCheckpointReplay() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cp.legacy = true
+}
+
+// PendNextSnapshot makes the next CreateCheckpoint for a Session answer FailedPrecondition with
+// reason KAGENT_CHECKPOINT_SNAPSHOT_PENDING, recording nothing, so the same request id succeeds
+// on its next try.
+func (s *Server) PendNextSnapshot(sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cp.init()
+	s.cp.pend[sessionID] = true
+}
+
+// checkpointRefusal is kagent's FailedPrecondition with an ErrorInfo reason in domain kagent.dev.
+func checkpointRefusal(reason, message string) error {
+	ce := connect.NewError(connect.CodeFailedPrecondition, errors.New(message))
+	if d, err := connect.NewErrorDetail(&errdetails.ErrorInfo{Reason: reason, Domain: "kagent.dev"}); err == nil {
+		ce.AddDetail(d)
+	}
+	return ce
 }
 
 func (s *Server) registerCheckpoints(handle func(string, http.Handler)) {
@@ -59,7 +106,15 @@ func (s *Server) createCheckpoint(
 			return nil, connect.NewError(connect.CodeAlreadyExists,
 				fmt.Errorf("request id %q was already used for a different checkpoint", m.GetRequestId()))
 		}
-		return connect.NewResponse(&api.CreateCheckpointResponse{Checkpoint: proto.CloneOf(st.checkpoints[id])}), nil
+		cp := st.checkpoints[id]
+		if cp.GetState() == api.CheckpointState_CHECKPOINT_STATE_FAILED && !st.legacy {
+			return nil, checkpointRefusal("KAGENT_CHECKPOINT_FAILED", cp.GetFailure().GetMessage())
+		}
+		return connect.NewResponse(&api.CreateCheckpointResponse{Checkpoint: proto.CloneOf(cp)}), nil
+	}
+	if st.pend[m.GetSessionId()] {
+		delete(st.pend, m.GetSessionId())
+		return nil, checkpointRefusal("KAGENT_CHECKPOINT_SNAPSHOT_PENDING", "the runtime snapshot is not ready yet")
 	}
 	sess, ok := s.sessions[m.GetSessionId()]
 	if !ok {
@@ -76,10 +131,25 @@ func (s *Server) createCheckpoint(
 		State: api.CheckpointState_CHECKPOINT_STATE_READY, CreatedAt: timestamppb.Now(),
 		Name: fmt.Sprintf("%s at %s", sess.GetName(), m.GetExpectedHeadTaskId()),
 	}
+	refused := st.refuse[m.GetSessionId()]
+	if refused {
+		delete(st.refuse, m.GetSessionId())
+		cp.State = api.CheckpointState_CHECKPOINT_STATE_FAILED
+		cp.Failure = &api.Failure{Reason: "SnapshotTagFailed", Message: "snapshot changed"}
+		if !st.legacy {
+			cp.Failure = &api.Failure{Reason: "RuntimeNotSuspended", Message: "the runtime is not suspended"}
+		}
+	}
 	st.checkpoints[cp.Id] = cp
 	st.order = append(st.order, cp.Id)
 	st.byReq[m.GetRequestId()] = cp.Id
 	st.first[m.GetRequestId()] = proto.CloneOf(m)
+	if refused && st.legacy {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("checkpoint %q failed: snapshot changed", cp.Id))
+	}
+	if refused {
+		return nil, checkpointRefusal("KAGENT_CHECKPOINT_RUNTIME_NOT_SUSPENDED", "the runtime is not suspended")
+	}
 	return connect.NewResponse(&api.CreateCheckpointResponse{Checkpoint: proto.CloneOf(cp)}), nil
 }
 
@@ -89,7 +159,7 @@ func (s *Server) getCheckpoint(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp, ok := s.cp.checkpoints[req.Msg.GetCheckpointId()]
-	if !ok {
+	if !ok || cp.GetState() == api.CheckpointState_CHECKPOINT_STATE_FAILED {
 		return nil, connect.NewError(connect.CodeNotFound,
 			fmt.Errorf("checkpoint %q not found", req.Msg.GetCheckpointId()))
 	}
@@ -110,7 +180,8 @@ func (s *Server) listCheckpoints(
 	}
 	var matched []string
 	for _, id := range st.order {
-		if st.checkpoints[id].GetSessionId() == req.Msg.GetSessionId() {
+		if cp := st.checkpoints[id]; cp.GetSessionId() == req.Msg.GetSessionId() &&
+			cp.GetState() != api.CheckpointState_CHECKPOINT_STATE_FAILED {
 			matched = append(matched, id)
 		}
 	}
@@ -156,7 +227,7 @@ func (s *Server) forkSession(
 		return connect.NewResponse(&api.ForkSessionResponse{Session: s.out(kagent.ProcForkSession, s.sessions[id])}), nil
 	}
 	cp, ok := st.checkpoints[m.GetCheckpointId()]
-	if !ok {
+	if !ok || cp.GetState() == api.CheckpointState_CHECKPOINT_STATE_FAILED {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("checkpoint %q not found", m.GetCheckpointId()))
 	}
 	src, ok := s.sessions[cp.GetSessionId()]

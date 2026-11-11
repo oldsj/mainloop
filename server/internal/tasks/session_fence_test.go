@@ -15,7 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/tasks"
-	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1alpha1"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
 
 // Port of G8b review-4 P2-7: a completed activity status cannot restore a stopped writer's
@@ -109,7 +109,7 @@ func TestStoppedTaskSessionDoesNotDispatchRecordedMessage(t *testing.T) {
 			if got := r.str(`SELECT state FROM deliveries WHERE id=$1`, mid); got != "cancelled" {
 				t.Fatalf("delivery = %s, want cancelled", got)
 			}
-			for _, method := range []string{kagent.ProcGetSession, kagent.ProcCreateSession, kagent.ProcResumeSession, "SendStreamingMessage"} {
+			for _, method := range []string{kagent.ProcGetSession, kagent.ProcCreateSession, "SendStreamingMessage"} {
 				if n := f.Count(method); n != 0 {
 					t.Fatalf("native %s calls = %d, want zero", method, n)
 				}

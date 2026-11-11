@@ -19,8 +19,9 @@ tests in `server/internal/deploytest` check:
   (`make dev-live`; see [docs/dev-environment.md#live-dev-instance](../../docs/dev-environment.md#live-dev-instance)).
 
 The chart reads, but does not create, Secret `mainloop-secrets` (GitHub App keys, agent token key,
-and database credentials when CNPG is off), and with `kagentControlAuth.enabled` Secrets
-`kagent-control-token` and `kagent-control-ca`. Routes, gateway network policy peers and kagent
+and database credentials when CNPG is off), and with `kagentControlAuth.enabled` Secret
+`kagent-control-ca`. The kagent bearer is a projected token of the backend's ServiceAccount
+(audience `kagent-invocation`), not a Secret. Routes, gateway network policy peers and kagent
 objects belong to the deployment.
 
 ## Kind

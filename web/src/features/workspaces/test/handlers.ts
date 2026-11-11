@@ -5,7 +5,7 @@ import { workspaceFixture } from '@/test/fixtures';
 
 type Schemas = components['schemas'];
 export type WorkspaceFixture = Schemas['WorkspaceLifecycle'];
-type Action = 'suspend' | 'resume' | 'refresh';
+type Action = 'refresh';
 
 const url = (path: string) => `${API_URL}${path}`;
 

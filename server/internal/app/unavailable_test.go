@@ -19,8 +19,6 @@ func TestUnconfiguredServicesAnswerTheDeclared503(t *testing.T) {
 		{"DELETE", "/workspaces/w1", ""},
 		{"GET", "/workspaces/w1/ports", ""},
 		{"POST", "/workspaces/w1/refresh", ""},
-		{"POST", "/workspaces/w1/resume", ""},
-		{"POST", "/workspaces/w1/suspend", ""},
 		{"GET", "/tasks", ""},
 		{"POST", "/tasks", `{"request_id":"r1","title":"t","brief":"b","mode":"code","project_id":"p1"}`},
 		{"GET", "/tasks/t1", ""},

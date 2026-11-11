@@ -7,7 +7,7 @@ checkout request. Workspace lifecycle is separate from the session's task status
 activity, message delivery, user attention, and publication state.
 
 Mainloop stores the checkout request (repository, ref, branch, depth), the declared preview
-ports and the idle timeout. `agent_kind` accepts a configured [provider profile](providers.md) ID
+ports and the idle timeout (stored, no longer enforced; see below). `agent_kind` accepts a configured [provider profile](providers.md) ID
 or alias; existing Claude/Codex selection is unchanged. Everything about the running state is
 read from kagent.
 
@@ -16,6 +16,10 @@ read from kagent.
 This section is the Go server's lifecycle in `server/internal/workspaces`. Labels: **implemented** is
 in the code and covered by fake-backed tests against a scratch PostgreSQL; **proposed** is not
 built; nothing here has been measured against a live kagent.
+
+The lifecycle follows kagent's control API `kagent.api.v1` (Substrate 1.0), which has no suspend or
+resume call: kagent puts an idle Session's Actor to sleep by itself and wakes it on use. This is
+**implemented and tested with fakes only**; a live check on a Kind stack is pending.
 
 History before `e776537` describes the retired Python backend. Where other text on this page differs from the Go status, the Go status is current.
 
@@ -27,13 +31,13 @@ History before `e776537` describes the retired Python backend. Where other text 
 - Push enrollment runs separately after the native Session is freshly observed READY with no operation and exactly one matching reference. The task caller must have attached the workspace and activated the current writer before `pushgate.Service.Enroll` can publish its grant and Secret. Creation refusal, runtime failure/deletion, task abandonment and reservation expiry release push authority. A delete request revokes push authority in the same transaction that records the delete intent, not when the delete completes; a first-attempt refusal releases it in its outcome transaction; other abandoned/expired reservations are reconciled automatically, and the release sweep also revokes any grant or push credential left behind a revoked reservation. A delete later rejected (for example because a turn is open) leaves the surviving workspace without push authority on purpose: the reservation is terminal and the workspace fails closed. A task workspace whose project has no known default branch yet waits to be created, retrying until the `project-metadata` sweep fills it or the create retry window ends (`gave_up`, with the reason recorded), instead of being created read-only for good. No database transaction spans native, metadata or Secret calls. Local tests include a real push from the workspace credential to a bare repository; live kagent and GitHub remain unmeasured.
 - Caller request id: `CreateWithRequestID` takes a UUID and is idempotent on it. A repeat call, concurrent or later, returns the workspace the first call made (waiting for its create the same way) and makes no second kagent Session; `LookupByRequestID` finds one by that id. The id is also the kagent request id. The HTTP API does not take one yet; the tasks service derives it from the attempt.
 
-- Every lifecycle change is a durable `workspace_ops` row (`create`, `suspend`, `resume`,
-  `delete`) with a state (`pending`, `retrying`, `succeeded`, `rejected`, `gave_up`, `cancelled`)
+- Every lifecycle change is a durable `workspace_ops` row (`create` or `delete`) with a state (`pending`, `retrying`, `succeeded`, `rejected`, `gave_up`, `cancelled`)
   and an idempotency key. One operation is open per workspace; asking for the kind that is
   already open joins it, and a different kind is `409`. A delete cancels the others. The API
   inserts the row, wakes the reconcile loop and waits up to `WORKSPACE_OPERATION_WAIT_SECONDS`
   (default 30) for the result; if the operation is still going it answers with the workspace as
-  it stands and the loop carries on.
+  it stands and the loop carries on. A `suspend` or `resume` row queued before the upgrade is
+  closed as `cancelled` without a kagent call.
 - The Agent (namespace and name) is resolved when the workspace is made and stored on its row.
   Every replay and the orphan sweep use that stored reference, so a config change between
   attempts cannot turn a replay into a different request.
@@ -58,10 +62,19 @@ History before `e776537` describes the retired Python backend. Where other text 
   lands after the refusal keeps them. Refresh sends a new create operation with a fresh window.
   The three timings are
   `WORKSPACE_CREATE_RETRY_INITIAL_SECONDS`, `_MAX_SECONDS` and `_WINDOW_SECONDS`.
-- Suspend and resume are operations. Suspend is refused (`409`) while a delivery is open and is
-  cancelled if activity arrived after the idle check picked the workspace. Resume touches the
-  workspace's activity and calls `ResumeSession` only for a suspended Session. A Session that is
-  failed or deleted refuses the resume (`409`). A resume that finds the Session already ready (a caller read it suspended just before another resume finished) changes nothing and publishes no `workspace:updated` event; only a retried attempt does, since an earlier attempt may have resumed it without recording that. That resume still advances the workspace's last activity (it is the idle-suspend keepalive), so `last_active_at` can move with no event; a client sees the new value at its next event or read.
+- There are no suspend or resume operations, and Mainloop never asks kagent to suspend or wake a
+  Session. kagent suspends an idle Session's Actor itself, after its own quiesce delay, and wakes
+  it on use: the next A2A send, `PrepareSessionWorkspace`, or a connection through the Substrate
+  router (a preview request or a live-view attach). A sleeping Session stays `READY`. Asleep or
+  awake is read from `Session.runtime_association.current_active` on `GetSession`: present and
+  false is asleep (shown as `suspended`); absent is not known and shown as `running`, since the
+  Session runs on use either way. kagent reports the association whenever the Session has an
+  Actor, with `phase` `active` and `current_active` true only while the Actor runs.
+  `RUNTIME_STATE_SUSPENDED` and the `SUSPEND`,
+  `RESUME` and `REVERT` operations can still appear briefly for kagent's own lifecycle work;
+  Mainloop treats them as busy and reads again.
+- Processes do not survive sleep: kagent's snapshots are data-only. The checkout is kept, but a
+  dev server must be started again after a wake.
 - Delete removes the rows only after kagent confirms: `DeleteSession` must report the same Session
   as deleted, or answer not found. Anything else keeps the rows and returns `502`; the operation
   keeps retrying. A workspace whose create was never sent is removed without calling kagent. One
@@ -77,16 +90,11 @@ History before `e776537` describes the retired Python backend. Where other text 
   An archived workspace whose create outcome was never known has no Session id to delete by: once
   its create op is closed (given up or succeeded without a bound id) and no op is open, the same
   sweep starts a delete op for it, which replays the create, deletes what comes back and removes the
-  rows. A workspace with a create op still open is left to that op.
-- Idle suspend: a sweep (`WORKSPACE_IDLE_CHECK_SECONDS`, default 60) suspends a running workspace that has been quiet for its idle timeout (1
-  to 1440 minutes, default 30). Quiet means no preview traffic (`Touch`), no resume and no
-  delivery activity, and no open delivery. A Session kagent no longer has, or that is failed or
-  being deleted, rejects the idle suspend and marks the workspace as handled until it is used
-  again, so it is not queued every pass; a Session that is mid-change is looked at again shortly.
-  With the delivery ledger wired (G6b) a workspace with a `recorded`, `sending` or `delivered`
-  delivery, or an `uncertain` one inside its hold, is never picked, and a delivery that finished
-  recently counts as activity. The sweep is not registered when no ledger is set, and the server
-  logs once that idle suspend is off.
+  rows. A workspace with a create op still open is left to that op. The same sweep prunes old
+  operation rows.
+- No idle suspend: the `workspace-idle` sweep and `WORKSPACE_IDLE_CHECK_SECONDS` are removed. The
+  manifest's `dev.idle_timeout_minutes` (1 to 1440 minutes, default 30) is still stored and
+  returned but is no longer enforced: kagent's quiesce delay decides when a runtime sleeps.
 - Orphan sweep: a Session in kagent that was created for `KAGENT_USER_ID`, belongs to one of the
   configured provider profiles' Agents or to any Agent a create was ever sent to (`kagent_agents`, kept after the row that named it is settled or purged), is not deleted, is at least `WORKSPACE_ORPHAN_MIN_AGE_SECONDS`
   old (default 600) and that no binding names, is an orphan. It runs on a schedule
@@ -99,7 +107,8 @@ History before `e776537` describes the retired Python backend. Where other text 
   credential reference and deletes what comes back, so a cancelled session never blocks the sweep for ever. Each Session is checked against the database again just before it is
   deleted. The exit status is non-zero if a delete failed or deletion was blocked, and the
   scheduled pass logs a warning when it is blocked. kagent records every Session made with the
-  control token as created by the same user, so the creator does not tell Mainloop instances
+  same ServiceAccount token (Mainloop sends a projected token for the audience
+  `kagent-invocation`, which kagent verifies by TokenReview) as created by the same user, so the creator does not tell Mainloop instances
   apart: only distinct Agent names do. Instances that share a kagent must never have shared
   Agents, or one instance's sweep deletes the other's Sessions. An Agent a deployment once used
   (a workspace row or a session create named it) stays in its orphan sweep (`kagent_agents`) after
@@ -111,24 +120,19 @@ History before `e776537` describes the retired Python backend. Where other text 
   `--delete`; the flag checks run before the command reads configuration or the database.
 - Every state change publishes `workspace:updated` in the same transaction as the change. The
   event carries the workspace lifecycle; it is not a removal notice.
-- `Wake(workspaceID)` is what a message to a workspace session calls before it is sent. It waits
-  for an open suspend to finish (up to `WORKSPACE_OPERATION_WAIT_SECONDS`, over at most four
-  rounds), then resumes the workspace if it is not running, so the message finds a running Session
-  and is sent once. A workspace with an open delete is refused, one that is gone is not found, and
-  one kagent has not confirmed in time or that stays busy is an error the delivery loop retries
-  without sending. The sender commits its delivery first: an open delivery makes a suspend that
-  has not yet reached kagent stand down, and one already in flight is waited for.
-- `WakeForPreview(workspaceID)` does not wait out other work, unlike `Wake`. It and
-  `Touch(workspaceID)` are the entry points the preview proxy calls. A running workspace is only
-  touched. If a suspend or a create is open it returns `ErrBusy` at once, and the proxy answers its
-  waking page (`503`, `Retry-After: 2`) instead of holding the request; an open delete is refused
-  (`409`). Otherwise a resume operation is queued once for any number of concurrent callers, and the
-  call returns when the Session is ready (a bounded wait) or fails with `502`/`409`.
+- `Wake(workspaceID)` is what a message to a workspace session calls before it is sent. It no
+  longer resumes anything: a workspace with an open delete is refused (`RejectedError`), one that
+  is gone is not found, and otherwise the call records the use (`Touch`). The send itself wakes a
+  sleeping Session.
+- `WakeForPreview(workspaceID)` and `Touch(workspaceID)` are the entry points the preview proxy
+  calls. `WakeForPreview` refuses an open delete the same way (`409`) and records the use. While
+  the workspace is still being created or has no kagent Session it returns `ErrBusy`, and the
+  proxy answers its waking page (`503`, `Retry-After: 2`) instead of holding the request.
 - Preview URLs are `<port>--<workspace>--preview.<host>` built from `SUBSTRATE_PREVIEW_BASE_URL`, ports sorted
   by number.
 - The preview proxy (G12, `server/internal/preview`), described under "Go preview proxy" in the
-  preview section below. Tests cover it with a fake router and dev server; it has not been run
-  against a real Substrate router.
+  preview section below. Tests cover it, including the router's mutual TLS and allow-list, with a
+  fake router and dev server; it has not been run against a real Substrate router.
 
 ### Proposed, not built
 
@@ -142,8 +146,9 @@ and covered by those tests.
 
 Implemented in the React client:
 
-- Lifecycle and publication badges. Suspend shows only when the workspace is running, and Resume
-  only when it is suspended. Refresh is always available. Delete asks for confirmation first.
+- Lifecycle and publication badges. The page has no Suspend or Resume buttons; it keeps Refresh,
+  which is always available, and Delete, which asks for confirmation first. A sleeping workspace
+  shows the hint "Asleep. It wakes when you send a message or open a preview."
 - A control cannot be submitted twice. After a `409` the page re-reads the workspace before it
   offers a retry, and it shows the backend's message.
 - A failed action keeps its message when its row or section unmounts. Moving to another workspace
@@ -151,7 +156,7 @@ Implemented in the React client:
 - The repository is a link only for `http` and `https` URLs. The image digest shows its first 19
   characters, or "unknown" when it does not parse.
 - Preview links are offered only for `http` and `https` URLs. A bad row is dropped and counted; the
-  rest still show. Opening a suspended workspace's preview wakes it on the Go side (G12, the
+  rest still show. Opening a sleeping workspace's preview wakes it on the Go side (G12, the
   preview proxy, described below); the React page only links to the preview.
 - A failed refresh keeps the cached data on screen, with an inline error and a retry.
 - A later read that cannot be parsed keeps the last good workspace on screen, with a notice that it
@@ -171,21 +176,22 @@ Not proven:
 
 ## Lifecycle
 
-| Observed state | User label | Meaning                                                                                              |
-| -------------- | ---------- | ---------------------------------------------------------------------------------------------------- |
-| `running`      | RUNNING    | kagent reports the Session ready.                                                                    |
-| `suspending`   | SUSPENDING | A suspend is in progress.                                                                            |
-| `suspended`    | SUSPENDED  | The Session is suspended. Its checkout is kept.                                                      |
-| `resuming`     | RESUMING   | The Session is being created (including automatic create retries) or resumed.                        |
-| `failed`       | FAILED     | kagent reports the Session failed, or automatic create retries stopped. `detail` carries the reason. |
-| `unknown`      | UNKNOWN    | kagent is unreachable, has no such Session, or reports a deleting one.                               |
+| Observed state | User label | Meaning                                                                                                                                                                           |
+| -------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `running`      | RUNNING    | kagent reports the Session ready with a current, active Actor.                                                                                                                    |
+| `suspended`    | SUSPENDED  | The Session is ready but asleep (no active Actor). Its checkout is kept and it wakes on use.                                                                                      |
+| `resuming`     | RESUMING   | The Session is being created (including automatic create retries), or kagent is doing brief lifecycle work on it (a `SUSPENDED` state, or a suspend, resume or revert operation). |
+| `failed`       | FAILED     | kagent reports the Session failed, or automatic create retries stopped. `detail` carries the reason.                                                                              |
+| `unknown`      | UNKNOWN    | kagent is unreachable, has no such Session, or reports a deleting one.                                                                                                            |
+
+`suspending` remains in the contract's enum but is no longer reported.
 
 The UI shows workspace state wherever sessions are listed and links from the session detail to
 `/workspaces/{id}`. The workspace page shows the manifest, state, last activity and preview ports,
-with suspend, resume, refresh and delete controls. Session badges and status are not changed by
+with refresh and delete controls. Session badges and status are not changed by
 workspace operations.
 
-## Create, suspend, resume, delete
+## Create, sleep, delete
 
 - A workspace is created from a project or straight from a repository. Naming a repository
   (`owner/name` or `https://github.com/owner/name[.git]`) finds the owner's project for it, or
@@ -261,14 +267,11 @@ workspace operations.
   fresh retry schedule. Completed, failed and cancelled sessions are never retried
   automatically (refresh and delete still reconcile them), and task-attempt workspaces are
   excluded: task provisioning retries its own creates.
-- Suspend is refused (`409`) while the native delivery ledger has a recorded, queued (unless held after a stop), sending or
-  delivered-but-incomplete delivery. The check and `SuspendSession` run under the REST
-  process's per-session lock. The MCP container is a second writer that this lock does not
-  cover, so a message it records during a suspend can still arrive; it resumes the Session
-  before it is sent. A message that arrives during a suspend waits for it, then resumes the
-  Session before it is sent.
-- Resume calls `ResumeSession` only when the Session is suspended and counts as activity. A
-  suspend or resume keeps the workspace grant and its token hash.
+- There is no suspend or resume. kagent puts an idle workspace's Actor to sleep after its own
+  quiesce delay; the workspace then reads `suspended` and keeps its checkout, its workspace grant
+  and its token hash. The next message, a workspace preparation, a preview request or a live-view
+  attach wakes it. Processes do not survive sleep, so the agent has to start a dev server again
+  after a wake.
 - Delete is refused (`409`) while a delivery is open. If the create's outcome was never known,
   delete first resolves it with the same idempotent `CreateSession` (the stored request id and the
   same credential reference) that **refresh** uses, including after cancellation has revoked the
@@ -287,7 +290,7 @@ workspace operations.
   id; deleting the workspace resolves it first (above), and the operator sweep below finds any
   that were never recorded.
 
-## Preview and idle-out
+## Preview and sleep
 
 The preview URL has the form `<port>--<workspace>--preview.<domain>`: one DNS label directly
 under `<domain>`, so a single-label wildcard certificate (`*.<domain>`) and listener cover every
@@ -296,15 +299,16 @@ preview. A host with more labels (`x.<port>--<workspace>--preview.<domain>`) is 
 `http://localhost:8001` (giving `http://3000--<workspace>--preview.localhost:8001`) or
 `https://<domain>` in production. Mainloop checks that the workspace is the configured owner's and
 that the port is one the workspace declares, then opens
-`CONNECT actor-upstream:<port>` through the Substrate router to the Session's running actor. The
-actor's name carries its runtime generation (`session-<kagent session id>-<suffix>`), so Mainloop
-reads it from the kagent Session's runtime association, which kagent reports only while the actor
-runs. The router has no authentication of its own, so the owner
-check is Mainloop's. With `onQuiesce: Full` on the harness, the CONNECT would wake a suspended actor behind kagent's back,
-so a preview of a suspended workspace first resumes its Session through kagent (the same as the
-resume endpoint), once for any number of concurrent previews, and only then connects. If the resume
-fails the preview is `502` (WebSocket close `1013`) and the router is not contacted. The idle
-timeout then suspends the workspace again.
+`CONNECT actor-upstream:<port>` through the Substrate router to the Session's actor. The target
+is `<atespace>/<actor name>` from the kagent Session's runtime association when kagent reports one,
+current or not; otherwise from the Session's A2A authority (`<actor>.<atespace>.actors.resources.substrate.ate.dev`, which kagent records when it creates the Actor); failing both,
+`<KAGENT_ACTOR_ATESPACE>/session-<kagent session id, lower case>`, kagent's stable Actor name. The
+router authenticates the backend by its pod certificate (mutual TLS, see "Tunnel" below) but knows
+nothing of owners or ports, so the owner check is Mainloop's. Mainloop does not ask
+kagent to wake anything: the `CONNECT` through the router is what wakes a sleeping Actor. A
+Session that is not `READY` shows the waking page and the router is not contacted. Processes do
+not survive sleep, so a preview of a just-woken workspace can fail until the agent has started the
+dev server again.
 
 Mainloop has one owner, set by `MAINLOOP_OWNER_ID` (default `local-dev-user`, which Kind and
 local development use). Every REST handler and the preview proxy take the user from the configured owner.
@@ -316,7 +320,7 @@ multi-user setup reads the identity a trusted gateway sets, in `current_user()` 
 Access to the tailnet, plus the in-cluster NetworkPolicy, is the security boundary. The API also
 refuses a non-GET request that carries an `Origin` other than the frontend's, a loopback
 development origin (`localhost`, `127.0.0.1` or `[::1]`, any port; development mode only) or its own, so another origin's page (the agent's preview page, for one)
-cannot make a browser post a cancel, archive, suspend or resume.
+cannot make a browser post a cancel, an archive or a delete.
 
 **Host check.** The API answers `404` to any `Host` that is not the frontend domain
 (`FRONTEND_DOMAIN`), the configured `API_DOMAIN` (with or without a port), a name in `MAINLOOP_API_HOSTS`
@@ -330,7 +334,7 @@ are the only things between that page and the API. This is a known, accepted ris
 a deployment that cannot accept it must serve previews under a registrable domain of their own.
 The preview listener never reads an identity header (`X-User-ID` included): a
 workspace that is not the configured owner's is `404` (WebSocket close `4404`), and an undeclared
-port is `403` (close `4403`). A refused request does not touch the workspace's idle clock; only a
+port is `403` (close `4403`). A refused request does not record activity on the workspace; only a
 request that passes both checks does.
 
 **Preview Origin check.** An unsafe HTTP method (anything but `GET`, `HEAD` and `OPTIONS`) and
@@ -354,12 +358,9 @@ allowlist. A header the gateway adds under another name is not stripped. It retr
 a disconnect has an unknown outcome and the request is not replayed. Active HTTP streams and
 WebSocket connections refresh the workspace's activity every 20 seconds until they close.
 
-A preview-only wake does not make kagent suspend the actor again, so Mainloop does. The reconcile
-loop checks once a minute. A workspace is suspended when it has been quiet for its idle timeout
-(1 to 1440 minutes, default 30): no preview traffic, no resume, and no delivery activity, and no
-open delivery. It is skipped when the Session is not ready, is mid-operation, or is already
-suspended. The main thread is excluded by role and never suspended by Mainloop idle-out.
-Held reports after a stopped turn do not prevent parking.
+Mainloop does not suspend a workspace after a preview, or at any other time. kagent puts the
+Actor to sleep again after its own quiesce delay, and the workspace's idle timeout is not
+enforced.
 
 ## Go preview proxy
 
@@ -383,16 +384,33 @@ request id, access log and panic recovery still wrap it. Any other host is the A
   is not a `GET` WebSocket handshake is `400`.
 - **Methods.** `CONNECT`, `TRACE` and `TRACK` are `405` before any lookup, wake or tunnel.
 - **Wake.** `workspaces.Service.WakeForPreview`, whose result is trusted for 5 seconds so a page
-  load's many requests do not each ask kagent; the idle clock is still touched on each request.
-  Inside those 5 seconds a suspend by the owner (or an idle suspend that already passed its activity
-  re-check) is not noticed: a request there can reach the router while the workspace is suspended.
-  The window is narrow and owner-only; the per-request touch makes a later idle suspend back off.
-  Not confirmed in time, or another workspace operation is in progress, shows a `503` "Workspace
-  waking up" page with `Retry-After: 2`; a workspace that cannot be resumed is `409`; any other
-  failure is `502`.
+  load's many requests do not each read the workspace; activity is still recorded on each request.
+  It asks kagent for nothing. A workspace that is still being created, or has no kagent Session,
+  shows a `503` "Workspace waking up" page with `Retry-After: 2`; one that is being deleted is
+  `409`; any other failure is `502`.
+- **Router TLS.** The Substrate 1.0 router has no plain-HTTP listener. `SUBSTRATE_ROUTER_ADDRESS`
+  is its CONNECT-over-TLS listener (default
+  `https://atenet-router.ate-system.svc.cluster.local:8444`; an `http` address is refused at
+  startup). The backend verifies the router's certificate as `SUBSTRATE_ROUTER_SERVER_NAME`
+  (default `atenet-router.ate-system.svc`) against the trust bundle at `SUBSTRATE_ROUTER_CA`
+  (signer `servicedns.podcert.ate.dev/identity`), and presents the pod certificate at
+  `SUBSTRATE_ROUTER_CLIENT_CREDENTIAL` (signer `podidentity.podcert.ate.dev/identity`, key and
+  chain in one file). The kubelet rotates both, so both are read on every connect. The router
+  admits only SPIFFE IDs on its allow-list (`atenetRouter.ingressAllowedSPIFFEIDs`); the backend's
+  is `spiffe://cluster.local/ns/<namespace>/sa/mainloop-backend`. The router answers a client it
+  does not admit with `200` to the `CONNECT` and then closes the tunnel ("network authorization
+  denied" in the router's log; measured on Substrate 1.0.1 on Kind). By then the request has been
+  forwarded, so it is a `502` and is not replayed. A missing or unreadable credential file, or a
+  router certificate the trust bundle does not sign, fails the dial before anything is sent: after
+  the one retry the owner sees the waking page, logged as "preview tunnel not ready" with the
+  reason. The chart's `substrateRouterAuth.enabled` mounts both files into the API container only.
 - **Tunnel.** `CONNECT actor-upstream:<port>` to `SUBSTRATE_ROUTER_ADDRESS` with
   `ate-target-actor: <atespace>/<actor name>` from the kagent Session's runtime association (read
-  per request; no association shows the waking page and the router is not contacted), timed by
+  per request), current or not. With no association it is the actor the Session's A2A authority
+  names, and with neither
+  `<KAGENT_ACTOR_ATESPACE>/session-<kagent session id, lower case>`, kagent's stable Actor name.
+  The `CONNECT` is what wakes a sleeping Actor. A Session that is not `READY` shows the waking
+  page and the router is not contacted. The connect is timed by
   `SUBSTRATE_PREVIEW_CONNECT_TIMEOUT_SECONDS`. A router refusal before anything was sent is retried
   once, then the waking page; a failure after the request was forwarded is `502` and is never
   replayed. One tunnel per request (no pooling), no compression, streaming responses are flushed
@@ -407,8 +425,7 @@ request id, access log and panic recovery still wrap it. Any other host is the A
   takes one if it is still running after 10 seconds. The holder renews every 20 seconds (lease TTL
   60 seconds) and deletes the row on close. A reconcile sweep every 20 seconds, under the runner's
   sweep lease, calls `Touch` for every workspace with an unexpired lease and prunes rows expired
-  for over a minute. A holder that crashes stops renewing, so its lease lapses without cleanup; the
-  workspace idles out after the usual timeout.
+  for over a minute. A holder that crashes stops renewing, so its lease lapses without cleanup.
 
 Not covered: WebSocket close codes `4403`/`4404`/`1013` (see Origin above), per-session pooling of
 tunnels, and behaviour against a real router.
@@ -473,7 +490,7 @@ delete those workspaces first. The exit status is non-zero if any delete failed.
   - A bad `branch`, `ref` or other field is `422` with the first problem, for example
     `branch: Value error, ...`.
 - `GET /workspaces` and `GET /workspaces/{id}` return lifecycle records for the current user.
-- `POST /workspaces/{id}/suspend`, `/resume`, `/refresh`.
+- `POST /workspaces/{id}/refresh`. The suspend and resume endpoints are removed.
 - `DELETE /workspaces/{id}` returns `204`.
 - `GET /workspaces/{id}/ports` lists the declared preview ports and their URLs.
 - Lifecycle changes are published on the event stream as `workspace:updated`.
@@ -489,7 +506,10 @@ execution against the frozen candidate. Source inspection is not execution evide
 
 **Verified live before the cutover**, on the Python backend, on a Kind cluster running the kagent
 fork and Substrate (images built from this work before the review repairs; they were not
-redeployed after them). Not re-run on the Go server:
+redeployed after them). Not re-run on the Go server. These runs used the previous kagent API
+(Substrate 0.4), which had `SuspendSession`, `ResumeSession` and `onQuiesce: Full`; the items that
+name a suspend, a resume or idle-out record behaviour that has since been removed and say nothing
+about the current API:
 
 - Creating a workspace, a first turn that sees the checkout, a second turn on the same Session,
   and the K1 markers outside `.git`.
@@ -506,6 +526,12 @@ redeployed after them). Not re-run on the Go server:
 - Deleting a workspace deletes the kagent Session.
 - Stopping a running turn: `stopped`, then `no_open_turn`, the Session still usable.
 
+**Not verified live on the current kagent API (`kagent.api.v1`, Substrate 1.0):** everything
+above about sleep and wake. That kagent suspends an idle Actor and keeps the Session `READY`,
+that a send, a preparation, a preview request or a live-view attach wakes it, the stable Actor
+name for a Session with no association, and the observed-state mapping are implemented and tested
+with fakes only. A live check on a Kind stack is pending.
+
 **Not verified live:**
 
 - The cold-clone first turn against the client's 30 second timeout (a depth-1 public clone
@@ -514,12 +540,9 @@ redeployed after them). Not re-run on the Go server:
   untouched) and the markers after a snapshot restore. The kagent end-to-end tests cover the
   first.
 - Stopping a parked (`input-required`) turn.
-- A suspend that arrives in the middle of a turn, through Mainloop (kagent's end-to-end test covers
-  it).
-- WebSocket previews against a suspended workspace, and kagent's `SuspendSession` and
-  `DeleteSession` idempotency.
-- The review repairs: the idle re-check under the lock, the archived-session delete retry, the
-  preview header filtering and the cross-origin write check.
+- WebSocket previews against a sleeping workspace, and kagent's `DeleteSession` idempotency.
+- The review repairs: the archived-session delete retry, the preview header filtering and the
+  cross-origin write check.
 
 ## Workspace environment resolution
 
@@ -584,8 +607,8 @@ Preparation is a durable intent, not a side effect of the first send. Creating t
 stores a `workspace_preparations` row (`planned`, `requested`, `confirmed` or `failed`) in the
 same transaction, keyed by the create request ID. The `workspace-preparation` loop:
 
-- waits for a READY Session with no operation in progress, and wakes it if kagent has no
-  running Actor (preparation needs one);
+- waits for a READY Session with no operation in progress. It does not wake a sleeping one:
+  `PrepareSessionWorkspace` wakes the runtime itself;
 - reads the Session's receipt before anything else. A confirmed receipt settles the row. A
   definite failure, a receipt for another action, or a historical receipt fails it at once
   (kagent keeps one preparation per Session, so a historical receipt never becomes current);
@@ -596,7 +619,11 @@ same transaction, keyed by the create request ID. The `workspace-preparation` lo
   `agent` when there is none) on the first call and then frozen on the row. The pinned setup
   digests belong to the kagent release the harnesses run and must change with it; a test fails
   when the vendored kagent API pin moves without them. `InvalidArgument`, `PermissionDenied` and
-  `AlreadyExists` replies fail the row; other errors retry with the loop's backoff.
+  `AlreadyExists` replies fail the row; other errors retry with the loop's backoff. The call
+  carries the generation id and actor uid from the last `GetSession`, even when the association is
+  not current. The generation id is derived from the Session and its Actor, so sleep and wake keep
+  it; only a replaced Actor changes it. kagent answers `FAILED_PRECONDITION` or `ABORTED` when they are stale, and the
+  next pass reads the Session again and retries. With no association at all the loop waits.
 
 A row that is not confirmed 30 minutes after creation fails, but only after a last read of the
 receipt, so a late confirmation still counts. A failed row's detail names the cause.
@@ -606,9 +633,9 @@ failed, with that detail, once it is `failed`. Disabling either flag does not ch
 The workspace lifecycle view does not report preparation; the owner sees a failed preparation in
 the delivery detail ("workspace preparation failed; replace the session") and the logs.
 
-Push enrollment also needs a running Actor: kagent attests the runtime only while one runs, and
-parks an idle Actor. Enrollment resumes the Session and looks again instead of treating an
-unattested runtime as final.
+Push enrollment also needs an awake Actor: kagent attests the runtime only while one runs, and
+puts an idle Actor to sleep. Enrollment no longer wakes one. It waits until the preparation or the
+first message has woken the Actor, instead of treating an unattested runtime as final.
 
 ## Task-backed workspaces
 
@@ -700,7 +727,7 @@ not copied (an MCP credential) and why.
 
 Because the row is ordinary once written — a `workspaces` row joined to an `agent_bindings` row
 that already names a kagent Session — every lifecycle path above applies unchanged: `GET
-/workspaces/{id}`, suspend, resume, idle suspend, and delete. In particular, deleting or archiving
+/workspaces/{id}`, refresh, sleep and wake, and delete. In particular, deleting or archiving
 a fork's workspace goes through the same reconciler-rule delete op as any other workspace (a
 durable `workspace_ops` intent row, written before any kagent call): `doDelete` finds the Session
 already bound and calls kagent's `DeleteSession` directly, with no create to replay first, which

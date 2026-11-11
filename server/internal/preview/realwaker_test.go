@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"testing"
 	"time"
@@ -29,17 +30,19 @@ func (noDeliveries) LastActivity(context.Context, string) (time.Time, error) { r
 // workspace id and the host to request.
 func realWorkspace(t *testing.T, e *env) (svc *workspaces.Service, fake *kagenttest.Server, id, host string) {
 	t.Helper()
-	cfg, err := config.Parse(map[string]string{
+	vars := map[string]string{
 		"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "mainloop.test", "MAINLOOP_API_HOSTS": "api.test",
 		"MAINLOOP_OWNER_ID": owner, "SUBSTRATE_PREVIEW_BASE_URL": origin,
-		"SUBSTRATE_ROUTER_ADDRESS":         e.router.addr(),
 		"WORKSPACE_OPERATION_WAIT_SECONDS": "1",
-	})
+	}
+	maps.Copy(vars, e.router.vars())
+	cfg, err := config.Parse(vars)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fake = kagenttest.New()
 	t.Cleanup(fake.Close)
+	fake.Actors = true
 	reg, err := providers.NewRegistry(cfg.Kagent)
 	if err != nil {
 		t.Fatal(err)
@@ -57,6 +60,7 @@ func realWorkspace(t *testing.T, e *env) (svc *workspaces.Service, fake *kagentt
 	svc = workspaces.New(cfg, e.pool, client, reg, nil, noDeliveries{}, projects.NewService(cfg, e.pool, nil, nil, nil, log), log)
 	svc.PollEvery = 5 * time.Millisecond
 	e.proxy.Waker = svc
+	e.proxy.Sessions = client
 
 	r := reconcile.NewRunner(e.pool, svc.Log, nil)
 	loop := svc.Loop()
@@ -82,60 +86,31 @@ func realWorkspace(t *testing.T, e *env) (svc *workspaces.Service, fake *kagentt
 	return svc, fake, w.WorkspaceId, "3000--" + w.WorkspaceId + "--preview." + baseHost
 }
 
-// A suspend that is open must not hold the preview request: the proxy answers its waking page at
-// once and the browser retries, and nothing is resumed under the suspend.
-func TestPreviewDuringAnOpenSuspendShowsTheWakingPageAtOnce(t *testing.T) {
+// kagent parks an idle workspace's Actor itself and has no resume call. A preview of a sleeping
+// workspace is tunnelled to its Actor at once: the connection through the router is what wakes it,
+// and no workspace operation is started.
+func TestPreviewOfASleepingWorkspaceTunnelsToItsActor(t *testing.T) {
 	e := newEnv(t)
 	svc, fake, id, host := realWorkspace(t, e)
-
-	fake.FailNext(kagent.ProcSuspendSession, kagenttest.Fault{Delay: 3 * time.Second}) // the suspend stays in flight
-	suspended := make(chan error, 1)
-	go func() { _, err := svc.Suspend(context.Background(), id); suspended <- err }()
-	deadline := time.Now().Add(10 * time.Second)
-	for fake.Count(kagent.ProcSuspendSession) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the suspend never reached kagent")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	start := time.Now()
-	rec := e.do("GET", host, "/", nil, nil)
-	if took := time.Since(start); took > time.Second {
-		t.Fatalf("the preview request waited %s for the suspend", took)
-	}
-	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
-		t.Fatalf("got %d %v", rec.Code, rec.Header())
-	}
-	if fake.Count(kagent.ProcResumeSession) != 0 {
-		t.Fatal("resumed under an open suspend")
-	}
-	if len(e.router.seen()) != 0 {
-		t.Fatal("traffic reached the workspace while it was being suspended")
-	}
-	<-suspended
-}
-
-// A suspended workspace is resumed once by the preview request, which then goes through.
-func TestPreviewOfASuspendedWorkspaceResumesItOnce(t *testing.T) {
-	e := newEnv(t)
-	svc, fake, id, host := realWorkspace(t, e)
-	if _, err := svc.Suspend(context.Background(), id); err != nil {
+	var ksid string
+	if err := e.pool.QueryRow(context.Background(), `SELECT kagent_session_id FROM agent_bindings WHERE session_id = $1`, id).Scan(&ksid); err != nil {
 		t.Fatal(err)
+	}
+	fake.Sleep(ksid)
+	if w, err := svc.Get(context.Background(), id); err != nil || w.ObservedState != api.WorkspaceObservedStateSuspended {
+		t.Fatalf("a sleeping workspace shows as %+v %v", w.ObservedState, err)
 	}
 
 	rec := e.do("GET", host, "/", nil, nil)
 	if rec.Code != http.StatusOK || rec.Body.String() != "dev" {
 		t.Fatalf("got %d %q", rec.Code, rec.Body.String())
 	}
-	if n := fake.Count(kagent.ProcResumeSession); n != 1 {
-		t.Fatalf("%d resumes", n)
+	want := "ate/" + kagent.ActorName(ksid) + " actor-upstream:3000 CONNECT"
+	if seen := e.router.seen(); len(seen) != 1 || seen[0] != want {
+		t.Fatalf("router saw %v, want [%s]", seen, want)
 	}
-	// A second request shares the confirmed wake.
-	if rec := e.do("GET", host, "/", nil, nil); rec.Code != http.StatusOK {
-		t.Fatalf("second request: %d", rec.Code)
-	}
-	if n := fake.Count(kagent.ProcResumeSession); n != 1 {
-		t.Fatalf("%d resumes after two requests", n)
+	var ops int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM workspace_ops WHERE workspace_id = $1 AND kind <> 'create'`, id).Scan(&ops); err != nil || ops != 0 {
+		t.Fatalf("%d workspace operations for a preview: %v", ops, err)
 	}
 }
