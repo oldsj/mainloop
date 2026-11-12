@@ -179,6 +179,9 @@ func TestReportsDuringAnOpenTurnAreOneMessage(t *testing.T) {
 	r.eventually("all three looked at and waiting", func() bool {
 		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'pending' AND attempts > 0`) == 3
 	})
+	// All three come due together, so one runner claims them in one go: the batch must still take
+	// rows another handler holds.
+	r.exec(`UPDATE task_event_deliveries SET next_attempt_at = now() + interval '200 milliseconds'`)
 	r.finishTurns()
 	r.eventually("all three queued", func() bool {
 		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'queued'`) == 3

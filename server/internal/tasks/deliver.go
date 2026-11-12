@@ -86,11 +86,17 @@ func reportText(r dbq.TaskReport, t dbq.Task, attempt int32) string {
 }
 
 // prepareBatch writes the delivery's target and message id, and in the same transaction gives that
-// message id to the other pending reports for the same recipient that no claimer holds. Each keeps
-// its own row; only the message is shared. A lost lease returns the delivery without a message id.
+// message id to the other pending reports for the same recipient that have no message yet. Each
+// keeps its own row; only the message is shared. When this row was already taken into another
+// batch, or the lease was lost, it returns the delivery without a message id.
 func (s *Service) prepareBatch(ctx context.Context, c reconcile.Claim, d dbq.TaskEventDelivery, attemptID *string) (dbq.TaskEventDelivery, error) {
 	mid := messageID(d.ID, d.Sends+1)
 	err := db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+		// One batch per recipient at a time, so two deliveries prepared together cannot each leave
+		// the other out: the second waits, then finds its row already in the first one's message.
+		if err := db.XactLock(ctx, tx, "mainloop:task-report-batch:"+d.RecipientKey); err != nil {
+			return err
+		}
 		q := dbq.New(tx)
 		prepared, err := q.PrepareTaskEventDelivery(ctx, dbq.PrepareTaskEventDeliveryParams{
 			ID: d.ID, LeaseOwner: &c.Owner, Attempts: int32(c.Attempts), //nolint:gosec // a small counter
@@ -217,7 +223,9 @@ func (s *Service) sendReport(ctx context.Context, c reconcile.Claim, d dbq.TaskE
 			return reconcile.Outcome{}, err
 		}
 		if d.DeliveryID == nil {
-			return reconcile.Recorded(), nil // the lease was lost
+			// Another delivery's batch took this row (or the lease was lost): look again shortly,
+			// when it has the shared message id to follow.
+			return reconcile.RetryAfter(10 * time.Millisecond), nil
 		}
 	}
 	mid := *d.DeliveryID
