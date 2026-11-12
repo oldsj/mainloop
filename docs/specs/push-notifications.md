@@ -8,11 +8,11 @@ so the owner can step away and still hear when something needs them. This is imp
 
 Push is off unless both of these are set on the server:
 
-| Variable | Meaning |
-| --- | --- |
-| `MAINLOOP_NTFY_URL` | ntfy base URL, such as `http://ntfy.ntfy.svc` |
+| Variable              | Meaning                                                     |
+| --------------------- | ----------------------------------------------------------- |
+| `MAINLOOP_NTFY_URL`   | ntfy base URL, such as `http://ntfy.ntfy.svc`               |
 | `MAINLOOP_NTFY_TOPIC` | topic to publish to (letters, digits, `-`, `_`; at most 64) |
-| `MAINLOOP_NTFY_TOKEN` | optional access token, from a Secret; never committed |
+| `MAINLOOP_NTFY_TOKEN` | optional access token, from a Secret; never committed       |
 
 The token needs **read and write** access to the topic: a retry reads the topic back before
 posting again (see below). Setting only one of URL and topic is a startup error. Links use
@@ -20,13 +20,13 @@ posting again (see below). Setting only one of URL and topic is a startup error.
 
 ## What is sent
 
-| Event | Title | Body | Opens | Priority |
-| --- | --- | --- | --- | --- |
-| New Needs-you approval | item title | what is needed | the item's card | 4 (high) |
-| New Needs-you question or owner decision | item title | what is needed | the item's card | 3 |
-| Root task completed | task title | Task completed | `/tasks/<id>` | 3 |
-| Root task failed | task title | Task failed | `/tasks/<id>` | 4 |
-| Root task blocked (not on an owner decision) | task title | Task blocked: … | `/tasks/<id>` | 4 |
+| Event                                        | Title      | Body            | Opens           | Priority |
+| -------------------------------------------- | ---------- | --------------- | --------------- | -------- |
+| New Needs-you approval                       | item title | what is needed  | the item's card | 4 (high) |
+| New Needs-you question or owner decision     | item title | what is needed  | the item's card | 3        |
+| Root task completed                          | task title | Task completed  | `/tasks/<id>`   | 3        |
+| Root task failed                             | task title | Task failed     | `/tasks/<id>`   | 4        |
+| Root task blocked (not on an owner decision) | task title | Task blocked: … | `/tasks/<id>`   | 4        |
 
 - Only Needs-you items count. Problems (kind `problem`) and Activity are not pushed.
 - A task blocked on an owner decision is pushed once, as its attention item, not twice.
