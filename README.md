@@ -10,34 +10,132 @@ Inspired by [You Are The Main Thread](https://claudelog.com/mechanics/you-are-th
 | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
 | <img width="600" alt="mainloop desktop" src="docs/images/desktop.png" /> | <img width="150" alt="mainloop mobile" src="https://github.com/user-attachments/assets/3b263abe-9fee-45c5-9ba8-38edd5e5e4a8" /> |
 
-## How It Works
+## How it works
 
-```text
-You (phone/laptop)
-    │
-    ▼
-┌─────────────────────────────────────────────────────┐
-│                   Main Thread                        │
-│       Native Claude Code or Codex via kagent         │
-│                                                      │
-│   user@mainloop$ research X      ← inline sessions  │
-│   ├── [research X] thinking...   ← threaded reply   │
-│   └── [research X] here's what   ← notification     │
-└──────────────┬────────────────┬─────────────────────┘
-               │                │
-       ┌───────▼──────┐  ┌──────▼───────┐
-       │   Session 1  │  │   Session 2  │  ...
-       │   (Claude)   │  │   (Opus)     │
-       │              │  │              │
-       │   Research   │  │  Feature dev │
-       └──────────────┘  └──────────────┘
+### The big picture
+
+```mermaid
+flowchart LR
+  you["You<br/>phone or laptop"] --> web["React app"]
+  web --> api
+
+  subgraph cp["Mainloop control plane (namespace mainloop)"]
+    api["Go server<br/>REST API, MCP tools,<br/>Git proxy, reconcilers"]
+    db[("PostgreSQL<br/>the ledger")]
+    api <--> db
+  end
+
+  api -->|"A2A turns,<br/>Session lifecycle"| kagent["kagent controller"]
+
+  subgraph sb["Substrate actors (one per Session)"]
+    main["Main thread<br/>Claude Code or Codex<br/>gVisor"]
+    ws["Workspace<br/>Claude Code or Codex<br/>+ git checkout<br/>microVM"]
+  end
+
+  kagent --> main
+  kagent --> ws
+  main -. "MCP tools" .-> api
+  ws -. "MCP tools, git fetch/push" .-> api
+  api -->|"GitHub App tokens"| gh["GitHub"]
 ```
 
-- **Main thread**: One product conversation with an explicitly selected Claude Code or Codex main; delegated sessions surface results back. [Idle provider switching](docs/specs/chat.md#selecting-the-main-provider) preserves product history and creates a new native identity.
-- **Sessions**: Native Claude Code or Codex work with their own conversations; appear as colored threads in your timeline
-- **Notifications**: Slack-style thread replies notify you when sessions need attention or complete
-- **Persistence**: Mainloop stores conversations, delivery records, and workspace lifecycle state in PostgreSQL; native history remains with the provider CLI in its kagent Session
-- **Workspaces**: Each branch workspace is a kagent Session with its own git checkout; previews and sleep are described in [Workspaces](docs/specs/workspaces.md)
+Mainloop is the control plane: it records every message, delivery, task and approval in PostgreSQL, then hands each turn to kagent over A2A. kagent runs each native Claude Code or Codex session in its own Substrate actor, and the agents call back into Mainloop only through its MCP tools and Git proxy.
+
+State lives in three places, and none of them is the actor's memory:
+
+| What                                                | Where                                    |
+| --------------------------------------------------- | ---------------------------------------- |
+| Conversations, deliveries, tasks, approvals, policy | Mainloop's PostgreSQL ledger             |
+| Native session history (the CLI's own transcript)   | The kagent Session and its snapshots     |
+| Code                                                | Git: the workspace checkout, then GitHub |
+
+### What a kagent agent is
+
+```mermaid
+flowchart TB
+  agent["Agent<br/>(what Mainloop names)"]
+  tmpl["AgentTemplate<br/>instructions, model,<br/>tool bindings"]
+  harness["Harness<br/>runtime (Claude or Codex), image,<br/>CPU/memory, worker pool,<br/>env, idle TTL, git origins"]
+  model["ModelConfig<br/>provider, model,<br/>auth Secret"]
+  mcp["RemoteMCPServer<br/>a tool server URL"]
+  pool["WorkerPool<br/>sandbox class:<br/>gVisor or microVM"]
+
+  agent --> tmpl
+  agent --> harness
+  tmpl --> model
+  tmpl --> mcp
+  harness --> pool
+```
+
+An Agent is an AgentTemplate (what it does) plus a Harness (how it runs). kagent compiles the pair into an immutable revision; each Session pins one revision and runs as one Substrate actor.
+
+The Agents Mainloop uses today (names are server settings; the resources live in the infrastructure repository):
+
+| Agent                      | Used for                                  | Sandbox                   | Tools                                 |
+| -------------------------- | ----------------------------------------- | ------------------------- | ------------------------------------- |
+| `mainloop-main`            | the Claude main thread                    | gVisor, 2 CPU/2 GiB       | `mainloop`                            |
+| `mainloop-main-codex`      | the Codex main thread                     | gVisor, 2 CPU/2 GiB       | `mainloop`                            |
+| `claude-workspace`         | code tasks, supervisors, owner workspaces | microVM, 3 CPU/4 GiB, git | `mainloop`, `mainloop-merge-approval` |
+| `codex-workspace`          | the same, on Codex                        | microVM, 3 CPU/4 GiB, git | `mainloop`, `mainloop-merge-approval` |
+| `claude-subscription`      | coordination children (no repository)     | microVM, 2 CPU/2 GiB      | `mainloop`                            |
+| `codex-subscription-https` | the same, on Codex                        | microVM, 2 CPU/2 GiB      | `mainloop`                            |
+
+Infrastructure ops agents (`renovate-steward`, `alert-triage`) are kagent Agents too, but Mainloop does not start them; see [Agents and permissions](docs/architecture/agents-and-permissions.md#ops-agents).
+
+### Sandboxes and permissions
+
+```mermaid
+flowchart LR
+  subgraph actor["Workspace actor (microVM)"]
+    cli["Claude Code<br/>permissions skipped"]
+    repo["/data/workspace<br/>checkout"]
+  end
+  cli -->|"ml_ bearer<br/>(no GitHub token)"| git["Mainloop Git proxy<br/>read: one repo<br/>push: own branch only"]
+  cli -->|"ml_ bearer"| tools["Mainloop MCP<br/>open PR, merge, report"]
+  cli -->|"allowlist"| reg["Package registries"]
+  git -->|"GitHub App token"| gh["GitHub"]
+  tools -->|"merge policy:<br/>auto or approval"| gh
+```
+
+A coding agent runs with Claude Code's permission prompts skipped (kagent's managed profile uses `bypassPermissions`), because the sandbox is the boundary. The actor holds no GitHub credential: it fetches and pushes through Mainloop's Git proxy, which lets it push only its own branch, and it opens and merges pull requests through MCP tools that apply the project's merge policy.
+
+### A turn's life
+
+```mermaid
+sequenceDiagram
+  actor You
+  participant API as Mainloop API
+  participant DB as PostgreSQL
+  participant DL as Delivery loop
+  participant K as kagent
+  participant S as Native session
+
+  You->>API: POST /sessions/{id}/message
+  API->>DB: message + delivery (recorded)
+  API-->>You: 200 ok
+  DL->>DB: claim (sending)
+  DL->>K: A2A send (messageId = delivery id)
+  K->>S: wake the actor if asleep, run the turn
+  S-->>K: tool calls, text, status
+  K-->>DL: task events
+  DL->>DB: reply, delivery completed
+  Note over You,S: The live view streams the same turn over a WebSocket
+
+  You->>API: message while the turn runs (steer: true)
+  API->>DB: delivery_steers row
+  API-->>You: 202 steered
+  DL->>K: A2A message on the running task
+  K->>S: joins the turn at its next tool boundary
+
+  You->>API: message while the turn runs (no steer)
+  API->>DB: delivery (queued)
+  API-->>You: 202 queued
+  Note over DB: promoted to recorded when the open turn ends
+```
+
+Every message becomes a ledger row before anything is sent, and a session has at most one open turn. A message sent mid-turn either joins it (a steer) or waits as `queued` for its own turn; a steer that the turn never consumed turns into the next queued message.
+
+More diagrams (approvals, delegation, delivery to production) and the detail behind these are in [Agents and permissions](docs/architecture/agents-and-permissions.md). Workspaces, previews and sleep are in [Architecture](docs/architecture.md).
 
 ## Quick Start
 
@@ -129,27 +227,6 @@ mainloop/
 3. Completed and failed sessions
 4. Each session has its own conversation you can zoom into
 
-## Agent Workflow
-
-Agents are native sessions spawned for development tasks. Mainloop records the session and its deliveries; the native CLI session runs in a kagent Agent (A2A) selected by agent kind.
-
-```text
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Spawn     │────►│    Work     │────►│     PR      │────►│    Close    │
-│   (main)    │     │  (kagent)  │     │  (GitHub)   │     │  (summary)  │
-└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
-       ▲                   │
-       └───────────────────┘
-         check in / spawn more
-```
-
-1. **Spawn** - Main thread creates agent for a task
-2. **Work** - A native Claude Code or Codex session runs in its kagent Agent
-3. **PR** - Agent creates and merges GitHub PR when ready
-4. **Close** - Agent posts summary back to main thread
-
-You stay in main thread, checking in on agents and spawning new ones as needed.
-
 ## Documentation
 
 **Specs** (source of truth for app behavior):
@@ -162,6 +239,7 @@ You stay in main thread, checking in on agents and spawning new ones as needed.
 **Guides**:
 
 - [Architecture](docs/architecture.md) - Workspaces, delivery, previews, and agent tools
+- [Agents and permissions](docs/architecture/agents-and-permissions.md) - kagent Agents, sandboxes, approvals, delegation and delivery to prod
 - [Development environment](docs/dev-environment.md) - Make targets and the shared live dev instance
 - [Production rollout](docs/production-rollout.md) - Production overlay, site contract and GitOps boundary
 - [Performance](docs/performance.md) - Open performance items for the current stack
@@ -170,78 +248,3 @@ You stay in main thread, checking in on agents and spawning new ones as needed.
 ## License
 
 This project is licensed under the [Sustainable Use License v1.0](LICENSE.md) - a source-available license that allows free use for internal business, non-commercial, and personal purposes.
-
-## Agent tools and network isolation
-
-Native agents use the `mainloop` MCP server, a dedicated stateless Streamable HTTP listener
-on port 8002. Service `mainloop-mcp` serves port 80 at
-`http://mainloop-mcp.mainloop.svc.cluster.local/mcp`; it exposes no REST API.
-The Substrate egress gateway replaces the agent's literal `Authorization: Bearer
-kagent-credential-injected` placeholder with its binding credential. Mainloop stores a token
-hash on the binding and creates a runtime-owned `kagent/mainloop-mcp-<credential-identity>` Secret
-with the full header in its `authorization` key, labeled `mainloop.dev/actor-egress=true`
-and `mainloop.dev/purpose=mcp`. Terminal or archived bindings lose tool access; cleanup
-deletes their Secret.
-Ordinary bindings use their binding ID as the credential identity. A main-provider switch
-uses a fresh credential identity so the retained old native Session loses tool authority.
-
-A **NetworkPolicy-enforcing CNI is required**. The REST API has no application authorization;
-its port 8000 must admit only the frontend and the Tailscale gateway. MCP port 8002 admits
-only `ate-system` egress pods labelled `app: atenet-egress`. Verify those gateway pod labels
-and the Tailscale gateway selector against the installation, and prove blocked connections
-fail before deployment. A default Kind CNI does not provide this enforcement. The cleartext
-gateway-to-Mainloop hop depends on this isolation and the pinned stock agentgateway path;
-never expose the MCP Service outside the cluster.
-
-The base includes the dedicated MCP container, Service and ingress policy. Cross-namespace
-integration resources are separately rendered with `k8s/integrations/kagent`: the
-Role/RoleBinding and RemoteMCPServer. Binding Secrets are created by Mainloop at runtime.
-The trusted backend Role grants namespace-wide Secret `get/create/delete` in `kagent`.
-RBAC cannot constrain dynamic creates by name or label; admission policy can restrict writes,
-while prefix-scoped reads require a separate broker or authorization boundary.
-Main and child AgentTemplates must bind that RemoteMCPServer.
-Mainloop uses three kinds of kagent Agent, named by settings. Agent templates and harnesses
-remain owned by the kagent installation.
-
-| Setting                                           | Runs                                      | Harness requirements                                       |
-| ------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------- |
-| `KAGENT_MAIN_AGENT` (`mainloop-main`)             | the Claude main thread                    | `sessionIdleTTL: 0s`                                       |
-| `KAGENT_MAIN_CODEX_AGENT` (`mainloop-main-codex`) | the Codex main thread                     | `sessionIdleTTL: 0s`                                       |
-| `KAGENT_WORKSPACE_CLAUDE_AGENT` / `_CODEX_AGENT`  | workspaces and sessions the owner starts  | `sessionIdleTTL: 0s`, `git.origins` (the repository hosts) |
-| `KAGENT_CLAUDE_AGENT` / `KAGENT_CODEX_AGENT`      | child agents the main thread delegates to | default TTL and snapshot scope                             |
-
-A workspace needs its own Agents because kagent measures idle time from the last A2A event
-(previews do not count) and deletes the Session and its actor on expiry,
-along with uncommitted and unpushed work. kagent puts idle compute to sleep by itself (Mainloop
-makes no suspend or resume call); snapshots are data-only, so files survive sleep and processes
-such as a dev server do not. Archiving or deleting ends the
-Session. Main and child templates bind the `mainloop` RemoteMCPServer. Standalone workspace Agents
-have no Mainloop tool identity and do not bind that server. Gateway port 8083 must admit only
-Mainloop, and TaskStore must admit only actors, using installation-specific policies.
-
-The supported gateway is stock Substrate v0.3.0-alpha3 using agentgateway revision
-`50999825cb55904801f7fd6b18b865179d0d50c4`, image digest
-`sha256:f1907a50b2e74a071da53fcd2008d585b6a63d31b4e1ba3ee46cf22b342cf04b`.
-That dataplane injects complete header values on HTTP and HTTPS when a configured placeholder
-header is present. The credential provider must authorize the actor's atespace to read the
-per-binding Secrets in `kagent`, selected by `mainloop.dev/actor-egress=true`; Mainloop's
-namespace-scoped publisher Role does not grant the provider that access. Keep this version
-pinned and repeat the gateway regression proof on every Substrate/agentgateway upgrade: HTTP injection is not a portable guarantee of
-other dataplanes. The proposed atenet cleartext allowlist patch is parked and is not required.
-
-The hash-only live gateway proof established HTTP/HTTPS injection and placeholder
-isolation on that pinned stock dataplane. The joint proof (a native agent calling the Mainloop MCP
-server through the gateway, and blocked connections) passed on a Cilium cluster; the Kind
-overlay's default CNI does not enforce NetworkPolicy, so the blocked-connection check needs a
-policy-enforcing CNI. The Secret holds the complete `Bearer ml_…` header value; NetworkPolicy
-remains required.
-
-Mainloop is greenfield. It has no upgrade path from earlier development schemas, from
-credential-less kagent bindings or from the retired Python backend, so start from an empty
-database and let `mainloop migrate up` create the schema. Main and child Sessions start with
-credential references; the main thread uses its dedicated main Agent. Native session history
-from earlier development builds is not carried over.
-
-The [Kind setup](docs/dev-environment.md#kind) runs the Go/React stack without kagent,
-so native sessions, workspaces and schedules are unavailable there. A tracked recipe for installing
-kagent into a local cluster does not exist yet.
