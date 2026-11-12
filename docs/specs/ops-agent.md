@@ -14,9 +14,13 @@ No dedicated API or task kind exists. The ops agent is an operator provider prof
 `PROVIDER_PROFILES` (see [Provider profiles](providers.md)), with one role:
 
 ```json
-{ "id": "ops", "display_name": "Ops (home cluster, read-only)", "native_provider": "claude",
+{
+  "id": "ops",
+  "display_name": "Ops (home cluster, read-only)",
+  "native_provider": "claude",
   "configuration_revision": "ops-readonly-v1",
-  "agents": { "supervisor": { "namespace": "kagent", "name": "ops" } } }
+  "agents": { "supervisor": { "namespace": "kagent", "name": "ops" } }
+}
 ```
 
 Main hands over an ops request with `delegate`, `mode: "coordination"` and
