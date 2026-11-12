@@ -635,8 +635,8 @@ func TestReportMovesTheTask(t *testing.T) {
 	if v := e.view(e.own, id); *v.Task.Reason != "publication" {
 		t.Fatalf("completed task = %+v", v.Task)
 	}
-	if n := e.count(`SELECT count(*) FROM task_event_deliveries WHERE recipient_key = 'main'`); n != 4 {
-		t.Fatalf("main deliveries = %d, want 4 (three blocked, one failed)", n)
+	if n := e.count(`SELECT count(*) FROM task_event_deliveries WHERE recipient_key = 'main'`); n != 5 {
+		t.Fatalf("main deliveries = %d, want 5 (three blocked, one failed, and the root task's completion)", n)
 	}
 }
 

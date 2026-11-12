@@ -5,7 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 )
 
@@ -125,8 +128,8 @@ func TestBusyParentGetsTheReportLater(t *testing.T) {
 	r.run()
 	parent, sup := r.supervisor()
 	_, supSession := r.attemptOf(parent)
-	// The supervisor's brief turn is still open: one open turn per session, so the report is
-	// recorded as queued behind it instead of refused.
+	// The supervisor's brief turn is still open, so the report waits, pending, for it to end: it is
+	// not refused, not steered into the turn, and not yet a message of its own.
 	child := r.codeChild(sup, "feat")
 	r.eventually("child provisioned", func() bool { return r.opState(child) == "completed" })
 	_, binding := r.attemptOf(child)
@@ -134,24 +137,101 @@ func TestBusyParentGetsTheReportLater(t *testing.T) {
 	if _, err := r.svc.Report(context.Background(), kid, report(kid, "r1", dbstate.OutcomeProgress)); err != nil {
 		t.Fatal(err)
 	}
-	r.eventually("the report is recorded, queued behind the open turn", func() bool {
-		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'queued' AND delivery_id IS NOT NULL`) == 1
+	r.eventually("the report has been looked at and is waiting", func() bool {
+		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'pending' AND attempts > 0 AND delivery_id IS NULL`) == 1
 	})
-	// The message is recorded at once; only its delivery waits, not yet admitted.
-	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, supSession); n != 1 {
-		t.Fatalf("report messages = %d, want 1", n)
+	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, supSession); n != 0 {
+		t.Fatalf("report messages = %d, want 0 while the turn is open", n)
 	}
-	if got := r.str(`SELECT d.state FROM deliveries d JOIN session_messages m ON m.id = d.id
-		WHERE m.session_id = $1 AND m.content LIKE '[report from%'`, supSession); got != "queued" {
-		t.Fatalf("report delivery state = %s, want queued (not yet admitted)", got)
+	if n := r.count(`SELECT count(*) FROM delivery_steers WHERE session_id = $1`, supSession); n != 0 {
+		t.Fatalf("the report was steered into the open turn")
+	}
+	// fakeSessions runs with no kagent client, so nothing is ever actually sent; admission is as far
+	// as this rig can observe. Once the supervisor's turn ends, the report is sent and admitted.
+	r.finishTurns()
+	r.eventually("the report is sent once the turn ended", func() bool {
+		return r.count(`SELECT count(*) FROM deliveries d JOIN session_messages m ON m.id = d.id
+			WHERE m.session_id = $1 AND m.content LIKE '[report from%' AND d.state = 'recorded'`, supSession) == 1
+	})
+}
+
+// openTurn leaves the session with an open turn, as an owner message being answered would.
+func (r *rig) openTurn(sessionID, messageID string) {
+	r.t.Helper()
+	if _, err := r.ses.SendToAs(context.Background(), sessions.SourceUser, sessionID, messageID, "keep going"); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// Reports that arrive while the recipient's turn is open go out together as one message once it
+// ends, and each keeps its own delivery row.
+func TestReportsDuringAnOpenTurnAreOneMessage(t *testing.T) {
+	r := newRig(t)
+	_, supSession, _, kid := r.reportingChild()
+	r.openTurn(supSession, uuid.NewString())
+	for _, req := range []string{"p1", "p2", "p3"} {
+		in := report(kid, req, dbstate.OutcomeProgress)
+		in.Summary = "step " + req
+		if _, err := r.svc.Report(context.Background(), kid, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.eventually("all three looked at and waiting", func() bool {
+		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'pending' AND attempts > 0`) == 3
+	})
+	r.finishTurns()
+	r.eventually("all three queued", func() bool {
+		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'queued'`) == 3
+	})
+	if n := r.count(`SELECT count(DISTINCT delivery_id) FROM task_event_deliveries`); n != 1 {
+		t.Fatalf("messages = %d, want one for the three reports", n)
+	}
+	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[3 reports]%'`, supSession); n != 1 {
+		t.Fatalf("batched messages = %d, want 1", n)
+	}
+	got := r.str(`SELECT content FROM session_messages WHERE session_id = $1 AND content LIKE '[3 reports]%'`, supSession)
+	if i1, i2, i3 := strings.Index(got, "step p1"), strings.Index(got, "step p2"), strings.Index(got, "step p3"); i1 < 0 || i1 > i2 || i2 > i3 {
+		t.Fatalf("batched message = %q, want the three reports in order", got)
 	}
 
-	// fakeSessions runs with no kagent client, so nothing is ever actually sent; admission is as far
-	// as this rig can observe. Once the supervisor's turn ends, the queued report is admitted.
+	// A replay of every delivery, as after a crash before the bookkeeping, sends nothing again: the
+	// shared message id finds the message the first pass recorded.
+	r.exec(`UPDATE task_event_deliveries SET state = 'pending', next_attempt_at = now()`)
+	r.eventually("all three queued again", func() bool {
+		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'queued'`) == 3
+	})
+	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[%report%'`, supSession); n != 1 {
+		t.Fatalf("report messages after the replay = %d, want 1", n)
+	}
+	// Each report is delivered on its own row when the shared message is.
 	r.finishTurns()
-	if got := r.str(`SELECT d.state FROM deliveries d JOIN session_messages m ON m.id = d.id
-		WHERE m.session_id = $1 AND m.content LIKE '[report from%'`, supSession); got != "recorded" {
-		t.Fatalf("report delivery state = %s, want recorded (admitted once the turn ended)", got)
+	r.exec(`UPDATE deliveries SET state = 'completed' WHERE id IN (SELECT delivery_id FROM task_event_deliveries)`)
+	r.eventually("all three delivered", func() bool {
+		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'delivered'`) == 3
+	})
+}
+
+// A root task's completed report reaches main: main delegated it, so it hears how it ended.
+func TestCompletedRootReportReachesMain(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	_, sup := r.supervisor()
+	r.finishTurns()
+	in := report(sup, "done", dbstate.OutcomeCompleted)
+	in.Summary = "shipped"
+	if _, err := r.svc.Report(context.Background(), sup, in); err != nil {
+		t.Fatal(err)
+	}
+	r.eventually("the report to main is queued", func() bool {
+		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE recipient_key = 'main' AND state IN ('queued', 'delivered')`) == 1
+	})
+	var main string
+	if err := r.pool.QueryRow(context.Background(), `SELECT session_id FROM agent_bindings WHERE role = 'main'`).Scan(&main); err != nil {
+		t.Fatal(err)
+	}
+	got := r.str(`SELECT content FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, main)
+	if !strings.HasPrefix(got, "[report from task ") || !strings.Contains(got, "completed; unverified claim]\nshipped") {
+		t.Fatalf("main message = %q", got)
 	}
 }
 

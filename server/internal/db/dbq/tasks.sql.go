@@ -1480,6 +1480,67 @@ func (q *Queries) InsertTaskReport(ctx context.Context, arg InsertTaskReportPara
 	return i, err
 }
 
+const joinTaskEventBatch = `-- name: JoinTaskEventBatch :many
+UPDATE task_event_deliveries
+SET target_attempt_id = $1, delivery_id = $2,
+    sends = sends + 1, updated_at = now()
+WHERE id IN (
+    SELECT o.id FROM task_event_deliveries o
+    WHERE o.recipient_key = $3 AND o.state = 'pending' AND o.delivery_id IS NULL
+      AND o.id <> $4 AND (o.lease_until IS NULL OR o.lease_until < now())
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at
+`
+
+type JoinTaskEventBatchParams struct {
+	TargetAttemptID *string
+	DeliveryID      *string
+	RecipientKey    string
+	LeaderID        string
+}
+
+// The other pending reports to the same recipient that no claimer holds join the message a
+// delivery is preparing, so they are sent as one. SKIP LOCKED and the lease test leave rows another
+// claimer is working on to their own message.
+func (q *Queries) JoinTaskEventBatch(ctx context.Context, arg JoinTaskEventBatchParams) ([]TaskEventDelivery, error) {
+	rows, err := q.db.Query(ctx, joinTaskEventBatch,
+		arg.TargetAttemptID,
+		arg.DeliveryID,
+		arg.RecipientKey,
+		arg.LeaderID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TaskEventDelivery{}
+	for rows.Next() {
+		var i TaskEventDelivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.ReportID,
+			&i.RecipientKey,
+			&i.TargetAttemptID,
+			&i.DeliveryID,
+			&i.State,
+			&i.Sends,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.LeaseOwner,
+			&i.LeaseUntil,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listActiveAttemptsForLiveness = `-- name: ListActiveAttemptsForLiveness :many
 SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at, a.progress_marker, a.progress_at, a.stop_requested_at, a.liveness_failing_since, a.model, a.effort FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
@@ -2263,6 +2324,45 @@ func (q *Queries) ListTaskAttempts(ctx context.Context, taskIds []string) ([]Tas
 			&i.LivenessFailingSince,
 			&i.Model,
 			&i.Effort,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskEventBatch = `-- name: ListTaskEventBatch :many
+SELECT r.id, r.task_id, r.attempt_id, r.request_id, r.request_digest, r.summary, r.outcome, r.owner_action, r.evidence_refs, r.task_version, r.created_at FROM task_event_deliveries d JOIN task_reports r ON r.id = d.report_id
+WHERE d.delivery_id = $1
+ORDER BY r.created_at, r.id
+`
+
+// The reports one message carries, oldest first.
+func (q *Queries) ListTaskEventBatch(ctx context.Context, deliveryID *string) ([]TaskReport, error) {
+	rows, err := q.db.Query(ctx, listTaskEventBatch, deliveryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TaskReport{}
+	for rows.Next() {
+		var i TaskReport
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.AttemptID,
+			&i.RequestID,
+			&i.RequestDigest,
+			&i.Summary,
+			&i.Outcome,
+			&i.OwnerAction,
+			&i.EvidenceRefs,
+			&i.TaskVersion,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
