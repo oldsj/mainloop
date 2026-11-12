@@ -700,6 +700,7 @@ type Session struct {
 	AgentCancelOutcome       *string
 	AgentCancelAttempts      int32
 	AgentCancelNextAttemptAt time.Time
+	Hidden                   bool
 }
 
 type SessionCheckpoint struct {

@@ -778,6 +778,8 @@ type NewSession struct {
 	AgentKind string
 	// Model is the session's model override from its first turn; nil means the provider's default.
 	Model *string
+	// Hidden leaves the session out of the owner's sessions list (a session Mainloop runs for itself).
+	Hidden bool
 }
 
 // Create starts a native session: the session and its ungranted agent binding, and the prompt as
@@ -817,6 +819,11 @@ func (s *Service) Create(ctx context.Context, n NewSession) (string, error) {
 			SessionID: id, Kind: profile.ID, Role: dbstate.RoleAgent, MCPGrantKind: dbstate.GrantNone,
 		}); err != nil {
 			return fmt.Errorf("create binding: %w", err)
+		}
+		if n.Hidden {
+			if err := q.HideSession(ctx, id); err != nil {
+				return fmt.Errorf("hide session: %w", err)
+			}
 		}
 		if n.Model != nil {
 			if _, err := q.SetBindingModelOverride(ctx, dbq.SetBindingModelOverrideParams{SessionID: id, ModelOverride: n.Model}); err != nil {

@@ -1,12 +1,13 @@
 // Package canary runs one cheap synthetic turn through a running Mainloop and reports which step
 // failed or was slow (docs/specs/canary.md). It is the one-shot body of `mainloop canary`, meant
-// for a CronJob: it keeps no state of its own; a session a crashed run left behind is found by its
-// title and retired by the next run.
+// for a CronJob: it keeps no state of its own; the session is found again by its title among the
+// hidden sessions.
 //
-// The turn is the cheapest one the product can run: a one-word prompt on the smallest model, set
-// at create so even the first turn uses it, in a fresh standalone session that the run cancels and
-// archives when it ends. A standalone session has no coordination grant, so it never reports to the
-// main thread, and it starts no task.
+// The turn is the cheapest one the product can run: a one-word prompt on the smallest model (set
+// at create, so even the first turn uses it), in one long-lived hidden session, so each run is a
+// warm wake of an idle session (the path the owner's own sessions take) rather than a cold start.
+// The session is hidden from the owner's sessions list, has no coordination grant (it never reports
+// to the main thread) and starts no task. It is recreated only when it breaks.
 package canary
 
 import (
@@ -20,6 +21,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/oldsj/mainloop/server/internal/api"
 )
@@ -60,7 +63,9 @@ type Result struct {
 	// Err is set when Step failed.
 	Err error
 	// Slow is set when every step passed but the reply took longer than Options.Slow.
-	Slow    bool
+	Slow bool
+	// Created is set when the run had to create the canary session (a cold start).
+	Created bool
 	Elapsed time.Duration
 	Session string
 }
@@ -74,16 +79,24 @@ func (r Result) String() string {
 	case r.Err != nil:
 		return fmt.Sprintf("fail %s step=%s session=%s: %v", r.Target, r.Step, r.Session, r.Err)
 	case r.Slow:
-		return fmt.Sprintf("slow %s reply in %s session=%s", r.Target, r.Elapsed.Round(time.Second), r.Session)
+		return fmt.Sprintf("slow %s reply in %s session=%s%s", r.Target, r.Elapsed.Round(time.Second), r.Session, r.cold())
 	default:
-		return fmt.Sprintf("ok %s reply in %s session=%s", r.Target, r.Elapsed.Round(100*time.Millisecond), r.Session)
+		return fmt.Sprintf("ok %s reply in %s session=%s%s", r.Target, r.Elapsed.Round(100*time.Millisecond), r.Session, r.cold())
 	}
+}
+
+func (r Result) cold() string {
+	if r.Created {
+		return " (new session, cold start)"
+	}
+	return ""
 }
 
 // The steps, in order.
 const (
 	StepList    = "list-sessions"
 	StepCreate  = "create-session"
+	StepSend    = "send-message"
 	StepReply   = "await-reply"
 	StepCleanup = "cleanup"
 )
@@ -92,8 +105,18 @@ type runner struct {
 	o Options
 }
 
-// Run does one canary turn in a session of its own, and always cancels and archives that session
-// afterwards, so the owner's sessions list and inbox never keep it.
+// usable reports whether a canary session can take the next ping.
+func usable(s api.Session) bool {
+	switch s.Status {
+	case api.SessionStatusFailed, api.SessionStatusCancelled, api.SessionStatusCompleted, api.SessionStatusSuperseded:
+		return false
+	}
+	return s.ArchivedAt == nil
+}
+
+// Run does one canary turn. It reuses the one hidden canary session, so a run is a warm wake of an
+// idle session, and creates it (hidden, on the canary model) only when none is usable. A turn that
+// gets no reply is stopped, so nothing is left running to stall.
 func Run(ctx context.Context, o Options) (res Result) {
 	if o.Client == nil {
 		o.Client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -109,52 +132,84 @@ func Run(ctx context.Context, o Options) (res Result) {
 	}
 
 	var sessions []api.Session
-	if err := r.call(ctx, http.MethodGet, "/sessions", nil, &sessions); err != nil {
+	if err := r.call(ctx, http.MethodGet, "/sessions?hidden=true", nil, &sessions); err != nil {
 		return fail(StepList, err)
 	}
-	// Sessions an earlier run could not clean up (it crashed or timed out) go first.
-	var stale []string
-	for _, s := range sessions {
-		if strings.HasPrefix(s.Title, TitlePrefix) && s.ArchivedAt == nil {
-			stale = append(stale, s.Id)
+	// The list is newest first: keep the newest usable canary session, retire the rest.
+	var current *api.Session
+	var retire []string
+	for i, s := range sessions {
+		if !strings.HasPrefix(s.Title, TitlePrefix) {
+			continue
+		}
+		if current == nil && usable(s) {
+			current = &sessions[i]
+		} else {
+			retire = append(retire, s.Id)
 		}
 	}
+	defer func() {
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*o.Request)
+		defer cancel()
+		for _, id := range retire {
+			if err := r.retire(cctx, id); err != nil && res.Err == nil {
+				res = fail(StepCleanup, err)
+			}
+		}
+	}()
 
 	start := o.Now()
-	body := map[string]any{
-		"title":       TitlePrefix + start.UTC().Format("2006-01-02 15:04"),
-		"description": "Synthetic turn that checks Mainloop end to end; archived when it ends (docs/specs/canary.md).",
-		"prompt":      Prompt,
-	}
-	if o.Model != "" {
-		body["model"] = o.Model
-	}
-	var created api.Session
-	if err := r.call(ctx, http.MethodPost, "/sessions", body, &created); err != nil {
-		res = fail(StepCreate, err)
-	} else {
-		res.Session = created.Id
-		stale = append(stale, created.Id)
-		if err := r.awaitReply(ctx, created.Id); err != nil {
-			res = fail(StepReply, err)
+	messageID := ""
+	if current == nil {
+		body := map[string]any{
+			"title":       TitlePrefix + start.UTC().Format("2006-01-02 15:04"),
+			"description": "Synthetic turn that checks Mainloop end to end (docs/specs/canary.md). Hidden from the sessions list.",
+			"prompt":      Prompt,
+			"hidden":      true,
 		}
-		res.Elapsed = o.Now().Sub(start)
-		res.Slow = res.Err == nil && res.Elapsed > o.Slow
+		if o.Model != "" {
+			body["model"] = o.Model
+		}
+		var created api.Session
+		if err := r.call(ctx, http.MethodPost, "/sessions", body, &created); err != nil {
+			return fail(StepCreate, err)
+		}
+		res.Session, res.Created = created.Id, true
+	} else {
+		res.Session = current.Id
+		messageID = uuid.NewString()
+		var sent api.SessionMessageResponse
+		if err := r.call(ctx, http.MethodPost, "/sessions/"+current.Id+"/message",
+			map[string]any{"message": Prompt, "message_id": messageID}, &sent); err != nil {
+			return fail(StepSend, err)
+		}
+		if sent.Status != api.SessionMessageResponseStatusOk {
+			// Queued or steered behind an open turn: an earlier canary turn never ended.
+			r.stop(ctx, current.Id)
+			return fail(StepSend, fmt.Errorf("message %s: an earlier turn is still open; stopped it", sent.Status))
+		}
 	}
 
-	// Cleanup runs even when the run's ctx has ended.
-	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*o.Request)
-	defer cancel()
-	for _, id := range stale {
-		if err := r.retire(cctx, id); err != nil && res.Err == nil {
-			res = fail(StepCleanup, err)
-		}
+	err := r.awaitReply(ctx, res.Session, messageID)
+	res.Elapsed = o.Now().Sub(start)
+	if err != nil {
+		r.stop(ctx, res.Session)
+		return fail(StepReply, err)
 	}
+	res.Slow = res.Elapsed > o.Slow
 	return res
 }
 
-// retire stops the session's turn and archives it. A session that already ended answers the
-// cancel with 409; the archive is what matters.
+// stop ends the session's open turn, best effort: a failed stop shows up as the next run's
+// send-message failure.
+func (r runner) stop(ctx context.Context, id string) {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.o.Request)
+	defer cancel()
+	_ = r.call(cctx, http.MethodPost, "/sessions/"+id+"/stop-turn", map[string]any{}, nil)
+}
+
+// retire cancels and archives a canary session that is broken or superseded. One that already
+// ended answers the cancel with 409; the archive is what matters.
 func (r runner) retire(ctx context.Context, id string) error {
 	if err := r.call(ctx, http.MethodPost, "/sessions/"+id+"/cancel", map[string]any{}, nil); err != nil &&
 		!strings.HasSuffix(err.Error(), "status 409") {
@@ -163,8 +218,9 @@ func (r runner) retire(ctx context.Context, id string) error {
 	return r.call(ctx, http.MethodPost, "/sessions/"+id+"/archive", map[string]any{}, nil)
 }
 
-// awaitReply waits for an assistant message after the session's first user message.
-func (r runner) awaitReply(ctx context.Context, session string) error {
+// awaitReply waits for an assistant message after the user message messageID, or after the first
+// user message when messageID is empty (a new session).
+func (r runner) awaitReply(ctx context.Context, session, messageID string) error {
 	ctx, cancel := context.WithTimeout(ctx, r.o.Deadline)
 	defer cancel()
 	var lastErr error
@@ -172,7 +228,7 @@ func (r runner) awaitReply(ctx context.Context, session string) error {
 		var conv api.SessionConversationResponse
 		err := r.call(ctx, http.MethodGet, "/sessions/"+session+"/conversation", nil, &conv)
 		if err == nil {
-			if replied(conv.Messages) {
+			if replied(conv.Messages, messageID) {
 				return nil
 			}
 			switch conv.Session.Status {
@@ -193,8 +249,10 @@ func (r runner) awaitReply(ctx context.Context, session string) error {
 	}
 }
 
-func replied(msgs []api.Message) bool {
-	at := slices.IndexFunc(msgs, func(m api.Message) bool { return m.Role == api.MessageRoleUser })
+func replied(msgs []api.Message, messageID string) bool {
+	at := slices.IndexFunc(msgs, func(m api.Message) bool {
+		return m.Role == api.MessageRoleUser && (messageID == "" || m.Id == messageID)
+	})
 	if at < 0 {
 		return false
 	}

@@ -2864,6 +2864,11 @@ export interface components {
        * @description The session's model override, set before its first turn (as `POST /sessions/{session_id}/model` would set it afterwards). Omitted or null: the provider's default. kagent validates the model when the turn starts.
        */
       model?: string | null;
+      /**
+       * Hidden
+       * @description A session Mainloop runs for itself, such as the canary: left out of `GET /sessions` (and the session list the attention snapshot carries) unless `hidden=true` is asked for. Set at create only.
+       */
+      hidden?: boolean;
     };
     /**
      * SessionMessageRequest
@@ -8124,6 +8129,8 @@ export interface operations {
     parameters: {
       query?: {
         status?: string | null;
+        /** @description true lists only hidden sessions (the canary's); omitted or false leaves them out. */
+        hidden?: boolean;
       };
       header?: never;
       path?: never;

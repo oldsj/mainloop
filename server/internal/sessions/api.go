@@ -379,7 +379,7 @@ func (a *SessionsAPI) needsOwner(ctx context.Context, q *dbq.Queries, id string)
 // thread, newest first.
 func (a *SessionsAPI) ListSessions(ctx context.Context, r api.ListSessionsRequestObject) (api.ListSessionsResponseObject, error) {
 	q := dbq.New(a.Svc.Pool)
-	rows, err := q.ListSessionRows(ctx, dbq.ListSessionRowsParams{UserID: a.Svc.OwnerID, Status: r.Params.Status})
+	rows, err := q.ListSessionRows(ctx, dbq.ListSessionRowsParams{UserID: a.Svc.OwnerID, Status: r.Params.Status, Hidden: r.Params.Hidden})
 	if err != nil {
 		return nil, err
 	}
@@ -404,7 +404,7 @@ func (a *SessionsAPI) CreateSession(ctx context.Context, r api.CreateSessionRequ
 	if r.Body == nil {
 		return nil, apierr.Invalid("the body is required")
 	}
-	n := NewSession{Title: r.Body.Title, Description: r.Body.Description, Prompt: r.Body.Prompt, RepoURL: r.Body.RepoUrl, Model: r.Body.Model}
+	n := NewSession{Title: r.Body.Title, Description: r.Body.Description, Prompt: r.Body.Prompt, RepoURL: r.Body.RepoUrl, Model: r.Body.Model, Hidden: r.Body.Hidden != nil && *r.Body.Hidden}
 	if r.Body.AgentKind != nil {
 		n.AgentKind = *r.Body.AgentKind
 	}

@@ -995,7 +995,7 @@ func (q *Queries) GetSessionRestart(ctx context.Context, id string) (SessionRest
 }
 
 const getSessionRow = `-- name: GetSessionRow :one
-SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, s.agent_cancel_attempts, s.agent_cancel_next_attempt_at, b.kind AS agent_kind, b.parent_session_id, COALESCE(b.role, '')::text AS binding_role, t.name AS topic
+SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, s.agent_cancel_attempts, s.agent_cancel_next_attempt_at, s.hidden, b.kind AS agent_kind, b.parent_session_id, COALESCE(b.role, '')::text AS binding_role, t.name AS topic
 FROM sessions s
 LEFT JOIN agent_bindings b ON b.session_id = s.id
 LEFT JOIN topics t ON t.id = b.topic_id
@@ -1031,6 +1031,7 @@ type GetSessionRowRow struct {
 	AgentCancelOutcome       *string
 	AgentCancelAttempts      int32
 	AgentCancelNextAttemptAt time.Time
+	Hidden                   bool
 	AgentKind                *string
 	ParentSessionID          *string
 	BindingRole              string
@@ -1065,6 +1066,7 @@ func (q *Queries) GetSessionRow(ctx context.Context, arg GetSessionRowParams) (G
 		&i.AgentCancelOutcome,
 		&i.AgentCancelAttempts,
 		&i.AgentCancelNextAttemptAt,
+		&i.Hidden,
 		&i.AgentKind,
 		&i.ParentSessionID,
 		&i.BindingRole,
@@ -1144,6 +1146,15 @@ func (q *Queries) HasQueuedDelivery(ctx context.Context, sessionID string) (bool
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const hideSession = `-- name: HideSession :exec
+UPDATE sessions SET hidden = true WHERE id = $1
+`
+
+func (q *Queries) HideSession(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, hideSession, id)
+	return err
 }
 
 const insertDelivery = `-- name: InsertDelivery :one
@@ -1942,17 +1953,19 @@ func (q *Queries) ListSessionMessagesByID(ctx context.Context, arg ListSessionMe
 }
 
 const listSessionRows = `-- name: ListSessionRows :many
-SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, s.agent_cancel_attempts, s.agent_cancel_next_attempt_at, b.kind AS agent_kind, b.parent_session_id, COALESCE(b.role, '')::text AS binding_role, t.name AS topic
+SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, s.agent_cancel_attempts, s.agent_cancel_next_attempt_at, s.hidden, b.kind AS agent_kind, b.parent_session_id, COALESCE(b.role, '')::text AS binding_role, t.name AS topic
 FROM sessions s
 LEFT JOIN agent_bindings b ON b.session_id = s.id
 LEFT JOIN topics t ON t.id = b.topic_id
 WHERE s.user_id = $1 AND s.archived_at IS NULL AND b.role IS DISTINCT FROM 'main'
-  AND ($2::text IS NULL OR s.status = $2::text)
+  AND s.hidden = coalesce($2::boolean, false)
+  AND ($3::text IS NULL OR s.status = $3::text)
   AND (s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
        OR s.id IN (
            SELECT h.id FROM sessions h
            LEFT JOIN agent_bindings hb ON hb.session_id = h.id
            WHERE h.user_id = $1 AND h.archived_at IS NULL AND hb.role IS DISTINCT FROM 'main'
+             AND h.hidden = coalesce($2::boolean, false)
              AND h.status IN ('completed', 'failed', 'cancelled', 'superseded')
            ORDER BY h.created_at DESC, h.id LIMIT 100))
 ORDER BY s.created_at DESC, s.id
@@ -1960,6 +1973,7 @@ ORDER BY s.created_at DESC, s.id
 
 type ListSessionRowsParams struct {
 	UserID string
+	Hidden *bool
 	Status *string
 }
 
@@ -1987,6 +2001,7 @@ type ListSessionRowsRow struct {
 	AgentCancelOutcome       *string
 	AgentCancelAttempts      int32
 	AgentCancelNextAttemptAt time.Time
+	Hidden                   bool
 	AgentKind                *string
 	ParentSessionID          *string
 	BindingRole              string
@@ -1995,9 +2010,9 @@ type ListSessionRowsRow struct {
 
 // The owner's unarchived sessions other than the main thread, newest first: every session that is
 // not history, plus the newest 100 history records (completed, failed, cancelled, superseded).
-// Optionally of one status.
+// Optionally of one status. Hidden sessions (the canary) only when hidden is true, and then only them.
 func (q *Queries) ListSessionRows(ctx context.Context, arg ListSessionRowsParams) ([]ListSessionRowsRow, error) {
-	rows, err := q.db.Query(ctx, listSessionRows, arg.UserID, arg.Status)
+	rows, err := q.db.Query(ctx, listSessionRows, arg.UserID, arg.Hidden, arg.Status)
 	if err != nil {
 		return nil, err
 	}
@@ -2029,6 +2044,7 @@ func (q *Queries) ListSessionRows(ctx context.Context, arg ListSessionRowsParams
 			&i.AgentCancelOutcome,
 			&i.AgentCancelAttempts,
 			&i.AgentCancelNextAttemptAt,
+			&i.Hidden,
 			&i.AgentKind,
 			&i.ParentSessionID,
 			&i.BindingRole,
