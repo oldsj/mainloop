@@ -8,6 +8,7 @@ import { createSseApplier } from '@/api/invalidation';
 import { keys } from '@/api';
 import type { RefusalCode } from '@/api/errors';
 import { server } from '@/test/msw/server';
+import { createFakeRunner } from '@/features/live/fakeRunner';
 import { SessionChatSlot } from '@/features/sessions/SessionChatSlot';
 import { ChatPage, type ChatPageProps } from './ChatPage';
 import { loadDraft, saveDraft, sessionDraftKey } from './drafts';
@@ -1768,5 +1769,43 @@ describe('the composer model/effort indicator', () => {
     expect(screen.getByTestId('composer-model-effort')).toHaveTextContent(
       'model: claude-opus-5 · effort: high'
     );
+  });
+});
+
+describe('a live main session', () => {
+  it('shows the live view with the session’s own slash commands and Up-arrow history', async () => {
+    const runner = createFakeRunner({ owns: (id) => id === MAIN_SESSION_ID });
+    const user = userEvent.setup();
+    setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({ live: true })
+        })
+      })
+    );
+    // After the chat backend, so the runner answers the main session's input.
+    server.use(...runner.handlers);
+    const live = await screen.findByTestId('live-session');
+    expect(screen.getByTestId('main-thread')).toContainElement(live);
+    await waitFor(() => expect(within(live).getByTestId('live-conn')).toHaveTextContent('live'));
+    const box = within(live).getByRole('textbox', { name: 'Message' });
+    await user.type(box, '/comp');
+    const list = screen.getByRole('listbox', { name: 'Commands' });
+    expect(within(list).getByRole('option', { name: /\/compact/ })).toBeInTheDocument();
+    await user.clear(box);
+    await user.type(box, 'look around{Enter}');
+    await waitFor(() => expect(runner.echoed).toContain('look around'));
+    await within(live).findByTestId('live-user');
+    await waitFor(() => expect(within(live).getByTestId('live-status')).toHaveTextContent('idle'));
+    await user.click(box);
+    await user.keyboard('{ArrowUp}');
+    expect(box).toHaveValue('look around');
+  });
+
+  it('keeps the regular thread when the main session is not live', async () => {
+    setup(existing());
+    expect(await screen.findByText('On it.')).toBeInTheDocument();
+    expect(screen.queryByTestId('live-session')).not.toBeInTheDocument();
   });
 });
