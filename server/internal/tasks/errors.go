@@ -56,4 +56,5 @@ const (
 	ReasonGlobalCapacity       = "global_capacity"
 	ReasonModelUnavailable     = "model_unavailable"
 	ReasonEffortUnavailable    = "effort_unavailable"
+	ReasonTaskNotRunning       = "task_not_running"
 )

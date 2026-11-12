@@ -482,6 +482,32 @@
       }
     },
     {
+      "name": "steer",
+      "description": "Send a message into a managed task's running turn; it joins at the next tool boundary. Where the turn cannot take it (none running, waiting on input, an agent without steering) it is queued as the task's next message instead; the result says steered, queued or sent. Reuse request_id to retry.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "task_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["task_id", "request_id", "text"],
+        "type": "object"
+      }
+    },
+    {
       "name": "report",
       "description": "Record progress or an explicit result claim with durable parent notification. For a blocker requiring an owner decision, use outcome=blocked and owner_action to state the specific question or choice. Routine results are stored for task reads and Activity.",
       "input_schema": {
@@ -541,7 +567,7 @@
     },
     {
       "name": "prepare_pull_request_merge",
-      "description": "Prepare immutable PR merge facts and required route; creates no approval card.",
+      "description": "Prepare immutable PR merge facts and required route; creates no approval card. Workspace sessions give project_id and expected_sha; the main thread may give repository instead and omit expected_sha.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -558,19 +584,24 @@
             "minLength": 1,
             "type": "string"
           },
+          "repository": {
+            "maxLength": 200,
+            "minLength": 3,
+            "type": "string"
+          },
           "request_id": {
             "maxLength": 100,
             "minLength": 1,
             "type": "string"
           }
         },
-        "required": ["project_id", "pr_number", "expected_sha", "request_id"],
+        "required": ["pr_number", "request_id"],
         "type": "object"
       }
     },
     {
       "name": "merge_pull_request",
-      "description": "Merge an auto-policy unprotected PR or return an approval proposal. Reuse request_id to reconcile.",
+      "description": "Merge an auto-policy unprotected PR or return an approval proposal. Reuse request_id to reconcile. Workspace sessions give project_id and expected_sha; the main thread may give repository instead and omit expected_sha.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -587,13 +618,18 @@
             "minLength": 1,
             "type": "string"
           },
+          "repository": {
+            "maxLength": 200,
+            "minLength": 3,
+            "type": "string"
+          },
           "request_id": {
             "maxLength": 100,
             "minLength": 1,
             "type": "string"
           }
         },
-        "required": ["project_id", "pr_number", "expected_sha", "request_id"],
+        "required": ["pr_number", "request_id"],
         "type": "object"
       }
     },
@@ -723,6 +759,7 @@
         "open_pull_request",
         "pending_add",
         "pending_done",
+        "steer",
         "task_cancel",
         "task_get",
         "task_history",
@@ -754,6 +791,7 @@
         "open_pull_request",
         "pending_add",
         "pending_done",
+        "steer",
         "task_cancel",
         "task_get",
         "task_history",
@@ -784,6 +822,7 @@
         "pending_add",
         "pending_done",
         "prepare_pull_request_merge",
+        "steer",
         "task_cancel",
         "task_get",
         "task_history",
@@ -818,6 +857,7 @@
         "pending_add",
         "pending_done",
         "prepare_pull_request_merge",
+        "steer",
         "task_cancel",
         "task_get",
         "task_history",
@@ -838,6 +878,7 @@
       "ordinary": [
         "delegate",
         "report",
+        "steer",
         "task_cancel",
         "task_get",
         "task_history",
@@ -856,6 +897,7 @@
       "ordinary": [
         "delegate",
         "report",
+        "steer",
         "task_cancel",
         "task_get",
         "task_history",
@@ -874,6 +916,7 @@
       "ordinary": [
         "delegate",
         "report",
+        "steer",
         "task_cancel",
         "task_get",
         "task_history",
@@ -892,6 +935,7 @@
       "ordinary": [
         "delegate",
         "report",
+        "steer",
         "task_cancel",
         "task_get",
         "task_history",
@@ -914,6 +958,7 @@
         "list_dependabot_alerts",
         "open_pull_request",
         "report",
+        "steer",
         "task_cancel",
         "task_get",
         "task_history",
@@ -940,6 +985,7 @@
         "list_dependabot_alerts",
         "open_pull_request",
         "report",
+        "steer",
         "task_cancel",
         "task_get",
         "task_history",
@@ -965,6 +1011,7 @@
         "open_pull_request",
         "prepare_pull_request_merge",
         "report",
+        "steer",
         "task_cancel",
         "task_get",
         "task_history",
@@ -994,6 +1041,7 @@
         "open_pull_request",
         "prepare_pull_request_merge",
         "report",
+        "steer",
         "task_cancel",
         "task_get",
         "task_history",

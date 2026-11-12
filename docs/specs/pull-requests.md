@@ -90,13 +90,21 @@ keys and its result are an append-only ledger (a trigger refuses updates and del
   `auto` route too, so this refusal is what stops it, instead of a card raised under a route nobody
   will approve. The project's own `approval` policy still forces the approval route regardless of
   this gate.
+- From the main thread, `prepare_pull_request_merge` and `merge_pull_request` work across all of
+  the owner's imported projects: main names the project by `project_id` or by `repository`
+  (`owner/name`, case-insensitive, exactly one of the two), and may leave out `expected_sha`, in
+  which case the proposal pins the head read at preparation, so the approved and merged commit is
+  still exact. Every other session must give its own `project_id` and the exact `expected_sha`.
+  Main's approval, status and the approved-merge sweep accept any project of the owner; the owner
+  check is unchanged.
 - `merge_pull_request_with_approval` (only on `/mcp/merge-approval`) evaluates the exact merge the
   owner approved, once, and Mainloop then keeps evaluating under that consent until CI settles or
   the deadline passes. Re-calling it while it evaluates is a replay; read
   `get_pull_request_merge_status` instead. A sweep (every 30 s) starts any approved merge whose
   tool call never arrived or was lost: the approval is recorded, so completing it does not need
   the agent. The sweep requires the proposal's session to still have the same non-empty project
-  authority as the approved tool; otherwise it leaves the proposal prepared.
+  authority as the approved tool (or to be the owner's main thread); otherwise it leaves the
+  proposal prepared.
 - `get_pull_request_merge_status` reads the stored state for a proposal id and one of its request
   ids. It never approves or executes. Like the approved-merge tool, it loads the proposal's project
   and needs the actor's session project to be non-empty and equal to it (`forbidden` otherwise); the

@@ -995,7 +995,7 @@ func (q *Queries) GetSessionRestart(ctx context.Context, id string) (SessionRest
 }
 
 const getSessionRow = `-- name: GetSessionRow :one
-SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, s.agent_cancel_attempts, s.agent_cancel_next_attempt_at, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
+SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, s.agent_cancel_attempts, s.agent_cancel_next_attempt_at, b.kind AS agent_kind, b.parent_session_id, COALESCE(b.role, '')::text AS binding_role, t.name AS topic
 FROM sessions s
 LEFT JOIN agent_bindings b ON b.session_id = s.id
 LEFT JOIN topics t ON t.id = b.topic_id
@@ -1033,6 +1033,7 @@ type GetSessionRowRow struct {
 	AgentCancelNextAttemptAt time.Time
 	AgentKind                *string
 	ParentSessionID          *string
+	BindingRole              string
 	Topic                    *string
 }
 
@@ -1066,6 +1067,7 @@ func (q *Queries) GetSessionRow(ctx context.Context, arg GetSessionRowParams) (G
 		&i.AgentCancelNextAttemptAt,
 		&i.AgentKind,
 		&i.ParentSessionID,
+		&i.BindingRole,
 		&i.Topic,
 	)
 	return i, err
@@ -1940,7 +1942,7 @@ func (q *Queries) ListSessionMessagesByID(ctx context.Context, arg ListSessionMe
 }
 
 const listSessionRows = `-- name: ListSessionRows :many
-SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, s.agent_cancel_attempts, s.agent_cancel_next_attempt_at, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
+SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, s.agent_cancel_attempts, s.agent_cancel_next_attempt_at, b.kind AS agent_kind, b.parent_session_id, COALESCE(b.role, '')::text AS binding_role, t.name AS topic
 FROM sessions s
 LEFT JOIN agent_bindings b ON b.session_id = s.id
 LEFT JOIN topics t ON t.id = b.topic_id
@@ -1987,6 +1989,7 @@ type ListSessionRowsRow struct {
 	AgentCancelNextAttemptAt time.Time
 	AgentKind                *string
 	ParentSessionID          *string
+	BindingRole              string
 	Topic                    *string
 }
 
@@ -2028,6 +2031,7 @@ func (q *Queries) ListSessionRows(ctx context.Context, arg ListSessionRowsParams
 			&i.AgentCancelNextAttemptAt,
 			&i.AgentKind,
 			&i.ParentSessionID,
+			&i.BindingRole,
 			&i.Topic,
 		); err != nil {
 			return nil, err

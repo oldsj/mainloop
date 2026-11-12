@@ -342,7 +342,7 @@ func (s *Service) completeOne(ctx context.Context, r dbq.ListPreparedApprovalPro
 	if err != nil {
 		return err
 	}
-	if session.ProjectID == nil || ownsProject(*session.ProjectID, row.ProjectID) != nil {
+	if ownsProject(deref(session.ProjectID), row.ProjectID, session.BindingRole == string(dbstate.RoleMain)) != nil {
 		return nil
 	}
 	if len(view.Summary.UnavailableReasons) > 0 {
@@ -422,7 +422,7 @@ func (s *Service) recheck(ctx context.Context, q *dbq.Queries, work dbq.GetMerge
 		case b.UserID != work.OwnerID || b.ArchivedAt != nil || b.KagentDeletedAt != nil ||
 			b.KagentSessionID == nil || *b.KagentSessionID != pin.KagentSessionID || b.Kind != pin.Provider:
 			return "consent_runtime_changed", dbstate.MergeBlocked, nil
-		case b.ProjectID == nil || ownsProject(*b.ProjectID, work.ProjectID) != nil:
+		case ownsProject(deref(b.ProjectID), work.ProjectID, b.Role == dbstate.RoleMain) != nil:
 			return "consent_project_changed", dbstate.MergeBlocked, nil
 		}
 	}
