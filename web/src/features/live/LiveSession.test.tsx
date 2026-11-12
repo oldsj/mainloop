@@ -1,9 +1,12 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, render as rtlRender, screen, waitFor, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse, ws } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { API_URL } from '@/api/config';
 import { server } from '@/test/msw/server';
+import { useSessionRequests } from '@/features/hitl/session-requests';
 import { createFakeRunner, type FakeRunner } from './fakeRunner';
 import { LiveSession } from './LiveSession';
 import { LIVE_SUBPROTOCOL, LIVE_TIMING, liveDeps, liveUrl, type LiveDeps } from './useLiveSession';
@@ -51,11 +54,41 @@ const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let current: FakeRunner;
 
+const render = (ui: ReactNode) =>
+  rtlRender(
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      {ui}
+    </QueryClientProvider>
+  );
+
+/** The live view as the session page places it, with the session's requests listed by id. */
+function WithRequests() {
+  const { pending } = useSessionRequests('s1');
+  return (
+    <LiveSession
+      sessionId="s1"
+      deps={deps}
+      pending={pending}
+      requests={(skip) => (
+        <ul data-testid="request-cards">
+          {pending
+            .filter((id) => id !== skip)
+            .map((id) => (
+              <li key={id}>{id}</li>
+            ))}
+        </ul>
+      )}
+    />
+  );
+}
+
 function setup(opts?: Parameters<typeof createFakeRunner>[0]) {
   const runner = createFakeRunner(opts);
   current = runner;
   server.use(...runner.handlers);
-  render(<LiveSession sessionId="s1" deps={deps} />);
+  render(<WithRequests />);
   return { runner, user: userEvent.setup() };
 }
 
@@ -116,24 +149,65 @@ describe('live session', () => {
     expect(screen.queryByText(/Interrupted/)).not.toBeInTheDocument();
   });
 
-  it('asks for permission and sends the answer', async () => {
+  it('answers a permission prompt through its session request, shown once', async () => {
     const { runner, user } = setup();
     await attached();
     await say(user, 'perm please');
     const card = await screen.findByTestId('live-perm');
     expect(screen.getByTestId('live-status')).toHaveTextContent('needs you');
     expect(card).toHaveTextContent('ls /data/workspace');
-    await user.click(
-      within(card).getByRole('button', { name: "2. Yes, and don't ask again this session" })
+    // The prompt is the request: its card is not listed again below the transcript.
+    const yes = await within(card).findByRole('button', { name: '1. Yes' });
+    expect(within(card).getByRole('button', { name: '2. No' })).toBeInTheDocument();
+    expect(screen.getByTestId('request-cards')).toBeEmptyDOMElement();
+    await user.click(yes);
+    await waitFor(() =>
+      expect(runner.responses).toEqual([
+        { requestId: expect.stringMatching(/^req_\d+_perm_1$/), approved: true }
+      ])
     );
-    expect(runner.received).toContainEqual({
-      k: 'perm',
-      id: 'perm_1',
-      behavior: 'allow',
-      always: true
-    });
-    expect(await screen.findByText(/Bash\(ls \/data\/workspace\) →/)).toBeInTheDocument();
+    expect(runner.received).toEqual([]);
+    expect(await screen.findByText(/Bash\(ls \/data\/workspace\) →/)).toHaveTextContent('Yes');
     expect(screen.queryByTestId('live-perm')).not.toBeInTheDocument();
+    await idle();
+  });
+
+  it('takes back an answer Mainloop did not record, so it can be given again', async () => {
+    const { runner, user } = setup();
+    await attached();
+    await say(user, 'perm please');
+    const card = await screen.findByTestId('live-perm');
+    server.use(
+      http.post(
+        `${API_URL}/hitl/:id/respond`,
+        () => HttpResponse.json({ detail: 'The request changed.' }, { status: 409 }),
+        { once: true }
+      )
+    );
+    await user.click(await within(card).findByRole('button', { name: '1. Yes' }));
+    expect(await screen.findByText(/Not answered: .*The request changed/)).toBeInTheDocument();
+    expect(runner.responses).toEqual([]);
+    expect(
+      within(screen.getByTestId('live-perm')).getByRole('button', { name: '1. Yes' })
+    ).toBeInTheDocument();
+  });
+
+  it('shows a prompt without choices until Mainloop has raised its request, then denies it', async () => {
+    const { runner, user } = setup();
+    runner.scanned = false;
+    await attached();
+    await say(user, 'perm please');
+    const card = await screen.findByTestId('live-perm');
+    expect(card).toHaveTextContent('Waiting for Mainloop to record the request');
+    expect(within(card).queryByRole('button')).not.toBeInTheDocument();
+    runner.scanned = true;
+    await user.click(await within(card).findByRole('button', { name: '2. No' }, { timeout: 3000 }));
+    await waitFor(() =>
+      expect(runner.responses).toEqual([
+        { requestId: expect.stringMatching(/^req_\d+_perm_1$/), approved: false }
+      ])
+    );
+    expect(await screen.findByText(/Bash\(ls \/data\/workspace\) →/)).toHaveTextContent('No');
     await idle();
   });
 
@@ -166,8 +240,8 @@ describe('live session', () => {
     render(
       <LiveSession
         sessionId="s1"
-        needsAnswer
-        requests={<div data-testid="request-card">Approve the deploy?</div>}
+        pending={['deploy']}
+        requests={() => <div data-testid="request-card">Approve the deploy?</div>}
       />
     );
     await attached();
@@ -183,7 +257,7 @@ describe('live session', () => {
     await say(user, 'then this');
     const queued = await screen.findByText(/queued · joins this turn/);
     expect(queued.parentElement).toHaveTextContent('then this');
-    await user.click(screen.getByRole('button', { name: '1. Yes' }));
+    await user.click(await screen.findByRole('button', { name: '1. Yes' }));
     expect(await screen.findByText('Noted: then this')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText(/queued ·/)).not.toBeInTheDocument());
     await idle();
@@ -199,7 +273,7 @@ describe('live session', () => {
     await screen.findByTestId('live-perm');
     await user.type(screen.getByRole('textbox', { name: 'Message' }), '/compact {Enter}');
     expect(await screen.findByText(/queued · sends when this turn ends/)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '1. Yes' }));
+    await user.click(await screen.findByRole('button', { name: '1. Yes' }));
     await waitFor(() => expect(screen.getAllByTestId('live-tool')).toHaveLength(2));
     await idle();
   });

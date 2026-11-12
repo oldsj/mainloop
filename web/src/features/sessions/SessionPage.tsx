@@ -55,8 +55,8 @@ function LiveWithRequests({
     <LiveSession
       sessionId={sessionId}
       onFallback={onFallback}
-      requests={<SessionRequests sessionId={sessionId} />}
-      needsAnswer={pending.length > 0}
+      requests={(skip) => <SessionRequests sessionId={sessionId} skip={[skip]} />}
+      pending={pending}
     />
   );
 }

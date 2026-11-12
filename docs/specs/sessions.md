@@ -193,9 +193,19 @@ move the caret, so multi-line editing works. History is this session's user mess
 backlog and those sent since), a repeat kept once. On a phone, a small `↑ history` button below the
 composer lists the last ten to tap into the composer. The send button becomes interrupt while a turn runs and the composer is empty; Esc interrupts
 too. Interrupt is Mainloop's stop turn (`POST /sessions/{id}/stop-turn`), which keeps the partial
-reply, as Esc does in Claude Code. Shift+Tab or the mode button below the composer cycles the permission mode. The runner
-prompts live only for a turn a client started on its port and for prompts outside the harness's
-approval boundary (the profile's own permission mode); those are lost if the session sleeps. A
+reply, as Esc does in Claude Code. Shift+Tab or the mode button below the composer cycles the permission mode. Every turn
+is an A2A turn, so a permission prompt the runner holds live (one outside the harness's approval
+boundary, under the profile's own permission mode) is also the A2A task's input-required request,
+which Mainloop raises as a session request. kagent gives that request's tool the runner's
+permission id as its id and the SDK's `tool_use_id` as its call id, and the view pairs the prompt with
+it by those: the prompt shows once, in place, with "1. Yes" and "2. No", and its card is not listed
+again below the transcript. The answer goes through Mainloop's request API
+(`POST /hitl/{request_id}/respond`), which records it and answers the A2A task; there is no "don't ask
+again" choice, since a request takes approve or reject. The prompt shows the answer at once and takes
+it back with a "Not answered" line if Mainloop does not record it. Until Mainloop has raised the
+request (its HITL scan), the prompt shows without choices and says it is waiting for Mainloop to
+record it, and the view re-reads the session's requests every second meanwhile. A prompt held live
+is lost if the session sleeps. A
 protected tool call or question in a turn Mainloop sends (an A2A turn) is deferred instead
 (kagent #90): the live turn ends with a `tool_deferred` result, the log says it is waiting for the
 answer, the status reads "needs you", and the request shows at the end of the transcript as the same
@@ -243,11 +253,10 @@ used by the tests).
 The server relays the WebSocket frame by frame to the runner's client port (`:7682/ws`) on the
 session's actor: it ends the browser's WebSocket and dials the runner as a client (before upgrading
 the browser, so a refusal is still an HTTP answer). Runner frames pass unchanged, and so do close
-codes in both directions. From the browser only the permission mode (`{k:"mode"}`) and permission
-answers (`{k:"perm"}`) pass; a message, interrupt, model or effort sent on the socket is answered
-with an `err` frame naming the API call to use, and anything else with an `err` frame too, so input
-reaches the runner only through Mainloop's record. Permission answers stay on the socket until they
-are paired with the session's requests. It reaches the runner through the Substrate router, like the workspace preview proxy and over the same mutual-TLS
+codes in both directions. From the browser only the permission mode (`{k:"mode"}`) passes; a
+message, interrupt, model, effort or permission answer sent on the socket is answered with an `err`
+frame naming the API call to use, and anything else with an `err` frame too, so input reaches the
+runner only through Mainloop's record. It reaches the runner through the Substrate router, like the workspace preview proxy and over the same mutual-TLS
 connection (see "Router TLS" in [workspaces.md](workspaces.md)). `live` is true when the
 session has a kagent Session and its Agent is listed in `MAINLOOP_LIVE_AGENTS`. An attach is the
 owner's only (another owner's session, or one that is not live, is `404`); a cross-origin `Origin` is

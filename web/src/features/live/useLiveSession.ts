@@ -158,11 +158,17 @@ export interface LiveSession {
   /** Sets the model or effort through Mainloop, from the next turn. */
   set: (what: 'model' | 'effort', value: string) => void;
   /**
-   * Sends a runner control over the socket: the permission mode and permission answers, the input
-   * that is not a message. It needs an open socket: false, with a note in the log, when there is none.
+   * Sends a runner control over the socket: only the permission mode, the one control that is not
+   * input. It needs an open socket: false, with a note in the log, when there is none.
    */
   send: (cmd: Record<string, unknown>) => boolean;
-  answer: (permId: string, choice: number) => void;
+  /**
+   * Answers a permission prompt through `via` (Mainloop's request API), showing the answer at once
+   * and taking it back with a note if `via` fails.
+   */
+  answer: (permId: string, choice: number, via: () => Promise<void>) => void;
+  /** Adds a line to the transcript. */
+  note: (text: string) => void;
   /** Attaches now, waking the session if it sleeps: an owner action. */
   retry: () => void;
   /** The owner is typing: an attached view is not idle. */
@@ -412,17 +418,25 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
   );
 
   const answer = useCallback(
-    (permId: string, choice: number) => {
+    (permId: string, choice: number, via: () => Promise<void>) => {
       if (!model.current.choose(permId, choice)) return;
-      send({
-        k: 'perm',
-        id: permId,
-        behavior: choice === 2 ? 'deny' : 'allow',
-        always: choice === 1
+      bump.current();
+      flush();
+      via().catch((err: unknown) => {
+        model.current.unchoose(permId);
+        model.current.note(`Not answered: ${err instanceof Error ? err.message : String(err)}`);
+        flush();
       });
+    },
+    [flush]
+  );
+
+  const note = useCallback(
+    (text: string) => {
+      model.current.note(text);
       flush();
     },
-    [send, flush]
+    [flush]
   );
 
   const say = useCallback(
@@ -477,5 +491,5 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
   const retry = useCallback(() => wakeNow.current(), []);
   const touch = useCallback(() => bump.current(), []);
 
-  return { state, conn, say, interrupt, set, send, answer, retry, touch };
+  return { state, conn, say, interrupt, set, send, answer, note, retry, touch };
 }

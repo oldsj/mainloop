@@ -7,16 +7,19 @@
  * The runner is one process: its turns run whether or not a view is attached, and every attach
  * starts with `hello` and the frames so far. Each message runs a short scripted turn: streamed text,
  * a Bash call and its output. A message containing "perm" asks for permission first and waits for
- * the answer. A message containing "defer" ends its turn on a deferred call, as an A2A turn does with
+ * the answer; as kagent does for an A2A turn, the prompt is also the session's request (tool id the
+ * permission id, call id the tool_use_id), and answering that request answers the prompt. A message containing "defer" ends its turn on a deferred call, as an A2A turn does with
  * a protected tool (kagent #90); Mainloop then holds messages until `answerDeferred` replays the call.
  *
  * As Mainloop does, the fake records every message under its id. A message sent during a turn joins
  * it at the next tool boundary (a steer); a slash command, or a message while the turn waits on the
  * deferred call, waits behind the turn and runs as its own. A model or effort applies from the next
- * turn. Over the socket the runner takes only the permission mode and permission answers.
+ * turn. Over the socket the runner takes only the permission mode.
  */
-import { http, HttpResponse, ws, type WebSocketHandler } from 'msw';
+import { http, HttpResponse, ws, type HttpHandler, type WebSocketHandler } from 'msw';
 import { API_URL } from '@/api/config';
+import type { HITLView } from '@/lib/contract';
+import { decisionReceipt, hitlView } from '@/test/fixtures/hitl';
 
 type Out = Record<string, unknown>;
 type Msg = { uuid: string; mid: string; text: string };
@@ -24,7 +27,7 @@ type Msg = { uuid: string; mid: string; text: string };
 export interface FakeRunner {
   handler: WebSocketHandler;
   /** The socket handler and Mainloop's input endpoints, for `server.use(...handlers)`. */
-  handlers: (WebSocketHandler | ReturnType<typeof http.post>)[];
+  handlers: (WebSocketHandler | HttpHandler)[];
   /** Every client command received over the socket, oldest first. */
   received: Out[];
   /** The text of every message the runner took from Mainloop, in the order it echoed them. */
@@ -41,6 +44,10 @@ export interface FakeRunner {
   drop: () => void;
   /** Mainloop answers the next `n` message sends with a server error, as a failed request. */
   failSends: (n: number) => void;
+  /** Whether Mainloop has raised the prompt's request yet (its HITL scan). True by default. */
+  scanned: boolean;
+  /** Every request answer sent through Mainloop: the request id and the decision. */
+  responses: { requestId: string; approved: boolean }[];
 }
 
 const MODELS = [
@@ -52,6 +59,8 @@ const MODELS = [
   },
   { value: 'claude-sonnet-5-5', displayName: 'Sonnet 5.5', description: 'Fast and capable' }
 ];
+
+let runs = 0;
 
 export function createFakeRunner(
   opts: {
@@ -73,6 +82,8 @@ export function createFakeRunner(
     handlers: [],
     received: [],
     echoed: [],
+    scanned: true,
+    responses: [],
     posted: [],
     backlog: opts.backlog ?? [],
     answerDeferred: () => {},
@@ -112,6 +123,10 @@ export function createFakeRunner(
   const sdk = (m: Out) => send({ k: 'sdk', m });
   let running = false;
   let pendingPerm: { id: string; resolve: (allow: boolean) => void } | null = null;
+  const requests = new Map<string, HITLView>();
+  // Request ids are unique across runners: answered requests are remembered for the page's life.
+  const run = ++runs;
+  const reqOf = (permId: string) => `req_${run}_${permId}`;
   let interrupted = false;
   let deferred: string | null = null; // the deferred tool_use id
   const held: Msg[] = []; // Mainloop's queue: messages waiting for the turn to end
@@ -187,6 +202,21 @@ export function createFakeRunner(
       const permId = `perm_${n}`;
       allowed = await new Promise<boolean>((resolve) => {
         pendingPerm = { id: permId, resolve };
+        requests.set(
+          reqOf(permId),
+          hitlView(reqOf(permId), {
+            request: {
+              ...hitlView().request,
+              id: reqOf(permId),
+              payload: {
+                type: 'tool_approval_request',
+                hint: 'Claude requires approval before calling Bash.',
+                tools: [{ id: permId, call_id: tool, name: 'Bash', args: input }],
+                nested: null
+              }
+            }
+          })
+        );
         send({
           k: 'perm',
           id: permId,
@@ -276,6 +306,7 @@ export function createFakeRunner(
     send({ k: 'ctl', what: 'interrupt', ms: 40 });
     interrupted = true;
     if (pendingPerm) {
+      requests.delete(reqOf(pendingPerm.id));
       send({
         k: 'perm_done',
         id: pendingPerm.id,
@@ -350,25 +381,6 @@ export function createFakeRunner(
       }
       runner.received.push(c);
       switch (c.k) {
-        case 'perm': {
-          const p = pendingPerm;
-          if (!p || p.id !== c.id) {
-            client.send(
-              JSON.stringify({ k: 'err', text: 'no such permission request', ref: c.id })
-            );
-            return;
-          }
-          pendingPerm = null;
-          send({
-            k: 'perm_done',
-            id: p.id,
-            behavior: c.behavior,
-            always: Boolean(c.always),
-            by: 'client'
-          });
-          p.resolve(c.behavior === 'allow');
-          return;
-        }
         case 'mode':
           meta.permissionMode = String(c.mode);
           send({ k: 'ctl', what: 'mode', mode: c.mode, ms: 5 });
@@ -396,6 +408,45 @@ export function createFakeRunner(
         { status, message_id: String(body.message_id) },
         { status: status === 'ok' ? 200 : 202 }
       );
+    }),
+    http.get(path('hitl'), ({ params }) => {
+      if (!owns(params)) return;
+      const ids = runner.scanned
+        ? [...requests.values()].filter((v) => !v.response).map((v) => v.request.id)
+        : [];
+      return HttpResponse.json(ids);
+    }),
+    http.get(`${API_URL}/hitl/:id`, ({ params }) => {
+      const view = requests.get(String(params.id));
+      if (!view) return;
+      return HttpResponse.json(view);
+    }),
+    http.post(`${API_URL}/hitl/:id/respond`, async ({ params, request }) => {
+      const view = requests.get(String(params.id));
+      if (!view) return;
+      const body = (await request.json()) as {
+        action_id: string;
+        response: { approvals?: { approved: boolean }[] };
+      };
+      const approved = body.response.approvals?.[0]?.approved === true;
+      runner.responses.push({ requestId: view.request.id, approved });
+      const next: HITLView = {
+        ...view,
+        response: {
+          ...decisionReceipt(view.request),
+          action_id: body.action_id,
+          response: body.response as never
+        },
+        transport_state: 'recorded'
+      };
+      requests.set(view.request.id, next);
+      const p = pendingPerm;
+      if (p && reqOf(p.id) === view.request.id) {
+        pendingPerm = null;
+        send({ k: 'perm_done', id: p.id, behavior: approved ? 'allow' : 'deny', by: 'a2a' });
+        p.resolve(approved);
+      }
+      return HttpResponse.json(next);
     }),
     http.post(path('stop-turn'), async ({ request, params }) => {
       if (!owns(params)) return;

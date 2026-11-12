@@ -57,7 +57,8 @@ export interface Perm {
   arg: string;
   why: string;
   title: string;
-  canAlways: boolean;
+  /** The SDK's tool_use_id for the call, which pairs the prompt with the session's request. */
+  callId?: string;
   chosen: number | null;
 }
 
@@ -373,7 +374,6 @@ export class LiveModel {
       case 'perm': {
         const id = str(f.id);
         const tool = str(f.toolName);
-        const suggestions = f.suggestions;
         s.perms = {
           ...s.perms,
           [id]: {
@@ -382,7 +382,7 @@ export class LiveModel {
             arg: argOf(tool, f.input),
             why: str(f.decisionReason) || str(f.description) || str(f.blockedPath),
             title: str(f.title) || `Claude wants to use ${tool}`,
-            canAlways: Array.isArray(suggestions) && suggestions.length > 0,
+            callId: str(f.toolUseID) || undefined,
             chosen: null
           }
         };
@@ -577,6 +577,12 @@ export class LiveModel {
     if (!p || p.chosen != null) return false;
     this.state.perms = { ...this.state.perms, [permId]: { ...p, chosen } };
     return true;
+  }
+
+  /** Takes back an answer that did not reach Mainloop, so it can be given again. */
+  unchoose(permId: string) {
+    const p = this.state.perms[permId];
+    if (p) this.state.perms = { ...this.state.perms, [permId]: { ...p, chosen: null } };
   }
 
   note(text: string) {
