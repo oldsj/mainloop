@@ -1,0 +1,55 @@
+{{- if .Values.canary.enabled }}
+# One cheap synthetic turn every few minutes (docs/specs/canary.md); ntfy alert on failure or slowness.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mainloop-canary
+  namespace: {{ .Release.Namespace }}
+spec:
+  schedule: {{ .Values.canary.schedule | quote }}
+  # A run that outlives its slot must not overlap the next: a second turn would queue behind it.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 360
+      template:
+        metadata:
+          labels:
+            app: mainloop-canary
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: canary
+              image: {{ include "mainloop.backendImage" . }}
+              {{- include "mainloop.pullPolicy" . | nindent 14 }}
+              command: [/usr/local/bin/mainloop, canary]
+              args:
+                - --target={{ .Values.canary.name }}=http://mainloop-backend.{{ .Release.Namespace }}.svc.cluster.local:8000
+                {{- range .Values.canary.extraTargets }}
+                - --target={{ . }}
+                {{- end }}
+                {{- range .Values.canary.args }}
+                - {{ . | quote }}
+                {{- end }}
+              {{- with .Values.canary.env }}
+              env:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              {{- include "mainloop.securityContext" . | nindent 14 }}
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { cpu: 200m, memory: 128Mi }
+{{- end }}

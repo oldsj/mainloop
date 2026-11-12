@@ -10,6 +10,15 @@ spec:
   policyTypes: [Ingress]
   ingress:
     {{- toYaml .Values.networkPolicy.backendIngress | nindent 4 }}
+    {{- if .Values.canary.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app: mainloop-canary
+      ports:
+        - protocol: TCP
+          port: 8000
+    {{- end }}
 ---
 # Separate policy, so a deployment's backendIngress never opens the git listeners to another peer.
 apiVersion: networking.k8s.io/v1

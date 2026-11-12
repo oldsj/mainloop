@@ -178,6 +178,21 @@ kagentControlAuth:
 substrateRouterAuth:
   enabled: false
 
+# A CronJob that runs one cheap synthetic turn (smallest model, one-word prompt) through this
+# instance's API and posts to ntfy when a step fails or the reply is slow. See docs/specs/canary.md.
+canary:
+  enabled: false
+  # Names this instance in alerts.
+  name: prod
+  schedule: '*/10 * * * *'
+  # More name=url[@host] targets, such as another instance's API.
+  extraTargets: []
+  # Extra flags, such as --slow=120s or --model=haiku.
+  args: []
+  # MAINLOOP_NTFY_URL, MAINLOOP_NTFY_TOPIC and MAINLOOP_NTFY_TOKEN (from a Secret). No ntfy: the
+  # run only logs and exits non-zero on failure.
+  env: []
+
 networkPolicy:
   # Ingress to the REST and MCP listeners. The git listeners have their own fixed policy, open only
   # to the actor egress proxy.

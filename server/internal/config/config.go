@@ -555,3 +555,21 @@ func (c *Config) GitReadHosts() map[string]bool {
 func (c *Config) GitPushHosts() map[string]bool {
 	return hostSet([]string{"mainloop-git-push." + c.Namespace + ".svc.cluster.local"})
 }
+
+// LoadNtfy reads only the ntfy settings, for commands such as `mainloop canary` that need no
+// database or agent key.
+func LoadNtfy() (Ntfy, error) {
+	var n Ntfy
+	if err := env.ParseWithOptions(&n, env.Options{Environment: environ()}); err != nil {
+		return n, fmt.Errorf("config: %w", err)
+	}
+	n.URL = strings.TrimRight(strings.TrimSpace(n.URL), "/")
+	n.Topic = strings.TrimSpace(n.Topic)
+	if (n.URL != "") != (n.Topic != "") {
+		return n, errors.New("config: MAINLOOP_NTFY_URL and MAINLOOP_NTFY_TOPIC must be set together")
+	}
+	if n.Topic != "" && !ntfyTopic.MatchString(n.Topic) {
+		return n, errors.New("config: MAINLOOP_NTFY_TOPIC must be 1-64 letters, digits, '-' or '_'")
+	}
+	return n, nil
+}
