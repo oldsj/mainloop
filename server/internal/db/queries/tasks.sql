@@ -359,9 +359,10 @@ WHERE id = sqlc.arg(id) AND lease_owner = sqlc.arg(lease_owner) AND attempts = s
   AND delivery_id IS NULL
 RETURNING *;
 
--- The other pending reports to the same recipient that no claimer holds join the message a
--- delivery is preparing, so they are sent as one. SKIP LOCKED and the lease test leave rows another
--- claimer is working on to their own message.
+-- The other pending reports to the same recipient that have no message yet join the message a
+-- delivery is preparing, so they are sent as one, even while another claimer holds them: that
+-- claimer's own prepare then finds a message id already set and follows the shared message. A row
+-- another transaction is preparing right now is skipped (SKIP LOCKED) and keeps its own message.
 -- name: JoinTaskEventBatch :many
 UPDATE task_event_deliveries
 SET target_attempt_id = sqlc.narg(target_attempt_id), delivery_id = sqlc.arg(delivery_id),
@@ -369,7 +370,7 @@ SET target_attempt_id = sqlc.narg(target_attempt_id), delivery_id = sqlc.arg(del
 WHERE id IN (
     SELECT o.id FROM task_event_deliveries o
     WHERE o.recipient_key = sqlc.arg(recipient_key) AND o.state = 'pending' AND o.delivery_id IS NULL
-      AND o.id <> sqlc.arg(leader_id) AND (o.lease_until IS NULL OR o.lease_until < now())
+      AND o.id <> sqlc.arg(leader_id)
     FOR UPDATE SKIP LOCKED
 )
 RETURNING *;
