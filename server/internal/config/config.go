@@ -29,6 +29,7 @@ type Config struct {
 	Events     Events
 	Sessions   Sessions
 	Server     Server
+	Ntfy       Ntfy
 
 	// EnvironmentRegistryAllowlist limits OCI registries for development environments.
 	EnvironmentRegistryAllowlist RegistryAllowlist `env:"ENVIRONMENT_REGISTRY_ALLOWLIST" envDefault:"[\"ghcr.io\"]"`
@@ -232,6 +233,20 @@ type Server struct {
 	KubernetesServiceHost string `env:"KUBERNETES_SERVICE_HOST"`
 }
 
+// Ntfy configures push notifications to the owner's phone (docs/specs/push-notifications.md).
+// Push is off unless URL and Topic are both set.
+type Ntfy struct {
+	// URL is the ntfy server's base URL, such as http://ntfy.ntfy.svc.
+	URL   string `env:"MAINLOOP_NTFY_URL"`
+	Topic string `env:"MAINLOOP_NTFY_TOPIC"`
+	// Token is an ntfy access token with read and write access to Topic (reads let a retry check
+	// whether an earlier attempt already arrived). Optional for an open server.
+	Token Secret `env:"MAINLOOP_NTFY_TOKEN"`
+}
+
+// Enabled reports whether push notifications are configured.
+func (n Ntfy) Enabled() bool { return n.URL != "" && n.Topic != "" }
+
 // Load reads and validates the process environment.
 func Load() (*Config, error) {
 	return Parse(nil)
@@ -252,6 +267,8 @@ func Parse(vars map[string]string) (*Config, error) {
 	}
 	return cfg, nil
 }
+
+var ntfyTopic = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 func environ() map[string]string {
 	vars := map[string]string{}
@@ -289,6 +306,18 @@ func (c *Config) validate() error {
 		// Secret names are <ns>-mcp-* and <ns>-git-{read,push}-*; such a namespace could put its
 		// names inside another instance's patterns.
 		fail("MAINLOOP_NAMESPACE collides with credential Secret names")
+	}
+	c.Ntfy.URL = strings.TrimRight(strings.TrimSpace(c.Ntfy.URL), "/")
+	c.Ntfy.Topic = strings.TrimSpace(c.Ntfy.Topic)
+	if (c.Ntfy.URL != "") != (c.Ntfy.Topic != "") {
+		fail("MAINLOOP_NTFY_URL and MAINLOOP_NTFY_TOPIC must be set together")
+	} else if c.Ntfy.URL != "" {
+		if u, err := url.Parse(c.Ntfy.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			fail("MAINLOOP_NTFY_URL must be an http(s) URL")
+		}
+		if !ntfyTopic.MatchString(c.Ntfy.Topic) {
+			fail("MAINLOOP_NTFY_TOPIC must be 1-64 letters, digits, '-' or '_'")
+		}
 	}
 	for _, name := range []string{"read", "push"} {
 		field, label := &c.Git.ReadOrigin, "GIT_READ_ORIGIN"
