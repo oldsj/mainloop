@@ -303,3 +303,21 @@ func TestTurnsNameOnlyChosenModelAndEffort(t *testing.T) {
 		})
 	}
 }
+
+// A model given at create is the session's override from its first turn: the prompt's own turn
+// names it, with no window where the first turn runs on the default.
+func TestCreateWithModelNamesItOnTheFirstTurn(t *testing.T) {
+	var log metaLog
+	e := newEnv(t, metaOpt(t, &log))
+	e.withProviders()
+	resp, err := e.API().CreateSession(context.Background(), api.CreateSessionRequestObject{Body: &api.SessionCreate{
+		Title: "Canary", Description: "d", Prompt: "ping", Model: strp("claude-haiku-5-5"),
+	}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id := api.Session(resp.(api.CreateSession200JSONResponse)).Id
+	e.run()
+	e.waitState(e.firstDelivery(id), dbstate.DeliveryCompleted)
+	wantMeta(t, "first turn", log.last(t), "claude-haiku-5-5", "")
+}

@@ -715,3 +715,44 @@ func (e *env) leftBehind2(sessionID string, state dbstate.DeliveryState, taskID 
 	}
 	return id
 }
+
+// A hidden session works like any other but only GET /sessions?hidden=true lists it.
+func TestAHiddenSessionIsLeftOutOfTheList(t *testing.T) {
+	e := newEnv(t)
+	e.withProviders()
+	a := e.API()
+	ctx := context.Background()
+	hidden := true
+	resp, err := a.CreateSession(ctx, api.CreateSessionRequestObject{Body: &api.SessionCreate{
+		Title: "Mainloop canary", Description: "d", Prompt: "ping", Hidden: &hidden,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := api.Session(resp.(api.CreateSession200JSONResponse)).Id
+	if _, err := a.CreateSession(ctx, api.CreateSessionRequestObject{Body: &api.SessionCreate{
+		Title: "Real work", Description: "d", Prompt: "go",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	list := func(h *bool) []api.Session {
+		r, err := a.ListSessions(ctx, api.ListSessionsRequestObject{Params: api.ListSessionsParams{Hidden: h}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.(api.ListSessions200JSONResponse)
+	}
+	if got := list(nil); len(got) != 1 || got[0].Title != "Real work" {
+		t.Fatalf("default list %+v", got)
+	}
+	notHidden := false
+	if got := list(&notHidden); len(got) != 1 || got[0].Title != "Real work" {
+		t.Fatalf("hidden=false list %+v", got)
+	}
+	if got := list(&hidden); len(got) != 1 || got[0].Id != id {
+		t.Fatalf("hidden=true list %+v", got)
+	}
+	if _, err := a.GetSession(ctx, api.GetSessionRequestObject{SessionId: id}); err != nil {
+		t.Fatalf("a hidden session is still readable by id: %v", err)
+	}
+}

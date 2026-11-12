@@ -455,18 +455,20 @@ WHERE s.id = $1 AND s.user_id = $2;
 -- name: ListSessionRows :many
 -- The owner's unarchived sessions other than the main thread, newest first: every session that is
 -- not history, plus the newest 100 history records (completed, failed, cancelled, superseded).
--- Optionally of one status.
+-- Optionally of one status. Hidden sessions (the canary) only when hidden is true, and then only them.
 SELECT s.*, b.kind AS agent_kind, b.parent_session_id, COALESCE(b.role, '')::text AS binding_role, t.name AS topic
 FROM sessions s
 LEFT JOIN agent_bindings b ON b.session_id = s.id
 LEFT JOIN topics t ON t.id = b.topic_id
 WHERE s.user_id = $1 AND s.archived_at IS NULL AND b.role IS DISTINCT FROM 'main'
+  AND s.hidden = coalesce(sqlc.narg(hidden)::boolean, false)
   AND (sqlc.narg(status)::text IS NULL OR s.status = sqlc.narg(status)::text)
   AND (s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
        OR s.id IN (
            SELECT h.id FROM sessions h
            LEFT JOIN agent_bindings hb ON hb.session_id = h.id
            WHERE h.user_id = $1 AND h.archived_at IS NULL AND hb.role IS DISTINCT FROM 'main'
+             AND h.hidden = coalesce(sqlc.narg(hidden)::boolean, false)
              AND h.status IN ('completed', 'failed', 'cancelled', 'superseded')
            ORDER BY h.created_at DESC, h.id LIMIT 100))
 ORDER BY s.created_at DESC, s.id;
@@ -741,3 +743,6 @@ SELECT id, task_id, activity_at, activity_kind, stalled_at, updated_at FROM deli
 WHERE session_id = $1 AND state = 'delivered' AND stalled_at IS NOT NULL
 ORDER BY created_at DESC
 LIMIT 1;
+
+-- name: HideSession :exec
+UPDATE sessions SET hidden = true WHERE id = $1;

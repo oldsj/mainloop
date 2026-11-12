@@ -169,7 +169,7 @@ func (q *Queries) ListOwnedProjects(ctx context.Context, arg ListOwnedProjectsPa
 }
 
 const listProjectSessions = `-- name: ListProjectSessions :many
-SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, s.agent_cancel_attempts, s.agent_cancel_next_attempt_at, ab.kind AS agent_kind, ab.parent_session_id, t.name AS topic
+SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, s.agent_cancel_attempts, s.agent_cancel_next_attempt_at, s.hidden, ab.kind AS agent_kind, ab.parent_session_id, t.name AS topic
 FROM sessions s
 LEFT JOIN agent_bindings ab ON ab.session_id = s.id
 LEFT JOIN topics t ON t.id = ab.topic_id
@@ -207,6 +207,7 @@ type ListProjectSessionsRow struct {
 	AgentCancelOutcome       *string
 	AgentCancelAttempts      int32
 	AgentCancelNextAttemptAt time.Time
+	Hidden                   bool
 	AgentKind                *string
 	ParentSessionID          *string
 	Topic                    *string
@@ -245,6 +246,7 @@ func (q *Queries) ListProjectSessions(ctx context.Context, arg ListProjectSessio
 			&i.AgentCancelOutcome,
 			&i.AgentCancelAttempts,
 			&i.AgentCancelNextAttemptAt,
+			&i.Hidden,
 			&i.AgentKind,
 			&i.ParentSessionID,
 			&i.Topic,

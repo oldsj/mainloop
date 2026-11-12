@@ -77,6 +77,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 		defer stop()
 		return runSmoke(ctx, args[1:], stdout, stderr)
+	case "canary":
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		defer stop()
+		return runCanary(ctx, args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		usage(stdout)
 		return 0
@@ -98,6 +102,7 @@ commands:
   sweep-orphans   list kagent Sessions Mainloop created and no longer references (--delete removes them;
                   --forget-agent ns/name drops an Agent from the swept set)
   smoke           --read-only: probe a running Mainloop (no quota); --live --budget N: one task from chat to merge
+  canary          one cheap synthetic turn per --target; ntfy alert when one fails or is slow
   kagent-probe    read-only check that kagent answers (GetAgent and ListSessions)
 `)
 }
