@@ -4,7 +4,7 @@ import { http, HttpResponse, ws } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { API_URL } from '@/api/config';
 import { server } from '@/test/msw/server';
-import { createFakeRunner } from './fakeRunner';
+import { createFakeRunner, type FakeRunner } from './fakeRunner';
 import { LiveSession } from './LiveSession';
 import { LIVE_SUBPROTOCOL, LIVE_TIMING, liveDeps, liveUrl, type LiveDeps } from './useLiveSession';
 
@@ -15,8 +15,12 @@ const world: {
   nativeReads: number;
 } = { active: true, messages: [], nativeReads: 0 };
 
-/** The reads outside the live channel, from `world`; the real ones are tested once, below. */
+/**
+ * The reads outside the live channel, from `world`; the real ones are tested once, below. Input goes
+ * through the real client to the fake runner's Mainloop endpoints.
+ */
 const deps: LiveDeps = {
+  ...liveDeps,
   awake: async () => {
     world.nativeReads += 1;
     return world.active;
@@ -45,9 +49,12 @@ const conn = (text: string) =>
   waitFor(() => expect(screen.getByTestId('live-conn')).toHaveTextContent(text));
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+let current: FakeRunner;
+
 function setup(opts?: Parameters<typeof createFakeRunner>[0]) {
   const runner = createFakeRunner(opts);
-  server.use(runner.handler);
+  current = runner;
+  server.use(...runner.handlers);
   render(<LiveSession sessionId="s1" deps={deps} />);
   return { runner, user: userEvent.setup() };
 }
@@ -65,10 +72,18 @@ const attached = () =>
 const idle = () =>
   waitFor(() => expect(screen.getByTestId('live-status')).toHaveTextContent('idle'));
 
-async function say(user: ReturnType<typeof userEvent.setup>, text: string) {
+/** A message the view sent through Mainloop, with this text. */
+const message = (text: string) => ({
+  what: 'message',
+  body: { message: text, message_id: expect.any(String), steer: true }
+});
+
+async function say(user: ReturnType<typeof userEvent.setup>, text: string, echo = true) {
   await user.type(screen.getByRole('textbox', { name: 'Message' }), `${text}{Enter}`);
+  await waitFor(() => expect(current.posted).toContainEqual(message(text)));
   // Wait for the runner's echo, so a following idle check cannot pass before the turn starts.
-  if (!text.startsWith('/')) await screen.findAllByText(text);
+  if (echo) await waitFor(() => expect(current.echoed).toContain(text));
+  await screen.findAllByText(text);
 }
 
 describe('live session', () => {
@@ -84,8 +99,9 @@ describe('live session', () => {
     await attached();
     expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('opus-5-5 · high');
     await say(user, 'look around');
-    expect(runner.received).toContainEqual({ k: 'user', text: 'look around' });
-    expect(await screen.findByText('look around')).toBeInTheDocument();
+    // Through Mainloop, never the socket; the runner's echo replaces the message shown at once.
+    expect(runner.received).toEqual([]);
+    await waitFor(() => expect(screen.getAllByText('look around')).toHaveLength(1));
     await waitFor(() =>
       expect(screen.getByTestId('live-text')).toHaveTextContent('I will list the workspace.')
     );
@@ -134,12 +150,13 @@ describe('live session', () => {
     expect(screen.queryByText(/Interrupted/)).not.toBeInTheDocument();
     const box = screen.getByRole('textbox', { name: 'Message' });
     expect(box).toHaveAttribute('placeholder', 'Answer the request first');
-    await user.type(box, 'carry on{Enter}');
-    expect(
-      await screen.findByText(/waiting for an answer to a pending approval or question/)
-    ).toBeInTheDocument();
+    // Mainloop holds a message while the turn waits on its request, and runs it once answered.
+    await say(user, 'carry on', false);
+    expect(await screen.findByText(/queued · sends when this turn ends/)).toBeInTheDocument();
+    expect(runner.echoed).not.toContain('carry on');
     runner.answerDeferred(true);
-    await waitFor(() => expect(screen.getByTestId('live-tool')).toHaveTextContent('⎿ README.md'));
+    await waitFor(() => expect(runner.echoed).toContain('carry on'));
+    await waitFor(() => expect(screen.getAllByTestId('live-tool')).toHaveLength(2));
     await idle();
     expect(box).toHaveAttribute('placeholder', 'Message, or / for commands');
   });
@@ -158,18 +175,49 @@ describe('live session', () => {
     expect(screen.getByTestId('live-status')).toHaveTextContent('needs you');
   });
 
-  it('queues a message sent during a turn and runs it next', async () => {
+  it('folds a message sent during a turn into that turn at its next tool boundary', async () => {
     const { user } = setup({ step: 30 });
     await attached();
     await say(user, 'perm first');
     await screen.findByTestId('live-perm');
     await say(user, 'then this');
-    const queued = await screen.findByText(/queued · sends when this turn ends/);
+    const queued = await screen.findByText(/queued · joins this turn/);
     expect(queued.parentElement).toHaveTextContent('then this');
     await user.click(screen.getByRole('button', { name: '1. Yes' }));
+    expect(await screen.findByText('Noted: then this')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText(/queued ·/)).not.toBeInTheDocument());
+    await idle();
+    // One turn: the message joined it rather than running after it.
+    expect(screen.getAllByTestId('live-tool')).toHaveLength(1);
+    expect(screen.getAllByText('then this')).toHaveLength(1);
+  });
+
+  it('runs a slash command sent during a turn as the next turn', async () => {
+    const { user } = setup({ step: 30 });
+    await attached();
+    await say(user, 'perm first');
+    await screen.findByTestId('live-perm');
+    await user.type(screen.getByRole('textbox', { name: 'Message' }), '/compact {Enter}');
+    expect(await screen.findByText(/queued · sends when this turn ends/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '1. Yes' }));
     await waitFor(() => expect(screen.getAllByTestId('live-tool')).toHaveLength(2));
     await idle();
+  });
+
+  it('retries a send under the same id and says when it was not recorded', async () => {
+    LIVE_TIMING.backoffMs = 5;
+    const { runner, user } = setup();
+    await attached();
+    runner.failSends(1);
+    await say(user, 'once only');
+    await idle();
+    const sends = runner.posted.filter((p) => p.what === 'message');
+    expect(sends).toHaveLength(2);
+    expect(sends[1]?.body.message_id).toBe(sends[0]?.body.message_id);
+    runner.failSends(3);
+    await user.type(screen.getByRole('textbox', { name: 'Message' }), 'lost{Enter}');
+    expect(await screen.findByText(/Not sent: database unavailable/)).toBeInTheDocument();
+    expect(runner.echoed).not.toContain('lost');
   });
 
   it('interrupts a running turn from the stop button', async () => {
@@ -178,7 +226,7 @@ describe('live session', () => {
     await say(user, 'perm wait');
     await screen.findByTestId('live-perm');
     await user.click(screen.getByRole('button', { name: 'Interrupt' }));
-    expect(runner.received).toContainEqual({ k: 'interrupt' });
+    await waitFor(() => expect(runner.posted.map((p) => p.what)).toContain('stop-turn'));
     expect(await screen.findByText('⎿ Interrupted')).toBeInTheDocument();
     expect(screen.getByText(/→/)).toHaveTextContent('cancelled');
     await idle();
@@ -190,15 +238,26 @@ describe('live session', () => {
     await user.click(screen.getByRole('button', { name: 'Model' }));
     const sheet = screen.getByRole('dialog', { name: 'Model' });
     await user.click(within(sheet).getByRole('radio', { name: /Sonnet 5\.5/ }));
-    expect(runner.received).toContainEqual({ k: 'model', model: 'claude-sonnet-5-5' });
+    await waitFor(() =>
+      expect(runner.posted).toContainEqual({ what: 'model', body: { model: 'claude-sonnet-5-5' } })
+    );
+    expect(await screen.findByText('Set model to claude-sonnet-5-5')).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('sonnet-5-5')
     );
-    await say(user, '/model');
+    await user.type(screen.getByRole('textbox', { name: 'Message' }), '/model{Enter}');
     await user.click(
       within(screen.getByRole('dialog', { name: 'Model' })).getByRole('radio', { name: 'max' })
     );
-    expect(runner.received).toContainEqual({ k: 'effort', effort: 'max' });
+    await waitFor(() =>
+      expect(runner.posted).toContainEqual({ what: 'effort', body: { effort: 'max' } })
+    );
+    // /effort with a level sets it without the picker; neither command reaches Claude.
+    await user.type(screen.getByRole('textbox', { name: 'Message' }), '/effort low{Enter}');
+    await waitFor(() =>
+      expect(runner.posted).toContainEqual({ what: 'effort', body: { effort: 'low' } })
+    );
+    expect(runner.posted.filter((p) => p.what === 'message')).toEqual([]);
     await user.click(screen.getByRole('button', { name: /default/ }));
     expect(runner.received).toContainEqual({ k: 'mode', mode: 'acceptEdits' });
     expect(await screen.findByRole('button', { name: /accept edits/ })).toBeInTheDocument();
@@ -232,7 +291,7 @@ describe('live session', () => {
     const list = screen.getByRole('listbox', { name: 'Commands' });
     expect(within(list).getByRole('option', { name: /\/compact/ })).toBeInTheDocument();
     await user.keyboard('{Enter}');
-    expect(runner.received).toContainEqual({ k: 'user', text: '/compact' });
+    await waitFor(() => expect(runner.posted).toContainEqual(message('/compact')));
   });
 
   it('says the live channel is unavailable when the runner never answers, and offers a way out', async () => {
@@ -359,7 +418,7 @@ describe('live session', () => {
       const { runner, user } = setup();
       await conn('asleep');
       await user.type(screen.getByRole('textbox', { name: 'Message' }), 'carry on{Enter}');
-      await waitFor(() => expect(runner.received).toContainEqual({ k: 'user', text: 'carry on' }));
+      await waitFor(() => expect(runner.posted).toContainEqual(message('carry on')));
       expect(runner.attaches).toHaveLength(1);
       expect(runner.attaches[0]).toContain('wake=1');
       await attached();

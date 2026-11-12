@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { API_URL } from '@/api/config';
 import { fetchClient } from '@/api/client';
+import { errorDetail } from '@/api/errors';
+import type { components } from '@/api/schema.gen';
 import { initialState, LiveModel, type Frame, type HistoryMessage, type LiveState } from './store';
 
 export const LIVE_SUBPROTOCOL = 'kagent.sdk-runner.v1';
@@ -43,13 +45,33 @@ export const LIVE_TIMING = {
   hiddenDetachMs: 15_000
 };
 
-/** What the view reads from Mainloop, outside the live channel. Neither read wakes the session. */
+/** How Mainloop took a message: run now, queued behind the open turn, or joining the running turn. */
+export type SendStatus = 'ok' | 'queued' | 'steered';
+
+/**
+ * What the view does through Mainloop, outside the live channel. The reads never wake the session.
+ * Input goes through Mainloop's API, never the socket: a message is recorded before it reaches the
+ * runner, and a stop, model or effort is Mainloop's to record and apply.
+ */
 export interface LiveDeps {
   /** Whether the session's actor runs: true, false (asleep), or null when kagent does not say. */
   awake: (sessionId: string) => Promise<boolean | null>;
   /** Mainloop's record of the conversation, which survives the actor sleeping. */
   history: (sessionId: string) => Promise<HistoryMessage[]>;
+  /**
+   * Records a message under `messageId`, which makes a retry safe. During a turn it steers that turn,
+   * as a message sent mid-turn in Claude Code does. Throws with the reason when it is not recorded.
+   */
+  say: (sessionId: string, messageId: string, text: string) => Promise<SendStatus>;
+  /** Stops the running turn, keeping what it already wrote. */
+  stop: (sessionId: string) => Promise<void>;
+  /** Sets the model or effort for the session's next turns. */
+  set: (sessionId: string, what: 'model' | 'effort', value: string) => Promise<void>;
 }
+
+type EffortLevel = components['schemas']['EffortLevel'];
+
+const failed = (error: unknown, fallback: string) => new Error(errorDetail(error, fallback));
 
 export const liveDeps: LiveDeps = {
   awake: async (sessionId) => {
@@ -72,8 +94,39 @@ export const liveDeps: LiveDeps = {
     } catch {
       return [];
     }
+  },
+  say: async (sessionId, messageId, text) => {
+    const { data, error } = await fetchClient.POST('/sessions/{session_id}/message', {
+      params: { path: { session_id: sessionId } },
+      body: { message: text, message_id: messageId, steer: true }
+    });
+    if (!data) throw failed(error, 'the message was not recorded');
+    return data.status;
+  },
+  stop: async (sessionId) => {
+    const { data, error } = await fetchClient.POST('/sessions/{session_id}/stop-turn', {
+      params: { path: { session_id: sessionId } }
+    });
+    if (!data) throw failed(error, 'the turn was not stopped');
+  },
+  set: async (sessionId, what, value) => {
+    const path = { params: { path: { session_id: sessionId } } };
+    const { data, error } =
+      what === 'model'
+        ? await fetchClient.POST('/sessions/{session_id}/model', {
+            ...path,
+            body: { model: value }
+          })
+        : await fetchClient.POST('/sessions/{session_id}/effort', {
+            ...path,
+            body: { effort: value as EffortLevel }
+          });
+    if (!data) throw failed(error, `the ${what} was not set`);
   }
 };
+
+/** Attempts at recording a message, the same message id each time, before the view says it failed. */
+const SAY_ATTEMPTS = 3;
 
 /**
  * The WebSocket URL of a session's live channel. A WebSocket upgrade has no place in the generated
@@ -96,9 +149,17 @@ export interface LiveSession {
   state: LiveState;
   conn: Conn;
   /**
-   * Sends a client command. A message sent while the session is asleep or reconnecting waits and
-   * goes once the runner says hello; asleep, it wakes the session. Anything else needs an open
-   * socket: false, with a note in the log, when there is none.
+   * Sends a message through Mainloop, shown at once. Asleep, it also wakes the session. Retries
+   * reuse the message id, so the message is recorded once.
+   */
+  say: (text: string) => void;
+  /** Stops the running turn through Mainloop, as Esc does in Claude Code. */
+  interrupt: () => void;
+  /** Sets the model or effort through Mainloop, from the next turn. */
+  set: (what: 'model' | 'effort', value: string) => void;
+  /**
+   * Sends a runner control over the socket: the permission mode and permission answers, the input
+   * that is not a message. It needs an open socket: false, with a note in the log, when there is none.
    */
   send: (cmd: Record<string, unknown>) => boolean;
   answer: (permId: string, choice: number) => void;
@@ -127,7 +188,6 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
   const frame = useRef(0);
   const wakeNow = useRef<() => void>(() => {});
   const asleepNow = useRef(false);
-  const pending = useRef<Record<string, unknown>[]>([]);
   const bump = useRef<() => void>(() => {});
 
   const flush = useCallback(() => {
@@ -157,7 +217,6 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
     // The socket being closed is one the view detached on purpose.
     let detaching: WebSocket | null = null;
     model.current = new LiveModel();
-    pending.current = [];
 
     const loadHistory = () => {
       void deps.history(sessionId).then((messages) => {
@@ -198,7 +257,7 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
     const quiet = () =>
       model.current.state.status === 'idle' &&
       !Object.values(model.current.state.perms).some((p) => p.chosen == null) &&
-      pending.current.length === 0;
+      model.current.unechoed === 0;
     const arm = () => {
       clearTimeout(idle);
       const sock = ws.current;
@@ -246,7 +305,6 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
           setConn('attached');
           model.current.hello(f);
           loadHistory();
-          for (const cmd of pending.current.splice(0)) sock.send(JSON.stringify(cmd));
           arm();
         } else {
           arm();
@@ -277,8 +335,8 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
     // owner asked to wake it.
     const attempt = () => {
       if (closed) return;
-      // A message the owner already sent is an owner action: it wakes the session.
-      if (pending.current.length) wanted = true;
+      // A message the owner sent that has not shown up yet is an owner action: it wakes the session.
+      if (model.current.unechoed) wanted = true;
       if (wanted) {
         connect(true);
         return;
@@ -342,17 +400,6 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
         bump.current();
         return true;
       }
-      if (cmd.k === 'user') {
-        pending.current.push(cmd);
-        if (asleepNow.current) {
-          model.current.note('Waking the session; your message goes when it is up.');
-          wakeNow.current();
-        } else {
-          model.current.note('Reconnecting; your message goes when the session is back.');
-        }
-        flush();
-        return true;
-      }
       model.current.note(
         asleepNow.current
           ? 'The session is asleep; send a message or wake it first.'
@@ -378,8 +425,57 @@ export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): Li
     [send, flush]
   );
 
+  const say = useCallback(
+    (text: string) => {
+      const mid = crypto.randomUUID();
+      model.current.sending(mid, text);
+      if (asleepNow.current) {
+        model.current.note('Waking the session; your message is recorded and goes when it is up.');
+        wakeNow.current();
+      }
+      bump.current();
+      flush();
+      const attempt = async (n: number): Promise<void> => {
+        try {
+          const status = await deps.say(sessionId, mid, text);
+          if (status !== 'ok') model.current.recorded(mid, status === 'steered');
+        } catch (err) {
+          if (n + 1 < SAY_ATTEMPTS) {
+            await new Promise((r) => setTimeout(r, LIVE_TIMING.backoffMs * 2 ** n));
+            return attempt(n + 1);
+          }
+          model.current.notSent(mid, err instanceof Error ? err.message : String(err));
+        }
+        flush();
+      };
+      void attempt(0);
+    },
+    [sessionId, deps, flush]
+  );
+
+  const interrupt = useCallback(() => {
+    void deps.stop(sessionId).catch((err: unknown) => {
+      model.current.note(`Not stopped: ${err instanceof Error ? err.message : String(err)}`);
+      flush();
+    });
+  }, [sessionId, deps, flush]);
+
+  const set = useCallback(
+    (what: 'model' | 'effort', value: string) => {
+      void deps
+        .set(sessionId, what, value)
+        .then(
+          () => model.current.control(what, value),
+          (err: unknown) =>
+            model.current.note(`Not set: ${err instanceof Error ? err.message : String(err)}`)
+        )
+        .finally(flush);
+    },
+    [sessionId, deps, flush]
+  );
+
   const retry = useCallback(() => wakeNow.current(), []);
   const touch = useCallback(() => bump.current(), []);
 
-  return { state, conn, send, answer, retry, touch };
+  return { state, conn, say, interrupt, set, send, answer, retry, touch };
 }

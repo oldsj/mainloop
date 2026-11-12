@@ -41,7 +41,7 @@ describe('session page', () => {
   it('drives a session live when its agent runs the SDK runner', async () => {
     const runner = createFakeRunner();
     server.use(
-      runner.handler,
+      ...runner.handlers,
       ...serveSession(session({ id: 's1' }), native({ session_id: 's1', live: true }))
     );
     renderSessions('/sessions/s1');
@@ -53,7 +53,7 @@ describe('session page', () => {
 
   it('shows a pending A2A request in the live view, since the runner no longer prompts for it', async () => {
     server.use(
-      createFakeRunner().handler,
+      ...createFakeRunner().handlers,
       ...serveSession(session({ id: 's1' }), native({ session_id: 's1', live: true })),
       http.get(`${API_URL}/sessions/s1/hitl`, () => HttpResponse.json(['req-s1'])),
       ...createFakeHITL({ 'req-s1': hitlView('req-s1', { context: { session_id: 's1' } }) })

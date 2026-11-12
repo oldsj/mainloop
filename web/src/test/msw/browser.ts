@@ -16,8 +16,12 @@ const localHITL = createFakeHITL(seed?.requests ?? { request: hitlView('request'
 export const worker = setupWorker(
   ...(seed?.handlers ?? []),
   ...baseHandlers,
+  // Every session's live channel: open one with `?live=1`. Its input goes to the fake runner for a
+  // session whose live view attached, and to the chat backend otherwise.
+  ...createFakeRunner({
+    step: 400,
+    owns: (id, runner) => runner.attaches.some((url) => url.includes(`/sessions/${id}/live`))
+  }).handlers,
   ...localChat.handlers,
-  ...localHITL.handlers,
-  // Every session's live channel: open one with `?live=1`.
-  createFakeRunner({ step: 400 }).handler
+  ...localHITL.handlers
 );

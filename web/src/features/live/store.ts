@@ -28,7 +28,18 @@ export type ToolStatus = 'run' | 'ok' | 'err';
 export type DiffLine = ['+' | '-', string];
 
 export type Entry =
-  | { t: 'user'; id: number; text: string; uuid?: string; queued: boolean; origin?: string }
+  | {
+      t: 'user';
+      id: number;
+      text: string;
+      uuid?: string;
+      /** Mainloop's message id: set on a message the owner sent, and on the runner's echo of it. */
+      mid?: string;
+      queued: boolean;
+      /** Mainloop recorded it to join the running turn, as a message sent mid-turn does. */
+      joins?: boolean;
+      origin?: string;
+    }
   | { t: 'text'; id: number; text: string }
   | { t: 'sys'; id: number; text: string }
   | { t: 'tool'; id: number; name: string; arg: string; out: string[]; status: ToolStatus }
@@ -175,6 +186,9 @@ export class LiveModel {
   private cur = new Map<number, number>(); // content block index -> text entry id
   private streamed = new Set<string>(); // assistant message ids seen as stream events
   private queued = new Map<string, number>(); // user uuid -> entry id
+  // Messages the owner sent through Mainloop that the runner has not echoed yet, oldest first:
+  // message id -> its text and entry. They survive a reattach, which rebuilds the entries.
+  private sent = new Map<string, { text: string; id: number }>();
   private history: HistoryMessage[] = [];
   private historyIds = new Set<number>(); // entries placed from the history
 
@@ -240,6 +254,9 @@ export class LiveModel {
       for (const p of f.perms) {
         if (isObj(p) && !this.state.perms[str(p.id)]) this.apply({ ...p, k: 'perm' } as Frame);
       }
+    }
+    for (const [mid, m] of this.sent) {
+      m.id = this.push({ t: 'user', text: m.text, mid, queued: true, origin: 'client' });
     }
     this.placeHistory();
   }
@@ -324,11 +341,14 @@ export class LiveModel {
         }
         return;
       case 'user': {
+        const joins = this.echoed(str(f.mid), str(f.text));
         const queued = s.status !== 'idle';
         const id = this.push({
+          joins: queued && joins ? true : undefined,
           t: 'user',
           text: str(f.text),
           uuid: str(f.uuid) || undefined,
+          mid: str(f.mid) || undefined,
           queued,
           origin: str(f.origin) || undefined
         });
@@ -561,5 +581,65 @@ export class LiveModel {
 
   note(text: string) {
     this.sys(text);
+  }
+
+  /**
+   * Shows a message the owner sent through Mainloop at once. The runner's echo replaces it where the
+   * runner puts it: matched by Mainloop's message id, or by text while the runner does not echo one.
+   */
+  sending(mid: string, text: string) {
+    const queued = this.state.status !== 'idle';
+    this.sent.set(mid, { text, id: this.push({ t: 'user', text, mid, queued, origin: 'client' }) });
+  }
+
+  /** Mainloop recorded the message to join the running turn, or behind it. */
+  recorded(mid: string, joins: boolean) {
+    // The runner's echo can come first; it carries the same id.
+    this.state.entries = this.state.entries.map((e) =>
+      e.t === 'user' && e.mid === mid && (e.queued || this.sent.get(mid)?.id === e.id)
+        ? { ...e, queued: true, joins }
+        : e
+    );
+  }
+
+  /** Mainloop did not record the message: it stays shown, marked unsent. */
+  notSent(mid: string, why: string) {
+    const m = this.sent.get(mid);
+    if (!m) return;
+    this.sent.delete(mid);
+    this.update(m.id, (e) => (e.t === 'user' ? { ...e, queued: false } : e));
+    this.sys(`Not sent: ${why}`);
+  }
+
+  /** Messages sent through Mainloop that the runner has not echoed yet. */
+  get unechoed(): number {
+    return this.sent.size;
+  }
+
+  /** A model or effort Mainloop set for the session's next turns, shown as Claude Code does. */
+  control(what: 'model' | 'effort', value: string) {
+    if (what === 'model') this.state.model = value;
+    else this.state.effort = value;
+    this.sys(`Set ${what} to ${value}`);
+  }
+
+  /** Drops the shown copy of a message the runner echoed; whether it was recorded to join the turn. */
+  private echoed(mid: string, text: string): boolean {
+    let key = mid && this.sent.has(mid) ? mid : '';
+    if (!key) {
+      const t = text.trim();
+      for (const [k, m] of this.sent) {
+        if (m.text.trim() === t) {
+          key = k;
+          break;
+        }
+      }
+    }
+    const m = key ? this.sent.get(key) : undefined;
+    if (!m) return false;
+    this.sent.delete(key);
+    const shown = this.state.entries.find((e) => e.id === m.id);
+    this.state.entries = this.state.entries.filter((e) => e.id !== m.id);
+    return shown?.t === 'user' && Boolean(shown.joins);
   }
 }

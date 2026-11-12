@@ -63,6 +63,9 @@ export function LiveSession({
 export interface LiveSessionViewProps {
   state: LiveState;
   conn: Conn;
+  say: (text: string) => void;
+  interrupt: () => void;
+  set: (what: 'model' | 'effort', value: string) => void;
   send: (cmd: Record<string, unknown>) => boolean;
   answer: (permId: string, choice: number) => void;
   retry: () => void;
@@ -86,6 +89,9 @@ const CONN_LABEL: Record<Conn, string> = {
 export function LiveSessionView({
   state,
   conn,
+  say,
+  interrupt,
+  set,
   send,
   answer,
   retry,
@@ -98,7 +104,6 @@ export function LiveSessionView({
   const [sheet, setSheet] = useState(false);
   const busy = state.status !== 'idle';
   const waiting = state.status === 'waiting' || state.deferred || needsAnswer;
-  const interrupt = () => send({ k: 'interrupt' });
   const cycleMode = () => {
     const i = MODE_IDS.indexOf(state.mode as (typeof MODE_IDS)[number]);
     send({ k: 'mode', mode: MODE_IDS[(i + 1) % MODE_IDS.length] });
@@ -191,14 +196,15 @@ export function LiveSessionView({
         state={state}
         asleep={resting}
         busy={busy}
-        send={send}
+        say={say}
+        set={set}
         touch={touch}
         interrupt={interrupt}
         cycleMode={cycleMode}
         openModel={() => setSheet(true)}
       />
 
-      {sheet ? <ModelSheet state={state} send={send} close={() => setSheet(false)} /> : null}
+      {sheet ? <ModelSheet state={state} set={set} close={() => setSheet(false)} /> : null}
     </section>
   );
 }
@@ -284,7 +290,9 @@ const Row = memo(function Row({
           <span className="text-term-accent">❯ </span>
           {e.text}
           {e.queued ? (
-            <span className="text-term-fg-muted text-xs"> queued · sends when this turn ends</span>
+            <span className="text-term-fg-muted text-xs">
+              {e.joins ? ' queued · joins this turn' : ' queued · sends when this turn ends'}
+            </span>
           ) : null}
         </div>
       );
@@ -426,7 +434,8 @@ function Composer({
   state,
   asleep,
   busy,
-  send,
+  say,
+  set,
   touch,
   interrupt,
   cycleMode,
@@ -435,7 +444,8 @@ function Composer({
   state: LiveState;
   asleep: boolean;
   busy: boolean;
-  send: LiveSessionViewProps['send'];
+  say: LiveSessionViewProps['say'];
+  set: LiveSessionViewProps['set'];
   touch?: () => void;
   interrupt: () => void;
   cycleMode: () => void;
@@ -488,11 +498,15 @@ function Composer({
     setAt(null);
     setHistoryOpen(false);
     draft.current = '';
-    if (t === '/model') {
-      openModel();
+    // /model and /effort are Claude Code's own commands, not messages: with no argument they open
+    // the picker, with one they set the session's next turns. Neither reaches Claude.
+    const local = /^\/(model|effort)(?:\s+(\S+))?$/.exec(t);
+    if (local) {
+      if (local[2]) set(local[1] as 'model' | 'effort', local[2]);
+      else openModel();
       return;
     }
-    send({ k: 'user', text: t });
+    say(t);
   };
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -659,11 +673,11 @@ function Composer({
 
 function ModelSheet({
   state,
-  send,
+  set,
   close
 }: {
   state: LiveState;
-  send: LiveSessionViewProps['send'];
+  set: LiveSessionViewProps['set'];
   close: () => void;
 }) {
   useEffect(() => {
@@ -696,7 +710,7 @@ function ModelSheet({
                 role="radio"
                 aria-checked={m === cur}
                 onClick={() => {
-                  send({ k: 'model', model: m.value });
+                  set('model', m.value);
                   close();
                 }}
                 className={cn(
@@ -732,7 +746,7 @@ function ModelSheet({
               role="radio"
               aria-checked={state.effort === x}
               onClick={() => {
-                send({ k: 'effort', effort: x });
+                set('effort', x);
                 close();
               }}
               className={cn(
