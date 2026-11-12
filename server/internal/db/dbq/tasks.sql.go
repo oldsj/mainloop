@@ -1487,7 +1487,7 @@ SET target_attempt_id = $1, delivery_id = $2,
 WHERE id IN (
     SELECT o.id FROM task_event_deliveries o
     WHERE o.recipient_key = $3 AND o.state = 'pending' AND o.delivery_id IS NULL
-      AND o.id <> $4 AND (o.lease_until IS NULL OR o.lease_until < now())
+      AND o.id <> $4
     FOR UPDATE SKIP LOCKED
 )
 RETURNING id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at
@@ -1500,9 +1500,10 @@ type JoinTaskEventBatchParams struct {
 	LeaderID        string
 }
 
-// The other pending reports to the same recipient that no claimer holds join the message a
-// delivery is preparing, so they are sent as one. SKIP LOCKED and the lease test leave rows another
-// claimer is working on to their own message.
+// The other pending reports to the same recipient that have no message yet join the message a
+// delivery is preparing, so they are sent as one, even while another claimer holds them: that
+// claimer's own prepare then finds a message id already set and follows the shared message. A row
+// another transaction is preparing right now is skipped (SKIP LOCKED) and keeps its own message.
 func (q *Queries) JoinTaskEventBatch(ctx context.Context, arg JoinTaskEventBatchParams) ([]TaskEventDelivery, error) {
 	rows, err := q.db.Query(ctx, joinTaskEventBatch,
 		arg.TargetAttemptID,
