@@ -227,6 +227,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		(&gittransport.Enroller{Pool: pool, Creds: creds, Log: log}).Register(runner)
 	}
 	runner.Add(svc.DeliveryLoop())
+	runner.Add(svc.SteerLoop())
 	runner.AddSweep(svc.EnsureSweep())
 	runner.AddSweep(svc.ResolveCreatesSweep())
 	runner.AddSweep(svc.CancelSweep())

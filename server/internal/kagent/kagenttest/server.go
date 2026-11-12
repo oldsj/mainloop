@@ -166,6 +166,17 @@ type Server struct {
 	TamperExecution func(*api.ScheduledRunExecution)
 	// TamperTask edits the task a CancelTask reply carries, without changing the stored task.
 	TamperTask func(proc string, t *a2a.Task)
+	// SteerRefusal, when set, refuses every steer with this reason (steer_input_required,
+	// steer_process_driver), as kagent does for a turn that cannot take one.
+	SteerRefusal string
+}
+
+// SteerRefused is kagent's refusal of a steer: not accepted, with the steer reason in the
+// ErrorInfo metadata. Nothing was dispatched.
+func SteerRefused(reason string) *RPCError {
+	e := NotAccepted(0)
+	e.Metadata["steer"] = reason
+	return e
 }
 
 // New starts a fake kagent. Close it with Close.
@@ -787,6 +798,16 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request, call rpcCall, msg 
 		return
 	}
 	s.wake(msg.ContextID) // any A2A message wakes a sleeping Actor
+	if steer, _ := msg.Metadata["kagent.steer"].(bool); steer && msg.TaskID != "" {
+		task, refusal := s.steerLocked(msg)
+		s.mu.Unlock()
+		if refusal != nil {
+			writeEnvelope(w, call.ID, nil, refusal)
+			return
+		}
+		s.stream(w, r, call, []Step{Emit{task}})
+		return
+	}
 	var steps []Step
 	scripted := len(s.scripts) > 0
 	if scripted {
@@ -797,6 +818,30 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request, call rpcCall, msg 
 		steps = s.defaultTurn(msg)
 	}
 	s.stream(w, r, call, steps)
+}
+
+// steerLocked takes a steer into its running task, as kagent does: the message joins the task's
+// history (once per message id) and the reply is the task. A task that is not running, or the
+// SteerRefusal reason, refuses it.
+func (s *Server) steerLocked(msg *a2a.Message) (*a2a.Task, *RPCError) {
+	if s.SteerRefusal != "" {
+		return nil, SteerRefused(s.SteerRefusal)
+	}
+	t, ok := s.tasks[msg.TaskID]
+	if !ok || t.Status.State.Terminal() {
+		return nil, SteerRefused("steer_task_not_running")
+	}
+	if t.Status.State == a2a.TaskStateInputRequired {
+		return nil, SteerRefused("steer_input_required")
+	}
+	cp := *t
+	if !slices.ContainsFunc(cp.History, func(m *a2a.Message) bool { return m.ID == msg.ID }) {
+		user := *msg
+		cp.History = append(slices.Clone(cp.History), &user)
+		s.tasks[msg.TaskID] = &cp
+	}
+	out := cp
+	return &out, nil
 }
 
 // defaultTurn records the message as a task and streams submitted, working and completed.

@@ -18,6 +18,11 @@ func (s *Service) IsLiveAgent(name string) bool {
 	return config.Sessions{LiveAgents: s.opts().LiveAgents}.IsLiveAgent(name)
 }
 
+// IsSteerAgent reports whether the named Agent takes a message into a running turn.
+func (s *Service) IsSteerAgent(name string) bool {
+	return config.Sessions{SteerAgents: s.opts().SteerAgents}.IsSteerAgent(name)
+}
+
 // LiveTarget is the actor behind the owner's session when its Agent runs the SDK runner, read from
 // the kagent Session (see liveactor.Of).
 // liveactor.ErrNotFound covers another owner's session, one without a kagent Session, and one

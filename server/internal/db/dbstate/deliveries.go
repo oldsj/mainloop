@@ -18,6 +18,22 @@ const (
 	DeliveryUncertain DeliveryState = "uncertain"
 )
 
+// SteerState is delivery_steers.state: a message sent into a running turn. Recorded, sending,
+// uncertain and delivered are open; converted means it became an ordinary delivery instead.
+type SteerState string
+
+// Steer states.
+const (
+	SteerRecorded  SteerState = "recorded"
+	SteerSending   SteerState = "sending"
+	SteerUncertain SteerState = "uncertain"
+	SteerDelivered SteerState = "delivered"
+	SteerCompleted SteerState = "completed"
+	SteerFailed    SteerState = "failed"
+	SteerCancelled SteerState = "cancelled"
+	SteerConverted SteerState = "converted"
+)
+
 // RestartState is session_restarts.state: requested until the native Session is confirmed gone and
 // the turns on it are settled, then done.
 type RestartState string

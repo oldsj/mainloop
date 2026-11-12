@@ -363,7 +363,8 @@ func (c *Client) SendMessage(ctx context.Context, agent AgentRef, p SendParams) 
 				return
 			}
 			var refused *SendNotAccepted
-			if started || !errors.As(err, &refused) {
+			if started || !errors.As(err, &refused) || SteerRefusal(err) != "" {
+				// A refused steer is final: the same message would be refused again.
 				yield(nil, err)
 				return
 			}

@@ -180,6 +180,9 @@ type Waker interface {
 type Options struct {
 	// LiveAgents names the Agents that run the Agent SDK runner (see config.Sessions.LiveAgents).
 	LiveAgents []string
+	// SteerAgents names the Agents that take a message into a running turn (see
+	// config.Sessions.SteerAgents).
+	SteerAgents []string
 	// UncertainHold keeps an unresolved delivery blocking new sends, and after it a message that
 	// no task shows is failed.
 	UncertainHold time.Duration
@@ -227,6 +230,7 @@ func OptionsFrom(c config.Sessions) Options {
 		StallAfter:        c.StallAfter.Duration(),
 		StallToolAfter:    c.StallToolAfter.Duration(),
 		LiveAgents:        c.LiveAgents,
+		SteerAgents:       c.SteerAgents,
 	}
 }
 
@@ -407,7 +411,22 @@ type Sent struct {
 	// Queued is whether the message was recorded as queued, behind an open turn, instead of
 	// admitted at once.
 	Queued bool
+	// Steered is whether the message was recorded to join the running turn (see SendOptions.Steer).
+	Steered bool
 }
+
+// SendOptions are the choices of one send to a session.
+type SendOptions struct {
+	// Steer asks for the message to join the session's running turn at its next tool boundary, as a
+	// message typed while Claude Code works does, instead of queueing behind it. It joins only when
+	// the session's Agent takes steers, a turn is running a task, and the text is not a slash command;
+	// otherwise it is an ordinary message. A steer that cannot join after all (the turn ends first, or
+	// kagent refuses it) becomes the session's next turn, once.
+	Steer bool
+}
+
+// recorded is how record wrote a message.
+type recorded struct{ queued, steered bool }
 
 // checkTextOrImages trims and validates a message and its id. The text may be empty only when
 // imageCount is over zero: a pasted image needs no caption, as Claude.ai and Claude Code allow.
@@ -442,25 +461,40 @@ const (
 // was queued behind an open turn rather than admitted at once. It is idempotent per message id: an
 // id that is already recorded for the session changes nothing and reports the state it is actually
 // in. The caller has checked that the session exists and may take a message.
-func (s *Service) record(ctx context.Context, tx pgx.Tx, source Source, sessionID, messageID, text string) (bool, error) {
+func (s *Service) record(ctx context.Context, tx pgx.Tx, source Source, sessionID, messageID, text string, steer bool) (recorded, error) {
 	q := dbq.New(tx)
 	// One send at a time per session, so the open-turn check below cannot race another send.
 	if err := db.XactLock(ctx, tx, "mainloop:send:"+sessionID); err != nil {
-		return false, err
+		return recorded{}, err
 	}
 	if err := checkTaskSendFence(ctx, q, sessionID); err != nil {
-		return false, err
+		return recorded{}, err
 	}
 	if err := checkMainReady(ctx, q, sessionID); err != nil {
-		return false, err
+		return recorded{}, err
 	}
+	// A converted steer has a delivery under the same id, so the delivery is looked for first.
 	if d, err := q.GetDelivery(ctx, messageID); err == nil {
 		if d.SessionID != sessionID {
-			return false, fmt.Errorf("%w: the message id belongs to another conversation", ErrInvalid)
+			return recorded{}, fmt.Errorf("%w: the message id belongs to another conversation", ErrInvalid)
 		}
-		return d.State == dbstate.DeliveryQueued, nil // already recorded
+		return recorded{queued: d.State == dbstate.DeliveryQueued}, nil // already recorded
 	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return false, fmt.Errorf("get delivery: %w", err)
+		return recorded{}, fmt.Errorf("get delivery: %w", err)
+	}
+	if st, err := q.GetSteer(ctx, messageID); err == nil {
+		if st.SessionID != sessionID {
+			return recorded{}, fmt.Errorf("%w: the message id belongs to another conversation", ErrInvalid)
+		}
+		return recorded{steered: true}, nil // already recorded
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return recorded{}, fmt.Errorf("get steer: %w", err)
+	}
+	if steer {
+		ok, err := s.recordSteer(ctx, q, source, sessionID, messageID, text)
+		if err != nil || ok {
+			return recorded{steered: ok}, err
+		}
 	}
 	hold := s.opts().UncertainHold.Seconds()
 	busy := false
@@ -469,11 +503,11 @@ func (s *Service) record(ctx context.Context, tx pgx.Tx, source Source, sessionI
 	}); err == nil {
 		busy = true
 	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return false, fmt.Errorf("check open turn: %w", err)
+		return recorded{}, fmt.Errorf("check open turn: %w", err)
 	}
 	hasQueued, err := q.HasQueuedDelivery(ctx, sessionID)
 	if err != nil {
-		return false, fmt.Errorf("check queued backlog: %w", err)
+		return recorded{}, fmt.Errorf("check queued backlog: %w", err)
 	}
 	if !busy && hasQueued {
 		// The turn that blocked the backlog has ended or gone past its hold, but nothing released
@@ -481,11 +515,11 @@ func (s *Service) record(ctx context.Context, tx pgx.Tx, source Source, sessionI
 		// a place behind it.
 		promoted, err := promoteNextQueued(ctx, q, sessionID, hold)
 		if err != nil {
-			return false, fmt.Errorf("promote queued delivery: %w", err)
+			return recorded{}, fmt.Errorf("promote queued delivery: %w", err)
 		}
 		if promoted != "" {
 			if err := q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: DeliveryChannel, Payload: promoted}); err != nil {
-				return false, fmt.Errorf("notify promoted delivery: %w", err)
+				return recorded{}, fmt.Errorf("notify promoted delivery: %w", err)
 			}
 		}
 	}
@@ -495,10 +529,10 @@ func (s *Service) record(ctx context.Context, tx pgx.Tx, source Source, sessionI
 	if n, err := q.InsertSessionMessage(ctx, dbq.InsertSessionMessageParams{
 		ID: messageID, SessionID: sessionID, Role: string(userRole), Content: text,
 	}); err != nil {
-		return false, fmt.Errorf("record message: %w", err)
+		return recorded{}, fmt.Errorf("record message: %w", err)
 	} else if n == 0 {
 		// No delivery has this id, so the row is some other message: ids are global.
-		return false, fmt.Errorf("%w: the message id is already used", ErrInvalid)
+		return recorded{}, fmt.Errorf("%w: the message id is already used", ErrInvalid)
 	}
 	if busy {
 		// Durably queued, behind the open turn: deliveries_one_open excludes this state, so the
@@ -507,25 +541,25 @@ func (s *Service) record(ctx context.Context, tx pgx.Tx, source Source, sessionI
 		if _, err := q.InsertQueuedDelivery(ctx, dbq.InsertQueuedDeliveryParams{
 			ID: messageID, SessionID: sessionID, Source: string(source),
 		}); err != nil {
-			return false, fmt.Errorf("record queued delivery: %w", err)
+			return recorded{}, fmt.Errorf("record queued delivery: %w", err)
 		}
 	} else if _, err := q.InsertDelivery(ctx, dbq.InsertDeliveryParams{
 		ID: messageID, SessionID: sessionID, Source: string(source),
 	}); err != nil {
-		return false, fmt.Errorf("record delivery: %w", err)
+		return recorded{}, fmt.Errorf("record delivery: %w", err)
 	}
 	// The owner's next message releases the hold a stop left on the queue.
 	if err := q.SetBindingQueueHeld(ctx, dbq.SetBindingQueueHeldParams{SessionID: sessionID, QueueHeld: false}); err != nil {
-		return false, fmt.Errorf("release queue hold: %w", err)
+		return recorded{}, fmt.Errorf("release queue hold: %w", err)
 	}
 	if err := q.RefreshSessionStatus(ctx, sessionID); err != nil {
-		return false, fmt.Errorf("refresh session status: %w", err)
+		return recorded{}, fmt.Errorf("refresh session status: %w", err)
 	}
 	if busy {
-		return true, nil
+		return recorded{queued: true}, nil
 	}
 	// Delivered to listeners when the transaction commits.
-	return false, q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: DeliveryChannel, Payload: messageID})
+	return recorded{}, q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: DeliveryChannel, Payload: messageID})
 }
 
 // promoteNextQueued admits the oldest message still queued for the session, if any, once nothing
@@ -593,8 +627,8 @@ func (s *Service) sendAsWithImages(
 			return ErrNotFound
 		}
 		out = Sent{ConversationID: main.SessionID, MessageID: messageID}
-		queued, err := s.record(ctx, tx, source, main.SessionID, messageID, text)
-		out.Queued = queued
+		r, err := s.record(ctx, tx, source, main.SessionID, messageID, text, false)
+		out.Queued = r.queued
 		if err != nil {
 			return err
 		}
@@ -669,11 +703,16 @@ func (s *Service) SendTo(ctx context.Context, sessionID, messageID, text string)
 
 // SendToAs is SendTo for a message from source (SourceUser or SourceMainloop).
 func (s *Service) SendToAs(ctx context.Context, source Source, sessionID, messageID, text string) (Sent, error) {
+	return s.SendToWith(ctx, source, sessionID, messageID, text, SendOptions{})
+}
+
+// SendToWith is SendToAs with the send's options.
+func (s *Service) SendToWith(ctx context.Context, source Source, sessionID, messageID, text string, o SendOptions) (Sent, error) {
 	text, err := checkTextOrImages(messageID, text, 0)
 	if err != nil {
 		return Sent{}, err
 	}
-	var queued bool
+	var r recorded
 	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
 		// The lock cancel also takes, before the status is read: no message is recorded after a
 		// cancel commits. Stop and archive take no lock; the open-turn index and the status check
@@ -702,14 +741,19 @@ func (s *Service) SendToAs(ctx context.Context, source Source, sessionID, messag
 		if b.WorkspaceAgentName != nil && b.KagentSessionID == nil {
 			return conflict("The workspace is not ready yet; try again when it is.")
 		}
+		steer := o.Steer && !slashCommand(text)
+		if steer {
+			ref, aerr := s.bindingAgentOf(b)
+			steer = aerr == nil && s.IsSteerAgent(ref.Name)
+		}
 		var rerr error
-		queued, rerr = s.record(ctx, tx, source, sessionID, messageID, text)
+		r, rerr = s.record(ctx, tx, source, sessionID, messageID, text, steer)
 		return rerr
 	})
 	if err = busyOrErr(err); err != nil {
 		return Sent{}, err
 	}
-	return Sent{ConversationID: sessionID, MessageID: messageID, Queued: queued}, nil
+	return Sent{ConversationID: sessionID, MessageID: messageID, Queued: r.queued, Steered: r.steered}, nil
 }
 
 // NewService builds the service from settings. k may be nil in a test that talks to no kagent. reg

@@ -284,6 +284,9 @@ func (s *Service) finishRestart(ctx context.Context, r dbq.SessionRestart) (Rest
 				if err != nil {
 					return nil, fmt.Errorf("fail delivery: %w", err)
 				}
+				if err := endUnsentSteers(ctx, q, d.ID, dbstate.DeliveryFailed); err != nil {
+					return nil, err
+				}
 				ended = append(ended, d)
 				failed = append(failed, d.ID)
 				drafts = append(drafts, endedEvent(s.OwnerID, r.SessionID, d.ID))

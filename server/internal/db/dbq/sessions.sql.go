@@ -1858,9 +1858,10 @@ func (q *Queries) ListSessionKagentContexts(ctx context.Context, sessionID strin
 
 const listSessionMessages = `-- name: ListSessionMessages :many
 SELECT m.id, m.session_id, m.role, m.content, m.created_at,
-       coalesce(d.source, '')::text AS source
+       coalesce(d.source, st.source, '')::text AS source
 FROM session_messages m
 LEFT JOIN deliveries d ON d.id = m.id
+LEFT JOIN delivery_steers st ON st.id = m.id
 WHERE m.session_id = $1
 ORDER BY m.created_at, m.id
 `
