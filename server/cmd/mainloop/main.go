@@ -27,6 +27,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/kagent"
+	"github.com/oldsj/mainloop/server/internal/notify"
 	"github.com/oldsj/mainloop/server/internal/preview"
 	"github.com/oldsj/mainloop/server/internal/progress"
 	"github.com/oldsj/mainloop/server/internal/projects"
@@ -243,6 +244,13 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner.AddSweep(healthSvc.RetainSweep())
 	runner.AddSweep(schedSvc.Sweep())
 	runner.AddSweep(environments.NewAPI(cfg, pool, nil).Service.FollowSweep(cfg.Identity.OwnerID))
+	if cfg.Ntfy.Enabled() {
+		(&notify.Service{
+			Pool: pool, OwnerID: cfg.Identity.OwnerID, Log: log,
+			URL: cfg.Ntfy.URL, Topic: cfg.Ntfy.Topic, Token: cfg.Ntfy.Token.Reveal(),
+			AppURL: cfg.Server.FrontendScheme + "://" + cfg.Server.FrontendDomain,
+		}).Register(runner)
+	}
 	previews.Register(runner)
 	taskSvc.Register(runner)
 	devOps, err := newDevloopOperations(cfg, pool)

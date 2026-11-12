@@ -76,6 +76,9 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.SteerRecorded), string(dbstate.SteerSending), string(dbstate.SteerUncertain),
 			string(dbstate.SteerDelivered), string(dbstate.SteerCompleted), string(dbstate.SteerFailed),
 			string(dbstate.SteerCancelled), string(dbstate.SteerConverted))},
+		{"push_notifications", "state", strs(
+			string(dbstate.PushPending), string(dbstate.PushSent), string(dbstate.PushSuppressed), string(dbstate.PushFailed))},
+		{"push_notifications", "kind", strs(string(dbstate.PushAttention), string(dbstate.PushTask))},
 		{"session_restarts", "state", strs(string(dbstate.RestartRequested), string(dbstate.RestartDone))},
 		{"deliveries", "activity_kind", strs(
 			string(dbstate.ActivityEvent), string(dbstate.ActivityTool), string(dbstate.ActivityParked))},

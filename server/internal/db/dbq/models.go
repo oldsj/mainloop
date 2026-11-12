@@ -617,6 +617,33 @@ type ProjectProviderPreference struct {
 	Version   int64
 }
 
+type PushFloor struct {
+	Singleton bool
+	StartedAt time.Time
+}
+
+type PushNotification struct {
+	ID             string
+	IdempotencyKey string
+	OwnerID        string
+	Kind           string
+	SourceID       string
+	SourceState    string
+	Title          string
+	Body           string
+	Href           string
+	Priority       int32
+	State          dbstate.PushState
+	Detail         *string
+	Attempts       int32
+	NextAttemptAt  time.Time
+	LeaseOwner     *string
+	LeaseUntil     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	SentAt         *time.Time
+}
+
 type ScheduledRunCreateAttempt struct {
 	ID        int64
 	RequestID string
