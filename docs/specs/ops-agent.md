@@ -1,7 +1,9 @@
 # Ops agent
 
-Status: slice 1 (read-only) is implemented in configuration. Its kagent and infrastructure parts
-are in oldsj/infrastructure; this spec covers how Mainloop reaches it. Not yet proven live.
+Status: slice 1 (read-only) is implemented in configuration and proven live on 2026-11-12 (task
+8c6ee58c answered a restart question; task d171cfb1 confirmed the private-namespace refusals). Its
+kagent and infrastructure parts are in oldsj/infrastructure; this spec covers how Mainloop reaches
+it.
 
 The ops agent answers questions about the owner's home cluster and homelab: pods, logs, events,
 alerts, Argo CD applications and node health. It follows the infrastructure repository's ops-agent
@@ -50,10 +52,17 @@ injects from a Secret. The native agent sees only a placeholder. Mainloop names 
 it: Mainloop's own MCP credential is the only Session credential it sends, as for any
 coordination task (see [Credentials](credentials.md)).
 
-Permission mode: the SDK driver starts these Sessions in `bypassPermissions`, and a Harness cannot
-start them in `auto` yet. The live view can switch the mode for each Session. Starting in `auto`
-needs a small kagent change; slice 1 doesn't depend on it, because nothing in the Session can
-write.
+Permission mode: the ops Harness starts Sessions in Claude's `auto` mode
+(`KAGENT_CLAUDE_PERMISSION_MODE=auto`). An action the classifier holds surfaces as an approval
+request. The live view can still switch the mode for each Session.
+
+## Known gap: no follow-up after the report
+
+An ops request is a one-shot task. The coordination attempt closes when the agent reports, so a
+follow-up message to its session returns 409 ("This task attempt has stopped"), and the task offers
+no retry or reassign (`handoff_unavailable`). A follow-up question means a new ops task, which
+starts without the earlier context. An ops conversation probably wants a session that stays open
+across reports, not a task. That isn't designed yet.
 
 ## Not yet built (slice 2, designed)
 
