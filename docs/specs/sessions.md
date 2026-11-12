@@ -187,7 +187,10 @@ until the turn takes it; one Mainloop queues instead, such as a slash command, s
 sends when this turn ends". Slash commands go as typed, except `/model` and `/effort`, which are
 Claude Code's own: without an argument they open the model and effort picker, and with one (or from
 the picker) they set the session's override (`POST /sessions/{id}/model` or `/effort`) for its next
-turns and print "Set model to …" without reaching Claude. Up on the composer's first line (or in an empty composer) recalls the previous sent message and
+turns and print "Set model to …" (or "Set effort to default" when cleared) without reaching Claude.
+The runner acknowledges the model and effort at the start of every turn; the view prints an
+acknowledgement only when it differs from the last one it saw, so a change made elsewhere shows once
+and an unchanged turn prints nothing. Up on the composer's first line (or in an empty composer) recalls the previous sent message and
 Down on its last line steps forward, back to the unsent draft, which is kept; elsewhere the arrows
 move the caret, so multi-line editing works. History is this session's user messages (the attach
 backlog and those sent since), a repeat kept once. On a phone, a small `↑ history` button below the
@@ -199,7 +202,7 @@ boundary, under the profile's own permission mode) is also the A2A task's input-
 which Mainloop raises as a session request. kagent gives that request's tool the runner's
 permission id as its id and the SDK's `tool_use_id` as its call id, and the view pairs the prompt with
 it by those: the prompt shows once, in place, with "1. Yes" and "2. No", and its card is not listed
-again below the transcript. The answer goes through Mainloop's request API
+again below the transcript, before or after it is answered. The answer goes through Mainloop's request API
 (`POST /hitl/{request_id}/respond`), which records it and answers the A2A task; there is no "don't ask
 again" choice, since a request takes approve or reject. The prompt shows the answer at once and takes
 it back with a "Not answered" line if Mainloop does not record it. Until Mainloop has raised the

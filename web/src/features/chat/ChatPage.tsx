@@ -133,12 +133,12 @@ function LiveMain({
       pending={pending}
       requests={(skip) => (
         <PanelBoundary name="Requests">
-          {hitlId && hitlId !== skip ? (
+          {hitlId && !skip.includes(hitlId) ? (
             <div className="border-border mx-md border">
               <HITLCard requestId={hitlId} />
             </div>
           ) : null}
-          <SessionRequests sessionId={sessionId} skip={[skip, hitlId]} />
+          <SessionRequests sessionId={sessionId} skip={[...skip, hitlId]} />
         </PanelBoundary>
       )}
     />

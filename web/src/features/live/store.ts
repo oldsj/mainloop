@@ -183,6 +183,8 @@ export function initialState(): LiveState {
 export class LiveModel {
   state: LiveState = initialState();
   private nextId = 1;
+  /** The last model and effort acks (`ctl`) this view saw; see the `ctl` case. */
+  private acked: Partial<Record<'model' | 'effort', string>> = {};
   private tools = new Map<string, number>(); // tool_use id -> entry id
   private cur = new Map<number, number>(); // content block index -> text entry id
   private streamed = new Set<string>(); // assistant message ids seen as stream events
@@ -406,11 +408,15 @@ export class LiveModel {
       case 'ctl':
         if (f.what === 'interrupt') return;
         // The SDK driver sets the model and effort at the start of every A2A turn, so most acks
-        // repeat the current value: only a change is printed. Empty means the default.
+        // repeat the last one: only a change from the last ack is printed, and the first ack this
+        // view sees is the baseline. It is compared with the last ack, not the shown model, which
+        // the SDK's init replaces with the full model id. Empty means the default.
         if (f.what === 'model' || f.what === 'effort') {
           const key = f.what;
           const next = str(f[key]) || str(f.value);
-          if (next !== (s[key] || '')) this.sys(`Set ${key} to ${next || 'default'}`);
+          const last = this.acked[key];
+          if (last !== undefined && next !== last) this.sys(`Set ${key} to ${next || 'default'}`);
+          this.acked[key] = next;
           s[key] = next;
         } else if (f.what === 'mode') {
           s.mode = str(f.mode) || str(f.value) || s.mode;
@@ -627,7 +633,9 @@ export class LiveModel {
   control(what: 'model' | 'effort', value: string) {
     if (what === 'model') this.state.model = value;
     else this.state.effort = value;
-    this.sys(`Set ${what} to ${value}`);
+    // This line stands for the change, so the next turn's ack of it is not printed again.
+    this.acked[what] = value;
+    this.sys(`Set ${what} to ${value || 'default'}`);
   }
 
   /** Drops the shown copy of a message the runner echoed; whether it was recorded to join the turn. */
