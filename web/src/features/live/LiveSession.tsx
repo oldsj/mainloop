@@ -83,6 +83,16 @@ export function LiveSession({
     );
     return () => clearInterval(again);
   }, [unpaired, queryClient, sessionId]);
+  // A prompt the live channel settled (answered, denied or aborted by an interrupt): re-read the
+  // requests now, so "needs you" clears at once instead of at the next poll.
+  const settled = Object.values(live.state.perms)
+    .filter((p) => p.chosen != null)
+    .map((p) => p.id)
+    .join();
+  useEffect(() => {
+    if (!settled) return;
+    void queryClient.invalidateQueries({ queryKey: keys.sessionHitl(sessionId) });
+  }, [settled, queryClient, sessionId]);
   const { answer: answerLive } = live;
   const [answeredHere, setAnsweredHere] = useState<readonly string[]>([]);
   const answer = useCallback(
