@@ -63,6 +63,18 @@ const render = (ui: ReactNode) =>
     </QueryClientProvider>
   );
 
+/** The session's request cards by id: pending ones and this browser's answered ones. */
+function RequestCards({ skip }: { skip: readonly string[] }) {
+  const { shown } = useSessionRequests('s1', skip);
+  return (
+    <ul data-testid="request-cards">
+      {shown.map((id) => (
+        <li key={id}>{id}</li>
+      ))}
+    </ul>
+  );
+}
+
 /** The live view as the session page places it, with the session's requests listed by id. */
 function WithRequests() {
   const { pending } = useSessionRequests('s1');
@@ -71,15 +83,7 @@ function WithRequests() {
       sessionId="s1"
       deps={deps}
       pending={pending}
-      requests={(skip) => (
-        <ul data-testid="request-cards">
-          {pending
-            .filter((id) => id !== skip)
-            .map((id) => (
-              <li key={id}>{id}</li>
-            ))}
-        </ul>
-      )}
+      requests={(skip) => <RequestCards skip={skip} />}
     />
   );
 }
@@ -170,6 +174,8 @@ describe('live session', () => {
     expect(await screen.findByText(/Bash\(ls \/data\/workspace\) →/)).toHaveTextContent('Yes');
     expect(screen.queryByTestId('live-perm')).not.toBeInTheDocument();
     await idle();
+    // The prompt shows the answer, so the request's receipt is not listed below it either.
+    expect(screen.getByTestId('request-cards')).toBeEmptyDOMElement();
   });
 
   it('takes back an answer Mainloop did not record, so it can be given again', async () => {

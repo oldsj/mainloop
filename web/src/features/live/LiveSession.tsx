@@ -48,8 +48,11 @@ export function LiveSession({
   sessionId: string;
   /** Leaves the live view for the regular one, offered when the live channel is unavailable. */
   onFallback?: () => void;
-  /** The session's requests, shown after the transcript, leaving out `skip` (the paired prompt's). */
-  requests?: (skip?: string) => ReactNode;
+  /**
+   * The session's requests, shown after the transcript, leaving out `skip`: the requests paired with
+   * a prompt, and those answered from one, whose answer the prompt already shows.
+   */
+  requests?: (skip: readonly string[]) => ReactNode;
   /** The ids of the session's pending requests. */
   pending?: readonly string[];
   /** The reads outside the live channel; tests replace them. Keep it stable across renders. */
@@ -81,14 +84,20 @@ export function LiveSession({
     return () => clearInterval(again);
   }, [unpaired, queryClient, sessionId]);
   const { answer: answerLive } = live;
+  const [answeredHere, setAnsweredHere] = useState<readonly string[]>([]);
   const answer = useCallback(
     (permId: string, choice: number) => {
       const pair = pairs[permId];
-      if (pair) answerLive(permId, choice, () => answerPair(pair, choice !== 2, sessionId));
+      if (!pair) return;
+      setAnsweredHere((ids) => (ids.includes(pair.requestId) ? ids : [...ids, pair.requestId]));
+      answerLive(permId, choice, () => answerPair(pair, choice !== 2, sessionId));
     },
     [pairs, answerLive, sessionId]
   );
-  const skip = Object.values(pairs)[0]?.requestId;
+  const skip = useMemo(
+    () => [...new Set([...Object.values(pairs).map((p) => p.requestId), ...answeredHere])],
+    [pairs, answeredHere]
+  );
   return (
     <LiveSessionView
       {...live}
