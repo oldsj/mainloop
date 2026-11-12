@@ -8,8 +8,9 @@
 //
 //	PORT          listen port (default 3000)
 //	WEB_DIR       directory holding index.html and assets/ (default "dist")
-//	VITE_API_URL  the API base URL the build was made with; an absolute URL adds its origin to
-//	              the CSP connect-src, a relative one (the default) adds nothing
+//	VITE_API_URL  the API base URL the build was made with; an absolute URL adds its origin, and
+//	              the same host on the WebSocket scheme, to the CSP connect-src; a relative one (the
+//	              default) adds nothing
 package main
 
 import (
@@ -35,6 +36,14 @@ func contentSecurityPolicy(apiURL string) string {
 	connect := "'self'"
 	if u, err := url.Parse(apiURL); err == nil && u.Scheme != "" && u.Host != "" {
 		connect += " " + u.Scheme + "://" + u.Host
+		// The live view's socket (GET /sessions/{id}/live) goes to the same host. Chrome does not
+		// let an https: source match wss:, so the WebSocket origin is listed too.
+		switch u.Scheme {
+		case "https":
+			connect += " wss://" + u.Host
+		case "http":
+			connect += " ws://" + u.Host
+		}
 	}
 	return strings.Join([]string{
 		"default-src 'self'",
