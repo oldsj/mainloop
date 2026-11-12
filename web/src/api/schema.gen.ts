@@ -2859,6 +2859,11 @@ export interface components {
        * @description Native agent kind; defaults to Claude Code
        */
       agent_kind?: string | null;
+      /**
+       * Model
+       * @description The session's model override, set before its first turn (as `POST /sessions/{session_id}/model` would set it afterwards). Omitted or null: the provider's default. kagent validates the model when the turn starts.
+       */
+      model?: string | null;
     };
     /**
      * SessionMessageRequest

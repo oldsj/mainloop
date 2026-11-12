@@ -404,7 +404,7 @@ func (a *SessionsAPI) CreateSession(ctx context.Context, r api.CreateSessionRequ
 	if r.Body == nil {
 		return nil, apierr.Invalid("the body is required")
 	}
-	n := NewSession{Title: r.Body.Title, Description: r.Body.Description, Prompt: r.Body.Prompt, RepoURL: r.Body.RepoUrl}
+	n := NewSession{Title: r.Body.Title, Description: r.Body.Description, Prompt: r.Body.Prompt, RepoURL: r.Body.RepoUrl, Model: r.Body.Model}
 	if r.Body.AgentKind != nil {
 		n.AgentKind = *r.Body.AgentKind
 	}

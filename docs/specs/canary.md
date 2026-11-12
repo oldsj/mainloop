@@ -10,12 +10,14 @@ For each `--target name=url[@host]` (in the chart, this instance's own API, name
 
 | Step | What it does |
 | --- | --- |
-| `list-sessions` | `GET /sessions`, to find today's canary session |
-| `create-session` | first run of the UTC day: creates `Mainloop canary YYYY-MM-DD` with the prompt `ping` |
-| `set-model` | right after the create, sets the session's model override (`--model`, default `haiku`) |
-| `send-message` | later runs: sends `ping` to today's session; anything but `ok` (queued, steered) fails, since it means the previous canary turn never ended |
-| `await-reply` | reads the conversation until an assistant reply follows the ping (`--deadline`, default 4m); fails early if the session ends |
-| `archive-old` | after a reply, archives earlier days' canary sessions |
+| `list-sessions` | `GET /sessions`; any canary session an earlier run left behind is retired below |
+| `create-session` | creates a fresh standalone session `Mainloop canary YYYY-MM-DD HH:MM` with the prompt `ping` and the model (`--model`, default `claude-haiku-5-5`) set at create, so the first turn already uses it |
+| `await-reply` | reads the conversation until an assistant reply follows the ping (`--deadline`, default 4m); fails early if the session ends. A model kagent rejects fails here |
+| `cleanup` | cancels and archives this run's session and any left-overs, even when an earlier step failed |
+
+The session lives only for the run (seconds), then is archived: it does not stay in the sessions
+list, and archiving resolves any Needs-you item it could have raised. A standalone session has no
+coordination grant, so it never reports to the main thread, and it starts no task.
 
 A reply slower than `--slow` (default 90s) is reported as slow. All targets run in parallel; one
 ntfy notification covers every target that failed (priority 4, "Mainloop canary failed") or was
@@ -27,11 +29,9 @@ ntfy comes from `MAINLOOP_NTFY_URL`, `MAINLOOP_NTFY_TOPIC` and `MAINLOOP_NTFY_TO
 
 ## Cost
 
-Each run is one native turn on the smallest model with a one-word prompt, in a session of its own,
-so it never touches the main thread, tasks or the Needs-you inbox. The session is replaced every
-day so its context stays small. The first turn of each day runs on the agent's default model if
-the model override lands after the turn was sent (the native session normally takes seconds to
-start, so the override usually wins).
+Each run is one native turn on the smallest model with a one-word prompt, in a brand-new session,
+so the context is only the agent's own system prompt and `ping`. It never touches the main thread,
+tasks or the Needs-you inbox.
 
 The default schedule is every 10 minutes: 144 small turns a day. Every 5 minutes halves the time
 to detect an outage and doubles the turns. Failing runs alert every run, so an outage pages every

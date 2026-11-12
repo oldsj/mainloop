@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -22,11 +23,13 @@ type fakeAPI struct {
 	sessions []api.Session
 	messages map[string][]api.Message
 	calls    []string
-	// sendStatus answers /message; reply makes the agent answer each user message.
-	sendStatus string
-	reply      bool
-	listStatus int
-	model      string
+	// reply makes the agent answer each user message.
+	reply        bool
+	listStatus   int
+	createStatus int
+	model        string
+	ended        map[string]bool
+	archived     []string
 }
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -51,21 +54,30 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		write(f.sessions)
 	case r.Method == http.MethodPost && len(parts) == 1:
+		if f.createStatus != 0 {
+			w.WriteHeader(f.createStatus)
+			return
+		}
+		f.model, _ = body["model"].(string)
 		s := api.Session{Id: "s-new", Title: body["title"].(string), Status: api.SessionStatusActive}
 		f.sessions = append(f.sessions, s)
 		userMsg("first", s.Id)
 		write(s)
-	case len(parts) == 3 && parts[2] == "model":
-		f.model, _ = body["model"].(string)
-		write(map[string]any{"session_id": parts[1]})
-	case len(parts) == 3 && parts[2] == "message":
-		if f.sendStatus == "ok" {
-			userMsg(body["message_id"].(string), parts[1])
+	case len(parts) == 3 && parts[2] == "cancel":
+		if f.ended[parts[1]] {
+			w.WriteHeader(http.StatusConflict)
+			return
 		}
-		write(api.SessionMessageResponse{Status: api.SessionMessageResponseStatus(f.sendStatus), MessageId: "m"})
+		f.ended[parts[1]] = true
+		write(map[string]any{})
 	case len(parts) == 3 && parts[2] == "conversation":
 		write(api.SessionConversationResponse{Session: api.Session{Id: parts[1], Status: api.SessionStatusActive}, Messages: f.messages[parts[1]]})
 	case len(parts) == 3 && parts[2] == "archive":
+		if !f.ended[parts[1]] {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		f.archived = append(f.archived, parts[1])
 		write(map[string]any{})
 	default:
 		w.WriteHeader(http.StatusNotFound)
@@ -77,60 +89,56 @@ func run(t *testing.T, f *fakeAPI) canary.Result {
 	if f.messages == nil {
 		f.messages = map[string][]api.Message{}
 	}
+	if f.ended == nil {
+		f.ended = map[string]bool{}
+	}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	return canary.Run(context.Background(), canary.Options{
-		Name: "prod", API: srv.URL, Model: "haiku", Slow: time.Hour, Deadline: 300 * time.Millisecond,
+		Name: "prod", API: srv.URL, Model: "claude-haiku-5-5", Slow: time.Hour, Deadline: 300 * time.Millisecond,
 		Poll: 20 * time.Millisecond, Request: time.Second, Now: func() time.Time { return today },
 	})
 }
 
-func TestFirstRunOfTheDayCreatesASessionOnTheSmallModel(t *testing.T) {
+func TestEachRunUsesAFreshSmallModelSessionAndRetiresIt(t *testing.T) {
 	f := &fakeAPI{reply: true, sessions: []api.Session{
-		{Id: "s-old", Title: canary.TitlePrefix + "2026-11-11"},
+		{Id: "s-left", Title: canary.TitlePrefix + "2026-11-12 09:50"},
 		{Id: "s-other", Title: "Real work"},
-	}}
+	}, ended: map[string]bool{"s-left": true}}
 	res := run(t, f)
 	if !res.OK() || res.Session != "s-new" {
 		t.Fatalf("result: %v", res)
 	}
-	if f.model != "haiku" {
-		t.Fatalf("model %q", f.model)
+	if f.model != "claude-haiku-5-5" {
+		t.Fatalf("model must be set at create: %q", f.model)
 	}
-	if f.sessions[2].Title != canary.TitlePrefix+"2026-11-12" {
+	if f.sessions[2].Title != canary.TitlePrefix+"2026-11-12 10:00" {
 		t.Fatalf("title %q", f.sessions[2].Title)
 	}
-	if !contains(f.calls, "POST /sessions/s-old/archive") || contains(f.calls, "POST /sessions/s-other/archive") {
-		t.Fatalf("only yesterday's canary is archived: %v", f.calls)
+	if !slices.Equal(f.archived, []string{"s-left", "s-new"}) {
+		t.Fatalf("a left-over and this run's session are archived, nothing else: %v", f.archived)
 	}
 }
 
-func TestLaterRunSendsOneWordToTodaysSession(t *testing.T) {
-	f := &fakeAPI{reply: true, sendStatus: "ok", sessions: []api.Session{{Id: "s-today", Title: canary.TitlePrefix + "2026-11-12"}}}
-	res := run(t, f)
-	if !res.OK() || res.Session != "s-today" {
-		t.Fatalf("result: %v", res)
-	}
-	if contains(f.calls, "POST /sessions") || f.model != "" {
-		t.Fatalf("must reuse the session: %v", f.calls)
-	}
-}
-
-func TestReportsTheFailedStep(t *testing.T) {
+func TestReportsTheFailedStepAndStillRetires(t *testing.T) {
 	cases := []struct {
-		name string
-		f    *fakeAPI
-		step string
+		name     string
+		f        *fakeAPI
+		step     string
+		archived []string
 	}{
-		{"api down", &fakeAPI{listStatus: http.StatusBadGateway}, canary.StepList},
-		{"turn still open", &fakeAPI{sendStatus: "queued", sessions: []api.Session{{Id: "s", Title: canary.TitlePrefix + "2026-11-12"}}}, canary.StepSend},
-		{"no reply", &fakeAPI{sendStatus: "ok", sessions: []api.Session{{Id: "s", Title: canary.TitlePrefix + "2026-11-12"}}}, canary.StepReply},
+		{"api down", &fakeAPI{listStatus: http.StatusBadGateway}, canary.StepList, nil},
+		{"create refused", &fakeAPI{createStatus: http.StatusUnprocessableEntity}, canary.StepCreate, nil},
+		{"no reply", &fakeAPI{}, canary.StepReply, []string{"s-new"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			res := run(t, c.f)
 			if res.Err == nil || res.Step != c.step {
 				t.Fatalf("got %v, want step %s", res, c.step)
+			}
+			if !slices.Equal(c.f.archived, c.archived) {
+				t.Fatalf("archived %v, want %v", c.f.archived, c.archived)
 			}
 		})
 	}
@@ -161,13 +169,4 @@ func TestAlert(t *testing.T) {
 		!strings.Contains(m["message"].(string), "prod: await-reply failed") || !strings.Contains(m["message"].(string), "dev: reply took 2m0s") {
 		t.Fatalf("alert: %+v", m)
 	}
-}
-
-func contains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }

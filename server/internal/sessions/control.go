@@ -776,6 +776,8 @@ type NewSession struct {
 	RepoURL                    *string
 	// AgentKind is a provider profile id or alias; empty means Claude Code.
 	AgentKind string
+	// Model is the session's model override from its first turn; nil means the provider's default.
+	Model *string
 }
 
 // Create starts a native session: the session and its ungranted agent binding, and the prompt as
@@ -815,6 +817,11 @@ func (s *Service) Create(ctx context.Context, n NewSession) (string, error) {
 			SessionID: id, Kind: profile.ID, Role: dbstate.RoleAgent, MCPGrantKind: dbstate.GrantNone,
 		}); err != nil {
 			return fmt.Errorf("create binding: %w", err)
+		}
+		if n.Model != nil {
+			if _, err := q.SetBindingModelOverride(ctx, dbq.SetBindingModelOverrideParams{SessionID: id, ModelOverride: n.Model}); err != nil {
+				return fmt.Errorf("set model override: %w", err)
+			}
 		}
 		if _, err := q.SetSessionStatus(ctx, dbq.SetSessionStatusParams{ID: id, Status: dbstate.SessionActive}); err != nil {
 			return fmt.Errorf("start session: %w", err)

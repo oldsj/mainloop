@@ -6339,6 +6339,16 @@ components:
             - type: 'null'
           title: Agent Kind
           description: Native agent kind; defaults to Claude Code
+        model:
+          anyOf:
+            - type: string
+              pattern: ^[A-Za-z0-9._:/-]{1,200}$
+            - type: 'null'
+          title: Model
+          description: >-
+            The session's model override, set before its first turn (as `POST
+            /sessions/{session_id}/model` would set it afterwards). Omitted or null: the provider's
+            default. kagent validates the model when the turn starts.
       type: object
       required:
         - title

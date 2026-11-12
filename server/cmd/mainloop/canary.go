@@ -35,7 +35,7 @@ func runCanary(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	fs.SetOutput(stderr)
 	var targets targetsFlag
 	fs.Var(&targets, "target", "name=url[@host] of an owner API to check; repeatable (default prod=in-cluster mainloop-backend)")
-	model := fs.String("model", "haiku", "model override for new canary sessions")
+	model := fs.String("model", "claude-haiku-5-5", "model for the canary session, set at create")
 	slow := fs.Duration("slow", 90*time.Second, "reply time above which a run is reported slow")
 	deadline := fs.Duration("deadline", 4*time.Minute, "how long to wait for the reply")
 	poll := fs.Duration("poll", 3*time.Second, "pause between conversation reads")
