@@ -94,8 +94,9 @@ func (s *Service) requireOwnedBinding(ctx context.Context, sessionID string) (st
 // default kagent cannot serve fails every turn (found on prod with Codex: gpt-5.1-codex against a
 // gpt-6.1-sol ModelConfig).
 //
-// Known gap: clearing an override sends nothing, so a harness that carries an explicit value across
-// turns (the Claude SDK driver) keeps the old one until the session is replaced.
+// Clearing an override sends nothing, and that takes effect: the Claude SDK driver sets both
+// controls at the start of every turn, to the metadata value or else the Agent's ModelConfig model
+// and the default effort.
 func turnMetadata(model, effort *string) map[string]any {
 	var out map[string]any
 	set := func(k, v string) {
