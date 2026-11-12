@@ -43,7 +43,7 @@ const (
 	// steerUnconsumedKey lists, in an ended task's status metadata, the steers kagent took but never
 	// gave to the model.
 	steerUnconsumedKey = "kagent.steer.unconsumed"
-	steerTurnStopped = "not sent: the turn it was sent into was stopped"
+	steerTurnStopped   = "not sent: the turn it was sent into was stopped"
 )
 
 // SteerTable is the steer ledger as an intent table.
