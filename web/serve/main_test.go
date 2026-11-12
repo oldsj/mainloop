@@ -90,7 +90,7 @@ func TestSecurityHeaders(t *testing.T) {
 	for _, want := range []string{
 		"default-src 'self'",
 		"script-src 'self'",
-		"connect-src 'self' https://api.example.test",
+		"connect-src 'self' https://api.example.test wss://api.example.test;",
 		"frame-ancestors 'none'",
 	} {
 		if !strings.Contains(csp, want) {
@@ -107,6 +107,14 @@ func TestSecurityHeaders(t *testing.T) {
 func TestImagesAllowGitHubAvatarsOnly(t *testing.T) {
 	csp := contentSecurityPolicy("/api")
 	if !strings.Contains(csp, "; img-src 'self' data: https://avatars.githubusercontent.com;") {
+		t.Fatalf("CSP = %q", csp)
+	}
+}
+
+// The live view opens a WebSocket to the API host; without the ws or wss origin Chrome blocks it
+// and the view never attaches.
+func TestAPIOriginAllowsItsWebSocket(t *testing.T) {
+	if csp := contentSecurityPolicy("http://localhost:8000"); !strings.Contains(csp, "connect-src 'self' http://localhost:8000 ws://localhost:8000;") {
 		t.Fatalf("CSP = %q", csp)
 	}
 }
