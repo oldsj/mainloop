@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/events"
@@ -84,6 +85,60 @@ func reportText(r dbq.TaskReport, t dbq.Task, attempt int32) string {
 	return text
 }
 
+// prepareBatch writes the delivery's target and message id, and in the same transaction gives that
+// message id to the other pending reports for the same recipient that no claimer holds. Each keeps
+// its own row; only the message is shared. A lost lease returns the delivery without a message id.
+func (s *Service) prepareBatch(ctx context.Context, c reconcile.Claim, d dbq.TaskEventDelivery, attemptID *string) (dbq.TaskEventDelivery, error) {
+	mid := messageID(d.ID, d.Sends+1)
+	err := db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+		q := dbq.New(tx)
+		prepared, err := q.PrepareTaskEventDelivery(ctx, dbq.PrepareTaskEventDeliveryParams{
+			ID: d.ID, LeaseOwner: &c.Owner, Attempts: int32(c.Attempts), //nolint:gosec // a small counter
+			TargetAttemptID: attemptID, DeliveryID: &mid,
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		d = prepared
+		_, err = q.JoinTaskEventBatch(ctx, dbq.JoinTaskEventBatchParams{
+			TargetAttemptID: attemptID, DeliveryID: &mid, RecipientKey: d.RecipientKey, LeaderID: d.ID,
+		})
+		return err
+	})
+	return d, err
+}
+
+// batchText is the message for a ledger message id: the text of each report it carries, oldest
+// first. It is read from the rows, not from the claim, so whichever claimer sends the message
+// sends the same text.
+func (s *Service) batchText(ctx context.Context, mid string, own dbq.TaskReport, ownTask dbq.Task, ownAttempt int32) (string, error) {
+	q := dbq.New(s.Pool)
+	rs, err := q.ListTaskEventBatch(ctx, &mid)
+	if err != nil {
+		return "", err
+	}
+	if len(rs) <= 1 {
+		return reportText(own, ownTask, ownAttempt), nil
+	}
+	parts := make([]string, 0, len(rs)+1)
+	parts = append(parts, fmt.Sprintf("[%d reports]", len(rs)))
+	for _, r := range rs {
+		t, err := q.GetTaskByID(ctx, r.TaskID)
+		if err != nil {
+			return "", err
+		}
+		a, err := q.GetTaskAttempt(ctx, r.AttemptID)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, reportText(r, t, a.Number))
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
 // target resolves where a delivery goes. A parent whose attempt is no longer the active current one
 // has ended; ended is true and the delivery is cancelled rather than retried.
 func (s *Service) target(ctx context.Context, key string) (attemptID *string, sessionID string, ended bool, err error) {
@@ -145,16 +200,24 @@ func (s *Service) sendReport(ctx context.Context, c reconcile.Claim, d dbq.TaskE
 		if sessionID == "" {
 			return reconcile.RetryAfter(3 * time.Second), nil
 		}
-		mid := messageID(d.ID, d.Sends+1)
-		d, err = q.PrepareTaskEventDelivery(ctx, dbq.PrepareTaskEventDeliveryParams{
-			ID: d.ID, LeaseOwner: &c.Owner, Attempts: int32(c.Attempts), //nolint:gosec // a small counter
-			TargetAttemptID: attemptID, DeliveryID: &mid,
-		})
-		if errors.Is(err, pgx.ErrNoRows) {
-			return reconcile.Recorded(), nil
+		// A report waits while its recipient has an open turn, and for the batch window after it was
+		// made, so the reports that pile up meanwhile go out as one message: one turn, not one each.
+		// It is never steered in; it waits for the turn to end.
+		if wait := s.Limits.ReportBatchWindow - s.now().Sub(r.CreatedAt); wait > 0 {
+			return reconcile.RetryAfter(wait), nil
 		}
+		busy, err := s.Sessions.HasOpen(ctx, sessionID)
 		if err != nil {
 			return reconcile.Outcome{}, err
+		}
+		if busy {
+			return reconcile.RetryAfter(2 * time.Second), nil
+		}
+		if d, err = s.prepareBatch(ctx, c, d, attemptID); err != nil {
+			return reconcile.Outcome{}, err
+		}
+		if d.DeliveryID == nil {
+			return reconcile.Recorded(), nil // the lease was lost
 		}
 	}
 	mid := *d.DeliveryID
@@ -171,7 +234,10 @@ func (s *Service) sendReport(ctx context.Context, c reconcile.Claim, d dbq.TaskE
 		if ended {
 			return s.setDelivery(ctx, c, dbstate.TaskDeliveryCancelled)
 		}
-		text := reportText(r, t, a.Number)
+		text, err := s.batchText(ctx, mid, r, t, a.Number)
+		if err != nil {
+			return reconcile.Outcome{}, err
+		}
 		if d.RecipientKey == "main" {
 			_, err = s.Sessions.SendAs(ctx, sessions.SourceMainloop, mid, "", text)
 		} else {

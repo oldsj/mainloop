@@ -359,6 +359,27 @@ WHERE id = sqlc.arg(id) AND lease_owner = sqlc.arg(lease_owner) AND attempts = s
   AND delivery_id IS NULL
 RETURNING *;
 
+-- The other pending reports to the same recipient that no claimer holds join the message a
+-- delivery is preparing, so they are sent as one. SKIP LOCKED and the lease test leave rows another
+-- claimer is working on to their own message.
+-- name: JoinTaskEventBatch :many
+UPDATE task_event_deliveries
+SET target_attempt_id = sqlc.narg(target_attempt_id), delivery_id = sqlc.arg(delivery_id),
+    sends = sends + 1, updated_at = now()
+WHERE id IN (
+    SELECT o.id FROM task_event_deliveries o
+    WHERE o.recipient_key = sqlc.arg(recipient_key) AND o.state = 'pending' AND o.delivery_id IS NULL
+      AND o.id <> sqlc.arg(leader_id) AND (o.lease_until IS NULL OR o.lease_until < now())
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING *;
+
+-- The reports one message carries, oldest first.
+-- name: ListTaskEventBatch :many
+SELECT r.* FROM task_event_deliveries d JOIN task_reports r ON r.id = d.report_id
+WHERE d.delivery_id = $1
+ORDER BY r.created_at, r.id;
+
 -- A message the ledger gave up on is recorded again under a new id.
 -- name: ResendTaskEventDelivery :one
 UPDATE task_event_deliveries

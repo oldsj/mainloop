@@ -60,6 +60,9 @@ type Service struct {
 	Log    *slog.Logger
 }
 
+// defaultReportBatchWindow is Limits.ReportBatchWindow in a running server.
+const defaultReportBatchWindow = 3 * time.Second
+
 // Limits are the capacity and timing settings, from configuration.
 type Limits struct {
 	// MaxChildrenPerParent and MaxChildrenGlobal cap the child tasks that hold a slot: an attempt
@@ -89,6 +92,9 @@ type Limits struct {
 	LivenessEvery time.Duration
 	StallTimeout  time.Duration
 	MaxRuntime    time.Duration
+	// ReportBatchWindow is how long a report waits after it is made before it is sent, so reports
+	// made together reach their recipient as one message. Zero sends at once.
+	ReportBatchWindow time.Duration
 }
 
 func (s *Service) log() *slog.Logger {
@@ -852,7 +858,11 @@ func (s *Service) applyReport(ctx context.Context, q *dbq.Queries, t dbq.Task, i
 	if t.ParentTaskID != nil {
 		recipients = append(recipients, "parent-task:"+*t.ParentTaskID)
 	}
-	if in.Outcome == dbstate.OutcomeBlocked || in.Outcome == dbstate.OutcomeFailed {
+	// Main hears every blocked or failed report, and every terminal report of a root task: a root
+	// task is main's own delegation, so its outcome is main's to hear whatever it is.
+	switch {
+	case in.Outcome == dbstate.OutcomeBlocked, in.Outcome == dbstate.OutcomeFailed,
+		in.Outcome == dbstate.OutcomeCompleted && t.ParentTaskID == nil:
 		recipients = append(recipients, "main")
 	}
 	for _, r := range recipients {
@@ -1039,6 +1049,7 @@ func NewService(cfg *config.Config, pool *pgxpool.Pool, reg Resolver, log *slog.
 			ProjectionEvery: cfg.Tasks.ProjectionEvery.Duration(),
 			StallTimeout:    cfg.Tasks.StallTimeout.Duration(), MaxRuntime: cfg.Tasks.MaxRuntime.Duration(),
 			ForceSuspendAfter: cfg.Tasks.ForceSuspendAfter.Duration(), ForceDeleteAfter: cfg.Tasks.ForceDeleteAfter.Duration(),
+			ReportBatchWindow: defaultReportBatchWindow,
 		},
 	}
 	for _, o := range opts {
