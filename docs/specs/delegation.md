@@ -8,6 +8,8 @@ Main at depth zero creates supervisors. A supervisor at depth one creates direct
 
 `delegate` accepts `request_id`, `title`, `brief`, `mode`, optional `project_id`, `topic_id`, `provider_profile_id`, `model`, `effort` and typed `checkout`. Code tasks require an owned project and checkout; coordination tasks have no repository authority. The service chooses role, depth, owner, root and native configuration. Provider constraints and admission caps apply through the shared service. Reusing a request ID with identical input returns the original operation; changed input conflicts. A returned pending operation is not a running native session.
 
+Cluster and homelab ops requests go to the [ops agent](ops-agent.md): a coordination task on the `ops` provider profile.
+
 Reuse the request ID after a lost or uncertain response. After a confirmed terminal `blocked` create, a new create requires a **new** request ID; replaying the old ID returns the recorded blocked operation.
 
 ### Choosing a worker's model and effort (#318)
