@@ -1,5 +1,7 @@
-import { type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { HITLCard } from '@/features/hitl';
+import { useSessionRequests } from '@/features/hitl/session-requests';
+import { LiveSession, liveForced } from '@/features/live';
 import { PanelBoundary } from '@/shell/PanelBoundary';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { mainInputLock } from './mainProvider';
@@ -24,7 +26,12 @@ export interface ChatPageProps {
   starters?: ReactNode;
 }
 
-/** The main thread: header, conversation (ending with any pending requests) and the composer. */
+/**
+ * The main thread: header, conversation (ending with any pending requests) and the composer. When
+ * the main session's agent runs the SDK runner (`native.live`), the conversation and composer are
+ * the live view instead, as on a session's page, under the same header; `?live=1` forces it for
+ * local work. A locked main input (a provider switch) keeps the regular view, which says why.
+ */
 export function ChatPage({
   hitlId,
   renderIdentity,
@@ -41,6 +48,11 @@ export function ChatPage({
     offline || chat.sendPending || chat.stopping || !chat.loaded
   );
   const inputLock = mainInputLock(info, provider);
+  // Use the chat view, offered when the live channel is unavailable, holds until the page reloads.
+  const [chatView, setChatView] = useState(false);
+  const sessionId = info?.session_id ?? null;
+  const live =
+    !!sessionId && !chatView && !inputLock && (info?.native?.live === true || liveForced());
 
   // `/model` and `/effort` are local commands: neither ever becomes a chat message. Their own
   // output replaces any earlier one; an ordinary send clears it, so a stale notice cannot linger
@@ -64,32 +76,68 @@ export function ChatPage({
         />
       ) : null}
 
-      <ThreadBody
-        thread={chat}
-        offline={offline}
-        label="main thread"
-        closedReason={inputLock}
-        closedPlaceholder="Main input is locked"
-        prefill={prefill}
-        onPrefillUsed={onPrefillUsed}
-        starters={starters}
-        allowImages
-        onSend={intercept}
-        commandNotice={commandNotice}
-        commands={SLASH_COMMANDS}
-        requests={
-          <PanelBoundary name="Requests">
-            {hitlId ? (
-              <div className="border-border mx-md border">
-                <HITLCard requestId={hitlId} />
-              </div>
-            ) : null}
-            {info?.session_id ? (
-              <SessionRequests sessionId={info.session_id} skip={hitlId} />
-            ) : null}
-          </PanelBoundary>
-        }
-      />
+      {live && sessionId ? (
+        <PanelBoundary name="Live session">
+          <LiveMain sessionId={sessionId} hitlId={hitlId} onFallback={() => setChatView(true)} />
+        </PanelBoundary>
+      ) : (
+        <ThreadBody
+          thread={chat}
+          offline={offline}
+          label="main thread"
+          closedReason={inputLock}
+          closedPlaceholder="Main input is locked"
+          prefill={prefill}
+          onPrefillUsed={onPrefillUsed}
+          starters={starters}
+          allowImages
+          onSend={intercept}
+          commandNotice={commandNotice}
+          commands={SLASH_COMMANDS}
+          requests={
+            <PanelBoundary name="Requests">
+              {hitlId ? (
+                <div className="border-border mx-md border">
+                  <HITLCard requestId={hitlId} />
+                </div>
+              ) : null}
+              {info?.session_id ? (
+                <SessionRequests sessionId={info.session_id} skip={hitlId} />
+              ) : null}
+            </PanelBoundary>
+          }
+        />
+      )}
     </div>
+  );
+}
+
+/** The live view of the main session, ending with its requests and the one `?hitl=` names. */
+function LiveMain({
+  sessionId,
+  hitlId,
+  onFallback
+}: {
+  sessionId: string;
+  hitlId?: string;
+  onFallback: () => void;
+}) {
+  const { pending } = useSessionRequests(sessionId);
+  return (
+    <LiveSession
+      sessionId={sessionId}
+      onFallback={onFallback}
+      needsAnswer={pending.length > 0}
+      requests={
+        <PanelBoundary name="Requests">
+          {hitlId ? (
+            <div className="border-border mx-md border">
+              <HITLCard requestId={hitlId} />
+            </div>
+          ) : null}
+          <SessionRequests sessionId={sessionId} skip={hitlId} />
+        </PanelBoundary>
+      }
+    />
   );
 }
