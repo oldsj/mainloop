@@ -1,5 +1,6 @@
 import {
   memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -21,6 +22,9 @@ import {
 } from './store';
 import { caretOnFirstLine, caretOnLastLine, sentHistory, step } from './history';
 import { liveDeps, useLiveSession, type Conn, type LiveDeps } from './useLiveSession';
+import { useQueryClient } from '@tanstack/react-query';
+import { keys } from '@/api/keys';
+import { answerPair, PAIR_POLL_MS, pairOf, usePendingViews, type PermPair } from './pairing';
 
 const short = (id: string) => (id || '…').replace(/^claude-/, '');
 
@@ -29,33 +33,70 @@ const short = (id: string) => (id || '…').replace(/^claude-/, '');
  * it, permission prompts, interrupt, model and effort, permission mode, and a composer whose
  * messages queue while a turn runs. Phone first: one column that fills the page.
  *
- * Approvals and questions from an A2A turn do not come through the runner: they are the session's
- * requests (`requests`, the same cards the chat view shows), placed at the end of the transcript.
+ * Every turn is an A2A turn, so approvals and questions are the session's requests (the same cards
+ * the chat view shows), placed at the end of the transcript. A permission prompt the runner shows
+ * live is paired with its request by the permission id and answered through it, as one prompt; until
+ * Mainloop has raised the request the prompt shows without choices.
  */
 export function LiveSession({
   sessionId,
   onFallback,
   requests,
-  needsAnswer,
+  pending = [],
   deps
 }: {
   sessionId: string;
   /** Leaves the live view for the regular one, offered when the live channel is unavailable. */
   onFallback?: () => void;
-  /** The session's pending requests, shown after the transcript. */
-  requests?: ReactNode;
-  /** A request is pending, so the session needs the owner. */
-  needsAnswer?: boolean;
+  /** The session's requests, shown after the transcript, leaving out `skip` (the paired prompt's). */
+  requests?: (skip?: string) => ReactNode;
+  /** The ids of the session's pending requests. */
+  pending?: readonly string[];
   /** The reads outside the live channel; tests replace them. Keep it stable across renders. */
   deps?: LiveDeps;
 }) {
   const live = useLiveSession(sessionId, deps ?? liveDeps);
+  const views = usePendingViews(pending);
+  const pairs = useMemo(() => {
+    const out: Record<string, PermPair> = {};
+    for (const p of Object.values(live.state.perms)) {
+      const pair = p.chosen == null ? pairOf(views, { id: p.id, toolUseID: p.callId }) : undefined;
+      if (pair) out[p.id] = pair;
+    }
+    return out;
+  }, [live.state.perms, views]);
+  // A prompt Mainloop has not listed yet: re-read the requests now rather than at the next poll.
+  const unpaired = Object.values(live.state.perms)
+    .filter((p) => p.chosen == null && !pairs[p.id])
+    .map((p) => p.id)
+    .join();
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!unpaired) return;
+    void queryClient.invalidateQueries({ queryKey: keys.sessionHitl(sessionId) });
+    const again = setInterval(
+      () => void queryClient.invalidateQueries({ queryKey: keys.sessionHitl(sessionId) }),
+      PAIR_POLL_MS
+    );
+    return () => clearInterval(again);
+  }, [unpaired, queryClient, sessionId]);
+  const { answer: answerLive } = live;
+  const answer = useCallback(
+    (permId: string, choice: number) => {
+      const pair = pairs[permId];
+      if (pair) answerLive(permId, choice, () => answerPair(pair, choice !== 2, sessionId));
+    },
+    [pairs, answerLive, sessionId]
+  );
+  const skip = Object.values(pairs)[0]?.requestId;
   return (
     <LiveSessionView
       {...live}
+      answer={answer}
+      paired={pairs}
       onFallback={onFallback}
-      requests={requests}
-      needsAnswer={needsAnswer}
+      requests={requests?.(skip)}
+      needsAnswer={pending.length > 0}
     />
   );
 }
@@ -67,7 +108,10 @@ export interface LiveSessionViewProps {
   interrupt: () => void;
   set: (what: 'model' | 'effort', value: string) => void;
   send: (cmd: Record<string, unknown>) => boolean;
+  /** Answers a paired permission prompt: 0 allow, 2 deny. */
   answer: (permId: string, choice: number) => void;
+  /** The prompts paired with a session request, by permission id; the rest show without choices. */
+  paired?: Readonly<Record<string, unknown>>;
   retry: () => void;
   /** The owner is typing; keeps an attached view from detaching as idle. */
   touch?: () => void;
@@ -94,6 +138,7 @@ export function LiveSessionView({
   set,
   send,
   answer,
+  paired = {},
   retry,
   touch,
   onFallback,
@@ -190,7 +235,7 @@ export function LiveSessionView({
         </div>
       ) : null}
 
-      <Log state={state} answer={answer} requests={requests} />
+      <Log state={state} answer={answer} paired={paired} requests={requests} />
 
       <Composer
         state={state}
@@ -227,10 +272,12 @@ function statusClass(st: string) {
 function Log({
   state,
   answer,
+  paired,
   requests
 }: {
   state: LiveState;
   answer: LiveSessionViewProps['answer'];
+  paired: Readonly<Record<string, unknown>>;
   requests?: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -255,6 +302,7 @@ function Log({
           key={e.id}
           entry={e}
           perm={e.t === 'perm' ? state.perms[e.permId] : undefined}
+          answerable={e.t === 'perm' && Object.hasOwn(paired, e.permId)}
           answer={answer}
         />
       ))}
@@ -271,10 +319,12 @@ function Log({
 const Row = memo(function Row({
   entry: e,
   perm,
+  answerable,
   answer
 }: {
   entry: Entry;
   perm?: Perm;
+  answerable: boolean;
   answer: LiveSessionViewProps['answer'];
 }) {
   switch (e.t) {
@@ -331,7 +381,7 @@ const Row = memo(function Row({
         </div>
       );
     case 'perm':
-      return perm ? <PermCard perm={perm} answer={answer} /> : null;
+      return perm ? <PermCard perm={perm} answerable={answerable} answer={answer} /> : null;
   }
 });
 
@@ -385,21 +435,24 @@ function ToolRow({ entry: e }: { entry: Extract<Entry, { t: 'tool' }> }) {
   );
 }
 
-function PermCard({ perm, answer }: { perm: Perm; answer: LiveSessionViewProps['answer'] }) {
-  const opts = ['Yes', perm.canAlways ? "Yes, and don't ask again this session" : null, 'No'];
+function PermCard({
+  perm,
+  answerable,
+  answer
+}: {
+  perm: Perm;
+  answerable: boolean;
+  answer: LiveSessionViewProps['answer'];
+}) {
+  // A session request takes approve or reject, so there is no "don't ask again" here.
+  const opts = ['Yes', 'No'];
   if (perm.chosen != null) {
-    const label =
-      perm.chosen === -1 ? 'cancelled' : perm.chosen === 2 ? 'No' : (opts[perm.chosen] ?? 'Yes');
+    const denied = perm.chosen === 2 || perm.chosen === -1;
+    const label = perm.chosen === -1 ? 'cancelled' : denied ? 'No' : 'Yes';
     return (
       <div className="text-term-fg-muted text-xs [overflow-wrap:anywhere]">
         {perm.tool}({perm.arg.length > 48 ? perm.arg.slice(0, 48) + '…' : perm.arg}) →{' '}
-        <span
-          className={
-            perm.chosen === 2 || perm.chosen === -1 ? 'text-term-error' : 'text-term-green'
-          }
-        >
-          {label}
-        </span>
+        <span className={denied ? 'text-term-error' : 'text-term-green'}>{label}</span>
       </div>
     );
   }
@@ -414,17 +467,21 @@ function PermCard({ perm, answer }: { perm: Perm; answer: LiveSessionViewProps['
       <div className="pl-[2ch] [overflow-wrap:anywhere] whitespace-pre-wrap">{perm.arg}</div>
       {perm.why ? <div className="text-term-fg-muted pl-[2ch] text-xs">{perm.why}</div> : null}
       <div className="mt-1">Do you want to proceed?</div>
-      {opts.map((o, k) =>
-        o ? (
+      {answerable ? (
+        opts.map((o, k) => (
           <button
-            key={k}
+            key={o}
             type="button"
-            onClick={() => answer(perm.id, k)}
+            onClick={() => answer(perm.id, k === 0 ? 0 : 2)}
             className="hover:bg-term-bg-secondary min-h-10 pl-[2ch] text-left"
           >
-            {k === 2 && !perm.canAlways ? 2 : k + 1}. {o}
+            {k + 1}. {o}
           </button>
-        ) : null
+        ))
+      ) : (
+        <div className="text-term-fg-muted pl-[2ch] text-xs" role="status">
+          Waiting for Mainloop to record the request…
+        </div>
       )}
     </div>
   );

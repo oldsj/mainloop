@@ -3,8 +3,8 @@ import { useSessionRequests } from '@/features/hitl/session-requests';
 
 export interface SessionRequestsProps {
   sessionId: string;
-  /** Already shown by `?hitl=`; not shown twice. */
-  skip?: string;
+  /** Already shown elsewhere (by `?hitl=`, or in a live permission prompt); not shown twice. */
+  skip?: readonly (string | undefined)[];
 }
 
 /**

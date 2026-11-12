@@ -137,9 +137,9 @@ func attach(t *testing.T, base, path string, hdr http.Header) *websocket.Conn {
 }
 
 // Input reaches the runner only through Mainloop's API: the relay answers a message, a stop, a
-// model or an effort sent on the socket with an err frame naming the call, and forwards none of
-// them. The permission mode and permission answers pass, and the runner's close reaches the browser
-// with its code, which is how the view tells a suspend apart.
+// model, an effort or a permission answer sent on the socket with an err frame naming the call, and
+// forwards none of them. The permission mode passes, and the runner's close reaches the browser with
+// its code, which is how the view tells a suspend apart.
 func TestLiveForwardsOnlyControlsFromTheBrowser(t *testing.T) {
 	runner := &fakeRunner{}
 	front, _ := newTestLive(t, runner, nil)
@@ -149,7 +149,8 @@ func TestLiveForwardsOnlyControlsFromTheBrowser(t *testing.T) {
 		`{"k":"interrupt"}`:                  "POST /sessions/{id}/stop-turn",
 		`{"k":"model","model":"x"}`:          "POST /sessions/{id}/model",
 		`{"k":"effort","effort":"max"}`:      "POST /sessions/{id}/effort",
-		`not json`:                           "permission mode and permission answers",
+		`{"k":"perm","id":"p1"}`:             "POST /hitl/{request_id}/respond",
+		`not json`:                           "only the permission mode",
 	}
 	for frame, call := range refused {
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(frame)); err != nil {
@@ -160,15 +161,15 @@ func TestLiveForwardsOnlyControlsFromTheBrowser(t *testing.T) {
 			t.Fatalf("%s: answered %+v, %v; want an err naming %q", frame, got, err, call)
 		}
 	}
-	perm := `{"k":"perm","id":"p1","behavior":"allow"}`
-	if err := conn.WriteMessage(websocket.TextMessage, []byte(perm)); err != nil {
+	mode := `{"k":"mode","mode":"plan"}`
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(mode)); err != nil {
 		t.Fatal(err)
 	}
-	if _, got, err := conn.ReadMessage(); err != nil || string(got) != perm {
-		t.Fatalf("perm echo %q %v", got, err)
+	if _, got, err := conn.ReadMessage(); err != nil || string(got) != mode {
+		t.Fatalf("mode echo %q %v", got, err)
 	}
-	if got := runner.received(); !slices.Equal(got, []string{perm}) {
-		t.Fatalf("runner received %q, want only the perm answer", got)
+	if got := runner.received(); !slices.Equal(got, []string{mode}) {
+		t.Fatalf("runner received %q, want only the mode", got)
 	}
 
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"k":"mode","mode":"suspend"}`)); err != nil {

@@ -40,9 +40,9 @@ const (
 )
 
 // liveClientOps are the commands the browser may send the runner directly. Everything else that is
-// input (a message, a stop, a model or effort) goes through Mainloop's API, which records it first.
-// perm stays until permission answers are paired with the session's requests.
-var liveClientOps = map[string]bool{"mode": true, "perm": true}
+// input (a message, a stop, a model or effort, a permission answer) goes through Mainloop's API,
+// which records it first.
+var liveClientOps = map[string]bool{"mode": true}
 
 // liveRESTFor names the API call that replaces a refused client command.
 var liveRESTFor = map[string]string{
@@ -50,6 +50,7 @@ var liveRESTFor = map[string]string{
 	"interrupt": "POST /sessions/{id}/stop-turn",
 	"model":     "POST /sessions/{id}/model",
 	"effort":    "POST /sessions/{id}/effort",
+	"perm":      "POST /hitl/{request_id}/respond",
 }
 
 // ErrLiveNotFound is what a LiveTargets returns for a session the owner cannot open live.
@@ -306,7 +307,7 @@ func refuseClientFrame(kind int, data []byte) []byte {
 	if kind == websocket.TextMessage && json.Unmarshal(data, &c) == nil && liveClientOps[c.K] {
 		return nil
 	}
-	text := "the live channel takes only the permission mode and permission answers"
+	text := "the live channel takes only the permission mode"
 	if call, ok := liveRESTFor[c.K]; ok {
 		text = fmt.Sprintf("send %s through Mainloop: %s", c.K, call)
 	}

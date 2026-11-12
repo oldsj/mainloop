@@ -102,7 +102,7 @@ export function ChatPage({
                 </div>
               ) : null}
               {info?.session_id ? (
-                <SessionRequests sessionId={info.session_id} skip={hitlId} />
+                <SessionRequests sessionId={info.session_id} skip={[hitlId]} />
               ) : null}
             </PanelBoundary>
           }
@@ -112,7 +112,10 @@ export function ChatPage({
   );
 }
 
-/** The live view of the main session, ending with its requests and the one `?hitl=` names. */
+/**
+ * The live view of the main session, ending with its requests and the one `?hitl=` names. A
+ * request paired with a live permission prompt is answered in the prompt, so its card is left out.
+ */
 function LiveMain({
   sessionId,
   hitlId,
@@ -127,17 +130,17 @@ function LiveMain({
     <LiveSession
       sessionId={sessionId}
       onFallback={onFallback}
-      needsAnswer={pending.length > 0}
-      requests={
+      pending={pending}
+      requests={(skip) => (
         <PanelBoundary name="Requests">
-          {hitlId ? (
+          {hitlId && hitlId !== skip ? (
             <div className="border-border mx-md border">
               <HITLCard requestId={hitlId} />
             </div>
           ) : null}
-          <SessionRequests sessionId={sessionId} skip={hitlId} />
+          <SessionRequests sessionId={sessionId} skip={[skip, hitlId]} />
         </PanelBoundary>
-      }
+      )}
     />
   );
 }
