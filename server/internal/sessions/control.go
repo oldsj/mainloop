@@ -134,6 +134,12 @@ func (s *Service) endDelivery(ctx context.Context, d dbq.Delivery, from []dbstat
 			return nil, fmt.Errorf("end delivery: %w", err)
 		}
 		previous, moved = dbstate.DeliveryState(prev), true
+		if err := endUnsentSteers(ctx, q, d.ID, e.final); err != nil {
+			return nil, err
+		}
+		if err := q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: SteerChannel, Payload: d.ID}); err != nil {
+			return nil, err
+		}
 		// The turn just ended, so the one-open-turn index has nothing of this session's left in it:
 		// admit the oldest message still queued.
 		promoted, err := promoteNextQueued(ctx, q, d.SessionID, s.opts().UncertainHold.Seconds())
@@ -412,6 +418,9 @@ func (s *Service) end(ctx context.Context, sessionID string, status dbstate.Sess
 			}
 			if err != nil {
 				return nil, fmt.Errorf("close delivery: %w", err)
+			}
+			if err := endUnsentSteers(ctx, q, d.ID, dbstate.DeliveryCancelled); err != nil {
+				return nil, err
 			}
 			closedNow = append(closedNow, cancelledDelivery{d: d, prev: dbstate.DeliveryState(prev)})
 			// Every ending publishes one event, so open clients see the turn end.
@@ -811,7 +820,7 @@ func (s *Service) Create(ctx context.Context, n NewSession) (string, error) {
 			return fmt.Errorf("start session: %w", err)
 		}
 		// A brand new session has no open turn to queue behind.
-		_, err = s.record(ctx, tx, SourceUser, id, messageID, prompt)
+		_, err = s.record(ctx, tx, SourceUser, id, messageID, prompt, false)
 		return err
 	})
 	if err != nil {

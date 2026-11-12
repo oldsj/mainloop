@@ -53,6 +53,9 @@ sql:
           - column: deliveries.state
             go_type:
               { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: DeliveryState }
+          - column: delivery_steers.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: SteerState }
           - column: session_restarts.state
             go_type:
               { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: RestartState }

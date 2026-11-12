@@ -135,6 +135,22 @@ type Delivery struct {
 	StalledAt       *time.Time
 }
 
+type DeliverySteer struct {
+	ID             string
+	IdempotencyKey string
+	SessionID      string
+	DeliveryID     string
+	Source         string
+	State          dbstate.SteerState
+	Detail         *string
+	Attempts       int32
+	NextAttemptAt  time.Time
+	LeaseOwner     *string
+	LeaseUntil     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 type DevEnvironment struct {
 	ID               string
 	OwnerID          string

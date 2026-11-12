@@ -17,7 +17,8 @@ History before `e776537` describes the retired Python backend. Where other text 
 - A task that finished while no process was watching is finalized from `GetTask` on restart. A task parked for input keeps the turn open.
 - Failure reasons are stored with best-effort redaction and a 300 character cut (see [chat](chat.md)).
 - Routes (G6b), all owner-only and all on the same ledger: `POST /sessions` (create), `GET /sessions` (the owner's sessions except the main thread, newest first), `GET /sessions/{id}`, `GET /sessions/{id}/conversation`, `GET /sessions/{id}/native`, `POST /sessions/{id}/message`, `POST /sessions/{id}/stop-turn`, `POST /sessions/{id}/restart`, `POST /sessions/{id}/cancel`, `POST /sessions/{id}/archive`. Another owner's session and an unknown id are both `404`. `needs_owner` is the attention visibility rule ([inbox](inbox.md)): true while the session has a visible attention item. The list reads it for every session in one query, the detail and conversation routes read it for the one session, and a session just created reads false; its status stays the session's own (only the inbox snapshot reports `waiting_on_user`).
-- `POST /sessions/{id}/message` records the message and its delivery exactly like `POST /chat`, with one open turn per session: while a delivery is `recorded`, `sending` or `delivered`, or an `uncertain` one is inside its hold, the new message is recorded as `queued` instead of refused, and the response is `202` with `status: "queued"` and the message id (`200` with `status: "ok"` when it is admitted at once). It is still `409` for a cancelled or failed session, an archived one, one without a native binding, a workspace whose Session does not exist yet, and a task-owned session whose attempt has requested a stop — none of these ever admit a message, so there is nothing to queue behind. The message id is the idempotency key: repeating the same id returns the state it is actually in (`ok` or `queued`) and writes nothing new.
+- `POST /sessions/{id}/message` records the message and its delivery exactly like `POST /chat`, with one open turn per session: while a delivery is `recorded`, `sending` or `delivered`, or an `uncertain` one is inside its hold, the new message is recorded as `queued` instead of refused, and the response is `202` with `status: "queued"` and the message id (`200` with `status: "ok"` when it is admitted at once). It is still `409` for a cancelled or failed session, an archived one, one without a native binding, a workspace whose Session does not exist yet, and a task-owned session whose attempt has requested a stop — none of these ever admit a message, so there is nothing to queue behind. The message id is the idempotency key: the caller may choose it (`message_id`, a UUID; the server picks one when it is absent), and repeating the same id returns the state it is actually in (`ok`, `queued` or `steered`) and writes nothing new.
+- Steering (`steer: true` on `POST /sessions/{id}/message`): a message sent while a turn runs joins that turn, as a message typed mid-turn does in Claude Code, instead of waiting for it to end. Mainloop steers only when the session's Agent is listed in `MAINLOOP_STEER_AGENTS`, a delivery is `delivered` with a known task, and the text is not a slash command; otherwise the message is an ordinary one (`ok` or `queued`). A steer is recorded first, under the send lock, as a `delivery_steers` row that names the running turn (the message and its id are recorded the same way as any other), and the response is `202` with `status: "steered"`. The steer loop then sends it to kagent as an A2A message on that turn's task with the same message id and the `kagent.steer` flag; kagent hands it to the running SDK turn, which folds it in at its next tool boundary, and the reply is that turn's. Steer states: `recorded`, `sending`, `uncertain` and `delivered` are open; `completed`, `failed`, `cancelled` and `converted` are final. A delivered steer ends with its turn, except one kagent lists as unconsumed (`kagent.steer.unconsumed` on the ended task). A steer that does not join converts once to an ordinary `queued` delivery under the same id, keeping the time it was recorded, so it runs as the next turn ahead of anything sent after it: when the turn ends before it was sent, when kagent refuses it with a steer reason (`metadata.steer` on `KAGENT_SEND_NOT_ACCEPTED`: the task is not running, the driver cannot steer, or the task waits for input), or when kagent lists it as unconsumed. A turn the owner stopped cancels its unsent and unconsumed steers instead. A steer whose send outcome is unknown is settled by reading the turn's task (its message id in the history means it was taken), never by sending it again. Tested against the fake kagent only; the kagent side is a separate kagent change, and none of this is measured live.
 - A task attempt's stop intent permanently closes its session to new messages, regardless of
   activity status (including `completed`). Message recording checks the retained attempt's
   `stop_state` in its transaction. Already-recorded deliveries check it before native preparation;
@@ -176,22 +177,31 @@ page replaces the identity strip, actions and chat with a live view attached to
 protocol). It renders the way Claude Code does: assistant text after `●`, tool calls with their first
 output line after `⎿` (tap to expand), edits as diffs, permission prompts with numbered answers, and
 an interrupted turn as `⎿ Interrupted`; a finished turn prints nothing, and there are no status icons
-or cost lines. The composer sends messages as typed, slash commands included (`/model` opens the
-model and effort picker); a message sent while a turn runs shows as queued until the runner picks it
-up. Up on the composer's first line (or in an empty composer) recalls the previous sent message and
+or cost lines. Input goes through Mainloop's API, never the socket, so every message is in
+Mainloop's record before it reaches the runner. The composer sends each message with
+`POST /sessions/{id}/message`, with a message id chosen in the browser and `steer: true`; it shows at
+once and the runner's echo replaces it (matched by the message id the runner echoes as `mid`, or by
+text while it does not). A failed send is retried twice under the same id, then marked "Not sent". A
+message sent while a turn runs steers it (see Steering above) and shows as "queued · joins this turn"
+until the turn takes it; one Mainloop queues instead, such as a slash command, shows as "queued ·
+sends when this turn ends". Slash commands go as typed, except `/model` and `/effort`, which are
+Claude Code's own: without an argument they open the model and effort picker, and with one (or from
+the picker) they set the session's override (`POST /sessions/{id}/model` or `/effort`) for its next
+turns and print "Set model to …" without reaching Claude. Up on the composer's first line (or in an empty composer) recalls the previous sent message and
 Down on its last line steps forward, back to the unsent draft, which is kept; elsewhere the arrows
 move the caret, so multi-line editing works. History is this session's user messages (the attach
 backlog and those sent since), a repeat kept once. On a phone, a small `↑ history` button below the
 composer lists the last ten to tap into the composer. The send button becomes interrupt while a turn runs and the composer is empty; Esc interrupts
-too, and Shift+Tab or the mode button below the composer cycles the permission mode. The runner
+too. Interrupt is Mainloop's stop turn (`POST /sessions/{id}/stop-turn`), which keeps the partial
+reply, as Esc does in Claude Code. Shift+Tab or the mode button below the composer cycles the permission mode. The runner
 prompts live only for a turn a client started on its port and for prompts outside the harness's
 approval boundary (the profile's own permission mode); those are lost if the session sleeps. A
 protected tool call or question in a turn Mainloop sends (an A2A turn) is deferred instead
 (kagent #90): the live turn ends with a `tool_deferred` result, the log says it is waiting for the
 answer, the status reads "needs you", and the request shows at the end of the transcript as the same
-card the chat view shows, answered through the A2A task. Until it is answered the runner refuses new
-messages, the composer says to answer the request first, and a message sent anyway shows the
-runner's refusal; the answer replays the call and the turn continues.
+card the chat view shows, answered through the A2A task. Until it is answered the composer says to
+answer the request first, and a message sent anyway is queued by Mainloop behind the waiting turn;
+the answer replays the call, the turn continues, and the queued message runs after it.
 
 The view never wakes a sleeping session on its own (#348): an attach goes through the Substrate
 router, which wakes the actor, so a view that reconnected whenever kagent suspended the actor would
@@ -200,7 +210,8 @@ reads `GET /sessions/{id}/native`; when the runtime association says the actor i
 view shows "asleep" with a Wake now button and does not attach (an absent association is unknown
 and attaches as before). Opening the page of a sleeping session therefore does not wake it. A
 message sent from the composer while asleep, Wake now, and Retry now are owner actions: they attach
-with `wake=1`, and a message waits until the runner says `hello`, then goes. Asleep, the view reads
+with `wake=1` (the message is recorded and sent by Mainloop at once, which wakes the session as
+well). Asleep, the view reads
 the native state every 10 s and attaches without waking once something else woke the session (a
 turn Mainloop sends, or an answered request that replays the call). An attached view also keeps the
 actor awake by itself: the runner counts every open client as busy (kagent's SDK runner), and kagent
@@ -218,9 +229,9 @@ entries under "Earlier in this session, from Mainloop's record", and stops befor
 the user message the runner's `hello` backlog starts with, so a turn is not shown twice. Every attach
 rebuilds the live part from the backlog, which is in the runner's memory and starts empty after a
 sleep or a replayed answer; the record is read again on each `hello` and each sleep. The record holds
-the messages and replies of turns Mainloop sent (A2A turns), so tool calls from earlier runner
-processes are not shown, and a turn sent from the live view itself is not in the record at all: it
-is in the view only until the actor sleeps (measured on kind, #348). After five
+the messages and replies of turns Mainloop sent (A2A turns), which since the composer sends through
+Mainloop includes every message sent from the live view; tool calls from earlier runner processes
+are not shown. After five
 failed attaches in a row with no `hello` (about 15 s, longer than a wake's 503s normally last) the
 view says the live channel is unavailable, keeps retrying every 8 s, and offers Retry now and Use the
 chat view (the regular session view, until the page is reopened).
@@ -228,8 +239,14 @@ chat view (the regular session view, until the page is reopened).
 `VITE_MSW=1 pnpm dev` a scripted fake runner answers (`web/src/features/live/fakeRunner.ts`, also
 used by the tests).
 
-The server relays the WebSocket verbatim to the runner's client port (`:7682/ws`) on the session's
-actor through the Substrate router, like the workspace preview proxy and over the same mutual-TLS
+The server relays the WebSocket frame by frame to the runner's client port (`:7682/ws`) on the
+session's actor: it ends the browser's WebSocket and dials the runner as a client (before upgrading
+the browser, so a refusal is still an HTTP answer). Runner frames pass unchanged, and so do close
+codes in both directions. From the browser only the permission mode (`{k:"mode"}`) and permission
+answers (`{k:"perm"}`) pass; a message, interrupt, model or effort sent on the socket is answered
+with an `err` frame naming the API call to use, and anything else with an `err` frame too, so input
+reaches the runner only through Mainloop's record. Permission answers stay on the socket until they
+are paired with the session's requests. It reaches the runner through the Substrate router, like the workspace preview proxy and over the same mutual-TLS
 connection (see "Router TLS" in [workspaces.md](workspaces.md)). `live` is true when the
 session has a kagent Session and its Agent is listed in `MAINLOOP_LIVE_AGENTS`. An attach is the
 owner's only (another owner's session, or one that is not live, is `404`); a cross-origin `Origin` is

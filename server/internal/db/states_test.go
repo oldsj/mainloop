@@ -72,6 +72,10 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.DeliveryQueued), string(dbstate.DeliveryRecorded), string(dbstate.DeliverySending),
 			string(dbstate.DeliveryDelivered), string(dbstate.DeliveryCompleted), string(dbstate.DeliveryFailed),
 			string(dbstate.DeliveryCancelled), string(dbstate.DeliveryUncertain))},
+		{"delivery_steers", "state", strs(
+			string(dbstate.SteerRecorded), string(dbstate.SteerSending), string(dbstate.SteerUncertain),
+			string(dbstate.SteerDelivered), string(dbstate.SteerCompleted), string(dbstate.SteerFailed),
+			string(dbstate.SteerCancelled), string(dbstate.SteerConverted))},
 		{"session_restarts", "state", strs(string(dbstate.RestartRequested), string(dbstate.RestartDone))},
 		{"deliveries", "activity_kind", strs(
 			string(dbstate.ActivityEvent), string(dbstate.ActivityTool), string(dbstate.ActivityParked))},
@@ -174,6 +178,7 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(api.TaskProjectionCiStateFailure), string(api.TaskProjectionCiStateUnknown))},
 		{"session_messages", "role", strs(string(api.MessageRoleUser), string(api.MessageRoleAssistant))},
 		{"deliveries", "source", strs(string(api.MessageSourceUser), string(api.MessageSourceMainloop))},
+		{"delivery_steers", "source", strs(string(api.MessageSourceUser), string(api.MessageSourceMainloop))},
 		{"sessions", "agent_cancel_outcome", strs(
 			string(api.SessionCancelResponseAgentStopped), string(api.SessionCancelResponseAgentNotRunning),
 			string(api.SessionCancelResponseAgentUnknown))},

@@ -2867,6 +2867,17 @@ export interface components {
     SessionMessageRequest: {
       /** Message */
       message: string;
+      /**
+       * Message Id
+       * Format: uuid
+       * @description The client's id for the message, its idempotency key: sending the same id again returns the first result and records nothing twice. Omitted, the server picks one.
+       */
+      message_id?: string;
+      /**
+       * Steer
+       * @description Join the session's running turn at its next tool boundary, as a message typed while Claude Code works does, instead of queueing behind it. It joins only when the session's agent takes steers, a turn is running, and the message is not a slash command; otherwise it is an ordinary message. A steer that cannot join after all runs as the next turn, once.
+       */
+      steer?: boolean;
     };
     /**
      * SessionModelRequest
@@ -3240,10 +3251,10 @@ export interface components {
     };
     SessionMessageResponse: {
       /**
-       * @description `queued`: recorded durably behind an open turn, and delivered in its own turn once that one ends; `ok`: admitted at once.
+       * @description `queued`: recorded durably behind an open turn, and delivered in its own turn once that one ends; `ok`: admitted at once; `steered`: recorded to join the running turn (if it cannot, it runs as the next turn).
        * @enum {string}
        */
-      status: 'ok' | 'queued';
+      status: 'ok' | 'queued' | 'steered';
       message_id: string;
     };
     SessionCancelResponse: {
@@ -8466,7 +8477,7 @@ export interface operations {
           'application/json': components['schemas']['SessionMessageResponse'];
         };
       };
-      /** @description Accepted: recorded durably as queued behind an open turn, and delivered once that turn ends. */
+      /** @description Accepted: recorded durably as queued behind an open turn and delivered once that turn ends, or recorded to join the running turn (`steered`). */
       202: {
         headers: {
           [name: string]: unknown;

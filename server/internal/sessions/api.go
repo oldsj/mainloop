@@ -546,7 +546,11 @@ func (a *SessionsAPI) SendSessionMessage(ctx context.Context, r api.SendSessionM
 		return nil, apierr.Invalid("the body is required")
 	}
 	id := uuid.NewString()
-	sent, err := a.Svc.SendTo(ctx, r.SessionId, id, r.Body.Message)
+	if r.Body.MessageId != nil {
+		id = r.Body.MessageId.String()
+	}
+	sent, err := a.Svc.SendToWith(ctx, SourceUser, r.SessionId, id, r.Body.Message,
+		SendOptions{Steer: r.Body.Steer != nil && *r.Body.Steer})
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return nil, apierr.NotFound("Session not found")
@@ -559,7 +563,12 @@ func (a *SessionsAPI) SendSessionMessage(ctx context.Context, r api.SendSessionM
 	case err != nil:
 		return nil, err
 	}
-	if sent.Queued {
+	switch {
+	case sent.Steered:
+		return api.SendSessionMessage202JSONResponse(api.SessionMessageResponse{
+			MessageId: id, Status: api.SessionMessageResponseStatusSteered,
+		}), nil
+	case sent.Queued:
 		return api.SendSessionMessage202JSONResponse(api.SessionMessageResponse{
 			MessageId: id, Status: api.SessionMessageResponseStatusQueued,
 		}), nil

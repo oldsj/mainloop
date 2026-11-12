@@ -9,10 +9,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 type fakeTargets map[string]string
@@ -33,13 +36,21 @@ func (f fakeTargets) LiveTarget(_ context.Context, id string, wake bool) (LiveTa
 	return LiveTarget{}, ErrLiveNotFound
 }
 
-// fakeRunner is the runner's client port: PUT /bootstrap (TOFU) and a /ws that echoes raw bytes.
+// fakeRunner is the runner's client port: PUT /bootstrap (TOFU) and a /ws that echoes every frame
+// and records it. A frame "suspend" closes the socket as kagent suspending the actor does.
 type fakeRunner struct {
 	mu       sync.Mutex
 	token    string
 	boots    int
 	wsQuery  string
 	wsHeader http.Header
+	got      []string
+}
+
+func (f *fakeRunner) received() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.got)
 }
 
 func (f *fakeRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -62,16 +73,29 @@ func (f *fakeRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-		conn, brw, err := http.NewResponseController(w).Hijack()
+		up := websocket.Upgrader{Subprotocols: []string{RunnerSubprotocol}}
+		conn, err := up.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
 		defer func() { _ = conn.Close() }()
-		_, _ = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Protocol: " + RunnerSubprotocol + "\r\n\r\n")
-		_ = brw.Flush()
-		buf := make([]byte, 64)
-		n, _ := brw.Read(buf)
-		_, _ = conn.Write(buf[:n])
+		for {
+			kind, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			f.mu.Lock()
+			f.got = append(f.got, string(data))
+			f.mu.Unlock()
+			if strings.Contains(string(data), "suspend") {
+				msg := websocket.FormatCloseMessage(websocket.CloseGoingAway, "actor suspended")
+				_ = conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
+				return
+			}
+			if err := conn.WriteMessage(kind, data); err != nil {
+				return
+			}
+		}
 	}
 }
 
@@ -95,6 +119,66 @@ func newTestLive(t *testing.T, runner http.Handler, dialErr error) (*httptest.Se
 	front := httptest.NewServer(l.Route(http.NotFoundHandler()))
 	t.Cleanup(front.Close)
 	return front, l
+}
+
+// attach opens a WebSocket to the relay.
+func attach(t *testing.T, base, path string, hdr http.Header) *websocket.Conn {
+	t.Helper()
+	d := websocket.Dialer{Subprotocols: []string{RunnerSubprotocol}}
+	conn, resp, err := d.DialContext(t.Context(), "ws"+strings.TrimPrefix(base, "http")+path, hdr)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("attach %s: %v", path, err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+// Input reaches the runner only through Mainloop's API: the relay answers a message, a stop, a
+// model or an effort sent on the socket with an err frame naming the call, and forwards none of
+// them. The permission mode and permission answers pass, and the runner's close reaches the browser
+// with its code, which is how the view tells a suspend apart.
+func TestLiveForwardsOnlyControlsFromTheBrowser(t *testing.T) {
+	runner := &fakeRunner{}
+	front, _ := newTestLive(t, runner, nil)
+	conn := attach(t, front.URL, "/sessions/s1/live", nil)
+	refused := map[string]string{
+		`{"k":"user","text":"hi","id":"c1"}`: "POST /sessions/{id}/message",
+		`{"k":"interrupt"}`:                  "POST /sessions/{id}/stop-turn",
+		`{"k":"model","model":"x"}`:          "POST /sessions/{id}/model",
+		`{"k":"effort","effort":"max"}`:      "POST /sessions/{id}/effort",
+		`not json`:                           "permission mode and permission answers",
+	}
+	for frame, call := range refused {
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(frame)); err != nil {
+			t.Fatal(err)
+		}
+		var got struct{ K, Text string }
+		if err := conn.ReadJSON(&got); err != nil || got.K != "err" || !strings.Contains(got.Text, call) {
+			t.Fatalf("%s: answered %+v, %v; want an err naming %q", frame, got, err, call)
+		}
+	}
+	perm := `{"k":"perm","id":"p1","behavior":"allow"}`
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(perm)); err != nil {
+		t.Fatal(err)
+	}
+	if _, got, err := conn.ReadMessage(); err != nil || string(got) != perm {
+		t.Fatalf("perm echo %q %v", got, err)
+	}
+	if got := runner.received(); !slices.Equal(got, []string{perm}) {
+		t.Fatalf("runner received %q, want only the perm answer", got)
+	}
+
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"k":"mode","mode":"suspend"}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := conn.ReadMessage()
+	var ce *websocket.CloseError
+	if !errors.As(err, &ce) || ce.Code != websocket.CloseGoingAway || ce.Text != "actor suspended" {
+		t.Fatalf("close %v, want 1001 actor suspended", err)
+	}
 }
 
 // upgrade sends a raw WebSocket handshake and returns the response status and headers; on a 101 the
@@ -130,21 +214,18 @@ func TestLiveRelaysWebSocketAndBootstrapsOnce(t *testing.T) {
 	runner := &fakeRunner{}
 	front, l := newTestLive(t, runner, nil)
 	for i := range 2 {
-		code, hdr, conn, br := upgrade(t, front.URL, "/sessions/s1/live?since=7", map[string]string{
-			"Cookie": "session=secret", "Origin": "https://app.example",
+		conn := attach(t, front.URL, "/sessions/s1/live?since=7", http.Header{
+			"Cookie": {"session=secret"}, "Origin": {"https://app.example"},
 		})
-		if code != http.StatusSwitchingProtocols {
-			t.Fatalf("attach %d: status %d", i, code)
+		if got := conn.Subprotocol(); got != RunnerSubprotocol {
+			t.Fatalf("attach %d: subprotocol %q", i, got)
 		}
-		if got := hdr.Get("Sec-WebSocket-Protocol"); got != RunnerSubprotocol {
-			t.Fatalf("subprotocol %q", got)
-		}
-		if _, err := conn.Write([]byte("frame")); err != nil {
+		mode := `{"k":"mode","mode":"acceptEdits"}`
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(mode)); err != nil {
 			t.Fatal(err)
 		}
-		buf := make([]byte, 5)
-		if _, err := io.ReadFull(br, buf); err != nil || string(buf) != "frame" {
-			t.Fatalf("echo %q %v", buf, err)
+		if _, got, err := conn.ReadMessage(); err != nil || string(got) != mode {
+			t.Fatalf("echo %q %v", got, err)
 		}
 	}
 	runner.mu.Lock()

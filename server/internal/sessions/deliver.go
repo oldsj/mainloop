@@ -1086,6 +1086,13 @@ func (t *turn) settle(
 		})); err != nil {
 			return nil, err
 		}
+		// Steers never sent into the turn go first: they were recorded before anything queued after them.
+		if err := endUnsentSteers(ctx, q, t.c.ID, final); err != nil {
+			return nil, err
+		}
+		if err := q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: SteerChannel, Payload: t.c.ID}); err != nil {
+			return nil, err
+		}
 		// The turn just ended, so the one-open-turn index has nothing of this session's left in it:
 		// admit the oldest message still queued, before refreshing the session's status below sees it.
 		promoted, err := promoteNextQueued(ctx, q, t.d.SessionID, t.s.opts().UncertainHold.Seconds())

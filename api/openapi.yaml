@@ -2707,7 +2707,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SessionMessageResponse'
         '202':
-          description: 'Accepted: recorded durably as queued behind an open turn, and delivered once that turn ends.'
+          description: 'Accepted: recorded durably as queued behind an open turn and delivered once that turn ends, or recorded to join the running turn (`steered`).'
           content:
             application/json:
               schema:
@@ -6351,6 +6351,21 @@ components:
         message:
           type: string
           title: Message
+        message_id:
+          type: string
+          format: uuid
+          title: Message Id
+          description: >-
+            The client's id for the message, its idempotency key: sending the same id again returns the
+            first result and records nothing twice. Omitted, the server picks one.
+        steer:
+          type: boolean
+          title: Steer
+          description: >-
+            Join the session's running turn at its next tool boundary, as a message typed while Claude
+            Code works does, instead of queueing behind it. It joins only when the session's agent
+            takes steers, a turn is running, and the message is not a slash command; otherwise it is an
+            ordinary message. A steer that cannot join after all runs as the next turn, once.
       type: object
       required:
         - message
@@ -7085,7 +7100,8 @@ components:
           enum:
             - ok
             - queued
-          description: '`queued`: recorded durably behind an open turn, and delivered in its own turn once that one ends; `ok`: admitted at once.'
+            - steered
+          description: '`queued`: recorded durably behind an open turn, and delivered in its own turn once that one ends; `ok`: admitted at once; `steered`: recorded to join the running turn (if it cannot, it runs as the next turn).'
         message_id:
           type: string
       required:

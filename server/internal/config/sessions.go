@@ -7,6 +7,11 @@ type Sessions struct {
 	// LiveAgents names the kagent Agents (by name) whose Harness runs the Agent SDK runner
 	// (KAGENT_CLAUDE_DRIVER=sdk). Their sessions get GET /sessions/{id}/live.
 	LiveAgents []string `env:"MAINLOOP_LIVE_AGENTS" envSeparator:","`
+	// SteerAgents names the kagent Agents (by name) whose harness takes a message into a running
+	// turn (A2A SendMessage to the running task with the kagent.steer flag). An owner's message
+	// sent with steer to one of their sessions joins the running turn instead of queueing behind it.
+	// Any other Agent's steer is an ordinary message.
+	SteerAgents []string `env:"MAINLOOP_STEER_AGENTS" envSeparator:","`
 	// UncertainHold is how long a delivery whose send may have reached kagent keeps blocking new
 	// sends while it is looked up. After it, a message that no kagent task shows is marked failed.
 	UncertainHold Seconds `env:"SESSION_UNCERTAIN_HOLD_SECONDS" envDefault:"1800"`
@@ -36,8 +41,13 @@ type Sessions struct {
 }
 
 // IsLiveAgent reports whether the named Agent runs the Agent SDK runner.
-func (s Sessions) IsLiveAgent(name string) bool {
-	for _, n := range s.LiveAgents {
+func (s Sessions) IsLiveAgent(name string) bool { return listed(s.LiveAgents, name) }
+
+// IsSteerAgent reports whether the named Agent takes a message into a running turn.
+func (s Sessions) IsSteerAgent(name string) bool { return listed(s.SteerAgents, name) }
+
+func listed(names []string, name string) bool {
+	for _, n := range names {
 		if n = strings.TrimSpace(n); n != "" && n == name {
 			return true
 		}

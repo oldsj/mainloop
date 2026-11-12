@@ -124,6 +124,17 @@ func (e *A2AError) RetryAfter() time.Duration {
 	return time.Duration(ms * float64(time.Millisecond))
 }
 
+// SteerRefusal is the reason kagent refused a steer (a message into a running task), or "" when
+// err is not one: steer_task_not_running, steer_input_required or steer_process_driver. Unlike an
+// ordinary not-accepted refusal, sending the same steer again would be refused again.
+func SteerRefusal(err error) string {
+	var n *SendNotAccepted
+	if !errors.As(err, &n) {
+		return ""
+	}
+	return n.Metadata["steer"]
+}
+
 // SendNotAccepted means kagent did not accept the message. Sending the same message again
 // is safe.
 type SendNotAccepted struct{ A2AError }
