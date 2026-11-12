@@ -405,12 +405,13 @@ export class LiveModel {
       }
       case 'ctl':
         if (f.what === 'interrupt') return;
-        if (f.what === 'model') {
-          s.model = str(f.model) || str(f.value) || s.model;
-          this.sys(`Set model to ${s.model}`);
-        } else if (f.what === 'effort') {
-          s.effort = str(f.effort) || str(f.value) || s.effort;
-          this.sys(`Set effort to ${s.effort}`);
+        // The SDK driver sets the model and effort at the start of every A2A turn, so most acks
+        // repeat the current value: only a change is printed. Empty means the default.
+        if (f.what === 'model' || f.what === 'effort') {
+          const key = f.what;
+          const next = str(f[key]) || str(f.value);
+          if (next !== (s[key] || '')) this.sys(`Set ${key} to ${next || 'default'}`);
+          s[key] = next;
         } else if (f.what === 'mode') {
           s.mode = str(f.mode) || str(f.value) || s.mode;
         }
