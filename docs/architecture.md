@@ -232,15 +232,9 @@ The trusted backend Role grants namespace-wide Secret `get/create/delete` in `ka
 RBAC cannot constrain dynamic creates by name or label; admission policy can restrict writes,
 while prefix-scoped reads require a separate broker or authorization boundary.
 Main and child AgentTemplates must bind that RemoteMCPServer.
-Mainloop uses three kinds of kagent Agent, named by settings. Agent templates and harnesses
-remain owned by the kagent installation.
-
-| Setting                                           | Runs                                      | Harness requirements                                       |
-| ------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------- |
-| `KAGENT_MAIN_AGENT` (`mainloop-main`)             | the Claude main thread                    | `sessionIdleTTL: 0s`                                       |
-| `KAGENT_MAIN_CODEX_AGENT` (`mainloop-main-codex`) | the Codex main thread                     | `sessionIdleTTL: 0s`                                       |
-| `KAGENT_WORKSPACE_CLAUDE_AGENT` / `_CODEX_AGENT`  | workspaces and sessions the owner starts  | `sessionIdleTTL: 0s`, `git.origins` (the repository hosts) |
-| `KAGENT_CLAUDE_AGENT` / `KAGENT_CODEX_AGENT`      | child agents the main thread delegates to | default TTL and snapshot scope                             |
+Mainloop picks a kagent Agent by role (main, supervisor, code task or workspace, coordination
+child); the settings, defaults and harnesses are in
+[Agents and permissions](architecture/agents-and-permissions.md#the-agents).
 
 A workspace needs its own Agents because kagent measures idle time from the last A2A event
 (previews do not count) and deletes the Session and its actor on expiry,
