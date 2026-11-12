@@ -477,15 +477,11 @@ func inHistory(task *a2a.Task, messageID string) bool {
 }
 
 // unconsumed reports whether the ended task lists the message as a steer it took but never gave
-// to the model.
+// to the model. kagent lists them on the task; the final status message is read too.
 func unconsumed(task *a2a.Task, messageID string) bool {
-	var meta map[string]any
-	if task.Status.Message != nil {
-		meta = task.Status.Message.Metadata
+	listed := func(meta map[string]any) bool {
+		list, _ := meta[steerUnconsumedKey].([]any)
+		return slices.ContainsFunc(list, func(v any) bool { s, _ := v.(string); return s == messageID })
 	}
-	if v, ok := task.Metadata[steerUnconsumedKey]; ok && meta == nil {
-		meta = map[string]any{steerUnconsumedKey: v}
-	}
-	list, _ := meta[steerUnconsumedKey].([]any)
-	return slices.ContainsFunc(list, func(v any) bool { s, _ := v.(string); return s == messageID })
+	return listed(task.Metadata) || (task.Status.Message != nil && listed(task.Status.Message.Metadata))
 }

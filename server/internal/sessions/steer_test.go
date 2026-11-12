@@ -67,15 +67,20 @@ func (e *env) finishTask(id a2a.TaskID, state a2a.TaskState, unconsumed ...strin
 	if !ok {
 		e.t.Fatalf("no task %s", id)
 	}
-	task.Status = a2a.TaskStatus{State: state}
+	// kagent (#101) lists unconsumed steers on the task; its final status message can carry
+	// metadata of its own, which must not hide that list.
+	msg := a2a.NewMessage(a2a.MessageRoleAgent)
+	msg.Metadata = map[string]any{"kagent.dev/usage": map[string]any{"output_tokens": 1}}
+	task.Status = a2a.TaskStatus{State: state, Message: msg}
 	if len(unconsumed) > 0 {
 		list := make([]any, len(unconsumed))
 		for i, m := range unconsumed {
 			list[i] = m
 		}
-		msg := a2a.NewMessage(a2a.MessageRoleAgent)
-		msg.Metadata = map[string]any{"kagent.steer.unconsumed": list}
-		task.Status.Message = msg
+		if task.Metadata == nil {
+			task.Metadata = map[string]any{}
+		}
+		task.Metadata["kagent.steer.unconsumed"] = list
 	}
 	task.Artifacts = []*a2a.Artifact{{ID: "a1", Parts: a2a.ContentParts{a2a.NewTextPart("all done")}}}
 	e.srv.AddTask(task)
