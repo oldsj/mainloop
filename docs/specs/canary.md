@@ -11,13 +11,13 @@ wake of an idle session: the path the owner's own sessions take, and the latency
 
 For each `--target name=url[@host]` (in the chart, this instance's own API, named `canary.name`):
 
-| Step | What it does |
-| --- | --- |
-| `list-sessions` | `GET /sessions?hidden=true`; the newest canary session that has not ended is the one to ping |
+| Step             | What it does                                                                                                                                                                                                                                                         |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list-sessions`  | `GET /sessions?hidden=true`; the newest canary session that has not ended is the one to ping                                                                                                                                                                         |
 | `create-session` | only when none is usable (first run, or the last one broke): creates a hidden standalone session `Mainloop canary YYYY-MM-DD HH:MM` with the prompt `ping` and the model (`--model`, default `claude-haiku-5-5`) set at create. This run is a cold start and says so |
-| `send-message` | otherwise sends `ping`; anything but `ok` (queued, steered) means an earlier canary turn never ended: it is stopped and the run fails |
-| `await-reply` | reads the conversation until an assistant reply follows the ping (`--deadline`, default 4m); on a timeout the turn is stopped (`stop-turn`) so nothing is left running. A model kagent rejects fails here |
-| `cleanup` | cancels and archives canary sessions that ended or were superseded |
+| `send-message`   | otherwise sends `ping`; anything but `ok` (queued, steered) means an earlier canary turn never ended: it is stopped and the run fails                                                                                                                                |
+| `await-reply`    | reads the conversation until an assistant reply follows the ping (`--deadline`, default 4m); on a timeout the turn is stopped (`stop-turn`) so nothing is left running. A model kagent rejects fails here                                                            |
+| `cleanup`        | cancels and archives canary sessions that ended or were superseded                                                                                                                                                                                                   |
 
 The session is hidden: `GET /sessions` (and the session list in the attention snapshot) leaves it
 out unless `hidden=true` is asked for; it is still readable by id. A standalone session has no
