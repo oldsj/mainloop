@@ -117,7 +117,7 @@ func (s *Service) Handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 		}
 		owner := c.Owner
 		rows, err := q.SettlePushNotification(ctx, dbq.SettlePushNotificationParams{
-			State: state, Detail: d, ID: c.ID, LeaseOwner: &owner, Attempts: int32(c.Attempts),
+			State: state, Detail: d, ID: c.ID, LeaseOwner: &owner, Attempts: n.Attempts,
 		})
 		if err != nil {
 			return reconcile.Retry(), err
@@ -188,7 +188,7 @@ func (s *Service) post(ctx context.Context, msg message) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("ntfy publish: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode/100 != 2 {
 		return resp.StatusCode, fmt.Errorf("ntfy publish: status %d", resp.StatusCode)
@@ -209,7 +209,7 @@ func (s *Service) published(ctx context.Context, msg message, since time.Time) (
 	if err != nil {
 		return false, fmt.Errorf("ntfy poll: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		return false, fmt.Errorf("ntfy poll: status %d", resp.StatusCode)
 	}
