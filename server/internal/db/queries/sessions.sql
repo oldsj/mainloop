@@ -446,7 +446,7 @@ ORDER BY created_at, id;
 
 -- name: GetSessionRow :one
 -- A session with what its binding says about it. The owner filter is part of the key.
-SELECT s.*, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
+SELECT s.*, b.kind AS agent_kind, b.parent_session_id, COALESCE(b.role, '')::text AS binding_role, t.name AS topic
 FROM sessions s
 LEFT JOIN agent_bindings b ON b.session_id = s.id
 LEFT JOIN topics t ON t.id = b.topic_id
@@ -456,7 +456,7 @@ WHERE s.id = $1 AND s.user_id = $2;
 -- The owner's unarchived sessions other than the main thread, newest first: every session that is
 -- not history, plus the newest 100 history records (completed, failed, cancelled, superseded).
 -- Optionally of one status.
-SELECT s.*, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
+SELECT s.*, b.kind AS agent_kind, b.parent_session_id, COALESCE(b.role, '')::text AS binding_role, t.name AS topic
 FROM sessions s
 LEFT JOIN agent_bindings b ON b.session_id = s.id
 LEFT JOIN topics t ON t.id = b.topic_id

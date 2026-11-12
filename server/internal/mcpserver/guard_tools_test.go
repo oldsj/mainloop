@@ -128,6 +128,12 @@ var writeCases = []writeCase{
 			}
 			return map[string]any{"request_id": "dead", "task_id": id, "expected_version": version, "expected_attempt_id": nil}
 		}},
+	{tool: "steer", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(t *testing.T, h *harness, _ *prHarness, a authtest.Seeded) map[string]any {
+			made := setupCall(t, h, a, "delegate", map[string]any{"request_id": "live", "title": "Plan", "brief": "b", "mode": "coordination"})
+			id, _ := made["task_id"].(string)
+			return map[string]any{"request_id": "dead", "task_id": id, "text": "also check the docs"}
+		}},
 	{tool: "report", role: dbstate.RoleSupervisor, grant: dbstate.GrantCoordination,
 		prepare: func(t *testing.T, h *harness, _ *prHarness, a authtest.Seeded) map[string]any {
 			task, attempt := h.seedTask(t, nil, dbstate.AttemptSupervisor, dbstate.AttemptActive, a)

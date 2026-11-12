@@ -151,12 +151,19 @@ func (s *Service) view(ctx context.Context, q *dbq.Queries, ownerID, proposalID 
 // PrepareInput is a prepare_pull_request_merge or merge_pull_request call.
 type PrepareInput struct {
 	OwnerID, ProjectID, SessionID string
-	PRNumber                      int
-	ExpectedSHA, RequestID        string
+	// Repository ("owner/name") names the project instead of ProjectID; only the main thread
+	// sends it.
+	Repository             string
+	PRNumber               int
+	ExpectedSHA, RequestID string
 }
 
 func (in PrepareInput) hash() string {
-	return digest(map[string]any{"project_id": in.ProjectID, "pr_number": in.PRNumber, "expected_sha": in.ExpectedSHA})
+	m := map[string]any{"project_id": in.ProjectID, "pr_number": in.PRNumber, "expected_sha": in.ExpectedSHA}
+	if in.Repository != "" {
+		m["repository"] = strings.ToLower(in.Repository)
+	}
+	return digest(m)
 }
 
 // Prepare freezes the facts of a pull request into a proposal: it reads GitHub, decides the route
@@ -188,6 +195,16 @@ func (s *Service) prepare(ctx context.Context, tool dbstate.MergeTool, in Prepar
 		return v, err
 	}
 
+	if in.Repository != "" {
+		p, err := q.GetProjectByFullName(ctx, dbq.GetProjectByFullNameParams{UserID: in.OwnerID, Lower: in.Repository})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return View{}, ErrNotFound
+		}
+		if err != nil {
+			return View{}, err
+		}
+		in.ProjectID = p.ID
+	}
 	project, err := q.GetProjectAuthority(ctx, dbq.GetProjectAuthorityParams{ID: in.ProjectID, UserID: in.OwnerID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return View{}, ErrNotFound
@@ -219,7 +236,9 @@ func (s *Service) prepare(ctx context.Context, tool dbstate.MergeTool, in Prepar
 	if !strings.EqualFold(f.Repository, project.FullName) {
 		return View{}, refuse("repository_mismatch", "the repository is not the project's")
 	}
-	if f.HeadSHA != in.ExpectedSHA {
+	// An empty expected_sha (allowed only from the main thread) takes the head just read; the
+	// proposal pins it either way, so what is approved and merged is that exact head.
+	if in.ExpectedSHA != "" && f.HeadSHA != in.ExpectedSHA {
 		return View{}, refuse("head_moved", "the pull request head is not expected_sha")
 	}
 	f.Policy, f.PolicyVer = string(project.MergePolicy), int(project.MergePolicyVersion)
@@ -386,13 +405,19 @@ func (s *Service) begin(ctx context.Context, proposalID, ownerID string, consent
 // ApprovedInput is a merge_pull_request_with_approval call.
 type ApprovedInput struct {
 	OwnerID, SessionID, ProposalID, RequestID string
-	// ActorProjectID is the project the calling session is bound to; it must be the proposal's.
+	// ActorProjectID is the project the calling session is bound to; it must be the proposal's,
+	// unless ActorMain: the owner's main thread acts in any of the owner's projects.
 	ActorProjectID string
+	ActorMain      bool
 }
 
 // ownsProject refuses a caller whose session is not bound to the proposal's project. A session with
-// no project has no authority over any.
-func ownsProject(actorProjectID, projectID string) error {
+// no project has no authority over any, except the owner's main thread, which has authority over
+// every project of its owner (the proposal's owner is checked wherever this is).
+func ownsProject(actorProjectID, projectID string, main bool) error {
+	if main {
+		return nil
+	}
 	if actorProjectID == "" || actorProjectID != projectID {
 		return refuse("forbidden", "this session has no authority over that project")
 	}
@@ -408,7 +433,7 @@ func (s *Service) MergeApproved(ctx context.Context, in ApprovedInput) (View, er
 	if err != nil {
 		return View{}, err
 	}
-	if err := ownsProject(in.ActorProjectID, row.ProjectID); err != nil {
+	if err := ownsProject(in.ActorProjectID, row.ProjectID, in.ActorMain); err != nil {
 		return View{}, err
 	}
 	if row.SessionID != in.SessionID {
@@ -457,7 +482,7 @@ func (s *Service) MergeApproved(ctx context.Context, in ApprovedInput) (View, er
 
 // Status is get_pull_request_merge_status: it reads the stored state of a proposal that this
 // request id belongs to, and never approves or executes anything.
-func (s *Service) Status(ctx context.Context, ownerID, actorProjectID, proposalID, requestID string) (View, error) {
+func (s *Service) Status(ctx context.Context, ownerID, actorProjectID string, actorMain bool, proposalID, requestID string) (View, error) {
 	q := dbq.New(s.Pool)
 	for _, tool := range []dbstate.MergeTool{dbstate.ToolPrepare, dbstate.ToolMerge, dbstate.ToolApprovedMerge} {
 		k, err := q.GetMergeRequestKey(ctx, dbq.GetMergeRequestKeyParams{OwnerID: ownerID, Tool: tool, RequestID: requestID})
@@ -474,7 +499,7 @@ func (s *Service) Status(ctx context.Context, ownerID, actorProjectID, proposalI
 		if err != nil {
 			return View{}, err
 		}
-		if err := ownsProject(actorProjectID, row.ProjectID); err != nil {
+		if err := ownsProject(actorProjectID, row.ProjectID, actorMain); err != nil {
 			return View{}, err
 		}
 		return v, nil
@@ -521,4 +546,11 @@ func NewService(cfg *config.Config, pool *pgxpool.Pool, gh GitHub, rt Runtime, l
 		Pool: pool, GitHub: gh, Log: log, Configs: cfg.MergeConfigurations, Runtime: rt, Settle: DefaultSettle,
 		ProtectedAuto: bool(cfg.MergeProtectedAuto),
 	}
+}
+
+func deref(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }

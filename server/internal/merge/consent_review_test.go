@@ -345,7 +345,7 @@ func TestReviewStatusAndApprovalMustBeProjectScoped(t *testing.T) {
 	e.consent(v.ProposalID, "good", nil)
 	ctx := context.Background()
 	for _, project := range []string{"", "p2"} {
-		if _, err := e.svc.Status(ctx, owner, project, v.ProposalID, "prep"); refusalOf(err) != "forbidden" {
+		if _, err := e.svc.Status(ctx, owner, project, false, v.ProposalID, "prep"); refusalOf(err) != "forbidden" {
 			t.Fatalf("status for project %q: %v", project, err)
 		}
 		_, err := e.svc.MergeApproved(ctx, merge.ApprovedInput{OwnerID: owner, ActorProjectID: project, SessionID: "s1", ProposalID: v.ProposalID, RequestID: "good"})
@@ -356,7 +356,7 @@ func TestReviewStatusAndApprovalMustBeProjectScoped(t *testing.T) {
 	if e.puts() != 0 {
 		t.Fatalf("puts = %d", e.puts())
 	}
-	if _, err := e.svc.Status(ctx, owner, "p1", v.ProposalID, "prep"); err != nil {
+	if _, err := e.svc.Status(ctx, owner, "p1", false, v.ProposalID, "prep"); err != nil {
 		t.Fatalf("status from the right project: %v", err)
 	}
 }

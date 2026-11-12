@@ -894,14 +894,14 @@ func TestStatusReadsStoredStateOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := e.svc.Status(ctx, owner, "p1", v.ProposalID, "r1")
+	got, err := e.svc.Status(ctx, owner, "p1", false, v.ProposalID, "r1")
 	if err != nil || got.State != dbstate.MergeMerged || got.ProposalID != v.ProposalID {
 		t.Fatalf("status = %+v, %v", got, err)
 	}
-	if _, err := e.svc.Status(ctx, owner, "p1", v.ProposalID, "unknown"); !errors.Is(err, merge.ErrNotFound) {
+	if _, err := e.svc.Status(ctx, owner, "p1", false, v.ProposalID, "unknown"); !errors.Is(err, merge.ErrNotFound) {
 		t.Fatalf("unknown request id = %v", err)
 	}
-	if _, err := e.svc.Status(ctx, "someone-else", "p1", v.ProposalID, "r1"); !errors.Is(err, merge.ErrNotFound) {
+	if _, err := e.svc.Status(ctx, "someone-else", "p1", false, v.ProposalID, "r1"); !errors.Is(err, merge.ErrNotFound) {
 		t.Fatalf("foreign owner = %v", err)
 	}
 	if e.puts() != 1 {

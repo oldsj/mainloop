@@ -103,7 +103,53 @@ func (s *Server) taskTools() []Tool {
 			}, "request_id", "expected_version", "expected_attempt_id", "task_id"),
 			Handle: s.taskCancel,
 		},
+		{
+			Name: agentauth.ToolSteer,
+			Description: "Send a message into a managed task's running turn; it joins at the next tool boundary. " +
+				"Where the turn cannot take it (none running, waiting on input, an agent without steering) it is queued " +
+				"as the task's next message instead; the result says steered, queued or sent. Reuse request_id to retry.",
+			InputSchema: objectSchema(map[string]any{
+				"task_id":    id,
+				"request_id": id,
+				"text":       stringSchema(1, tasks.MaxSteerChars),
+			}, "task_id", "request_id", "text"),
+			Handle: s.taskSteer,
+		},
 	}
+}
+
+func (s *Server) taskSteer(ctx context.Context, a agentauth.Actor, args json.RawMessage) (Result, error) {
+	var in struct {
+		TaskID    string `json:"task_id"`
+		RequestID string `json:"request_id"`
+		Text      string `json:"text"`
+	}
+	if err := decode(args, &in); err != nil {
+		return Result{}, err
+	}
+	var st tasks.SteerInput
+	var err error
+	if st.TaskID, err = text(in.TaskID, 1, 100); err != nil {
+		return Result{}, err
+	}
+	if st.RequestID, err = text(in.RequestID, 1, 100); err != nil {
+		return Result{}, err
+	}
+	if st.Text, err = text(in.Text, 1, tasks.MaxSteerChars); err != nil {
+		return Result{}, err
+	}
+	p, err := s.taskPrincipal(ctx, a)
+	if err != nil {
+		return Result{}, err
+	}
+	res, err := s.Tasks.Steer(ctx, p, st)
+	if err != nil {
+		return Result{}, taskFailure(err)
+	}
+	line := fmt.Sprintf("message %s to task %s: %s", res.MessageID, res.TaskID, res.How)
+	return Result{Text: line, Structured: map[string]any{
+		"task_id": res.TaskID, "attempt_id": res.AttemptID, "message_id": res.MessageID, "delivery": res.How, "text": line,
+	}}, nil
 }
 
 // taskPrincipal turns the authenticated actor into a task principal, re-checking a supervisor's

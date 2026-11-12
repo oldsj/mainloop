@@ -371,3 +371,27 @@ func TestReviewApprovalMustBeProjectScoped(t *testing.T) {
 		t.Fatalf("PUTs = %d", n)
 	}
 }
+
+// The main thread merges by repository and PR number without a head sha; workspace sessions still
+// give their project_id and the exact head.
+func TestMainMergesByRepositoryAndNumber(t *testing.T) {
+	h := newPRHarness(t)
+	a := h.seedAgent(t, nil)
+	for _, args := range []map[string]any{
+		{"project_id": "p1", "pr_number": 1, "request_id": "w1"},
+		{"repository": "o/n", "pr_number": 1, "expected_sha": prTip, "request_id": "w2"},
+	} {
+		if _, r := h.call(mcpserver.PathOrdinary, a.Token, "merge_pull_request", args); !r.Result.IsError || r.text() != "[validation] invalid tool arguments" {
+			t.Errorf("workspace %v = %q", args, r.text())
+		}
+	}
+	main := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination})
+	both := map[string]any{"project_id": "p1", "repository": "o/n", "pr_number": 1, "request_id": "m0"}
+	if _, r := h.call(mcpserver.PathOrdinary, main.Token, "merge_pull_request", both); !r.Result.IsError || r.text() != "[validation] invalid tool arguments" {
+		t.Errorf("project and repository = %q", r.text())
+	}
+	_, done := h.call(mcpserver.PathOrdinary, main.Token, "merge_pull_request", map[string]any{"repository": "O/N", "pr_number": 1, "request_id": "m1"})
+	if done.Result.IsError || done.Result.StructuredContent["status"] != "merged" || h.fake.Count("PUT", mergeIt) != 1 {
+		t.Fatalf("main merge = %v %q", done.Result.StructuredContent, done.text())
+	}
+}

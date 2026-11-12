@@ -194,9 +194,9 @@ func TestPolicyTable(t *testing.T) {
 		got  string
 		want string
 	}{
-		{"main", join(off, main, ord), want("whoami", "topics", "topic_open", "note", "decide", "pending_add", "pending_done", "open_pull_request", "get_issue", "list_dependabot_alerts", "list_check_runs", "task_get", "task_list", "task_history", "delegate", "task_cancel")},
-		{"supervisor coordination", join(off, sup, ord), want("whoami", "task_get", "task_list", "task_history", "delegate", "task_cancel", "report")},
-		{"supervisor workspace", join(off, supWS, ord), want("whoami", "open_pull_request", "get_issue", "list_dependabot_alerts", "list_check_runs", "task_get", "task_list", "task_history", "delegate", "task_cancel", "report")},
+		{"main", join(off, main, ord), want("whoami", "topics", "topic_open", "note", "decide", "pending_add", "pending_done", "open_pull_request", "get_issue", "list_dependabot_alerts", "list_check_runs", "task_get", "task_list", "task_history", "delegate", "task_cancel", "steer")},
+		{"supervisor coordination", join(off, sup, ord), want("whoami", "task_get", "task_list", "task_history", "delegate", "task_cancel", "steer", "report")},
+		{"supervisor workspace", join(off, supWS, ord), want("whoami", "open_pull_request", "get_issue", "list_dependabot_alerts", "list_check_runs", "task_get", "task_list", "task_history", "delegate", "task_cancel", "steer", "report")},
 		{"child", join(off, child, ord), want("whoami", "task_get", "task_list", "task_history", "report")},
 		{"workspace agent", join(off, ws, ord), want("whoami", "open_pull_request", "get_issue", "list_dependabot_alerts", "list_check_runs")},
 		{"workspace agent with merge", join(on, ws, ord), want("whoami", "open_pull_request", "get_issue", "list_dependabot_alerts", "list_check_runs", "prepare_pull_request_merge", "merge_pull_request", "get_pull_request_merge_status")},

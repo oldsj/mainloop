@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/merge"
 	"github.com/oldsj/mainloop/server/internal/prs"
 )
@@ -19,12 +20,16 @@ import (
 func (s *Server) pullRequestTools() []Tool {
 	id := stringSchema(1, 100)
 	sha := map[string]any{"type": "string", "pattern": "^[0-9a-f]{40}$"}
+	// The main thread names a pull request by number, in any of the owner's projects: by project_id
+	// or by repository ("owner/name"), and expected_sha may be left out to take the head as read.
+	// Every other session must give its own project_id and the exact expected_sha.
 	prCall := objectSchema(map[string]any{
 		"project_id":   id,
+		"repository":   stringSchema(3, 200),
 		"pr_number":    map[string]any{"type": "integer", "exclusiveMinimum": 0},
 		"expected_sha": sha,
 		"request_id":   id,
-	}, "project_id", "pr_number", "expected_sha", "request_id")
+	}, "pr_number", "request_id")
 	proposalCall := objectSchema(map[string]any{"proposal_id": id, "request_id": id}, "proposal_id", "request_id")
 	return []Tool{
 		{
@@ -42,13 +47,15 @@ func (s *Server) pullRequestTools() []Tool {
 			Handle: s.openPullRequest,
 		},
 		{
-			Name:        agentauth.ToolPreparePullRequestMerge,
-			Description: "Prepare immutable PR merge facts and required route; creates no approval card.",
+			Name: agentauth.ToolPreparePullRequestMerge,
+			Description: "Prepare immutable PR merge facts and required route; creates no approval card. " +
+				"Workspace sessions give project_id and expected_sha; the main thread may give repository instead and omit expected_sha.",
 			InputSchema: prCall, Handle: s.prepareMerge,
 		},
 		{
-			Name:        agentauth.ToolMergePullRequest,
-			Description: "Merge an auto-policy unprotected PR or return an approval proposal. Reuse request_id to reconcile.",
+			Name: agentauth.ToolMergePullRequest,
+			Description: "Merge an auto-policy unprotected PR or return an approval proposal. Reuse request_id to reconcile. " +
+				"Workspace sessions give project_id and expected_sha; the main thread may give repository instead and omit expected_sha.",
 			InputSchema: prCall, Handle: s.mergePullRequest,
 		},
 		{
@@ -133,40 +140,52 @@ func (s *Server) openPullRequest(ctx context.Context, a agentauth.Actor, raw jso
 
 type prInput struct {
 	ProjectID   string `json:"project_id"`
+	Repository  string `json:"repository"`
 	PRNumber    int    `json:"pr_number"`
 	ExpectedSHA string `json:"expected_sha"`
 	RequestID   string `json:"request_id"`
 }
 
-func (s *Server) decodePR(a agentauth.Actor, raw json.RawMessage) (merge.PrepareInput, error) {
+// isMain is the owner's main thread, which may merge in any of the owner's projects.
+func isMain(a agentauth.Actor) bool { return a.Role == dbstate.RoleMain && a.Depth == 0 }
+
+func (s *Server) decodePR(ctx context.Context, a agentauth.Actor, raw json.RawMessage) (merge.PrepareInput, error) {
 	var in prInput
 	if err := decode(raw, &in); err != nil {
 		return merge.PrepareInput{}, err
 	}
 	var err error
-	if in.ProjectID, err = text(in.ProjectID, 1, 100); err != nil {
-		return merge.PrepareInput{}, err
-	}
 	if in.RequestID, err = text(in.RequestID, 1, 100); err != nil {
 		return merge.PrepareInput{}, err
 	}
-	if in.PRNumber <= 0 || !isSHA(in.ExpectedSHA) {
+	main := isMain(a)
+	switch {
+	case in.PRNumber <= 0, in.ExpectedSHA != "" && !isSHA(in.ExpectedSHA),
+		!main && (in.ExpectedSHA == "" || in.Repository != ""),
+		(in.ProjectID == "") == (in.Repository == ""):
 		return merge.PrepareInput{}, errValidation
 	}
 	if s.Merge == nil {
 		return merge.PrepareInput{}, failure("unavailable", "merges are not available")
 	}
-	if err := projectAuthority(a, in.ProjectID); err != nil {
-		return merge.PrepareInput{}, err
+	if in.Repository == "" {
+		if in.ProjectID, err = text(in.ProjectID, 1, 100); err != nil {
+			return merge.PrepareInput{}, err
+		}
+	}
+	if !main {
+		if err := projectAuthority(a, in.ProjectID); err != nil {
+			return merge.PrepareInput{}, err
+		}
 	}
 	return merge.PrepareInput{
-		OwnerID: a.UserID, ProjectID: in.ProjectID, SessionID: a.BindingID,
+		OwnerID: a.UserID, ProjectID: in.ProjectID, Repository: in.Repository, SessionID: a.BindingID,
 		PRNumber: in.PRNumber, ExpectedSHA: in.ExpectedSHA, RequestID: in.RequestID,
 	}, nil
 }
 
 func (s *Server) prepareMerge(ctx context.Context, a agentauth.Actor, raw json.RawMessage) (Result, error) {
-	in, err := s.decodePR(a, raw)
+	in, err := s.decodePR(ctx, a, raw)
 	if err != nil {
 		return Result{}, err
 	}
@@ -175,7 +194,7 @@ func (s *Server) prepareMerge(ctx context.Context, a agentauth.Actor, raw json.R
 }
 
 func (s *Server) mergePullRequest(ctx context.Context, a agentauth.Actor, raw json.RawMessage) (Result, error) {
-	in, err := s.decodePR(a, raw)
+	in, err := s.decodePR(ctx, a, raw)
 	if err != nil {
 		return Result{}, err
 	}
@@ -212,7 +231,7 @@ func (s *Server) mergeApproved(ctx context.Context, a agentauth.Actor, raw json.
 		return Result{}, err
 	}
 	v, err := s.Merge.MergeApproved(ctx, merge.ApprovedInput{
-		OwnerID: a.UserID, SessionID: a.BindingID, ProposalID: in.ProposalID, RequestID: in.RequestID, ActorProjectID: a.ProjectID,
+		OwnerID: a.UserID, SessionID: a.BindingID, ProposalID: in.ProposalID, RequestID: in.RequestID, ActorProjectID: a.ProjectID, ActorMain: isMain(a),
 	})
 	return mergeResult(v, err)
 }
@@ -222,7 +241,7 @@ func (s *Server) mergeStatus(ctx context.Context, a agentauth.Actor, raw json.Ra
 	if err != nil {
 		return Result{}, err
 	}
-	v, err := s.Merge.Status(ctx, a.UserID, a.ProjectID, in.ProposalID, in.RequestID)
+	v, err := s.Merge.Status(ctx, a.UserID, a.ProjectID, isMain(a), in.ProposalID, in.RequestID)
 	return mergeResult(v, err)
 }
 

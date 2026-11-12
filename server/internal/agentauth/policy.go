@@ -24,6 +24,7 @@ const (
 	ToolTaskHistory               = "task_history"
 	ToolDelegate                  = "delegate"
 	ToolTaskCancel                = "task_cancel"
+	ToolSteer                     = "steer"
 	ToolReport                    = "report"
 	ToolPreparePullRequestMerge   = "prepare_pull_request_merge"
 	ToolMergePullRequest          = "merge_pull_request"
@@ -40,7 +41,7 @@ var AllTools = []string{
 	ToolWhoami, ToolTopics, ToolTopicOpen, ToolNote, ToolDecide, ToolPendingAdd, ToolPendingDone,
 	ToolOpenPullRequest,
 	ToolGetIssue, ToolListDependabotAlerts, ToolListCheckRuns,
-	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolDelegate, ToolTaskCancel, ToolReport,
+	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolDelegate, ToolTaskCancel, ToolSteer, ToolReport,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
 	ToolDevLeaseAcquire, ToolDevLeaseRelease, ToolDevSync, ToolDevStatus,
@@ -102,7 +103,7 @@ type Policy struct {
 
 var (
 	taskRead       = []string{ToolTaskGet, ToolTaskList, ToolTaskHistory}
-	taskManagement = []string{ToolDelegate, ToolTaskCancel}
+	taskManagement = []string{ToolDelegate, ToolTaskCancel, ToolSteer}
 	workspaceTools = []string{ToolWhoami, ToolOpenPullRequest}
 	mergeTools     = []string{
 		ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
