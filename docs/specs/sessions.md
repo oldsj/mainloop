@@ -215,7 +215,8 @@ well). Asleep, the view reads
 the native state every 10 s and attaches without waking once something else woke the session (a
 turn Mainloop sends, or an answered request that replays the call). An attached view also keeps the
 actor awake by itself: the runner counts every open client as busy (kagent's SDK runner), and kagent
-suspends the actor only about 30 s after the last one detaches. So the view detaches on purpose
+suspends the actor only once it has reported no activity for its idle period (5 minutes on prod:
+measured 2026-11-12, suspended 5 min 1 s after the view's idle detach). So the view detaches on purpose
 after 2 minutes with nothing happening (no turn running, no prompt unanswered, nothing received,
 sent or typed), or 15 s after the page is hidden, and shows "paused" with a Resume button. A paused
 view does not attach again while the actor is still awake: it waits until kagent reports it asleep
