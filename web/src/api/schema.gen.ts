@@ -1630,7 +1630,7 @@ export interface components {
        * Kind
        * @enum {string}
        */
-      kind: 'approval' | 'question' | 'owner_decision' | 'problem';
+      kind: 'approval' | 'question' | 'owner_decision' | 'problem' | 'review';
       /** Title */
       title: string;
       /** Needed */

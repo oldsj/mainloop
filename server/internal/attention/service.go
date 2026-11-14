@@ -16,6 +16,9 @@
 //   - turn_stalled: one item per stalled turn (no task activity past its allowance) of the main
 //     thread or a standalone session, opened and resolved by [Service.SyncTasks] from the sessions
 //     ledger's stalled_at. A task-owned session is left to the task liveness sweep.
+//   - project_memory: one 'review' item per project with memory proposals waiting for the owner,
+//     opened, updated with the count and resolved by [Service.SyncTasks] from
+//     project_memory_entries. It is a low-priority decision: counted, listed last, never pushed.
 //   - queue: written by [Open], for questions other slices put to the owner. The owner's answer is
 //     stored on the row (detail.response) for that slice to read; nothing is delivered from here.
 //
@@ -58,6 +61,7 @@ const (
 	SourceMerge          = "merge_proposal"
 	SourceStalledTurn    = "turn_stalled"
 	SourceQueue          = "queue"
+	SourceProjectMemory  = "project_memory"
 )
 
 // noticePrefix marks the queue_item_id of an input notice (a hitl_diagnostics row).
@@ -101,10 +105,11 @@ func (s *Service) Sweep() reconcile.Sweep {
 	return reconcile.Sweep{Name: "attention", Every: every, Run: s.SyncTasks}
 }
 
-// SyncTasks opens items for owner decisions, reconciliation needs and merge proposals, and resolves the
-// items whose need has ended: a decision that cleared, a question of a finished task, an item of a
-// finished or archived session, an item whose task has finished or whose attempt was replaced,
-// archived or deleted. It publishes one inbox:updated when it changed an item, or when the unread
+// SyncTasks opens items for owner decisions, reconciliation needs, merge proposals, stalled turns
+// and project memory proposals, and resolves the items whose need has ended: a decision that
+// cleared, a question of a finished task, an item of a finished or archived session, an item whose
+// task has finished or whose attempt was replaced, archived or deleted, a project with no memory
+// proposal left. It publishes one inbox:updated when it changed an item, or when the unread
 // count differs from the one the owner's newest inbox:updated carried, since a session, task or
 // response that ends hides or shows items without any write here. That event is read from the
 // events table in the same transaction, never remembered by the process, so a restart, a second
@@ -119,6 +124,7 @@ func (s *Service) SyncTasks(ctx context.Context) error {
 			q.OpenTaskReconciliationAttention, q.ResolveTaskReconciliationAttention,
 			q.OpenMergeProposalAttention, q.ResolveMergeProposalAttention,
 			q.OpenStalledTurnAttention, q.ResolveStalledTurnAttention,
+			q.OpenProjectMemoryAttention, q.ResolveProjectMemoryAttention,
 			q.ResolveFinishedSessionAttention, q.ResolveAttentionHiddenForGood,
 		} {
 			ids, err := step(ctx, s.OwnerID)
@@ -254,8 +260,8 @@ func (s *Service) NeedsOwner(ctx context.Context, sessionID string) bool {
 
 // Snapshot is the Needs-you view: the open items, their count, and the owner's session list. Items
 // lists every open, visible item, including a 'problem' one (Mainloop's own recovery work); Count
-// is only the items that are a real owner decision (kind != problem), since a problem has no
-// decision yet for the owner to make. The sessions are every unfinished session plus the newest
+// is only the items that are a real owner decision (kind != problem, a low-priority review
+// included), since a problem has no decision yet for the owner to make. Review items come last. The sessions are every unfinished session plus the newest
 // finished ones (ListSessionRows), each with its own needs_owner; a session reads waiting_on_user
 // only while a native input request waits on it. Items, sessions and the sessions needing the owner
 // come from one read-only transaction, so they agree. Every session behind a visible item is
@@ -328,6 +334,8 @@ func (s *Service) item(r dbq.AttentionItem) (api.AttentionItem, bool) {
 		out.Id, out.TaskId = "reconciliation:"+r.SourceID, r.TaskID
 	case SourceStalledTurn:
 		out.Id = "stalled:" + r.SourceID
+	case SourceProjectMemory:
+		out.Id = "memory:" + r.SourceID
 	case SourceMerge:
 		var detail struct {
 			RequestID string `json:"hitl_request_id"`

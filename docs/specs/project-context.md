@@ -2,10 +2,10 @@
 
 Status: **project instructions are implemented**: the API, task briefs, the `project_context` tool
 and the Instructions section of the project page. **Project memory is implemented on the server**:
-the `remember` and `forget` tools, the owner's API and task briefs. The server is tested with
-Postgres and fakes, and the page with mocked API responses; none of it has been measured against a
-live agent. The memory section of the project page, its Needs you item and updates to running
-sessions are **proposed**: see [Proposed](#proposed) below.
+the `remember` and `forget` tools, the owner's API, task briefs, the Memory section of the project
+page and its Needs you item. The server is tested with Postgres and fakes, and the page with mocked
+API responses; none of it has been measured against a live agent. Updates to running sessions are
+**proposed**: see [Proposed](#proposed) below.
 
 A project's owner can say something once and have every later agent working on the project follow
 it: "UI demos use fictional data", "merge with --squash", "ask before touching billing". Mainloop
@@ -178,13 +178,33 @@ sequence number, and before an attempt's brief is first sent the current number 
 attempt (`task_attempts.memory_seq`, 0 for none). Every send of that attempt's brief renders the
 entries active at that number, so a resend carries the same entries even after one is forgotten.
 
+### Memory on the project page
+
+A **Memory** section follows Tasks, outside the folded Settings, so waiting proposals are in view.
+
+- **Waiting for you (N)** lists the proposals, oldest first, each with its text, the active entry it
+  would replace, who recorded it and when ("From a task" or "From an agent", linked to the task or
+  session), and **Accept** and **Reject**.
+- **Active** lists the entries every new brief carries, with "N of 4,096 bytes used". Each says who
+  recorded it ("By main", linked to the main thread, or "From a task, …, accepted …") and offers
+  **Revoke**.
+- A decision re-reads the memory and the Needs you snapshot. A refused one (the entry was decided
+  elsewhere, or accepting would pass 4096 bytes) shows the server's reason, and the list shows the
+  entries as they are now. An entry that does not match the contract is left out; the rest show.
+
+### Memory in Needs you
+
+A project with proposals waiting has one Needs you item, not one per proposal (`source_kind`
+`project_memory`, kind `review`). The attention sweep opens it, rewrites its line as the count
+changes ("2 project memory proposals wait for you. Accept or reject them."), resolves it once none is
+left and reopens the same item, unread, for a later proposal. `review` is a low-priority owner
+decision: it counts toward the Needs you badge, is listed after the other items and sends no push
+notification. Its row links to the project page's Memory section ("Review on the project page").
+
 ## Proposed
 
 Not implemented; planned as the next slices.
 
-- **Project memory on the project page:** the active entries, main's marked "by main" with their
-  source and a revoke action, and pending proposals with accept and reject. Pending proposals also
-  show as one low-priority Needs you item per project, not one per proposal.
 - **Running sessions:** a task session whose project context changed after its brief gets the
   changed context in front of its next Mainloop-delivered message, the way a guidance version bump
   reaches the main session ([chat](chat.md)). It never interrupts a turn.

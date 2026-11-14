@@ -28,7 +28,7 @@ posting again (see below). Setting only one of URL and topic is a startup error.
 | Root task failed                             | task title | Task failed     | `/tasks/<id>`   | 4        |
 | Root task blocked (not on an owner decision) | task title | Task blocked: … | `/tasks/<id>`   | 4        |
 
-- Only Needs-you items count. Problems (kind `problem`) and Activity are not pushed.
+- Only Needs-you items that are an approval, question or owner decision count. Problems (kind `problem`), low-priority reviews (kind `review`, such as project memory proposals) and Activity are not pushed.
 - A task blocked on an owner decision is pushed once, as its attention item, not twice.
 - Child tasks are not pushed; their root reports.
 - Items and task changes from before push was first turned on are not sent (a floor is recorded

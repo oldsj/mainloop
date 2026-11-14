@@ -309,7 +309,7 @@ function NeedsRow({ row, selected }: { row: Row; selected?: string }) {
  * the one-line ask (an owner decision's `owner_action`, or a problem's plain-language explanation),
  * followed by the one action available for it. A problem has nothing to decide, so it only offers
  * to review the evidence; an owner decision says so, so the link reads as the next step the ask
- * calls for.
+ * calls for. A review (project memory proposals) is decided on its project page.
  */
 function AttentionEntry({ item }: { item: AttentionItem }) {
   const queue = item.queue_item;
@@ -335,6 +335,15 @@ function AttentionEntry({ item }: { item: AttentionItem }) {
           className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'self-start')}
         >
           Open the main thread
+        </Link>
+      ) : item.href?.startsWith('/projects/') ? (
+        <Link
+          to="/projects/$id"
+          params={{ id: item.href.slice('/projects/'.length) }}
+          hash={item.kind === 'review' ? 'project-memory' : undefined}
+          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'self-start')}
+        >
+          {item.kind === 'review' ? 'Review on the project page' : 'Open the project'}
         </Link>
       ) : item.href?.startsWith('/sessions/') ? (
         <Link

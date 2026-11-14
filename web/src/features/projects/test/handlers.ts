@@ -16,11 +16,13 @@ import type { SelectionFixture } from '@/features/environments/test/fixtures';
 import {
   detail,
   instructions,
+  memory,
   policy,
   project,
   verification,
   type DetailFixture,
   type InstructionsFixture,
+  type MemoryFixture,
   type PolicyFixture,
   type ProjectFixture,
   type VerificationFixture,
@@ -49,6 +51,12 @@ export const instructionsRead = (resolve: HttpResponseResolver) =>
 
 export const instructionsWrite = (resolve: HttpResponseResolver) =>
   http.put(url('/projects/:project_id/instructions'), resolve);
+
+export const memoryRead = (resolve: HttpResponseResolver) =>
+  http.get(url('/projects/:project_id/memory'), resolve);
+
+export const memoryDecide = (resolve: HttpResponseResolver) =>
+  http.post(url('/projects/:project_id/memory/:entry_id/decision'), resolve);
 
 export const instructionVersionsRead = (resolve: HttpResponseResolver) =>
   http.get(url('/projects/:project_id/instructions/versions'), resolve);
@@ -84,6 +92,7 @@ export function serveProjectPage(
     policy?: PolicyFixture;
     verification?: VerificationFixture;
     instructions?: InstructionsFixture;
+    memory?: MemoryFixture;
     workspaces?: WorkspaceFixture[];
     environments?: EnvironmentFixture[];
     versions?: Record<string, VersionFixture[]>;
@@ -97,6 +106,7 @@ export function serveProjectPage(
     policyRead(() => HttpResponse.json(options.policy ?? policy())),
     verificationRead(() => HttpResponse.json(options.verification ?? verification())),
     instructionsRead(() => HttpResponse.json(options.instructions ?? instructions())),
+    memoryRead(() => HttpResponse.json(options.memory ?? memory())),
     workspacesRead(options.workspaces ?? []),
     providersRead(),
     environmentsRead(options.environments ?? [environment()]),
