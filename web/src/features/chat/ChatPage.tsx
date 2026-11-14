@@ -6,6 +6,7 @@ import { PanelBoundary } from '@/shell/PanelBoundary';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { mainInputLock } from './mainProvider';
 import { MainThreadHeader } from './MainThreadHeader';
+import { runNotes, useRunDefaults, type RunNotes } from './runDefaults';
 import { ChatControls, ProviderChoice, providerChipLabel } from './ProviderChoice';
 import { SessionRequests } from './SessionRequests';
 import { SLASH_COMMANDS } from './slashCommand';
@@ -49,6 +50,8 @@ export function ChatPage({
     offline || chat.sendPending || chat.stopping || !chat.loaded
   );
   const inputLock = mainInputLock(info, provider);
+  // Whose choice the model and effort are, for the session controls chip under the live view.
+  const run = useRunDefaults('main', chat.native);
   // Use the chat view, offered when the live channel is unavailable, holds until the page reloads.
   const [chatView, setChatView] = useState(false);
   const sessionId = info?.session_id ?? null;
@@ -88,6 +91,7 @@ export function ChatPage({
             hitlId={hitlId}
             onFallback={() => setChatView(true)}
             renderBar={header}
+            notes={run ? runNotes(run, 'main') : undefined}
             provider={
               info
                 ? {
@@ -107,6 +111,7 @@ export function ChatPage({
             thread={chat}
             offline={offline}
             label="main thread"
+            defaultsRole="main"
             closedReason={inputLock}
             closedPlaceholder="Main input is locked"
             prefill={prefill}
@@ -145,13 +150,15 @@ function LiveMain({
   hitlId,
   onFallback,
   renderBar,
-  provider
+  provider,
+  notes
 }: {
   sessionId: string;
   hitlId?: string;
   onFallback: () => void;
   renderBar: (bar: LiveBar) => ReactNode;
   provider?: LiveProvider;
+  notes?: RunNotes;
 }) {
   const { pending } = useSessionRequests(sessionId);
   return (
@@ -161,6 +168,7 @@ function LiveMain({
       pending={pending}
       renderBar={renderBar}
       provider={provider}
+      notes={notes}
       requests={(skip) => (
         <PanelBoundary name="Requests">
           {hitlId && !skip.includes(hitlId) ? (

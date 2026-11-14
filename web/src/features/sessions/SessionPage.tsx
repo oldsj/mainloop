@@ -14,7 +14,8 @@ import { useConnection } from '@/shell/ConnectionBanner';
 import { PanelBoundary } from '@/shell/PanelBoundary';
 import { SessionRequests } from '@/features/chat/SessionRequests';
 import { useSessionRequests } from '@/features/hitl/session-requests';
-import { LiveSession, liveForced } from '@/features/live';
+import { runNotes, useRunDefaults } from '@/features/chat/runDefaults';
+import { LiveSession, liveForced, type LiveNotes } from '@/features/live';
 import { IdentityStrip } from './IdentityStrip';
 import {
   actionFailure,
@@ -45,10 +46,13 @@ import { WorkspaceLifecycleBadge, WorkspacePublicationBadge } from './WorkspaceB
  */
 function LiveWithRequests({
   sessionId,
-  onFallback
+  onFallback,
+  notes
 }: {
   sessionId: string;
   onFallback: () => void;
+  /** Whose choice the session's model and effort are, for the session controls chip. */
+  notes?: LiveNotes;
 }) {
   const { pending } = useSessionRequests(sessionId);
   return (
@@ -57,6 +61,7 @@ function LiveWithRequests({
       onFallback={onFallback}
       requests={(skip) => <SessionRequests sessionId={sessionId} skip={skip} />}
       pending={pending}
+      notes={notes}
     />
   );
 }
@@ -113,6 +118,8 @@ export function SessionPage({ id }: { id: string }) {
   const tasks = useTasks();
   const actions = useSessionActions(id);
   const native = useNativeSession(id);
+  // Every session but the main thread falls under the owner's worker defaults.
+  const run = useRunDefaults('worker', native.data);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [chatView, setChatView] = useState(false);
@@ -236,7 +243,11 @@ export function SessionPage({ id }: { id: string }) {
 
       {live ? (
         <PanelBoundary name="Live session">
-          <LiveWithRequests sessionId={session.id} onFallback={() => setChatView(true)} />
+          <LiveWithRequests
+            sessionId={session.id}
+            onFallback={() => setChatView(true)}
+            notes={run ? runNotes(run, 'worker') : undefined}
+          />
         </PanelBoundary>
       ) : (
         <>

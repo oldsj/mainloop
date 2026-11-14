@@ -5,6 +5,7 @@ import { cn } from '@/components/ui/cn';
 import { Composer } from './Composer';
 import { assignmentIds } from './assignments';
 import { MessageList } from './MessageList';
+import { fieldText, useRunDefaults, type DefaultsRole } from './runDefaults';
 import type { SlashCommandSpec } from './slashCommand';
 import { TurnRecovery } from './TurnRecovery';
 import { useLiveTurn } from './useLiveTurn';
@@ -41,6 +42,11 @@ export interface ThreadBodyProps {
   commands?: readonly SlashCommandSpec[];
   /** The session controls chip, shown with the composer. Only the main thread has one. */
   controls?: ReactNode;
+  /**
+   * Which of the owner's session defaults this thread falls under: the main thread's, or a
+   * worker's (every other session). The composer's model and effort line names it.
+   */
+  defaultsRole?: DefaultsRole;
 }
 
 /** The conversation timeline, the send and stop errors, and the composer, for any thread. */
@@ -58,12 +64,24 @@ export function ThreadBody({
   onSend,
   commandNotice = null,
   commands,
-  controls
+  controls,
+  defaultsRole = 'worker'
 }: ThreadBodyProps) {
   const live = useLiveTurn(thread.sessionId, thread.busy, thread.messages);
-  const modelEffort = thread.native
-    ? { model: thread.native.model_override ?? null, effort: thread.native.effort_override ?? null }
-    : null;
+  // The line says whose choice each value is: the session's own, the owner's default for its role,
+  // or the provider's. Until the owner's defaults are read it shows the session's own choice only.
+  const run = useRunDefaults(defaultsRole, thread.native);
+  const modelEffort = !thread.native
+    ? null
+    : run
+      ? {
+          model: fieldText(run.model, defaultsRole),
+          effort: fieldText(run.effort, defaultsRole)
+        }
+      : {
+          model: thread.native.model_override ?? null,
+          effort: thread.native.effort_override ?? null
+        };
   return (
     <>
       {thread.loadFailed && !offline ? (

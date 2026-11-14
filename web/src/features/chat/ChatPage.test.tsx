@@ -7,6 +7,7 @@ import { API_URL } from '@/api/config';
 import { createSseApplier } from '@/api/invalidation';
 import { keys } from '@/api';
 import type { RefusalCode } from '@/api/errors';
+import { sessionDefaultsHandlers } from '@/test/msw/handlers';
 import { server } from '@/test/msw/server';
 import { createFakeRunner } from '@/features/live/fakeRunner';
 import { SessionChatSlot } from '@/features/sessions/SessionChatSlot';
@@ -1799,6 +1800,48 @@ describe('the composer model/effort indicator', () => {
   });
 });
 
+describe('the owner’s session defaults in the composer', () => {
+  it('says a main default applies when the session has no choice of its own', async () => {
+    server.use(
+      ...sessionDefaultsHandlers([
+        { role: 'main', provider: 'claude', model: 'claude-opus-5', effort: null },
+        // A worker default never applies to the main thread.
+        { role: 'worker', provider: 'claude', model: 'claude-haiku-4-5-20251001', effort: 'low' }
+      ])
+    );
+    setup(idleThread());
+    await screen.findByText('build it');
+    await waitFor(() =>
+      expect(screen.getByTestId('composer-model-effort')).toHaveTextContent(
+        'model: claude-opus-5 (main default) · effort: default'
+      )
+    );
+  });
+
+  it('shows the session’s own choice bare, over the default', async () => {
+    server.use(
+      ...sessionDefaultsHandlers([
+        { role: 'main', provider: 'claude', model: 'claude-opus-5', effort: 'high' }
+      ])
+    );
+    setup({
+      ...idleThread(),
+      mainThread: mainThreadFixture({
+        conversation_id: CONVERSATION_ID,
+        provider: providerFixture(),
+        native: nativeFixture({ model_override: 'claude-sonnet-5' })
+      }),
+      messages: [messageFixture({ id: 'm1', content: 'build it' })]
+    });
+    await screen.findByText('build it');
+    await waitFor(() =>
+      expect(screen.getByTestId('composer-model-effort')).toHaveTextContent(
+        'model: claude-sonnet-5 · effort: high (main default)'
+      )
+    );
+  });
+});
+
 describe('a live main session', () => {
   it('shows the live view with the session’s own slash commands and Up-arrow history', async () => {
     const runner = createFakeRunner({ owns: (id) => id === MAIN_SESSION_ID });
@@ -1826,6 +1869,8 @@ describe('a live main session', () => {
       expect(within(live).getByTestId('session-controls')).toHaveTextContent(/^Claude · /)
     );
     expect(screen.queryByRole('combobox')).toBeNull();
+    // Nothing is set here, so the model and effort are the provider's own and the chip adds no note.
+    expect(within(live).getByTestId('session-controls')).not.toHaveTextContent('(');
     const box = within(live).getByRole('textbox', { name: 'Message' });
     await user.type(box, '/comp');
     const list = screen.getByRole('listbox', { name: 'Commands' });
