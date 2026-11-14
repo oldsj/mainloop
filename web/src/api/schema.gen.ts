@@ -5821,7 +5821,19 @@ export interface components {
       idle_timeout_minutes: number;
     };
   };
-  responses: never;
+  responses: {
+    /** @description No valid identity came with the request. */
+    Unauthorized: {
+      headers: {
+        /** @description Bearer challenge. */
+        'WWW-Authenticate'?: string;
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['HTTPError'];
+      };
+    };
+  };
   parameters: never;
   requestBodies: never;
   headers: never;
@@ -5845,6 +5857,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ActivityItem'][];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -5874,6 +5896,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['AttentionSnapshot'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -5918,6 +5950,7 @@ export interface operations {
           'application/json': components['schemas']['ChatResponse'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -5987,6 +6020,16 @@ export interface operations {
           'application/json': components['schemas']['ChatImageUploadResponse'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Request Entity Too Large */
       413: {
         headers: {
@@ -6027,6 +6070,16 @@ export interface operations {
           'application/json': components['schemas']['ConversationResponse'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -6065,6 +6118,16 @@ export interface operations {
           'application/json': components['schemas']['DevloopLease'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Service Unavailable */
       503: {
         headers: {
@@ -6094,6 +6157,16 @@ export interface operations {
           'application/json': components['schemas']['DevloopLease'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Service Unavailable */
       503: {
         headers: {
@@ -6121,6 +6194,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['DevloopLease'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Service Unavailable */
@@ -6154,6 +6237,16 @@ export interface operations {
           'application/json': components['schemas']['DevloopOperation'][];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Service Unavailable */
       503: {
         headers: {
@@ -6181,6 +6274,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['DevEnvironment'][];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -6216,6 +6319,7 @@ export interface operations {
           'application/json': components['schemas']['RegisteredEnvironment'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -6276,6 +6380,16 @@ export interface operations {
           'application/json': components['schemas']['DevEnvironment'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -6320,6 +6434,7 @@ export interface operations {
           'application/json': components['schemas']['DevEnvironment'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -6384,6 +6499,7 @@ export interface operations {
           'application/json': components['schemas']['DevEnvironment'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -6449,6 +6565,7 @@ export interface operations {
           'application/json': components['schemas']['ProjectEnvironmentGrant'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -6506,6 +6623,7 @@ export interface operations {
         };
         content?: never;
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -6559,6 +6677,7 @@ export interface operations {
           'application/json': components['schemas']['EnvironmentVersion'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -6619,6 +6738,16 @@ export interface operations {
           'application/json': components['schemas']['EnvironmentVersion'][];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -6658,6 +6787,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['EnvironmentVersion'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -6707,6 +6846,16 @@ export interface operations {
             | components['schemas']['EventSessionProgress']
             | components['schemas']['EventTaskUpdated']
             | components['schemas']['EventWorkspaceUpdated'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -6776,6 +6925,16 @@ export interface operations {
           'application/json': components['schemas']['HITLObserverStatus'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -6805,6 +6964,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HITLView'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -6850,6 +7019,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HITLMergeDetails'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -6914,6 +7093,7 @@ export interface operations {
           'application/json': components['schemas']['HITLView'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -6988,6 +7168,16 @@ export interface operations {
           'application/json': components['schemas']['MainThreadInfo'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -7017,6 +7207,16 @@ export interface operations {
           'application/json': components['schemas']['MainProviderInfo'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
     };
   };
   putMainProvider: {
@@ -7041,6 +7241,7 @@ export interface operations {
           'application/json': components['schemas']['MainProviderInfo'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -7113,6 +7314,16 @@ export interface operations {
           'application/json': components['schemas']['HealthView'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -7154,6 +7365,16 @@ export interface operations {
           'application/json': components['schemas']['HealthEvents'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -7192,6 +7413,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['Project'][];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -7245,6 +7476,7 @@ export interface operations {
           'application/json': components['schemas']['HTTPError'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -7303,6 +7535,16 @@ export interface operations {
           'application/json': components['schemas']['Project'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -7343,6 +7585,7 @@ export interface operations {
           'application/json': components['schemas']['ProjectProviderPreference'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -7398,6 +7641,7 @@ export interface operations {
           'application/json': components['schemas']['ProjectProviderPreference'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -7471,6 +7715,16 @@ export interface operations {
           'application/json': components['schemas']['ProjectDetail'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -7509,6 +7763,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['DevloopTarget'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -7557,6 +7821,16 @@ export interface operations {
       };
       /** @description Bad Request */
       400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
         headers: {
           [name: string]: unknown;
         };
@@ -7617,6 +7891,16 @@ export interface operations {
           'application/json': components['schemas']['ProjectVerification'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -7659,6 +7943,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ProjectVerification'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -7712,6 +8006,16 @@ export interface operations {
           'application/json': components['schemas']['WorkspaceService'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -7754,6 +8058,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['WorkspaceService'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -7814,6 +8128,16 @@ export interface operations {
         };
         content?: never;
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -7858,6 +8182,7 @@ export interface operations {
           'application/json': components['schemas']['ProjectEnvironmentSelection'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -7927,6 +8252,16 @@ export interface operations {
           'application/json': components['schemas']['MergePolicyView'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -7971,6 +8306,7 @@ export interface operations {
           'application/json': components['schemas']['MergePolicyView'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -8047,6 +8383,16 @@ export interface operations {
           'application/json': components['schemas']['ProjectInstructions'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -8089,6 +8435,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ProjectInstructions'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -8151,6 +8507,16 @@ export interface operations {
           'application/json': components['schemas']['ProjectInstructionVersionList'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -8189,6 +8555,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ProjectMemory'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -8234,6 +8610,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ProjectMemoryEntry'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -8287,6 +8673,16 @@ export interface operations {
           'application/json': components['schemas']['SmokeObservations'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -8325,6 +8721,16 @@ export interface operations {
           'application/json': components['schemas']['ProviderProfile'][];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -8352,6 +8758,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['Seen'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -8392,6 +8808,16 @@ export interface operations {
           'application/json': components['schemas']['Seen'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -8430,6 +8856,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['SeenTask'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -8479,6 +8915,16 @@ export interface operations {
           'application/json': components['schemas']['SessionDefaults'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -8510,6 +8956,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['SessionDefaults'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -8545,6 +9001,7 @@ export interface operations {
           'application/json': components['schemas']['StatusOk'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -8607,6 +9064,7 @@ export interface operations {
           'application/json': components['schemas']['QueueRespondResponse'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -8675,6 +9133,7 @@ export interface operations {
           'application/json': components['schemas']['ScheduledRunPage'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -8748,6 +9207,7 @@ export interface operations {
           'application/json': components['schemas']['ScheduledRunOutput'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -8837,6 +9297,7 @@ export interface operations {
           'application/json': components['schemas']['ScheduledRunOutput'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -8915,6 +9376,7 @@ export interface operations {
           'application/json': components['schemas']['ScheduledRunOutput'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -9018,6 +9480,7 @@ export interface operations {
         };
         content?: never;
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -9090,6 +9553,7 @@ export interface operations {
           'application/json': components['schemas']['ScheduledRunExecutionPage'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -9163,6 +9627,7 @@ export interface operations {
           'application/json': components['schemas']['ScheduledRunExecutionOutput'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -9252,6 +9717,16 @@ export interface operations {
           'application/json': components['schemas']['Session'][];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -9294,6 +9769,7 @@ export interface operations {
           'application/json': components['schemas']['Session'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -9354,6 +9830,16 @@ export interface operations {
           'application/json': components['schemas']['Session'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -9394,6 +9880,7 @@ export interface operations {
           'application/json': components['schemas']['SessionArchiveResponse'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -9452,6 +9939,7 @@ export interface operations {
           'application/json': components['schemas']['SessionCancelResponse'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -9510,6 +9998,16 @@ export interface operations {
           'application/json': components['schemas']['SessionConversationResponse'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -9548,6 +10046,16 @@ export interface operations {
         };
         content: {
           'application/json': string[];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -9603,6 +10111,7 @@ export interface operations {
           'application/json': components['schemas']['SessionMessageResponse'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -9674,6 +10183,16 @@ export interface operations {
           'application/json': components['schemas']['SessionModelEffort'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -9718,6 +10237,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['SessionModelEffort'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -9767,6 +10296,16 @@ export interface operations {
       };
       /** @description Not a WebSocket upgrade request. */
       400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
         headers: {
           [name: string]: unknown;
         };
@@ -9832,6 +10371,16 @@ export interface operations {
           'application/json': components['schemas']['NativeSessionInfo'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -9872,6 +10421,7 @@ export interface operations {
           'application/json': components['schemas']['SessionStopTurnResponse'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -9943,6 +10493,7 @@ export interface operations {
           'application/json': components['schemas']['SessionRestartResponse'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -10019,6 +10570,16 @@ export interface operations {
           'application/json': components['schemas']['Checkpoint'][];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -10081,6 +10642,16 @@ export interface operations {
           'application/json': components['schemas']['Checkpoint'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -10141,6 +10712,16 @@ export interface operations {
           'application/json': components['schemas']['Checkpoint'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -10197,6 +10778,16 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['StatusOk'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Not Found */
@@ -10270,6 +10861,16 @@ export interface operations {
           'application/json': components['schemas']['CheckpointForkResponse'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -10330,6 +10931,7 @@ export interface operations {
           'application/json': components['schemas']['TaskOperation'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -10391,6 +10993,7 @@ export interface operations {
           'application/json': components['schemas']['TaskView'][];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -10451,6 +11054,7 @@ export interface operations {
           'application/json': components['schemas']['TaskOperation'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -10533,6 +11137,7 @@ export interface operations {
           'application/json': components['schemas']['TaskView'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -10597,6 +11202,7 @@ export interface operations {
           'application/json': components['schemas']['TaskOperation'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -10683,6 +11289,7 @@ export interface operations {
           'application/json': components['schemas']['TaskOperation'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -10769,6 +11376,7 @@ export interface operations {
           'application/json': components['schemas']['TaskOperation'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -10849,6 +11457,16 @@ export interface operations {
           'application/json': components['schemas']['WorkspaceLifecycle'][];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -10891,6 +11509,7 @@ export interface operations {
           'application/json': components['schemas']['WorkspaceLifecycle'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -10978,6 +11597,16 @@ export interface operations {
           'application/json': components['schemas']['WorkspaceLifecycle'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -11025,6 +11654,7 @@ export interface operations {
         };
         content?: never;
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {
@@ -11101,6 +11731,16 @@ export interface operations {
           'application/json': components['schemas']['WorkspacePortsResponse'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -11150,6 +11790,7 @@ export interface operations {
           'application/json': components['schemas']['WorkspaceLifecycle'];
         };
       };
+      401: components['responses']['Unauthorized'];
       /** @description Forbidden */
       403: {
         headers: {

@@ -56,7 +56,7 @@ For a local image build, use `docker build --target prod server` for the server 
 
 ## Network boundary and preview risk
 
-- Mainloop does no per-request authentication. Reachability (the tailnet and the gateway) is the access control, and `MAINLOOP_OWNER_ID` scopes workspaces and previews. Do not trust `X-User-ID`.
+- The owner API verifies each caller itself ([authentication](specs/authentication.md)): the owner's Pocket ID token or an allowed ServiceAccount token. Reachability is not identity. `MAINLOOP_AUTH_MODE` is `observe` by default, which only logs; until a deployment sets `enforce`, reachability (the tailnet and the gateway) is still the effective access control. `MAINLOOP_OWNER_ID` scopes workspaces and previews. Do not trust `X-User-ID`.
 - On `mainloop-backend-ingress`, the production values admit only the actor egress proxy, to `:8002`. The gateway's `:8000` peer comes from the deployment repository as a separate policy, because its labels are cluster-specific. Actors reach MCP only through the credential-injecting egress path. The frontend makes no server-side calls to the backend, so prod grants it nothing.
 - Previews run agent-controlled code on a host that shares a registrable domain with the API. This is accepted for a single owner and is not a multi-user boundary. The server's unknown-Host 404 (except `/health`), foreign-Origin write rejection and owner scoping are the controls. Verify them through the real gateway before relying on them, together with wildcard DNS and certificate coverage and WebSocket upgrades.
 - Any `NetworkPolicy` evidence needs an allowed control next to each blocked probe, and must consider every policy selecting the destination, including Cilium policies.

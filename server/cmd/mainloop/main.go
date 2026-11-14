@@ -206,11 +206,16 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		ciSvc.Sender = svc
 	}
 
+	authn, err := newAuthenticator(cfg, log)
+	if err != nil {
+		return err
+	}
 	handler, err := app.New(app.Deps{
 		Config: cfg, Log: log, DB: pool, Pool: pool, Hub: hub, Live: live,
 		Providers: reg, Projects: projectSvc, Tasks: taskSvc, Workspaces: wsSvc, Sessions: svc, Preview: previews, LiveRelay: liveRelay,
 		HITL: hitlSvc, Attention: attn, Health: healthSvc, Schedules: schedSvc, Merge: mergeSvc,
 		Devloop: &devloop.LeaseService{Pool: pool}, DevloopTargets: &devloop.TargetService{Pool: pool}, CI: ciSvc,
+		Auth: authn,
 	}).Handler()
 	if err != nil {
 		return err
