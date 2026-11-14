@@ -28,21 +28,24 @@ the loading message. Retrying requests the details for the current project.
 - The row for the page being shown is filled and marked as the current page (`aria-current="page"`), wherever it appears in the tree, so the tree shows where the owner is. Keyboard focus is separate: it is the ring.
 - Each tree row, including Needs-you rows, has an **Ask Mainloop** button, visible on hover or keyboard focus. It opens the main chat with the composer filled, not sent, for example `About task <title> (<short id>): `. The **a** key does the same from a focused row. Right-click (desktop), a long press (phone) or Shift+F10 and the menu key open a small row menu with **Open** and **Ask Mainloop**. It closes on Escape, a press outside, a scroll of the explorer or its row moving; other scrolling, such as the chat following a turn, leaves it open.
 - Keyboard access: up and down move, right expands, left collapses, Enter opens. A ring marks the row with keyboard focus only.
-- The sidebar's header is its view's name (**Sessions** or **Projects**; **Explorer** on the phone) and, on desktop, the button that hides it. The hint **Ask Mainloop to start, stop or change anything.** shows in the empty main chat, above the suggestion chips.
+- The sidebar's header is its view's name (**Sessions** or **Projects**; **Explorer** on the phone) and, on desktop, the button that hides it; on the phone it also holds orchestration health and the theme selector. The hint **Ask Mainloop to start, stop or change anything.** shows in the empty main chat, above the suggestion chips.
 - There is no create button for tasks, agents or workspaces in the activity bar or the sidebar. Work starts from the main chat. The project page has no create control either; `/agents` is reachable by URL only.
 - An empty main chat shows suggestion chips inside the empty thread (they go once the thread has messages): **What needs me?**, **Start a task in <first project>:**, **What’s running?** and **Pause a schedule:**. Each fills the composer without sending.
 
 ## Mobile
 
-- The header has an icon link to orchestration health, labelled "Orchestration health", and the theme selector.
-- Bottom tab bar with two tabs, **Chat** and **Explorer**. The Explorer tab shows the Needs-you count, and its accessible name includes it. The explorer shows the same tree full width. Rows are 44 px touch targets with the status on a second line, and the Ask Mainloop button is always shown.
-- The answer view opens over the Chat tab, with a back link to the Explorer tab.
-- Chat tab active by default on load
-- Tab bar hidden on desktop viewports
-- Touch targets sized appropriately for mobile interaction
+- There is no header. The page starts at the top of the screen, so on the main chat the one row above the thread is the session row (status, pending count, Session info).
+- A bottom tab bar has three tabs with plain labels: **Chat**, **Needs you** and **Explorer**. (The third tab's label is not final; it was not to be "Work".)
+  - **Chat** opens the main chat.
+  - **Needs you** opens the answer view (`/inbox`). It shows the Needs-you count as a red badge, and its accessible name includes the count ("Needs you, 3").
+  - **Explorer** shows the tree, full width, over the current page (`?tab=explorer`). Rows are 44 px touch targets with their second line beneath the title, and the Ask Mainloop button is always shown.
+- The lit tab follows where the owner is: Chat on the main chat, Needs you on the answer view, and Explorer both while the tree is showing and on any page opened from it (a task, a session, a workspace, a project, a schedule, orchestration health). On such a page, Explorer brings the tree back and keeps the page's route, so the page's row is still marked as current.
+- Orchestration health and the theme selector are in the tree's header, since there is no header above the page. The tree also has the **Insights** row.
+- The answer view has a back link to the Explorer tab.
+- Tab bar hidden on desktop viewports.
 - Old `?tab=` values `sessions` and `projects` open the Explorer tab; `?tab=inbox` opens the answer view.
-- Switching tabs keeps what each tab holds, such as a draft or an open tree. A tab is built the first time it opens.
-- The header and tab bar stay clear of the device’s safe areas (notch, rounded corners and the home indicator).
+- The page and the tree are two panes. Each is built the first time it opens and then stays mounted, so an open tree survives a switch. Chat and Needs you are pages, so moving between them changes the route; a draft in the composer is kept by the draft store.
+- The tab bar stays clear of the device's safe areas (notch, rounded corners and the home indicator), as does the top of the page.
 
 ## Shell
 
@@ -75,6 +78,6 @@ server reports; it never decides a task's state locally.
 
 ## React status (F5)
 
-- **Superseded by the explorer:** the always-mounted inbox panel and the compact Inbox tab with its two badges. Attention and owner tasks now poll while the explorer is mounted, on both layouts; the Explorer tab on the phone, and the activity bar's Inbox item and the status bar on desktop, carry the Needs-you count; and the answer view at `/inbox` mounts the same inbox panel. Inbox buttons, links and the reply field are at least 44 px tall.
+- **Superseded by the explorer:** the always-mounted inbox panel and the compact Inbox tab with its two badges. Attention and owner tasks now poll while the explorer is mounted, on both layouts; the Needs you tab on the phone, and the activity bar's Inbox item and the status bar on desktop, carry the Needs-you count; and the answer view at `/inbox` mounts the same inbox panel. Inbox buttons, links and the reply field are at least 44 px tall.
 - **Desktop count:** on the activity bar's Inbox item, in the status bar, and on the sidebar's Needs you heading while the Sessions view shows.
 - **Checked in a browser (fixtures, not live):** 390×844 and 1440×900 against the MSW dev server. Playwright journeys are deferred to F9.
