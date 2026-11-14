@@ -17,9 +17,11 @@ import {
   detail,
   policy,
   project,
+  verification,
   type DetailFixture,
   type PolicyFixture,
   type ProjectFixture,
+  type VerificationFixture,
   type WorkspaceFixture
 } from './fixtures';
 
@@ -36,6 +38,12 @@ export const detailRead = (resolve: HttpResponseResolver) =>
 
 export const policyRead = (resolve: HttpResponseResolver) =>
   http.get(url('/projects/:project_id/merge-policy'), resolve);
+
+export const verificationRead = (resolve: HttpResponseResolver) =>
+  http.get(url('/projects/:project_id/verification'), resolve);
+
+export const verificationWrite = (resolve: HttpResponseResolver) =>
+  http.put(url('/projects/:project_id/verification'), resolve);
 
 export const policyWrite = (resolve: HttpResponseResolver) =>
   http.put(url('/projects/:project_id/merge-policy'), resolve);
@@ -63,6 +71,7 @@ export function serveProjectPage(
     project?: ProjectFixture;
     detail?: DetailFixture;
     policy?: PolicyFixture;
+    verification?: VerificationFixture;
     workspaces?: WorkspaceFixture[];
     environments?: EnvironmentFixture[];
     versions?: Record<string, VersionFixture[]>;
@@ -74,6 +83,7 @@ export function serveProjectPage(
   return [
     detailRead(() => HttpResponse.json(value)),
     policyRead(() => HttpResponse.json(options.policy ?? policy())),
+    verificationRead(() => HttpResponse.json(options.verification ?? verification())),
     workspacesRead(options.workspaces ?? []),
     providersRead(),
     environmentsRead(options.environments ?? [environment()]),

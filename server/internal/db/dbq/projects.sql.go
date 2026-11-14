@@ -14,7 +14,7 @@ import (
 )
 
 const getOwnedProject = `-- name: GetOwnedProject :one
-SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at FROM projects WHERE id = $1 AND user_id = $2
+SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at FROM projects WHERE id = $1 AND user_id = $2
 `
 
 type GetOwnedProjectParams struct {
@@ -42,6 +42,9 @@ func (q *Queries) GetOwnedProject(ctx context.Context, arg GetOwnedProjectParams
 		&i.MetadataUpdatedAt,
 		&i.CreatedAt,
 		&i.LastUsedAt,
+		&i.VerificationMode,
+		&i.CiDetection,
+		&i.CiDetectedAt,
 	)
 	return i, err
 }
@@ -51,7 +54,7 @@ const importProject = `-- name: ImportProject :one
 INSERT INTO projects (id, user_id, owner, name, full_name, default_branch, html_url)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (user_id, lower(full_name)) DO UPDATE SET last_used_at = now()
-RETURNING id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at
+RETURNING id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at
 `
 
 type ImportProjectParams struct {
@@ -94,6 +97,9 @@ func (q *Queries) ImportProject(ctx context.Context, arg ImportProjectParams) (P
 		&i.MetadataUpdatedAt,
 		&i.CreatedAt,
 		&i.LastUsedAt,
+		&i.VerificationMode,
+		&i.CiDetection,
+		&i.CiDetectedAt,
 	)
 	return i, err
 }
@@ -123,7 +129,7 @@ func (q *Queries) InsertMergePolicyAudit(ctx context.Context, arg InsertMergePol
 }
 
 const listOwnedProjects = `-- name: ListOwnedProjects :many
-SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at FROM projects WHERE user_id = $1 ORDER BY last_used_at DESC, id LIMIT $2
+SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at FROM projects WHERE user_id = $1 ORDER BY last_used_at DESC, id LIMIT $2
 `
 
 type ListOwnedProjectsParams struct {
@@ -157,6 +163,9 @@ func (q *Queries) ListOwnedProjects(ctx context.Context, arg ListOwnedProjectsPa
 			&i.MetadataUpdatedAt,
 			&i.CreatedAt,
 			&i.LastUsedAt,
+			&i.VerificationMode,
+			&i.CiDetection,
+			&i.CiDetectedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -262,7 +271,7 @@ func (q *Queries) ListProjectSessions(ctx context.Context, arg ListProjectSessio
 }
 
 const listProjectsNeedingMetadata = `-- name: ListProjectsNeedingMetadata :many
-SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at FROM projects
+SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at FROM projects
 WHERE user_id = $1
   AND (default_branch = '' OR html_url = '' OR metadata_updated_at IS NULL OR metadata_updated_at < $2)
 ORDER BY (default_branch = '' OR html_url = '') DESC, metadata_updated_at NULLS FIRST, id
@@ -303,6 +312,9 @@ func (q *Queries) ListProjectsNeedingMetadata(ctx context.Context, arg ListProje
 			&i.MetadataUpdatedAt,
 			&i.CreatedAt,
 			&i.LastUsedAt,
+			&i.VerificationMode,
+			&i.CiDetection,
+			&i.CiDetectedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -315,7 +327,7 @@ func (q *Queries) ListProjectsNeedingMetadata(ctx context.Context, arg ListProje
 }
 
 const lockOwnedProject = `-- name: LockOwnedProject :one
-SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE
+SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE
 `
 
 type LockOwnedProjectParams struct {
@@ -343,6 +355,9 @@ func (q *Queries) LockOwnedProject(ctx context.Context, arg LockOwnedProjectPara
 		&i.MetadataUpdatedAt,
 		&i.CreatedAt,
 		&i.LastUsedAt,
+		&i.VerificationMode,
+		&i.CiDetection,
+		&i.CiDetectedAt,
 	)
 	return i, err
 }
@@ -353,7 +368,7 @@ SET owner = $2, name = $3, full_name = $4, html_url = $5, description = $6, defa
     avatar_url = $8, open_pr_count = $9, open_issue_count = $10, metadata_updated_at = now()
 WHERE id = $1 AND user_id = $11
   AND metadata_updated_at IS NOT DISTINCT FROM $12::timestamptz
-RETURNING id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at
+RETURNING id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at
 `
 
 type RefreshProjectMetadataParams struct {
@@ -407,6 +422,9 @@ func (q *Queries) RefreshProjectMetadata(ctx context.Context, arg RefreshProject
 		&i.MetadataUpdatedAt,
 		&i.CreatedAt,
 		&i.LastUsedAt,
+		&i.VerificationMode,
+		&i.CiDetection,
+		&i.CiDetectedAt,
 	)
 	return i, err
 }
@@ -415,7 +433,7 @@ const setOwnedProjectMergePolicy = `-- name: SetOwnedProjectMergePolicy :one
 UPDATE projects
 SET merge_policy = $2, merge_policy_version = merge_policy_version + 1
 WHERE id = $1
-RETURNING id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at
+RETURNING id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at
 `
 
 type SetOwnedProjectMergePolicyParams struct {
@@ -443,6 +461,9 @@ func (q *Queries) SetOwnedProjectMergePolicy(ctx context.Context, arg SetOwnedPr
 		&i.MetadataUpdatedAt,
 		&i.CreatedAt,
 		&i.LastUsedAt,
+		&i.VerificationMode,
+		&i.CiDetection,
+		&i.CiDetectedAt,
 	)
 	return i, err
 }

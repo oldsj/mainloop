@@ -8,6 +8,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/apierr"
+	"github.com/oldsj/mainloop/server/internal/ci"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/devloop"
@@ -24,6 +25,9 @@ type ProjectsAPI struct {
 	// unconfigured project, since devloop's own operator flag already covers "not available"
 	// everywhere else.
 	Devloop *devloop.TargetService
+	// CI serves the project's verification setting and CI detection. Nil (no GitHub App) answers
+	// those routes 404.
+	CI *ci.Service
 }
 
 func toProject(p dbq.Project) api.Project {

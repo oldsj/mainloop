@@ -109,6 +109,8 @@ var ErrNotFound = errors.New("ci: not found")
 type Provider interface {
 	// HeadSHA resolves a pull request to its current head commit.
 	HeadSHA(ctx context.Context, repo Repo, pr int) (string, error)
+	// BranchHead resolves a branch to the commit it points at.
+	BranchHead(ctx context.Context, repo Repo, branch string) (string, error)
 	// Checks lists the latest check of each name on a commit.
 	Checks(ctx context.Context, repo Repo, sha string) ([]Check, error)
 	// Failure reads why a failed check failed.

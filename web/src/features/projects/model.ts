@@ -238,3 +238,52 @@ export function openPrText(count: number): string {
 export function policyText(view: { merge_policy: MergePolicy }): string {
   return `Current policy: ${POLICY_LABEL[view.merge_policy]}`;
 }
+
+export type VerificationMode = Schemas['VerificationMode'];
+export type EffectiveVerificationMode = Schemas['EffectiveVerificationMode'];
+export type ProjectVerification = Schemas['ProjectVerification'];
+const VERIFICATION_MODES = contractEnum<VerificationMode>()(['auto', 'ci', 'hybrid', 'local']);
+const EFFECTIVE_MODES = contractEnum<EffectiveVerificationMode>()(['ci', 'hybrid', 'local']);
+
+/** One object, like the merge policy view: a bad one fails the section rather than being dropped. */
+export const projectVerificationSchema = z.object({
+  mode: z.enum(VERIFICATION_MODES),
+  effective_mode: z.enum(EFFECTIVE_MODES),
+  source: z.enum(['owner', 'detected', 'default']),
+  detection: z
+    .object({
+      usable: z.boolean(),
+      branch: text,
+      checks: z.number().int(),
+      sources: z.array(text),
+      checked_at: text
+    })
+    .nullable(),
+  detect_error: text.nullish()
+});
+
+export const VERIFICATION_LABEL: Record<VerificationMode, string> = {
+  auto: 'Automatic',
+  ci: 'CI',
+  hybrid: 'Hybrid',
+  local: 'Workspace'
+};
+
+export const VERIFICATION_EXPLANATION: Record<EffectiveVerificationMode, string> = {
+  ci: 'Agents build and lint what they changed, push, and let CI run every test.',
+  hybrid: 'Agents run the tests of what they changed, push, and let CI run the full suite.',
+  local: 'Agents run the full checks in their workspace before reporting done.'
+};
+
+/** What the project's agents do now, and why. */
+export function verificationText(v: z.output<typeof projectVerificationSchema>): string {
+  const effective = VERIFICATION_LABEL[v.effective_mode];
+  if (v.source === 'owner') return `Heavy checks run in: ${effective}`;
+  if (v.source === 'default') return `Heavy checks run in: ${effective} (CI not detected yet)`;
+  const d = v.detection;
+  const found =
+    d && d.usable
+      ? `CI found on ${d.branch}: ${d.sources.join(', ') || `${d.checks} checks`}`
+      : `no CI reported on ${d?.branch ?? 'the default branch'}`;
+  return `Heavy checks run in: ${effective} (automatic, ${found})`;
+}

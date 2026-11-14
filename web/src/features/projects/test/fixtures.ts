@@ -5,6 +5,7 @@ type Schemas = components['schemas'];
 export type ProjectFixture = Schemas['Project'];
 export type DetailFixture = Schemas['ProjectDetail'];
 export type PolicyFixture = Schemas['MergePolicyView'];
+export type VerificationFixture = Schemas['ProjectVerification'];
 export type WorkspaceFixture = Schemas['WorkspaceLifecycle'];
 
 export const REPO_URL = 'https://github.com/acme/widgets';
@@ -96,6 +97,23 @@ export function detail(overrides: Partial<DetailFixture> = {}): DetailFixture {
     open_prs: [pullRequest()],
     recent_commits: [commit()],
     sessions: [] as Session[],
+    ...overrides
+  };
+}
+
+export function verification(overrides: Partial<VerificationFixture> = {}): VerificationFixture {
+  return {
+    mode: 'auto',
+    effective_mode: 'hybrid',
+    source: 'detected',
+    detection: {
+      usable: true,
+      branch: 'main',
+      sha: '0123456789abcdef0123456789abcdef01234567',
+      checks: 4,
+      sources: ['github-actions'],
+      checked_at: '2026-11-01T12:00:00Z'
+    },
     ...overrides
   };
 }

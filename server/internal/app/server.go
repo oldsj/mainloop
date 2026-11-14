@@ -14,6 +14,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/attention"
 	"github.com/oldsj/mainloop/server/internal/buildinfo"
+	"github.com/oldsj/mainloop/server/internal/ci"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/devloop"
 	"github.com/oldsj/mainloop/server/internal/environments"
@@ -115,6 +116,9 @@ type Deps struct {
 	// DevloopTargets serves a project's staging target (GET/PUT /projects/{id}/devloop-target).
 	// Nil answers those routes 404, the same as an unconfigured project.
 	DevloopTargets *devloop.TargetService
+	// CI serves a project's verification setting (GET/PUT /projects/{id}/verification). Nil
+	// without a GitHub App.
+	CI *ci.Service
 }
 
 // missing names the required services Deps lacks. A nil one would otherwise fail as a nil dereference
@@ -148,7 +152,7 @@ const maxBodyBytes = 8 << 20
 func New(d Deps) *Server {
 	return &Server{
 		HealthAPI:       &HealthAPI{DB: d.DB, Log: d.Log, Revision: buildinfo.Revision},
-		ProjectsAPI:     &projects.ProjectsAPI{Svc: d.Projects, Devloop: d.DevloopTargets},
+		ProjectsAPI:     &projects.ProjectsAPI{Svc: d.Projects, Devloop: d.DevloopTargets, CI: d.CI},
 		ProvidersAPI:    providers.NewAPI(d.Config, d.Pool, d.Providers),
 		EnvironmentsAPI: environments.NewAPI(d.Config, d.Pool, d.Registry),
 		EventsAPI:       events.NewAPI(d.Pool, d.Hub, d.Log, d.Config.Identity.OwnerID, events.WithLive(d.Live)),

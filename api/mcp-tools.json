@@ -289,6 +289,22 @@
       }
     },
     {
+      "name": "get_verification",
+      "description": "Read where the bound project's heavy checks run: mode (the owner's setting: auto, ci, hybrid or local), effective_mode (what auto resolved to from the project's detected CI), and what to run in the workspace before you push. Read it before deciding how much to test locally.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["project_id"],
+        "type": "object"
+      }
+    },
+    {
       "name": "task_get",
       "description": "Read a scoped task and its stored projections without a native turn.",
       "input_schema": {
@@ -792,6 +808,7 @@
         "decide",
         "delegate",
         "get_issue",
+        "get_verification",
         "list_dependabot_alerts",
         "note",
         "open_pull_request",
@@ -825,6 +842,7 @@
         "dev_status",
         "dev_sync",
         "get_issue",
+        "get_verification",
         "list_dependabot_alerts",
         "note",
         "open_pull_request",
@@ -855,6 +873,7 @@
         "delegate",
         "get_issue",
         "get_pull_request_merge_status",
+        "get_verification",
         "list_dependabot_alerts",
         "merge_pull_request",
         "note",
@@ -891,6 +910,7 @@
         "dev_sync",
         "get_issue",
         "get_pull_request_merge_status",
+        "get_verification",
         "list_dependabot_alerts",
         "merge_pull_request",
         "note",
@@ -997,6 +1017,7 @@
         "check_status",
         "delegate",
         "get_issue",
+        "get_verification",
         "list_dependabot_alerts",
         "open_pull_request",
         "report",
@@ -1025,6 +1046,7 @@
         "dev_status",
         "dev_sync",
         "get_issue",
+        "get_verification",
         "list_dependabot_alerts",
         "open_pull_request",
         "report",
@@ -1050,6 +1072,7 @@
         "delegate",
         "get_issue",
         "get_pull_request_merge_status",
+        "get_verification",
         "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
@@ -1081,6 +1104,7 @@
         "dev_sync",
         "get_issue",
         "get_pull_request_merge_status",
+        "get_verification",
         "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
@@ -1146,6 +1170,7 @@
       "ordinary": [
         "check_status",
         "get_issue",
+        "get_verification",
         "list_dependabot_alerts",
         "open_pull_request",
         "report",
@@ -1171,6 +1196,7 @@
         "dev_status",
         "dev_sync",
         "get_issue",
+        "get_verification",
         "list_dependabot_alerts",
         "open_pull_request",
         "report",
@@ -1193,6 +1219,7 @@
         "check_status",
         "get_issue",
         "get_pull_request_merge_status",
+        "get_verification",
         "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
@@ -1221,6 +1248,7 @@
         "dev_sync",
         "get_issue",
         "get_pull_request_merge_status",
+        "get_verification",
         "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
@@ -1244,6 +1272,7 @@
       "ordinary": [
         "check_status",
         "get_issue",
+        "get_verification",
         "list_dependabot_alerts",
         "open_pull_request",
         "watch_checks",
@@ -1265,6 +1294,7 @@
         "dev_status",
         "dev_sync",
         "get_issue",
+        "get_verification",
         "list_dependabot_alerts",
         "open_pull_request",
         "watch_checks",
@@ -1283,6 +1313,7 @@
         "check_status",
         "get_issue",
         "get_pull_request_merge_status",
+        "get_verification",
         "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
@@ -1307,6 +1338,7 @@
         "dev_sync",
         "get_issue",
         "get_pull_request_merge_status",
+        "get_verification",
         "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",

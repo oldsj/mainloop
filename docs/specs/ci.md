@@ -6,8 +6,8 @@ CI, not in the workspace. A worker runs a quick local loop, pushes, and reads th
 Mainloop. This spec covers how an agent reads that result. Sandboxes have no `gh` CLI and cannot
 reach the forge's API, so the read goes through Mainloop's MCP tools and the project's GitHub App.
 
-Status: `check_status` and `watch_checks` are implemented. The per-project setting for where heavy
-checks run and the worker guidance that uses both tools are proposed in follow-up slices and are
+Status: `check_status`, `watch_checks`, the per-project setting for where heavy checks run, and
+`get_verification` are implemented. The worker guidance that uses them is a follow-up slice and is
 not described here as behavior yet.
 
 ## Providers
@@ -150,7 +150,47 @@ The watch uses the same credential and scoping as `check_status`: `projectAuthor
 row is written, the project resolved by owner, and the watch bound to the calling session, which is
 the only session it can message.
 
-### Why this tool returns check detail and `merge_pull_request` does not
+## Where heavy checks run
+
+Each project has a **verification mode**, owner-set in the project's Checks settings
+(`GET`/`PUT /projects/{project_id}/verification`). It is Mainloop-side configuration, never read
+from the project's repository, so it works the same for any repository the owner imports.
+
+| Mode     | The agent, in its workspace                      | Then                                   |
+| -------- | ------------------------------------------------ | -------------------------------------- |
+| `ci`     | builds and lints what it changed                 | pushes once, `watch_checks`, ends turn |
+| `hybrid` | builds, lints and runs the tests of what changed | pushes once, `watch_checks`, ends turn |
+| `local`  | runs the project's full checks                   | reports; CI, if any, is not relied on  |
+| `auto`   | (the default) resolves to one of the above       |                                        |
+
+`auto` resolves from a **CI detection**: Mainloop reads the checks on the default branch's tip
+through the CI provider (`contents: read` for the branch tip, then the same check reads as
+`check_status`). At least one check there is usable CI, and `auto` resolves to `hybrid`; none
+resolves to `local`, as does a project never detected. The detection records the branch, the tip,
+how many checks reported and what reported them (a check run's app, a commit status's context; at
+most ten). It is cached on the project and refreshed by the next read once it is a day old, or on
+`GET …/verification?refresh=true`. A failed refresh is reported as `detect_error` and leaves the
+last good detection in place. The detection is stored as JSON so later reads can add to it without
+a migration.
+
+The answer names the mode, the effective mode, its source (`owner`, `detected`, or `default` when
+`auto` had no detection to go on), and the detection. Known limit: a repository whose CI runs only
+on pull requests, never on its default branch, is detected as having none; its owner sets `ci` or
+`hybrid` explicitly.
+
+Proposed, not built: auditing a repository's workflows for steps that deploy, publish or notify on
+push before agents rely on them; reporting what agents' CI use costs (Actions minutes on private
+repositories); rerunning a known-flaky failure once. These are additions to the detection and to
+the watch, not new modes.
+
+### `get_verification`
+
+`get_verification(project_id)` gives an agent its project's `mode`, `effective_mode`, `source`,
+`detection` and `instructions` (what to run in the workspace before pushing, per the table above).
+It has the same scoping as `check_status`. It may refresh a stale detection; that write runs in a
+transaction, so a revoked credential is refused before it.
+
+### Why `check_status` returns check detail and `merge_pull_request` does not
 
 `merge_pull_request` deliberately strips check detail from its answer (`blocked` /
 `checks_failed`, with no check name or upstream text): the merge decision is where arbitrary CI

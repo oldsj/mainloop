@@ -189,6 +189,11 @@ func (Unimplemented) GetProjectSmokeObservations(context.Context, GetProjectSmok
 	return nil, apierr.NotImplemented
 }
 
+// GetProjectVerification is not implemented yet.
+func (Unimplemented) GetProjectVerification(context.Context, GetProjectVerificationRequestObject) (GetProjectVerificationResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetSchedule is not implemented yet.
 func (Unimplemented) GetSchedule(context.Context, GetScheduleRequestObject) (GetScheduleResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -426,6 +431,11 @@ func (Unimplemented) UpdateProjectDefaultProvider(context.Context, UpdateProject
 
 // UpdateProjectDevloopTarget is not implemented yet.
 func (Unimplemented) UpdateProjectDevloopTarget(context.Context, UpdateProjectDevloopTargetRequestObject) (UpdateProjectDevloopTargetResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// UpdateProjectVerification is not implemented yet.
+func (Unimplemented) UpdateProjectVerification(context.Context, UpdateProjectVerificationRequestObject) (UpdateProjectVerificationResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 
