@@ -2,6 +2,7 @@ import { useLocation } from '@tanstack/react-router';
 import { PanelLeftClose } from 'lucide-react';
 import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { Button } from '@/components/ui/button';
+import { shortcutLabel } from '@/lib/platform';
 import {
   needsCount,
   SIDEBAR_VIEWS,
@@ -98,7 +99,7 @@ function ExplorerBody({
             variant="ghost"
             size="sm"
             aria-label="Hide sidebar"
-            title="Hide sidebar (Ctrl+B or ⌘B)"
+            title={`Hide sidebar (${shortcutLabel('b')})`}
             onClick={onCollapse}
           >
             <PanelLeftClose aria-hidden="true" />
@@ -140,7 +141,7 @@ export interface ExplorerSidebarProps {
 /**
  * Desktop: the sidebar on the left, between the activity bar and the page. It shows one view of the
  * tree at a time (Sessions or Projects, chosen in the activity bar), is resizable from its right
- * edge, and is hidden from the activity bar or with Ctrl+B / ⌘B. The shell owns the prefs and the
+ * edge, and is hidden from the activity bar or with the sidebar shortcut (⌘B on a Mac, Ctrl+B elsewhere). The shell owns the prefs and the
  * data, since the activity bar and the status bar read them too.
  */
 export function ExplorerSidebar({ prefs, update, nodes, ready, failed }: ExplorerSidebarProps) {

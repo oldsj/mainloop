@@ -502,15 +502,58 @@ describe('explorer panel', () => {
     expect(screen.queryByTestId('explorer-aside')).toBeNull();
   });
 
-  it('hides and shows the sidebar with Ctrl+B', async () => {
-    setViewport(true);
-    const user = userEvent.setup();
-    await renderAt('/');
-    expect(screen.getByTestId('explorer-aside')).toBeInTheDocument();
-    await user.keyboard('{Control>}b{/Control}');
-    expect(screen.queryByTestId('explorer-aside')).toBeNull();
-    await user.keyboard('{Control>}b{/Control}');
-    expect(screen.getByTestId('explorer-aside')).toBeInTheDocument();
+  describe('the sidebar shortcut', () => {
+    afterEach(() => vi.restoreAllMocks());
+    const as = (platform: string) =>
+      vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue(platform);
+    const shown = () => screen.queryByTestId('explorer-aside') !== null;
+    // A real key event on whatever has focus. Nothing is typed, so no draft is left behind.
+    const press = (modifier: 'metaKey' | 'ctrlKey', target: Element = document.body) => {
+      const event = new KeyboardEvent('keydown', {
+        key: 'b',
+        [modifier]: true,
+        bubbles: true,
+        cancelable: true
+      });
+      act(() => {
+        target.dispatchEvent(event);
+      });
+      return event;
+    };
+
+    it('is Ctrl+B off a Mac, and ⌘B does nothing there', async () => {
+      as('Win32');
+      setViewport(true);
+      await renderAt('/');
+      expect(shown()).toBe(true);
+      expect(press('metaKey').defaultPrevented).toBe(false);
+      expect(shown()).toBe(true);
+      expect(press('ctrlKey').defaultPrevented).toBe(true);
+      expect(shown()).toBe(false);
+      press('ctrlKey');
+      expect(shown()).toBe(true);
+    });
+
+    it('is ⌘B on a Mac, and leaves Ctrl+B to the system’s text keys, also while typing', async () => {
+      as('MacIntel');
+      setViewport(true);
+      await renderAt('/');
+      const box = await screen.findByRole('textbox', { name: 'Message' });
+      act(() => box.focus());
+      // Ctrl+B is "back one character" on macOS: the app must neither act on it nor cancel it.
+      expect(press('ctrlKey', box).defaultPrevented).toBe(false);
+      expect(shown()).toBe(true);
+      // ⌘B works with the caret in the composer, and the box keeps the caret.
+      expect(press('metaKey', box).defaultPrevented).toBe(true);
+      expect(shown()).toBe(false);
+      expect(box).toHaveFocus();
+      press('metaKey', box);
+      expect(shown()).toBe(true);
+      expect(screen.getByRole('button', { name: 'Hide sidebar' })).toHaveAttribute(
+        'title',
+        'Hide sidebar (⌘B)'
+      );
+    });
   });
 
   it('shows one view at a time: Sessions is the work, Projects the catalogue', async () => {

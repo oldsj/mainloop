@@ -1,6 +1,7 @@
 import { useRouterState } from '@tanstack/react-router';
 import { useEffect, type ReactNode } from 'react';
 import { cn } from '@/components/ui/cn';
+import { isShortcut } from '@/lib/platform';
 import {
   ExplorerSidebar,
   needsCount,
@@ -42,11 +43,12 @@ export function DesktopShell({
         : { ...prev, view, collapsed: false }
     );
 
-  // Ctrl+B or ⌘B hides and shows the sidebar, as in an editor.
+  // ⌘B on a Mac, Ctrl+B elsewhere, hides and shows the sidebar, as in an editor. Never both on one
+  // platform: on a Mac, Ctrl+B in a text field is the system's "back one character" and must be left
+  // alone. ⌘B works while typing.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() !== 'b' || !(event.metaKey || event.ctrlKey)) return;
-      if (event.altKey || event.shiftKey) return;
+      if (!isShortcut(event, 'b')) return;
       event.preventDefault();
       update((prev) => ({ ...prev, collapsed: !prev.collapsed }));
     };
