@@ -23,6 +23,7 @@ import { hasAvailableAction } from '@/features/tasks/cache';
 import type { Session, TaskView } from '@/lib/contract';
 import { childrenOf, currentAttempt, statusTone, type Tone } from '@/lib/taskState';
 import { isCurrent } from '@/lib/sessionStatus';
+import { isUnseen, type SeenState } from './seen';
 
 /** Where a row leads. The shell turns it into a route; the tree never builds URLs itself. */
 export type Target =
@@ -74,6 +75,8 @@ export interface ExplorerSource {
   lastVisit?: number | null;
   /** The clock the finished window is measured from, in ms. Defaults to now. */
   now?: number;
+  /** Which finished tasks the owner has looked at in this browser. Without it nothing is unseen. */
+  seen?: SeenState | null;
 }
 
 /** How far back "Finished recently" reaches: tasks completed or cancelled in the last seven days. */
@@ -146,7 +149,10 @@ function childBucket(
   return 'running';
 }
 
-/** "3/5 done · 1 running · 1 blocked · 1 waiting on you", each part left out when it is zero. */
+/** "needs you" with its verb agreeing: "1 needs you", "2 need you". The label for red, everywhere. */
+const needsYou = (count: number) => (count === 1 ? 'needs you' : 'need you');
+
+/** "3/5 done · 1 running · 1 blocked · 1 needs you", each part left out when it is zero. */
 function childProgressText(childTasks: TaskView[], attention: AttentionItem[]): string {
   // A problem item is Mainloop's own recovery work, not an owner decision, so a child behind one
   // reads as blocked, not waiting on the owner.
@@ -158,7 +164,7 @@ function childProgressText(childTasks: TaskView[], attention: AttentionItem[]): 
   const parts = [`${counts.done}/${childTasks.length} done`];
   if (counts.running > 0) parts.push(`${counts.running} running`);
   if (counts.blocked > 0) parts.push(`${counts.blocked} blocked`);
-  if (counts.waiting > 0) parts.push(`${counts.waiting} waiting on you`);
+  if (counts.waiting > 0) parts.push(`${counts.waiting} ${needsYou(counts.waiting)}`);
   return parts.join(' · ');
 }
 
@@ -180,6 +186,26 @@ function parentDetail(view: TaskView, childTasks: TaskView[], source: ExplorerSo
   return report ? `${progress} · ${report}` : progress;
 }
 
+/**
+ * A task row's dot. Needs you is red. A problem is Mainloop's own recovery work, not an owner
+ * decision, so it is at rest (hollow). A completed task is teal until the owner has opened it,
+ * then at rest like any other finished row.
+ */
+function taskTone(
+  view: TaskView,
+  group: ReturnType<typeof workGroup>,
+  source: ExplorerSource
+): Tone {
+  if (group === 'needs-you') return 'attention';
+  if (group === 'problem') return 'muted';
+  const tone = statusTone(view.task.status);
+  if (tone !== 'ok') return tone;
+  return isUnseen(source.seen, view.task.id, view.task.updated_at) ? 'unseen' : 'muted';
+}
+
+/** A dot says a row's state, so a row whose state is merely fine is at rest, not green. */
+const atRest = (tone: Tone): Tone => (tone === 'ok' ? 'muted' : tone);
+
 export function taskNode(view: TaskView, source: ExplorerSource, parent: string): ExplorerNode {
   const { task } = view;
   const id = `${parent}/task:${task.id}`;
@@ -195,22 +221,11 @@ export function taskNode(view: TaskView, source: ExplorerSource, parent: string)
     detail: childTasks.length > 0 ? parentDetail(view, childTasks, source) : statusLine(view),
     project: project ? shortProject(project.full_name) : undefined,
     at: task.updated_at,
-    // A problem is Mainloop's own recovery work, not an owner decision, so it reads muted, never
-    // the attention yellow a real decision gets.
-    tone:
-      group === 'needs-you' ? 'attention' : group === 'problem' ? 'muted' : statusTone(task.status),
+    tone: taskTone(view, group, source),
     target,
     ask: askPrefill({ label }, target),
     children: taskChildren(view, source, id, childTasks)
   };
-}
-
-/**
- * A row in Finished recently. The group already says the work is over, so a completed or cancelled
- * task carries no marker there; a failed one keeps its red.
- */
-function finishedNode(node: ExplorerNode): ExplorerNode {
-  return node.tone === 'bad' ? node : { ...node, tone: undefined };
 }
 
 /** A task nested under a loaded parent is shown there, not again as a flat sibling. */
@@ -226,7 +241,7 @@ export function sessionNode(session: Session, parent: string): ExplorerNode {
     id,
     label: session.title || 'Untitled session',
     detail: session.needs_owner ? 'Needs you' : session.status.replaceAll('_', ' '),
-    tone: sessionTone(session),
+    tone: atRest(sessionTone(session)),
     target,
     ask: askPrefill({ label: session.title || 'session' }, target),
     children: []
@@ -292,10 +307,11 @@ function problemNode(item: AttentionItem, parent: string): ExplorerNode {
  * The "Since you were here" rows. The waiting row opens the answer view, on the latest task's action
  * when one is listed, as the same work does under Needs you; the others open the latest task.
  */
-const SINCE: { key: keyof SinceCounts; label: string; tone: Tone }[] = [
-  { key: 'waiting', label: 'waiting on you', tone: 'attention' },
-  { key: 'failed', label: 'failed', tone: 'bad' },
-  { key: 'merged', label: 'merged', tone: 'ok' }
+const SINCE: { key: keyof SinceCounts; label: (count: number) => string; tone: Tone }[] = [
+  { key: 'waiting', label: needsYou, tone: 'attention' },
+  { key: 'failed', label: () => 'failed', tone: 'bad' },
+  // New since the owner was last here, so it is finished and not yet seen.
+  { key: 'merged', label: () => 'merged', tone: 'unseen' }
 ];
 
 /**
@@ -310,7 +326,7 @@ function sinceNode(source: ExplorerSource): ExplorerNode[] {
     return [
       {
         id: `since/${key}`,
-        label: `${countText(counts[key].length, 'task')} ${label}`,
+        label: `${countText(counts[key].length, 'task')} ${label(counts[key].length)}`,
         detail: latest.task.title,
         tone,
         target:
@@ -338,7 +354,7 @@ const note = (id: string, label: string): ExplorerNode => ({ id, label, note: tr
 
 /** Mainloop's own state: waiting when the owner is needed, working while a task runs, else idle. */
 export function mainloopState(needs: number, working: number): { label: string; tone: Tone } {
-  if (needs > 0) return { label: 'Waiting on you', tone: 'attention' };
+  if (needs > 0) return { label: 'Needs you', tone: 'attention' };
   if (working > 0) return { label: 'Working', tone: 'active' };
   return { label: 'Idle', tone: 'muted' };
 }
@@ -421,7 +437,7 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
       id: `schedules/${schedule.id}`,
       label: schedule.config.name,
       detail: schedule.config.paused ? 'Paused' : schedule.config.schedule,
-      tone: schedule.config.paused ? 'muted' : 'ok',
+      tone: 'muted',
       target,
       ask: askPrefill({ label: schedule.config.name }, target),
       children: []
@@ -481,7 +497,7 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
       id: 'finished',
       label: 'Finished recently',
       count: finished.length,
-      children: finished.map((view) => finishedNode(taskNode(view, source, 'finished')))
+      children: finished.map((view) => taskNode(view, source, 'finished'))
     },
     {
       id: 'health',

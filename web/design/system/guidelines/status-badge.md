@@ -8,7 +8,7 @@ A status word in its token colour: session status in the list and session page, 
 
 ## Tokens
 
-- Tones map to the status tokens: active `status-working`, attention `status-attention`, bad `status-failed`, muted `status-idle` with `border-subtle`. Ok stays `term-green`.
+- Tones map to the status tokens: active `status-working` (amber), attention `status-attention` and bad `status-failed` (red: needs you), unseen `status-unseen` (teal), muted `status-idle` with `border-subtle`. Ok is `term-green`, for a fact that is good (passing CI, a merged PR), not for a row's state.
 - The border is the tone colour at half strength. Text is uppercase by CSS; the label in the DOM keeps its words.
 - On a filled row (open or hovered, `bg-accent`), the badge text takes `text-accent-foreground` and the tone border is dropped. The label carries the status there, so no tone colour is drawn on the fill.
 - Radius `rounded-none`. Spacing `px-sm py-xs`. Type `text-xs`, medium weight.

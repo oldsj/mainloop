@@ -9,7 +9,7 @@ The one row above the main conversation: the session's status, how many topics a
 ## Tokens
 
 - Surface `bg-card`, rule `border-border-subtle`, text `text-muted-foreground`; the state word is `text-foreground`.
-- State marker: ready `bg-term-green`; idle, asleep and paused `bg-status-idle`; working, starting and waking `bg-status-working` (it pulses); needs you and unconfirmed `bg-status-attention`; failed, unreachable and unavailable `bg-status-failed`; connecting and reconnecting `bg-status-idle`, pulsing. The marker is a square (`rounded-none`).
+- State marker, in the status-dot language: working, starting and waking are filled amber (`bg-status-working`, pulsing); needs you and unconfirmed are filled red (`bg-status-attention`); failed, unreachable and unavailable are filled red (`bg-status-failed`); ready, idle, asleep and paused are hollow (`border border-status-idle`); connecting and reconnecting are hollow and pulse. The marker is a square (`rounded-none`).
 
 ## States
 

@@ -54,11 +54,15 @@ describe('barStatus', () => {
 });
 
 describe('barStatusDot', () => {
-  it('gives each meaning one colour', () => {
+  it('fills the marker for working and needs you, and leaves it hollow at rest', () => {
     expect(barStatusDot('needs you')).toContain('bg-status-attention');
     expect(barStatusDot('working')).toContain('bg-status-working');
     expect(barStatusDot('last message failed')).toContain('bg-status-failed');
-    expect(barStatusDot('asleep')).toBe('bg-status-idle');
-    expect(barStatusDot('ready')).toBe('bg-term-green');
+    for (const rest of ['ready', 'idle', 'asleep', 'paused'] as const) {
+      expect(barStatusDot(rest)).toBe('border border-status-idle');
+      expect(barStatusDot(rest)).not.toMatch(/\bbg-/);
+    }
+    // Still trying to connect is at rest, pulsing.
+    expect(barStatusDot('reconnecting…')).toBe('border border-status-idle animate-pulse');
   });
 });

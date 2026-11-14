@@ -257,7 +257,13 @@ describe('quiet border', () => {
 
 describe('status colours', () => {
   // Each status colour is drawn as badge text, so it meets text contrast on both surfaces.
-  const STATUS_KEYS = ['status-attention', 'status-working', 'status-failed', 'status-idle'];
+  const STATUS_KEYS = [
+    'status-attention',
+    'status-working',
+    'status-unseen',
+    'status-failed',
+    'status-idle'
+  ];
   const cases = Object.keys(themes).flatMap((theme) =>
     STATUS_KEYS.flatMap((key): [string, string, string][] => [
       [theme, key, 'bg'],
@@ -270,26 +276,21 @@ describe('status colours', () => {
     ).toBeGreaterThanOrEqual(AA_TEXT);
   });
 
-  // Working must not read as needs-you or failed. Gruvbox's accent is its yellow, so it takes cyan.
-  it.each(Object.keys(themes))(
-    '%s: working is a different hue from attention and failed',
-    (theme) => {
-      const working = colour(theme, 'semantic', 'status-working');
-      expect(
-        hueDistance(working, colour(theme, 'semantic', 'status-attention'))
-      ).toBeGreaterThanOrEqual(60);
-      expect(
-        hueDistance(working, colour(theme, 'semantic', 'status-failed'))
-      ).toBeGreaterThanOrEqual(60);
-    }
-  );
+  // The three filled dots must read apart: amber working, red needs you, teal finished and unseen.
+  // Amber and red are neighbours on the wheel, so they are held to 30 degrees; teal is far from both.
+  it.each(Object.keys(themes))('%s: working, needs you and unseen are different hues', (theme) => {
+    const working = colour(theme, 'semantic', 'status-working');
+    const needsYou = colour(theme, 'semantic', 'status-attention');
+    const unseen = colour(theme, 'semantic', 'status-unseen');
+    expect(hueDistance(working, needsYou)).toBeGreaterThanOrEqual(30);
+    expect(hueDistance(unseen, working)).toBeGreaterThanOrEqual(60);
+    expect(hueDistance(unseen, needsYou)).toBeGreaterThanOrEqual(60);
+  });
 
-  it.each(Object.keys(themes))('%s: attention is a different hue from failed', (theme) => {
-    expect(
-      hueDistance(
-        colour(theme, 'semantic', 'status-attention'),
-        colour(theme, 'semantic', 'status-failed')
-      )
-    ).toBeGreaterThanOrEqual(30);
+  // A failure is one kind of "needs you": the word beside the dot says which.
+  it.each(Object.keys(themes))('%s: failed is drawn as needs you', (theme) => {
+    expect(colour(theme, 'semantic', 'status-failed')).toBe(
+      colour(theme, 'semantic', 'status-attention')
+    );
   });
 });

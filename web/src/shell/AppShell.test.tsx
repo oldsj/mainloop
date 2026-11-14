@@ -12,6 +12,7 @@ import {
   hitlAttentionItem,
   queueItem
 } from '@/features/inbox/test/fixtures';
+import { resetSeenForTests } from '@/features/explorer/seen';
 import { writeLastVisit } from '@/features/home/lastVisit';
 import { projectsRead, serveProjectPage } from '@/features/projects/test/handlers';
 import { project } from '@/features/projects/test/fixtures';
@@ -480,6 +481,45 @@ describe('explorer panel', () => {
     expect(JSON.parse(localStorage.getItem('mainloop.explorer.v1') ?? '{}')).toMatchObject({
       width: 480
     });
+  });
+});
+
+describe('finished and not yet seen', () => {
+  const SEEN_KEY = 'mainloop.seen.v1';
+  const HOUR = 60 * 60 * 1000;
+
+  it('lights a task that finished after this browser kept a record, and opening it puts it at rest', async () => {
+    setViewport(true);
+    resetSeenForTests();
+    // The record started an hour ago; the task finished since.
+    localStorage.setItem(SEEN_KEY, JSON.stringify({ since: Date.now() - HOUR, seen: {} }));
+    const done = view({
+      id: 'done-1',
+      title: 'Ship docs',
+      status: 'completed',
+      updated_at: new Date(Date.now() - 60_000).toISOString()
+    });
+    server.use(
+      tasksList(() => HttpResponse.json([done])),
+      taskRead(() => HttpResponse.json(done))
+    );
+    const user = userEvent.setup();
+    await renderAt('/');
+    const tree = within(await screen.findByTestId('explorer-aside'));
+    await user.click(await tree.findByText('Finished recently'));
+    const row = await tree.findByRole('treeitem', { name: /Ship docs/ });
+    expect(within(row).getByTestId('explorer-dot')).toHaveAttribute('data-tone', 'unseen');
+
+    // Opening the task's page is looking at it.
+    await user.click(within(row).getByText('Ship docs'));
+    await waitFor(() =>
+      expect(
+        within(tree.getByRole('treeitem', { name: /Ship docs/ })).getByTestId('explorer-dot')
+      ).toHaveAttribute('data-tone', 'muted')
+    );
+    expect(JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}').seen['done-1']).toBeGreaterThan(
+      Date.now() - 60_000
+    );
   });
 });
 

@@ -326,6 +326,38 @@ describe('task identity on a row', () => {
   });
 });
 
+describe('the status dot', () => {
+  const dotNodes: ExplorerNode[] = (
+    [
+      ['working', 'active'],
+      ['needs', 'attention'],
+      ['failed', 'bad'],
+      ['unseen', 'unseen'],
+      ['rest', 'muted']
+    ] as const
+  ).map(([id, tone]) => ({ id, label: id, tone, children: [] }));
+
+  it('is filled amber, red or teal for working, needs you and unseen, and hollow at rest', () => {
+    render(
+      <ExplorerTree
+        nodes={dotNodes}
+        isExpanded={() => false}
+        onToggle={vi.fn()}
+        onOpen={vi.fn()}
+        onAsk={vi.fn()}
+      />
+    );
+    const dot = (tone: string) =>
+      screen.getAllByTestId('explorer-dot').find((el) => el.dataset.tone === tone);
+    expect(dot('active')).toHaveClass('bg-status-working');
+    expect(dot('attention')).toHaveClass('bg-status-attention');
+    expect(dot('bad')).toHaveClass('bg-status-failed');
+    expect(dot('unseen')).toHaveClass('bg-status-unseen');
+    expect(dot('muted')).toHaveClass('border', 'border-status-idle');
+    expect(dot('muted')?.className).not.toMatch(/\bbg-/);
+  });
+});
+
 describe('the row for the current page', () => {
   const renderAt = (current: React.ComponentProps<typeof ExplorerTree>['current']) =>
     render(
