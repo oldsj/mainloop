@@ -15,7 +15,7 @@ import { useWorkspaces } from '@/features/sessions/queries';
 import { useOwnerTaskPoll, useTaskList } from '@/features/tasks/queries';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { currentAttempt } from '@/lib/taskState';
-import { buildExplorer, targetOfLocation, type ExplorerNode, type Target } from './model';
+import { buildExplorer, prStage, targetOfLocation, type ExplorerNode, type Target } from './model';
 import { useSeen } from './seen';
 
 /** `lastVisit` is the shell's baseline for "Since you were here"; without it the group is left out. */
@@ -35,24 +35,32 @@ export function useExplorer(lastVisit: number | null = null): {
   const schedules = useSchedules();
   const online = useConnection().status !== 'offline';
 
-  // A finished task is "unseen" until the owner opens its page, or the page of its session, in this
-  // browser. It is marked whenever that page is showing and again when the task changes under it.
+  // A finished task is "unseen" until the owner opens its page, or the page of its session, on any
+  // device. It is marked when that page opens, and again when it changes under the owner while it
+  // is the kind of row that shows seen-ness (completed, or a pull request ready to be looked at).
+  // A running task is marked once per status, so watching it does not write on every update.
   const { seen, mark } = useSeen();
   const page = useLocation({
     select: (location) => targetOfLocation(location.pathname, location.search),
     structuralSharing: true
   });
-  const open = useMemo(() => {
+  const openView = useMemo(() => {
     if (page?.to !== 'task' && page?.to !== 'session') return undefined;
     return (tasks.data ?? []).find((view) =>
       page.to === 'task' ? view.task.id === page.id : currentAttempt(view)?.session_id === page.id
-    )?.task;
+    );
   }, [page, tasks.data]);
+  const open = openView?.task;
   const openId = open?.id;
   const openChanged = open?.updated_at;
+  const shown = open?.status === 'completed' || (openView ? prStage(openView) === 'review' : false);
+  const markKey = shown ? openChanged : open?.status;
   useEffect(() => {
     if (openId) mark(openId, openChanged);
-  }, [openId, openChanged, mark]);
+    // `openChanged` is read at the time of the mark; `markKey` decides when one is due. `seen` is a
+    // dependency so the first mark runs once the owner's record has been read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openId, markKey, mark, seen]);
 
   const nodes = useMemo(
     () =>

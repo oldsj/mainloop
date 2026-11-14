@@ -13,11 +13,10 @@ import { serveProjectPage } from '@/features/projects/test/handlers';
 import { session } from '@/features/sessions/test/fixtures';
 import { approvalRequest, hitlView } from '@/test/fixtures/hitl';
 import { attempt, projection, view } from '@/test/fixtures/tasks';
-import { sessionDefaultsHandlers } from './handlers';
+import { sessionDefaultsHandlers, testSeen } from './handlers';
 
 const url = (path: string) => `${API_URL}${path}`;
 const DAY = 24 * 60 * 60 * 1000;
-const LAST_VISIT_KEY = 'mainloop.home.lastVisit';
 
 /** Whether this load asked for the review seed. */
 export function reviewSeedRequested(): boolean {
@@ -32,14 +31,9 @@ export function reviewSeedRequested(): boolean {
  * backend, so a card can still be answered. Times are relative to now, so "Since you were here" has rows.
  */
 export function reviewSeed() {
-  // A first visit has no baseline and shows no Since group, so it starts from yesterday.
-  try {
-    if (!window.localStorage.getItem(LAST_VISIT_KEY)) {
-      window.localStorage.setItem(LAST_VISIT_KEY, String(Date.now() - DAY));
-    }
-  } catch {
-    // Storage blocked: the Since group is left out, as it is for the owner.
-  }
+  // A first visit has no baseline and shows no Since group, so the owner's record starts from
+  // yesterday, with a visit then. Tasks that finish "now" are therefore not yet seen.
+  testSeen.begin({ since: Date.now() - DAY, lastVisit: Date.now() - DAY });
 
   const now = new Date().toISOString();
   const repo = project({ id: 'project-a', open_pr_count: 0 });

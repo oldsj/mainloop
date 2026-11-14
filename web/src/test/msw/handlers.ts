@@ -46,6 +46,76 @@ export function sessionDefaultsHandlers(initial: Schemas['SessionDefault'][] = [
   ];
 }
 
+/**
+ * The owner's seen state, kept in memory as the server keeps it (docs/specs/seen.md): a read
+ * writes nothing; a visit moves `last_visit` to `previous_visit`; a mark is stamped now, and a
+ * later one wins. `begin` sets the record a case starts from, and `reset` empties it.
+ */
+export function createSeenBackend() {
+  const iso = (ms: number) => new Date(ms).toISOString();
+  let since: number | null = null;
+  let lastVisit: number | null = null;
+  let previousVisit: number | null = null;
+  let marks: Record<string, number> = {};
+  const marked: string[] = [];
+  let visits = 0;
+
+  const body = (): Schemas['Seen'] => ({
+    since: iso(since ?? Date.now()),
+    last_visit: lastVisit === null ? null : iso(lastVisit),
+    previous_visit: previousVisit === null ? null : iso(previousVisit),
+    tasks: Object.entries(marks).map(([task_id, at]) => ({ task_id, seen_at: iso(at) }))
+  });
+
+  return {
+    /** The record a case starts from: when it began, the owner's last visit, and any marks (ms). */
+    begin(start: { since?: number; lastVisit?: number | null; tasks?: Record<string, number> }) {
+      since = start.since ?? since;
+      lastVisit = start.lastVisit ?? lastVisit;
+      marks = { ...(start.tasks ?? {}) };
+    },
+    reset() {
+      since = lastVisit = previousVisit = null;
+      marks = {};
+      marked.length = 0;
+      visits = 0;
+    },
+    /** The task ids marked, in order, one entry per write. */
+    get marked(): readonly string[] {
+      return marked;
+    },
+    /** How many visits were recorded. */
+    get visits(): number {
+      return visits;
+    },
+    handlers: [
+      http.get(url('/seen'), () => HttpResponse.json(body())),
+      http.post(url('/seen/visits'), () => {
+        const now = Date.now();
+        since ??= now;
+        previousVisit = lastVisit;
+        lastVisit = now;
+        visits++;
+        return HttpResponse.json(body());
+      }),
+      http.put(url('/seen/tasks/:taskId'), ({ params }) => {
+        const taskId = String(params.taskId);
+        const now = Date.now();
+        since ??= now;
+        marks[taskId] = Math.max(now, marks[taskId] ?? 0);
+        marked.push(taskId);
+        return HttpResponse.json({ task_id: taskId, seen_at: iso(marks[taskId]) });
+      })
+    ]
+  };
+}
+
+/**
+ * The seen state the test suite and the local stack share. `setup.ts` resets it after each case,
+ * so one test's visit is not the next one's "previous visit".
+ */
+export const testSeen = createSeenBackend();
+
 /** A stream that sends `connected` and then stays open, like the real /events. */
 function eventStream() {
   const encoder = new TextEncoder();
@@ -85,7 +155,8 @@ export const baseHandlers = [
   // A test that only passes through /health incidentally (on its way elsewhere) still needs these.
   http.get(url('/orchestration-health'), () => HttpResponse.json(orchestrationHealth)),
   http.get(url('/providers'), () => HttpResponse.json(providers)),
-  ...sessionDefaultsHandlers()
+  ...sessionDefaultsHandlers(),
+  ...testSeen.handlers
 ];
 
 /**

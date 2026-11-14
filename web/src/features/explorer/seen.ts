@@ -1,78 +1,42 @@
 /**
- * Which finished tasks the owner has looked at, per browser. A finished task the owner has not
- * opened since it finished shows a filled teal dot; once opened it is hollow, like any idle row.
- * There is no API for this: it is kept in local storage, as the explorer's layout is.
+ * Which tasks the owner has looked at. A finished task the owner has not opened since it last
+ * changed shows a filled teal dot; once opened it is hollow, like any row at rest.
  *
- * `since` is when this browser first kept the record. A task that finished before then counts as
- * seen, so the first load does not light every old task.
+ * The record is the owner's, kept on the server (`GET /seen`, `PUT /seen/tasks/{task_id}`; see
+ * docs/specs/seen.md), so a task opened on the phone is seen on the desktop too. Both times in the
+ * comparison are the server's, so a device's clock does not matter. Until the record has been read,
+ * or if it cannot be, nothing shows as unseen.
  */
-import { useCallback, useSyncExternalStore } from 'react';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useCallback, useMemo } from 'react';
+import { $api } from '@/api';
+import type { components } from '@/api';
 
-export const SEEN_KEY = 'mainloop.seen.v1';
-
-/** Entries older than this are dropped on write, so the record cannot grow without bound. */
-export const SEEN_KEEP_MS = 60 * 24 * 60 * 60 * 1000;
+type Seen = components['schemas']['Seen'];
 
 export interface SeenState {
-  /** When this browser started keeping the record, in ms. */
+  /** When the owner's record started, in ms. A task that last changed before it counts as seen. */
   since: number;
   /** Task id to the last time the owner had it open, in ms. */
   seen: Record<string, number>;
 }
 
-function parse(raw: string | null): SeenState | null {
-  if (!raw) return null;
-  try {
-    const value: unknown = JSON.parse(raw);
-    if (typeof value !== 'object' || value === null) return null;
-    const { since, seen } = value as { since?: unknown; seen?: unknown };
-    if (typeof since !== 'number' || !Number.isFinite(since)) return null;
-    const entries =
-      typeof seen === 'object' && seen !== null
-        ? Object.entries(seen).filter(
-            (entry): entry is [string, number] =>
-              typeof entry[1] === 'number' && Number.isFinite(entry[1])
-          )
-        : [];
-    return { since, seen: Object.fromEntries(entries) };
-  } catch {
-    return null;
+/** The record as the explorer reads it, or null when there is none to go by. */
+export function seenState(seen: Seen | undefined | null): SeenState | null {
+  if (!seen) return null;
+  const since = Date.parse(seen.since);
+  if (!Number.isFinite(since)) return null;
+  const marks: Record<string, number> = {};
+  for (const task of seen.tasks) {
+    const at = Date.parse(task.seen_at);
+    if (Number.isFinite(at)) marks[task.task_id] = at;
   }
-}
-
-/** The record, started now if there is none. Null when storage is blocked: nothing is unseen then. */
-export function readSeen(now: number = Date.now()): SeenState | null {
-  try {
-    const stored = parse(window.localStorage.getItem(SEEN_KEY));
-    if (stored) return stored;
-    const fresh: SeenState = { since: now, seen: {} };
-    window.localStorage.setItem(SEEN_KEY, JSON.stringify(fresh));
-    return fresh;
-  } catch {
-    return null;
-  }
-}
-
-/** Records that the owner has `taskId` open now. Returns the new record, or null when storage is blocked. */
-export function markSeen(taskId: string, now: number = Date.now()): SeenState | null {
-  const state = readSeen(now);
-  if (!state) return null;
-  const kept = Object.entries(state.seen).filter(([, at]) => now - at < SEEN_KEEP_MS);
-  const next: SeenState = {
-    since: state.since,
-    seen: { ...Object.fromEntries(kept), [taskId]: now }
-  };
-  try {
-    window.localStorage.setItem(SEEN_KEY, JSON.stringify(next));
-  } catch {
-    return null;
-  }
-  return next;
+  return { since, seen: marks };
 }
 
 /**
- * Whether a finished task has not been looked at: it last changed after this browser started
- * keeping the record, and after the owner last had it open. With no record nothing is unseen.
+ * Whether a task has not been looked at: it last changed after the owner's record started, and
+ * after the owner last had it open. With no record nothing is unseen.
  */
 export function isUnseen(
   state: SeenState | null | undefined,
@@ -85,36 +49,63 @@ export function isUnseen(
   return changed > state.since && changed > (state.seen[taskId] ?? 0);
 }
 
-// One record for every reader in the page, so a mark made by one tree shows in the other.
-let current: SeenState | null | undefined;
-const listeners = new Set<() => void>();
-const snapshot = () => (current === undefined ? (current = readSeen()) : current);
-const subscribe = (listener: () => void) => {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-};
+/** Whether a mark would change anything: the task has no mark, or changed after its mark. */
+function needsMark(seen: Seen, taskId: string, changedAt: string | undefined): boolean {
+  const mark = seen.tasks.find((task) => task.task_id === taskId)?.seen_at;
+  if (!mark) return true;
+  const changed = changedAt ? Date.parse(changedAt) : Number.NaN;
+  return Number.isFinite(changed) && changed > Date.parse(mark);
+}
+
+// Marks being written, per query client, so two trees on one page send one write between them.
+const writing = new WeakMap<QueryClient, Set<string>>();
 
 /**
- * The record and a way to mark a task seen. Every caller shares one record. `changedAt` is the
- * task's own last change: the mark is never earlier than it, so a browser clock that runs behind
- * the server cannot leave an open task unseen.
+ * The owner's record and a way to mark a task as looked at. `changedAt` is the task's own last
+ * change: a task already marked after it is left alone, so opening a page does not write each time.
+ * A mark that fails (offline) is simply not recorded; the next change or visit tries again.
  */
 export function useSeen(): {
   seen: SeenState | null;
   mark: (taskId: string, changedAt?: string) => void;
 } {
-  const seen = useSyncExternalStore(subscribe, snapshot, () => null);
-  const mark = useCallback((taskId: string, changedAt?: string) => {
-    const changed = changedAt ? Date.parse(changedAt) : Number.NaN;
-    const next = markSeen(taskId, Math.max(Date.now(), Number.isFinite(changed) ? changed : 0));
-    if (next === null) return;
-    current = next;
-    for (const listener of listeners) listener();
-  }, []);
-  return { seen, mark };
-}
+  const queryClient = useQueryClient();
+  const key = $api.queryOptions('get', '/seen').queryKey;
+  // The record changes only by this owner's own marks, which update the cache themselves, so it is
+  // not re-read on a timer. A reconnect re-reads it with everything else.
+  // No init object: with one the key would differ from `key` above, and the lookup in `mark` and
+  // the record the visit hands over would both miss this read.
+  const read = $api.useQuery('get', '/seen', undefined, { retry: false, staleTime: Infinity });
+  const write = $api.useMutation('put', '/seen/tasks/{task_id}');
+  const { mutate } = write;
+  const seen = useMemo(() => seenState(read.data), [read.data]);
 
-/** Test helper: forget the in-memory record, so the next read comes from storage again. */
-export function resetSeenForTests(): void {
-  current = undefined;
+  const mark = useCallback(
+    (taskId: string, changedAt?: string) => {
+      const current = queryClient.getQueryData<Seen>(key);
+      // Before the record is read there is nothing to compare with; the caller marks again once it is.
+      if (!current || !needsMark(current, taskId, changedAt)) return;
+      let pending = writing.get(queryClient);
+      if (!pending) writing.set(queryClient, (pending = new Set()));
+      if (pending.has(taskId)) return;
+      pending.add(taskId);
+      const done = pending;
+      mutate(
+        { params: { path: { task_id: taskId } } },
+        {
+          onSuccess: (row) =>
+            queryClient.setQueryData<Seen>(key, (prev) =>
+              prev
+                ? { ...prev, tasks: [...prev.tasks.filter((t) => t.task_id !== row.task_id), row] }
+                : prev
+            ),
+          onSettled: () => done.delete(taskId)
+        }
+      );
+    },
+    // `key` is rebuilt each render with the same contents; the client and `mutate` are stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [queryClient, mutate]
+  );
+  return { seen, mark };
 }

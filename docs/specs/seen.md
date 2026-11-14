@@ -4,9 +4,11 @@ The owner's seen state: which tasks they have looked at, and when they last open
 kept per owner on the server, so it follows them between devices: a task opened on the phone is
 seen on the desktop too.
 
-**Implemented (server):** the API below. **Not yet:** the web app still keeps both records per
-browser in local storage (`mainloop.seen.v1`, `mainloop.home.lastVisit`; see
-[layout](layout.md)); moving `useSeen` and `useLastVisit` onto this API is a separate web change.
+**Implemented (server):** the API below. **Implemented (web, checked against MSW, not a live
+backend):** the explorer's unseen dots read `GET /seen` and mark with `PUT /seen/tasks/{task_id}`,
+and "Since you were here" takes its baseline from `POST /seen/visits`; see [layout](layout.md) for
+when each is called. The web app no longer keeps either record in local storage, and removes the
+old keys (`mainloop.seen.v1`, `mainloop.home.lastVisit`) when it opens.
 
 ## API
 

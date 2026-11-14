@@ -12,14 +12,13 @@ import {
   hitlAttentionItem,
   queueItem
 } from '@/features/inbox/test/fixtures';
-import { resetSeenForTests } from '@/features/explorer/seen';
-import { writeLastVisit } from '@/features/home/lastVisit';
 import { projectsRead, serveProjectPage } from '@/features/projects/test/handlers';
 import { project } from '@/features/projects/test/fixtures';
 import { serveTaskPage, taskRead, taskScreen, tasksList } from '@/features/tasks/test/handlers';
 import { hitlView } from '@/test/fixtures/hitl';
 import type * as ConnectionModule from '@/api/connection';
 import { connection } from '@/api/connection';
+import { testSeen } from '@/test/msw/handlers';
 import { server } from '@/test/msw/server';
 import { projection, view } from '@/test/fixtures/tasks';
 import { createAppRouter } from '@/router';
@@ -455,7 +454,8 @@ describe('home work placement', () => {
   const failedNow = () => new Date(Date.now() - MIN).toISOString();
 
   function serveFailedSinceVisit() {
-    writeLastVisit(Date.now() - 60 * MIN);
+    // The owner's last visit, on any device, was an hour ago.
+    testSeen.begin({ since: Date.now() - 120 * MIN, lastVisit: Date.now() - 60 * MIN });
     const failed = view({
       id: 'fail-1',
       title: 'Broke',
@@ -518,11 +518,27 @@ describe('home work placement', () => {
     expect(screen.getByRole('main')).toHaveClass('relative');
   });
 
-  it('records this visit when the shell opens, so the next one compares against it', async () => {
+  it('records this visit once when the shell opens, so the next one compares against it', async () => {
     setViewport(true);
     await renderAt('/');
-    const recorded = Number(window.localStorage.getItem('mainloop.home.lastVisit'));
-    expect(Math.abs(recorded - Date.now())).toBeLessThan(10_000);
+    await waitFor(() => expect(testSeen.visits).toBe(1));
+    // Not again as the page settles: a second record would make "the visit before" this one.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(testSeen.visits).toBe(1);
+  });
+
+  it('shows nothing as changed on the owner’s first visit, which has no visit before it', async () => {
+    setViewport(true);
+    const failed = view({
+      id: 'fail-1',
+      title: 'Broke',
+      status: 'failed',
+      updated_at: failedNow()
+    });
+    server.use(tasksList(() => HttpResponse.json([failed])));
+    await renderAt('/');
+    await waitFor(() => expect(testSeen.visits).toBe(1));
+    expect(screen.queryByRole('treeitem', { name: /Since you were here/ })).toBeNull();
   });
 });
 
@@ -701,41 +717,66 @@ describe('explorer panel', () => {
 });
 
 describe('finished and not yet seen', () => {
-  const SEEN_KEY = 'mainloop.seen.v1';
   const HOUR = 60 * 60 * 1000;
-
-  it('lights a task that finished after this browser kept a record, and opening it puts it at rest', async () => {
-    setViewport(true);
-    resetSeenForTests();
-    // The record started an hour ago; the task finished since.
-    localStorage.setItem(SEEN_KEY, JSON.stringify({ since: Date.now() - HOUR, seen: {} }));
-    const done = view({
+  const done = () =>
+    view({
       id: 'done-1',
       title: 'Ship docs',
       status: 'completed',
       updated_at: new Date(Date.now() - 60_000).toISOString()
     });
+  const serve = (task = done()) =>
     server.use(
-      tasksList(() => HttpResponse.json([done])),
-      taskRead(() => HttpResponse.json(done))
+      tasksList(() => HttpResponse.json([task])),
+      taskRead(() => HttpResponse.json(task))
     );
+  const dotOf = (tree: ReturnType<typeof within>) =>
+    within(tree.getByRole('treeitem', { name: /Ship docs/ })).getByTestId('explorer-dot');
+
+  it('lights a task that finished after the owner’s record began, and opening it puts it at rest on the server', async () => {
+    setViewport(true);
+    // The owner's record began an hour ago; the task finished since.
+    testSeen.begin({ since: Date.now() - HOUR, lastVisit: Date.now() - HOUR });
+    serve();
     const user = userEvent.setup();
     await renderAt('/');
     const tree = within(await screen.findByTestId('explorer-aside'));
     await user.click(await tree.findByText('Finished recently'));
-    const row = await tree.findByRole('treeitem', { name: /Ship docs/ });
-    expect(within(row).getByTestId('explorer-dot')).toHaveAttribute('data-tone', 'unseen');
+    await tree.findByRole('treeitem', { name: /Ship docs/ });
+    await waitFor(() => expect(dotOf(tree)).toHaveAttribute('data-tone', 'unseen'));
 
-    // Opening the task's page is looking at it.
-    await user.click(within(row).getByText('Ship docs'));
-    await waitFor(() =>
-      expect(
-        within(tree.getByRole('treeitem', { name: /Ship docs/ })).getByTestId('explorer-dot')
-      ).toHaveAttribute('data-tone', 'muted')
-    );
-    expect(JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}').seen['done-1']).toBeGreaterThan(
-      Date.now() - 60_000
-    );
+    // Opening the task's page is looking at it: one write, to the owner's record.
+    await user.click(tree.getByText('Ship docs'));
+    await waitFor(() => expect(dotOf(tree)).toHaveAttribute('data-tone', 'muted'));
+    expect(testSeen.marked).toEqual(['done-1']);
+  });
+
+  it('shows a task opened on another device as seen here', async () => {
+    setViewport(true);
+    testSeen.begin({
+      since: Date.now() - HOUR,
+      lastVisit: Date.now() - HOUR,
+      tasks: { 'done-1': Date.now() - 1000 }
+    });
+    serve();
+    const user = userEvent.setup();
+    await renderAt('/');
+    const tree = within(await screen.findByTestId('explorer-aside'));
+    await user.click(await tree.findByText('Finished recently'));
+    await tree.findByRole('treeitem', { name: /Ship docs/ });
+    await waitFor(() => expect(testSeen.visits).toBe(1));
+    expect(dotOf(tree)).toHaveAttribute('data-tone', 'muted');
+    expect(testSeen.marked).toEqual([]);
+  });
+
+  it('does not write again for a task that is already marked after its last change', async () => {
+    setViewport(true);
+    testSeen.begin({ since: Date.now() - HOUR, tasks: { 'done-1': Date.now() - 1000 } });
+    serve();
+    await renderAt('/tasks/done-1');
+    await waitFor(() => expect(testSeen.visits).toBe(1));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(testSeen.marked).toEqual([]);
   });
 });
 
