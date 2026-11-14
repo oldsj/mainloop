@@ -603,6 +603,31 @@ describe('offline banner', () => {
 });
 
 describe('explorer panel', () => {
+  it('shows placeholder rows in the tree’s shape while it loads, then the tree', async () => {
+    setViewport(true);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      tasksList(async () => {
+        await held;
+        return HttpResponse.json([]);
+      })
+    );
+    await renderAt('/');
+    const aside = screen.getByTestId('explorer-aside');
+    // The rows are for the eye; the status line is what a screen reader hears.
+    expect(await within(aside).findByTestId('explorer-loading')).toHaveAttribute(
+      'aria-hidden',
+      'true'
+    );
+    expect(within(aside).getByRole('status')).toHaveTextContent('Loading Mainloop…');
+    release();
+    expect(await within(aside).findByRole('tree')).toBeInTheDocument();
+    expect(within(aside).queryByTestId('explorer-loading')).toBeNull();
+  });
+
   it('says the counts are loading until the first read answers, not that nothing needs the owner', async () => {
     setViewport(true);
     let release!: () => void;

@@ -2,9 +2,9 @@
  * Opt-in data for reviewing the app in a browser with the local stack: a project with its page, tasks in every
  * explorer group (including a pull request ready for review and one that is landing), more Needs-you rows than fit on a phone (a tall approval card last), a task waiting
  * on the owner, a blocked task with no repository that asks the owner to fix something (its page opens at `/tasks/task-ops-0008`), and a "Since you were here" baseline. Load it with `VITE_MSW=1 VITE_MSW_SEED=review`
- * or `?seed=review` on first load. Tests never load it, and the default handlers stay empty.
+ * or `?seed=review` on first load. Add `&slow=1` to hold the task, attention and project reads open, so the loading placeholders stay on screen. Tests never load it, and the default handlers stay empty.
  */
-import { http, HttpResponse } from 'msw';
+import { delay, http, HttpResponse } from 'msw';
 import { API_URL } from '@/api/config';
 import { attentionItem, hitlAttentionItem, queueItem } from '@/features/inbox/test/fixtures';
 import { CLAUDE_PROFILE, CODEX_PROFILE } from '@/features/chat/handlers';
@@ -251,7 +251,19 @@ export function reviewSeed() {
     })
   ];
   const tasks = [running, ready, landing, stuck, ops, failed, merged, old, ...family];
+  // `&slow=1`: these reads never answer, so every loading state can be looked at.
+  const slow = new URLSearchParams(window.location.search).get('slow') === '1';
+  const never = async () => {
+    await delay('infinite');
+    return HttpResponse.json(null);
+  };
+  const held = slow
+    ? ['/tasks', '/tasks/:task_id', '/attention', '/projects/:project_id'].map((path) =>
+        http.get(url(path), never)
+      )
+    : [];
   const handlers = [
+    ...held,
     http.get(url('/attention'), () =>
       HttpResponse.json({ ...attention, count: attention.items.length })
     ),

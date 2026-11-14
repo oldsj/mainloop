@@ -1,3 +1,4 @@
+import { SkeletonRows } from '@/components/shared/skeleton';
 import { useLocation } from '@tanstack/react-router';
 import { PanelLeftClose } from 'lucide-react';
 import {
@@ -123,9 +124,14 @@ function ExplorerBody({
             Couldn’t load the explorer. It fills in when the next read succeeds.
           </p>
         ) : !ready ? (
-          <p role="status" className="px-xs py-sm text-muted-foreground text-sm">
-            Loading Mainloop…
-          </p>
+          // Rows in the tree's own shape, so nothing jumps when it arrives. The line is for a screen
+          // reader; the rows are hidden from it.
+          <>
+            <p role="status" className="sr-only">
+              Loading Mainloop…
+            </p>
+            <SkeletonRows rows={8} testId="explorer-loading" />
+          </>
         ) : (
           <ExplorerTree
             nodes={nodes}
