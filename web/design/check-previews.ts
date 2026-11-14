@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
@@ -9,6 +9,14 @@ const pages = readdirSync(root)
   .filter((name) => name.endsWith('.html'))
   .sort();
 if (pages.length < 2 || !pages.includes('index.html')) throw new Error('Build the previews first');
+// The previews must carry the components' own classes, or every page here is checked unstyled (and
+// its contrast with it). `min-h-control` is a class only components use, never the preview pages.
+const css = readdirSync(join(root, 'assets'))
+  .filter((name) => name.endsWith('.css'))
+  .map((name) => readFileSync(join(root, 'assets', name), 'utf8'))
+  .join('');
+if (!css.includes('.min-h-control'))
+  throw new Error("The previews were built without the components' Tailwind classes");
 const server = await preview({
   configFile: false,
   root: import.meta.dirname,

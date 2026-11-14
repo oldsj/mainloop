@@ -547,9 +547,9 @@ describe('sending', () => {
       expect(within(bubble).getByTestId('delivery-notice-label')).toHaveTextContent('Queued')
     );
     expect(within(bubble).queryByTestId('delivery-retry')).toBeNull();
-    expect(bubble.className).toMatch(/opacity-60/);
+    expect(bubble).toHaveAttribute('data-queued', 'true');
     // The earlier, already-sent message must never read as queued.
-    expect(screen.getByText('build it').closest('article')!.className).not.toMatch(/opacity-60/);
+    expect(screen.getByText('build it').closest('article')).not.toHaveAttribute('data-queued');
 
     // The open turn behind it ends and the backend promotes the queued row, as the reconcile loop
     // does; the page picks this up on its next poll of the main thread.
@@ -566,7 +566,7 @@ describe('sending', () => {
     await waitFor(() => expect(within(bubble).queryByTestId('delivery-notice')).toBeNull(), {
       timeout: 5000
     });
-    expect(bubble.className).not.toMatch(/opacity-60/);
+    expect(bubble).not.toHaveAttribute('data-queued');
   });
 
   it('locks and says so while the backend is unreachable', async () => {

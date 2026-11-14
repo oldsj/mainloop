@@ -43,7 +43,9 @@ export function LiveTurn({ frame, context = 'main', agentKind }: LiveTurnProps) 
     <article
       aria-label={`${agentLabel(agentKind)}, working`}
       data-testid="live-turn"
-      className="px-md py-sm bg-card w-full border-l-2 border-dashed opacity-80"
+      // The dashed edge marks a turn still being written. The block is not faded: fading the whole
+      // block took its text below the contrast the theme guarantees.
+      className="px-md py-sm bg-card w-full border-l-2 border-dashed"
     >
       <div className="gap-xs flex flex-col">
         {/* aria-busy holds back the updates of live regions inside it, so the status sits outside. */}

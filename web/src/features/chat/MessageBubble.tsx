@@ -49,9 +49,10 @@ export function MessageBubble({
     return (
       <article
         aria-label={`Assignment from Mainloop, ${messageTime(message.created_at)}${queued ? ', queued' : ''}`}
+        data-queued={queued ? 'true' : undefined}
         className={cn(
           'px-md py-sm border-border w-full border-l-2 bg-transparent',
-          queued && 'opacity-60'
+          queued && 'border-dashed'
         )}
       >
         <details data-testid="assignment-block">
@@ -77,11 +78,14 @@ export function MessageBubble({
     <article
       aria-label={`${report ? `${report.title} · ${report.outcome}` : isUser ? 'You' : agentLabel(writer)}, ${messageTime(message.created_at)}${queued ? ', queued' : ''}`}
       data-testid={report ? 'child-report' : undefined}
+      data-queued={queued ? 'true' : undefined}
       className={cn(
         'px-md py-sm w-full border-l-2',
         report ? 'border-term-fg-muted bg-card' : 'border-border',
         !report && !isUser ? 'bg-card' : 'bg-transparent',
-        queued && 'opacity-60'
+        // Not yet sent: a dashed edge and muted text. The bubble is not faded with opacity, which
+        // took its text below the contrast the theme guarantees.
+        queued && 'border-dashed'
       )}
     >
       <div className="gap-xs flex flex-col">
@@ -103,7 +107,12 @@ export function MessageBubble({
           )}
         </span>
         <div className="min-w-0 flex-1">
-          <Markdown className="text-foreground text-sm md:text-base">
+          <Markdown
+            className={cn(
+              'text-sm md:text-base',
+              queued ? 'text-muted-foreground' : 'text-foreground'
+            )}
+          >
             {report ? report.body : content}
           </Markdown>
           {message.images && message.images.length > 0 ? (
