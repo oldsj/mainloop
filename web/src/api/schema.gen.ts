@@ -654,12 +654,12 @@ export interface paths {
     };
     /**
      * Get Project Workspace Service
-     * @description The argv of the project's workspace service, a long-running process such as a development server. kagent starts it in the checkout at every start and resume of a workspace's runtime, so it is running again when a suspended workspace wakes. Empty declares none.
+     * @description The argv of the project's workspace service, a long-running process such as a development server, and the preview ports of the project's workspaces. kagent starts the command in the checkout at every start and resume of a workspace's runtime, so it is running again when a suspended workspace wakes. Empty declares none.
      */
     get: operations['getProjectWorkspaceService'];
     /**
      * Set Project Workspace Service
-     * @description Set the argv of the project's workspace service. Workspaces created afterwards run it; existing workspaces keep the command they were created with. An empty command declares none. Owner-only, Mainloop-side configuration, never read from the project's repository.
+     * @description Set the argv of the project's workspace service and its preview ports. Workspaces created afterwards run the command and, unless their create request names ports, declare these ports; existing workspaces keep what they were created with. An empty command declares no service. Owner-only, Mainloop-side configuration, never read from the project's repository.
      */
     put: operations['updateProjectWorkspaceService'];
     post?: never;
@@ -2161,6 +2161,11 @@ export interface components {
        * @description argv of the service; the first element is resolved through PATH in the workspace's environment. Empty declares no service. A workspace runs it through env(1) with MAINLOOP_WORKSPACE_ID and MAINLOOP_PREVIEW_URLS (`<port>=<url>` per declared port, comma-separated) set, which is why it takes at most 61 arguments.
        */
       command: string[];
+      /**
+       * Ports
+       * @description Preview ports for the project's workspaces, unique by name and number. A workspace created without its own dev.ports (tasks never send any) declares these, so its preview URLs and MAINLOOP_PREVIEW_URLS list them. At most 16, so the preview URLs fit one 4096-byte argument. Independent of the command: ports without a service are allowed.
+       */
+      ports: components['schemas']['WorkspacePort'][];
     };
     /**
      * VerificationMode

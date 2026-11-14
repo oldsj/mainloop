@@ -595,10 +595,11 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 	if depth < 0 || depth > maxDepth {
 		return plan{}, &InvalidError{fmt.Sprintf("depth must be between 0 and %d", maxDepth)}
 	}
-	ports, idle := []api.WorkspacePort{}, defaultIdleMin
+	// A request that names no ports, as a task's never does, takes the project's (below).
+	ports, idle, ownPorts := []api.WorkspacePort{}, defaultIdleMin, false
 	if body.Dev != nil {
 		if body.Dev.Ports != nil {
-			ports = *body.Dev.Ports
+			ports, ownPorts = *body.Dev.Ports, true
 		}
 		if body.Dev.IdleTimeoutMinutes != nil {
 			idle = *body.Dev.IdleTimeoutMinutes
@@ -607,7 +608,7 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 	if idle < 1 || idle > 1440 {
 		return plan{}, &InvalidError{"idle_timeout_minutes must be between 1 and 1440"}
 	}
-	if err := validatePorts(ports); err != nil {
+	if err := projects.ValidatePorts(ports); err != nil {
 		return plan{}, &InvalidError{err.Error()}
 	}
 	for field, v := range map[string]*string{"ref": body.Ref, "branch": body.Branch} {
@@ -631,6 +632,11 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 	}
 	if err != nil {
 		return plan{}, err
+	}
+	if !ownPorts {
+		if ports, err = projects.ServicePorts(project); err != nil {
+			return plan{}, err
+		}
 	}
 	ref := project.DefaultBranch
 	if body.Ref != nil && *body.Ref != "" {

@@ -43,8 +43,9 @@ WHERE id = $1
 RETURNING *;
 
 -- name: SetOwnedProjectWorkspaceService :one
--- Workspaces created afterwards run the new command; existing ones keep the one they were made with.
-UPDATE projects SET workspace_service_command = $3 WHERE id = $1 AND user_id = $2
+-- Workspaces created afterwards run the new command and copy the ports; existing ones keep theirs.
+UPDATE projects SET workspace_service_command = $3, workspace_service_ports = $4
+WHERE id = $1 AND user_id = $2
 RETURNING *;
 
 -- name: InsertMergePolicyAudit :exec

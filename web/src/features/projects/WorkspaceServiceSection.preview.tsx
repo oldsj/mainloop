@@ -16,8 +16,11 @@ function seededClient() {
   const client = new QueryClient({
     defaultOptions: { queries: { staleTime: Infinity, retry: false } }
   });
-  client.setQueryData(serviceKey('declared'), { command: ['scripts/dev/workspace.sh', 'run'] });
-  client.setQueryData(serviceKey('none'), { command: [] });
+  client.setQueryData(serviceKey('declared'), {
+    command: ['scripts/dev/workspace.sh', 'run'],
+    ports: [{ name: 'web', number: 3000 }]
+  });
+  client.setQueryData(serviceKey('none'), { command: [], ports: [] });
   return client;
 }
 

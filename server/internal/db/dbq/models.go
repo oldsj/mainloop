@@ -630,6 +630,7 @@ type Project struct {
 	CiDetection             json.RawMessage
 	CiDetectedAt            *time.Time
 	WorkspaceServiceCommand []string
+	WorkspaceServicePorts   json.RawMessage
 }
 
 type ProjectEnvironmentSelection struct {

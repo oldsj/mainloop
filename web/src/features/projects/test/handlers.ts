@@ -106,7 +106,7 @@ export function serveProjectPage(
     environments?: EnvironmentFixture[];
     versions?: Record<string, VersionFixture[]>;
     selection?: SelectionFixture | null;
-    serviceCommand?: string[];
+    service?: { command: string[]; ports: { name: string; number: number }[] };
   } = {}
 ) {
   const current = options.project ?? project();
@@ -122,6 +122,6 @@ export function serveProjectPage(
     environmentsRead(options.environments ?? [environment()]),
     versionsRead(options.versions ?? { env: [version()] }),
     savedSelection(options.selection ?? null),
-    workspaceServiceRead(() => HttpResponse.json({ command: options.serviceCommand ?? [] }))
+    workspaceServiceRead(() => HttpResponse.json(options.service ?? { command: [], ports: [] }))
   ];
 }
