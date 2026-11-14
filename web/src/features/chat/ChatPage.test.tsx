@@ -95,8 +95,8 @@ function recordDelivery(state: ChatBackendState, delivery: NativeDeliveryInfo) {
 describe('loading', () => {
   it('shows connecting, then the empty thread', async () => {
     setup();
-    expect(screen.getByText('$ connecting')).toBeInTheDocument();
-    expect(await screen.findByText('$ mainloop --help')).toBeInTheDocument();
+    expect(screen.getByText('Connecting. Waiting for the backend…')).toBeInTheDocument();
+    expect(await screen.findByText('No messages yet.')).toBeInTheDocument();
     expect(await screen.findByTestId('mt-state')).toHaveTextContent('ready');
   });
 
@@ -217,7 +217,7 @@ describe('sending', () => {
 
   it('starts the conversation with a null id from an empty thread', async () => {
     const { state } = setup();
-    await screen.findByText('$ mainloop --help');
+    await screen.findByText('No messages yet.');
     await userEvent.type(input(), 'hello{Enter}');
     await waitFor(() =>
       expect(state.chatPosts).toEqual([{ message: 'hello', conversation_id: null }])
@@ -654,7 +654,7 @@ describe('the native /chat answer', () => {
       await screen.findByText('Could not refresh the conversation. Showing the last messages.')
     ).toBeInTheDocument();
     expect(input()).toBeEnabled();
-    expect(input()).toHaveAttribute('placeholder', 'Enter command...');
+    expect(input()).toHaveAttribute('placeholder', 'Message, or / for commands');
     expect(screen.getByText('build it')).toBeInTheDocument();
     expect(screen.queryByText('Could not load the conversation')).toBeNull();
   });
@@ -764,8 +764,8 @@ describe('loading the conversation', () => {
       })
     );
     await screen.findByTestId('mt-state');
-    expect(screen.queryByText('$ mainloop --help')).toBeNull();
-    expect(screen.getByText('$ connecting')).toBeInTheDocument();
+    expect(screen.queryByText('No messages yet.')).toBeNull();
+    expect(screen.getByText('Connecting. Waiting for the backend…')).toBeInTheDocument();
   });
 
   it('says so when the conversation cannot be read, even with no messages', async () => {
@@ -776,7 +776,7 @@ describe('loading the conversation', () => {
       )
     );
     expect(await screen.findByText('Could not load the conversation')).toBeInTheDocument();
-    expect(screen.queryByText('$ mainloop --help')).toBeNull();
+    expect(screen.queryByText('No messages yet.')).toBeNull();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
 

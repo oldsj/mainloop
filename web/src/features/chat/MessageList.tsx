@@ -150,12 +150,9 @@ export function MessageList({
           >
             {messages.length === 0 && !live ? (
               <div className="gap-md m-auto flex flex-col items-center text-center text-sm">
-                <div className="text-muted-foreground">
-                  <p className="text-term-accent">
-                    {loaded ? '$ mainloop --help' : '$ connecting'}
-                  </p>
-                  <p>{loaded ? 'Start a conversation to begin' : 'Waiting for the backend…'}</p>
-                </div>
+                <p className="text-muted-foreground">
+                  {loaded ? 'No messages yet.' : 'Connecting. Waiting for the backend…'}
+                </p>
                 {loaded ? starters : null}
               </div>
             ) : (

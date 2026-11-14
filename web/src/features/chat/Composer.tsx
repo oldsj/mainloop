@@ -10,7 +10,6 @@ import {
   type KeyboardEvent,
   type ReactNode
 } from 'react';
-import { Button } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import { clearDraft, loadDraft, NEW_CONVERSATION, saveDraft } from './drafts';
 import {
@@ -80,18 +79,19 @@ function placeholder(
   working: boolean,
   loading: boolean,
   unavailable: boolean,
-  closed: string | null
+  closed: string | null,
+  hasCommands: boolean
 ) {
   if (offline) return 'Backend unreachable…';
   if (unavailable) return 'Thread did not load…';
   if (closed) return closed;
   if (loading) return 'Loading…';
   if (working) return 'Working…';
-  return 'Enter command...';
+  return hasCommands ? 'Message, or / for commands' : 'Message';
 }
 
 /**
- * The text box and EXEC button. Enter sends, Shift+Enter adds a line, IME composition never sends.
+ * The text box and its send button, drawn as the live view's composer is. Enter sends, Shift+Enter adds a line, IME composition never sends.
  * When `commands` names slash commands, a leading `/` opens an autosuggest dropdown: Up/Down moves
  * the highlight, Tab accepts it, Enter accepts it too unless the typed name is already exact (then
  * it sends), and Escape dismisses the dropdown without accepting.
@@ -390,18 +390,8 @@ export function Composer({
           {imageError}
         </p>
       ) : null}
-      {controls || modelEffort ? (
-        <div className="text-muted-foreground px-md pt-xs gap-sm flex flex-wrap items-center text-xs">
-          {controls}
-          {modelEffort ? (
-            <p data-testid="composer-model-effort">
-              model: {modelEffort.model ?? 'default'} · effort: {modelEffort.effort ?? 'default'}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
       <div
-        className="px-md py-sm gap-sm relative flex shrink-0 items-end"
+        className="px-md pt-sm pb-sm relative flex shrink-0 flex-col gap-1"
         data-testid="input-bar"
         aria-busy={sending || busy || turnBusy}
         onDrop={drop}
@@ -439,44 +429,65 @@ export function Composer({
             ))}
           </ul>
         ) : null}
-        <span className="text-term-accent min-h-control flex items-center" aria-hidden="true">
-          $
-        </span>
-        <textarea
-          ref={input}
-          rows={1}
-          value={text}
-          disabled={disabled}
-          placeholder={placeholder(
-            offline,
-            busy || turnBusy,
-            loading,
-            unavailable,
-            closed ? closedPlaceholder : null
+        {/* One box, as in the live view: the prompt mark, the text and the send key. */}
+        <div
+          className={cn(
+            'border-border focus-within:border-ring pl-sm flex items-end gap-2 border p-1',
+            disabled && 'opacity-60'
           )}
-          aria-label="Message"
-          aria-controls={menuOpen ? listboxId : undefined}
-          aria-activedescendant={
-            menuOpen ? `${listboxId}-${matches[highlightIndex]!.name}` : undefined
-          }
-          onChange={(event) => {
-            change(event.target.value);
-            setCaret(event.target.selectionStart ?? event.target.value.length);
-          }}
-          onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
-          onKeyDown={keyDown}
-          onPaste={paste}
-          data-testid="command-input"
-          className="border-input bg-background text-foreground placeholder:text-muted-foreground focus-visible:ring-ring px-sm py-sm min-h-control min-w-0 flex-1 resize-none border text-sm outline-none focus-visible:ring-1 disabled:opacity-50"
-        />
-        <Button
-          disabled={disabled || (!text.trim() && images.length === 0)}
-          onClick={() => void submit()}
-          aria-label="Send message"
-          data-testid="exec-button"
         >
-          EXEC
-        </Button>
+          <span className="text-term-accent pb-1" aria-hidden="true">
+            ❯
+          </span>
+          <textarea
+            ref={input}
+            rows={1}
+            value={text}
+            disabled={disabled}
+            placeholder={placeholder(
+              offline,
+              busy || turnBusy,
+              loading,
+              unavailable,
+              closed ? closedPlaceholder : null,
+              (commands?.length ?? 0) > 0
+            )}
+            aria-label="Message"
+            aria-controls={menuOpen ? listboxId : undefined}
+            aria-activedescendant={
+              menuOpen ? `${listboxId}-${matches[highlightIndex]!.name}` : undefined
+            }
+            onChange={(event) => {
+              change(event.target.value);
+              setCaret(event.target.selectionStart ?? event.target.value.length);
+            }}
+            onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
+            onKeyDown={keyDown}
+            onPaste={paste}
+            data-testid="command-input"
+            className="text-foreground placeholder:text-muted-foreground max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 text-base leading-snug outline-none"
+          />
+          <button
+            type="button"
+            disabled={disabled || (!text.trim() && images.length === 0)}
+            onClick={() => void submit()}
+            aria-label="Send message"
+            data-testid="exec-button"
+            className="text-muted-foreground hover:text-foreground size-control min-h-9 min-w-9 flex-none disabled:pointer-events-none disabled:opacity-40"
+          >
+            ↵
+          </button>
+        </div>
+        {controls || modelEffort ? (
+          <div className="text-muted-foreground gap-sm flex min-w-0 items-center text-xs">
+            {controls}
+            {modelEffort ? (
+              <p className="min-w-0 truncate" data-testid="composer-model-effort">
+                model: {modelEffort.model ?? 'default'} · effort: {modelEffort.effort ?? 'default'}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         {/* sr-only is absolutely positioned. The bar is its positioned ancestor, so it cannot grow the page. */}
         <span role="status" className="sr-only">
           {sending ? 'Sending' : ''}

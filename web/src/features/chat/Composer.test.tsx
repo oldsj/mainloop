@@ -49,7 +49,38 @@ describe('Composer', () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it('sends from the EXEC button, which is empty-disabled', async () => {
+  it('says what the box is for, and offers slash commands only where it has them', () => {
+    const { unmount } = setup();
+    expect(input()).toHaveAttribute('placeholder', 'Message');
+    unmount();
+    setup({ commands: [{ name: 'model', summary: 'Set the model' }] as SlashCommandSpec[] });
+    expect(input()).toHaveAttribute('placeholder', 'Message, or / for commands');
+  });
+
+  it('is one box with a prompt mark and a named send key, with no terminal wording', () => {
+    setup();
+    const send = screen.getByRole('button', { name: 'Send message' });
+    expect(send).toHaveTextContent('↵');
+    expect(send.parentElement).toContainElement(input());
+    expect(send.parentElement).toHaveTextContent('❯');
+    expect(screen.queryByText('EXEC')).toBeNull();
+    expect(screen.queryByText('$')).toBeNull();
+  });
+
+  it('puts the session controls and the model line on one row below the box', () => {
+    setup({
+      controls: <button type="button">Claude · sonnet-5-5</button>,
+      modelEffort: { model: null, effort: null }
+    });
+    const row = screen.getByTestId('composer-model-effort').parentElement;
+    expect(row).toContainElement(screen.getByRole('button', { name: 'Claude · sonnet-5-5' }));
+    // The row comes after the input in the document, as in the live view.
+    expect(
+      input().compareDocumentPosition(row as Node) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('sends from the send button, which is empty-disabled', async () => {
     const { onSend } = setup();
     expect(screen.getByTestId('exec-button')).toBeDisabled();
     await userEvent.type(input(), 'go');

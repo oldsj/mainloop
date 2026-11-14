@@ -21,11 +21,9 @@ function geometry(el: HTMLElement, scrollTop: number, scrollHeight = 1000, clien
 describe('MessageList', () => {
   it('shows the empty state once loaded, and "connecting" before', () => {
     const { rerender } = render(<MessageList {...base} messages={[]} loaded />);
-    expect(screen.getByText('$ mainloop --help')).toBeInTheDocument();
-    expect(screen.getByText('Start a conversation to begin')).toBeInTheDocument();
+    expect(screen.getByText('No messages yet.')).toBeInTheDocument();
     rerender(<MessageList {...base} messages={[]} loaded={false} />);
-    expect(screen.getByText('$ connecting')).toBeInTheDocument();
-    expect(screen.getByText('Waiting for the backend…')).toBeInTheDocument();
+    expect(screen.getByText('Connecting. Waiting for the backend…')).toBeInTheDocument();
   });
 
   it('starts at the newest message', () => {
