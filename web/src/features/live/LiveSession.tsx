@@ -49,6 +49,7 @@ export function LiveSession({
   pending = [],
   renderBar,
   provider,
+  notes,
   deps
 }: {
   sessionId: string;
@@ -56,6 +57,8 @@ export function LiveSession({
   renderBar?: (bar: LiveBar) => ReactNode;
   /** The session's provider choice, where it has one (the main thread): first in the controls picker. */
   provider?: LiveProvider;
+  /** Whose choice the model and effort are, shown on the session controls chip. */
+  notes?: LiveNotes;
   /** Leaves the live view for the regular one, offered when the live channel is unavailable. */
   onFallback?: () => void;
   /**
@@ -128,6 +131,7 @@ export function LiveSession({
       needsAnswer={pending.length > 0}
       renderBar={renderBar}
       provider={provider}
+      notes={notes}
     />
   );
 }
@@ -152,6 +156,32 @@ export interface LiveSessionViewProps {
   /** Draws the row above the transcript. Without it the view draws its own. */
   renderBar?: (bar: LiveBar) => ReactNode;
   provider?: LiveProvider;
+  notes?: LiveNotes;
+}
+
+/**
+ * Whose choice the model and effort are, in the caller's words (for example "worker default").
+ * `all` is one note for the chip when both come from one place; otherwise each part has its own.
+ */
+export interface LiveNotes {
+  all?: string;
+  model?: string;
+  effort?: string;
+}
+
+/** "Claude · opus-5-5 · high (worker default)": what runs, and whose choice it is. */
+export function controlsLabel(
+  provider: string | undefined,
+  model: string,
+  effort: string | undefined,
+  notes: LiveNotes = {}
+): string {
+  const noted = (value: string | undefined, note?: string) =>
+    value && note ? `${value} (${note})` : value;
+  const label = [provider, noted(model, notes.model), noted(effort, notes.effort)]
+    .filter(Boolean)
+    .join(' · ');
+  return notes.all ? `${label} (${notes.all})` : label;
 }
 
 /** A provider choice for the controls picker: the chip's first word, and the picker's first section. */
@@ -203,7 +233,8 @@ export function LiveSessionView({
   requests,
   needsAnswer = false,
   renderBar,
-  provider
+  provider,
+  notes
 }: LiveSessionViewProps) {
   const resting = conn === 'asleep' || conn === 'paused';
   const [sheet, setSheet] = useState(false);
@@ -289,6 +320,7 @@ export function LiveSessionView({
         interrupt={interrupt}
         cycleMode={cycleMode}
         provider={provider}
+        notes={notes}
         controlsOpen={sheet}
         setControlsOpen={setSheet}
       />
@@ -573,6 +605,7 @@ function Composer({
   interrupt,
   cycleMode,
   provider,
+  notes,
   controlsOpen,
   setControlsOpen
 }: {
@@ -587,6 +620,7 @@ function Composer({
   interrupt: () => void;
   cycleMode: () => void;
   provider?: LiveProvider;
+  notes?: LiveNotes;
   /** The controls picker, opened from the chip below the input and by `/model` or `/effort`. */
   controlsOpen: boolean;
   setControlsOpen: (open: boolean) => void;
@@ -795,7 +829,7 @@ function Composer({
         </div>
         <div className="text-term-fg-muted gap-sm flex min-w-0 items-center text-xs">
           <SessionControls
-            label={[provider?.label, short(state.model), state.effort].filter(Boolean).join(' · ')}
+            label={controlsLabel(provider?.label, short(state.model), state.effort, notes)}
             title="Session controls"
             open={controlsOpen}
             onOpenChange={setControlsOpen}

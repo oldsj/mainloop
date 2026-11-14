@@ -21,6 +21,7 @@ One chip below the composer that says how the session runs, and the one picker i
 ## States
 
 - **Label:** the provider (main thread only), the model without its `claude-` prefix, and the effort, joined by `·`, for example `Claude · opus-5-5 · high`. A part that is not known is left out. An unknown provider reads "provider unknown".
+- **Whose choice:** the label ends with where the model and effort come from: `(this session)`, or `(main default)` or `(worker default)` for the owner's default for the session's role. The provider's own is not noted, so a label with no note means the provider's. When the two parts differ, each part that is not the provider's carries its own note: `opus-5-5 (this session) · high (worker default)`. Nothing is added until the owner's defaults have been read.
 - **Sections:** Provider (main thread only), then Model and Effort under the live view. In the chat view the picker holds Provider and a line saying to type `/model` or `/effort`.
 - **Choosing a provider:** asks first. The confirmation says that switching starts a fresh native session and that the conversation, tasks and earlier native history are kept. Nothing is sent until **Switch to <provider>**; the picker then closes. Choosing the ready provider again asks nothing.
 - **Held:** while the provider cannot change (offline, a send or stop in flight, the thread still loading, a switch pending, or a turn or delivery open) both provider options are disabled and a line says why. An open confirmation is dropped. Model and effort stay available.

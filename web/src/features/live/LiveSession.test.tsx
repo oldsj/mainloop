@@ -8,7 +8,7 @@ import { API_URL } from '@/api/config';
 import { server } from '@/test/msw/server';
 import { useSessionRequests } from '@/features/hitl/session-requests';
 import { createFakeRunner, type FakeRunner } from './fakeRunner';
-import { LiveSession } from './LiveSession';
+import { LiveSession, controlsLabel } from './LiveSession';
 import { LIVE_SUBPROTOCOL, LIVE_TIMING, liveDeps, liveUrl, type LiveDeps } from './useLiveSession';
 
 /** What Mainloop reports about session s1: kagent's current_active (null: no association) and its record. */
@@ -127,6 +127,30 @@ async function say(user: ReturnType<typeof userEvent.setup>, text: string, echo 
   if (echo) await waitFor(() => expect(current.echoed).toContain(text));
   await screen.findAllByText(text);
 }
+
+describe('the session controls label', () => {
+  it('names what runs', () => {
+    expect(controlsLabel('Claude', 'opus-5-5', 'high')).toBe('Claude · opus-5-5 · high');
+    expect(controlsLabel(undefined, 'opus-5-5', undefined)).toBe('opus-5-5');
+  });
+
+  it('adds whose choice it is: one note when both parts share it', () => {
+    expect(controlsLabel(undefined, 'opus-5-5', 'high', { all: 'worker default' })).toBe(
+      'opus-5-5 · high (worker default)'
+    );
+    expect(controlsLabel('Claude', 'opus-5-5', 'high', { all: 'main default' })).toBe(
+      'Claude · opus-5-5 · high (main default)'
+    );
+  });
+
+  it('notes each part when they differ, and skips a part that is not known', () => {
+    const notes = { model: 'this session', effort: 'worker default' };
+    expect(controlsLabel(undefined, 'opus-5-5', 'high', notes)).toBe(
+      'opus-5-5 (this session) · high (worker default)'
+    );
+    expect(controlsLabel(undefined, 'opus-5-5', undefined, notes)).toBe('opus-5-5 (this session)');
+  });
+});
 
 describe('live session', () => {
   it('builds the socket URL from the API base', () => {

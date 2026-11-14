@@ -94,8 +94,22 @@ does not list stays selectable, and a saved effort the profile stopped offering 
 that turns leave the effort to the provider. Settings is reached from the activity bar on desktop and
 from the tree's header on a phone.
 
-The composer still shows `default` for a session with no override of its own; showing which default
-applies there is a UI follow-up.
+**The composer says which default applies (implemented, checked against MSW).** A turn's model and
+effort each come from one of three places, in the order above: the session's own choice, the owner's
+default for its role and provider, or the provider. The composer names it, per field:
+
+- **Live view:** the session controls chip ends with whose choice it is, for example
+  `opus-5-5 · high (worker default)` or `Claude · opus-5-5 · high (main default)`. A session's own
+  choice reads `(this session)`. The provider's own is not noted: a chip with no note is the
+  provider's. When the model and the effort come from different places, each part that is not the
+  provider's carries its own note: `opus-5-5 (this session) · high (worker default)`.
+- **Chat view:** the line under the box reads `model: claude-opus-5 (main default) · effort: default`.
+  A session's own choice is shown bare, a role default with whose it is, and the provider's as
+  `default`, since nothing is sent for it.
+
+The main thread falls under the `main` defaults and every other session under `worker`. A default
+effort the provider no longer offers reads as the provider's, as the turn treats it. Until the
+owner's defaults have been read the composer says nothing about them.
 
 ## Sending messages
 
