@@ -7,12 +7,19 @@ import { $api, connection } from '@/api';
 import type { VersionRow } from '@/features/environments/model';
 import {
   detailRead,
+  instructionsRead,
   policyRead,
   verificationRead,
   providersRead,
   workspacesRead
 } from '@/features/projects/test/handlers';
-import { detail, policy, project, verification } from '@/features/projects/test/fixtures';
+import {
+  detail,
+  instructions,
+  policy,
+  project,
+  verification
+} from '@/features/projects/test/fixtures';
 import { renderProjects } from '@/features/projects/test/render';
 import { server } from '@/test/msw/server';
 import { EnvironmentSection } from './EnvironmentSection';
@@ -190,6 +197,7 @@ describe('environment selection', () => {
       ),
       policyRead(() => HttpResponse.json(policy())),
       verificationRead(() => HttpResponse.json(verification())),
+      instructionsRead(() => HttpResponse.json(instructions())),
       workspacesRead([]),
       providersRead(),
       environmentsRead([environment({ accepted_default_version_id: 'v2' })]),

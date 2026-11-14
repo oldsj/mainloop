@@ -7,6 +7,8 @@ import {
   commitTitle,
   ContractError,
   failureText,
+  instructionsDraft,
+  instructionsStatus,
   keepValid,
   mergePolicyViewSchema,
   openPrText,
@@ -186,5 +188,30 @@ describe('list and row helpers', () => {
     expect(openPrText(0)).toBe('0 open PRs');
     expect(openPrText(1)).toBe('1 open PR');
     expect(openPrText(3)).toBe('3 open PRs');
+  });
+});
+
+describe('project instructions', () => {
+  it('judges a draft as the server will: trimmed, by UTF-8 bytes', () => {
+    expect(instructionsDraft('  same \n', 'same', 8192)).toEqual({
+      bytes: 4,
+      over: false,
+      changed: false
+    });
+    expect(instructionsDraft('été', '', 4)).toEqual({ bytes: 5, over: true, changed: true });
+    expect(instructionsDraft('', 'old', 10)).toEqual({ bytes: 0, over: false, changed: true });
+  });
+
+  it('describes none, a cleared version and a saved one', () => {
+    const ago = () => '3m ago';
+    expect(instructionsStatus({ version: 0, text: '', updated_at: null }, ago)).toBe(
+      'No instructions yet.'
+    );
+    expect(instructionsStatus({ version: 4, text: '', updated_at: 'x' }, ago)).toBe(
+      'Cleared (version 4, saved 3m ago).'
+    );
+    expect(instructionsStatus({ version: 2, text: 'Do.', updated_at: 'x' }, ago)).toBe(
+      'Version 2, saved 3m ago.'
+    );
   });
 });

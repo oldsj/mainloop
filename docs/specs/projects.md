@@ -20,9 +20,9 @@ CI Mainloop found on the default branch, or that none was found yet), what agent
 when the last re-check of the project's CI failed. Saving takes effect at once, with no version
 check. See [CI checks](ci.md#where-heavy-checks-run).
 
-The owner's per-project **instructions** for agents are served by the API and carried in every
-task brief of the project; the project page section to edit them is not built yet. See
-[project context](project-context.md).
+The owner's per-project **instructions** for agents are edited in the Instructions section, first
+under Settings, and carried in every task brief of the project. See
+[project context](project-context.md#on-the-project-page).
 
 Project detail lists unarchived project sessions and excludes bindings with the `main` role.
 Unbound sessions remain visible.
@@ -62,8 +62,8 @@ the branch as pending and New workspace stays disabled until GitHub metadata arr
 with no default branch yet stays listed.
 
 The project page opens on the work: Tasks first, then Open Pull Requests, then Sessions, Branch
-workspaces and Recent Commits. Settings comes last. It holds the merge policy, the checks setting and the environment,
-and it is collapsed by default. The owner opens it with its heading button, which is keyboard
+workspaces and Recent Commits. Settings comes last. It holds the instructions, the merge policy,
+the checks setting and the environment, and it is collapsed by default. The owner opens it with its heading button, which is keyboard
 operable and reports whether it is expanded. Its open or closed state is kept while the owner stays
 on the page.
 

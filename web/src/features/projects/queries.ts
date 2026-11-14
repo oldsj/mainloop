@@ -60,3 +60,39 @@ export function useUpdateVerification(projectId: string) {
     onSuccess: (data) => queryClient.setQueryData(key, data)
   });
 }
+
+export function useInstructions(projectId: string) {
+  return $api.useQuery('get', '/projects/{project_id}/instructions', {
+    params: { path: { project_id: projectId } }
+  });
+}
+
+/** Earlier versions, read only while the owner has the list open. */
+export function useInstructionVersions(projectId: string, enabled: boolean) {
+  return $api.useQuery(
+    'get',
+    '/projects/{project_id}/instructions/versions',
+    { params: { path: { project_id: projectId } } },
+    { enabled }
+  );
+}
+
+/**
+ * Saves the instructions. A saved version replaces the cached one at once; any failure re-reads the
+ * current instructions, so a conflict shows what changed while the owner's draft stays as typed.
+ */
+export function useUpdateInstructions(projectId: string) {
+  const queryClient = useQueryClient();
+  const params = { params: { path: { project_id: projectId } } };
+  const key = $api.queryOptions('get', '/projects/{project_id}/instructions', params).queryKey;
+  const versionsKey = $api.queryOptions(
+    'get',
+    '/projects/{project_id}/instructions/versions',
+    params
+  ).queryKey;
+  return $api.useMutation('put', '/projects/{project_id}/instructions', {
+    onSuccess: (data) => queryClient.setQueryData(key, data),
+    onError: () => queryClient.invalidateQueries({ queryKey: key }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: versionsKey })
+  });
+}

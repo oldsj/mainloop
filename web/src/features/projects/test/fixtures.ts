@@ -6,6 +6,7 @@ export type ProjectFixture = Schemas['Project'];
 export type DetailFixture = Schemas['ProjectDetail'];
 export type PolicyFixture = Schemas['MergePolicyView'];
 export type VerificationFixture = Schemas['ProjectVerification'];
+export type InstructionsFixture = Schemas['ProjectInstructions'];
 export type WorkspaceFixture = Schemas['WorkspaceLifecycle'];
 
 export const REPO_URL = 'https://github.com/acme/widgets';
@@ -114,6 +115,17 @@ export function verification(overrides: Partial<VerificationFixture> = {}): Veri
       sources: ['github-actions'],
       checked_at: '2026-11-01T12:00:00Z'
     },
+    ...overrides
+  };
+}
+
+export function instructions(overrides: Partial<InstructionsFixture> = {}): InstructionsFixture {
+  return {
+    project_id: 'project-a',
+    version: 0,
+    text: '',
+    max_bytes: 8192,
+    updated_at: null,
     ...overrides
   };
 }
