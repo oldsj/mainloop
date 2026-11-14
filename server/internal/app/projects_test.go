@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/app/apicheck"
@@ -25,6 +27,14 @@ import (
 
 // projectServer is the owner API over a scratch database and the fake GitHub.
 func projectServer(t *testing.T, policyWrites bool) (http.Handler, *githubtest.Server) {
+	t.Helper()
+	h, fake, _ := projectServerWithPool(t, policyWrites)
+	return h, fake
+}
+
+// projectServerWithPool is projectServer, also answering its database for tests that seed rows
+// the API cannot create.
+func projectServerWithPool(t *testing.T, policyWrites bool) (http.Handler, *githubtest.Server, *pgxpool.Pool) {
 	t.Helper()
 	fake := githubtest.New(t)
 	desc := "the loop"
@@ -55,7 +65,7 @@ func projectServer(t *testing.T, policyWrites bool) (http.Handler, *githubtest.S
 	if err != nil {
 		t.Fatal(err)
 	}
-	return apicheck.Wrap(t, h), fake
+	return apicheck.Wrap(t, h), fake, pool
 }
 
 // strict decodes a response body into v and fails on any field the contract type lacks.

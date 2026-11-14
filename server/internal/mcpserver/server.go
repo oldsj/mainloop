@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
@@ -61,7 +62,10 @@ type Server struct {
 	DevLease   *devloop.LeaseService
 	DevOps     *devloop.OperationsService
 	DevTargets *devloop.TargetService
-	Log        *slog.Logger
+	// Pool backs project memory, whose writes take the project row lock in their own
+	// transaction. With none, remember and forget answer that they are unavailable.
+	Pool *pgxpool.Pool
+	Log  *slog.Logger
 	// AllowedHosts are the Host names the listener answers to; Dev also allows loopback.
 	AllowedHosts map[string]bool
 	Dev          bool

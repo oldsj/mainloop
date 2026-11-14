@@ -64,6 +64,7 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		Policy:       agentauth.Policy{MergeTools: bool(cfg.MergeToolsEnabled), DevLoop: bool(cfg.DevloopEnabled)},
 		Queries:      q,
 		Topics:       topics.NewService(pool),
+		Pool:         pool,
 		Log:          log,
 		AllowedHosts: cfg.AllowedMCPHosts(),
 		Dev:          cfg.IsDev(),

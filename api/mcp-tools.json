@@ -309,7 +309,7 @@
     },
     {
       "name": "project_context",
-      "description": "Read the project owner's current standing instructions for the project: instructions and version. A task brief carries them at the version current when the task started; read this when you need the current text. The main session may read any of its owner's projects; other sessions only their own.",
+      "description": "Read the project's current context: the owner's standing instructions and version, the active memory entries, and how many proposals wait for the owner. A task brief carries both as they were when the task started; read this when you need the current state, for example before `remember`. The main session may read any of its owner's projects; other sessions only their own.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -320,6 +320,53 @@
           }
         },
         "required": ["project_id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "remember",
+      "description": "Record a short lesson for every later agent on the project, such as an owner preference or a verified fact that is not about the repository's code (that belongs in an AGENTS.md change). At most 500 bytes, on one line. The main session's entries are active at once and go into every new task brief; only record the owner's own words or facts you verified. Any other session's entry is a proposal the owner accepts or rejects. Set replaces to the id of an active entry the new one supersedes. Recording text that is already open answers that entry.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "replaces": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["project_id", "text"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "forget",
+      "description": "End a project memory entry. The main session ends an active entry that turned out wrong or out of date; any other session withdraws a proposal it made itself.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "entry_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["project_id", "entry_id"],
         "type": "object"
       }
     },
@@ -859,6 +906,7 @@
         "check_status",
         "decide",
         "delegate",
+        "forget",
         "get_issue",
         "get_verification",
         "list_dependabot_alerts",
@@ -867,6 +915,7 @@
         "pending_add",
         "pending_done",
         "project_context",
+        "remember",
         "steer",
         "task_cancel",
         "task_get",
@@ -895,6 +944,7 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "forget",
         "get_issue",
         "get_verification",
         "list_dependabot_alerts",
@@ -903,6 +953,7 @@
         "pending_add",
         "pending_done",
         "project_context",
+        "remember",
         "steer",
         "task_cancel",
         "task_get",
@@ -927,6 +978,7 @@
         "check_status",
         "decide",
         "delegate",
+        "forget",
         "get_issue",
         "get_pull_request_merge_status",
         "get_verification",
@@ -938,6 +990,7 @@
         "pending_done",
         "prepare_pull_request_merge",
         "project_context",
+        "remember",
         "steer",
         "task_cancel",
         "task_get",
@@ -966,6 +1019,7 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "forget",
         "get_issue",
         "get_pull_request_merge_status",
         "get_verification",
@@ -977,6 +1031,7 @@
         "pending_done",
         "prepare_pull_request_merge",
         "project_context",
+        "remember",
         "steer",
         "task_cancel",
         "task_get",
@@ -999,7 +1054,9 @@
       "devloop_enabled": false,
       "ordinary": [
         "delegate",
+        "forget",
         "project_context",
+        "remember",
         "report",
         "steer",
         "task_cancel",
@@ -1019,7 +1076,9 @@
       "devloop_enabled": true,
       "ordinary": [
         "delegate",
+        "forget",
         "project_context",
+        "remember",
         "report",
         "steer",
         "task_cancel",
@@ -1039,7 +1098,9 @@
       "devloop_enabled": false,
       "ordinary": [
         "delegate",
+        "forget",
         "project_context",
+        "remember",
         "report",
         "steer",
         "task_cancel",
@@ -1059,7 +1120,9 @@
       "devloop_enabled": true,
       "ordinary": [
         "delegate",
+        "forget",
         "project_context",
+        "remember",
         "report",
         "steer",
         "task_cancel",
@@ -1080,11 +1143,13 @@
       "ordinary": [
         "check_status",
         "delegate",
+        "forget",
         "get_issue",
         "get_verification",
         "list_dependabot_alerts",
         "open_pull_request",
         "project_context",
+        "remember",
         "report",
         "steer",
         "task_cancel",
@@ -1110,11 +1175,13 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "forget",
         "get_issue",
         "get_verification",
         "list_dependabot_alerts",
         "open_pull_request",
         "project_context",
+        "remember",
         "report",
         "steer",
         "task_cancel",
@@ -1136,6 +1203,7 @@
       "ordinary": [
         "check_status",
         "delegate",
+        "forget",
         "get_issue",
         "get_pull_request_merge_status",
         "get_verification",
@@ -1144,6 +1212,7 @@
         "open_pull_request",
         "prepare_pull_request_merge",
         "project_context",
+        "remember",
         "report",
         "steer",
         "task_cancel",
@@ -1169,6 +1238,7 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "forget",
         "get_issue",
         "get_pull_request_merge_status",
         "get_verification",
@@ -1177,6 +1247,7 @@
         "open_pull_request",
         "prepare_pull_request_merge",
         "project_context",
+        "remember",
         "report",
         "steer",
         "task_cancel",
@@ -1195,7 +1266,16 @@
       "merge_status_only": false,
       "merge_tools_enabled": false,
       "devloop_enabled": false,
-      "ordinary": ["project_context", "report", "task_get", "task_history", "task_list", "whoami"],
+      "ordinary": [
+        "forget",
+        "project_context",
+        "remember",
+        "report",
+        "task_get",
+        "task_history",
+        "task_list",
+        "whoami"
+      ],
       "approval": []
     },
     {
@@ -1205,7 +1285,16 @@
       "merge_status_only": false,
       "merge_tools_enabled": false,
       "devloop_enabled": true,
-      "ordinary": ["project_context", "report", "task_get", "task_history", "task_list", "whoami"],
+      "ordinary": [
+        "forget",
+        "project_context",
+        "remember",
+        "report",
+        "task_get",
+        "task_history",
+        "task_list",
+        "whoami"
+      ],
       "approval": []
     },
     {
@@ -1215,7 +1304,16 @@
       "merge_status_only": false,
       "merge_tools_enabled": true,
       "devloop_enabled": false,
-      "ordinary": ["project_context", "report", "task_get", "task_history", "task_list", "whoami"],
+      "ordinary": [
+        "forget",
+        "project_context",
+        "remember",
+        "report",
+        "task_get",
+        "task_history",
+        "task_list",
+        "whoami"
+      ],
       "approval": []
     },
     {
@@ -1225,7 +1323,16 @@
       "merge_status_only": false,
       "merge_tools_enabled": true,
       "devloop_enabled": true,
-      "ordinary": ["project_context", "report", "task_get", "task_history", "task_list", "whoami"],
+      "ordinary": [
+        "forget",
+        "project_context",
+        "remember",
+        "report",
+        "task_get",
+        "task_history",
+        "task_list",
+        "whoami"
+      ],
       "approval": []
     },
     {
@@ -1237,11 +1344,13 @@
       "devloop_enabled": false,
       "ordinary": [
         "check_status",
+        "forget",
         "get_issue",
         "get_verification",
         "list_dependabot_alerts",
         "open_pull_request",
         "project_context",
+        "remember",
         "report",
         "task_get",
         "task_history",
@@ -1264,11 +1373,13 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "forget",
         "get_issue",
         "get_verification",
         "list_dependabot_alerts",
         "open_pull_request",
         "project_context",
+        "remember",
         "report",
         "task_get",
         "task_history",
@@ -1287,6 +1398,7 @@
       "devloop_enabled": false,
       "ordinary": [
         "check_status",
+        "forget",
         "get_issue",
         "get_pull_request_merge_status",
         "get_verification",
@@ -1295,6 +1407,7 @@
         "open_pull_request",
         "prepare_pull_request_merge",
         "project_context",
+        "remember",
         "report",
         "task_get",
         "task_history",
@@ -1317,6 +1430,7 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "forget",
         "get_issue",
         "get_pull_request_merge_status",
         "get_verification",
@@ -1325,74 +1439,11 @@
         "open_pull_request",
         "prepare_pull_request_merge",
         "project_context",
+        "remember",
         "report",
         "task_get",
         "task_history",
         "task_list",
-        "watch_checks",
-        "whoami"
-      ],
-      "approval": ["merge_pull_request_with_approval"]
-    },
-    {
-      "role": "agent",
-      "depth": 0,
-      "grant": "workspace",
-      "merge_status_only": false,
-      "merge_tools_enabled": false,
-      "devloop_enabled": false,
-      "ordinary": [
-        "check_status",
-        "get_issue",
-        "get_verification",
-        "list_dependabot_alerts",
-        "open_pull_request",
-        "project_context",
-        "watch_checks",
-        "whoami"
-      ],
-      "approval": []
-    },
-    {
-      "role": "agent",
-      "depth": 0,
-      "grant": "workspace",
-      "merge_status_only": false,
-      "merge_tools_enabled": false,
-      "devloop_enabled": true,
-      "ordinary": [
-        "check_status",
-        "dev_lease_acquire",
-        "dev_lease_release",
-        "dev_status",
-        "dev_sync",
-        "get_issue",
-        "get_verification",
-        "list_dependabot_alerts",
-        "open_pull_request",
-        "project_context",
-        "watch_checks",
-        "whoami"
-      ],
-      "approval": []
-    },
-    {
-      "role": "agent",
-      "depth": 0,
-      "grant": "workspace",
-      "merge_status_only": false,
-      "merge_tools_enabled": true,
-      "devloop_enabled": false,
-      "ordinary": [
-        "check_status",
-        "get_issue",
-        "get_pull_request_merge_status",
-        "get_verification",
-        "list_dependabot_alerts",
-        "merge_pull_request",
-        "open_pull_request",
-        "prepare_pull_request_merge",
-        "project_context",
         "watch_checks",
         "whoami"
       ],
@@ -1403,7 +1454,28 @@
       "depth": 0,
       "grant": "workspace",
       "merge_status_only": false,
-      "merge_tools_enabled": true,
+      "merge_tools_enabled": false,
+      "devloop_enabled": false,
+      "ordinary": [
+        "check_status",
+        "forget",
+        "get_issue",
+        "get_verification",
+        "list_dependabot_alerts",
+        "open_pull_request",
+        "project_context",
+        "remember",
+        "watch_checks",
+        "whoami"
+      ],
+      "approval": []
+    },
+    {
+      "role": "agent",
+      "depth": 0,
+      "grant": "workspace",
+      "merge_status_only": false,
+      "merge_tools_enabled": false,
       "devloop_enabled": true,
       "ordinary": [
         "check_status",
@@ -1411,6 +1483,28 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "forget",
+        "get_issue",
+        "get_verification",
+        "list_dependabot_alerts",
+        "open_pull_request",
+        "project_context",
+        "remember",
+        "watch_checks",
+        "whoami"
+      ],
+      "approval": []
+    },
+    {
+      "role": "agent",
+      "depth": 0,
+      "grant": "workspace",
+      "merge_status_only": false,
+      "merge_tools_enabled": true,
+      "devloop_enabled": false,
+      "ordinary": [
+        "check_status",
+        "forget",
         "get_issue",
         "get_pull_request_merge_status",
         "get_verification",
@@ -1419,6 +1513,35 @@
         "open_pull_request",
         "prepare_pull_request_merge",
         "project_context",
+        "remember",
+        "watch_checks",
+        "whoami"
+      ],
+      "approval": ["merge_pull_request_with_approval"]
+    },
+    {
+      "role": "agent",
+      "depth": 0,
+      "grant": "workspace",
+      "merge_status_only": false,
+      "merge_tools_enabled": true,
+      "devloop_enabled": true,
+      "ordinary": [
+        "check_status",
+        "dev_lease_acquire",
+        "dev_lease_release",
+        "dev_status",
+        "dev_sync",
+        "forget",
+        "get_issue",
+        "get_pull_request_merge_status",
+        "get_verification",
+        "list_dependabot_alerts",
+        "merge_pull_request",
+        "open_pull_request",
+        "prepare_pull_request_merge",
+        "project_context",
+        "remember",
         "watch_checks",
         "whoami"
       ],

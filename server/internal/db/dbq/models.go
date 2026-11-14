@@ -636,6 +636,23 @@ type ProjectInstructionVersion struct {
 	CreatedAt time.Time
 }
 
+type ProjectMemoryEntry struct {
+	ID               string
+	ProjectID        string
+	Text             string
+	State            string
+	Author           string
+	SourceSessionID  *string
+	SourceTaskID     *string
+	SourceAttemptID  *string
+	SourceDeliveryID *string
+	ReplacesID       *string
+	ActivatedSeq     *int64
+	EndedSeq         *int64
+	CreatedAt        time.Time
+	DecidedAt        *time.Time
+}
+
 type ProjectMergePolicyAudit struct {
 	ID        int64
 	ProjectID string
@@ -889,6 +906,7 @@ type TaskAttempt struct {
 	Model                     *string
 	Effort                    *string
 	InstructionsVersion       *int32
+	MemorySeq                 *int64
 }
 
 type TaskEventDelivery struct {

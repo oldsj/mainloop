@@ -140,7 +140,7 @@ func TestSupervisorAndChildVisibility(t *testing.T) {
 	otherTask, _ := h.seedTask(t, &supTask, dbstate.AttemptChild, dbstate.AttemptActive, other)
 
 	// Discovery follows the per-actor table.
-	if got := h.list(t, ordinary, child.Token); !slices.Equal(got, []string{"check_status", "get_issue", "get_verification", "list_dependabot_alerts", "open_pull_request", "project_context", "report", "task_get", "task_history", "task_list", "watch_checks", "whoami"}) {
+	if got := h.list(t, ordinary, child.Token); !slices.Equal(got, []string{"check_status", "forget", "get_issue", "get_verification", "list_dependabot_alerts", "open_pull_request", "project_context", "remember", "report", "task_get", "task_history", "task_list", "watch_checks", "whoami"}) {
 		t.Errorf("child lists %v", got)
 	}
 

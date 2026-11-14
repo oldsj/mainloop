@@ -1969,6 +1969,98 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /projects/{project_id}/memory:
+    get:
+      tags:
+        - projects
+      summary: Get Project Memory
+      description: >-
+        The project's memory: entries agents recorded for later agents on the project. Active
+        entries are carried in every new task brief after the instructions; proposed entries wait
+        for the owner. Active entries come first, then proposals, each oldest first.
+      operationId: getProjectMemory
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectMemory'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /projects/{project_id}/memory/{entry_id}/decision:
+    post:
+      tags:
+        - projects
+      summary: Decide Project Memory Entry
+      description: >-
+        The owner's decision on one entry. accept activates a proposal, replacing the entry it
+        names as replaced if that is still active; reject declines a proposal; revoke ends an
+        active entry. A decision on an entry already in the state it would leave it in answers
+        that entry again. An accept that would take active memory past max_bytes is refused with
+        409 and changes nothing.
+      operationId: decideProjectMemoryEntry
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+        - name: entry_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Entry Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectMemoryDecision'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectMemoryEntry'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /projects/{project_id}/smoke-observations:
     get:
       tags:
@@ -5075,6 +5167,148 @@ components:
       required:
         - versions
       title: ProjectInstructionVersionList
+    ProjectMemory:
+      properties:
+        project_id:
+          type: string
+          title: Project Id
+        entries:
+          items:
+            $ref: '#/components/schemas/ProjectMemoryEntry'
+          type: array
+          title: Entries
+          description: Active entries, then proposed ones.
+        used_bytes:
+          type: integer
+          minimum: 0
+          title: Used Bytes
+          description: UTF-8 bytes of the active entries' text.
+        max_bytes:
+          type: integer
+          title: Max Bytes
+          description: The most UTF-8 bytes active entries may hold together.
+        max_entry_bytes:
+          type: integer
+          title: Max Entry Bytes
+      additionalProperties: false
+      type: object
+      required:
+        - project_id
+        - entries
+        - used_bytes
+        - max_bytes
+        - max_entry_bytes
+      title: ProjectMemory
+    ProjectMemoryEntry:
+      properties:
+        id:
+          type: string
+          title: Id
+        project_id:
+          type: string
+          title: Project Id
+        text:
+          type: string
+          title: Text
+        state:
+          $ref: '#/components/schemas/ProjectMemoryState'
+        author:
+          type: string
+          enum:
+            - main
+            - task
+            - agent
+          title: Author
+          description: >-
+            Who recorded it: the main session, a task, or a workspace agent. Only the main
+            session's entries are active from the start.
+        source:
+          $ref: '#/components/schemas/ProjectMemorySource'
+        replaces_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Replaces Id
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        decided_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Decided At
+          description: When it was accepted, rejected, withdrawn or ended.
+      additionalProperties: false
+      type: object
+      required:
+        - id
+        - project_id
+        - text
+        - state
+        - author
+        - source
+        - replaces_id
+        - created_at
+        - decided_at
+      title: ProjectMemoryEntry
+    ProjectMemoryState:
+      type: string
+      enum:
+        - proposed
+        - active
+        - rejected
+        - withdrawn
+        - forgotten
+        - replaced
+      title: ProjectMemoryState
+    ProjectMemorySource:
+      properties:
+        session_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Session Id
+        task_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Task Id
+        attempt_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Attempt Id
+        delivery_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Delivery Id
+          description: The session's latest message when the entry was recorded.
+      additionalProperties: false
+      type: object
+      required:
+        - session_id
+        - task_id
+        - attempt_id
+        - delivery_id
+      title: ProjectMemorySource
+      description: Where an entry came from, as the server resolved it, not as the agent said.
+    ProjectMemoryDecision:
+      properties:
+        decision:
+          type: string
+          enum:
+            - accept
+            - reject
+            - revoke
+          title: Decision
+      additionalProperties: false
+      type: object
+      required:
+        - decision
+      title: ProjectMemoryDecision
     ProjectVerification:
       properties:
         mode:
