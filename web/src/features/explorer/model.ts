@@ -3,14 +3,11 @@
  * it leads and what "Ask Mainloop" prefills. Pure, so the rules test without a QueryClient. Every
  * fact comes from the existing reads; nothing here decides what a task or session is allowed to do.
  */
-import {
-  attentionKey,
-  needsYouItems,
-  problemItems,
-  type AttentionItem
-} from '@/features/inbox/model';
+import { attentionKey, needsYouItems, type AttentionItem } from '@/features/inbox/model';
+import { ownerWork } from '@/features/inbox/ownerWork';
 import {
   countText,
+  isHeld,
   sinceCounts,
   statusLine,
   workGroup,
@@ -24,6 +21,8 @@ import type { Session, TaskView } from '@/lib/contract';
 import { childrenOf, currentAttempt, statusTone, type Tone } from '@/lib/taskState';
 import { isCurrent } from '@/lib/sessionStatus';
 import { isUnseen, type SeenState } from './seen';
+
+export { isHeld };
 
 /** Where a row leads. The shell turns it into a route; the tree never builds URLs itself. */
 export type Target =
@@ -137,15 +136,6 @@ export function prStage(view: TaskView): PrStage | null {
   if (p.pr_state !== 'open') return null;
   if (p.merge_proposal_id) return 'landing';
   return p.ci_state === 'success' ? 'review' : null;
-}
-
-/**
- * Whether the main thread has set the task aside for now (`task_hold`). A hold is not a status:
- * the task goes on. It only keeps the task out of the owner's way until the time passes.
- */
-export function isHeld(view: TaskView, now: number): boolean {
-  const until = view.task.held_until ? Date.parse(view.task.held_until) : Number.NaN;
-  return Number.isFinite(until) && until > now;
 }
 
 /**
@@ -472,24 +462,27 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
     snoozed: [] as TaskView[],
     finished: [] as TaskView[]
   };
-  const attentionTasks = new Set<string>();
-  for (const item of source.attention) {
-    if (item.task_id) attentionTasks.add(item.task_id);
-  }
-
   // Needs you: owner actions first, then a blocked task (not a problem) that no action already
   // names. A failed or blocked task with nothing the owner can do about it (every action
   // unavailable) is not an owner decision either: workGroup leaves it out of both groups below, so
   // it falls through to Finished recently or its project instead of piling up here forever.
-  const needs = needsYouItems(source.attention).map((item) => attentionNode(item, 'needs'));
   // Problems: Mainloop's own recovery work first, then blocked tasks no problem item already names.
   // Kept apart from Needs you: a problem is not an owner decision, so it never shows there.
-  const problems = problemItems(source.attention).map((item) => problemNode(item, 'problems'));
+  // Both lists are `ownerWork`, which the Inbox draws too, so the tree and the Inbox always agree.
   const now = source.now ?? Date.now();
+  const work = ownerWork(source.attention, source.tasks, now);
+  const needs = [
+    ...work.needs.map((item) => attentionNode(item, 'needs')),
+    ...work.needsTasks.map((view) => taskNode(view, source, 'needs'))
+  ];
+  const problems = [
+    ...work.problems.map((item) => problemNode(item, 'problems')),
+    ...work.problemTasks.map((view) => taskNode(view, source, 'problems'))
+  ];
   const finishedSince = now - FINISHED_WINDOW_MS;
   for (const view of [...source.tasks].sort(byUpdatedDesc)) {
     const group = workGroup(view, null);
-    const named = attentionTasks.has(view.task.id);
+    const named = work.named.has(view.task.id);
     const nested = hasLoadedParent(view, source);
     // A task nested under its parent elsewhere in the tree is not also a flat Working or
     // Finished row; Needs you stays flat regardless, so an owner action is never hidden a level down.
@@ -506,12 +499,6 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
       if (stage === 'review') groups.review.push(view);
       else if (stage === 'landing') groups.landing.push(view);
       else groups.working.push(view);
-    }
-    if ((group === 'needs-you' || group === 'blocked') && !named && !held) {
-      needs.push(taskNode(view, source, 'needs'));
-    }
-    if (group === 'problem' && !named) {
-      problems.push(taskNode(view, source, 'problems'));
     }
     // A failed task joins completed/cancelled ones here once it has nothing left for the owner to
     // do: same recency window, same fallback to its project once that window passes.

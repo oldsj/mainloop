@@ -6,7 +6,6 @@ import {
   badgeText,
   prLink,
   taskIdOf,
-  unresolvedCount,
   withoutActivityItem
 } from './model';
 import {
@@ -36,13 +35,6 @@ describe('attention boundary', () => {
     const badOptionList = attentionItem(queueItem({ id: 'list', options: ['main', 3] as never }));
     const snapshot = attentionSnapshot([good, badOptions, badTitle, badOptionList]);
     expect(attentionItems(snapshot).map((item) => item.id)).toEqual([good.id]);
-  });
-
-  it('treats a missing or negative count as zero and floors fractions', () => {
-    expect(unresolvedCount(undefined)).toBe(0);
-    expect(unresolvedCount(attentionSnapshot([], -4))).toBe(0);
-    expect(unresolvedCount(attentionSnapshot([], Number.NaN))).toBe(0);
-    expect(unresolvedCount(attentionSnapshot([], 3.7))).toBe(3);
   });
 });
 

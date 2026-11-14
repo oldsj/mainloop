@@ -950,4 +950,23 @@ describe('answer view on desktop', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
     expect(await screen.findByTestId('main-thread')).toBeInTheDocument();
   });
+
+  it('shows the same Needs-you number on the activity bar, the status bar, the tree and the Inbox', async () => {
+    setViewport(true);
+    // One listed owner action, and one failed task that can be retried and that no item names.
+    server.use(
+      attentionRead(() => HttpResponse.json(attentionSnapshot([hitlAttentionItem('req-a')]))),
+      tasksList(() =>
+        HttpResponse.json([view({ id: 'task-f', title: 'Fix CI flake', status: 'failed' })])
+      )
+    );
+    await renderAt('/inbox');
+    expect(await screen.findByRole('link', { name: 'Inbox, 2 need you' })).toBeInTheDocument();
+    expect(screen.getByTestId('status-needs')).toHaveTextContent('2 need you');
+    expect(screen.getByRole('treeitem', { name: 'Needs you, 2' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Needs you/ })).toHaveTextContent('Needs you2');
+    // The Inbox lists both, so the number is the number of rows.
+    const list = screen.getByRole('list', { name: 'Needs you' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+  });
 });

@@ -92,12 +92,6 @@ export function problemItems(items: AttentionItem[]): AttentionItem[] {
   return items.filter((item) => item.kind === 'problem');
 }
 
-/** The server's count of unresolved owner actions. It is the badge number; Activity is not in it. */
-export function unresolvedCount(snapshot: AttentionSnapshot | undefined): number {
-  const count = snapshot?.count;
-  return typeof count === 'number' && Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
-}
-
 /** Badge text: nothing at zero, `99+` above that. */
 export function badgeText(count: number): string | null {
   if (count <= 0) return null;

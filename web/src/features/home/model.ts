@@ -48,6 +48,15 @@ export function workGroup(view: TaskView, lastVisit: number | null): WorkGroup |
   return null;
 }
 
+/**
+ * Whether the main thread has set the task aside for now (`task_hold`). A hold is not a status:
+ * the task goes on. It only keeps the task out of the owner's way until the time passes.
+ */
+export function isHeld(view: TaskView, now: number): boolean {
+  const until = view.task.held_until ? Date.parse(view.task.held_until) : Number.NaN;
+  return Number.isFinite(until) && until > now;
+}
+
 export function statusLine(view: TaskView): string {
   // An approval gate says what the owner must do, whatever the task's own status is.
   if (view.task.reason === 'approval' || (view.projection.pending_approval_ids ?? []).length > 0) {

@@ -9,6 +9,8 @@ import { createFakeHITL } from '@/features/hitl/handlers';
 import { forgetAnswered } from '@/features/hitl/hitl-client';
 import { server } from '@/test/msw/server';
 import { hitlView } from '@/test/fixtures/hitl';
+import { view } from '@/test/fixtures/tasks';
+import { tasksList } from '@/features/tasks/test/handlers';
 import {
   activityRow,
   attentionItem,
@@ -215,6 +217,62 @@ describe('Needs you', () => {
     expect(screen.getByRole('link', { name: 'Open the session' })).toHaveAttribute(
       'href',
       '/sessions/s-2'
+    );
+  });
+});
+
+describe('tasks that need a decision without an item of their own', () => {
+  it('lists the task after the items and counts it, so the badge matches the rows', async () => {
+    const question = attentionItem(queueItem({ id: 'q1', title: 'Which branch?' }));
+    server.use(
+      attentionRead(() => HttpResponse.json(attentionSnapshot([question]))),
+      tasksList(() =>
+        HttpResponse.json([view({ id: 'task-f', title: 'Fix CI flake', status: 'failed' })])
+      )
+    );
+    renderInbox();
+    const row = await screen.findByTestId('inbox-task-row');
+    expect(within(row).getByText('Fix CI flake')).toBeInTheDocument();
+    expect(within(row).getByText('Failed')).toBeInTheDocument();
+    expect(within(row).getByRole('link', { name: 'Review task and decide' })).toHaveAttribute(
+      'href',
+      '/tasks/task-f'
+    );
+    const list = screen.getByRole('list', { name: 'Needs you' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: /^Needs you/ })).toHaveTextContent('Needs you2');
+  });
+
+  it('does not say nothing needs the owner when only a task does', async () => {
+    server.use(
+      attentionRead(() => HttpResponse.json(attentionSnapshot([]))),
+      tasksList(() =>
+        HttpResponse.json([view({ id: 'task-f', title: 'Fix CI flake', status: 'failed' })])
+      )
+    );
+    renderInbox();
+    expect(await screen.findByTestId('inbox-task-row')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing needs you')).toBeNull();
+  });
+
+  it('lists a task Mainloop is recovering under Problems, with its count', async () => {
+    const user = userEvent.setup();
+    server.use(
+      attentionRead(() => HttpResponse.json(attentionSnapshot([]))),
+      tasksList(() =>
+        HttpResponse.json([
+          view({ id: 'task-s', title: 'Sync mirrors', status: 'blocked', reason: 'stalled' })
+        ])
+      )
+    );
+    renderInbox();
+    const tab = await screen.findByRole('button', { name: /^Problems1/ });
+    await user.click(tab);
+    const row = await screen.findByTestId('inbox-task-row');
+    expect(within(row).getByText('Sync mirrors')).toBeInTheDocument();
+    expect(within(row).getByRole('link', { name: 'Review task evidence' })).toHaveAttribute(
+      'href',
+      '/tasks/task-s'
     );
   });
 });
