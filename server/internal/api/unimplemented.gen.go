@@ -209,6 +209,11 @@ func (Unimplemented) GetProjectVerification(context.Context, GetProjectVerificat
 	return nil, apierr.NotImplemented
 }
 
+// GetProjectWorkspaceService is not implemented yet.
+func (Unimplemented) GetProjectWorkspaceService(context.Context, GetProjectWorkspaceServiceRequestObject) (GetProjectWorkspaceServiceResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetSchedule is not implemented yet.
 func (Unimplemented) GetSchedule(context.Context, GetScheduleRequestObject) (GetScheduleResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -486,6 +491,11 @@ func (Unimplemented) UpdateProjectInstructions(context.Context, UpdateProjectIns
 
 // UpdateProjectVerification is not implemented yet.
 func (Unimplemented) UpdateProjectVerification(context.Context, UpdateProjectVerificationRequestObject) (UpdateProjectVerificationResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// UpdateProjectWorkspaceService is not implemented yet.
+func (Unimplemented) UpdateProjectWorkspaceService(context.Context, UpdateProjectWorkspaceServiceRequestObject) (UpdateProjectWorkspaceServiceResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

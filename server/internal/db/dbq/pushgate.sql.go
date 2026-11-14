@@ -237,7 +237,7 @@ func (q *Queries) GetPushPublication(ctx context.Context, id string) (GitPublica
 }
 
 const getPushWorkspace = `-- name: GetPushWorkspace :one
-SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id::text AS native_session_id, b.role, b.mcp_grant_kind,
+SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, w.service_command, b.kagent_session_id::text AS native_session_id, b.role, b.mcp_grant_kind,
        e.repository, p.default_branch, p.full_name,
        c.generation, c.attempt_id, c.binding_id AS claim_binding_id
 FROM workspaces w
@@ -298,6 +298,7 @@ type GetPushWorkspaceRow struct {
 	IdleSuspendedAt    *time.Time
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	ServiceCommand     []string
 	NativeSessionID    string
 	Role               dbstate.BindingRole
 	MCPGrantKind       dbstate.MCPGrantKind
@@ -335,6 +336,7 @@ func (q *Queries) GetPushWorkspace(ctx context.Context, id string) (GetPushWorks
 		&i.IdleSuspendedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ServiceCommand,
 		&i.NativeSessionID,
 		&i.Role,
 		&i.MCPGrantKind,

@@ -42,6 +42,11 @@ SET merge_policy = $2, merge_policy_version = merge_policy_version + 1
 WHERE id = $1
 RETURNING *;
 
+-- name: SetOwnedProjectWorkspaceService :one
+-- Workspaces created afterwards run the new command; existing ones keep the one they were made with.
+UPDATE projects SET workspace_service_command = $3 WHERE id = $1 AND user_id = $2
+RETURNING *;
+
 -- name: InsertMergePolicyAudit :exec
 INSERT INTO project_merge_policy_audit (project_id, owner_id, old_policy, new_policy, version)
 VALUES ($1, $2, $3, $4, $5);

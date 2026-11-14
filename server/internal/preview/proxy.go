@@ -32,6 +32,10 @@ const (
 	// wakeTTL is how long a confirmed wake is trusted: a page load fires many requests, and each
 	// would otherwise ask kagent about the Session.
 	wakeTTL = 5 * time.Second
+	// serviceRetryMin and serviceRetryMax bound the backoff between the dial retries a workspace
+	// service gets (Proxy.ServiceHold).
+	serviceRetryMin = 250 * time.Millisecond
+	serviceRetryMax = 2 * time.Second
 )
 
 // Waker is what the proxy needs from the workspace lifecycle (G5). *workspaces.Service satisfies it.
@@ -61,6 +65,10 @@ type Proxy struct {
 	LeaseTTL      time.Duration
 	RenewEvery    time.Duration
 	HTTPLeaseWait time.Duration
+	// ServiceHold is how long one request to a workspace that declares a service keeps retrying a
+	// tunnel the service is not answering yet. After it the client gets the starting page, which
+	// reloads itself, so a slow cold start reads as one wait.
+	ServiceHold time.Duration
 
 	holder string
 	rp     *httputil.ReverseProxy
@@ -86,7 +94,8 @@ func New(cfg *config.Config, pool *pgxpool.Pool, w Waker, sessions SessionObserv
 		routerTLS: routerTLS{serverName: cfg.Preview.RouterServerName, credential: cfg.Preview.RouterClientCredential, ca: cfg.Preview.RouterCA},
 		atespace:  cfg.Kagent.ActorAtespace, connect: cfg.Preview.ConnectTimeout.Duration(),
 		LeaseTTL: 60 * time.Second, RenewEvery: 20 * time.Second, HTTPLeaseWait: 10 * time.Second,
-		holder: uuid.NewString(), now: time.Now, awake: map[string]time.Time{},
+		ServiceHold: 10 * time.Second,
+		holder:      uuid.NewString(), now: time.Now, awake: map[string]time.Time{},
 	}
 	p.rp = p.reverseProxy()
 	return p, nil
@@ -108,6 +117,8 @@ func (p *Proxy) Route(next http.Handler) http.Handler {
 type target struct {
 	sessionID string
 	ports     map[int]bool
+	// service is set when the workspace declares a workspace service.
+	service bool
 }
 
 var errNotAdmitted = errors.New("workspace does not admit this preview")
@@ -125,7 +136,7 @@ func (p *Proxy) resolve(ctx context.Context, workspaceID string) (target, error)
 	if err := json.Unmarshal(row.Ports, &decl); err != nil {
 		return target{}, fmt.Errorf("workspace ports: %w", err)
 	}
-	t := target{sessionID: row.KagentSessionID, ports: map[int]bool{}}
+	t := target{sessionID: row.KagentSessionID, ports: map[int]bool{}, service: row.DeclaresService}
 	for _, d := range decl {
 		t.ports[d.Number] = true
 	}
@@ -172,7 +183,7 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, h Host) {
 		switch {
 		case errors.As(err, &unc), errors.Is(err, workspaces.ErrBusy):
 			// Another operation (an idle suspend, say) is in flight; this clears on its own.
-			wakingPage(w)
+			wakingPage(w, t.service)
 		case errors.As(err, &rej):
 			refuse(w, http.StatusConflict, "Workspace cannot be resumed")
 		case errors.Is(err, workspaces.ErrNotFound):
@@ -187,7 +198,7 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, h Host) {
 	lease := p.holdLease(h.WorkspaceID, upgrade)
 	defer lease.release()
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
-	p.rp.ServeHTTP(w, r.WithContext(withHop(r.Context(), h)))
+	p.rp.ServeHTTP(w, r.WithContext(withHop(r.Context(), h, t.service)))
 }
 
 func safeMethod(m string) bool {
@@ -259,11 +270,21 @@ func refuse(w http.ResponseWriter, status int, msg string) {
 	_, _ = w.Write([]byte(msg))
 }
 
-func wakingPage(w http.ResponseWriter) {
+// wakingPage answers a preview the workspace cannot serve yet. For a workspace that declares a
+// service it is the starting page, which reloads itself: the service is started at every resume
+// and is most likely still coming up.
+func wakingPage(w http.ResponseWriter, service bool) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Retry-After", "2")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusServiceUnavailable)
+	if service {
+		_, _ = w.Write([]byte(`<!doctype html><meta http-equiv="refresh" content="2">` +
+			"<title>Workspace service starting</title><main><h1>Workspace service starting</h1>" +
+			"<p>The workspace's service is starting. This page reloads on its own.</p>" +
+			"<p>If it keeps showing, the service's output is in /data/workspace-service/log in the workspace.</p></main>"))
+		return
+	}
 	_, _ = w.Write([]byte("<!doctype html><title>Workspace waking up</title>" +
 		"<main><h1>Workspace waking up</h1><p>Reload this preview in a few seconds.</p></main>"))
 }

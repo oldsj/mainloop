@@ -32,6 +32,7 @@ var (
 	ErrInvalidPolicy   = errors.New("projects: unknown merge policy")
 	ErrWritesDisabled  = errors.New("projects: owner policy writes are disabled")
 	ErrVersionConflict = errors.New("projects: merge policy version changed")
+	ErrInvalidService  = errors.New("projects: invalid workspace service command")
 )
 
 // Remote is the part of the GitHub client the projects use.

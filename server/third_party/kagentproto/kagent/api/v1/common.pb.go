@@ -244,9 +244,15 @@ type Workspace struct {
 	// Local branch to create or switch to after checking out ref. Empty stays on ref.
 	Branch string `protobuf:"bytes,3,opt,name=branch,proto3" json:"branch,omitempty"`
 	// Shallow clone depth. Zero uses the server default.
-	Depth         int32 `protobuf:"varint,4,opt,name=depth,proto3" json:"depth,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Depth int32 `protobuf:"varint,4,opt,name=depth,proto3" json:"depth,omitempty"`
+	// Optional argv of the workspace service, a long-running process such as a
+	// development server. The runtime starts it in the checkout at every start
+	// and resume of the Session's runtime, after the checkout is ready, so it is
+	// running again when a suspended Session wakes. The first element is resolved
+	// through PATH. Empty declares no service.
+	ServiceCommand []string `protobuf:"bytes,5,rep,name=service_command,json=serviceCommand,proto3" json:"service_command,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Workspace) Reset() {
@@ -307,6 +313,13 @@ func (x *Workspace) GetDepth() int32 {
 	return 0
 }
 
+func (x *Workspace) GetServiceCommand() []string {
+	if x != nil {
+		return x.ServiceCommand
+	}
+	return nil
+}
+
 var File_kagent_api_v1_common_proto protoreflect.FileDescriptor
 
 const file_kagent_api_v1_common_proto_rawDesc = "" +
@@ -325,14 +338,15 @@ const file_kagent_api_v1_common_proto_rawDesc = "" +
 	"\n" +
 	"page_token\x18\x02 \x01(\tR\tpageToken\"6\n" +
 	"\fPageResponse\x12&\n" +
-	"\x0fnext_page_token\x18\x01 \x01(\tR\rnextPageToken\"\xda\x01\n" +
+	"\x0fnext_page_token\x18\x01 \x01(\tR\rnextPageToken\"\x96\x02\n" +
 	"\tWorkspace\x12!\n" +
 	"\x04repo\x18\x01 \x01(\tB\r\xbaH\n" +
 	"r\b\x10\x01\x18\x80\x10\x88\x01\x01R\x04repo\x12@\n" +
 	"\x03ref\x18\x02 \x01(\tB.\xbaH+r)\x18\xff\x012$^(?:$|[A-Za-z0-9_][A-Za-z0-9._/-]*)$R\x03ref\x12F\n" +
 	"\x06branch\x18\x03 \x01(\tB.\xbaH+r)\x18\xff\x012$^(?:$|[A-Za-z0-9_][A-Za-z0-9._/-]*)$R\x06branch\x12 \n" +
 	"\x05depth\x18\x04 \x01(\x05B\n" +
-	"\xbaH\a\x1a\x05\x18\xe8\a(\x00R\x05depthB=Z;github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1;apiv1b\x06proto3"
+	"\xbaH\a\x1a\x05\x18\xe8\a(\x00R\x05depth\x12:\n" +
+	"\x0fservice_command\x18\x05 \x03(\tB\x11\xbaH\x0e\x92\x01\v\x10@\"\ar\x05\x10\x01\x18\x80 R\x0eserviceCommandB=Z;github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1;apiv1b\x06proto3"
 
 var (
 	file_kagent_api_v1_common_proto_rawDescOnce sync.Once

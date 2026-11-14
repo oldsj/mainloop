@@ -696,6 +696,7 @@ func (s *Service) commitFork(ctx context.Context, r dbq.CheckpointFork, forked *
 				AgentKind: srcWorkspace.AgentKind, AgentNamespace: agentNamespace, AgentName: agentName,
 				Ports: srcWorkspace.Ports, IdleTimeoutMinutes: srcWorkspace.IdleTimeoutMinutes,
 				Environment: srcWorkspace.Environment, RequestID: uuid.NewString(),
+				ServiceCommand: srcWorkspace.ServiceCommand,
 			}); err != nil {
 				return fmt.Errorf("create forked workspace: %w", err)
 			}

@@ -21,7 +21,8 @@ func (q *Queries) DeletePreviewLease(ctx context.Context, id string) error {
 
 const getPreviewTarget = `-- name: GetPreviewTarget :one
 
-SELECT w.id, w.ports, b.kagent_session_id::text AS kagent_session_id
+SELECT w.id, w.ports, b.kagent_session_id::text AS kagent_session_id,
+    cardinality(w.service_command) > 0 AS declares_service
 FROM workspaces w
 JOIN sessions s ON s.id = w.id
 JOIN agent_bindings b ON b.session_id = w.id
@@ -47,6 +48,7 @@ type GetPreviewTargetRow struct {
 	ID              string
 	Ports           json.RawMessage
 	KagentSessionID string
+	DeclaresService bool
 }
 
 // Preview proxy: the target a preview host resolves to, and keep-awake leases.
@@ -55,10 +57,17 @@ type GetPreviewTargetRow struct {
 // task's current one, the task is not final, and (for a code attempt) it still holds the branch's
 // writer claim at the generation it was admitted with; a fenced, superseded or finished attempt, a
 // final task and a lost claim no longer own it. This is a read, not a lock: the dial checks again.
+// declares_service says kagent starts a workspace service at every resume, so a closed port is
+// most likely that service still starting.
 func (q *Queries) GetPreviewTarget(ctx context.Context, arg GetPreviewTargetParams) (GetPreviewTargetRow, error) {
 	row := q.db.QueryRow(ctx, getPreviewTarget, arg.ID, arg.UserID)
 	var i GetPreviewTargetRow
-	err := row.Scan(&i.ID, &i.Ports, &i.KagentSessionID)
+	err := row.Scan(
+		&i.ID,
+		&i.Ports,
+		&i.KagentSessionID,
+		&i.DeclaresService,
+	)
 	return i, err
 }
 

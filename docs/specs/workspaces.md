@@ -308,7 +308,48 @@ nothing of owners or ports, so the owner check is Mainloop's. Mainloop does not 
 kagent to wake anything: the `CONNECT` through the router is what wakes a sleeping Actor. A
 Session that is not `READY` shows the waking page and the router is not contacted. Processes do
 not survive sleep, so a preview of a just-woken workspace can fail until the agent has started the
-dev server again.
+dev server again, unless the project declares a workspace service (below).
+
+## Workspace service
+
+A project can declare a workspace service: the argv of a long-running process, such as a
+development server, set with `PUT /projects/{id}/workspace-service` (`{"command": [...]}`, at most
+61 non-empty arguments of at most 4096 bytes; `[]` declares none) and read with `GET`. It is
+owner-only Mainloop configuration, never read from the repository.
+
+- **Create.** A workspace created afterwards stores the command it sends kagent in
+  `workspaces.service_command`: the declared argv run through `env` with
+  `MAINLOOP_WORKSPACE_ID=<workspace id>` and
+  `MAINLOOP_PREVIEW_URLS=<port>=<preview URL>,...` (one per declared port, by port number, built
+  like the preview URLs the API returns). For example
+  `env MAINLOOP_WORKSPACE_ID=ws1 MAINLOOP_PREVIEW_URLS=3000=https://3000--ws1--preview.example scripts/dev/workspace.sh run`.
+  A service sets its dev origin from these. The create request carries it as kagent's
+  `Workspace.service_command`; because it is stored, a replay sends the same bytes, and changing
+  the project later changes only workspaces created after it. A command that with its preview URLs
+  is over kagent's limits (64 arguments of 4096 bytes) fails the create with `422`.
+- **Runtime (kagent).** kagent starts the command in the checkout at every start and resume of the
+  workspace's runtime, once the checkout and any preparation are ready, without waiting for a turn,
+  so a preview that wakes the workspace also starts its service. kagent's harness owns the process
+  tree, caps its log at two 8 MiB files under `/data/workspace-service/`, and writes
+  `/data/workspace-service/status.json` (`command`, `state`, `pid`, exit status). The agent's
+  instructions say a declared service is already running and how to restart it; the agent reads
+  the workspace id and preview URLs from `command` there. A service that exits is not restarted
+  until the next resume.
+- **Preview hold.** For a workspace that declares a service, the preview proxy keeps retrying a
+  tunnel the router refuses (backoff from 250 ms to 2 s) for up to 10 seconds per request instead
+  of once. Past that, and for a `GET`, `HEAD` or `OPTIONS` whose tunnel closes before any response
+  (nothing listening on the port yet), it answers `503` with `Retry-After: 2` and a "Workspace
+  service starting" page that reloads itself every 2 seconds and names the service log. Other
+  methods keep the `502` "outcome unknown" answer and are never replayed. A workspace with no
+  service keeps the single retry and the plain waking page.
+- **Rollout.** kagent must run a version that knows `service_command` before Mainloop sends one: an
+  older kagent keeps the field as unknown and runs nothing.
+
+Known limits: a [forked workspace](#forked-workspaces-issue-311) keeps the source workspace's
+command, so its service sees the source's `MAINLOOP_WORKSPACE_ID` and preview URLs (kagent's fork
+copies the Session's workspace). The variables are in the service's environment, not the agent's
+process environment. There is no UI or MCP tool for the setting yet. Tested against fakes (the fake
+router and fake kagent); not measured against a live router or kagent.
 
 Mainloop has one owner, set by `MAINLOOP_OWNER_ID` (default `local-dev-user`, which Kind and
 local development use). Every REST handler and the preview proxy take the user from the configured owner.
@@ -402,7 +443,7 @@ request id, access log and panic recovery still wrap it. Any other host is the A
   denied" in the router's log; measured on Substrate 1.0.1 on Kind). By then the request has been
   forwarded, so it is a `502` and is not replayed. A missing or unreadable credential file, or a
   router certificate the trust bundle does not sign, fails the dial before anything is sent: after
-  the one retry the owner sees the waking page, logged as "preview tunnel not ready" with the
+  the one retry (or the service hold, see [workspace service](#workspace-service)) the owner sees the waking page, logged as "preview tunnel not ready" with the
   reason. The chart's `substrateRouterAuth.enabled` mounts both files into the API container only.
 - **Tunnel.** `CONNECT actor-upstream:<port>` to `SUBSTRATE_ROUTER_ADDRESS` with
   `ate-target-actor: <atespace>/<actor name>` from the kagent Session's runtime association (read

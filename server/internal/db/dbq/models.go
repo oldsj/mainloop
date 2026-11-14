@@ -610,25 +610,26 @@ type PreviewLease struct {
 }
 
 type Project struct {
-	ID                 string
-	UserID             string
-	Owner              string
-	Name               string
-	FullName           string
-	Description        *string
-	DefaultBranch      string
-	AvatarURL          *string
-	HTMLURL            string
-	MergePolicy        dbstate.MergePolicy
-	MergePolicyVersion int64
-	OpenPRCount        int32
-	OpenIssueCount     int32
-	MetadataUpdatedAt  *time.Time
-	CreatedAt          time.Time
-	LastUsedAt         time.Time
-	VerificationMode   string
-	CiDetection        json.RawMessage
-	CiDetectedAt       *time.Time
+	ID                      string
+	UserID                  string
+	Owner                   string
+	Name                    string
+	FullName                string
+	Description             *string
+	DefaultBranch           string
+	AvatarURL               *string
+	HTMLURL                 string
+	MergePolicy             dbstate.MergePolicy
+	MergePolicyVersion      int64
+	OpenPRCount             int32
+	OpenIssueCount          int32
+	MetadataUpdatedAt       *time.Time
+	CreatedAt               time.Time
+	LastUsedAt              time.Time
+	VerificationMode        string
+	CiDetection             json.RawMessage
+	CiDetectedAt            *time.Time
+	WorkspaceServiceCommand []string
 }
 
 type ProjectEnvironmentSelection struct {
@@ -1030,6 +1031,7 @@ type Workspace struct {
 	IdleSuspendedAt    *time.Time
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	ServiceCommand     []string
 }
 
 type WorkspaceOp struct {

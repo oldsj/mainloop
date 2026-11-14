@@ -1662,6 +1662,91 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/HTTPValidationError'
                   - $ref: '#/components/schemas/HTTPError'
+  /projects/{project_id}/workspace-service:
+    get:
+      tags:
+        - projects
+      summary: Get Project Workspace Service
+      description: >-
+        The argv of the project's workspace service, a long-running process such as a development
+        server. kagent starts it in the checkout at every start and resume of a workspace's
+        runtime, so it is running again when a suspended workspace wakes. Empty declares none.
+      operationId: getProjectWorkspaceService
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceService'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+        - projects
+      summary: Set Project Workspace Service
+      description: >-
+        Set the argv of the project's workspace service. Workspaces created afterwards run it;
+        existing workspaces keep the command they were created with. An empty command declares
+        none. Owner-only, Mainloop-side configuration, never read from the project's repository.
+      operationId: updateProjectWorkspaceService
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceService'
+      responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceService'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
   /projects/{project_id}/environment:
     get:
       tags:
@@ -5457,6 +5542,26 @@ components:
       required:
         - mode
       title: ProjectVerificationUpdate
+    WorkspaceService:
+      properties:
+        command:
+          type: array
+          maxItems: 61
+          items:
+            type: string
+            minLength: 1
+            maxLength: 4096
+          title: Command
+          description: >-
+            argv of the service; the first element is resolved through PATH in the workspace's
+            environment. Empty declares no service. A workspace runs it through env(1) with
+            MAINLOOP_WORKSPACE_ID and MAINLOOP_PREVIEW_URLS (`<port>=<url>` per declared port,
+            comma-separated) set, which is why it takes at most 61 arguments.
+      additionalProperties: false
+      type: object
+      required:
+        - command
+      title: WorkspaceService
     VerificationMode:
       type: string
       enum:

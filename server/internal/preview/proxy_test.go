@@ -813,3 +813,89 @@ func (e *env) waitLeases(want int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func (e *env) declareService(id string) {
+	e.t.Helper()
+	if _, err := e.pool.Exec(context.Background(), `UPDATE workspaces SET service_command = '{npm,run,dev}' WHERE id = $1`, id); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+func TestWorkspaceServiceHold(t *testing.T) {
+	t.Run("Given a workspace that declares a service, when the router refuses while the service starts, assert that the request is held until it answers", func(t *testing.T) {
+		e := newEnv(t)
+		e.declareService("ws1")
+		e.router.refuse.Store(4)
+
+		rec := e.do("GET", wsHost, "/", nil, nil)
+
+		if rec.Code != http.StatusOK || rec.Body.String() != "dev" {
+			t.Fatalf("got %d %q, want the dev server's answer", rec.Code, rec.Body.String())
+		}
+		if n := len(e.router.seen()); n != 5 {
+			t.Fatalf("router saw %d CONNECTs, want 5 (four refusals, then the tunnel)", n)
+		}
+	})
+
+	t.Run("Given a workspace that declares a service, when the router refuses past the hold, assert that the starting page reloads itself", func(t *testing.T) {
+		e := newEnv(t)
+		e.declareService("ws1")
+		e.proxy.ServiceHold = time.Second
+		e.router.refuse.Store(1000)
+
+		rec := e.do("GET", wsHost, "/", nil, nil)
+
+		body := rec.Body.String()
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "2" ||
+			!strings.Contains(body, "service starting") || !strings.Contains(body, `http-equiv="refresh"`) {
+			t.Fatalf("got %d %q, want the self-reloading starting page", rec.Code, body)
+		}
+	})
+
+	t.Run("Given a workspace without a service, when the router refuses twice, assert that the plain waking page shows without a hold", func(t *testing.T) {
+		e := newEnv(t)
+		e.router.refuse.Store(1000)
+
+		rec := e.do("GET", wsHost, "/", nil, nil)
+
+		if body := rec.Body.String(); rec.Code != http.StatusServiceUnavailable || !strings.Contains(body, "waking up") || strings.Contains(body, "refresh") {
+			t.Fatalf("got %d %q, want the plain waking page", rec.Code, body)
+		}
+		if n := len(e.router.seen()); n != 2 {
+			t.Fatalf("router saw %d CONNECTs, want 2", n)
+		}
+	})
+
+	closed := func(e *env) {
+		e.devHandler.Store(http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hj, _ := w.(http.Hijacker)
+			c, _, _ := hj.Hijack()
+			_ = c.Close()
+		})))
+	}
+	scenarios := []struct {
+		name    string
+		service bool
+		method  string
+		want    int
+	}{
+		{"Given a workspace that declares a service, when a GET's tunnel closes before a response, assert that the starting page shows", true, "GET", http.StatusServiceUnavailable},
+		{"Given a workspace that declares a service, when a POST's tunnel closes before a response, assert that its unknown outcome is reported", true, "POST", http.StatusBadGateway},
+		{"Given a workspace without a service, when a GET's tunnel closes before a response, assert that its unknown outcome is reported", false, "GET", http.StatusBadGateway},
+	}
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			e := newEnv(t)
+			if s.service {
+				e.declareService("ws1")
+			}
+			closed(e)
+
+			rec := e.do(s.method, wsHost, "/", nil, nil)
+
+			if rec.Code != s.want {
+				t.Fatalf("got %d %q, want %d", rec.Code, rec.Body.String(), s.want)
+			}
+		})
+	}
+}

@@ -64,4 +64,18 @@ message Workspace {
     gte: 0
     lte: 1000
   }];
+  // Optional argv of the workspace service, a long-running process such as a
+  // development server. The runtime starts it in the checkout at every start
+  // and resume of the Session's runtime, after the checkout is ready, so it is
+  // running again when a suspended Session wakes. The first element is resolved
+  // through PATH. Empty declares no service.
+  repeated string service_command = 5 [(buf.validate.field).repeated = {
+    max_items: 64
+    items: {
+      string: {
+        min_len: 1
+        max_len: 4096
+      }
+    }
+  }];
 }
