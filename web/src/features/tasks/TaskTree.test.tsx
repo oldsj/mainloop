@@ -67,7 +67,7 @@ function evidenceNow(evidence: Evidence): Evidence {
 describe('CI on the task list', () => {
   for (const ci_state of CI_STATES) {
     for (const { label, evidence } of EVIDENCE) {
-      it(`shows CI unknown for ${ci_state} with ${label}`, async () => {
+      it(`says nothing about CI for ${ci_state} with ${label}`, async () => {
         server.use(
           tasksList(() =>
             HttpResponse.json([
@@ -78,8 +78,8 @@ describe('CI on the task list', () => {
         );
         renderTasks('/', () => <TaskTree />);
 
-        expect(await screen.findByText('CI unknown')).toBeInTheDocument();
-        expect(screen.queryByText(/^CI (passing|failing|running)$/)).not.toBeInTheDocument();
+        // CI that is not known is left out: the row never says "CI unknown", and never guesses.
+        expect(await screen.findByTestId('task-state')).not.toHaveTextContent(/CI/);
       });
     }
 
@@ -104,13 +104,15 @@ describe('CI on the task list', () => {
       );
       renderTasks('/', () => <TaskTree />);
 
-      expect(await screen.findByText(`CI ${EXPECTED_WORD[ci_state]}`)).toBeInTheDocument();
+      expect(await screen.findByTestId('task-state')).toHaveTextContent(
+        new RegExp(`· CI ${EXPECTED_WORD[ci_state]}$`)
+      );
     });
   }
 });
 
 describe('task tree', () => {
-  it('nests a child under its parent and indents it one step', async () => {
+  it('nests a child under its parent, one step in, with a guide line for the level above', async () => {
     const parent = view({ id: 'task-parent', title: 'Parent work' });
     const child = view({ id: 'task-child', title: 'Child work', parent_task_id: 'task-parent' });
     server.use(
@@ -120,10 +122,14 @@ describe('task tree', () => {
     renderTasks('/', () => <TaskTree />);
 
     const row = await screen.findByRole('link', { name: /Child work/ });
-    expect(row.closest('li')).toHaveClass('pl-md');
-    expect(screen.getByRole('link', { name: /Parent work/ }).closest('li')).not.toHaveClass(
-      'pl-md'
-    );
+    const parentRow = screen.getByRole('link', { name: /Parent work/ });
+    expect(row.closest('li')).toHaveAttribute('data-depth', '1');
+    expect(parentRow.closest('li')).toHaveAttribute('data-depth', '0');
+    expect(within(row).getAllByTestId('task-indent-guide')).toHaveLength(1);
+    expect(within(parentRow).queryByTestId('task-indent-guide')).toBeNull();
+    // The child follows its parent directly.
+    const rows = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
+    expect(rows).toEqual(['/tasks/task-parent', '/tasks/task-child']);
     expect(row).toHaveClass('min-h-control');
     expect(row).toHaveAttribute('href', '/tasks/task-child');
   });
@@ -141,8 +147,10 @@ describe('task tree', () => {
     renderTasks('/', () => <TaskTree />);
 
     const row = await screen.findByRole('link', { name: /Orphan work/ });
-    expect(within(row).getByText('child of a task not shown here')).toBeInTheDocument();
-    expect(row.closest('li')).not.toHaveClass('pl-md');
+    expect(within(row).getByTestId('task-state')).toHaveTextContent(
+      /child of a task not shown here$/
+    );
+    expect(row.closest('li')).toHaveAttribute('data-depth', '0');
   });
 
   it('marks a supervisor task and names the reason it is waiting', async () => {
@@ -157,13 +165,16 @@ describe('task tree', () => {
     renderTasks('/', () => <TaskTree />);
 
     const row = await screen.findByRole('link', { name: /Supervise/ });
-    expect(within(row).getByText('[SUPERVISOR]')).toBeInTheDocument();
-    expect(
-      within(row).getByText(new RegExp(reasonLabel('owner_decision') as string))
-    ).toBeInTheDocument();
+    // A plain word, not a bracketed tag.
+    const state = within(row).getByTestId('task-state');
+    expect(state).toHaveTextContent(/^supervisor · /);
+    expect(state).toHaveTextContent(new RegExp(reasonLabel('owner_decision') as string));
+    expect(row.textContent).not.toMatch(/\[/);
+    // It waits on the owner, so its dot is the Needs-you red.
+    expect(within(row).getByTestId('task-dot')).toHaveAttribute('data-tone', 'attention');
   });
 
-  it('does not mark a cancelled supervisor task as active', async () => {
+  it('draws a cancelled supervisor task at rest', async () => {
     const cancelled = view(
       { id: 'task-sup-done', title: 'Supervise done', mode: 'coordination', status: 'cancelled' },
       {}
@@ -175,9 +186,48 @@ describe('task tree', () => {
     renderTasks('/', () => <TaskTree />);
 
     const row = await screen.findByRole('link', { name: /Supervise done/ });
-    const badge = within(row).getByText('[SUPERVISOR]');
-    expect(badge).toHaveClass('text-status-idle');
-    expect(badge).not.toHaveClass('text-status-working');
+    expect(within(row).getByTestId('task-state')).toHaveTextContent('supervisor · Cancelled');
+    expect(within(row).getByTestId('task-dot')).toHaveAttribute('data-tone', 'muted');
+  });
+
+  it('is one line: the dot, the title, the state and the age', async () => {
+    const changed = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    server.use(
+      tasksList(() => HttpResponse.json([view({ title: 'Ship it', updated_at: changed })])),
+      providersRead()
+    );
+    renderTasks('/', () => <TaskTree />);
+
+    const row = await screen.findByRole('link', { name: /Ship it/ });
+    expect(within(row).getByTestId('task-dot')).toHaveAttribute('data-tone', 'active');
+    expect(within(row).getByText('Ship it')).toHaveClass('truncate');
+    expect(within(row).getByTestId('task-state')).toHaveTextContent('Running');
+    expect(within(row).getByTestId('task-age')).toHaveTextContent('3h');
+    // A narrow screen hides the longer state and keeps the status word, so it is never colour only.
+    expect(within(row).getByTestId('task-status')).toHaveTextContent('Running');
+    expect(within(row).getByTestId('task-status')).toHaveClass('sm:hidden');
+  });
+
+  it('says nothing about CI on a finished task, even when CI is known', async () => {
+    const done = view(
+      { title: 'Done work', status: 'completed' },
+      {
+        projection: projection({
+          ci_state: 'success',
+          pr_head_sha: 'aaa',
+          ci_head_sha: 'aaa',
+          observed_at: new Date().toISOString()
+        })
+      }
+    );
+    server.use(
+      tasksList(() => HttpResponse.json([done])),
+      providersRead()
+    );
+    renderTasks('/', () => <TaskTree />);
+
+    const row = await screen.findByRole('link', { name: /Done work/ });
+    expect(within(row).getByTestId('task-state')).toHaveTextContent(/^Completed$/);
   });
 
   it('says there are no tasks when the list is empty', async () => {

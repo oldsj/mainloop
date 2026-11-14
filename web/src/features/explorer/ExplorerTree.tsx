@@ -8,24 +8,10 @@ import {
   type ReactNode
 } from 'react';
 import { cn } from '@/components/ui/cn';
-import { relativeAge, type Tone } from '@/lib/taskState';
+import { StatusDot } from '@/components/shared/status-dot';
+import { relativeAge } from '@/lib/taskState';
 import { sameTarget, visibleRows, type ExplorerNode, type Target } from './model';
 import { RowMenu, useLongPress, type RowMenuAction } from './RowMenu';
-
-/**
- * The status dot, in the same language as herdr's agent list: filled amber is working, filled red
- * needs you, filled teal is finished and not yet looked at, and hollow is at rest (idle, asleep, or
- * finished and seen). Hollow is the default, so an unknown state never reads as a problem. Green is
- * the connection light only.
- */
-const DOT: Record<Tone, string> = {
-  active: 'bg-status-working',
-  attention: 'bg-status-attention',
-  bad: 'bg-status-failed',
-  unseen: 'bg-status-unseen',
-  ok: 'bg-term-green',
-  muted: 'border border-status-idle'
-};
 
 /**
  * A row's small button: a touch target on the phone, 24 px with a mouse. The negative margin keeps
@@ -279,14 +265,7 @@ export function ExplorerTree({
                 )
               ) : null}
             </span>
-            {node.tone ? (
-              <span
-                aria-hidden="true"
-                data-testid="explorer-dot"
-                data-tone={node.tone}
-                className={cn('size-2 shrink-0', DOT[node.tone])}
-              />
-            ) : null}
+            {node.tone ? <StatusDot tone={node.tone} testId="explorer-dot" /> : null}
             {top ? (
               // A top-level row is one line: a group heading, or Mainloop and Insights with their state.
               <span className="gap-xs flex min-w-0 flex-1 items-baseline">
