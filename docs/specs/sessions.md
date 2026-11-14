@@ -171,6 +171,10 @@ only; no screen shows the observation yet.
 
 ### Live sessions (SDK runner)
 
+A cancelled session never shows the live view, whatever `NativeSessionInfo.live` says: it has no
+runner left to attach to, so its page is the regular one, with its record, the line that it takes no
+new messages, and **Clear**.
+
 When `NativeSessionInfo.live` is true (the session's Agent runs the SDK runner driver), the session
 page replaces the identity strip, actions and chat with a live view attached to
 `GET /sessions/{id}/live` (WebSocket, subprotocol `kagent.sdk-runner.v1`, the runner's Client event

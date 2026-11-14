@@ -10,7 +10,7 @@ import { attentionItem, hitlAttentionItem, queueItem } from '@/features/inbox/te
 import { CLAUDE_PROFILE, CODEX_PROFILE } from '@/features/chat/handlers';
 import { project } from '@/features/projects/test/fixtures';
 import { serveProjectPage } from '@/features/projects/test/handlers';
-import { session } from '@/features/sessions/test/fixtures';
+import { native, session } from '@/features/sessions/test/fixtures';
 import { approvalRequest, hitlView } from '@/test/fixtures/hitl';
 import { attempt, projection, view } from '@/test/fixtures/tasks';
 import { sessionDefaultsHandlers, testSeen } from './handlers';
@@ -147,6 +147,13 @@ export function reviewSeed() {
     needs_owner: true,
     created_at: now
   });
+  // A cancelled session whose agent ran the SDK runner: its page opens at `/sessions/sess-gone-0002`.
+  const gone = session({
+    id: 'sess-gone-0002',
+    title: 'abandoned spike',
+    status: 'cancelled',
+    created_at: now
+  });
   const plan = queueItem({
     id: 'q-plan',
     task_id: null,
@@ -224,6 +231,16 @@ export function reviewSeed() {
         ? HttpResponse.json(found)
         : HttpResponse.json({ detail: 'Task not found' }, { status: 404 });
     }),
+    // A session's own page reads it by id, and its native state.
+    http.get(url('/sessions/:session_id'), ({ params }) => {
+      const found = [live, gone].find((item) => item.id === params.session_id);
+      return found
+        ? HttpResponse.json(found)
+        : HttpResponse.json({ detail: 'Session not found' }, { status: 404 });
+    }),
+    http.get(url(`/sessions/${gone.id}/native`), () =>
+      HttpResponse.json(native({ session_id: gone.id, live: true }))
+    ),
     http.get(url('/projects'), () => HttpResponse.json([repo])),
     // Both built-in profiles, so Settings has rows to show; one worker default is already set.
     http.get(url('/providers'), () => HttpResponse.json([CLAUDE_PROFILE, CODEX_PROFILE])),
