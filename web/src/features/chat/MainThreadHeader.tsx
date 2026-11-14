@@ -2,18 +2,16 @@ import { Info } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { SessionBar } from '@/components/shared/session-bar';
 import { cn } from '@/components/ui/cn';
-import { agentLabel } from '@/lib/agentLabel';
 import { barStatus, threadWords, type LiveStatus } from '@/lib/barStatus';
 import { threadStatus, type ThreadStatus } from '@/lib/delivery';
 import {
   boundedText,
-  MAIN_PROVIDERS,
   providerLabel,
   providerNeedsAttention,
   providerStateWords,
   type MainProviderControl
 } from './mainProvider';
-import type { MainProvider, MainThreadInfo } from './types';
+import type { MainThreadInfo } from './types';
 
 /** The words for a status. A failed or unconfirmed last delivery is never called ready. */
 export function statusWords(status: ThreadStatus): string {
@@ -31,51 +29,13 @@ export interface MainThreadHeaderProps {
   /** The owner's main-provider controls. Omitted, the provider row is not shown. */
   provider?: MainProviderControl;
   /**
-   * The live view under this header: its status joins the thread's into one word, and its wake and
-   * model controls sit in this row, so the live view draws no row of its own.
+   * The live view under this header: its status joins the thread's into one word, and its wake
+   * control sits in this row, so the live view draws no row of its own.
    */
   live?: { status: LiveStatus; controls: ReactNode };
 }
 
-/** The select the owner uses to switch the main provider; one per page, always in the top strip. */
-function ProviderSelect({
-  info,
-  provider
-}: {
-  info: MainThreadInfo;
-  provider: MainProviderControl;
-}) {
-  const desired: MainProvider | null = info.provider?.desired_provider ?? null;
-
-  return (
-    <>
-      <label htmlFor="main-provider-select" className="sr-only">
-        Main provider
-      </label>
-      <select
-        id="main-provider-select"
-        className="border-border bg-background text-foreground px-sm min-h-control border text-sm disabled:opacity-50"
-        value={desired ?? ''}
-        disabled={provider.switchBlocked}
-        onChange={(event) => provider.select(event.target.value as MainProvider)}
-        data-testid="mt-provider-select"
-      >
-        {desired ? null : (
-          <option value="" disabled>
-            unknown
-          </option>
-        )}
-        {MAIN_PROVIDERS.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </>
-  );
-}
-
-/** The main provider's status row: the confirmed provider, the status, retry/restart and any notice. The select lives in the top strip, not here. */
+/** The main provider's status row: the confirmed provider, the status, retry/restart and any notice. The choice itself is in the session controls by the composer. */
 function ProviderRow({
   info,
   offline,
@@ -170,9 +130,6 @@ export function MainThreadHeader({
       unconfirmed: provider.unconfirmed,
       notice: provider.notice
     });
-  const model = (
-    native?.model ?? agentLabel(native?.kind as 'claude' | 'codex' | undefined)
-  ).replace(/^claude-/, '');
   const pending = info.topics.reduce((total, topic) => total + topic.pending, 0);
   const status = threadStatus({
     offline,
@@ -206,9 +163,7 @@ export function MainThreadHeader({
               {stopping ? 'stopping…' : 'stop'}
             </button>
           ) : null}
-          {provider ? <ProviderSelect info={info} provider={provider} /> : null}
-          {/* The live view's own model control replaces the thread's model text. */}
-          {live ? live.controls : <span data-testid="mt-model">{model}</span>}
+          {live?.controls}
           <button
             type="button"
             className={cn(

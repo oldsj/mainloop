@@ -104,7 +104,7 @@ describe('loading', () => {
     setup(existing());
     expect(await screen.findByText('build it')).toBeInTheDocument();
     expect(screen.getByText('On it.')).toBeInTheDocument();
-    expect(screen.getByTestId('mt-model')).toHaveTextContent('sonnet-5-5');
+    expect(screen.getByTestId('session-controls')).toHaveTextContent('Claude · sonnet-5-5');
   });
 
   it('offers a reload when the thread cannot be read', async () => {
@@ -1097,19 +1097,43 @@ function idleThread(
   };
 }
 
-const providerSelect = () => screen.getByTestId('mt-provider-select');
-// The select itself always sits in the header's top strip. A ready provider's status and
-// effective-provider text live under details, so a test that reads those opens them first.
+// The provider choice is in the session controls by the composer: open the chip, pick a provider,
+// and confirm the switch (choosing the ready provider again asks nothing).
+const controlsChip = () => screen.getByTestId('session-controls');
+const openControls = async () => {
+  if (!screen.queryByRole('dialog', { name: 'Session controls' }))
+    await userEvent.click(controlsChip());
+};
+const providerOption = (provider: 'claude' | 'codex') =>
+  screen.getByTestId(`provider-option-${provider}`);
+/** An option of the provider choice, with the picker opened if it is not: disabled while held. */
+const providerChoice = async () => {
+  await openControls();
+  return providerOption('codex');
+};
+const chooseProvider = async (provider: 'claude' | 'codex') => {
+  await openControls();
+  await userEvent.click(providerOption(provider));
+  const confirm = screen.queryByTestId('provider-confirm-switch');
+  if (confirm) await userEvent.click(confirm);
+};
+// A ready provider's status and effective-provider text live under session info, so a test that
+// reads those opens it first.
 const openDetails = () => userEvent.click(screen.getByTestId('mt-details-toggle'));
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('the main provider', () => {
-  it('shows the select in the top strip with details collapsed, and Codex posts exactly one PUT', async () => {
+  it('offers the choice from the composer with session info collapsed, and a confirmed Codex posts exactly one PUT', async () => {
     const { state } = setup(idleThread());
     await screen.findByText('build it');
     expect(screen.queryByTestId('main-thread-details')).toBeNull();
-    expect(providerSelect()).toBeVisible();
-    await userEvent.selectOptions(providerSelect(), 'codex');
+    expect(controlsChip()).toBeVisible();
+    await openControls();
+    await userEvent.click(providerOption('codex'));
+    // Nothing is sent until the owner confirms the switch.
+    await pause(20);
+    expect(state.providerPosts).toHaveLength(0);
+    await userEvent.click(screen.getByTestId('provider-confirm-switch'));
     await waitFor(() =>
       expect(state.providerPosts).toEqual([{ provider: 'codex', restart_failed: false }])
     );
@@ -1119,7 +1143,7 @@ describe('the main provider', () => {
     const { state } = setup(idleThread());
     await screen.findByText('build it');
     await openDetails();
-    await userEvent.selectOptions(providerSelect(), 'codex');
+    await chooseProvider('codex');
     await waitFor(() =>
       expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Codex')
     );
@@ -1131,7 +1155,7 @@ describe('the main provider', () => {
   it('sends nothing when the provider that is already ready is chosen', async () => {
     const { state } = setup(idleThread());
     await screen.findByText('build it');
-    await userEvent.selectOptions(providerSelect(), 'claude');
+    await chooseProvider('claude');
     await pause(20);
     expect(state.providerPosts).toHaveLength(0);
   });
@@ -1148,7 +1172,7 @@ describe('the main provider', () => {
       messages: [messageFixture({ id: 'm1', content: 'build it' })]
     });
     await screen.findByText('build it');
-    expect(providerSelect()).toBeDisabled();
+    expect(await providerChoice()).toBeDisabled();
     expect(input()).toBeEnabled();
   });
 
@@ -1163,7 +1187,7 @@ describe('the main provider', () => {
       )
     );
     await screen.findByText('build it');
-    expect(providerSelect()).toBeDisabled();
+    expect(await providerChoice()).toBeDisabled();
     expect(input()).toBeDisabled();
     expect(input()).toHaveAttribute('placeholder', 'Main input is locked');
     expect(screen.getByText('Main provider is preparing.')).toBeInTheDocument();
@@ -1172,7 +1196,7 @@ describe('the main provider', () => {
   it('locks the main input when the provider state is unknown', async () => {
     setup(idleThread(null));
     await screen.findByText('build it');
-    expect(providerSelect()).toBeDisabled();
+    expect(await providerChoice()).toBeDisabled();
     expect(input()).toBeDisabled();
     expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('state unknown');
   });
@@ -1195,7 +1219,7 @@ describe('the main provider', () => {
     };
     setup(idleThread());
     await screen.findByText('build it');
-    expect(providerSelect()).toBeDisabled();
+    expect(await providerChoice()).toBeDisabled();
     expect(screen.getByTestId('mt-provider-status')).toHaveTextContent(
       'offline, selection unavailable'
     );
@@ -1205,7 +1229,7 @@ describe('the main provider', () => {
     const { state } = setup(idleThread(), {});
     state.rejectNextProvider = { status: 409, detail: 'Main provider is busy.' };
     await screen.findByText('build it');
-    await userEvent.selectOptions(providerSelect(), 'codex');
+    await chooseProvider('codex');
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Provider change blocked (409): Main provider is busy.'
     );
@@ -1219,7 +1243,7 @@ describe('the main provider', () => {
     state.lostProvider = 'unrecorded';
     await screen.findByText('build it');
     await openDetails();
-    await userEvent.selectOptions(providerSelect(), 'codex');
+    await chooseProvider('codex');
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Provider selection was not confirmed'
     );
@@ -1244,15 +1268,15 @@ describe('the main provider', () => {
     state.failProviderReads = 1;
     await screen.findByText('build it');
     await openDetails();
-    await userEvent.selectOptions(providerSelect(), 'codex');
+    await chooseProvider('codex');
     expect(await screen.findByText(/Could not confirm provider state/)).toBeInTheDocument();
-    expect(providerSelect()).toBeDisabled();
+    expect(await providerChoice()).toBeDisabled();
     expect(input()).toBeDisabled();
     expect(screen.getByTestId('mt-provider-status')).toHaveTextContent(
       'provider state unconfirmed'
     );
 
-    await waitFor(() => expect(providerSelect()).toBeEnabled(), { timeout: 3000 });
+    await waitFor(() => expect(providerOption('codex')).toBeEnabled(), { timeout: 3000 });
     expect(input()).toBeEnabled();
     expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Codex');
     expect(state.providerPosts).toHaveLength(1);
@@ -1309,13 +1333,14 @@ describe('the main provider', () => {
     );
     void queryClient.invalidateQueries({ queryKey: keys.mainThread() });
     await pause(20);
-    await userEvent.selectOptions(providerSelect(), 'codex');
+    await chooseProvider('codex');
     await waitFor(() =>
       expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Codex')
     );
     await pause(400);
     expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Codex');
-    expect(screen.getByTestId('mt-provider-select')).toHaveValue('codex');
+    await openControls();
+    expect(providerOption('codex')).toBeChecked();
   });
 
   it('offers Retry for a pending switch with no write from this page, and one click repeats the same write', async () => {
@@ -1326,7 +1351,7 @@ describe('the main provider', () => {
     );
     await screen.findByText('build it');
     await openDetails();
-    expect(providerSelect()).toBeDisabled();
+    expect(await providerChoice()).toBeDisabled();
     expect(screen.getByTestId('mt-provider-status')).toHaveAttribute('role', 'status');
     await userEvent.click(screen.getByTestId('mt-provider-retry'));
     await waitFor(() => expect(input()).toBeEnabled());
@@ -1352,7 +1377,7 @@ describe('the main provider', () => {
     });
     await screen.findByText('build it');
     expect(screen.getByTestId('mt-provider-retry')).toBeDisabled();
-    expect(providerSelect()).toBeDisabled();
+    expect(await providerChoice()).toBeDisabled();
   });
 
   it('re-reads a pending switch without a reload, unlocks when it turns ready, then stops reading', async () => {
@@ -1397,15 +1422,15 @@ describe('the main lock while a send, a stop or a load is in flight', () => {
     const release = hold('chat');
     await userEvent.type(input(), 'next step{Enter}');
     await waitFor(() => expect(state.chatPosts).toHaveLength(1));
-    expect(providerSelect()).toBeDisabled();
+    expect(await providerChoice()).toBeDisabled();
     expect(input()).toBeDisabled();
 
     release();
     // The send was recorded, so the turn runs and the selection lock holds until it ends.
     await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
-    expect(providerSelect()).toBeDisabled();
+    expect(await providerChoice()).toBeDisabled();
     endTurn('done');
-    await waitFor(() => expect(providerSelect()).toBeEnabled(), { timeout: 5000 });
+    await waitFor(() => expect(providerOption('codex')).toBeEnabled(), { timeout: 5000 });
     expect(input()).not.toHaveAttribute('placeholder', 'Working…');
   });
 
@@ -1426,17 +1451,17 @@ describe('the main lock while a send, a stop or a load is in flight', () => {
     await userEvent.click(await screen.findByTestId('mt-stop-turn'));
     await waitFor(() => expect(state.stopped).toEqual([MAIN_SESSION_ID]));
     expect(screen.getByTestId('mt-stop-turn')).toHaveTextContent('stopping…');
-    expect(providerSelect()).toBeDisabled();
+    expect(await providerChoice()).toBeDisabled();
     expect(input()).toBeEnabled();
 
     release();
     await waitFor(() =>
       expect(screen.getByTestId('mt-stop-turn')).not.toHaveTextContent('stopping…')
     );
-    expect(providerSelect()).toBeDisabled();
+    expect(await providerChoice()).toBeDisabled();
     endTurn();
     // Polling notices the turn has ended within one poll interval.
-    await waitFor(() => expect(providerSelect()).toBeEnabled(), { timeout: 5000 });
+    await waitFor(() => expect(providerOption('codex')).toBeEnabled(), { timeout: 5000 });
     expect(input()).toBeEnabled();
   });
 
@@ -1445,12 +1470,12 @@ describe('the main lock while a send, a stop or a load is in flight', () => {
     const release = hold('conversation');
     await screen.findByTestId('mt-details-toggle');
     await openDetails();
-    expect(await screen.findByTestId('mt-provider-select')).toBeDisabled();
+    expect(await providerChoice()).toBeDisabled();
     expect(input()).toBeDisabled();
 
     release();
     await screen.findByText('build it');
-    await waitFor(() => expect(providerSelect()).toBeEnabled());
+    await waitFor(() => expect(providerOption('codex')).toBeEnabled());
     expect(input()).toBeEnabled();
   });
 });
@@ -1481,7 +1506,9 @@ describe('the main lock does not reach drafts or a child session', () => {
     const main = within(screen.getByTestId('main-thread'));
     const child = within(await screen.findByTestId('session-chat-slot'));
 
-    expect(main.getByTestId('mt-provider-select')).toBeDisabled();
+    await userEvent.click(main.getByTestId('session-controls'));
+    expect(main.getByTestId('provider-option-codex')).toBeDisabled();
+    await userEvent.keyboard('{Escape}');
     expect(main.getByTestId('command-input')).toBeDisabled();
     expect(main.getByTestId('command-input')).toHaveValue('main draft');
     expect(loadDraft(CONVERSATION_ID)).toBe('main draft');
@@ -1543,7 +1570,7 @@ describe('refusal codes from the backend', () => {
     state.rejectNextProvider = { status: 409, detail: 'Raw server prose.', code };
     await screen.findByText('build it');
     await openDetails();
-    await userEvent.selectOptions(providerSelect(), 'codex');
+    await chooseProvider('codex');
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(`${text} State is refreshed; no automatic retry.`);
     expect(alert).not.toHaveTextContent('Raw server prose');
@@ -1559,7 +1586,7 @@ describe('refusal codes from the backend', () => {
     };
     await screen.findByText('build it');
     await openDetails();
-    await userEvent.selectOptions(providerSelect(), 'codex');
+    await chooseProvider('codex');
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Provider change blocked (409): Main provider is busy. State is refreshed; no automatic retry.'
     );
@@ -1794,6 +1821,11 @@ describe('a live main session', () => {
     expect(screen.getAllByRole('status')).toHaveLength(1);
     expect(within(live).queryByTestId('live-status')).toBeNull();
     expect(within(live).queryByTestId('mt-model')).toBeNull();
+    // How the session runs is one control below the input: provider, model and effort.
+    await waitFor(() =>
+      expect(within(live).getByTestId('session-controls')).toHaveTextContent(/^Claude · /)
+    );
+    expect(screen.queryByRole('combobox')).toBeNull();
     const box = within(live).getByRole('textbox', { name: 'Message' });
     await user.type(box, '/comp');
     const list = screen.getByRole('listbox', { name: 'Commands' });

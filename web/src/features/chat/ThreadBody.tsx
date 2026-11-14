@@ -37,6 +37,8 @@ export interface ThreadBodyProps {
   commandNotice?: string | null;
   /** Slash commands the composer's autosuggest dropdown offers. Omitted where there are none. */
   commands?: readonly SlashCommandSpec[];
+  /** The session controls chip, shown with the composer. Only the main thread has one. */
+  controls?: ReactNode;
 }
 
 /** The conversation timeline, the send and stop errors, and the composer, for any thread. */
@@ -53,7 +55,8 @@ export function ThreadBody({
   allowImages = false,
   onSend,
   commandNotice = null,
-  commands
+  commands,
+  controls
 }: ThreadBodyProps) {
   const live = useLiveTurn(thread.sessionId, thread.busy, thread.messages);
   const modelEffort = thread.native
@@ -146,6 +149,7 @@ export function ThreadBody({
         allowImages={allowImages}
         commands={commands}
         modelEffort={modelEffort}
+        controls={controls}
       />
     </>
   );

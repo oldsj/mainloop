@@ -4,7 +4,7 @@ Source: `docs/specs/chat.md` (Main thread header), `docs/specs/sessions.md`.
 
 ## Purpose
 
-The one row above the main conversation: the session's status, how many topics are waiting on the owner, and then its controls: stop while a turn runs, the provider select, the model, and a **Session info** toggle that opens the identity strip and the topic index. It is drawn by the shared session row (`SessionBar`), which the live view also uses, so there is one row whether the conversation is the chat view or the live view.
+The one row above the main conversation: the session's status, how many topics are waiting on the owner, and then its controls: stop while a turn runs, and a **Session info** toggle that opens the identity strip and the topic index. It is drawn by the shared session row (`SessionBar`), which the live view also uses, so there is one row whether the conversation is the chat view or the live view.
 
 ## Tokens
 
@@ -18,21 +18,19 @@ There is one status word. In the chat view, most urgent first: **unreachable** (
 Under the live view the row is the same one, and the live channel's state joins the thread's in a single order: **unreachable**; **needs you** (a request or permission prompt is waiting); **working** or **starting**; **last message failed**; **last message unconfirmed**; then what the channel is doing: **asleep**, **paused**, **waking…**, **connecting…**, **reconnecting…**, **unavailable**, or **ready** once attached. A sleeping session reads "asleep", never "ready" or "idle" beside it.
 
 - **Wake now / Resume:** in the row while the live view is asleep or paused. There is no banner; the composer's placeholder says a message wakes or resumes the session.
-- **Model (live view):** the live view's model and effort button replaces the model text.
+- **Provider, model and effort** are not in this row. They are the session controls chip by the composer (see `session-controls.md`).
 
-- **Model:** the model name without the `claude-` prefix; the agent kind when the session has no model.
 - **Pending:** shown only when topics are waiting on the owner; the sum across topics.
 - **Stop:** shown only while a turn is in flight. Disabled while the stop request runs ("stopping…") and while offline.
 - **Session info:** an icon button at the end of the row, labelled "Session info", closed by default; it also holds the provider row unless the provider needs attention (see Provider row). Open shows the identity strip (supplied by the sessions slice) and the topic index, `name (status line) [n pending]`, or "none yet".
 
 ## Provider row
 
-Inside the session info while the provider is ready or not started yet. It moves up under the row when the provider is failed, switching, unknown or unconfirmed, the thread is offline, or the last selection left a notice, so a problem is never hidden behind the toggle. It holds the owner's select (Claude or Codex), the effective provider, state words, and Retry or Restart after a failed start or write.
+Inside the session info while the provider is ready or not started yet. It moves up under the row when the provider is failed, switching, unknown or unconfirmed, the thread is offline, or the last selection left a notice, so a problem is never hidden behind the toggle. It holds the effective provider, state words, and Retry or Restart after a failed start or write. The choice of provider is in the session controls.
 
-- **Select:** labelled "Main provider". Held while the header is held: offline, a send or stop in flight, the thread or conversation still loading, a switch pending, or a turn or delivery open. Choosing the ready provider again sends nothing.
-- **State words:** offline (selection unavailable), selecting, provider state unconfirmed, state unknown, not started (starts with your next message), preparing, failed, ready, waiting to switch. Plain text beside the select, in a polite `role="status"` region so a change is announced without moving focus.
+- **State words:** offline (selection unavailable), selecting, provider state unconfirmed, state unknown, not started (starts with your next message), preparing, failed, ready, waiting to switch. Plain text in a polite `role="status"` region so a change is announced without moving focus.
 - **Notice:** a refused switch shows one line, a `role="alert"` in `text-destructive`, bounded to 300 characters. Its wording follows the refusal code; with no known code it shows the server's detail. Each notice ends "State is refreshed; no automatic retry."
-- **Retry and Restart:** Retry is offered for a failed start, a failed write until a read confirms it, or a pending switch. Retry is held by the select's rule except a pending switch, so it stays available while the select is held. Restart is offered only for a recoverable failed start and is held by the select's rule.
+- **Retry and Restart:** Retry is offered for a failed start, a failed write until a read confirms it, or a pending switch. Retry is held by the provider choice's rule except a pending switch, so it stays available while the choice is held. Restart is offered only for a recoverable failed start and is held by the choice's rule.
 
 ## Keyboard and screen reader
 

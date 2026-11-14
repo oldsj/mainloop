@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from 'react';
 import { HITLCard } from '@/features/hitl';
 import { useSessionRequests } from '@/features/hitl/session-requests';
-import { LiveSession, liveForced, type LiveBar } from '@/features/live';
+import { LiveSession, liveForced, type LiveBar, type LiveProvider } from '@/features/live';
 import { PanelBoundary } from '@/shell/PanelBoundary';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { mainInputLock } from './mainProvider';
 import { MainThreadHeader } from './MainThreadHeader';
+import { ChatControls, ProviderChoice, providerChipLabel } from './ProviderChoice';
 import { SessionRequests } from './SessionRequests';
 import { SLASH_COMMANDS } from './slashCommand';
 import { ThreadBody } from './ThreadBody';
@@ -87,6 +88,16 @@ export function ChatPage({
             hitlId={hitlId}
             onFallback={() => setChatView(true)}
             renderBar={header}
+            provider={
+              info
+                ? {
+                    label: providerChipLabel(info),
+                    section: (close) => (
+                      <ProviderChoice info={info} provider={provider} onDone={close} />
+                    )
+                  }
+                : undefined
+            }
           />
         </PanelBoundary>
       ) : (
@@ -105,6 +116,7 @@ export function ChatPage({
             onSend={intercept}
             commandNotice={commandNotice}
             commands={SLASH_COMMANDS}
+            controls={info ? <ChatControls info={info} provider={provider} /> : undefined}
             requests={
               <PanelBoundary name="Requests">
                 {hitlId ? (
@@ -132,12 +144,14 @@ function LiveMain({
   sessionId,
   hitlId,
   onFallback,
-  renderBar
+  renderBar,
+  provider
 }: {
   sessionId: string;
   hitlId?: string;
   onFallback: () => void;
   renderBar: (bar: LiveBar) => ReactNode;
+  provider?: LiveProvider;
 }) {
   const { pending } = useSessionRequests(sessionId);
   return (
@@ -146,6 +160,7 @@ function LiveMain({
       onFallback={onFallback}
       pending={pending}
       renderBar={renderBar}
+      provider={provider}
       requests={(skip) => (
         <PanelBoundary name="Requests">
           {hitlId && !skip.includes(hitlId) ? (
