@@ -263,7 +263,7 @@ describe('compact tab badges', () => {
     await renderAt('/');
     expect(await screen.findByTestId('needs-badge')).toHaveTextContent('3');
     expect(screen.getByTestId('tab-needs')).toHaveAccessibleName('Needs you, 3');
-    expect(screen.getByTestId('tab-explorer')).toHaveAccessibleName('Explorer');
+    expect(screen.getByTestId('tab-explorer')).toHaveAccessibleName('Sessions');
   });
 
   it('shows no count when nothing needs the owner', async () => {
@@ -354,7 +354,7 @@ describe('compact explorer tab', () => {
     expect(tabs.map((tab) => tab.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
       'Chat',
       'Needs you',
-      'Explorer'
+      'Sessions'
     ]);
     // The page starts at the top: the main chat's own row is the first thing in the shell.
     expect(screen.queryByText('$ mainloop')).toBeNull();
@@ -898,7 +898,7 @@ describe('answer view', () => {
     await user.click(await within(await screen.findByRole('tree')).findByText('Review the plan'));
     await waitFor(() => expect(router.state.location.pathname).toBe('/inbox'));
     expect(await screen.findByRole('heading', { name: 'Inbox' })).toBeVisible();
-    await user.click(screen.getByRole('link', { name: 'Back to Explorer' }));
+    await user.click(screen.getByRole('link', { name: 'Back to Sessions' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
     expect(screen.getByTestId('tab-explorer')).toHaveAttribute('aria-pressed', 'true');
   });

@@ -61,7 +61,7 @@ History before `e776537` describes the retired Python backend. Where other text 
 
 Sessions appear in the explorer, not in a list of their own: current sessions under
 **Mainloop**, and a task's session under that task in its project. The explorer is a side bar
-on the right at widths of 1024px and above, and the Explorer tab on narrower windows, where the
+on the left at widths of 1024px and above, and the Sessions tab on narrower windows, where the
 Chat tab holds the conversation. Task detail scrolls within the available pane; workspace
 controls wrap when needed.
 

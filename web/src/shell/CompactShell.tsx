@@ -8,15 +8,12 @@ import { badgeText } from '@/features/inbox/model';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
 import { ThemeSelector } from './ThemeSelector';
-import { activeNavTab, type NavTab, type Tab } from './view';
+import { activeNavTab, EXPLORER_TAB_LABEL, type NavTab, type Tab } from './view';
 
 /**
  * The tab bar's three items. Chat is the main chat, Needs you is the answer view with its count,
- * and Explorer is the tree. The third item's label is the one word here that is still open: see
- * `EXPLORER_TAB_LABEL`.
+ * and the third is the tree, under the label in `EXPLORER_TAB_LABEL`.
  */
-export const EXPLORER_TAB_LABEL = 'Explorer';
-
 const TAB_ITEMS: readonly { id: NavTab; label: string; Icon: LucideIcon }[] = [
   { id: 'chat', label: 'Chat', Icon: MessageSquare },
   { id: 'needs', label: 'Needs you', Icon: Inbox },
@@ -44,7 +41,7 @@ function TabPane({ active, children }: { active: boolean; children: ReactNode })
  *
  * - **Chat** opens the main chat.
  * - **Needs you** opens the answer view and carries the count, so attention keeps polling.
- * - **Explorer** shows the tree. It is also lit on a page opened from the tree (a task, a session,
+ * - **Sessions** shows the tree. It is also lit on a page opened from the tree (a task, a session,
  *   a project, health), where tapping it brings the tree back.
  *
  * Two panes sit under the bar: the routed page and the tree (`?tab=explorer`). Each is built the

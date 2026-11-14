@@ -71,3 +71,9 @@ export function useIsWide(): boolean {
     () => true
   );
 }
+
+/**
+ * The word on the phone's third tab, which shows the tree. The tab's id and its `?tab=explorer`
+ * link keep the tree's own name; the owner chose this word, so it is set in one place.
+ */
+export const EXPLORER_TAB_LABEL = 'Sessions';

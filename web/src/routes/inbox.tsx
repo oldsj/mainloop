@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import { InboxPanel } from '@/features/inbox/InboxPanel';
-import { useShellView } from '@/shell/view';
+import { EXPLORER_TAB_LABEL, useShellView } from '@/shell/view';
 
 // `show` picks Needs you, Problems or Activity; `item` names the Needs-you row to bring into view,
 // by its approval request id or queue item id (what the explorer and a task's pending approvals
@@ -23,7 +23,7 @@ export const Route = createFileRoute('/inbox')({
 
 /**
  * The answer view, in place of the chat. Its back link returns to where the owner came from: the
- * Explorer tab on the phone, the chat on desktop (where the explorer stays beside it).
+ * Sessions tab on the phone, the chat on desktop (where the explorer stays beside it).
  */
 function Inbox() {
   const { show = 'needs', item } = Route.useSearch();
@@ -48,8 +48,8 @@ function Inbox() {
           to="/"
           search={compact ? { tab: 'explorer' } : {}}
           className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }))}
-          aria-label={compact ? 'Back to Explorer' : 'Back to chat'}
-          title={compact ? 'Back to Explorer' : 'Back to chat'}
+          aria-label={compact ? `Back to ${EXPLORER_TAB_LABEL}` : 'Back to chat'}
+          title={compact ? `Back to ${EXPLORER_TAB_LABEL}` : 'Back to chat'}
         >
           <ChevronLeft aria-hidden="true" />
         </Link>
