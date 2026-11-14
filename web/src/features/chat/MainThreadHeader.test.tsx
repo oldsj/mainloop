@@ -12,16 +12,11 @@ const view = (
 ) => render(<MainThreadHeader info={info} offline={false} {...props} />);
 
 describe('MainThreadHeader', () => {
-  it('shows ready, the model without its vendor prefix, and no pending count', () => {
+  it('shows ready and no pending count, and leaves the model to the session controls', () => {
     view(mainThreadFixture());
     expect(screen.getByTestId('mt-state')).toHaveTextContent('ready');
-    expect(screen.getByTestId('mt-model')).toHaveTextContent('sonnet-5-5');
     expect(screen.queryByTestId('mt-pending')).toBeNull();
-  });
-
-  it('falls back to the agent kind when there is no model', () => {
-    view(mainThreadFixture({ native: nativeFixture({ model: null, kind: 'codex' }) }));
-    expect(screen.getByTestId('mt-model')).toHaveTextContent('codex');
+    expect(screen.queryByTestId('mt-model')).toBeNull();
   });
 
   it('sums pending over topics', () => {
@@ -121,11 +116,7 @@ const control = (overrides: Partial<MainProviderControl> = {}): MainProviderCont
 const withProvider = (provider: MainProviderInfo | null) => mainThreadFixture({ provider });
 
 describe('MainThreadHeader under the live view', () => {
-  const controls = (
-    <button type="button" aria-label="Model">
-      opus-5-5 · high
-    </button>
-  );
+  const controls = <button type="button">Wake now</button>;
 
   it('shows one status word, the live one, for a sleeping session', () => {
     view(mainThreadFixture({ native: nativeFixture({ session_state: 'suspended' }) }), {
@@ -135,10 +126,9 @@ describe('MainThreadHeader under the live view', () => {
     expect(screen.getByTestId('mt-state')).toHaveTextContent(/^asleep$/);
   });
 
-  it('puts the live controls in the row in place of the model text', () => {
-    view(mainThreadFixture(), { live: { status: 'ready', controls } });
-    expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('opus-5-5 · high');
-    expect(screen.queryByTestId('mt-model')).toBeNull();
+  it('puts the live view’s wake control in the row', () => {
+    view(mainThreadFixture(), { live: { status: 'asleep', controls } });
+    expect(screen.getByRole('button', { name: 'Wake now' })).toBeInTheDocument();
   });
 
   it('keeps a failed last message above a resting live view, and needs you above it', () => {
@@ -170,25 +160,11 @@ describe('MainThreadHeader session info', () => {
   });
 });
 
-describe('MainThreadHeader main provider select', () => {
-  it('is visible in the top strip, with no details opened, and chooses the other provider', async () => {
-    const select = vi.fn();
-    view(withProvider(providerFixture()), { provider: control({ select }) });
-    expect(screen.queryByTestId('main-thread-details')).toBeNull();
-    expect(screen.getByLabelText('Main provider')).toBeVisible();
-    await userEvent.selectOptions(screen.getByLabelText('Main provider'), 'codex');
-    expect(select).toHaveBeenCalledWith('codex');
-  });
-
-  it('shows the model name next to the select', () => {
+describe('MainThreadHeader and the provider choice', () => {
+  it('has no provider select: the choice is in the session controls by the composer', () => {
     view(withProvider(providerFixture()), { provider: control() });
-    expect(screen.getByTestId('mt-model')).toHaveTextContent('sonnet-5-5');
-  });
-
-  it('shows the plain model label when no provider controls are given', () => {
-    view(mainThreadFixture());
-    expect(screen.queryByTestId('mt-provider-select')).toBeNull();
-    expect(screen.getByTestId('mt-model')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Main provider')).toBeNull();
+    expect(screen.queryByRole('combobox')).toBeNull();
   });
 });
 
@@ -206,7 +182,6 @@ describe('MainThreadHeader main provider row', () => {
         provider: control({ switchBlocked: true })
       }
     );
-    expect(screen.getByLabelText('Main provider')).toHaveValue('codex');
     expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Claude');
     expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('preparing');
   });
@@ -239,26 +214,18 @@ describe('MainThreadHeader main provider row', () => {
     }
   );
 
-  it('says so when the provider state is unknown, and the select is held', () => {
+  it('says so when the provider state is unknown', () => {
     view(withProvider(null), { provider: control({ switchBlocked: true }) });
     expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('state unknown');
-    expect(screen.getByTestId('mt-provider-select')).toBeDisabled();
-    expect(screen.getByRole('option', { name: 'unknown' })).toBeInTheDocument();
   });
 
-  it('holds the select while the control says the switch is blocked', () => {
-    view(withProvider(providerFixture()), { provider: control({ switchBlocked: true }) });
-    expect(screen.getByTestId('mt-provider-select')).toBeDisabled();
-  });
-
-  it('holds Retry by its own rule, so a pending switch can offer it with the select held', () => {
+  it('holds Retry by its own rule, so a pending switch can offer it with the choice held', () => {
     view(
       withProvider(
         providerFixture({ desired_provider: 'codex', effective_provider: null, status: 'pending' })
       ),
       { provider: control({ switchBlocked: true, retryOffered: true, retryBlocked: false }) }
     );
-    expect(screen.getByTestId('mt-provider-select')).toBeDisabled();
     expect(screen.getByTestId('mt-provider-retry')).toBeEnabled();
   });
 
@@ -277,7 +244,7 @@ describe('MainThreadHeader main provider row', () => {
     expect(screen.getByTestId('mt-provider-status')).toHaveAttribute('role', 'status');
   });
 
-  it('shows the state as offline and holds the select while the backend is unreachable', () => {
+  it('shows the state as offline while the backend is unreachable', () => {
     view(withProvider(providerFixture()), {
       offline: true,
       provider: control({ switchBlocked: true })
@@ -285,7 +252,6 @@ describe('MainThreadHeader main provider row', () => {
     expect(screen.getByTestId('mt-provider-status')).toHaveTextContent(
       'offline, selection unavailable'
     );
-    expect(screen.getByTestId('mt-provider-select')).toBeDisabled();
   });
 
   it('says when a selection is in flight', () => {
@@ -350,9 +316,8 @@ describe('MainThreadHeader main provider row', () => {
     expect(screen.queryByTestId('mt-provider')).toBeNull();
   });
 
-  it('shows the select for a ready provider in the top strip, with its status under details', async () => {
+  it('keeps a ready provider’s status under session info', async () => {
     view(withProvider(providerFixture()), { provider: control() });
-    expect(screen.getByTestId('mt-provider-select')).toHaveValue('claude');
     expect(screen.queryByTestId('mt-provider-status')).toBeNull();
     await openDetails();
     expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('ready');
@@ -365,7 +330,6 @@ describe('MainThreadHeader main provider row', () => {
   ])('shows a %s provider under the summary without opening details', (_name, provider) => {
     view(withProvider(provider), { provider: control() });
     expect(screen.getByTestId('mt-provider-status')).toBeInTheDocument();
-    expect(screen.getByTestId('mt-provider-select')).toBeInTheDocument();
   });
 
   it('explains what a switch keeps, under details', async () => {

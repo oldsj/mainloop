@@ -124,9 +124,8 @@ export function ProviderFailedPreview() {
   );
 }
 
-/** Under the live view: one status word for thread and channel, with the live view's controls. */
+/** Under the live view: one status word for thread and channel, with the live view's wake control. */
 export function LiveAsleepPreview() {
-  const button = 'border-border-subtle text-foreground px-sm min-h-control border';
   return (
     <MainThreadHeader
       info={thread(providerFixture())}
@@ -135,14 +134,12 @@ export function LiveAsleepPreview() {
       live={{
         status: 'asleep',
         controls: (
-          <>
-            <button type="button" className={button}>
-              Wake now
-            </button>
-            <button type="button" className="px-xs min-h-control" aria-label="Model">
-              opus-5-5 · high
-            </button>
-          </>
+          <button
+            type="button"
+            className="border-border-subtle text-foreground px-sm min-h-control border"
+          >
+            Wake now
+          </button>
         )
       }}
     />

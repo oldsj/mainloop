@@ -185,8 +185,8 @@ text while it does not). A failed send is retried twice under the same id, then 
 message sent while a turn runs steers it (see Steering above) and shows as "queued · joins this turn"
 until the turn takes it; one Mainloop queues instead, such as a slash command, shows as "queued ·
 sends when this turn ends". Slash commands go as typed, except `/model` and `/effort`, which are
-Claude Code's own: without an argument they open the model and effort picker, and with one (or from
-the picker) they set the session's override (`POST /sessions/{id}/model` or `/effort`) for its next
+Claude Code's own: without an argument they open the session controls picker (the chip below the composer, which
+shows the model and effort in use), and with one (or from the picker) they set the session's override (`POST /sessions/{id}/model` or `/effort`) for its next
 turns and print "Set model to …" (or "Set effort to default" when cleared) without reaching Claude.
 The runner acknowledges the model and effort at the start of every turn; the view prints an
 acknowledgement only when it differs from the last one it saw, so a change made elsewhere shows once
@@ -221,7 +221,8 @@ reads "needs you" whether or not the view is attached. Otherwise an attached vie
 "working" or "ready", and a detached one reads what the channel is doing: "asleep", "paused",
 "waking…", "connecting…", "reconnecting…" or "unavailable". Wake now and Resume are buttons in that
 row; there is no banner under it, and the composer's placeholder says a message wakes (or resumes)
-the session. The model and effort button is at the end of the row. On `/` the row is the
+the session. The model and effort are not in the row: they are the session controls chip below the
+composer, beside the permission mode. On `/` the row is the
 main-thread header (see [the live main thread](chat.md)).
 
 The view never wakes a sleeping session on its own (#348): an attach goes through the Substrate

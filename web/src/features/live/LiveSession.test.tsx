@@ -109,7 +109,7 @@ function setHidden(hidden: boolean) {
 const attached = () =>
   waitFor(() => {
     expect(screen.getByTestId('live-session')).toHaveAttribute('data-conn', 'attached');
-    expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('opus-5-5');
+    expect(screen.getByTestId('session-controls')).toHaveTextContent('opus-5-5');
   });
 const idle = () =>
   waitFor(() => expect(screen.getByTestId('live-status')).toHaveTextContent('ready'));
@@ -139,7 +139,7 @@ describe('live session', () => {
   it('streams a turn: the message, the text after a dot, the tool and its output', async () => {
     const { runner, user } = setup();
     await attached();
-    expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('opus-5-5 · high');
+    expect(screen.getByTestId('session-controls')).toHaveTextContent('opus-5-5 · high');
     await say(user, 'look around');
     // Through Mainloop, never the socket; the runner's echo replaces the message shown at once.
     expect(runner.received).toEqual([]);
@@ -320,19 +320,21 @@ describe('live session', () => {
   it('switches model and effort, and cycles the permission mode', async () => {
     const { runner, user } = setup();
     await attached();
-    await user.click(screen.getByRole('button', { name: 'Model' }));
-    const sheet = screen.getByRole('dialog', { name: 'Model' });
+    await user.click(screen.getByTestId('session-controls'));
+    const sheet = screen.getByRole('dialog', { name: 'Session controls' });
     await user.click(within(sheet).getByRole('radio', { name: /Sonnet 5\.5/ }));
     await waitFor(() =>
       expect(runner.posted).toContainEqual({ what: 'model', body: { model: 'claude-sonnet-5-5' } })
     );
     expect(await screen.findByText('Set model to claude-sonnet-5-5')).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('sonnet-5-5')
+      expect(screen.getByTestId('session-controls')).toHaveTextContent('sonnet-5-5')
     );
     await user.type(screen.getByRole('textbox', { name: 'Message' }), '/model{Enter}');
     await user.click(
-      within(screen.getByRole('dialog', { name: 'Model' })).getByRole('radio', { name: 'max' })
+      within(screen.getByRole('dialog', { name: 'Session controls' })).getByRole('radio', {
+        name: 'max'
+      })
     );
     await waitFor(() =>
       expect(runner.posted).toContainEqual({ what: 'effort', body: { effort: 'max' } })

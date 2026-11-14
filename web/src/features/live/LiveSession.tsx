@@ -10,6 +10,7 @@ import {
   type ReactNode
 } from 'react';
 import { Markdown } from '@/components/markdown/markdown';
+import { ControlsHeading, SessionControls } from '@/components/shared/controls-sheet';
 import { SessionBar } from '@/components/shared/session-bar';
 import { cn } from '@/components/ui/cn';
 import { barStatus, type LiveStatus } from '@/lib/barStatus';
@@ -46,11 +47,14 @@ export function LiveSession({
   requests,
   pending = [],
   renderBar,
+  provider,
   deps
 }: {
   sessionId: string;
   /** Draws the row above the transcript; the main thread passes its header. */
   renderBar?: (bar: LiveBar) => ReactNode;
+  /** The session's provider choice, where it has one (the main thread): first in the controls picker. */
+  provider?: LiveProvider;
   /** Leaves the live view for the regular one, offered when the live channel is unavailable. */
   onFallback?: () => void;
   /**
@@ -122,6 +126,7 @@ export function LiveSession({
       requests={requests?.(skip)}
       needsAnswer={pending.length > 0}
       renderBar={renderBar}
+      provider={provider}
     />
   );
 }
@@ -145,9 +150,16 @@ export interface LiveSessionViewProps {
   needsAnswer?: boolean;
   /** Draws the row above the transcript. Without it the view draws its own. */
   renderBar?: (bar: LiveBar) => ReactNode;
+  provider?: LiveProvider;
 }
 
-/** What the live view gives the row above it: its status, and its wake and model controls. */
+/** A provider choice for the controls picker: the chip's first word, and the picker's first section. */
+export interface LiveProvider {
+  label: string;
+  section: (close: () => void) => ReactNode;
+}
+
+/** What the live view gives the row above it: its status, and its wake control while it rests. */
 export interface LiveBar {
   status: LiveStatus;
   controls: ReactNode;
@@ -189,7 +201,8 @@ export function LiveSessionView({
   onFallback,
   requests,
   needsAnswer = false,
-  renderBar
+  renderBar,
+  provider
 }: LiveSessionViewProps) {
   const resting = conn === 'asleep' || conn === 'paused';
   const [sheet, setSheet] = useState(false);
@@ -203,28 +216,15 @@ export function LiveSessionView({
   // offers the same as a button.
   const bar: LiveBar = {
     status: liveStatus(state, conn, waiting),
-    controls: (
-      <>
-        {resting ? (
-          <button
-            type="button"
-            onClick={retry}
-            className="border-border-subtle text-foreground hover:bg-accent px-sm min-h-control border"
-          >
-            {conn === 'paused' ? 'Resume' : 'Wake now'}
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className="hover:text-foreground px-xs min-h-control"
-          aria-label="Model"
-          onClick={() => setSheet(true)}
-        >
-          {short(state.model)}
-          {state.effort ? ` · ${state.effort}` : ''}
-        </button>
-      </>
-    )
+    controls: resting ? (
+      <button
+        type="button"
+        onClick={retry}
+        className="border-border-subtle text-foreground hover:bg-accent px-sm min-h-control border"
+      >
+        {conn === 'paused' ? 'Resume' : 'Wake now'}
+      </button>
+    ) : null
   };
 
   return (
@@ -284,10 +284,10 @@ export function LiveSessionView({
         touch={touch}
         interrupt={interrupt}
         cycleMode={cycleMode}
-        openModel={() => setSheet(true)}
+        provider={provider}
+        controlsOpen={sheet}
+        setControlsOpen={setSheet}
       />
-
-      {sheet ? <ModelSheet state={state} set={set} close={() => setSheet(false)} /> : null}
     </section>
   );
 }
@@ -520,7 +520,9 @@ function Composer({
   touch,
   interrupt,
   cycleMode,
-  openModel
+  provider,
+  controlsOpen,
+  setControlsOpen
 }: {
   state: LiveState;
   /** The session is resting: asleep, or `paused` by this view while idle. */
@@ -532,7 +534,10 @@ function Composer({
   touch?: () => void;
   interrupt: () => void;
   cycleMode: () => void;
-  openModel: () => void;
+  provider?: LiveProvider;
+  /** The controls picker, opened from the chip below the input and by `/model` or `/effort`. */
+  controlsOpen: boolean;
+  setControlsOpen: (open: boolean) => void;
 }) {
   const [text, setText] = useState('');
   const [sel, setSel] = useState(0);
@@ -586,7 +591,7 @@ function Composer({
     const local = /^\/(model|effort)(?:\s+(\S+))?$/.exec(t);
     if (local) {
       if (local[2]) set(local[1] as 'model' | 'effort', local[2]);
-      else openModel();
+      else setControlsOpen(true);
       return;
     }
     say(t);
@@ -732,6 +737,20 @@ function Composer({
         </button>
       </div>
       <div className="text-term-fg-muted gap-sm flex min-w-0 items-center text-xs">
+        <SessionControls
+          label={[provider?.label, short(state.model), state.effort].filter(Boolean).join(' · ')}
+          title="Session controls"
+          open={controlsOpen}
+          onOpenChange={setControlsOpen}
+          data-testid="session-controls"
+        >
+          <ControlsPicker
+            state={state}
+            set={set}
+            provider={provider}
+            close={() => setControlsOpen(false)}
+          />
+        </SessionControls>
         <button
           type="button"
           onClick={cycleMode}
@@ -756,97 +775,88 @@ function Composer({
   );
 }
 
-function ModelSheet({
+/** The picker's sections: the provider where the session has one, then model and effort. */
+function ControlsPicker({
   state,
   set,
+  provider,
   close
 }: {
   state: LiveState;
   set: LiveSessionViewProps['set'];
+  provider?: LiveProvider;
   close: () => void;
 }) {
-  useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && close();
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [close]);
   const cur = state.models.find((m) => m.value === state.model);
   const efforts = cur?.supportedEffortLevels?.length ? cur.supportedEffortLevels : EFFORTS;
   return (
     <>
-      <button
-        type="button"
-        aria-label="Close"
-        onClick={close}
-        className="bg-background/80 fixed inset-0 z-20"
-      />
-      <div
-        role="dialog"
-        aria-label="Model"
-        className="bg-term-bg border-term-border p-md fixed inset-x-0 bottom-0 z-30 flex max-h-[80%] flex-col gap-3 overflow-y-auto border-t pb-[calc(1rem+env(safe-area-inset-bottom,0px))] font-mono text-sm md:right-6 md:bottom-6 md:left-auto md:w-[420px] md:border"
-      >
-        <h3 className="m-0 text-sm">Model · now {state.model || '…'}</h3>
-        <div role="radiogroup" aria-label="Models" className="flex flex-col gap-1">
-          {state.models.length ? (
-            state.models.map((m) => (
-              <button
-                key={m.value}
-                type="button"
-                role="radio"
-                aria-checked={m === cur}
-                onClick={() => {
-                  set('model', m.value);
-                  close();
-                }}
-                className={cn(
-                  'border-border px-sm grid grid-cols-[1.5ch_1fr_auto] items-baseline gap-2 border py-2 text-left',
-                  m === cur && 'border-term-fg bg-term-selection'
-                )}
-              >
-                <span>{m === cur ? '❯' : ''}</span>
-                <span>{m.displayName || m.value}</span>
-                <span className="text-term-fg-muted text-xs">{m.value}</span>
-                {m.description ? (
-                  <span className="text-term-fg-muted col-span-2 col-start-2 text-xs">
-                    {m.description}
-                  </span>
-                ) : null}
-              </button>
-            ))
-          ) : (
-            <p className="text-term-fg-muted text-xs">No model list yet.</p>
-          )}
-        </div>
-        <div className="text-term-fg-muted text-xs tracking-widest uppercase">Effort</div>
-        <div
-          role="radiogroup"
-          aria-label="Effort"
-          className="border-term-border grid border"
-          style={{ gridTemplateColumns: `repeat(${efforts.length}, 1fr)` }}
-        >
-          {efforts.map((x) => (
+      {provider ? provider.section(close) : null}
+      <ControlsHeading>Model</ControlsHeading>
+      <div role="radiogroup" aria-label="Models" className="flex flex-col gap-1">
+        {state.models.length ? (
+          state.models.map((m) => (
             <button
-              key={x}
+              key={m.value}
               type="button"
               role="radio"
-              aria-checked={state.effort === x}
+              aria-checked={m === cur}
               onClick={() => {
-                set('effort', x);
+                set('model', m.value);
                 close();
               }}
               className={cn(
-                'border-border min-h-9 border-l text-xs first:border-l-0',
-                state.effort === x && 'bg-term-selection'
+                'border-border-subtle px-sm hover:bg-accent grid grid-cols-[1.5ch_1fr_auto] items-baseline gap-2 border py-2 text-left',
+                m === cur && 'border-term-fg bg-term-selection'
               )}
             >
-              {x}
+              <span>{m === cur ? '❯' : ''}</span>
+              <span>{m.displayName || m.value}</span>
+              <span className="text-term-fg-muted text-xs">{m.value}</span>
+              {m.description ? (
+                <span className="text-term-fg-muted col-span-2 col-start-2 text-xs">
+                  {m.description}
+                </span>
+              ) : null}
             </button>
-          ))}
-        </div>
-        <button type="button" onClick={close} className="border-border min-h-10 border">
-          Close
-        </button>
+          ))
+        ) : (
+          <p className="text-term-fg-muted text-xs">No model list yet.</p>
+        )}
       </div>
+      <ControlsHeading>Effort</ControlsHeading>
+      <div
+        role="radiogroup"
+        aria-label="Effort"
+        className="border-border-subtle grid border"
+        style={{ gridTemplateColumns: `repeat(${efforts.length}, 1fr)` }}
+      >
+        {efforts.map((x) => (
+          <button
+            key={x}
+            type="button"
+            role="radio"
+            aria-checked={state.effort === x}
+            onClick={() => {
+              set('effort', x);
+              close();
+            }}
+            className={cn(
+              'border-border-subtle hover:bg-accent min-h-control border-l text-xs first:border-l-0',
+              state.effort === x && 'bg-term-selection'
+            )}
+          >
+            {x}
+          </button>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={close}
+        className="border-border-subtle hover:bg-accent min-h-control border md:hidden"
+      >
+        Close
+      </button>
     </>
   );
 }

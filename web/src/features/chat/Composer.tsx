@@ -7,7 +7,8 @@ import {
   useState,
   type ClipboardEvent,
   type DragEvent,
-  type KeyboardEvent
+  type KeyboardEvent,
+  type ReactNode
 } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
@@ -70,6 +71,8 @@ export interface ComposerProps {
   /** The session's current /model and /effort override, null for the provider's default. Omitted
    * before the thread's native state has loaded. */
   modelEffort?: { model: string | null; effort: string | null } | null;
+  /** The session controls chip, shown before the model and effort line. Only the main thread has one. */
+  controls?: ReactNode;
 }
 
 function placeholder(
@@ -107,7 +110,8 @@ export function Composer({
   onPrefillUsed,
   allowImages = false,
   commands,
-  modelEffort
+  modelEffort,
+  controls
 }: ComposerProps) {
   const [text, setText] = useState(() => loadDraft(draftKey));
   const [shownKey, setShownKey] = useState(draftKey);
@@ -386,13 +390,15 @@ export function Composer({
           {imageError}
         </p>
       ) : null}
-      {modelEffort ? (
-        <p
-          className="text-muted-foreground px-md pt-xs text-xs"
-          data-testid="composer-model-effort"
-        >
-          model: {modelEffort.model ?? 'default'} · effort: {modelEffort.effort ?? 'default'}
-        </p>
+      {controls || modelEffort ? (
+        <div className="text-muted-foreground px-md pt-xs gap-sm flex flex-wrap items-center text-xs">
+          {controls}
+          {modelEffort ? (
+            <p data-testid="composer-model-effort">
+              model: {modelEffort.model ?? 'default'} · effort: {modelEffort.effort ?? 'default'}
+            </p>
+          ) : null}
+        </div>
       ) : null}
       <div
         className="px-md py-sm gap-sm relative flex shrink-0 items-end"
