@@ -18,14 +18,20 @@ import (
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 )
 
-// SecretStore is the Kubernetes side of a credential. [k8ssecrets.Store] implements it.
+// SecretStore is the Kubernetes side of a credential. [k8ssecrets.Store] implements it. It never
+// reads a Secret, so Mainloop needs only create and delete on Secrets in kagent.
+//
+// Names are deterministic (see SecretNameFor) and a name has one credential at a time: the unique
+// index credentials_secret_name covers every row that is not deleted, a revoked row keeps its name
+// until cleanup has deleted its Secret, and that cleanup waits out any create still in flight. So
+// the only Secret that can hold a credential's name is that credential's own, which is what lets
+// Create count a taken name as its own lost create and cleanup delete by name without a UID.
 type SecretStore interface {
-	// Create publishes the immutable Secret and returns its UID. It succeeds if a Secret with the
-	// same contents already holds the name.
+	// Create publishes the immutable Secret and returns its UID. When the name is taken it returns
+	// an empty UID and no error: an earlier create of the same credential landed.
 	Create(ctx context.Context, name, purpose, bearer string) (uid string, err error)
-	// Lookup returns the UID of the Secret with this name.
-	Lookup(ctx context.Context, name string) (uid string, found bool, err error)
-	// Delete removes the Secret only if it still has this UID.
+	// Delete removes the Secret. With a UID, only if it still has that UID; with an empty UID, by
+	// name. A missing Secret is not an error.
 	Delete(ctx context.Context, name, uid string) error
 }
 
@@ -143,7 +149,12 @@ func (c *Credentials) IssueFor(ctx context.Context, bindingID string, kind dbsta
 	if err != nil {
 		return Issued{}, fmt.Errorf("agentauth: publish %s: %w", row.SecretName, err)
 	}
-	if _, err := dbq.New(c.Pool).MarkCredentialPublished(ctx, dbq.MarkCredentialPublishedParams{ID: row.ID, SecretUID: &uid}); err != nil {
+	// An empty UID is this credential's own earlier create (see SecretStore): published, UID unknown.
+	var uidp *string
+	if uid != "" {
+		uidp = &uid
+	}
+	if _, err := dbq.New(c.Pool).MarkCredentialPublished(ctx, dbq.MarkCredentialPublishedParams{ID: row.ID, SecretUID: uidp}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Not planned any more: a concurrent Issue published it, or it was revoked.
 			cur, gerr := dbq.New(c.Pool).GetCredential(ctx, row.ID)
@@ -151,15 +162,18 @@ func (c *Credentials) IssueFor(ctx context.Context, bindingID string, kind dbsta
 				// The row's state is unknown, so the Secret is left for the cleanup and stray sweeps.
 				return Issued{}, fmt.Errorf("agentauth: read credential %s after a publish miss: %w", row.ID, gerr)
 			}
-			if cur.State == dbstate.CredentialPublished && deref(cur.SecretUID) == uid {
-				return Issued{CredentialID: row.ID, SecretName: row.SecretName, SecretUID: uid}, nil
+			// A concurrent Issue of the same row published it. With an empty UID this call's create
+			// found that Issue's Secret, so it is the same one.
+			if cur.State == dbstate.CredentialPublished && (uid == "" || deref(cur.SecretUID) == uid) {
+				return Issued{CredentialID: row.ID, SecretName: row.SecretName, SecretUID: deref(cur.SecretUID)}, nil
 			}
 			if cur.State != dbstate.CredentialRevoked && cur.State != dbstate.CredentialDeleted {
 				return Issued{}, fmt.Errorf("agentauth: credential %s is %s after a publish miss", row.ID, cur.State)
 			}
 			// Revoked: cleanup may already have marked the row deleted without seeing this
-			// Secret, so nothing else will remove it. The UID precondition keeps a newer Secret
-			// under the same name safe.
+			// Secret, so nothing else will remove it. The UID precondition (when known) keeps a
+			// newer Secret under the same name safe; without one, this create's Secret is the only
+			// one the name can hold until a new row takes it.
 			if derr := c.Secrets.Delete(ctx, row.SecretName, uid); derr != nil {
 				return Issued{}, fmt.Errorf("agentauth: remove the Secret of revoked credential %s: %w", row.ID, errors.Join(ErrRevoked, derr))
 			}
@@ -257,11 +271,6 @@ func (Unconfigured) Create(context.Context, string, string, string) (string, err
 	return "", ErrNotConfigured
 }
 
-// Lookup always fails.
-func (Unconfigured) Lookup(context.Context, string) (string, bool, error) {
-	return "", false, ErrNotConfigured
-}
-
 // Delete always fails.
 func (Unconfigured) Delete(context.Context, string, string) error { return ErrNotConfigured }
 
@@ -274,11 +283,11 @@ func CleanupTable() reconcile.Table {
 // with no recorded UID may still have a create in flight until this long after the create started.
 const createTimeout = 30 * time.Second
 
-// lookupGrace is how long past the start of a Secret create a missing Secret may still appear.
-const lookupGrace = createTimeout + 15*time.Second
+// createGrace is how long past the start of a Secret create the Secret may still appear.
+const createGrace = createTimeout + 15*time.Second
 
 // stalePlanned is how long a planned credential may wait for its publish before it is revoked
-// and its Secret looked up by name.
+// and its Secret deleted by name.
 const stalePlanned = 10 * time.Minute
 
 // Register adds the cleanup loop and the sweep that revokes stranded credentials.
@@ -313,9 +322,13 @@ func (c *Credentials) RevokeStrays(ctx context.Context) error {
 	return nil
 }
 
-// cleanup deletes the Secret of one revoked credential. It runs with no transaction open. A
-// credential that was revoked before its UID was recorded has its Secret looked up by name; the
-// delete always carries the UID, so a newer Secret under the same name is never touched.
+// cleanup deletes the Secret of one revoked credential. It runs with no transaction open. The delete
+// carries the recorded UID. A credential revoked before its UID was recorded has its Secret deleted
+// by name: the row still holds the name (see SecretStore), so no other credential's Secret can be
+// under it. Another Issue of the same row may still have a create in flight and land a Secret after
+// that delete, whether or not it found one, so the row keeps the name and deletes by name again
+// until that create's deadline has passed. Only then is it marked deleted, freeing the name: a
+// stale Secret left under a free name would be taken by the next credential's create as its own.
 func (c *Credentials) cleanup(ctx context.Context, claim reconcile.Claim) (reconcile.Outcome, error) {
 	row, err := dbq.New(c.Pool).GetCredential(ctx, claim.ID)
 	if err != nil {
@@ -325,25 +338,16 @@ func (c *Credentials) cleanup(ctx context.Context, claim reconcile.Claim) (recon
 		return reconcile.Done(string(row.State)), nil
 	}
 	uid := deref(row.SecretUID)
-	if uid == "" {
-		found := false
-		if uid, found, err = c.Secrets.Lookup(ctx, row.SecretName); err != nil {
-			return reconcile.Retry(), err
-		}
-		if !found {
-			// An Issue whose create is still in flight may yet land the Secret; wait out its deadline,
-			// counted from when the create started, before calling the name free. A row whose create
-			// never started has no Secret to wait for.
-			if row.CreateStartedAt != nil {
-				if wait := time.Until(row.CreateStartedAt.Add(lookupGrace)); wait > 0 {
-					return reconcile.RetryAfter(min(wait, time.Minute)), nil
-				}
-			}
-			return reconcile.Done(string(dbstate.CredentialDeleted)), nil
-		}
-	}
 	if err := c.Secrets.Delete(ctx, row.SecretName, uid); err != nil {
 		return reconcile.Retry(), err
+	}
+	if uid == "" && row.CreateStartedAt != nil {
+		// An Issue whose create is still in flight may yet land a Secret; wait out its deadline,
+		// counted from when the create started, and delete again before calling the name free. A
+		// row whose create never started has nothing in flight.
+		if wait := time.Until(row.CreateStartedAt.Add(createGrace)); wait > 0 {
+			return reconcile.RetryAfter(min(wait, time.Minute)), nil
+		}
 	}
 	return reconcile.Done(string(dbstate.CredentialDeleted)), nil
 }

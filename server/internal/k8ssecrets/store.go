@@ -1,15 +1,13 @@
 // Package k8ssecrets keeps the bearer Secrets that carry agent credentials into the kagent
 // namespace. A Secret is immutable: it is created once and deleted, never updated, so a token
-// cannot be swapped under a running session. The package uses only get, create and delete, which
-// is all the RBAC role grants.
+// cannot be swapped under a running session. The package uses only create and delete, which is all
+// the RBAC role grants: Mainloop never reads a Secret back, so it cannot read anything else in the
+// namespace either (RBAC cannot limit get to a name prefix).
 package k8ssecrets
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"maps"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -27,11 +25,7 @@ const (
 	DataKey          = "authorization"
 )
 
-// ErrMismatch means a Secret already holds the name but is not the one asked for (different
-// bearer, labels or mutability). The name is never overwritten.
-var ErrMismatch = errors.New("k8ssecrets: existing Secret differs from the requested one")
-
-// Store reads, creates and deletes credential Secrets in one namespace.
+// Store creates and deletes credential Secrets in one namespace.
 type Store struct {
 	client    kubernetes.Interface
 	namespace string
@@ -64,9 +58,10 @@ func labels(purpose string) map[string]string {
 
 func authorization(bearer string) []byte { return []byte("Bearer " + bearer) }
 
-// Create publishes the Secret and returns its UID. When the name is taken, it reads the Secret
-// and succeeds only if it is the same one (same labels, immutable, same bearer): a retry after a
-// lost response then recovers the UID instead of failing. A different Secret is [ErrMismatch].
+// Create publishes the Secret and returns its UID. When the name is taken it returns an empty UID
+// and no error: the caller's own earlier create landed and its response was lost. That holds
+// because a name has one writer at a time (agentauth gives a name to a new credential only after
+// the previous holder's Secret is deleted), and the existing Secret is never read or overwritten.
 func (s *Store) Create(ctx context.Context, name, purpose, bearer string) (string, error) {
 	immutable := true
 	want := &corev1.Secret{
@@ -83,46 +78,21 @@ func (s *Store) Create(ctx context.Context, name, purpose, bearer string) (strin
 	if !apierrors.IsAlreadyExists(err) {
 		return "", fmt.Errorf("k8ssecrets: create %s: %w", name, err)
 	}
-	existing, err := secrets.Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return "", fmt.Errorf("k8ssecrets: read existing %s: %w", name, err)
-	}
-	if !same(existing, want) {
-		return "", fmt.Errorf("%w: %s", ErrMismatch, name)
-	}
-	return string(existing.UID), nil
+	return "", nil
 }
 
-func same(have, want *corev1.Secret) bool {
-	return have.Type == corev1.SecretTypeOpaque && have.Immutable != nil && *have.Immutable &&
-		maps.Equal(have.Labels, want.Labels) &&
-		len(have.Data) == 1 && bytes.Equal(have.Data[DataKey], want.Data[DataKey])
-}
-
-// Lookup returns the UID of the Secret with this name, or false when there is none.
-func (s *Store) Lookup(ctx context.Context, name string) (uid string, found bool, err error) {
-	sec, err := s.client.CoreV1().Secrets(s.namespace).Get(ctx, name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("k8ssecrets: read %s: %w", name, err)
-	}
-	return string(sec.UID), true, nil
-}
-
-// Delete removes the Secret with this name and UID. The UID precondition makes the delete apply
-// only to the Secret that was published: a Secret created later under the same name (a new
-// credential for the binding) is left alone. A Secret that is already gone, or that now has a
-// different UID, counts as deleted.
+// Delete removes the Secret with this name. With a UID, the precondition makes the delete apply only
+// to the Secret that was published, and a Secret now under the name with a different UID is left
+// alone. An empty UID (a create whose UID was never seen) deletes by name: the caller vouches that
+// nothing else can hold the name. A Secret that is already gone, or has a different UID, counts as
+// deleted.
 func (s *Store) Delete(ctx context.Context, name, uid string) error {
-	if uid == "" {
-		return errors.New("k8ssecrets: delete needs the Secret's UID")
+	var opts metav1.DeleteOptions
+	if uid != "" {
+		u := types.UID(uid)
+		opts.Preconditions = &metav1.Preconditions{UID: &u}
 	}
-	u := types.UID(uid)
-	err := s.client.CoreV1().Secrets(s.namespace).Delete(ctx, name, metav1.DeleteOptions{
-		Preconditions: &metav1.Preconditions{UID: &u},
-	})
+	err := s.client.CoreV1().Secrets(s.namespace).Delete(ctx, name, opts)
 	if err == nil || apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
 		return nil
 	}
