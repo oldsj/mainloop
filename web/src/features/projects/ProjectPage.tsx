@@ -16,6 +16,7 @@ import { InstructionsSection } from './InstructionsSection';
 import { MemorySection } from './MemorySection';
 import { MergePolicySection } from './MergePolicySection';
 import { VerificationSection } from './VerificationSection';
+import { WorkspaceServiceSection } from './WorkspaceServiceSection';
 import {
   agentKindOf,
   commitRowSchema,
@@ -293,6 +294,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
             <MergePolicySection projectId={id} />
             <VerificationSection projectId={id} />
             <EnvironmentSection projectId={id} />
+            <WorkspaceServiceSection projectId={id} />
           </div>
         </div>
       </section>

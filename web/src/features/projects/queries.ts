@@ -121,3 +121,29 @@ export function useDecideMemory(projectId: string) {
       ])
   });
 }
+
+export function useWorkspaceService(projectId: string) {
+  return $api.useQuery('get', '/projects/{project_id}/workspace-service', {
+    params: { path: { project_id: projectId } }
+  });
+}
+
+/** Saves the service command. A save replaces the cached one; a failure re-reads what is stored. */
+export function useUpdateWorkspaceService(projectId: string) {
+  const queryClient = useQueryClient();
+  const key = $api.queryOptions('get', '/projects/{project_id}/workspace-service', {
+    params: { path: { project_id: projectId } }
+  }).queryKey;
+  return $api.useMutation('put', '/projects/{project_id}/workspace-service', {
+    onSuccess: (data) => queryClient.setQueryData(key, data),
+    onError: () => queryClient.invalidateQueries({ queryKey: key })
+  });
+}
+
+/** Imports a repository as a project. Settling re-reads the project list, so new rows appear everywhere. */
+export function useImportProject() {
+  const queryClient = useQueryClient();
+  return $api.useMutation('post', '/projects', {
+    onSettled: () => queryClient.invalidateQueries({ queryKey: keys.projects() })
+  });
+}

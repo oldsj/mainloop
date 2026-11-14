@@ -1,4 +1,5 @@
 import { ThemeSelector } from '@/shell/ThemeSelector';
+import { ImportProjectSection } from './ImportProjectSection';
 import { SessionDefaultsSection } from './SessionDefaultsSection';
 
 /** Settings: what the owner sets once and Mainloop then applies everywhere. */
@@ -7,6 +8,7 @@ export function SettingsPage() {
     <div className="gap-lg p-md mx-auto flex w-full max-w-3xl flex-col" data-testid="settings-page">
       <h1 className="text-lg font-semibold">Settings</h1>
       <SessionDefaultsSection />
+      <ImportProjectSection />
       <section aria-labelledby="appearance-heading" className="gap-sm flex flex-col">
         <h2 id="appearance-heading" className="text-base font-semibold">
           Appearance
