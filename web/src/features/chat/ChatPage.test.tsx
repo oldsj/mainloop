@@ -922,6 +922,60 @@ describe('stopping a turn', () => {
     await waitFor(() => expect(screen.queryByTestId('turn-recovery')).toBeNull());
   });
 
+  it('offers a confirmed restart when kagent refused the newest message and nothing is in flight', async () => {
+    const { state } = setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({
+            turn_in_flight: false,
+            restartable: true,
+            deliveries: [
+              deliveryFixture({
+                message_id: 'm1',
+                state: 'failed',
+                detail:
+                  'not sent: A2A error -32004: input was not accepted; retry after the session becomes available'
+              })
+            ]
+          })
+        })
+      })
+    );
+    const panel = await screen.findByTestId('turn-recovery');
+    expect(panel).toHaveTextContent('not accepting messages');
+    expect(within(panel).queryByTestId('turn-recovery-stop')).toBeNull();
+    await userEvent.click(within(panel).getByTestId('turn-restart'));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(state.restarts).toEqual([]);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Restart' }));
+    await waitFor(() => expect(state.restarts).toHaveLength(1));
+    expect(state.restarts[0]?.sessionId).toBe(MAIN_SESSION_ID);
+    // The refused delivery stays failed, but the offer does not come back for it.
+    await waitFor(() => expect(screen.queryByTestId('turn-recovery')).toBeNull());
+  });
+
+  it.each([
+    ['kagent did not answer', true, 'not sent: kagent unreachable: connection refused'],
+    ['the thread cannot be restarted', false, 'not sent: A2A error -32004: input was not accepted']
+  ])('offers no restart for a failed newest message when %s', async (_why, restartable, detail) => {
+    setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({
+            turn_in_flight: false,
+            restartable,
+            deliveries: [deliveryFixture({ message_id: 'm1', state: 'failed', detail })]
+          })
+        })
+      })
+    );
+    // Wait for the thread's native state to load before asserting the panel's absence.
+    expect(await screen.findByTestId('mt-state')).toBeInTheDocument();
+    expect(screen.queryByTestId('turn-recovery')).toBeNull();
+  });
+
   it('shows a stalled turn with how long it has been quiet, and offers stop and restart', async () => {
     const quietSince = new Date(Date.now() - 25 * 60_000 - 5_000).toISOString();
     const { state } = setup(
