@@ -9,16 +9,57 @@ const json = (status: number, body: unknown) =>
 
 function setup(
   respond: (request: Request) => Response | Promise<Response>,
-  readTimeoutMs?: number
+  readTimeoutMs?: number,
+  clientHeaderOnReads?: boolean
 ) {
   const reportFailure = vi.fn();
+  const unauthorized = vi.fn();
   const fetch = vi.fn((input: Request) => Promise.resolve(respond(input)));
   const client = createFetchClient<paths>({ baseUrl: 'http://api.test', fetch });
   client.use(
-    createMiddleware({ reportFailure, acquireRead: () => Promise.resolve(), readTimeoutMs })
+    createMiddleware({
+      reportFailure,
+      unauthorized,
+      clientHeaderOnReads,
+      acquireRead: () => Promise.resolve(),
+      readTimeoutMs
+    })
   );
-  return { client, reportFailure, fetch };
+  return { client, reportFailure, unauthorized, fetch };
 }
+
+describe('sign-in', () => {
+  it('sends the client header on writes, and on reads only for a same-origin API', async () => {
+    const seen: Array<[string, string | null]> = [];
+    const respond = (request: Request) => {
+      seen.push([request.method, request.headers.get('X-Mainloop-Client')]);
+      return json(200, {});
+    };
+    const crossOrigin = setup(respond);
+    await crossOrigin.client.GET('/projects');
+    await crossOrigin.client.POST('/chat', { body: { message: 'hi' } });
+    const sameOrigin = setup(respond, undefined, true);
+    await sameOrigin.client.GET('/projects');
+    expect(seen).toEqual([
+      ['GET', null],
+      ['POST', 'web'],
+      ['GET', 'web']
+    ]);
+  });
+
+  it('reports a 401 as a lapsed sign-in and still fails the request', async () => {
+    const { client, unauthorized } = setup(() => json(401, { detail: 'Authentication required' }));
+    const error = await client.GET('/projects').catch((e: unknown) => e);
+    expect(unauthorized).toHaveBeenCalledTimes(1);
+    expect(error).toMatchObject({ status: 401 });
+  });
+
+  it('does not treat a 403 as signed out', async () => {
+    const { client, unauthorized } = setup(() => json(403, { detail: 'Not permitted' }));
+    await client.GET('/projects').catch(() => undefined);
+    expect(unauthorized).not.toHaveBeenCalled();
+  });
+});
 
 describe('error mapping', () => {
   it('turns an HTTP failure into ApiError with the detail text', async () => {

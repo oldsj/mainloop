@@ -58,7 +58,9 @@ the loading message. Retrying requests the details for the current project.
 
 - On the phone the offline banner is one line at the top of the screen. It takes its height from
   the page, so the composer and the tab bar stay on screen at 390 × 844. Long text is cut off with
-  an ellipsis. On desktop there is no banner: the status bar says it (see Desktop).
+  an ellipsis. On desktop there is no banner: the status bar says it (see Desktop). Once the
+  owner's sign-in has lapsed and a reload did not restore it, the same place reads **Signed out**
+  with **Sign in again** ([authentication](authentication.md#the-web-app)).
 - Each page sets the document title, for example **Health · Mainloop**.
 - A route change moves keyboard focus to the main landmark, so focus does not fall back to the
   page body.

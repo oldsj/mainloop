@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { cn } from '@/components/ui/cn';
-import { useConnection } from './ConnectionBanner';
+import { signIn } from '@/api/signin';
+import { useConnection, useSignIn } from './ConnectionBanner';
 
 export interface StatusBarProps {
   /** How many items need the owner. */
@@ -27,7 +28,8 @@ const plural = (count: number, one: string, many: string) => `${count} ${count =
  */
 export function StatusBar({ needs, working, problems, onShowWorking }: StatusBarProps) {
   const connection = useConnection();
-  const offline = connection.status === 'offline';
+  const signedOut = useSignIn() === 'expired';
+  const offline = signedOut || connection.status === 'offline';
   const item = cn(
     'inline-flex h-6 items-center whitespace-nowrap hover:underline',
     offline ? 'text-destructive-foreground' : 'hover:text-foreground'
@@ -42,16 +44,33 @@ export function StatusBar({ needs, working, problems, onShowWorking }: StatusBar
         offline ? 'bg-destructive text-destructive-foreground' : 'bg-card text-muted-foreground'
       )}
     >
-      <Link to="/health" className={cn(item, 'gap-xs min-w-0')} data-testid="status-connection">
-        <span
-          aria-hidden="true"
-          className={cn('size-2 shrink-0', offline ? 'bg-destructive-foreground' : 'bg-term-green')}
-        />
-        {/* A live region, so going offline is announced without moving focus. */}
-        <span role="status" className="min-w-0 truncate">
-          {offline ? `Offline${since(connection.offlineSince)} · reconnecting…` : 'Connected'}
-        </span>
-      </Link>
+      {signedOut ? (
+        <button
+          type="button"
+          onClick={() => signIn.signInAgain()}
+          className={cn(item, 'gap-xs min-w-0')}
+          data-testid="status-signin"
+        >
+          <span aria-hidden="true" className="bg-destructive-foreground size-2 shrink-0" />
+          <span role="status" className="min-w-0 truncate">
+            Signed out · Sign in again
+          </span>
+        </button>
+      ) : (
+        <Link to="/health" className={cn(item, 'gap-xs min-w-0')} data-testid="status-connection">
+          <span
+            aria-hidden="true"
+            className={cn(
+              'size-2 shrink-0',
+              offline ? 'bg-destructive-foreground' : 'bg-term-green'
+            )}
+          />
+          {/* A live region, so going offline is announced without moving focus. */}
+          <span role="status" className="min-w-0 truncate">
+            {offline ? `Offline${since(connection.offlineSince)} · reconnecting…` : 'Connected'}
+          </span>
+        </Link>
+      )}
       <span className="flex-1" />
       <Link to="/inbox" className={item} data-testid="status-needs">
         {needs > 0 ? plural(needs, 'needs you', 'need you') : 'Nothing needs you'}

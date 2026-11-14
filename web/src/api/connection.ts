@@ -1,4 +1,5 @@
 import { API_URL } from './config';
+import { API_SAME_ORIGIN, CLIENT_HEADER, CLIENT_NAME, signIn } from './signin';
 
 /**
  * Backend reachability, so a dead service reads as "down" instead of as empty or half-working UI.
@@ -30,8 +31,14 @@ async function httpProbe(): Promise<boolean> {
   try {
     const response = await fetch(`${API_URL}/health`, {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-      cache: 'no-store'
+      cache: 'no-store',
+      headers: API_SAME_ORIGIN ? { [CLIENT_HEADER]: CLIENT_NAME } : undefined
     });
+    // The backend serves /health to anyone, so a 401 is the gateway's: it is up, the sign-in lapsed.
+    if (response.status === 401) {
+      signIn.expired();
+      return true;
+    }
     // /health never fails while the backend is up; a proxy answers 5xx when nothing is behind it.
     return response.ok;
   } catch {

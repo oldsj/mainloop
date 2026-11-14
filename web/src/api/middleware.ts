@@ -8,6 +8,7 @@ import {
   TaskApiError,
   taskErrorDetail
 } from './errors';
+import { CLIENT_HEADER, CLIENT_NAME } from './signin';
 
 export const READ_TIMEOUT_MS = 10_000;
 export const READS_PER_SECOND = 4;
@@ -88,12 +89,20 @@ export function createReadLimiter(
 
 export interface MiddlewareDeps {
   reportFailure: () => void;
+  /** The API answered 401: the owner's sign-in lapsed. */
+  unauthorized?: () => void;
+  /** Add the client header to reads too, not only writes (an API on the app's own origin). */
+  clientHeaderOnReads?: boolean;
   acquireRead?: (signal?: AbortSignal) => Promise<void>;
   readTimeoutMs?: number;
 }
 
 /**
  * Cross-cutting API behaviour:
+ * - every write, and every read when `clientHeaderOnReads`, carries `X-Mainloop-Client`: the
+ *   backend refuses an owner write without it (a page on another origin cannot send it), and the
+ *   gateway answers 401 instead of a login redirect to a request that has it;
+ * - a 401 is reported as a lapsed sign-in;
  * - reads wait for a limiter slot and time out after 10 s;
  * - a request that never gets an HTTP response is reported to the connection state (a timeout is
  *   not: a slow read says nothing about reachability, so the /health probe decides);
@@ -107,7 +116,11 @@ export function createMiddleware(deps: MiddlewareDeps): Middleware {
 
   return {
     async onRequest({ request }) {
-      if (!isRead(request.method)) return undefined;
+      if (!isRead(request.method)) {
+        request.headers.set(CLIENT_HEADER, CLIENT_NAME);
+        return request;
+      }
+      if (deps.clientHeaderOnReads) request.headers.set(CLIENT_HEADER, CLIENT_NAME);
       await acquireRead(request.signal);
       const signal = AbortSignal.any([request.signal, AbortSignal.timeout(timeoutMs)]);
       return new Request(request, { signal });
@@ -123,6 +136,7 @@ export function createMiddleware(deps: MiddlewareDeps): Middleware {
 
     async onResponse({ response, schemaPath }) {
       if (response.ok) return undefined;
+      if (response.status === 401) deps.unauthorized?.();
       let body: unknown;
       try {
         body = await response.clone().json();

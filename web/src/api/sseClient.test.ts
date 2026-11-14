@@ -5,6 +5,34 @@ const stream = (text: string) =>
   new Response(text, { headers: { 'Content-Type': 'text/event-stream' } });
 
 describe('createSseClient', () => {
+  it('reports a 401 as a lapsed sign-in and sends the client header when asked', async () => {
+    const unauthorized = vi.fn();
+    const headers: Array<string | null> = [];
+    let client!: ReturnType<typeof createSseClient>;
+    await new Promise<void>((resolve) => {
+      client = createSseClient({
+        url: 'http://api.test/events',
+        clientHeader: true,
+        unauthorized: () => {
+          unauthorized();
+          resolve();
+        },
+        fetch: (_url, init) => {
+          headers.push(new Headers(init?.headers).get('X-Mainloop-Client'));
+          return Promise.resolve(new Response('', { status: 401 }));
+        },
+        backoff: () => 1_000_000,
+        sleep: (_ms, signal) =>
+          new Promise((done) => signal.addEventListener('abort', () => done(), { once: true })),
+        onMessage: () => {}
+      });
+      client.start();
+    });
+    client.stop();
+    expect(unauthorized).toHaveBeenCalledTimes(1);
+    expect(headers).toEqual(['web']);
+  });
+
   it('reconnects with Last-Event-ID from the last event it saw', async () => {
     const requests: Array<string | null> = [];
     const messages: SseMessage[] = [];
