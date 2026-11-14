@@ -92,6 +92,8 @@ export function ChatPage({
             onFallback={() => setChatView(true)}
             renderBar={header}
             notes={run ? runNotes(run, 'main') : undefined}
+            prefill={prefill}
+            onPrefillUsed={onPrefillUsed}
             provider={
               info
                 ? {
@@ -114,7 +116,9 @@ export function ChatPage({
             defaultsRole="main"
             closedReason={inputLock}
             closedPlaceholder="Main input is locked"
-            prefill={prefill}
+            // Until the thread has loaded it is not known which composer will show: this one, or
+            // the live view's. The prefill waits, so it is not taken by a composer about to go.
+            prefill={chat.loaded ? prefill : undefined}
             onPrefillUsed={onPrefillUsed}
             starters={starters}
             allowImages
@@ -151,9 +155,13 @@ function LiveMain({
   onFallback,
   renderBar,
   provider,
-  notes
+  notes,
+  prefill,
+  onPrefillUsed
 }: {
   sessionId: string;
+  prefill?: string;
+  onPrefillUsed?: () => void;
   hitlId?: string;
   onFallback: () => void;
   renderBar: (bar: LiveBar) => ReactNode;
@@ -169,6 +177,8 @@ function LiveMain({
       renderBar={renderBar}
       provider={provider}
       notes={notes}
+      prefill={prefill}
+      onPrefillUsed={onPrefillUsed}
       requests={(skip) => (
         <PanelBoundary name="Requests">
           {hitlId && !skip.includes(hitlId) ? (

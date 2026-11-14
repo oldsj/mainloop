@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render as rtlRender, screen, waitFor, within } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse, ws } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { API_URL } from '@/api/config';
 import { server } from '@/test/msw/server';
 import { useSessionRequests } from '@/features/hitl/session-requests';
@@ -92,6 +92,50 @@ function WithRequests() {
     />
   );
 }
+
+describe('a prefill', () => {
+  function Prefilled({ onUsed }: { onUsed: () => void }) {
+    const [prefill, setPrefill] = useState<string | undefined>('About task Fix login (t1): ');
+    return (
+      <>
+        <button type="button" onClick={() => setPrefill('About task Fix login (t1): ')}>
+          again
+        </button>
+        <LiveSession
+          sessionId="s1"
+          deps={deps}
+          prefill={prefill}
+          onPrefillUsed={() => {
+            onUsed();
+            setPrefill(undefined);
+          }}
+        />
+      </>
+    );
+  }
+
+  it('fills the composer once, ahead of what is typed, and leaves a draft that already starts with it', async () => {
+    const runner = createFakeRunner();
+    current = runner;
+    server.use(...runner.handlers);
+    const onUsed = vi.fn();
+    const user = userEvent.setup();
+    render(<Prefilled onUsed={onUsed} />);
+
+    const box = await screen.findByRole('textbox', { name: 'Message' });
+    await waitFor(() => expect(box).toHaveValue('About task Fix login (t1): '));
+    expect(onUsed).toHaveBeenCalledTimes(1);
+    // Nothing was sent.
+    expect(runner.echoed).toEqual([]);
+
+    // The same prefill again does not stack on a draft that starts with it.
+    await waitFor(() => expect(box).toBeEnabled());
+    await user.type(box, 'retry it');
+    await user.click(screen.getByRole('button', { name: 'again' }));
+    await waitFor(() => expect(onUsed).toHaveBeenCalledTimes(2));
+    expect(box).toHaveValue('About task Fix login (t1): retry it');
+  });
+});
 
 function setup(opts?: Parameters<typeof createFakeRunner>[0]) {
   const runner = createFakeRunner(opts);
