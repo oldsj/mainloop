@@ -1,5 +1,5 @@
 import { Link, useRouterState } from '@tanstack/react-router';
-import { Activity, FolderGit2, Inbox, ListTree, type LucideIcon } from 'lucide-react';
+import { Activity, FolderGit2, Inbox, ListTree, Settings, type LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '@/components/ui/cn';
 import { badgeText } from '@/features/inbox/model';
@@ -26,8 +26,8 @@ export interface ActivityBarProps {
 
 /**
  * Desktop: the strip down the left edge. It replaces the old top header: the home mark, the two
- * sidebar views, the Inbox with its Needs-you count, and at the foot orchestration health and the
- * theme. The count is always on screen here, whichever view the sidebar shows and when it is hidden.
+ * sidebar views, the Inbox with its Needs-you count, and at the foot orchestration health, Settings
+ * and the theme. The count is always on screen here, whichever view the sidebar shows and when it is hidden.
  */
 export function ActivityBar({ view, collapsed, needs, onView }: ActivityBarProps) {
   const path = useRouterState({ select: (state) => state.location.pathname });
@@ -91,6 +91,15 @@ export function ActivityBar({ view, collapsed, needs, onView }: ActivityBarProps
       >
         <Activity aria-hidden="true" />
       </RouteItem>
+      <RouteItem
+        to="/settings"
+        on={path === '/settings'}
+        label="Settings"
+        title="Settings"
+        testId="activity-settings"
+      >
+        <Settings aria-hidden="true" />
+      </RouteItem>
       <ThemeSelector compact />
     </nav>
   );
@@ -105,7 +114,7 @@ function RouteItem({
   testId,
   children
 }: {
-  to: '/inbox' | '/health';
+  to: '/inbox' | '/health' | '/settings';
   on: boolean;
   label: string;
   title: string;

@@ -172,6 +172,28 @@ describe('routes', () => {
 });
 
 describe('header health link', () => {
+  it('opens Settings from the desktop activity bar, and marks it while it shows', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    const router = await renderAt('/');
+    const settings = screen.getByRole('link', { name: 'Settings' });
+    await user.click(settings);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
+    expect(await screen.findByRole('heading', { name: 'Settings', level: 1 })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Session defaults' })).toBeInTheDocument();
+    expect(settings).toHaveAttribute('aria-current', 'page');
+    await waitFor(() => expect(document.title).toBe('Settings · Mainloop'));
+  });
+
+  it('opens Settings from the tree’s header on a phone', async () => {
+    setViewport(false);
+    const user = userEvent.setup();
+    const router = await renderAt('/?tab=explorer');
+    await user.click(await screen.findByRole('link', { name: 'Settings' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
+    expect(await screen.findByTestId('settings-page')).toBeVisible();
+  });
+
   it('opens orchestration health from the desktop activity bar', async () => {
     setViewport(true);
     const user = userEvent.setup();

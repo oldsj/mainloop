@@ -1,5 +1,5 @@
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
-import { Activity, Compass, Inbox, MessageSquare, type LucideIcon } from 'lucide-react';
+import { Activity, Compass, Inbox, MessageSquare, Settings, type LucideIcon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
@@ -114,6 +114,14 @@ export function CompactShell({
                       className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }))}
                     >
                       <Activity aria-hidden="true" />
+                    </Link>
+                    <Link
+                      to="/settings"
+                      data-testid="header-settings"
+                      aria-label="Settings"
+                      className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }))}
+                    >
+                      <Settings aria-hidden="true" />
                     </Link>
                     <ThemeSelector />
                   </>
