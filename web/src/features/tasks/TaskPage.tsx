@@ -2,6 +2,7 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { ArrowLeft } from 'lucide-react';
 import { useId, useState } from 'react';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
+import { SkeletonHeader } from '@/components/shared/skeleton';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
@@ -68,9 +69,12 @@ export function TaskPage({ id }: { id: string }) {
   if (detail.data === undefined) {
     if (detail.isPending) {
       return (
-        <p role="status" className="p-md text-muted-foreground text-sm">
-          Loading task…
-        </p>
+        <div className="p-md">
+          <p role="status" className="sr-only">
+            Loading task…
+          </p>
+          <SkeletonHeader testId="task-loading" />
+        </div>
       );
     }
     if (detail.error instanceof UnreadablePayloadError) {

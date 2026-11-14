@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
+import { SkeletonHeader, SkeletonRows } from '@/components/shared/skeleton';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { EnvironmentSection } from '@/features/environments/EnvironmentSection';
 import { SessionRow } from '@/features/sessions/SessionRow';
@@ -80,9 +81,14 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
       );
     }
     return (
-      <p role="status" className="text-muted-foreground p-md text-sm">
-        Loading project...
-      </p>
+      // The page's own column, so the header and the task rows land where the placeholders were.
+      <div className="gap-lg p-md mx-auto flex w-full max-w-3xl min-w-0 flex-col">
+        <p role="status" className="sr-only">
+          Loading project...
+        </p>
+        <SkeletonHeader testId="project-loading" />
+        <SkeletonRows rows={5} />
+      </div>
     );
   }
 

@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
+import { SkeletonRows } from '@/components/shared/skeleton';
 import { StatusDot } from '@/components/shared/status-dot';
 import { statusLine, workGroup } from '@/features/home/model';
 import type { TaskView } from '@/lib/contract';
@@ -30,9 +31,12 @@ export function TaskTree({ projectId }: { projectId?: string }) {
   if (list.data === undefined) {
     if (list.isPending) {
       return (
-        <p role="status" className="p-md text-muted-foreground text-sm">
-          Loading tasks…
-        </p>
+        <>
+          <p role="status" className="sr-only">
+            Loading tasks…
+          </p>
+          <SkeletonRows rows={5} testId="task-list-loading" />
+        </>
       );
     }
     return (
