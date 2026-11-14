@@ -338,6 +338,21 @@ func (q *Queries) CreateMainBinding(ctx context.Context, arg CreateMainBindingPa
 	return i, err
 }
 
+const deleteSessionDefault = `-- name: DeleteSessionDefault :exec
+DELETE FROM session_defaults WHERE user_id = $1 AND role = $2 AND provider = $3
+`
+
+type DeleteSessionDefaultParams struct {
+	UserID   string
+	Role     string
+	Provider string
+}
+
+func (q *Queries) DeleteSessionDefault(ctx context.Context, arg DeleteSessionDefaultParams) error {
+	_, err := q.db.Exec(ctx, deleteSessionDefault, arg.UserID, arg.Role, arg.Provider)
+	return err
+}
+
 const endDelivery = `-- name: EndDelivery :one
 WITH old AS (
     SELECT id, state FROM deliveries
@@ -649,6 +664,7 @@ SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.u
        b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
        b.credential_identity,
        b.model_override, b.effort_override,
+       sd.model AS default_model, sd.effort AS default_effort,
        coalesce(b.mcp_grant_kind::text, '')::text AS binding_grant, s.user_id, s.title AS session_title,
        w.id AS workspace_id,
        coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
@@ -658,6 +674,9 @@ FROM deliveries d
 JOIN sessions s ON s.id = d.session_id
 LEFT JOIN agent_bindings b ON b.session_id = d.session_id
 LEFT JOIN workspaces w ON w.id = d.session_id
+LEFT JOIN session_defaults sd ON sd.user_id = s.user_id
+    AND sd.role = CASE WHEN b.role = 'main' THEN 'main' ELSE 'worker' END
+    AND sd.provider = coalesce(nullif(b.kind, ''), 'claude')
 WHERE d.id = $1
 `
 
@@ -682,6 +701,8 @@ type GetDeliveryContextRow struct {
 	CredentialIdentity     *string
 	ModelOverride          *string
 	EffortOverride         *string
+	DefaultModel           *string
+	DefaultEffort          *string
 	BindingGrant           string
 	UserID                 string
 	SessionTitle           string
@@ -693,6 +714,7 @@ type GetDeliveryContextRow struct {
 
 // What a handler needs about the delivery's session. The binding is a LEFT JOIN so a delivery
 // whose binding is gone still loads, and the handler can fail it instead of retrying for ever.
+// The owner's default for the session's role and provider (a binding with no kind is Claude's).
 func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliveryContextRow, error) {
 	row := q.db.QueryRow(ctx, getDeliveryContext, id)
 	var i GetDeliveryContextRow
@@ -717,6 +739,8 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 		&i.CredentialIdentity,
 		&i.ModelOverride,
 		&i.EffortOverride,
+		&i.DefaultModel,
+		&i.DefaultEffort,
 		&i.BindingGrant,
 		&i.UserID,
 		&i.SessionTitle,
@@ -1740,6 +1764,44 @@ func (q *Queries) ListScheduledSessionCancelsDue(ctx context.Context, arg ListSc
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSessionDefaults = `-- name: ListSessionDefaults :many
+SELECT role, provider, model, effort FROM session_defaults
+WHERE user_id = $1
+ORDER BY role, provider
+`
+
+type ListSessionDefaultsRow struct {
+	Role     string
+	Provider string
+	Model    *string
+	Effort   *string
+}
+
+func (q *Queries) ListSessionDefaults(ctx context.Context, userID string) ([]ListSessionDefaultsRow, error) {
+	rows, err := q.db.Query(ctx, listSessionDefaults, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSessionDefaultsRow{}
+	for rows.Next() {
+		var i ListSessionDefaultsRow
+		if err := rows.Scan(
+			&i.Role,
+			&i.Provider,
+			&i.Model,
+			&i.Effort,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -2941,4 +3003,30 @@ func (q *Queries) SetSessionEnded(ctx context.Context, arg SetSessionEndedParams
 	var id string
 	err := row.Scan(&id)
 	return id, err
+}
+
+const upsertSessionDefault = `-- name: UpsertSessionDefault :exec
+INSERT INTO session_defaults (user_id, role, provider, model, effort)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (user_id, role, provider)
+DO UPDATE SET model = excluded.model, effort = excluded.effort, updated_at = now()
+`
+
+type UpsertSessionDefaultParams struct {
+	UserID   string
+	Role     string
+	Provider string
+	Model    *string
+	Effort   *string
+}
+
+func (q *Queries) UpsertSessionDefault(ctx context.Context, arg UpsertSessionDefaultParams) error {
+	_, err := q.db.Exec(ctx, upsertSessionDefault,
+		arg.UserID,
+		arg.Role,
+		arg.Provider,
+		arg.Model,
+		arg.Effort,
+	)
+	return err
 }

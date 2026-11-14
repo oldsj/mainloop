@@ -581,7 +581,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 		return reconcile.Retry(), err
 	}
 	t.cur, t.ksid = dbstate.DeliverySending, ksid
-	metadata := turnMetadata(t.d.ModelOverride, t.d.EffortOverride)
+	metadata := turnMetadata(t.s.turnModelEffort(t.d))
 	var sendErr error
 	t.s.Progress.Begin(t.progressRef())
 	for ev, err := range t.s.Kagent.SendMessage(ctx, t.agent, kagent.SendParams{

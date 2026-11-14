@@ -88,7 +88,8 @@ func (s *Service) requireOwnedBinding(ctx context.Context, sessionID string) (st
 }
 
 // turnMetadata is the A2A message metadata that names a turn's model and effort. A key is sent only
-// when the owner or a supervisor chose a value for the session (its override); otherwise it is
+// when the owner or a supervisor chose a value for the session (its override) or the owner set a
+// default for its role and provider ([Service.turnModelEffort]); otherwise it is
 // absent and kagent runs the turn on the Agent's own ModelConfig model and the harness's default
 // effort. Mainloop does not name a profile default: its built-in model list goes stale, and a
 // default kagent cannot serve fails every turn (found on prod with Codex: gpt-5.1-codex against a

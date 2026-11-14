@@ -304,6 +304,11 @@ func (Unimplemented) ListSessionCheckpoints(context.Context, ListSessionCheckpoi
 	return nil, apierr.NotImplemented
 }
 
+// ListSessionDefaults is not implemented yet.
+func (Unimplemented) ListSessionDefaults(context.Context, ListSessionDefaultsRequestObject) (ListSessionDefaultsResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // ListSessionHITL is not implemented yet.
 func (Unimplemented) ListSessionHITL(context.Context, ListSessionHITLRequestObject) (ListSessionHITLResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -401,6 +406,11 @@ func (Unimplemented) SendMessage(context.Context, SendMessageRequestObject) (Sen
 
 // SendSessionMessage is not implemented yet.
 func (Unimplemented) SendSessionMessage(context.Context, SendSessionMessageRequestObject) (SendSessionMessageResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// SetSessionDefault is not implemented yet.
+func (Unimplemented) SetSessionDefault(context.Context, SetSessionDefaultRequestObject) (SetSessionDefaultResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 
