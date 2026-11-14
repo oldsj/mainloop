@@ -46,6 +46,9 @@ export function barStatus(thread: ThreadStatus | null, live: LiveStatus | null):
   return live;
 }
 
+/** A hollow marker: an outline in the idle colour, with no fill. */
+const HOLLOW = 'border border-status-idle';
+
 const DOT: Record<BarStatus, string> = {
   'needs you': 'bg-status-attention',
   'last message unconfirmed': 'bg-status-attention',
@@ -55,12 +58,13 @@ const DOT: Record<BarStatus, string> = {
   unreachable: 'bg-status-failed',
   unavailable: 'bg-status-failed',
   'last message failed': 'bg-status-failed',
-  ready: 'bg-term-green',
-  'connecting…': 'bg-status-idle animate-pulse',
-  'reconnecting…': 'bg-status-idle animate-pulse',
-  idle: 'bg-status-idle',
-  asleep: 'bg-status-idle',
-  paused: 'bg-status-idle'
+  // At rest: hollow, as an idle agent is in herdr.
+  ready: HOLLOW,
+  'connecting…': `${HOLLOW} animate-pulse`,
+  'reconnecting…': `${HOLLOW} animate-pulse`,
+  idle: HOLLOW,
+  asleep: HOLLOW,
+  paused: HOLLOW
 };
 
 /** The status marker's colour class. The word always shows beside it, so colour is never alone. */

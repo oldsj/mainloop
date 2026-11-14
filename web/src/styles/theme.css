@@ -43,6 +43,7 @@
   --color-ring: var(--ring);
   --color-status-attention: var(--status-attention);
   --color-status-working: var(--status-working);
+  --color-status-unseen: var(--status-unseen);
   --color-status-failed: var(--status-failed);
   --color-status-idle: var(--status-idle);
 
@@ -127,8 +128,9 @@
   --border-subtle: var(--term-border-subtle);
   --input: var(--term-border);
   --ring: var(--term-accent);
-  --status-attention: var(--term-yellow);
-  --status-working: var(--term-accent);
+  --status-attention: var(--term-error);
+  --status-working: var(--term-yellow);
+  --status-unseen: var(--term-cyan);
   --status-failed: var(--term-error);
   --status-idle: var(--term-fg-muted);
 
@@ -187,8 +189,9 @@
   --border-subtle: var(--term-border-subtle);
   --input: var(--term-border);
   --ring: var(--term-accent);
-  --status-attention: var(--term-yellow);
-  --status-working: var(--term-accent);
+  --status-attention: var(--term-error);
+  --status-working: var(--term-yellow);
+  --status-unseen: var(--term-cyan);
   --status-failed: var(--term-error);
   --status-idle: var(--term-fg-muted);
 }
@@ -233,8 +236,9 @@
   --border-subtle: var(--term-border-subtle);
   --input: var(--term-border);
   --ring: var(--term-accent);
-  --status-attention: var(--term-yellow);
-  --status-working: var(--term-accent);
+  --status-attention: var(--term-error);
+  --status-working: var(--term-yellow);
+  --status-unseen: var(--term-cyan);
   --status-failed: var(--term-error);
   --status-idle: var(--term-fg-muted);
 }
@@ -279,8 +283,9 @@
   --border-subtle: var(--term-border-subtle);
   --input: var(--term-border);
   --ring: var(--term-accent);
-  --status-attention: var(--term-yellow);
-  --status-working: var(--term-cyan);
+  --status-attention: var(--term-error);
+  --status-working: var(--term-yellow);
+  --status-unseen: var(--term-cyan);
   --status-failed: var(--term-error);
   --status-idle: var(--term-fg-muted);
 }
@@ -325,8 +330,9 @@
   --border-subtle: var(--term-border-subtle);
   --input: var(--term-border);
   --ring: var(--term-accent);
-  --status-attention: var(--term-yellow);
-  --status-working: var(--term-accent);
+  --status-attention: var(--term-error);
+  --status-working: var(--term-yellow);
+  --status-unseen: var(--term-cyan);
   --status-failed: var(--term-error);
   --status-idle: var(--term-fg-muted);
 }

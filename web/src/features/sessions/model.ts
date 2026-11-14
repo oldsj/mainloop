@@ -219,12 +219,14 @@ export function workspaceFor<T extends { session_id: string }>(
   return workspaces.find((workspace) => workspace.session_id === sessionId);
 }
 
-/** Tone for the workspace's observed state: running is active, a failure is bad, anything in motion needs attention. */
+/**
+ * Tone for the workspace's observed state. A workspace that is up or asleep is at rest; one in
+ * motion (starting, stopping) is working; a failure needs the owner.
+ */
 export function workspaceTone(state: WorkspaceLifecycle['observed_state']): Tone {
-  if (state === 'running') return 'active';
+  if (state === 'running' || state === 'suspended') return 'muted';
   if (state === 'failed') return 'bad';
-  if (state === 'suspended') return 'muted';
-  return 'attention';
+  return 'active';
 }
 
 export function publicationText(

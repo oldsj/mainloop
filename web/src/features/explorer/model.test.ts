@@ -175,7 +175,7 @@ describe('failed tasks', () => {
 
 describe('mainloop state', () => {
   it.each([
-    [1, 0, 'Waiting on you', 'attention'],
+    [1, 0, 'Needs you', 'attention'],
     [0, 2, 'Working', 'active'],
     [0, 0, 'Idle', 'muted']
   ])('needs %i, working %i reads as %s', (needs, working, label, tone) => {
@@ -244,27 +244,60 @@ describe('projects and schedules', () => {
     expect(schedules?.children[0]).toEqual(
       expect.objectContaining({ detail: 'Paused', tone: 'muted' })
     );
-    expect(schedules?.children[1]?.tone).toBe('ok');
+    // A schedule is at rest either way: its timing, or "Paused", is the line under its name.
+    expect(schedules?.children[1]).toEqual(
+      expect.objectContaining({ detail: schedule().config.schedule, tone: 'muted' })
+    );
   });
 
-  it('gives a completed or cancelled task no marker under Finished recently, and keeps a failed one red', () => {
+  describe('finished and not yet seen', () => {
     const now = Date.parse('2026-01-10T00:00:00Z');
-    const recent = '2026-01-09T00:00:00Z';
-    const tasks = [
-      view({ id: 'done', status: 'completed', updated_at: recent }),
-      view({ id: 'gone', status: 'cancelled', updated_at: recent }),
-      view({ id: 'stuck', status: 'failed', reason: null, updated_at: recent })
-    ];
-    const finished = buildExplorer(source({ tasks, now })).find((node) => node.id === 'finished');
-    const tones = Object.fromEntries(
-      (finished?.children ?? []).map((node) => [
-        node.target && 'id' in node.target ? node.target.id : '',
-        node.tone
-      ])
-    );
-    expect(tones.done).toBeUndefined();
-    expect(tones.gone).toBeUndefined();
-    if ('stuck' in tones) expect(tones.stuck).toBe('bad');
+    const finishedAt = '2026-01-09T00:00:00Z';
+    const before = Date.parse('2026-01-08T00:00:00Z');
+    const after = Date.parse('2026-01-09T12:00:00Z');
+    const toneOf = (status: 'completed' | 'cancelled' | 'failed', seen: ExplorerSource['seen']) => {
+      const task = view({ id: 't', status, reason: null, updated_at: finishedAt });
+      const finished = buildExplorer(source({ tasks: [task], now, seen })).find(
+        (node) => node.id === 'finished'
+      );
+      return finished?.children[0]?.tone;
+    };
+
+    it('is teal until the owner has opened the task, then at rest', () => {
+      expect(toneOf('completed', { since: before, seen: {} })).toBe('unseen');
+      expect(toneOf('completed', { since: before, seen: { t: after } })).toBe('muted');
+    });
+
+    it('is unseen again when the task changes after it was opened', () => {
+      expect(toneOf('completed', { since: before, seen: { t: before + 1 } })).toBe('unseen');
+    });
+
+    it('counts a task that finished before this browser kept a record as seen', () => {
+      expect(toneOf('completed', { since: after, seen: {} })).toBe('muted');
+    });
+
+    it('lights nothing without a record, as when storage is blocked', () => {
+      expect(toneOf('completed', null)).toBe('muted');
+      expect(toneOf('completed', undefined)).toBe('muted');
+    });
+
+    it('leaves a cancelled task at rest and a failed one red, seen or not', () => {
+      const seen = { since: before, seen: {} };
+      const toneFor = (status: 'cancelled' | 'failed') =>
+        taskNode(view({ id: 't', status, updated_at: finishedAt }), source({ seen }), 'x').tone;
+      expect(toneFor('cancelled')).toBe('muted');
+      expect(toneFor('failed')).toBe('bad');
+    });
+  });
+
+  it('gives a waiting task the working tone, and never green to a row', () => {
+    const waiting = view({ id: 'w', status: 'waiting' });
+    const working = buildExplorer(source({ tasks: [waiting] })).find((n) => n.id === 'working');
+    expect(working?.children[0]?.tone).toBe('active');
+    const tones = visibleRows(buildExplorer(source({ tasks: [waiting] })), () => true)
+      .filter((row) => row.node.id !== 'health')
+      .map((row) => row.node.tone);
+    expect(tones).not.toContain('ok');
   });
 
   it('lists only tasks finished in the last seven days, and counts the same rows', () => {
@@ -498,7 +531,7 @@ describe('parent task progress', () => {
     expect(node.detail).toBe('1/2 done · 1 blocked');
   });
 
-  it('counts a child needing the owner as waiting on you, per the attention items', () => {
+  it('counts a child needing the owner as needs you, per the attention items', () => {
     const parent = view({ id: 'p', title: 'Parent' });
     const needsOwner = view({
       id: 'c1',
@@ -513,7 +546,7 @@ describe('parent task progress', () => {
       source({ tasks: [parent, needsOwner, done], attention }),
       'working'
     );
-    expect(node.detail).toBe('1/2 done · 1 waiting on you');
+    expect(node.detail).toBe('1/2 done · 1 needs you');
   });
 
   it('keeps a task with no children on its current status detail', () => {
@@ -640,7 +673,7 @@ describe('since you were here', () => {
     );
     expect(since?.count).toBe(1);
     expect(since?.children.map((node) => [node.label, node.target])).toEqual([
-      ['1 task waiting on you', { to: 'needs', item: 'req-9' }],
+      ['1 task needs you', { to: 'needs', item: 'req-9' }],
       ['1 task failed', { to: 'task', id: 'w-1' }]
     ]);
     // Without a listed action for the task, the waiting row still opens the answer view.

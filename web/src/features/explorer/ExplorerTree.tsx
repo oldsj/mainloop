@@ -12,13 +12,19 @@ import { relativeAge, type Tone } from '@/lib/taskState';
 import { sameTarget, visibleRows, type ExplorerNode, type Target } from './model';
 import { RowMenu, useLongPress, type RowMenuAction } from './RowMenu';
 
-/** The status dot's colour. Muted is the default, so an unknown state never reads as a problem. */
+/**
+ * The status dot, in the same language as herdr's agent list: filled amber is working, filled red
+ * needs you, filled teal is finished and not yet looked at, and hollow is at rest (idle, asleep, or
+ * finished and seen). Hollow is the default, so an unknown state never reads as a problem. Green is
+ * the connection light only.
+ */
 const DOT: Record<Tone, string> = {
   active: 'bg-status-working',
   attention: 'bg-status-attention',
-  ok: 'bg-term-green',
   bad: 'bg-status-failed',
-  muted: 'bg-status-idle'
+  unseen: 'bg-status-unseen',
+  ok: 'bg-term-green',
+  muted: 'border border-status-idle'
 };
 
 export interface ExplorerTreeProps {
@@ -266,7 +272,12 @@ export function ExplorerTree({
               ) : null}
             </span>
             {node.tone ? (
-              <span aria-hidden="true" className={cn('size-2 shrink-0', DOT[node.tone])} />
+              <span
+                aria-hidden="true"
+                data-testid="explorer-dot"
+                data-tone={node.tone}
+                className={cn('size-2 shrink-0', DOT[node.tone])}
+              />
             ) : null}
             {top ? (
               // A top-level row is one line: a group heading, or Mainloop and Insights with their state.

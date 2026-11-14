@@ -79,16 +79,22 @@ Write `border-border-subtle` for a divider. Bare `border` still resolves to `bor
 
 ## Status colours
 
-State is drawn with four semantic colours, each with one meaning. Components use these, not the raw palette, for a status dot, badge or word.
+A row's state is one dot, in the same language as herdr's agent list, so the two read alike side by side. Components use these tokens, not the raw palette, for a status dot, badge or word.
 
-| Token              | Meaning                           | Palette colour                                                     |
-| ------------------ | --------------------------------- | ------------------------------------------------------------------ |
-| `status-attention` | waiting on the owner              | `term-yellow`                                                      |
-| `status-working`   | a turn or task is running         | `term-accent` (`term-cyan` in gruvbox, whose accent is its yellow) |
-| `status-failed`    | failed or a problem               | `term-error`                                                       |
-| `status-idle`      | idle, asleep, finished or unknown | `term-fg-muted`                                                    |
+| Token              | Dot          | Meaning                                                                                                        | Palette colour                 |
+| ------------------ | ------------ | -------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| `status-working`   | filled amber | working: a turn or task is running, or waiting on CI or another task                                           | `term-yellow`                  |
+| `status-attention` | filled red   | **Needs you**: a question, an approval, or a failure that needs a decision. The word beside the dot says which | `term-error`                   |
+| `status-failed`    | filled red   | a failure; drawn as Needs you                                                                                  | `term-error`                   |
+| `status-unseen`    | filled teal  | finished and not yet looked at                                                                                 | `term-cyan`                    |
+| `status-idle`      | hollow       | at rest: idle, asleep, or finished and seen                                                                    | `term-fg-muted`, as an outline |
 
-`term-green` stays for a healthy connection, diff additions and success notices. Warning paragraphs still use `term-yellow` directly; that is text, not a status.
+- The label for red is always "Needs you", as in the inbox. Never "blocked".
+- At rest is drawn hollow (`border border-status-idle`, no fill), so a list of quiet rows stays quiet.
+- The accent blue is for focus, selection and links only. It is not a status.
+- `term-green` is for facts that are good, not for a row's state: a healthy connection, passing CI, a merged PR, diff additions and success notices.
+- Warning paragraphs still use `term-yellow` directly; that is text, not a status.
+- "Seen" is kept per browser for now (see `docs/specs/layout.md`).
 
 ## Radius
 

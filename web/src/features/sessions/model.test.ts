@@ -268,9 +268,10 @@ describe('workspace helpers', () => {
   });
 
   it('tones the observed state', () => {
-    expect(workspaceTone('running')).toBe('active');
-    expect(workspaceTone('failed')).toBe('bad');
+    // Up or asleep is at rest; in motion is working; a failure needs the owner.
+    expect(workspaceTone('running')).toBe('muted');
     expect(workspaceTone('suspended')).toBe('muted');
-    expect(workspaceTone('resuming')).toBe('attention');
+    expect(workspaceTone('resuming')).toBe('active');
+    expect(workspaceTone('failed')).toBe('bad');
   });
 });

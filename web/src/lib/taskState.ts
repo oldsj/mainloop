@@ -52,12 +52,24 @@ const REASON_LABELS: Record<TaskReason, string> = {
   runtime_limit: 'it has run longer than its runtime bound'
 };
 
-export type Tone = 'active' | 'attention' | 'ok' | 'bad' | 'muted';
+/**
+ * What a status dot or badge says, in the same language as herdr's agent list:
+ * - `active`: working (amber, filled).
+ * - `attention` and `bad`: needs you (red, filled): a question, an approval, or a failure. The
+ *   word beside it says which.
+ * - `unseen`: finished and not yet looked at (teal, filled).
+ * - `muted`: idle, asleep, or finished and seen (hollow).
+ * - `ok`: a fact that is good, such as passing CI or a healthy connection (green). It is for
+ *   facts, not for a row's state.
+ */
+export type Tone = 'active' | 'attention' | 'unseen' | 'ok' | 'bad' | 'muted';
 
 const STATUS_TONES: Record<TaskStatus, Tone> = {
   queued: 'muted',
   running: 'active',
-  waiting: 'attention',
+  // Waiting on CI, a publication or another task is still work in progress, not an owner decision.
+  // A task that waits on the owner is listed under Needs you, which sets its own tone.
+  waiting: 'active',
   blocked: 'attention',
   completed: 'ok',
   failed: 'bad',
@@ -316,7 +328,7 @@ export function publicationFacts(
   // Every current CI state requires fresh evidence for the exact PR head.
   let ci: Fact = unknown();
   if (ciHeadMismatch)
-    ci = { label: 'Unknown (checked a different commit)', known: false, tone: 'attention' };
+    ci = { label: 'Unknown (checked a different commit)', known: false, tone: 'muted' };
   else if (prHeadSha && p.ci_head_sha === prHeadSha && !observationAge(p.observed_at, now).stale) {
     if (p.ci_state === 'success') ci = { label: 'Passing', known: true, tone: 'ok' };
     else if (p.ci_state === 'failure') ci = { label: 'Failing', known: true, tone: 'bad' };
@@ -327,7 +339,7 @@ export function publicationFacts(
     ? {
         label: humanize(p.merge_state),
         known: true,
-        tone: p.merge_state === 'merged' ? 'ok' : 'attention'
+        tone: p.merge_state === 'merged' ? 'ok' : 'active'
       }
     : { label: 'Not reported', known: false, tone: 'muted' };
   const publication: Fact = p.publication_state
@@ -507,6 +519,7 @@ export function switchBlockers(view: TaskView): string[] {
 const TONE_CLASSES: Record<Tone, string> = {
   active: 'text-status-working border-status-working/50',
   attention: 'text-status-attention border-status-attention/50',
+  unseen: 'text-status-unseen border-status-unseen/50',
   ok: 'text-term-green border-term-green/50',
   bad: 'text-status-failed border-status-failed/50',
   muted: 'text-status-idle border-border-subtle'

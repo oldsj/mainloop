@@ -3,8 +3,8 @@
  * invalidation reaches the tree without a second map. Opening a row and asking Mainloop both leave
  * the tree's tab, so on the phone the page or the composer shows in the chat pane.
  */
-import { useNavigate } from '@tanstack/react-router';
-import { useMemo } from 'react';
+import { useLocation, useNavigate } from '@tanstack/react-router';
+import { useEffect, useMemo } from 'react';
 import { attentionItems } from '@/features/inbox/model';
 import { useAttention } from '@/features/inbox/queries';
 import { useAttentionPoll } from '@/features/inbox/poll';
@@ -14,7 +14,9 @@ import { useSchedules } from '@/features/schedules/queries';
 import { useWorkspaces } from '@/features/sessions/queries';
 import { useOwnerTaskPoll, useTaskList } from '@/features/tasks/queries';
 import { useConnection } from '@/shell/ConnectionBanner';
-import { buildExplorer, type ExplorerNode, type Target } from './model';
+import { currentAttempt } from '@/lib/taskState';
+import { buildExplorer, targetOfLocation, type ExplorerNode, type Target } from './model';
+import { useSeen } from './seen';
 
 /** `lastVisit` is the shell's baseline for "Since you were here"; without it the group is left out. */
 export function useExplorer(lastVisit: number | null = null): {
@@ -33,6 +35,25 @@ export function useExplorer(lastVisit: number | null = null): {
   const schedules = useSchedules();
   const online = useConnection().status !== 'offline';
 
+  // A finished task is "unseen" until the owner opens its page, or the page of its session, in this
+  // browser. It is marked whenever that page is showing and again when the task changes under it.
+  const { seen, mark } = useSeen();
+  const page = useLocation({
+    select: (location) => targetOfLocation(location.pathname, location.search),
+    structuralSharing: true
+  });
+  const open = useMemo(() => {
+    if (page?.to !== 'task' && page?.to !== 'session') return undefined;
+    return (tasks.data ?? []).find((view) =>
+      page.to === 'task' ? view.task.id === page.id : currentAttempt(view)?.session_id === page.id
+    )?.task;
+  }, [page, tasks.data]);
+  const openId = open?.id;
+  const openChanged = open?.updated_at;
+  useEffect(() => {
+    if (openId) mark(openId, openChanged);
+  }, [openId, openChanged, mark]);
+
   const nodes = useMemo(
     () =>
       buildExplorer({
@@ -43,9 +64,19 @@ export function useExplorer(lastVisit: number | null = null): {
         projects: keepValid(projects.data, projectRowSchema),
         schedules: schedules.data?.pages.flatMap((page) => page.items) ?? [],
         online,
-        lastVisit
+        lastVisit,
+        seen
       }),
-    [tasks.data, attention.data, workspaces.data, projects.data, schedules.data, online, lastVisit]
+    [
+      tasks.data,
+      attention.data,
+      workspaces.data,
+      projects.data,
+      schedules.data,
+      online,
+      lastVisit,
+      seen
+    ]
   );
 
   return {
