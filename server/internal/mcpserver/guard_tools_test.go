@@ -161,6 +161,10 @@ var writeCases = []writeCase{
 			p.consent(t, a.SessionID, proposal, "dead")
 			return map[string]any{"proposal_id": proposal, "request_id": "dead"}
 		}},
+	{tool: "watch_checks", prs: true,
+		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
+			return map[string]any{"project_id": "p1", "pr_number": 1, "request_id": "dead"}
+		}},
 	{tool: "dev_lease_acquire", devloop: true,
 		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any { return map[string]any{} }},
 	{tool: "dev_lease_release", devloop: true,

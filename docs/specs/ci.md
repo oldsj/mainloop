@@ -6,9 +6,9 @@ CI, not in the workspace. A worker runs a quick local loop, pushes, and reads th
 Mainloop. This spec covers how an agent reads that result. Sandboxes have no `gh` CLI and cannot
 reach the forge's API, so the read goes through Mainloop's MCP tools and the project's GitHub App.
 
-Status: `check_status` is implemented. Waiting for a result asynchronously (`watch_checks`), the
-per-project setting for where heavy checks run, and the worker guidance that uses both are
-proposed in follow-up slices and are not described here as behavior yet.
+Status: `check_status` and `watch_checks` are implemented. The per-project setting for where heavy
+checks run and the worker guidance that uses both tools are proposed in follow-up slices and are
+not described here as behavior yet.
 
 ## Providers
 
@@ -26,6 +26,12 @@ evidence (`server/internal/merge`), so the check tools and the merge decision ag
 | ----------------------------- | -------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
 | Check run (status/conclusion) | `success`, `skipped` | `queued`, `in_progress`, `pending`, `waiting`, `requested` | any other conclusion (`neutral` included) or unknown state |
 | Commit status (state)         | `success`            | `pending`                                                  | anything else                                              |
+
+A **check suite** that has not completed yet counts as one pending check when none of its own
+check runs is pending: GitHub Actions creates a job's check run only when the job starts, so a
+workflow whose later jobs wait on earlier ones (`needs:`) can show nothing but passed runs while
+more are coming. A queued suite with no runs that is older than ten minutes is treated as
+abandoned and ignored, the same rule the merge evidence uses.
 
 Only the latest check of each name counts: the highest-id check run per (app, name), and the newest
 commit status per context, so an earlier failed attempt of a rerun check is not reported.
@@ -92,6 +98,57 @@ session project must equal `project_id` (`projectAuthority`, before any GitHub r
 then resolves the project by owner and id and derives the repository from its stored `full_name`,
 so another owner's project id is `not_found`. The tool takes no repository, owner, URL or token
 argument, and it never reruns, cancels or triggers a check.
+
+## `watch_checks`
+
+`watch_checks(project_id, pr_number | commit_sha, request_id, timeout_minutes?)` waits for CI
+without holding the agent's turn. It records a durable watch and returns at once with `watch_id`,
+`state` (`watching`), `deadline` and `superseded`. The agent then ends its turn, so its workspace
+can go idle and suspend while CI runs. When the watch settles, Mainloop sends the agent's session
+one message; it steers into a running turn when the agent supports that, and otherwise queues as
+the next turn, like any other message from Mainloop.
+
+The watch settles with one outcome:
+
+| Outcome           | When                                                                             |
+| ----------------- | -------------------------------------------------------------------------------- |
+| `green`           | Checks exist and none is pending or failed                                       |
+| `failed`          | Nothing is pending and at least one check failed                                 |
+| `no_checks`       | No check appeared within three minutes of the watch starting, or by the deadline |
+| `pending_timeout` | Checks were still pending (or CI could not be read) at the deadline              |
+| `not_found`       | The pull request or commit does not exist                                        |
+
+A failure does not settle the watch while other checks still run, so the message reports every
+failure at once. The message carries the same rendered text as `check_status` (verdict, checks
+that are not green, and the bounded failure detail), headed with the ref and the watch id, and
+ends with what to do next: push a fix and watch again, or for a timeout use `check_status`, watch
+again, or run the checks in the workspace.
+
+- `request_id` is required and makes the call idempotent per session: a retry with the same id
+  returns the same watch; reusing an id for a different ref is refused (`request_id_reused`).
+- `timeout_minutes` defaults to 30 and may be 1 to 120.
+- A pull request watch re-reads the pull request's head on every poll, so a push during the watch
+  is followed.
+- A new watch of the same session and ref supersedes older ones still watching, so a
+  push-and-watch-again sends one message, about the latest state.
+
+### How it runs
+
+The tool inserts a `check_watches` row (state `watching`, idempotency key `session_id` +
+`request_id`, deadline) and notifies the watch loop; it makes no GitHub request. The loop runs in
+`serve-api` as a reconciler (`server/internal/reconcile`): it claims due watches, reads the checks
+with no transaction open, and polls again later (every 15 seconds for the first two minutes, then
+every 30 seconds until ten minutes, then every minute) until the watch settles. Settling records
+the outcome and message (`watching` to `delivering`) under the claim's fence, then sends the
+message under the watch id. The send is idempotent on that id, so a delivery whose result is
+unknown is retried without a duplicate. A busy session is retried after a few seconds. A session
+that has ended or is not ready is retried until 30 minutes after the deadline and then marked
+`undeliverable`, as is a watch whose session or project is gone. Final states are `delivered`,
+`undeliverable` and `superseded`.
+
+The watch uses the same credential and scoping as `check_status`: `projectAuthority` before the
+row is written, the project resolved by owner, and the watch bound to the calling session, which is
+the only session it can message.
 
 ### Why this tool returns check detail and `merge_pull_request` does not
 

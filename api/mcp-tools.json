@@ -255,6 +255,40 @@
       }
     },
     {
+      "name": "watch_checks",
+      "description": "Wait for CI without holding your turn: give pr_number or commit_sha and a stable request_id. Returns at once; when nothing is pending any more (or at the timeout, default 30 minutes) Mainloop sends you one message with the outcome (green, failed, pending_timeout, no_checks or not_found) and why checks failed. End your turn after calling it. A newer watch of the same ref replaces an older one.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "commit_sha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "pr_number": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "timeout_minutes": {
+            "maximum": 120,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": ["project_id", "request_id"],
+        "type": "object"
+      }
+    },
+    {
       "name": "task_get",
       "description": "Read a scoped task and its stored projections without a native turn.",
       "input_schema": {
@@ -770,6 +804,7 @@
         "task_list",
         "topic_open",
         "topics",
+        "watch_checks",
         "whoami"
       ],
       "approval": []
@@ -802,6 +837,7 @@
         "task_list",
         "topic_open",
         "topics",
+        "watch_checks",
         "whoami"
       ],
       "approval": []
@@ -833,6 +869,7 @@
         "task_list",
         "topic_open",
         "topics",
+        "watch_checks",
         "whoami"
       ],
       "approval": ["merge_pull_request_with_approval"]
@@ -868,6 +905,7 @@
         "task_list",
         "topic_open",
         "topics",
+        "watch_checks",
         "whoami"
       ],
       "approval": ["merge_pull_request_with_approval"]
@@ -967,6 +1005,7 @@
         "task_get",
         "task_history",
         "task_list",
+        "watch_checks",
         "whoami"
       ],
       "approval": []
@@ -994,6 +1033,7 @@
         "task_get",
         "task_history",
         "task_list",
+        "watch_checks",
         "whoami"
       ],
       "approval": []
@@ -1020,6 +1060,7 @@
         "task_get",
         "task_history",
         "task_list",
+        "watch_checks",
         "whoami"
       ],
       "approval": ["merge_pull_request_with_approval"]
@@ -1050,6 +1091,7 @@
         "task_get",
         "task_history",
         "task_list",
+        "watch_checks",
         "whoami"
       ],
       "approval": ["merge_pull_request_with_approval"]
@@ -1110,6 +1152,7 @@
         "task_get",
         "task_history",
         "task_list",
+        "watch_checks",
         "whoami"
       ],
       "approval": []
@@ -1134,6 +1177,7 @@
         "task_get",
         "task_history",
         "task_list",
+        "watch_checks",
         "whoami"
       ],
       "approval": []
@@ -1157,6 +1201,7 @@
         "task_get",
         "task_history",
         "task_list",
+        "watch_checks",
         "whoami"
       ],
       "approval": ["merge_pull_request_with_approval"]
@@ -1184,6 +1229,7 @@
         "task_get",
         "task_history",
         "task_list",
+        "watch_checks",
         "whoami"
       ],
       "approval": ["merge_pull_request_with_approval"]
@@ -1200,6 +1246,7 @@
         "get_issue",
         "list_dependabot_alerts",
         "open_pull_request",
+        "watch_checks",
         "whoami"
       ],
       "approval": []
@@ -1220,6 +1267,7 @@
         "get_issue",
         "list_dependabot_alerts",
         "open_pull_request",
+        "watch_checks",
         "whoami"
       ],
       "approval": []
@@ -1239,6 +1287,7 @@
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",
+        "watch_checks",
         "whoami"
       ],
       "approval": ["merge_pull_request_with_approval"]
@@ -1262,6 +1311,7 @@
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",
+        "watch_checks",
         "whoami"
       ],
       "approval": ["merge_pull_request_with_approval"]

@@ -204,3 +204,42 @@ func TestCheckStatusRefusesAnUnknownPullRequestAndABadRef(t *testing.T) {
 		}
 	}
 }
+
+func TestWatchChecksRecordsAWatchForTheCallingSessionAndReturnsAtOnce(t *testing.T) {
+	h := newIssuesHarness(t)
+	a := h.seedAgent(t)
+	args := map[string]any{"project_id": "p1", "pr_number": 42, "request_id": "w1", "timeout_minutes": 10}
+
+	_, r := h.call(ordinary, a.Token, "watch_checks", args)
+	if r.Result.IsError {
+		t.Fatalf("watch_checks = %q", r.text())
+	}
+	sc := r.Result.StructuredContent
+	id, _ := sc["watch_id"].(string)
+	if id == "" || sc["state"] != "watching" || !strings.Contains(r.text(), "End your turn now.") {
+		t.Fatalf("watch = %v", sc)
+	}
+	var session, state string
+	var pr int
+	if err := h.env.Pool.QueryRow(context.Background(),
+		`SELECT session_id, state, pr_number FROM check_watches WHERE id = $1`, id).Scan(&session, &state, &pr); err != nil {
+		t.Fatal(err)
+	}
+	if session != a.SessionID || state != "watching" || pr != 42 {
+		t.Errorf("row = %s %s %d", session, state, pr)
+	}
+
+	// A retry with the same request_id finds the same watch.
+	if _, r := h.call(ordinary, a.Token, "watch_checks", args); r.Result.StructuredContent["watch_id"] != id {
+		t.Errorf("retry = %v", r.Result.StructuredContent)
+	}
+	for _, bad := range []map[string]any{
+		{"project_id": "p1", "pr_number": 42},
+		{"project_id": "p1", "request_id": "w2"},
+		{"project_id": "p1", "pr_number": 42, "request_id": "w3", "timeout_minutes": 500},
+	} {
+		if _, r := h.call(ordinary, a.Token, "watch_checks", bad); !r.Result.IsError {
+			t.Errorf("%v = %q, want an error", bad, r.text())
+		}
+	}
+}

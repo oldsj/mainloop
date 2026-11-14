@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -65,10 +66,14 @@ type Status struct {
 	FailuresOmitted int
 }
 
-// Service serves the check tools over a project's bound repository.
+// Service serves the check tools over a project's bound repository, and runs check watches.
+// Sender delivers a settled watch's message; only the process that runs [Service.WatchLoop] needs
+// one. Now is the clock; nil means time.Now.
 type Service struct {
 	Pool     *pgxpool.Pool
 	Provider Provider
+	Sender   Sender
+	Now      func() time.Time
 }
 
 // NewService builds the service over the GitHub App.
