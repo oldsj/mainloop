@@ -1,6 +1,6 @@
 /**
  * Opt-in data for reviewing the app in a browser with the local stack: a project with its page, tasks in every
- * explorer group, more Needs-you rows than fit on a phone (a tall approval card last), a task waiting
+ * explorer group (including a pull request ready for review and one that is landing), more Needs-you rows than fit on a phone (a tall approval card last), a task waiting
  * on the owner, and a "Since you were here" baseline. Load it with `VITE_MSW=1 VITE_MSW_SEED=review`
  * or `?seed=review` on first load. Tests never load it, and the default handlers stay empty.
  */
@@ -81,6 +81,34 @@ export function reviewSeed() {
     },
     { projection: projection({ merge_state: 'merged' }) }
   );
+  // One pull request that is green and waiting to be looked at, and one whose merge is under way.
+  const ready = view(
+    {
+      id: 'task-ready-0006',
+      project_id: repo.id,
+      title: 'Add a retry button to the task page',
+      status: 'waiting',
+      updated_at: now
+    },
+    { projection: projection({ pr_state: 'open', pr_number: 41, ci_state: 'success' }) }
+  );
+  const landing = view(
+    {
+      id: 'task-land-0007',
+      project_id: repo.id,
+      title: 'Bump the base image',
+      status: 'waiting',
+      updated_at: now
+    },
+    {
+      projection: projection({
+        pr_state: 'open',
+        pr_number: 40,
+        ci_state: 'success',
+        merge_proposal_id: 'merge-0001'
+      })
+    }
+  );
   const old = view({
     id: 'task-old-0004',
     title: 'Old cleanup',
@@ -152,7 +180,9 @@ export function reviewSeed() {
     http.get(url('/attention'), () =>
       HttpResponse.json({ ...attention, count: attention.items.length })
     ),
-    http.get(url('/tasks'), () => HttpResponse.json([running, stuck, failed, merged, old])),
+    http.get(url('/tasks'), () =>
+      HttpResponse.json([running, ready, landing, stuck, failed, merged, old])
+    ),
     http.get(url('/projects'), () => HttpResponse.json([repo])),
     ...serveProjectPage({ project: repo }),
     http.post(url('/queue/:id/respond'), () => HttpResponse.json({ status: 'ok', message: 'Sent' }))

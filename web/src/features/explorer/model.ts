@@ -102,8 +102,65 @@ export function briefSnippet(brief: string, max = 140): string {
 const byUpdatedDesc = (a: TaskView, b: TaskView) =>
   Date.parse(b.task.updated_at) - Date.parse(a.task.updated_at);
 
-/** Node ids a group starts expanded with. Everything else starts folded. */
-export const DEFAULT_EXPANDED: ReadonlySet<string> = new Set(['mainloop', 'needs', 'since']);
+/**
+ * Node ids a group starts expanded with. Everything else starts folded. Ready for review is open:
+ * it is the owner's own next step.
+ */
+export const DEFAULT_EXPANDED: ReadonlySet<string> = new Set([
+  'mainloop',
+  'needs',
+  'since',
+  'review'
+]);
+
+/**
+ * Where a working task's pull request stands, from the facts the task already carries (no new
+ * read). The agent's part is over in both; what is left is the review or the merge.
+ *
+ * - `review`: the pull request is open, CI passed on its head, and no merge has been proposed. It
+ *   is waiting to be looked at.
+ * - `landing`: a merge is under way (the merge service holds a proposal for it), or the pull
+ *   request has merged and the task is settling.
+ *
+ * CI that is failing, still running or not known for this head is neither: that task is still work
+ * in progress. The server already reports CI as unknown when its last look is stale.
+ */
+export type PrStage = 'review' | 'landing';
+
+export function prStage(view: TaskView): PrStage | null {
+  const p = view.projection;
+  if (p.pr_state === 'merged') return 'landing';
+  if (p.pr_state !== 'open') return null;
+  if (p.merge_proposal_id) return 'landing';
+  return p.ci_state === 'success' ? 'review' : null;
+}
+
+/** "PR #12", or "PR" when the number is not known. */
+const prLabel = (view: TaskView) =>
+  view.projection.pr_number != null ? `PR #${view.projection.pr_number}` : 'PR';
+
+/** The line under a row in Ready for review or Landing: the pull request and where it stands. */
+function prStageDetail(view: TaskView, stage: PrStage): string {
+  if (stage === 'review') return `${prLabel(view)} · CI passing`;
+  return view.projection.pr_state === 'merged'
+    ? `${prLabel(view)} · merged, settling`
+    : `${prLabel(view)} · merging`;
+}
+
+/**
+ * A row in Ready for review or Landing. Ready for review is finished work the owner has not looked
+ * at, so it is teal until its page has been opened and then at rest; Landing is still moving.
+ */
+function prStageNode(view: TaskView, source: ExplorerSource, stage: PrStage): ExplorerNode {
+  const node = taskNode(view, source, stage);
+  const tone: Tone =
+    stage === 'landing'
+      ? 'active'
+      : isUnseen(source.seen, view.task.id, view.task.updated_at)
+        ? 'unseen'
+        : 'muted';
+  return { ...node, detail: prStageDetail(view, stage), tone };
+}
 
 export function askPrefill(node: Pick<ExplorerNode, 'label'>, target: Target): string | undefined {
   switch (target.to) {
@@ -360,15 +417,18 @@ export function mainloopState(needs: number, working: number): { label: string; 
 }
 
 /**
- * The top-level tree, in the order the owner sees it: Mainloop, Needs you, Since you were here
- * (only when something changed), Working, Projects, Schedules, Finished recently, Insights (the
- * health row; its page is still `/health`).
+ * The top-level tree, in the order the owner sees it: Mainloop, Needs you, Problems, Since you were
+ * here (only when something changed), Working, Ready for review and Landing (each only when it has
+ * rows), Projects, Schedules, Finished recently, Insights (the health row; its page is still
+ * `/health`).
  */
 export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
   const groups = {
     needs: [] as ExplorerNode[],
     problems: [] as ExplorerNode[],
     working: [] as TaskView[],
+    review: [] as TaskView[],
+    landing: [] as TaskView[],
     finished: [] as TaskView[]
   };
   const attentionTasks = new Set<string>();
@@ -392,7 +452,14 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
     const nested = hasLoadedParent(view, source);
     // A task nested under its parent elsewhere in the tree is not also a flat Working or
     // Finished row; Needs you stays flat regardless, so an owner action is never hidden a level down.
-    if (group === 'working' && !named && !nested) groups.working.push(view);
+    // Working is what is still in progress. A task whose pull request is ready to be looked at, or
+    // is landing, moves to its own group, so Working does not hide what only waits on a review.
+    if (group === 'working' && !named && !nested) {
+      const stage = prStage(view);
+      if (stage === 'review') groups.review.push(view);
+      else if (stage === 'landing') groups.landing.push(view);
+      else groups.working.push(view);
+    }
     if ((group === 'needs-you' || group === 'blocked') && !named) {
       needs.push(taskNode(view, source, 'needs'));
     }
@@ -413,7 +480,8 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
   groups.problems = problems;
 
   const live = source.sessions.filter((session) => isCurrent(session));
-  const mainloop = mainloopState(needs.length, groups.working.length);
+  // A merge under way is still Mainloop working; a pull request waiting to be looked at is not.
+  const mainloop = mainloopState(needs.length, groups.working.length + groups.landing.length);
 
   const projects = source.projects.map((project) => {
     const path = `projects/${project.id}`;
@@ -481,6 +549,27 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
           ? groups.working.map((view) => taskNode(view, source, 'working'))
           : [note('working/none', 'Nothing running')]
     },
+    // Left out when empty, like Since you were here: most of the time nothing is at either stage.
+    ...(groups.review.length > 0
+      ? [
+          {
+            id: 'review',
+            label: 'Ready for review',
+            count: groups.review.length,
+            children: groups.review.map((view) => prStageNode(view, source, 'review'))
+          } satisfies ExplorerNode
+        ]
+      : []),
+    ...(groups.landing.length > 0
+      ? [
+          {
+            id: 'landing',
+            label: 'Landing',
+            count: groups.landing.length,
+            children: groups.landing.map((view) => prStageNode(view, source, 'landing'))
+          } satisfies ExplorerNode
+        ]
+      : []),
     {
       id: 'projects',
       label: 'Projects',
@@ -555,7 +644,7 @@ export function sameTarget(a: Target | null | undefined, b: Target | null | unde
 
 /**
  * The desktop sidebar's two views. **Sessions** is the work and what it needs: Mainloop, Needs you,
- * Problems, Since you were here, Working and Finished recently. **Projects** is the catalogue:
+ * Problems, Since you were here, Working, Ready for review, Landing and Finished recently. **Projects** is the catalogue:
  * Projects and Schedules. Insights is in neither: on desktop the connection is in the status bar.
  */
 export type SidebarView = 'sessions' | 'projects';
@@ -566,7 +655,7 @@ export const SIDEBAR_VIEWS: readonly { id: SidebarView; label: string }[] = [
 ];
 
 const VIEW_NODES: Record<SidebarView, readonly string[]> = {
-  sessions: ['mainloop', 'needs', 'problems', 'since', 'working', 'finished'],
+  sessions: ['mainloop', 'needs', 'problems', 'since', 'working', 'review', 'landing', 'finished'],
   projects: ['projects', 'schedules']
 };
 

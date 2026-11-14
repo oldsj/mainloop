@@ -8,7 +8,7 @@ import {
 import { keepValid, projectRowSchema } from '@/features/projects/model';
 import { project } from '@/features/projects/test/fixtures';
 import { schedule } from '@/features/schedules/test/fixtures';
-import { view } from '@/test/fixtures/tasks';
+import { projection, view } from '@/test/fixtures/tasks';
 import {
   askPrefill,
   briefSnippet,
@@ -16,10 +16,12 @@ import {
   FINISHED_WINDOW_MS,
   mainloopState,
   needsCount,
+  prStage,
   sameTarget,
   shortProject,
   targetOfLocation,
   taskNode,
+  viewNodes,
   visibleRows,
   type ExplorerSource
 } from './model';
@@ -681,5 +683,137 @@ describe('since you were here', () => {
       (node) => node.id === 'since'
     );
     expect(bare?.children[0]?.target).toEqual({ to: 'needs' });
+  });
+});
+
+describe('groups by pull request state', () => {
+  const open = { pr_state: 'open' as const, pr_number: 12 };
+  const ready = (id = 'r') =>
+    view(
+      { id, status: 'waiting', title: 'Add retry' },
+      { projection: projection({ ...open, ci_state: 'success' }) }
+    );
+  const landing = (id = 'l') =>
+    view(
+      { id, status: 'waiting', title: 'Ship docs' },
+      { projection: projection({ ...open, ci_state: 'success', merge_proposal_id: 'mp-1' }) }
+    );
+  const group = (nodes: ReturnType<typeof buildExplorer>, id: string) =>
+    nodes.find((node) => node.id === id);
+
+  it.each([
+    ['open, CI passing, no merge proposed', { ...open, ci_state: 'success' as const }, 'review'],
+    ['open with a merge proposed', { ...open, merge_proposal_id: 'mp-1' }, 'landing'],
+    [
+      'open, merge proposed, CI unknown',
+      { ...open, ci_state: 'unknown' as const, merge_proposal_id: 'mp-1' },
+      'landing'
+    ],
+    [
+      'merged, task still settling',
+      { pr_state: 'merged' as const, merge_state: 'merged' },
+      'landing'
+    ],
+    ['open, CI failing', { ...open, ci_state: 'failure' as const }, null],
+    ['open, CI running', { ...open, ci_state: 'pending' as const }, null],
+    ['open, CI not known for this head', { ...open, ci_state: 'unknown' as const }, null],
+    ['closed without merging', { pr_state: 'closed' as const, ci_state: 'success' as const }, null],
+    ['no pull request yet', {}, null]
+  ])('reads %s', (_name, facts, stage) => {
+    expect(prStage(view({ status: 'waiting' }, { projection: projection(facts) }))).toBe(stage);
+  });
+
+  it('moves a working task with a green open pull request to Ready for review', () => {
+    const still = view({ id: 'w', status: 'running' });
+    const nodes = buildExplorer(source({ tasks: [ready(), still] }));
+    expect(group(nodes, 'working')?.children.map((n) => n.target)).toEqual([
+      { to: 'task', id: 'w' }
+    ]);
+    expect(group(nodes, 'working')?.count).toBe(1);
+    const review = group(nodes, 'review');
+    expect(review).toEqual(expect.objectContaining({ label: 'Ready for review', count: 1 }));
+    expect(review?.children[0]).toEqual(
+      expect.objectContaining({
+        label: 'Add retry',
+        detail: 'PR #12 · CI passing',
+        target: { to: 'task', id: 'r' }
+      })
+    );
+  });
+
+  it('shows a ready pull request as unseen until its page has been opened, then at rest', () => {
+    const task = ready();
+    const before = Date.parse(task.task.updated_at) - 1000;
+    const toneWith = (seen: ExplorerSource['seen']) =>
+      group(buildExplorer(source({ tasks: [task], seen })), 'review')?.children[0]?.tone;
+    expect(toneWith({ since: before, seen: {} })).toBe('unseen');
+    expect(toneWith({ since: before, seen: { r: Date.now() } })).toBe('muted');
+    expect(toneWith(null)).toBe('muted');
+  });
+
+  it('puts a merge under way in Landing, as work still moving', () => {
+    const merged = view(
+      { id: 'm', status: 'running', title: 'Settle' },
+      { projection: projection({ pr_state: 'merged', pr_number: 7, merge_state: 'merged' }) }
+    );
+    const nodes = buildExplorer(source({ tasks: [landing(), merged] }));
+    const rows = group(nodes, 'landing')?.children ?? [];
+    expect(group(nodes, 'landing')).toEqual(
+      expect.objectContaining({ label: 'Landing', count: 2 })
+    );
+    expect(rows.map((n) => [n.detail, n.tone])).toEqual(
+      expect.arrayContaining([
+        ['PR #12 · merging', 'active'],
+        ['PR #7 · merged, settling', 'active']
+      ])
+    );
+    expect(group(nodes, 'working')?.count).toBe(0);
+  });
+
+  it('leaves both groups out when nothing is at either stage', () => {
+    const nodes = buildExplorer(source({ tasks: [view({ id: 'w', status: 'running' })] }));
+    expect(group(nodes, 'review')).toBeUndefined();
+    expect(group(nodes, 'landing')).toBeUndefined();
+  });
+
+  it('keeps a task with an owner action under Needs you only', () => {
+    const task = ready('n');
+    const attention = [{ ...hitlAttentionItem('req-1'), task_id: 'n' }];
+    const nodes = buildExplorer(source({ tasks: [task], attention }));
+    expect(group(nodes, 'review')).toBeUndefined();
+    expect(group(nodes, 'needs')?.count).toBe(1);
+  });
+
+  it('keeps a finished task out of both, whatever its pull request says', () => {
+    const done = view(
+      { id: 'd', status: 'completed', updated_at: new Date().toISOString() },
+      { projection: projection({ pr_state: 'merged', merge_state: 'merged' }) }
+    );
+    const nodes = buildExplorer(source({ tasks: [done] }));
+    expect(group(nodes, 'landing')).toBeUndefined();
+    expect(group(nodes, 'finished')?.count).toBe(1);
+  });
+
+  it('counts a merge under way as Mainloop working, and a waiting review as idle', () => {
+    expect(group(buildExplorer(source({ tasks: [landing()] })), 'mainloop')?.detail).toBe(
+      'Working'
+    );
+    expect(group(buildExplorer(source({ tasks: [ready()] })), 'mainloop')?.detail).toBe('Idle');
+  });
+
+  it('sits after Working, opens Ready for review by default, and is in the Sessions view', () => {
+    const nodes = buildExplorer(source({ tasks: [ready(), landing()] }));
+    const ids = topLevel(nodes);
+    expect(ids.slice(ids.indexOf('working'), ids.indexOf('working') + 3)).toEqual([
+      'working',
+      'review',
+      'landing'
+    ]);
+    expect(isExpanded(DEFAULT_PREFS, 'review')).toBe(true);
+    expect(isExpanded(DEFAULT_PREFS, 'landing')).toBe(false);
+    expect(topLevel(viewNodes(nodes, 'sessions'))).toEqual(
+      expect.arrayContaining(['review', 'landing'])
+    );
+    expect(topLevel(viewNodes(nodes, 'projects'))).toEqual(['projects', 'schedules']);
   });
 });
