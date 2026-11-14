@@ -958,26 +958,23 @@ describe('stopping a turn', () => {
   it.each([
     ['kagent did not answer', true, 'not sent: kagent unreachable: connection refused'],
     ['the thread cannot be restarted', false, 'not sent: A2A error -32004: input was not accepted']
-  ])(
-    'offers no restart for a failed newest message when %s',
-    async (_why, restartable, detail) => {
-      setup(
-        existing({
-          mainThread: mainThreadFixture({
-            conversation_id: CONVERSATION_ID,
-            native: nativeFixture({
-              turn_in_flight: false,
-              restartable,
-              deliveries: [deliveryFixture({ message_id: 'm1', state: 'failed', detail })]
-            })
+  ])('offers no restart for a failed newest message when %s', async (_why, restartable, detail) => {
+    setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({
+            turn_in_flight: false,
+            restartable,
+            deliveries: [deliveryFixture({ message_id: 'm1', state: 'failed', detail })]
           })
         })
-      );
-      // Wait for the thread's native state to load before asserting the panel's absence.
-      expect(await screen.findByTestId('mt-state')).toBeInTheDocument();
-      expect(screen.queryByTestId('turn-recovery')).toBeNull();
-    }
-  );
+      })
+    );
+    // Wait for the thread's native state to load before asserting the panel's absence.
+    expect(await screen.findByTestId('mt-state')).toBeInTheDocument();
+    expect(screen.queryByTestId('turn-recovery')).toBeNull();
+  });
 
   it('shows a stalled turn with how long it has been quiet, and offers stop and restart', async () => {
     const quietSince = new Date(Date.now() - 25 * 60_000 - 5_000).toISOString();
