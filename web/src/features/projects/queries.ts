@@ -44,3 +44,19 @@ export function useUpdateMergePolicy(projectId: string) {
       ])
   });
 }
+
+export function useVerification(projectId: string) {
+  return $api.useQuery('get', '/projects/{project_id}/verification', {
+    params: { path: { project_id: projectId } }
+  });
+}
+
+export function useUpdateVerification(projectId: string) {
+  const queryClient = useQueryClient();
+  const key = $api.queryOptions('get', '/projects/{project_id}/verification', {
+    params: { path: { project_id: projectId } }
+  }).queryKey;
+  return $api.useMutation('put', '/projects/{project_id}/verification', {
+    onSuccess: (data) => queryClient.setQueryData(key, data)
+  });
+}

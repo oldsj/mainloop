@@ -243,3 +243,23 @@ func TestWatchChecksRecordsAWatchForTheCallingSessionAndReturnsAtOnce(t *testing
 		}
 	}
 }
+
+func TestGetVerificationResolvesTheProjectsModeForTheAgent(t *testing.T) {
+	h := newIssuesHarness(t)
+	a := h.seedAgent(t)
+	_, r := h.call(ordinary, a.Token, "get_verification", map[string]any{"project_id": "p1"})
+	if r.Result.IsError {
+		t.Fatalf("get_verification = %q", r.text())
+	}
+	sc := r.Result.StructuredContent
+	if sc["mode"] != "auto" || sc["source"] != "detected" || sc["detection"] == nil || !strings.Contains(r.text(), "Verification: ") {
+		t.Fatalf("verification = %v", sc)
+	}
+	if _, err := h.env.Pool.Exec(context.Background(), `UPDATE projects SET verification_mode = 'ci' WHERE id = 'p1'`); err != nil {
+		t.Fatal(err)
+	}
+	_, r = h.call(ordinary, a.Token, "get_verification", map[string]any{"project_id": "p1"})
+	if sc := r.Result.StructuredContent; sc["effective_mode"] != "ci" || sc["source"] != "owner" || !strings.Contains(r.text(), "watch_checks") {
+		t.Errorf("owner mode = %v", sc)
+	}
+}

@@ -1568,6 +1568,98 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/HTTPValidationError'
                   - $ref: '#/components/schemas/HTTPError'
+  /projects/{project_id}/verification:
+    get:
+      tags:
+        - projects
+      summary: Get Project Verification
+      description: >-
+        Where the project's heavy checks run: the owner's mode, what it resolves to, and the
+        cached detection of the project's CI. Detects first when there is no detection, when the
+        last one is a day old, or when refresh is set; a failed detection is reported in
+        detect_error and leaves the last good one in place.
+      operationId: getProjectVerification
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+        - name: refresh
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+            title: Refresh
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectVerification'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+        - projects
+      summary: Set Project Verification Mode
+      description: >-
+        Set where the project's heavy checks run. auto follows the detection: hybrid when CI
+        reported checks on the default branch, local otherwise.
+      operationId: updateProjectVerification
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectVerificationUpdate'
+      responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectVerification'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
   /projects/{project_id}/environment:
     get:
       tags:
@@ -4721,6 +4813,99 @@ components:
         - provider
         - topics
       title: MainThreadInfo
+    ProjectVerification:
+      properties:
+        mode:
+          $ref: '#/components/schemas/VerificationMode'
+        effective_mode:
+          $ref: '#/components/schemas/EffectiveVerificationMode'
+        source:
+          type: string
+          enum:
+            - owner
+            - detected
+            - default
+          title: Source
+          description: owner when the owner chose the mode; detected or default when auto resolved it.
+        detection:
+          anyOf:
+            - $ref: '#/components/schemas/CIDetection'
+            - type: 'null'
+        detect_error:
+          anyOf:
+            - type: string
+              maxLength: 500
+            - type: 'null'
+          title: Detect Error
+      additionalProperties: false
+      type: object
+      required:
+        - mode
+        - effective_mode
+        - source
+        - detection
+      title: ProjectVerification
+    ProjectVerificationUpdate:
+      properties:
+        mode:
+          $ref: '#/components/schemas/VerificationMode'
+      additionalProperties: false
+      type: object
+      required:
+        - mode
+      title: ProjectVerificationUpdate
+    VerificationMode:
+      type: string
+      enum:
+        - auto
+        - ci
+        - hybrid
+        - local
+      title: VerificationMode
+    EffectiveVerificationMode:
+      type: string
+      enum:
+        - ci
+        - hybrid
+        - local
+      title: EffectiveVerificationMode
+    CIDetection:
+      properties:
+        usable:
+          type: boolean
+          title: Usable
+          description: At least one check reported on the default branch's tip.
+        branch:
+          type: string
+          title: Branch
+        sha:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Sha
+        checks:
+          type: integer
+          minimum: 0
+          title: Checks
+        sources:
+          items:
+            type: string
+          type: array
+          maxItems: 10
+          title: Sources
+        checked_at:
+          type: string
+          format: date-time
+          title: Checked At
+      additionalProperties: false
+      type: object
+      required:
+        - usable
+        - branch
+        - checks
+        - sources
+        - checked_at
+      title: CIDetection
     MergePolicy:
       type: string
       enum:

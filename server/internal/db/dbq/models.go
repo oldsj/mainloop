@@ -613,6 +613,9 @@ type Project struct {
 	MetadataUpdatedAt  *time.Time
 	CreatedAt          time.Time
 	LastUsedAt         time.Time
+	VerificationMode   string
+	CiDetection        json.RawMessage
+	CiDetectedAt       *time.Time
 }
 
 type ProjectEnvironmentSelection struct {

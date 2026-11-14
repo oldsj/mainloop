@@ -166,6 +166,8 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.ForkRequested), string(dbstate.ForkAccepted), string(dbstate.ForkReady), string(dbstate.ForkFailed))},
 		{"checkpoint_forks", "failure_reason", strs(
 			string(dbstate.FailureInvalidArgument), string(dbstate.FailureNotFound), string(dbstate.FailureFailedPrecondition))},
+		{"projects", "verification_mode", strs(
+			string(dbstate.VerifyAuto), string(dbstate.VerifyCI), string(dbstate.VerifyHybrid), string(dbstate.VerifyLocal))},
 		{"check_watches", "state", strs(
 			string(dbstate.WatchWatching), string(dbstate.WatchDelivering), string(dbstate.WatchDelivered),
 			string(dbstate.WatchUndeliverable), string(dbstate.WatchSuperseded))},

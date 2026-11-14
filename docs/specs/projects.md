@@ -14,6 +14,12 @@ and the form stays locked until that read succeeds.
 This selector changes policy only. It does not merge a pull request or approve a pending call.
 See [merge policy](merge-policy.md) for server gates and unproved production prerequisites.
 
+The **Checks** section sets where the project's heavy checks run: Automatic, CI, Hybrid or
+Workspace. It states what the setting resolves to and why (the owner's choice, or for Automatic the
+CI Mainloop found on the default branch, or that none was found yet), what agents do under it, and
+when the last re-check of the project's CI failed. Saving takes effect at once, with no version
+check. See [CI checks](ci.md#where-heavy-checks-run).
+
 Project detail lists unarchived project sessions and excludes bindings with the `main` role.
 Unbound sessions remain visible.
 
@@ -52,7 +58,7 @@ the branch as pending and New workspace stays disabled until GitHub metadata arr
 with no default branch yet stays listed.
 
 The project page opens on the work: Tasks first, then Open Pull Requests, then Sessions, Branch
-workspaces and Recent Commits. Settings comes last. It holds the merge policy and the environment,
+workspaces and Recent Commits. Settings comes last. It holds the merge policy, the checks setting and the environment,
 and it is collapsed by default. The owner opens it with its heading button, which is keyboard
 operable and reports whether it is expanded. Its open or closed state is kept while the owner stays
 on the page.

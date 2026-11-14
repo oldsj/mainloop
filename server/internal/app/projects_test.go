@@ -15,6 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/app/apicheck"
 	"github.com/oldsj/mainloop/server/internal/app/apptest"
+	"github.com/oldsj/mainloop/server/internal/ci"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/github/githubtest"
@@ -49,6 +50,7 @@ func projectServer(t *testing.T, policyWrites bool) (http.Handler, *githubtest.S
 	var remote projects.Remote = gh
 	d := apptest.Deps(t, cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), pool, apptest.WithRemote(remote))
 	d.DB = up()
+	d.CI = ci.NewService(pool, gh)
 	h, err := app.New(d).Handler()
 	if err != nil {
 		t.Fatal(err)
@@ -224,5 +226,45 @@ func TestProjectFlowsOnlyEverCallAllowlistedEndpoints(t *testing.T) {
 	}
 	if len(fake.Requests()) == 0 {
 		t.Fatal("no GitHub calls recorded")
+	}
+}
+
+func TestProjectVerificationDetectsAndTakesTheOwnersMode(t *testing.T) {
+	h, fake := projectServer(t, false)
+	p := importProject(t, h, "oldsj/mainloop")
+	path := "/projects/" + p.Id + "/verification"
+
+	// The fake's default branch tip has no checks: auto resolves to local, from the detection.
+	r := send(h, "GET", path, "", nil)
+	if r.status != 200 {
+		t.Fatalf("get: %d %s", r.status, r.body)
+	}
+	var v api.ProjectVerification
+	strict(t, r.body, &v)
+	if v.Mode != api.VerificationModeAuto || v.EffectiveMode != api.EffectiveVerificationModeLocal || v.Source != "detected" ||
+		v.Detection == nil || v.Detection.Usable || v.Detection.Branch != "main" {
+		t.Fatalf("verification = %s", r.body)
+	}
+
+	// CI reports on the tip: a refresh finds it, and auto becomes hybrid.
+	fake.Update("oldsj", "mainloop", func(repo *githubtest.Repository) {
+		repo.Runs = map[string][]githubtest.CheckRun{*v.Detection.Sha: {{ID: 1, AppID: 9, AppSlug: "github-actions", Name: "go", Conclusion: "success"}}}
+	})
+	r = send(h, "GET", path+"?refresh=true", "", nil)
+	strict(t, r.body, &v)
+	if v.EffectiveMode != api.EffectiveVerificationModeHybrid || !v.Detection.Usable || len(v.Detection.Sources) != 1 {
+		t.Fatalf("refreshed = %s", r.body)
+	}
+
+	r = send(h, "PUT", path, `{"mode":"ci"}`, nil)
+	strict(t, r.body, &v)
+	if r.status != 200 || v.Mode != api.VerificationModeCi || v.EffectiveMode != api.EffectiveVerificationModeCi || v.Source != "owner" {
+		t.Fatalf("put: %d %s", r.status, r.body)
+	}
+	if r := send(h, "PUT", path, `{"mode":"fast"}`, nil); r.status != 422 {
+		t.Errorf("unknown mode: %d %s", r.status, r.body)
+	}
+	if r := send(h, "GET", "/projects/nope/verification", "", nil); r.status != 404 {
+		t.Errorf("unknown project: %d %s", r.status, r.body)
 	}
 }

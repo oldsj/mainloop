@@ -621,6 +621,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/projects/{project_id}/verification': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Project Verification
+     * @description Where the project's heavy checks run: the owner's mode, what it resolves to, and the cached detection of the project's CI. Detects first when there is no detection, when the last one is a day old, or when refresh is set; a failed detection is reported in detect_error and leaves the last good one in place.
+     */
+    get: operations['getProjectVerification'];
+    /**
+     * Set Project Verification Mode
+     * @description Set where the project's heavy checks run. auto follows the detection: hybrid when CI reported checks on the default branch, local otherwise.
+     */
+    put: operations['updateProjectVerification'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/projects/{project_id}/environment': {
     parameters: {
       query?: never;
@@ -1792,6 +1816,55 @@ export interface components {
        * @default []
        */
       topics: components['schemas']['TopicLine'][];
+    };
+    /** ProjectVerification */
+    ProjectVerification: {
+      mode: components['schemas']['VerificationMode'];
+      effective_mode: components['schemas']['EffectiveVerificationMode'];
+      /**
+       * Source
+       * @description owner when the owner chose the mode; detected or default when auto resolved it.
+       * @enum {string}
+       */
+      source: 'owner' | 'detected' | 'default';
+      detection: components['schemas']['CIDetection'] | null;
+      /** Detect Error */
+      detect_error?: string | null;
+    };
+    /** ProjectVerificationUpdate */
+    ProjectVerificationUpdate: {
+      mode: components['schemas']['VerificationMode'];
+    };
+    /**
+     * VerificationMode
+     * @enum {string}
+     */
+    VerificationMode: 'auto' | 'ci' | 'hybrid' | 'local';
+    /**
+     * EffectiveVerificationMode
+     * @enum {string}
+     */
+    EffectiveVerificationMode: 'ci' | 'hybrid' | 'local';
+    /** CIDetection */
+    CIDetection: {
+      /**
+       * Usable
+       * @description At least one check reported on the default branch's tip.
+       */
+      usable: boolean;
+      /** Branch */
+      branch: string;
+      /** Sha */
+      sha?: string | null;
+      /** Checks */
+      checks: number;
+      /** Sources */
+      sources: string[];
+      /**
+       * Checked At
+       * Format: date-time
+       */
+      checked_at: string;
     };
     /**
      * MergePolicy
@@ -7076,6 +7149,103 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Request Entity Too Large */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  getProjectVerification: {
+    parameters: {
+      query?: {
+        refresh?: boolean;
+      };
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProjectVerification'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  updateProjectVerification: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ProjectVerificationUpdate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProjectVerification'];
         };
       };
       /** @description Not Found */

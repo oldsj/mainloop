@@ -199,12 +199,18 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	taskSvc := tasks.NewService(cfg, pool, reg, log, taskOpts...)
 	prSvc, mergeSvc := newPullRequestServices(cfg, pool, gh, kc, log)
+	// The CI service serves the verification routes and runs the watch loop; watch_checks rows are
+	// written by the MCP process. Nil without a GitHub App.
+	ciSvc := newCIService(pool, gh)
+	if ciSvc != nil {
+		ciSvc.Sender = svc
+	}
 
 	handler, err := app.New(app.Deps{
 		Config: cfg, Log: log, DB: pool, Pool: pool, Hub: hub, Live: live,
 		Providers: reg, Projects: projectSvc, Tasks: taskSvc, Workspaces: wsSvc, Sessions: svc, Preview: previews, LiveRelay: liveRelay,
 		HITL: hitlSvc, Attention: attn, Health: healthSvc, Schedules: schedSvc, Merge: mergeSvc,
-		Devloop: &devloop.LeaseService{Pool: pool}, DevloopTargets: &devloop.TargetService{Pool: pool},
+		Devloop: &devloop.LeaseService{Pool: pool}, DevloopTargets: &devloop.TargetService{Pool: pool}, CI: ciSvc,
 	}).Handler()
 	if err != nil {
 		return err
@@ -265,9 +271,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	if devOps != nil {
 		devOps.Register(runner)
 	}
-	if ciSvc := newCIService(pool, gh); ciSvc != nil {
-		// watch_checks rows are written by the MCP process; this one polls CI and delivers.
-		ciSvc.Sender = svc
+	if ciSvc != nil {
 		runner.Add(ciSvc.WatchLoop())
 	}
 	if prSvc != nil {

@@ -36,3 +36,14 @@ UPDATE check_watches
 SET state = sqlc.arg(state), detail = sqlc.narg(detail), lease_owner = NULL, lease_until = NULL,
     updated_at = now()
 WHERE id = sqlc.arg(id) AND lease_owner = sqlc.arg(lease_owner) AND attempts = sqlc.arg(attempts);
+
+-- name: GetProjectVerification :one
+SELECT id, full_name, default_branch, verification_mode, ci_detection, ci_detected_at
+FROM projects
+WHERE id = $1 AND user_id = $2;
+
+-- name: SetProjectVerificationMode :execrows
+UPDATE projects SET verification_mode = $3 WHERE id = $1 AND user_id = $2;
+
+-- name: SetProjectCIDetection :execrows
+UPDATE projects SET ci_detection = $3, ci_detected_at = $4 WHERE id = $1 AND user_id = $2;

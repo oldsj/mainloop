@@ -7,6 +7,7 @@ package dbq
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -102,6 +103,40 @@ func (q *Queries) GetCheckWatchByKey(ctx context.Context, idempotencyKey string)
 	return i, err
 }
 
+const getProjectVerification = `-- name: GetProjectVerification :one
+SELECT id, full_name, default_branch, verification_mode, ci_detection, ci_detected_at
+FROM projects
+WHERE id = $1 AND user_id = $2
+`
+
+type GetProjectVerificationParams struct {
+	ID     string
+	UserID string
+}
+
+type GetProjectVerificationRow struct {
+	ID               string
+	FullName         string
+	DefaultBranch    string
+	VerificationMode string
+	CiDetection      json.RawMessage
+	CiDetectedAt     *time.Time
+}
+
+func (q *Queries) GetProjectVerification(ctx context.Context, arg GetProjectVerificationParams) (GetProjectVerificationRow, error) {
+	row := q.db.QueryRow(ctx, getProjectVerification, arg.ID, arg.UserID)
+	var i GetProjectVerificationRow
+	err := row.Scan(
+		&i.ID,
+		&i.FullName,
+		&i.DefaultBranch,
+		&i.VerificationMode,
+		&i.CiDetection,
+		&i.CiDetectedAt,
+	)
+	return i, err
+}
+
 const insertCheckWatch = `-- name: InsertCheckWatch :one
 INSERT INTO check_watches (id, idempotency_key, user_id, project_id, session_id, pr_number, commit_sha, deadline)
 VALUES (
@@ -157,6 +192,48 @@ func (q *Queries) InsertCheckWatch(ctx context.Context, arg InsertCheckWatchPara
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const setProjectCIDetection = `-- name: SetProjectCIDetection :execrows
+UPDATE projects SET ci_detection = $3, ci_detected_at = $4 WHERE id = $1 AND user_id = $2
+`
+
+type SetProjectCIDetectionParams struct {
+	ID           string
+	UserID       string
+	CiDetection  json.RawMessage
+	CiDetectedAt *time.Time
+}
+
+func (q *Queries) SetProjectCIDetection(ctx context.Context, arg SetProjectCIDetectionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setProjectCIDetection,
+		arg.ID,
+		arg.UserID,
+		arg.CiDetection,
+		arg.CiDetectedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setProjectVerificationMode = `-- name: SetProjectVerificationMode :execrows
+UPDATE projects SET verification_mode = $3 WHERE id = $1 AND user_id = $2
+`
+
+type SetProjectVerificationModeParams struct {
+	ID               string
+	UserID           string
+	VerificationMode string
+}
+
+func (q *Queries) SetProjectVerificationMode(ctx context.Context, arg SetProjectVerificationModeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setProjectVerificationMode, arg.ID, arg.UserID, arg.VerificationMode)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const settleCheckWatch = `-- name: SettleCheckWatch :execrows

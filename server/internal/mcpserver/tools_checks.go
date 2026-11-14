@@ -11,7 +11,8 @@ import (
 	"github.com/oldsj/mainloop/server/internal/ci"
 )
 
-// checkTools are the CI tools. check_status reads only; watch_checks records a durable watch (the
+// checkTools are the CI tools. check_status and get_verification read (get_verification may
+// refresh the project's cached CI detection); watch_checks records a durable watch (the
 // idempotent request_id makes a retry find the same one) that the watch loop in serve-api settles
 // and delivers. The service is nil in a process that has no GitHub App, and then the tools answer
 // that they are unavailable.
@@ -45,7 +46,53 @@ func (s *Server) checkTools() []Tool {
 			}, "project_id", "request_id"),
 			Handle: s.watchChecks,
 		},
+		{
+			Name: agentauth.ToolGetVerification,
+			Description: "Read where the bound project's heavy checks run: mode (the owner's setting: auto, ci, hybrid or local), " +
+				"effective_mode (what auto resolved to from the project's detected CI), and what to run in the workspace " +
+				"before you push. Read it before deciding how much to test locally.",
+			InputSchema: objectSchema(map[string]any{"project_id": stringSchema(1, 100)}, "project_id"),
+			Handle:      s.getVerification,
+		},
 	}
+}
+
+func (s *Server) getVerification(ctx context.Context, a agentauth.Actor, raw json.RawMessage) (Result, error) {
+	var in struct {
+		ProjectID string `json:"project_id"`
+	}
+	if err := decode(raw, &in); err != nil {
+		return Result{}, err
+	}
+	var err error
+	if in.ProjectID, err = text(in.ProjectID, 1, 100); err != nil {
+		return Result{}, err
+	}
+	if s.CI == nil {
+		return Result{}, failure("unavailable", "CI checks are not available")
+	}
+	if err := projectAuthority(a, in.ProjectID); err != nil {
+		return Result{}, err
+	}
+	v, err := s.CI.Verification(ctx, a.UserID, in.ProjectID, false)
+	if err != nil {
+		return Result{}, ciFailure(err)
+	}
+	line := fmt.Sprintf("Verification: %s (mode %s, %s). %s", v.Effective, v.Mode, v.Source, ci.Instructions(v.Effective))
+	m := map[string]any{
+		"mode": string(v.Mode), "effective_mode": string(v.Effective), "source": string(v.Source),
+		"instructions": ci.Instructions(v.Effective), "text": line,
+	}
+	if d := v.Detection; d != nil {
+		m["detection"] = map[string]any{
+			"usable": d.Usable, "branch": d.Branch, "sha": d.SHA, "checks": d.Checks, "sources": d.Sources,
+			"checked_at": d.CheckedAt.UTC().Format(time.RFC3339),
+		}
+	}
+	if v.DetectError != "" {
+		m["detect_error"] = v.DetectError
+	}
+	return Result{Text: line, Structured: m}, nil
 }
 
 func (s *Server) watchChecks(ctx context.Context, a agentauth.Actor, raw json.RawMessage) (Result, error) {

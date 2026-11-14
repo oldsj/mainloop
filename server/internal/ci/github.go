@@ -15,6 +15,7 @@ import (
 // statuses, so it covers GitHub Actions and any other check provider that reports to GitHub.
 type GitHubAPI interface {
 	PullRequest(ctx context.Context, repo github.Repo, number int) (*github.PullRequestInfo, error)
+	BranchTip(ctx context.Context, repo github.Repo, branch string) (string, error)
 	CheckSuites(ctx context.Context, repo github.Repo, sha string) ([]github.CheckSuite, error)
 	CheckRuns(ctx context.Context, repo github.Repo, sha string) ([]github.CheckRun, error)
 	CommitStatuses(ctx context.Context, repo github.Repo, sha string) ([]github.CommitStatus, error)
@@ -44,6 +45,15 @@ func (g GitHub) HeadSHA(ctx context.Context, repo Repo, pr int) (string, error) 
 		return "", err
 	}
 	return info.Head.SHA, nil
+}
+
+// BranchHead resolves a branch to its tip commit.
+func (g GitHub) BranchHead(ctx context.Context, repo Repo, branch string) (string, error) {
+	sha, err := g.API.BranchTip(ctx, ghRepo(repo), branch)
+	if errors.Is(err, github.ErrNotFound) {
+		return "", ErrNotFound
+	}
+	return sha, err
 }
 
 // unknownCommit reports an answer that means GitHub has no such commit: 404, or the 422 ("No

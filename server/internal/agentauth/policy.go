@@ -20,6 +20,7 @@ const (
 	ToolListDependabotAlerts      = "list_dependabot_alerts"
 	ToolCheckStatus               = "check_status"
 	ToolWatchChecks               = "watch_checks"
+	ToolGetVerification           = "get_verification"
 	ToolTaskGet                   = "task_get"
 	ToolTaskList                  = "task_list"
 	ToolTaskHistory               = "task_history"
@@ -41,7 +42,7 @@ const (
 var AllTools = []string{
 	ToolWhoami, ToolTopics, ToolTopicOpen, ToolNote, ToolDecide, ToolPendingAdd, ToolPendingDone,
 	ToolOpenPullRequest,
-	ToolGetIssue, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks,
+	ToolGetIssue, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolDelegate, ToolTaskCancel, ToolSteer, ToolReport,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
@@ -117,7 +118,7 @@ var (
 	// tools. They carry no feature gate of their own: wherever an actor can open a pull request on
 	// its bound project, it can also read that project's issues, alerts and CI results.
 	issueTools = []string{ToolGetIssue, ToolListDependabotAlerts}
-	checkTools = []string{ToolCheckStatus, ToolWatchChecks}
+	checkTools = []string{ToolCheckStatus, ToolWatchChecks, ToolGetVerification}
 )
 
 // Tools returns the tool names the actor may use on the surface, in [AllTools] order.

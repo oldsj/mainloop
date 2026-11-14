@@ -13,6 +13,7 @@ import {
 import { agentLabel } from '@/lib/agentLabel';
 import { avatarUrl, httpsUrl } from '@/lib/url';
 import { MergePolicySection } from './MergePolicySection';
+import { VerificationSection } from './VerificationSection';
 import {
   agentKindOf,
   commitRowSchema,
@@ -285,6 +286,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
         <div id="project-settings-body" hidden={!settingsOpen}>
           <div className="gap-md flex flex-col">
             <MergePolicySection projectId={id} />
+            <VerificationSection projectId={id} />
             <EnvironmentSection projectId={id} />
           </div>
         </div>

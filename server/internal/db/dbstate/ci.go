@@ -24,3 +24,15 @@ const (
 	WatchNoChecks       CheckWatchOutcome = "no_checks"
 	WatchNotFound       CheckWatchOutcome = "not_found"
 )
+
+// VerificationMode is projects.verification_mode: where a project's heavy checks run. Auto follows
+// what was detected; the others are the owner's explicit choice.
+type VerificationMode string
+
+// Verification modes.
+const (
+	VerifyAuto   VerificationMode = "auto"
+	VerifyCI     VerificationMode = "ci"
+	VerifyHybrid VerificationMode = "hybrid"
+	VerifyLocal  VerificationMode = "local"
+)

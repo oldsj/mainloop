@@ -165,6 +165,11 @@ var writeCases = []writeCase{
 		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
 			return map[string]any{"project_id": "p1", "pr_number": 1, "request_id": "dead"}
 		}},
+	// get_verification may write the project's cached CI detection.
+	{tool: "get_verification", prs: true,
+		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
+			return map[string]any{"project_id": "p1"}
+		}},
 	{tool: "dev_lease_acquire", devloop: true,
 		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any { return map[string]any{} }},
 	{tool: "dev_lease_release", devloop: true,
