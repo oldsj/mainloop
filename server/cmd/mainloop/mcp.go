@@ -55,6 +55,7 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		PRs:          prSvc,
 		Merge:        mergeSvc,
 		Issues:       issuesSvc,
+		CI:           newCIService(pool, gh),
 		DevLease:     &devloop.LeaseService{Pool: pool},
 		DevOps:       &devloop.OperationsService{Pool: pool},
 		DevTargets:   &devloop.TargetService{Pool: pool},

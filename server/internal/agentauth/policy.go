@@ -18,7 +18,7 @@ const (
 	ToolOpenPullRequest           = "open_pull_request"
 	ToolGetIssue                  = "get_issue"
 	ToolListDependabotAlerts      = "list_dependabot_alerts"
-	ToolListCheckRuns             = "list_check_runs"
+	ToolCheckStatus               = "check_status"
 	ToolTaskGet                   = "task_get"
 	ToolTaskList                  = "task_list"
 	ToolTaskHistory               = "task_history"
@@ -40,7 +40,7 @@ const (
 var AllTools = []string{
 	ToolWhoami, ToolTopics, ToolTopicOpen, ToolNote, ToolDecide, ToolPendingAdd, ToolPendingDone,
 	ToolOpenPullRequest,
-	ToolGetIssue, ToolListDependabotAlerts, ToolListCheckRuns,
+	ToolGetIssue, ToolListDependabotAlerts, ToolCheckStatus,
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolDelegate, ToolTaskCancel, ToolSteer, ToolReport,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
@@ -112,10 +112,11 @@ var (
 	devLoopTools = []string{
 		ToolDevLeaseAcquire, ToolDevLeaseRelease, ToolDevSync, ToolDevStatus,
 	}
-	// issueTools are the read-only GitHub issue, Dependabot-alert and check-run tools. They carry
-	// no feature gate of their own: wherever an actor can open a pull request on its bound
-	// project, it can also read that project's issues, alerts and PR check runs.
-	issueTools = []string{ToolGetIssue, ToolListDependabotAlerts, ToolListCheckRuns}
+	// issueTools are the read-only GitHub issue and Dependabot-alert tools, and checkTools the CI
+	// tools. They carry no feature gate of their own: wherever an actor can open a pull request on
+	// its bound project, it can also read that project's issues, alerts and CI results.
+	issueTools = []string{ToolGetIssue, ToolListDependabotAlerts}
+	checkTools = []string{ToolCheckStatus}
 )
 
 // Tools returns the tool names the actor may use on the surface, in [AllTools] order.
@@ -171,6 +172,7 @@ func (p Policy) actorTools(a Actor) []string {
 	}
 	if slices.Contains(tools, ToolOpenPullRequest) {
 		tools = append(tools, issueTools...)
+		tools = append(tools, checkTools...)
 	}
 	if p.MergeTools && slices.Contains(tools, ToolOpenPullRequest) {
 		tools = append(tools, mergeTools...)

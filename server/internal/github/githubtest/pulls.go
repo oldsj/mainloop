@@ -32,11 +32,13 @@ type CheckSuite struct {
 }
 
 // CheckRun is a check run on a commit. Status defaults to "completed"; SuiteID to 1; HeadSHA to the
-// commit it is listed under. StartedAt and CompletedAt, when set, are RFC 3339 times; OutputTitle
-// and OutputSummary, when either is set, are served as the run's output.
+// commit it is listed under. StartedAt and CompletedAt, when set, are RFC 3339 times; OutputTitle,
+// OutputSummary and OutputText, when any is set, are served as the run's output. AppSlug and
+// HTMLURL are served when set.
 type CheckRun struct {
 	ID            int64
 	AppID         int64
+	AppSlug       string
 	SuiteID       int64
 	Name          string
 	Status        string
@@ -44,16 +46,31 @@ type CheckRun struct {
 	HeadSHA       string
 	StartedAt     string
 	CompletedAt   string
+	HTMLURL       string
 	OutputTitle   string
 	OutputSummary string
+	OutputText    string
 }
 
-// Status is a commit status. CreatedAt defaults to a time that grows with ID.
+// Annotation is a check-run annotation, served by the run's annotations read.
+type Annotation struct {
+	Path      string
+	StartLine int
+	EndLine   int
+	Level     string
+	Title     string
+	Message   string
+}
+
+// Status is a commit status. CreatedAt defaults to a time that grows with ID. Description and
+// TargetURL are served when set.
 type Status struct {
-	ID        int64
-	Context   string
-	State     string
-	CreatedAt time.Time
+	ID          int64
+	Context     string
+	State       string
+	Description string
+	TargetURL   string
+	CreatedAt   time.Time
 }
 
 // AppCheck is a required status check bound to an app (0 or -1: any app).
@@ -663,15 +680,22 @@ func (s *Server) commitFacts(w http.ResponseWriter, r *http.Request, repo *Repos
 			if suite == 0 {
 				suite = 1
 			}
-			item := map[string]any{"id": c.ID, "name": c.Name, "head_sha": head, "status": status, "conclusion": conclusion, "app": map[string]any{"id": c.AppID}, "check_suite": map[string]any{"id": suite}}
+			app := map[string]any{"id": c.AppID}
+			if c.AppSlug != "" {
+				app["slug"] = c.AppSlug
+			}
+			item := map[string]any{"id": c.ID, "name": c.Name, "head_sha": head, "status": status, "conclusion": conclusion, "app": app, "check_suite": map[string]any{"id": suite}}
+			if c.HTMLURL != "" {
+				item["html_url"] = c.HTMLURL
+			}
 			if c.StartedAt != "" {
 				item["started_at"] = c.StartedAt
 			}
 			if c.CompletedAt != "" {
 				item["completed_at"] = c.CompletedAt
 			}
-			if c.OutputTitle != "" || c.OutputSummary != "" {
-				item["output"] = map[string]any{"title": c.OutputTitle, "summary": c.OutputSummary}
+			if c.OutputTitle != "" || c.OutputSummary != "" || c.OutputText != "" {
+				item["output"] = map[string]any{"title": c.OutputTitle, "summary": c.OutputSummary, "text": c.OutputText}
 			}
 			runs = append(runs, item)
 		}
@@ -685,7 +709,14 @@ func (s *Server) commitFacts(w http.ResponseWriter, r *http.Request, repo *Repos
 			if created.IsZero() {
 				created = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(c.ID) * time.Second)
 			}
-			statuses = append(statuses, map[string]any{"id": c.ID, "context": c.Context, "state": c.State, "created_at": created.UTC().Format(time.RFC3339)})
+			item := map[string]any{"id": c.ID, "context": c.Context, "state": c.State, "created_at": created.UTC().Format(time.RFC3339)}
+			if c.Description != "" {
+				item["description"] = c.Description
+			}
+			if c.TargetURL != "" {
+				item["target_url"] = c.TargetURL
+			}
+			statuses = append(statuses, item)
 		}
 		from, to, pageNo, last := page(r, len(statuses))
 		s.link(w, r, pageNo, last)
@@ -707,4 +738,27 @@ func (s *Server) commitCall(w http.ResponseWriter, repo *Repository, ref string)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sha": sha})
+}
+
+func (s *Server) annotations(w http.ResponseWriter, repo *Repository, id string) {
+	n, err := strconv.ParseInt(id, 10, 64)
+	s.mu.Lock()
+	list, ok := repo.Annotations[n]
+	s.mu.Unlock()
+	if err != nil || !ok {
+		notFound(w)
+		return
+	}
+	out := []map[string]any{}
+	for _, a := range list {
+		item := map[string]any{
+			"path": a.Path, "start_line": a.StartLine, "end_line": a.EndLine,
+			"annotation_level": a.Level, "message": a.Message,
+		}
+		if a.Title != "" {
+			item["title"] = a.Title
+		}
+		out = append(out, item)
+	}
+	writeJSON(w, http.StatusOK, out)
 }

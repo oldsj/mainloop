@@ -3,11 +3,13 @@ package mcpserver_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/agentauth/authtest"
+	"github.com/oldsj/mainloop/server/internal/ci"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/github/githubtest"
@@ -40,8 +42,11 @@ func newIssuesHarness(t *testing.T) *issuesHarness {
 		Runs: map[string][]githubtest.CheckRun{
 			checkRunsHeadSHA: {
 				{ID: 1, AppID: 9, Name: "build", Conclusion: "success"},
-				{ID: 2, AppID: 9, Name: "test", Conclusion: "failure", OutputSummary: "it failed"},
+				{ID: 2, AppID: 9, Name: "test", Conclusion: "failure", OutputSummary: "it failed", OutputText: "FAIL TestFoo"},
 			},
+		},
+		Annotations: map[int64][]githubtest.Annotation{
+			2: {{Path: "x_test.go", StartLine: 7, EndLine: 7, Level: "failure", Message: "want 1, got 2"}},
 		},
 	})
 	app, err := github.NewApp(github.Options{AppID: fmt.Sprint(githubtest.AppID), PrivateKey: githubtest.PrivateKey(), BaseURL: fake.URL})
@@ -52,6 +57,7 @@ func newIssuesHarness(t *testing.T) *issuesHarness {
 	h.harness = buildHarness(t, false, false, func(srv *mcpserver.Server, pool *pgxpool.Pool) {
 		h.pool = pool
 		srv.Issues = issues.NewService(pool, app)
+		srv.CI = ci.NewService(pool, app)
 	})
 	return h
 }
@@ -130,8 +136,8 @@ func TestIssueToolsFailClosedWithoutProjectAuthority(t *testing.T) {
 	if _, r := h.call(ordinary, bare.Token, "list_dependabot_alerts", map[string]any{"project_id": "p1"}); !r.Result.IsError || r.text()[:11] != "[forbidden]" {
 		t.Errorf("list_dependabot_alerts without authority = %q", r.text())
 	}
-	if _, r := h.call(ordinary, bare.Token, "list_check_runs", map[string]any{"project_id": "p1", "pr_number": 42}); !r.Result.IsError || r.text()[:11] != "[forbidden]" {
-		t.Errorf("list_check_runs without authority = %q", r.text())
+	if _, r := h.call(ordinary, bare.Token, "check_status", map[string]any{"project_id": "p1", "pr_number": 42}); !r.Result.IsError || r.text()[:11] != "[forbidden]" {
+		t.Errorf("check_status without authority = %q", r.text())
 	}
 }
 
@@ -144,42 +150,57 @@ func TestIssueToolsAreUnavailableWithoutAGitHubApp(t *testing.T) {
 	if _, r := h.call(ordinary, a.Token, "list_dependabot_alerts", map[string]any{"project_id": "p1"}); !r.Result.IsError || r.text() != "[unavailable] issues are not available" {
 		t.Errorf("list_dependabot_alerts with no service = %q", r.text())
 	}
-	if _, r := h.call(ordinary, a.Token, "list_check_runs", map[string]any{"project_id": "p1", "pr_number": 1}); !r.Result.IsError || r.text() != "[unavailable] issues are not available" {
-		t.Errorf("list_check_runs with no service = %q", r.text())
+	if _, r := h.call(ordinary, a.Token, "check_status", map[string]any{"project_id": "p1", "pr_number": 1}); !r.Result.IsError || r.text() != "[unavailable] CI checks are not available" {
+		t.Errorf("check_status with no service = %q", r.text())
 	}
 }
 
-func TestListCheckRunsFetchesAMixOfPassedAndFailedRuns(t *testing.T) {
+func TestCheckStatusReportsTheFailureWithItsOutputAndAnnotations(t *testing.T) {
 	h := newIssuesHarness(t)
 	a := h.seedAgent(t)
 
-	_, r := h.call(ordinary, a.Token, "list_check_runs", map[string]any{"project_id": "p1", "pr_number": 42})
+	_, r := h.call(ordinary, a.Token, "check_status", map[string]any{"project_id": "p1", "pr_number": 42})
 	if r.Result.IsError {
-		t.Fatalf("list_check_runs = %q", r.text())
+		t.Fatalf("check_status = %q", r.text())
 	}
-	runs, _ := r.Result.StructuredContent["check_runs"].([]any)
-	if len(runs) != 2 {
-		t.Fatalf("runs = %v", r.Result.StructuredContent)
+	sc := r.Result.StructuredContent
+	if sc["state"] != "failed" || sc["sha"] != checkRunsHeadSHA || sc["pr_number"] != float64(42) {
+		t.Fatalf("status = %v", sc)
 	}
-	byName := map[string]map[string]any{}
-	for _, raw := range runs {
-		run, _ := raw.(map[string]any)
-		byName[run["name"].(string)] = run
+	failures, _ := sc["failures"].([]any)
+	if len(failures) != 1 {
+		t.Fatalf("failures = %v", sc["failures"])
 	}
-	if byName["build"]["conclusion"] != "success" {
-		t.Errorf("build run = %v", byName["build"])
+	f, _ := failures[0].(map[string]any)
+	ann, _ := f["annotations"].([]any)
+	if f["name"] != "test" || f["summary"] != "it failed" || f["text"] != "FAIL TestFoo" || len(ann) != 1 {
+		t.Errorf("failure = %v", f)
 	}
-	if byName["test"]["conclusion"] != "failure" || byName["test"]["output_summary"] != "it failed" {
-		t.Errorf("test run = %v", byName["test"])
+	if !strings.Contains(r.text(), "CI failed at PR #42") || !strings.Contains(r.text(), "failure x_test.go:7 want 1, got 2") {
+		t.Errorf("text = %q", r.text())
+	}
+
+	// The same commit by SHA, before or without a pull request.
+	_, r = h.call(ordinary, a.Token, "check_status", map[string]any{"project_id": "p1", "commit_sha": checkRunsHeadSHA})
+	if r.Result.IsError || r.Result.StructuredContent["state"] != "failed" {
+		t.Errorf("by sha = %q", r.text())
 	}
 }
 
-func TestListCheckRunsForUnknownPullRequestIsNotFound(t *testing.T) {
+func TestCheckStatusRefusesAnUnknownPullRequestAndABadRef(t *testing.T) {
 	h := newIssuesHarness(t)
 	a := h.seedAgent(t)
 
-	_, r := h.call(ordinary, a.Token, "list_check_runs", map[string]any{"project_id": "p1", "pr_number": 999})
+	_, r := h.call(ordinary, a.Token, "check_status", map[string]any{"project_id": "p1", "pr_number": 999})
 	if !r.Result.IsError || r.text() != "[not_found] no such pull request" {
 		t.Errorf("unknown pull request = %v %q", r.Result.IsError, r.text())
+	}
+	for _, args := range []map[string]any{
+		{"project_id": "p1"},
+		{"project_id": "p1", "pr_number": 42, "commit_sha": checkRunsHeadSHA},
+	} {
+		if _, r := h.call(ordinary, a.Token, "check_status", args); !r.Result.IsError {
+			t.Errorf("%v = %q, want a validation error", args, r.text())
+		}
 	}
 }

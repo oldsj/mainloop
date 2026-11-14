@@ -120,11 +120,13 @@ type CheckSuite struct {
 }
 
 // CheckRun is one check run on a commit. SuiteID is the check suite it belongs to. StartedAt and
-// CompletedAt are empty until GitHub reports them; OutputTitle and OutputSummary are the run's own
-// short output, empty when it reported none.
+// CompletedAt are empty until GitHub reports them; OutputTitle, OutputSummary and OutputText are the
+// run's own output, empty when it reported none. AppSlug and HTMLURL are empty when GitHub omits
+// them; HTMLURL is the run's page on GitHub.
 type CheckRun struct {
 	ID            int64
 	AppID         int64
+	AppSlug       string
 	SuiteID       int64
 	Name          string
 	HeadSHA       string
@@ -132,16 +134,31 @@ type CheckRun struct {
 	Conclusion    string
 	StartedAt     string
 	CompletedAt   string
+	HTMLURL       string
 	OutputTitle   string
 	OutputSummary string
+	OutputText    string
 }
 
-// CommitStatus is one commit status (the older CI interface).
+// CommitStatus is one commit status (the older CI interface). Description and TargetURL are empty
+// when the status has none.
 type CommitStatus struct {
-	ID        int64
-	Context   string
-	State     string
-	CreatedAt time.Time
+	ID          int64
+	Context     string
+	State       string
+	Description string
+	TargetURL   string
+	CreatedAt   time.Time
+}
+
+// Annotation is one annotation a check run reported: a file location and a message.
+type Annotation struct {
+	Path      string
+	StartLine int
+	EndLine   int
+	Level     string
+	Title     string
+	Message   string
 }
 
 // Protection is classic branch protection as GitHub returned it. Present is false when the branch
@@ -604,8 +621,10 @@ func (a *App) CheckRuns(ctx context.Context, repo Repo, sha string) ([]CheckRun,
 		Conclusion  *string `json:"conclusion"`
 		StartedAt   *string `json:"started_at"`
 		CompletedAt *string `json:"completed_at"`
+		HTMLURL     *string `json:"html_url"`
 		App         *struct {
-			ID int64 `json:"id"`
+			ID   int64   `json:"id"`
+			Slug *string `json:"slug"`
 		} `json:"app"`
 		Suite *struct {
 			ID int64 `json:"id"`
@@ -613,6 +632,7 @@ func (a *App) CheckRuns(ctx context.Context, repo Repo, sha string) ([]CheckRun,
 		Output *struct {
 			Title   *pullBody `json:"title"`
 			Summary *pullBody `json:"summary"`
+			Text    *pullBody `json:"text"`
 		} `json:"output"`
 	}
 	var all []CheckRun
@@ -628,7 +648,8 @@ func (a *App) CheckRuns(ctx context.Context, repo Repo, sha string) ([]CheckRun,
 		seen[r.ID] = true
 		run := CheckRun{
 			ID: r.ID, Name: r.Name, HeadSHA: r.HeadSHA, Status: *r.Status, Conclusion: deref(r.Conclusion),
-			AppID: r.App.ID, SuiteID: r.Suite.ID, StartedAt: deref(r.StartedAt), CompletedAt: deref(r.CompletedAt),
+			AppID: r.App.ID, AppSlug: deref(r.App.Slug), SuiteID: r.Suite.ID, StartedAt: deref(r.StartedAt),
+			CompletedAt: deref(r.CompletedAt), HTMLURL: deref(r.HTMLURL),
 		}
 		if r.Output != nil {
 			if r.Output.Title != nil {
@@ -636,6 +657,9 @@ func (a *App) CheckRuns(ctx context.Context, repo Repo, sha string) ([]CheckRun,
 			}
 			if r.Output.Summary != nil {
 				run.OutputSummary = string(*r.Output.Summary)
+			}
+			if r.Output.Text != nil {
+				run.OutputText = string(*r.Output.Text)
 			}
 		}
 		all = append(all, run)
@@ -657,10 +681,12 @@ func (a *App) CommitStatuses(ctx context.Context, repo Repo, sha string) ([]Comm
 	seen := map[int64]bool{}
 	for page := 1; page <= listMaxPages+1; page++ {
 		var got []struct {
-			ID        int64  `json:"id"`
-			Context   string `json:"context"`
-			State     string `json:"state"`
-			CreatedAt string `json:"created_at"`
+			ID          int64     `json:"id"`
+			Context     string    `json:"context"`
+			State       string    `json:"state"`
+			Description *pullBody `json:"description"`
+			TargetURL   *string   `json:"target_url"`
+			CreatedAt   string    `json:"created_at"`
 		}
 		path := repoPath(repo, "commits", sha, "statuses") + fmt.Sprintf("?per_page=%d&page=%d", listPerPage, page)
 		if err := a.call(ctx, repo, Permissions{"statuses": Read}, http.MethodGet, path, nil, &got); err != nil {
@@ -675,7 +701,11 @@ func (a *App) CommitStatuses(ctx context.Context, repo Repo, sha string) ([]Comm
 				return nil, ErrUnavailable
 			}
 			seen[s.ID] = true
-			all = append(all, CommitStatus{ID: s.ID, Context: s.Context, State: s.State, CreatedAt: created})
+			st := CommitStatus{ID: s.ID, Context: s.Context, State: s.State, TargetURL: deref(s.TargetURL), CreatedAt: created}
+			if s.Description != nil {
+				st.Description = string(*s.Description)
+			}
+			all = append(all, st)
 		}
 		if len(all) > maxChecks {
 			return nil, ErrUnavailable
@@ -685,6 +715,45 @@ func (a *App) CommitStatuses(ctx context.Context, repo Repo, sha string) ([]Comm
 		}
 	}
 	return nil, ErrIncomplete
+}
+
+// maxAnnotations caps the annotations read for one check run: the first page, which is enough to
+// say why a run failed.
+const maxAnnotations = 50
+
+// CheckRunAnnotations reads the first annotations of one check run, at most [maxAnnotations]. An
+// annotation without a path or message is [ErrUnavailable].
+func (a *App) CheckRunAnnotations(ctx context.Context, repo Repo, runID int64) ([]Annotation, error) {
+	if runID <= 0 {
+		return nil, ErrUnavailable
+	}
+	var got []struct {
+		Path      string    `json:"path"`
+		StartLine int       `json:"start_line"`
+		EndLine   int       `json:"end_line"`
+		Level     string    `json:"annotation_level"`
+		Title     *pullBody `json:"title"`
+		Message   *pullBody `json:"message"`
+	}
+	path := repoPath(repo, "check-runs", strconv.FormatInt(runID, 10), "annotations") + fmt.Sprintf("?per_page=%d", maxAnnotations)
+	if err := a.call(ctx, repo, Permissions{"checks": Read}, http.MethodGet, path, nil, &got); err != nil {
+		return nil, err
+	}
+	if len(got) > maxAnnotations {
+		return nil, ErrUnavailable
+	}
+	out := make([]Annotation, 0, len(got))
+	for _, g := range got {
+		if g.Path == "" || g.Message == nil {
+			return nil, ErrUnavailable
+		}
+		an := Annotation{Path: g.Path, StartLine: g.StartLine, EndLine: g.EndLine, Level: g.Level, Message: string(*g.Message)}
+		if g.Title != nil {
+			an.Title = string(*g.Title)
+		}
+		out = append(out, an)
+	}
+	return out, nil
 }
 
 // BranchProtection reads classic branch protection and hands back GitHub's answer unparsed in Raw.

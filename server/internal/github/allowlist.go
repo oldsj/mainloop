@@ -108,6 +108,7 @@ var rules = []rule{
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/commits/*/check-suites", kindRepo, Permissions{"checks": Read}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/commits/*/check-runs", kindRepo, Permissions{"checks": Read}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/commits/*/statuses", kindRepo, Permissions{"statuses": Read}),
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/check-runs/*/annotations", kindRepo, Permissions{"checks": Read}),
 	// One commit by branch, tag or SHA (CommitSHA). It follows the commit sub-resources above so
 	// that they keep their own permissions.
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/commits/**", kindRepo, Permissions{"contents": Read}),

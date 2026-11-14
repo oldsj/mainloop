@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oldsj/mainloop/server/internal/ci"
 	"github.com/oldsj/mainloop/server/internal/github"
 )
 
@@ -48,9 +49,9 @@ const (
 
 // Check results.
 const (
-	resultPassed  = "passed"
-	resultFailed  = "failed"
-	resultPending = "pending"
+	resultPassed  = ci.Passed
+	resultFailed  = ci.Failed
+	resultPending = ci.Pending
 )
 
 // abandonedSuiteGrace is how long a queued suite with no runs may sit before it stops counting.
@@ -152,40 +153,11 @@ func countChecks(checks []CheckFact) ciCounts {
 // passed, and at least one result exists, so a repository without CI never looks green.
 func green(c ciCounts) bool { return c.Failed == 0 && c.Pending == 0 && c.Results > 0 }
 
-// pendingStates are the in-flight states of a check run, suite or commit status.
-var pendingStates = []string{"queued", "in_progress", "pending", "waiting", "requested"}
+// checkResult judges a run or suite; see [ci.RunResult].
+func checkResult(status, conclusion string) string { return ci.RunResult(status, conclusion) }
 
-// passingConclusions are the completed conclusions that count as green: a plain success, and
-// skipped, which GitHub itself does not treat as blocking a merge. neutral is deliberately
-// excluded: GitHub does not treat it as blocking a branch protection rule, but it is not an
-// assertion that the check actually ran and passed, so a required neutral check must not
-// authorize a merge.
-var passingConclusions = []string{"success", "skipped"}
-
-// checkResult judges a run or suite. A completed success or skipped passes; every other
-// completed conclusion (including neutral) and every unfamiliar state fails, so a result GitHub
-// reports in a way Mainloop does not know is never green.
-func checkResult(status, conclusion string) string {
-	switch {
-	case status == "completed" && slices.Contains(passingConclusions, conclusion):
-		return resultPassed
-	case status == "completed":
-		return resultFailed
-	case slices.Contains(pendingStates, status):
-		return resultPending
-	}
-	return resultFailed
-}
-
-func statusResult(state string) string {
-	switch state {
-	case "success":
-		return resultPassed
-	case "pending":
-		return resultPending
-	}
-	return resultFailed
-}
+// statusResult judges a commit status; see [ci.StatusResult].
+func statusResult(state string) string { return ci.StatusResult(state) }
 
 // gather reads the pull request, its files and its CI facts. A GitHub failure is an error, to be
 // retried or reported; a pull request that cannot be merged on principle is reported in

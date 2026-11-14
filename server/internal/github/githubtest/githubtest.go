@@ -132,6 +132,8 @@ type Repository struct {
 	Suites   map[string][]CheckSuite
 	Runs     map[string][]CheckRun
 	Statuses map[string][]Status
+	// Annotations are the check-run annotations, by check-run id. A run with no entry answers 404.
+	Annotations map[int64][]Annotation
 	// Protection is classic branch protection of the default branch; nil means none.
 	// ProtectionStatus, when set, is the status the protection read answers instead, with
 	// ProtectionMessage as its message (default: an upstream-looking secret marker).
@@ -462,6 +464,8 @@ func need(method string, segs []string) map[string]string {
 		return read("checks")
 	case method == http.MethodGet && len(rest) >= 2 && rest[0] == "commits":
 		return read("contents")
+	case method == http.MethodGet && len(rest) == 3 && rest[0] == "check-runs" && rest[2] == "annotations":
+		return read("checks")
 	case method == http.MethodGet && len(rest) == 3 && rest[0] == "branches" && rest[2] == "protection":
 		return read("administration")
 	case method == http.MethodGet && len(rest) >= 2 && rest[0] == "branches":
@@ -558,6 +562,8 @@ func (s *Server) repoCall(w http.ResponseWriter, r *http.Request, segs []string)
 		s.commitFacts(w, r, repo, rest[1], rest[2])
 	case rest[0] == "commits":
 		s.commitCall(w, repo, strings.Join(rest[1:], "/"))
+	case rest[0] == "check-runs" && len(rest) == 3:
+		s.annotations(w, repo, rest[1])
 	case rest[0] == "branches":
 		s.branchCall(w, r, repo, rest[1:])
 	case rest[0] == "rules":
