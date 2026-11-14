@@ -29,6 +29,8 @@ tags:
     description: Projects, merge policy, provider preference and smoke data.
   - name: sessions
     description: Native-bound sessions and provider profiles.
+  - name: seen
+    description: The owner's seen state across devices.
   - name: workspaces
     description: Workspace lifecycle and preview ports.
   - name: environments
@@ -2122,6 +2124,108 @@ paths:
                 title: Response List Providers Providers Get
         '404':
           description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+  /seen:
+    get:
+      tags:
+        - seen
+      summary: Get Seen State
+      description: >-
+        The owner's seen state, shared by every device: when each task was last opened (the last
+        60 days), the last two app visits, and `since`, when the record started. A task that
+        changed after `since` and after it was last opened is unseen. With no record yet,
+        `since` is now and nothing is unseen.
+      operationId: getSeen
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Seen'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+  /seen/visits:
+    post:
+      tags:
+        - seen
+      summary: Record Visit
+      description: >-
+        Record that the owner opened the app now. `previous_visit` in the answer is the visit
+        before this one, from any device: the baseline for what changed since they were here.
+      operationId: recordVisit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Seen'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+  /seen/tasks/{task_id}:
+    put:
+      tags:
+        - seen
+      summary: Mark Task Seen
+      description: >-
+        Record that the owner has the task (or one of its sessions) open now, by the server's
+        clock, so it is never earlier than the task's own last change. A later mark replaces an
+        earlier one; an earlier one never replaces a later one.
+      operationId: markTaskSeen
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+            title: Task Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SeenTask'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '503':
+          description: Service Unavailable
           content:
             application/json:
               schema:
@@ -7120,6 +7224,57 @@ components:
         - worker
       title: SessionDefaultRole
       description: Which sessions a default applies to, the main thread or every task session.
+    Seen:
+      additionalProperties: false
+      properties:
+        since:
+          format: date-time
+          type: string
+          title: Since
+          description: When the owner's record started; a task that last changed before it is seen.
+        last_visit:
+          anyOf:
+            - format: date-time
+              type: string
+            - type: 'null'
+          title: Last Visit
+          description: The most recent recorded visit.
+        previous_visit:
+          anyOf:
+            - format: date-time
+              type: string
+            - type: 'null'
+          title: Previous Visit
+          description: The visit before last_visit.
+        tasks:
+          items:
+            $ref: '#/components/schemas/SeenTask'
+          type: array
+          title: Tasks
+      required:
+        - since
+        - last_visit
+        - previous_visit
+        - tasks
+      title: Seen
+      type: object
+    SeenTask:
+      additionalProperties: false
+      properties:
+        task_id:
+          maxLength: 100
+          minLength: 1
+          title: Task Id
+          type: string
+        seen_at:
+          format: date-time
+          type: string
+          title: Seen At
+      required:
+        - task_id
+        - seen_at
+      title: SeenTask
+      type: object
     SessionDefault:
       properties:
         role:

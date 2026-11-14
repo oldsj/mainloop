@@ -805,6 +805,66 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/seen': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Seen State
+     * @description The owner's seen state, shared by every device: when each task was last opened (the last 60 days), the last two app visits, and `since`, when the record started. A task that changed after `since` and after it was last opened is unseen. With no record yet, `since` is now and nothing is unseen.
+     */
+    get: operations['getSeen'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/seen/visits': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Record Visit
+     * @description Record that the owner opened the app now. `previous_visit` in the answer is the visit before this one, from any device: the baseline for what changed since they were here.
+     */
+    post: operations['recordVisit'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/seen/tasks/{task_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Mark Task Seen
+     * @description Record that the owner has the task (or one of its sessions) open now, by the server's clock, so it is never earlier than the task's own last change. A later mark replaces an earlier one; an earlier one never replaces a later one.
+     */
+    put: operations['markTaskSeen'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/session-defaults': {
     parameters: {
       query?: never;
@@ -3227,6 +3287,37 @@ export interface components {
      * @enum {string}
      */
     SessionDefaultRole: 'main' | 'worker';
+    /** Seen */
+    Seen: {
+      /**
+       * Since
+       * Format: date-time
+       * @description When the owner's record started; a task that last changed before it is seen.
+       */
+      since: string;
+      /**
+       * Last Visit
+       * @description The most recent recorded visit.
+       */
+      last_visit: string | null;
+      /**
+       * Previous Visit
+       * @description The visit before last_visit.
+       */
+      previous_visit: string | null;
+      /** Tasks */
+      tasks: components['schemas']['SeenTask'][];
+    };
+    /** SeenTask */
+    SeenTask: {
+      /** Task Id */
+      task_id: string;
+      /**
+       * Seen At
+       * Format: date-time
+       */
+      seen_at: string;
+    };
     /**
      * SessionDefault
      * @description The default model and effort for one role and provider profile.
@@ -8104,6 +8195,131 @@ export interface operations {
       };
       /** @description Not Found */
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  getSeen: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Seen'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  recordVisit: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Seen'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  markTaskSeen: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        task_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SeenTask'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
         headers: {
           [name: string]: unknown;
         };

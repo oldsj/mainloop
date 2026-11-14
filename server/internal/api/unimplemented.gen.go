@@ -214,6 +214,11 @@ func (Unimplemented) GetSchedule(context.Context, GetScheduleRequestObject) (Get
 	return nil, apierr.NotImplemented
 }
 
+// GetSeen is not implemented yet.
+func (Unimplemented) GetSeen(context.Context, GetSeenRequestObject) (GetSeenResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetSession is not implemented yet.
 func (Unimplemented) GetSession(context.Context, GetSessionRequestObject) (GetSessionResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -344,6 +349,11 @@ func (Unimplemented) ListWorkspaces(context.Context, ListWorkspacesRequestObject
 	return nil, apierr.NotImplemented
 }
 
+// MarkTaskSeen is not implemented yet.
+func (Unimplemented) MarkTaskSeen(context.Context, MarkTaskSeenRequestObject) (MarkTaskSeenResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // OrchestrationHealth is not implemented yet.
 func (Unimplemented) OrchestrationHealth(context.Context, OrchestrationHealthRequestObject) (OrchestrationHealthResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -356,6 +366,11 @@ func (Unimplemented) PutMainProvider(context.Context, PutMainProviderRequestObje
 
 // ReassignTask is not implemented yet.
 func (Unimplemented) ReassignTask(context.Context, ReassignTaskRequestObject) (ReassignTaskResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// RecordVisit is not implemented yet.
+func (Unimplemented) RecordVisit(context.Context, RecordVisitRequestObject) (RecordVisitResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 
