@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 	"strings"
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
@@ -102,6 +103,22 @@ func (s *Server) taskTools() []Tool {
 				"task_id":             id,
 			}, "request_id", "expected_version", "expected_attempt_id", "task_id"),
 			Handle: s.taskCancel,
+		},
+		{
+			Name: agentauth.ToolTaskHold,
+			Description: "Put a task on hold: it leaves the owner's Working and Needs you views until the hold ends, " +
+				"then Mainloop sends you one message to look at it again. Give minutes (1 to 10080) or until (RFC 3339, " +
+				"within 7 days), and a short reason; clear: true ends a hold now. The task keeps running. A hold ends early, " +
+				"with no message from this tool, when the task fails, blocks or ends or anything needs the owner about it; " +
+				"a task in one of those states cannot be held.",
+			InputSchema: objectSchema(map[string]any{
+				"task_id": id,
+				"minutes": map[string]any{"type": "integer", "minimum": 1, "maximum": int(tasks.MaxHold.Minutes())},
+				"until":   map[string]any{"type": "string", "format": "date-time"},
+				"reason":  stringSchema(1, tasks.MaxHoldReason),
+				"clear":   map[string]any{"type": "boolean"},
+			}, "task_id"),
+			Handle: s.taskHold,
 		},
 		{
 			Name: agentauth.ToolSteer,
@@ -425,6 +442,61 @@ func (s *Server) taskCancel(ctx context.Context, a agentauth.Actor, args json.Ra
 		return Result{}, taskFailure(err)
 	}
 	return operationResult(op)
+}
+
+func (s *Server) taskHold(ctx context.Context, a agentauth.Actor, args json.RawMessage) (Result, error) {
+	var in struct {
+		TaskID  string `json:"task_id"`
+		Minutes int    `json:"minutes"`
+		Until   string `json:"until"`
+		Reason  string `json:"reason"`
+		Clear   bool   `json:"clear"`
+	}
+	if err := decode(args, &in); err != nil {
+		return Result{}, err
+	}
+	var h tasks.HoldInput
+	var err error
+	if h.TaskID, err = text(in.TaskID, 1, 100); err != nil {
+		return Result{}, err
+	}
+	// Exactly one of minutes, until and clear.
+	given := 0
+	for _, b := range []bool{in.Minutes != 0, in.Until != "", in.Clear} {
+		if b {
+			given++
+		}
+	}
+	if given != 1 || in.Minutes < 0 || len(in.Reason) > tasks.MaxHoldReason || in.Clear && in.Reason != "" {
+		return Result{}, errValidation
+	}
+	switch {
+	case in.Minutes > 0:
+		h.Until = time.Now().Add(time.Duration(in.Minutes) * time.Minute)
+	case in.Until != "":
+		if h.Until, err = time.Parse(time.RFC3339, in.Until); err != nil {
+			return Result{}, errValidation
+		}
+	}
+	h.Reason = in.Reason
+	p, err := s.taskPrincipal(ctx, a)
+	if err != nil {
+		return Result{}, err
+	}
+	t, err := s.Tasks.Hold(ctx, p, h)
+	if err != nil {
+		return Result{}, taskFailure(err)
+	}
+	m, err := structured(t)
+	if err != nil {
+		return Result{}, err
+	}
+	line := fmt.Sprintf("task %s is no longer held", t.Id)
+	if t.HeldUntil != nil {
+		line = fmt.Sprintf("task %s is held until %s; you will get a message then", t.Id, t.HeldUntil.UTC().Format(time.RFC3339))
+	}
+	m["text"] = line
+	return Result{Text: line, Structured: m}, nil
 }
 
 // taskIdentity is the task part of whoami for a supervisor or child.

@@ -230,7 +230,7 @@ UPDATE tasks
 SET status = 'completed', reason = NULL, decision_attempt_id = NULL, decision_report_id = NULL,
     decision_action = NULL, merge_proposal_id = $3, version = version + 1, updated_at = now()
 WHERE id = $1 AND version = $2
-RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason
 `
 
 type CompleteTaskMergedParams struct {
@@ -282,6 +282,8 @@ func (q *Queries) CompleteTaskMerged(ctx context.Context, arg CompleteTaskMerged
 		&i.MergeProposalID,
 		&i.Model,
 		&i.Effort,
+		&i.HeldUntil,
+		&i.HeldReason,
 	)
 	return i, err
 }
@@ -403,6 +405,23 @@ WHERE r.task_id = $1 AND d.state IN ('pending', 'queued')
 
 func (q *Queries) CountOpenEventDeliveries(ctx context.Context, taskID string) (int64, error) {
 	row := q.db.QueryRow(ctx, countOpenEventDeliveries, taskID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countOpenTaskAttention = `-- name: CountOpenTaskAttention :one
+
+SELECT count(*) FROM attention_items a
+WHERE a.state = 'open'
+  AND (a.task_id = $1
+       OR a.session_id IN (SELECT ta.session_id FROM task_attempts ta WHERE ta.task_id = $1))
+`
+
+// Holds (docs/specs/tasks.md#holds).
+// Open attention items about a task: naming it, or the session of one of its attempts.
+func (q *Queries) CountOpenTaskAttention(ctx context.Context, taskID *string) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenTaskAttention, taskID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -612,7 +631,7 @@ func (q *Queries) GetProjectFullName(ctx context.Context, id string) (string, er
 }
 
 const getTask = `-- name: GetTask :one
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort FROM tasks WHERE id = $1 AND owner_id = $2
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason FROM tasks WHERE id = $1 AND owner_id = $2
 `
 
 type GetTaskParams struct {
@@ -662,6 +681,8 @@ func (q *Queries) GetTask(ctx context.Context, arg GetTaskParams) (Task, error) 
 		&i.MergeProposalID,
 		&i.Model,
 		&i.Effort,
+		&i.HeldUntil,
+		&i.HeldReason,
 	)
 	return i, err
 }
@@ -728,7 +749,7 @@ func (q *Queries) GetTaskAttempt(ctx context.Context, id string) (TaskAttempt, e
 
 const getTaskByID = `-- name: GetTaskByID :one
 
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort FROM tasks WHERE id = $1
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason FROM tasks WHERE id = $1
 `
 
 // Internal lookups for the reconcile handlers, which know a row id and not the caller.
@@ -774,12 +795,14 @@ func (q *Queries) GetTaskByID(ctx context.Context, id string) (Task, error) {
 		&i.MergeProposalID,
 		&i.Model,
 		&i.Effort,
+		&i.HeldUntil,
+		&i.HeldReason,
 	)
 	return i, err
 }
 
 const getTaskByIDForUpdate = `-- name: GetTaskByIDForUpdate :one
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort FROM tasks WHERE id = $1 FOR UPDATE
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason FROM tasks WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetTaskByIDForUpdate(ctx context.Context, id string) (Task, error) {
@@ -824,6 +847,8 @@ func (q *Queries) GetTaskByIDForUpdate(ctx context.Context, id string) (Task, er
 		&i.MergeProposalID,
 		&i.Model,
 		&i.Effort,
+		&i.HeldUntil,
+		&i.HeldReason,
 	)
 	return i, err
 }
@@ -866,7 +891,7 @@ func (q *Queries) GetTaskEventDelivery(ctx context.Context, id string) (TaskEven
 }
 
 const getTaskForUpdate = `-- name: GetTaskForUpdate :one
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort FROM tasks WHERE id = $1 AND owner_id = $2 FOR UPDATE
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason FROM tasks WHERE id = $1 AND owner_id = $2 FOR UPDATE
 `
 
 type GetTaskForUpdateParams struct {
@@ -916,6 +941,8 @@ func (q *Queries) GetTaskForUpdate(ctx context.Context, arg GetTaskForUpdatePara
 		&i.MergeProposalID,
 		&i.Model,
 		&i.Effort,
+		&i.HeldUntil,
+		&i.HeldReason,
 	)
 	return i, err
 }
@@ -1138,7 +1165,7 @@ INSERT INTO tasks (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 )
-RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason
 `
 
 type InsertTaskParams struct {
@@ -1227,6 +1254,8 @@ func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) (Task, e
 		&i.MergeProposalID,
 		&i.Model,
 		&i.Effort,
+		&i.HeldUntil,
+		&i.HeldReason,
 	)
 	return i, err
 }
@@ -1709,7 +1738,7 @@ func (q *Queries) ListAttemptWorkspaceCleanups(ctx context.Context, arg ListAtte
 }
 
 const listChildTasks = `-- name: ListChildTasks :many
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort FROM tasks WHERE owner_id = $1 AND parent_task_id = $2 ORDER BY created_at, id
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason FROM tasks WHERE owner_id = $1 AND parent_task_id = $2 ORDER BY created_at, id
 `
 
 type ListChildTasksParams struct {
@@ -1765,6 +1794,8 @@ func (q *Queries) ListChildTasks(ctx context.Context, arg ListChildTasksParams) 
 			&i.MergeProposalID,
 			&i.Model,
 			&i.Effort,
+			&i.HeldUntil,
+			&i.HeldReason,
 		); err != nil {
 			return nil, err
 		}
@@ -1777,7 +1808,7 @@ func (q *Queries) ListChildTasks(ctx context.Context, arg ListChildTasksParams) 
 }
 
 const listChildTasksForUpdate = `-- name: ListChildTasksForUpdate :many
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort FROM tasks WHERE parent_task_id = $1 ORDER BY id FOR UPDATE
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason FROM tasks WHERE parent_task_id = $1 ORDER BY id FOR UPDATE
 `
 
 // Child tasks in id order, locked. Settling a supervisor takes its task, then these, then its
@@ -1830,6 +1861,81 @@ func (q *Queries) ListChildTasksForUpdate(ctx context.Context, parentTaskID *str
 			&i.MergeProposalID,
 			&i.Model,
 			&i.Effort,
+			&i.HeldUntil,
+			&i.HeldReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExpiredHolds = `-- name: ListExpiredHolds :many
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason FROM tasks
+WHERE held_until IS NOT NULL AND held_until <= $1
+ORDER BY held_until, id
+LIMIT $2
+`
+
+type ListExpiredHoldsParams struct {
+	HeldUntil *time.Time
+	Limit     int32
+}
+
+func (q *Queries) ListExpiredHolds(ctx context.Context, arg ListExpiredHoldsParams) ([]Task, error) {
+	rows, err := q.db.Query(ctx, listExpiredHolds, arg.HeldUntil, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Task{}
+	for rows.Next() {
+		var i Task
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.ProjectID,
+			&i.TopicID,
+			&i.ParentTaskID,
+			&i.RootTaskID,
+			&i.CreatorBindingID,
+			&i.Title,
+			&i.Brief,
+			&i.Mode,
+			&i.AssignedProfileID,
+			&i.SelectionSource,
+			&i.ProviderConstraint,
+			&i.AcceptedEnvironment,
+			&i.Status,
+			&i.Reason,
+			&i.DecisionAttemptID,
+			&i.DecisionReportID,
+			&i.DecisionAction,
+			&i.CurrentAttemptID,
+			&i.Version,
+			&i.CheckoutBranch,
+			&i.CheckoutRef,
+			&i.CheckoutDepth,
+			&i.PrNumber,
+			&i.PrUrl,
+			&i.PrHeadSha,
+			&i.PrRepository,
+			&i.PrDescription,
+			&i.PrState,
+			&i.CiState,
+			&i.CiHeadSha,
+			&i.ProjectedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.MergeProposalID,
+			&i.Model,
+			&i.Effort,
+			&i.HeldUntil,
+			&i.HeldReason,
 		); err != nil {
 			return nil, err
 		}
@@ -2019,7 +2125,7 @@ func (q *Queries) ListOpenOperationsForSource(ctx context.Context, sourceAttempt
 
 const listProjectionCandidates = `-- name: ListProjectionCandidates :many
 
-SELECT t.id, t.owner_id, t.project_id, t.topic_id, t.parent_task_id, t.root_task_id, t.creator_binding_id, t.title, t.brief, t.mode, t.assigned_profile_id, t.selection_source, t.provider_constraint, t.accepted_environment, t.status, t.reason, t.decision_attempt_id, t.decision_report_id, t.decision_action, t.current_attempt_id, t.version, t.checkout_branch, t.checkout_ref, t.checkout_depth, t.pr_number, t.pr_url, t.pr_head_sha, t.pr_repository, t.pr_description, t.pr_state, t.ci_state, t.ci_head_sha, t.projected_at, t.created_at, t.updated_at, t.merge_proposal_id, t.model, t.effort, p.full_name AS project_full_name
+SELECT t.id, t.owner_id, t.project_id, t.topic_id, t.parent_task_id, t.root_task_id, t.creator_binding_id, t.title, t.brief, t.mode, t.assigned_profile_id, t.selection_source, t.provider_constraint, t.accepted_environment, t.status, t.reason, t.decision_attempt_id, t.decision_report_id, t.decision_action, t.current_attempt_id, t.version, t.checkout_branch, t.checkout_ref, t.checkout_depth, t.pr_number, t.pr_url, t.pr_head_sha, t.pr_repository, t.pr_description, t.pr_state, t.ci_state, t.ci_head_sha, t.projected_at, t.created_at, t.updated_at, t.merge_proposal_id, t.model, t.effort, t.held_until, t.held_reason, p.full_name AS project_full_name
 FROM tasks t
 JOIN projects p ON p.id = t.project_id
 WHERE t.mode = 'code' AND t.status NOT IN ('completed', 'failed', 'cancelled')
@@ -2073,6 +2179,8 @@ type ListProjectionCandidatesRow struct {
 	MergeProposalID     *string
 	Model               *string
 	Effort              *string
+	HeldUntil           *time.Time
+	HeldReason          *string
 	ProjectFullName     string
 }
 
@@ -2126,6 +2234,8 @@ func (q *Queries) ListProjectionCandidates(ctx context.Context, arg ListProjecti
 			&i.MergeProposalID,
 			&i.Model,
 			&i.Effort,
+			&i.HeldUntil,
+			&i.HeldReason,
 			&i.ProjectFullName,
 		); err != nil {
 			return nil, err
@@ -2504,7 +2614,7 @@ func (q *Queries) ListTaskReports(ctx context.Context, taskIds []string) ([]Task
 }
 
 const listTasks = `-- name: ListTasks :many
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort FROM tasks
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason FROM tasks
 WHERE owner_id = $1
   AND ($2::text IS NULL OR project_id = $2)
   AND ($3::text IS NULL OR parent_task_id = $3)
@@ -2565,6 +2675,8 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 			&i.MergeProposalID,
 			&i.Model,
 			&i.Effort,
+			&i.HeldUntil,
+			&i.HeldReason,
 		); err != nil {
 			return nil, err
 		}
@@ -3084,6 +3196,25 @@ func (q *Queries) RecordAttemptProgress(ctx context.Context, arg RecordAttemptPr
 	return err
 }
 
+const releaseExpiredHold = `-- name: ReleaseExpiredHold :execrows
+UPDATE tasks SET held_until = NULL, held_reason = NULL, updated_at = now()
+WHERE id = $1 AND held_until = $2
+`
+
+type ReleaseExpiredHoldParams struct {
+	ID        string
+	HeldUntil *time.Time
+}
+
+// Clears a hold that has run out, only if it is still the same hold.
+func (q *Queries) ReleaseExpiredHold(ctx context.Context, arg ReleaseExpiredHoldParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseExpiredHold, arg.ID, arg.HeldUntil)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const releaseTaskWriter = `-- name: ReleaseTaskWriter :execrows
 UPDATE workspace_writer_claims
 SET held = false, fence_evidence_ref = $3, fenced_at = now()
@@ -3345,7 +3476,7 @@ SET current_attempt_id = $1, status = $2, reason = $3,
     decision_action = CASE WHEN $2 = 'blocked' THEN decision_action END,
     version = version + 1, updated_at = now()
 WHERE id = $5
-RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason
 `
 
 type SetTaskAttemptParams struct {
@@ -3404,6 +3535,8 @@ func (q *Queries) SetTaskAttempt(ctx context.Context, arg SetTaskAttemptParams) 
 		&i.MergeProposalID,
 		&i.Model,
 		&i.Effort,
+		&i.HeldUntil,
+		&i.HeldReason,
 	)
 	return i, err
 }
@@ -3443,6 +3576,66 @@ func (q *Queries) SetTaskEventDeliveryState(ctx context.Context, arg SetTaskEven
 		&i.LeaseOwner,
 		&i.LeaseUntil,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setTaskHold = `-- name: SetTaskHold :one
+UPDATE tasks SET held_until = $2, held_reason = $3, updated_at = now()
+WHERE id = $1
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason
+`
+
+type SetTaskHoldParams struct {
+	ID         string
+	HeldUntil  *time.Time
+	HeldReason *string
+}
+
+func (q *Queries) SetTaskHold(ctx context.Context, arg SetTaskHoldParams) (Task, error) {
+	row := q.db.QueryRow(ctx, setTaskHold, arg.ID, arg.HeldUntil, arg.HeldReason)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.ProjectID,
+		&i.TopicID,
+		&i.ParentTaskID,
+		&i.RootTaskID,
+		&i.CreatorBindingID,
+		&i.Title,
+		&i.Brief,
+		&i.Mode,
+		&i.AssignedProfileID,
+		&i.SelectionSource,
+		&i.ProviderConstraint,
+		&i.AcceptedEnvironment,
+		&i.Status,
+		&i.Reason,
+		&i.DecisionAttemptID,
+		&i.DecisionReportID,
+		&i.DecisionAction,
+		&i.CurrentAttemptID,
+		&i.Version,
+		&i.CheckoutBranch,
+		&i.CheckoutRef,
+		&i.CheckoutDepth,
+		&i.PrNumber,
+		&i.PrUrl,
+		&i.PrHeadSha,
+		&i.PrRepository,
+		&i.PrDescription,
+		&i.PrState,
+		&i.CiState,
+		&i.CiHeadSha,
+		&i.ProjectedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.MergeProposalID,
+		&i.Model,
+		&i.Effort,
+		&i.HeldUntil,
+		&i.HeldReason,
 	)
 	return i, err
 }
@@ -3555,7 +3748,7 @@ SET pr_number = $2, pr_url = $3, pr_head_sha = $4, pr_state = $5, ci_state = $6,
     pr_repository = $8, pr_description = $9,
     projected_at = $10, version = version + 1, updated_at = now()
 WHERE id = $1
-RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason
 `
 
 type SetTaskProjectionParams struct {
@@ -3624,6 +3817,8 @@ func (q *Queries) SetTaskProjection(ctx context.Context, arg SetTaskProjectionPa
 		&i.MergeProposalID,
 		&i.Model,
 		&i.Effort,
+		&i.HeldUntil,
+		&i.HeldReason,
 	)
 	return i, err
 }
@@ -3640,7 +3835,7 @@ func (q *Queries) TouchAttemptLiveness(ctx context.Context, id string) error {
 }
 
 const touchTask = `-- name: TouchTask :one
-UPDATE tasks SET version = version + 1, updated_at = now() WHERE id = $1 AND version = $2 RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort
+UPDATE tasks SET version = version + 1, updated_at = now() WHERE id = $1 AND version = $2 RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason
 `
 
 type TouchTaskParams struct {
@@ -3691,6 +3886,8 @@ func (q *Queries) TouchTask(ctx context.Context, arg TouchTaskParams) (Task, err
 		&i.MergeProposalID,
 		&i.Model,
 		&i.Effort,
+		&i.HeldUntil,
+		&i.HeldReason,
 	)
 	return i, err
 }
@@ -3721,7 +3918,7 @@ SET status = $3,
     version = version + 1,
     updated_at = now()
 WHERE id = $1 AND version = $2
-RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason
 `
 
 type UpdateTaskStateParams struct {
@@ -3786,6 +3983,8 @@ func (q *Queries) UpdateTaskState(ctx context.Context, arg UpdateTaskStateParams
 		&i.MergeProposalID,
 		&i.Model,
 		&i.Effort,
+		&i.HeldUntil,
+		&i.HeldReason,
 	)
 	return i, err
 }

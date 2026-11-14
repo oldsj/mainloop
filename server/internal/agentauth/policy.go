@@ -27,6 +27,7 @@ const (
 	ToolTaskHistory               = "task_history"
 	ToolDelegate                  = "delegate"
 	ToolTaskCancel                = "task_cancel"
+	ToolTaskHold                  = "task_hold"
 	ToolSteer                     = "steer"
 	ToolReport                    = "report"
 	ToolPreparePullRequestMerge   = "prepare_pull_request_merge"
@@ -45,7 +46,7 @@ var AllTools = []string{
 	ToolOpenPullRequest,
 	ToolGetIssue, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
 	ToolProjectContext,
-	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolDelegate, ToolTaskCancel, ToolSteer, ToolReport,
+	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolDelegate, ToolTaskCancel, ToolTaskHold, ToolSteer, ToolReport,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
 	ToolDevLeaseAcquire, ToolDevLeaseRelease, ToolDevSync, ToolDevStatus,
@@ -162,6 +163,8 @@ func (p Policy) actorTools(a Actor) []string {
 			ToolPendingAdd, ToolPendingDone, ToolOpenPullRequest)
 		tools = append(tools, taskRead...)
 		tools = append(tools, taskManagement...)
+		// Only the main thread holds a task: it is the owner's view that a hold changes.
+		tools = append(tools, ToolTaskHold)
 	case (a.Role == dbstate.RoleSupervisor && a.Depth == 1) || (a.Role == dbstate.RoleChild && a.Depth == 2):
 		tools = append(tools, ToolWhoami, ToolReport)
 		tools = append(tools, taskRead...)

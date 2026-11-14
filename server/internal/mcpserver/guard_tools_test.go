@@ -118,6 +118,12 @@ var writeCases = []writeCase{
 		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
 			return map[string]any{"request_id": "dead", "title": "Plan", "brief": "Make a plan", "mode": "coordination"}
 		}},
+	{tool: "task_hold", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(t *testing.T, h *harness, _ *prHarness, a authtest.Seeded) map[string]any {
+			made := setupCall(t, h, a, "delegate", map[string]any{"request_id": "held", "title": "Plan", "brief": "b", "mode": "coordination"})
+			id, _ := made["task_id"].(string)
+			return map[string]any{"task_id": id, "minutes": 60, "reason": "later"}
+		}},
 	{tool: "task_cancel", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
 		prepare: func(t *testing.T, h *harness, _ *prHarness, a authtest.Seeded) map[string]any {
 			made := setupCall(t, h, a, "delegate", map[string]any{"request_id": "live", "title": "Plan", "brief": "b", "mode": "coordination"})

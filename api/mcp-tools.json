@@ -555,6 +555,39 @@
       }
     },
     {
+      "name": "task_hold",
+      "description": "Put a task on hold: it leaves the owner's Working and Needs you views until the hold ends, then Mainloop sends you one message to look at it again. Give minutes (1 to 10080) or until (RFC 3339, within 7 days), and a short reason; clear: true ends a hold now. The task keeps running. A hold ends early, with no message from this tool, when the task fails, blocks or ends or anything needs the owner about it; a task in one of those states cannot be held.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "clear": {
+            "type": "boolean"
+          },
+          "minutes": {
+            "maximum": 10080,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "task_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "until": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": ["task_id"],
+        "type": "object"
+      }
+    },
+    {
       "name": "steer",
       "description": "Send a message into a managed task's running turn; it joins at the next tool boundary. Where the turn cannot take it (none running, waiting on input, an agent without steering) it is queued as the task's next message instead; the result says steered, queued or sent. Reuse request_id to retry.",
       "input_schema": {
@@ -838,6 +871,7 @@
         "task_cancel",
         "task_get",
         "task_history",
+        "task_hold",
         "task_list",
         "topic_open",
         "topics",
@@ -873,6 +907,7 @@
         "task_cancel",
         "task_get",
         "task_history",
+        "task_hold",
         "task_list",
         "topic_open",
         "topics",
@@ -907,6 +942,7 @@
         "task_cancel",
         "task_get",
         "task_history",
+        "task_hold",
         "task_list",
         "topic_open",
         "topics",
@@ -945,6 +981,7 @@
         "task_cancel",
         "task_get",
         "task_history",
+        "task_hold",
         "task_list",
         "topic_open",
         "topics",

@@ -61,6 +61,7 @@ func (s *Service) Register(r *reconcile.Runner) {
 	r.AddSweep(s.BriefSweep())
 	r.AddSweep(s.ProjectionSweep())
 	r.AddSweep(s.LivenessSweep())
+	r.AddSweep(s.HoldSweep())
 }
 
 // OpTable is the table of operations the loop drives. Retry and reassign operations are recorded
