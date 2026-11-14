@@ -1,9 +1,8 @@
 repo: oldsj/kagent (branch mainloop-substrate-1-0)
-commit: 541df66e8f6e89f16eb6350bca0cf6410137007a
+commit: 92061451411ad848c79ab52de6e955d8c4a487d7
 paths: proto/kagent/api/v1/{common.proto,runtime.proto,sessions.proto,agents.proto,scheduled_runs.proto,checkpoints.proto}
 notes: |
-  The six files are the fork's at the commit above, the head of #107 (to be repinned to its merge
-  commit), with no overlay: through #63
+  The six files are the fork's at the commit above, the merge of #107, with no overlay: through #63
   (per-Session Git workspace: CreateSessionRequest.workspace = 6, Session.workspace = 16, message
   Workspace in common.proto) and #66 (per-Session credentials: CreateSessionRequest.credentials = 7,
   Session.credentials = 17, SessionCredential, SecretKeyReference), #73 (runtime composition:
