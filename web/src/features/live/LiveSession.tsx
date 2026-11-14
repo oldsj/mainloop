@@ -699,7 +699,7 @@ function Composer({
           ))}
         </div>
       ) : null}
-      <div className="border-border focus-within:border-term-border pl-sm flex items-end gap-2 border p-1">
+      <div className="border-border focus-within:border-ring pl-sm flex items-end gap-2 border p-1">
         <span className="text-term-accent pb-1" aria-hidden="true">
           ❯
         </span>
@@ -731,7 +731,10 @@ function Composer({
           type="button"
           onClick={() => (stop ? interrupt() : submit())}
           aria-label={stop ? 'Interrupt' : 'Send'}
-          className={cn('h-9 w-9 flex-none', stop ? 'text-term-error' : 'text-term-fg-muted')}
+          className={cn(
+            'size-control min-h-9 min-w-9 flex-none',
+            stop ? 'text-term-error' : 'text-term-fg-muted hover:text-term-fg'
+          )}
         >
           {stop ? '■' : '↵'}
         </button>
