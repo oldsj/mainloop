@@ -47,7 +47,7 @@ describe('session page', () => {
     renderSessions('/sessions/s1');
     await heading('Fix login redirect');
     expect(await screen.findByTestId('live-session')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId('live-conn')).toHaveTextContent('live'));
+    await waitFor(() => expect(screen.getByTestId('live-status')).toHaveTextContent('ready'));
     expect(screen.queryByTestId('identity-strip')).not.toBeInTheDocument();
   });
 

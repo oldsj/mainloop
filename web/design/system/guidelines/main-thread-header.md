@@ -4,25 +4,30 @@ Source: `docs/specs/chat.md` (Main thread header), `docs/specs/sessions.md`.
 
 ## Purpose
 
-A one-line summary above the main conversation: whether the agent is ready, the model, how many topics are waiting on the owner, and a stop button while a turn runs. A details toggle opens the identity strip and the topic index.
+The one row above the main conversation: the session's status, how many topics are waiting on the owner, and then its controls: stop while a turn runs, the provider select, the model, and a **Session info** toggle that opens the identity strip and the topic index. It is drawn by the shared session row (`SessionBar`), which the live view also uses, so there is one row whether the conversation is the chat view or the live view.
 
 ## Tokens
 
 - Surface `bg-card`, rule `border-border-subtle`, text `text-muted-foreground`; the state word is `text-foreground`.
-- State marker: ready `bg-term-green`, idle `bg-status-idle`, working `bg-status-working` (it pulses), unconfirmed `bg-status-attention`, failed and unreachable `bg-status-failed`. The marker is a square (`rounded-none`).
+- State marker: ready `bg-term-green`; idle, asleep and paused `bg-status-idle`; working, starting and waking `bg-status-working` (it pulses); needs you and unconfirmed `bg-status-attention`; failed, unreachable and unavailable `bg-status-failed`; connecting and reconnecting `bg-status-idle`, pulsing. The marker is a square (`rounded-none`).
 
 ## States
 
-Status words, most urgent first: **unreachable** (the backend cannot be reached, so the last state is stale), **working**, **last message failed**, **last message unconfirmed**, **idle** (session suspended), **ready**. The word always shows, so colour is never the only signal. The same words are used by the delivery receipt.
+There is one status word. In the chat view, most urgent first: **unreachable** (the backend cannot be reached, so the last state is stale), **working**, **last message failed**, **last message unconfirmed**, **idle** (session suspended), **ready**. The word always shows, so colour is never the only signal. The same words are used by the delivery receipt.
+
+Under the live view the row is the same one, and the live channel's state joins the thread's in a single order: **unreachable**; **needs you** (a request or permission prompt is waiting); **working** or **starting**; **last message failed**; **last message unconfirmed**; then what the channel is doing: **asleep**, **paused**, **waking…**, **connecting…**, **reconnecting…**, **unavailable**, or **ready** once attached. A sleeping session reads "asleep", never "ready" or "idle" beside it.
+
+- **Wake now / Resume:** in the row while the live view is asleep or paused. There is no banner; the composer's placeholder says a message wakes or resumes the session.
+- **Model (live view):** the live view's model and effort button replaces the model text.
 
 - **Model:** the model name without the `claude-` prefix; the agent kind when the session has no model.
 - **Pending:** shown only when topics are waiting on the owner; the sum across topics.
 - **Stop:** shown only while a turn is in flight. Disabled while the stop request runs ("stopping…") and while offline.
-- **Details:** closed by default; it also holds the provider row unless the provider needs attention (see Provider row). Open shows the identity strip (supplied by the sessions slice) and the topic index, `name (status line) [n pending]`, or "none yet".
+- **Session info:** an icon button at the end of the row, labelled "Session info", closed by default; it also holds the provider row unless the provider needs attention (see Provider row). Open shows the identity strip (supplied by the sessions slice) and the topic index, `name (status line) [n pending]`, or "none yet".
 
 ## Provider row
 
-Inside the details while the provider is ready or not started yet. It moves up under the summary when the provider is failed, switching, unknown or unconfirmed, the thread is offline, or the last selection left a notice, so a problem is never hidden behind the toggle. It holds the owner's select (Claude or Codex), the effective provider, state words, and Retry or Restart after a failed start or write.
+Inside the session info while the provider is ready or not started yet. It moves up under the row when the provider is failed, switching, unknown or unconfirmed, the thread is offline, or the last selection left a notice, so a problem is never hidden behind the toggle. It holds the owner's select (Claude or Codex), the effective provider, state words, and Retry or Restart after a failed start or write.
 
 - **Select:** labelled "Main provider". Held while the header is held: offline, a send or stop in flight, the thread or conversation still loading, a switch pending, or a turn or delivery open. Choosing the ready provider again sends nothing.
 - **State words:** offline (selection unavailable), selecting, provider state unconfirmed, state unknown, not started (starts with your next message), preparing, failed, ready, waiting to switch. Plain text beside the select, in a polite `role="status"` region so a change is announced without moving focus.
@@ -32,11 +37,12 @@ Inside the details while the provider is ready or not started yet. It moves up u
 ## Keyboard and screen reader
 
 - The state word is a polite `role="status"`.
-- The details toggle sets `aria-expanded` and `aria-controls`.
+- The Session info toggle has the accessible name "Session info" and sets `aria-expanded` and `aria-controls`.
+- There is one `role="status"` word for the session, in the chat view and under the live view.
 
 ## Touch
 
-- Stop and the details toggle are at least 44 px tall.
+- Stop, Wake now, Resume and the Session info toggle take the control height (`min-h-control`): at least 44 px on touch.
 
 ## Don't
 

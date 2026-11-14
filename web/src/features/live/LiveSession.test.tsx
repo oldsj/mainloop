@@ -48,8 +48,13 @@ afterEach(() => {
   setHidden(false);
 });
 
-const conn = (text: string) =>
-  waitFor(() => expect(screen.getByTestId('live-conn')).toHaveTextContent(text));
+// The row shows one status word. The channel's own state is on the view, as `data-conn`; while the
+// channel is detached and nothing waits on the owner, the word is that state.
+const conn = (state: 'asleep' | 'paused') =>
+  waitFor(() => {
+    expect(screen.getByTestId('live-session')).toHaveAttribute('data-conn', state);
+    expect(screen.getByTestId('live-status')).toHaveTextContent(state);
+  });
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let current: FakeRunner;
@@ -103,11 +108,11 @@ function setHidden(hidden: boolean) {
 
 const attached = () =>
   waitFor(() => {
-    expect(screen.getByTestId('live-conn')).toHaveTextContent('live');
+    expect(screen.getByTestId('live-session')).toHaveAttribute('data-conn', 'attached');
     expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('opus-5-5');
   });
 const idle = () =>
-  waitFor(() => expect(screen.getByTestId('live-status')).toHaveTextContent('idle'));
+  waitFor(() => expect(screen.getByTestId('live-status')).toHaveTextContent('ready'));
 
 /** A message the view sent through Mainloop, with this text. */
 const message = (text: string) => ({
@@ -387,7 +392,7 @@ describe('live session', () => {
     render(<LiveSession sessionId="s1" deps={deps} onFallback={() => (fellBack = true)} />);
     const alert = await screen.findByTestId('live-unavailable');
     expect(alert).toHaveTextContent('Live view unavailable');
-    expect(screen.getByTestId('live-conn')).toHaveTextContent('unavailable');
+    expect(screen.getByTestId('live-status')).toHaveTextContent('unavailable');
     expect(attempts).toBeGreaterThanOrEqual(5);
     const user = userEvent.setup();
     await user.click(within(alert).getByRole('button', { name: 'Use the chat view' }));
@@ -460,7 +465,13 @@ describe('live session', () => {
       world.active = false;
       runner.drop();
       await conn('asleep');
-      expect(screen.getByTestId('live-asleep')).toHaveTextContent('wakes when you send');
+      // One row, no banner: the word, a Wake now button, and the composer says what a message does.
+      expect(screen.queryByTestId('live-asleep')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Wake now' })).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'Message' })).toHaveAttribute(
+        'placeholder',
+        'Message to wake the session'
+      );
       await pause(300); // several asleep polls
       expect(runner.attaches).toHaveLength(1);
       expect(world.nativeReads).toBeGreaterThan(2);
@@ -528,7 +539,11 @@ describe('live session', () => {
       const { runner } = setup();
       await attached();
       await conn('paused');
-      expect(screen.getByTestId('live-asleep')).toHaveTextContent('Paused while idle');
+      expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'Message' })).toHaveAttribute(
+        'placeholder',
+        'Message to resume the session'
+      );
       await pause(200); // still awake: the view does not take the actor back
       expect(runner.attaches).toHaveLength(1);
       world.active = false;
@@ -539,7 +554,7 @@ describe('live session', () => {
       expect(runner.attaches[1]).not.toContain('wake=');
     });
 
-    it('resumes from the paused banner', async () => {
+    it('resumes from the button in the row', async () => {
       LIVE_TIMING.idleDetachMs = 60;
       const { runner, user } = setup();
       await attached();
@@ -554,9 +569,9 @@ describe('live session', () => {
       const { runner, user } = setup({ step: 120 });
       await attached();
       await user.type(screen.getByRole('textbox', { name: 'Message' }), 'hello{Enter}');
-      await waitFor(() => expect(screen.getByTestId('live-status')).not.toHaveTextContent('idle'));
+      await waitFor(() => expect(screen.getByTestId('live-status')).not.toHaveTextContent('ready'));
       await pause(250);
-      expect(screen.getByTestId('live-conn')).toHaveTextContent('live');
+      expect(screen.getByTestId('live-session')).toHaveAttribute('data-conn', 'attached');
       await conn('paused');
       expect(runner.attaches).toHaveLength(1);
     });

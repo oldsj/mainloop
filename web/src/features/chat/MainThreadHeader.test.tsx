@@ -120,6 +120,56 @@ const control = (overrides: Partial<MainProviderControl> = {}): MainProviderCont
 
 const withProvider = (provider: MainProviderInfo | null) => mainThreadFixture({ provider });
 
+describe('MainThreadHeader under the live view', () => {
+  const controls = (
+    <button type="button" aria-label="Model">
+      opus-5-5 · high
+    </button>
+  );
+
+  it('shows one status word, the live one, for a sleeping session', () => {
+    view(mainThreadFixture({ native: nativeFixture({ session_state: 'suspended' }) }), {
+      live: { status: 'asleep', controls }
+    });
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.getByTestId('mt-state')).toHaveTextContent(/^asleep$/);
+  });
+
+  it('puts the live controls in the row in place of the model text', () => {
+    view(mainThreadFixture(), { live: { status: 'ready', controls } });
+    expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('opus-5-5 · high');
+    expect(screen.queryByTestId('mt-model')).toBeNull();
+  });
+
+  it('keeps a failed last message above a resting live view, and needs you above it', () => {
+    const failed = mainThreadFixture({
+      native: nativeFixture({ deliveries: [deliveryFixture({ state: 'failed' })] })
+    });
+    const { rerender } = view(failed, { live: { status: 'asleep', controls } });
+    expect(screen.getByTestId('mt-state')).toHaveTextContent('last message failed');
+    rerender(
+      <MainThreadHeader info={failed} offline={false} live={{ status: 'needs you', controls }} />
+    );
+    expect(screen.getByTestId('mt-state')).toHaveTextContent('needs you');
+  });
+
+  it('says unreachable when offline, whatever the live view says', () => {
+    view(mainThreadFixture(), { offline: true, live: { status: 'working', controls } });
+    expect(screen.getByTestId('mt-state')).toHaveTextContent('unreachable');
+  });
+});
+
+describe('MainThreadHeader session info', () => {
+  it('is a labelled toggle that opens the topic index', async () => {
+    view(mainThreadFixture());
+    const toggle = screen.getByRole('button', { name: 'Session info' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('topic-index')).toBeInTheDocument();
+  });
+});
+
 describe('MainThreadHeader main provider select', () => {
   it('is visible in the top strip, with no details opened, and chooses the other provider', async () => {
     const select = vi.fn();
