@@ -1897,6 +1897,30 @@ describe('the owner’s session defaults in the composer', () => {
 });
 
 describe('a live main session', () => {
+  it('puts a prefill in the live composer, unsent, and says it has been taken', async () => {
+    const runner = createFakeRunner({ owns: (id) => id === MAIN_SESSION_ID });
+    const onPrefillUsed = vi.fn();
+    setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({ live: true })
+        })
+      }),
+      { prefill: 'About task Fix login (task-abc): I fixed it. Retry this task.', onPrefillUsed }
+    );
+    server.use(...runner.handlers);
+    const live = await screen.findByTestId('live-session');
+    const box = within(live).getByRole('textbox', { name: 'Message' });
+    await waitFor(() =>
+      expect(box).toHaveValue('About task Fix login (task-abc): I fixed it. Retry this task.')
+    );
+    // Taken by the live composer, once: not by the chat composer that shows while the thread loads.
+    expect(onPrefillUsed).toHaveBeenCalledTimes(1);
+    // Filled, not sent.
+    expect(runner.echoed).toEqual([]);
+  });
+
   it('shows the live view with the session’s own slash commands and Up-arrow history', async () => {
     const runner = createFakeRunner({ owns: (id) => id === MAIN_SESSION_ID });
     const user = userEvent.setup();
@@ -1937,6 +1961,14 @@ describe('a live main session', () => {
     await user.click(box);
     await user.keyboard('{ArrowUp}');
     expect(box).toHaveValue('look around');
+  });
+
+  it('puts a prefill in the chat composer once the thread has loaded, when the session is not live', async () => {
+    const onPrefillUsed = vi.fn();
+    setup(existing(), { prefill: 'What needs me?', onPrefillUsed });
+    await screen.findByText('On it.');
+    await waitFor(() => expect(input()).toHaveValue('What needs me?'));
+    expect(onPrefillUsed).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the regular thread when the main session is not live', async () => {

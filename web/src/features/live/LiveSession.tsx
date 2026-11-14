@@ -50,9 +50,17 @@ export function LiveSession({
   renderBar,
   provider,
   notes,
+  prefill,
+  onPrefillUsed,
   deps
 }: {
   sessionId: string;
+  /**
+   * Text to put in the composer, unsent: "Ask Mainloop" from the explorer, a task page or the
+   * command palette. The composer takes it once and calls `onPrefillUsed`, so the caller clears it.
+   */
+  prefill?: string;
+  onPrefillUsed?: () => void;
   /** Draws the row above the transcript; the main thread passes its header. */
   renderBar?: (bar: LiveBar) => ReactNode;
   /** The session's provider choice, where it has one (the main thread): first in the controls picker. */
@@ -132,6 +140,8 @@ export function LiveSession({
       renderBar={renderBar}
       provider={provider}
       notes={notes}
+      prefill={prefill}
+      onPrefillUsed={onPrefillUsed}
     />
   );
 }
@@ -157,6 +167,9 @@ export interface LiveSessionViewProps {
   renderBar?: (bar: LiveBar) => ReactNode;
   provider?: LiveProvider;
   notes?: LiveNotes;
+  /** Text for the composer, taken once; see `LiveSession`. */
+  prefill?: string;
+  onPrefillUsed?: () => void;
 }
 
 /**
@@ -234,7 +247,9 @@ export function LiveSessionView({
   needsAnswer = false,
   renderBar,
   provider,
-  notes
+  notes,
+  prefill,
+  onPrefillUsed
 }: LiveSessionViewProps) {
   const resting = conn === 'asleep' || conn === 'paused';
   const [sheet, setSheet] = useState(false);
@@ -321,6 +336,8 @@ export function LiveSessionView({
         cycleMode={cycleMode}
         provider={provider}
         notes={notes}
+        prefill={prefill}
+        onPrefillUsed={onPrefillUsed}
         controlsOpen={sheet}
         setControlsOpen={setSheet}
       />
@@ -606,10 +623,14 @@ function Composer({
   cycleMode,
   provider,
   notes,
+  prefill,
+  onPrefillUsed,
   controlsOpen,
   setControlsOpen
 }: {
   state: LiveState;
+  prefill?: string;
+  onPrefillUsed?: () => void;
   /** The session is resting: asleep, or `paused` by this view while idle. */
   asleep: boolean;
   paused: boolean;
@@ -655,6 +676,22 @@ function Composer({
       el.setSelectionRange(el.value.length, el.value.length);
     }
   }, [text]);
+
+  // A prefill goes ahead of whatever is being typed, once, and the caret moves to its end so the
+  // owner can type on. A draft that already starts with it (the same button pressed twice) is left.
+  const appliedPrefill = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!prefill) appliedPrefill.current = undefined;
+    if (!prefill || prefill === appliedPrefill.current) return;
+    appliedPrefill.current = prefill;
+    setAt(null);
+    setText((existing) =>
+      existing.startsWith(prefill) ? existing : existing.trim() ? prefill + existing : prefill
+    );
+    caretToEnd.current = true;
+    ta.current?.focus();
+    onPrefillUsed?.();
+  }, [prefill, onPrefillUsed]);
 
   const recall = (to: number | null) => {
     if (at === null) draft.current = text;
