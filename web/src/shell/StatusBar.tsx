@@ -12,6 +12,11 @@ export interface StatusBarProps {
   problems: number;
   /** Shows the sidebar's Sessions view, where the working tasks are. */
   onShowWorking: () => void;
+  /**
+   * Whether the counts are known. Before the first read they are not zero, they are unknown, so the
+   * bar says it is loading; when that read failed it says the counts are unavailable.
+   */
+  counts?: 'ready' | 'loading' | 'failed';
 }
 
 function since(iso: string | null): string {
@@ -26,7 +31,13 @@ const plural = (count: number, one: string, many: string) => `${count} ${count =
  * backend is unreachable (so nothing moves, as a banner at the top would make it), then what needs
  * the owner, what is working and what Mainloop is handling. Each count leads to its list.
  */
-export function StatusBar({ needs, working, problems, onShowWorking }: StatusBarProps) {
+export function StatusBar({
+  needs,
+  working,
+  problems,
+  onShowWorking,
+  counts = 'ready'
+}: StatusBarProps) {
   const connection = useConnection();
   const signedOut = useSignIn() === 'expired';
   const offline = signedOut || connection.status === 'offline';
@@ -72,20 +83,34 @@ export function StatusBar({ needs, working, problems, onShowWorking }: StatusBar
         </Link>
       )}
       <span className="flex-1" />
-      <Link to="/inbox" className={item} data-testid="status-needs">
-        {needs > 0 ? plural(needs, 'needs you', 'need you') : 'Nothing needs you'}
-      </Link>
-      <button type="button" onClick={onShowWorking} className={item} data-testid="status-working">
-        {working} working
-      </button>
-      <Link
-        to="/inbox"
-        search={{ show: 'problems' }}
-        className={item}
-        data-testid="status-problems"
-      >
-        {plural(problems, 'problem', 'problems')}
-      </Link>
+      {counts === 'ready' ? (
+        <>
+          <Link to="/inbox" className={item} data-testid="status-needs">
+            {needs > 0 ? plural(needs, 'needs you', 'need you') : 'Nothing needs you'}
+          </Link>
+          <button
+            type="button"
+            onClick={onShowWorking}
+            className={item}
+            data-testid="status-working"
+          >
+            {working} working
+          </button>
+          <Link
+            to="/inbox"
+            search={{ show: 'problems' }}
+            className={item}
+            data-testid="status-problems"
+          >
+            {plural(problems, 'problem', 'problems')}
+          </Link>
+        </>
+      ) : (
+        // Not "Nothing needs you": until the first read answers, that is not known.
+        <span data-testid="status-counts-pending" className="whitespace-nowrap">
+          {counts === 'loading' ? 'Loading…' : 'Counts unavailable'}
+        </span>
+      )}
     </footer>
   );
 }

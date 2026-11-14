@@ -1,3 +1,5 @@
+import { cn } from '@/components/ui/cn';
+import { PAGE } from '@/components/shared/measure';
 import { PageHeader } from '@/components/shared/page-header';
 import { useNavigate } from '@tanstack/react-router';
 import { useState, type KeyboardEvent } from 'react';
@@ -68,7 +70,7 @@ export function NewAgentPage() {
 
   return (
     <form
-      className="gap-md p-md flex max-w-2xl flex-col"
+      className={cn(PAGE, 'gap-md')}
       onSubmit={(event) => {
         event.preventDefault();
         start();

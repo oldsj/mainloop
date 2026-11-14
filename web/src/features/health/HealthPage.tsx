@@ -1,3 +1,5 @@
+import { cn } from '@/components/ui/cn';
+import { PAGE } from '@/components/shared/measure';
 import { BACK_LINK, BackIcon, PageHeader } from '@/components/shared/page-header';
 import { Link } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
@@ -86,7 +88,7 @@ export function HealthPage({ search }: { search: HealthSearch }) {
   const refresh = () => void health.refetch();
 
   return (
-    <article className="p-md gap-md mx-auto flex w-full max-w-6xl flex-col">
+    <article className={cn(PAGE, 'gap-md')}>
       <PageHeader
         title="Orchestration health"
         description="Tool failures and reported tokens, alongside blocked claims and approval state."

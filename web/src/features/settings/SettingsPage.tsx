@@ -1,3 +1,5 @@
+import { cn } from '@/components/ui/cn';
+import { PAGE } from '@/components/shared/measure';
 import { PageHeader } from '@/components/shared/page-header';
 import { API_SAME_ORIGIN, SIGN_OUT_PATH } from '@/api/signin';
 import { ThemeSelector } from '@/shell/ThemeSelector';
@@ -7,7 +9,7 @@ import { SessionDefaultsSection } from './SessionDefaultsSection';
 /** Settings: what the owner sets once and Mainloop then applies everywhere. */
 export function SettingsPage() {
   return (
-    <div className="gap-lg p-md mx-auto flex w-full max-w-3xl flex-col" data-testid="settings-page">
+    <div className={cn(PAGE, 'gap-lg')} data-testid="settings-page">
       <PageHeader title="Settings" />
       <SessionDefaultsSection />
       <ImportProjectSection />

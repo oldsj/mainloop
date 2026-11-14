@@ -603,6 +603,28 @@ describe('offline banner', () => {
 });
 
 describe('explorer panel', () => {
+  it('says the counts are loading until the first read answers, not that nothing needs the owner', async () => {
+    setViewport(true);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      tasksList(async () => {
+        await held;
+        return HttpResponse.json([view({ reason: 'owner_decision' })]);
+      })
+    );
+    await renderAt('/');
+    const bar = screen.getByTestId('status-bar');
+    expect(within(bar).getByTestId('status-counts-pending')).toHaveTextContent('Loading…');
+    expect(bar).not.toHaveTextContent('Nothing needs you');
+    expect(within(bar).queryByTestId('status-needs')).toBeNull();
+    release();
+    expect(await within(bar).findByTestId('status-needs')).toHaveTextContent('1 needs you');
+    expect(within(bar).queryByTestId('status-counts-pending')).toBeNull();
+  });
+
   it('hides the sidebar, and brings it back from the activity bar', async () => {
     setViewport(true);
     const user = userEvent.setup();
