@@ -17,7 +17,7 @@ One user or assistant message in a conversation. A user message also carries its
 
 - **Sending:** the delivery is in flight. Show "Working" in muted text.
 - **Sent:** no notice; the message is plain.
-- **Queued:** a message recorded behind the turn in flight, not yet sent to the agent. Dim the whole bubble, not only the notice, and show a `Queued` notice; no Retry, since nothing has been attempted. Clears to **Sent** on its own once the delivery ledger reports the row promoted off `queued` — never on a client timer.
+- **Queued:** a message recorded behind the turn in flight, not yet sent to the agent. Set the whole bubble apart, not only the notice: a dashed left edge and its text in the muted token, with a `Queued` notice. Never fade the bubble with opacity, which takes its text below the contrast the theme guarantees; no Retry, since nothing has been attempted. Clears to **Sent** on its own once the delivery ledger reports the row promoted off `queued` — never on a client timer.
 - **Failed (not sent):** a `Failed` notice with the short reason from the server (up to 300 characters). Retry is offered only on the newest user message, and only when nothing is in flight.
 - **Unconfirmed:** an `Unconfirmed` notice. No Retry, because the original may have been accepted. The message stays locked until the server reports the outcome.
 - **Assignment:** a message Mainloop wrote on the owner's behalf, such as a delegated brief (its delivery's `source` is not `user`). It is a collapsed "Assignment from Mainloop" disclosure with the time, not a message from "You". Its text opens on demand.

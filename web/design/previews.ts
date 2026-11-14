@@ -35,7 +35,7 @@ export function designPreviews(): Plugin {
           join(previewSource, entry),
           `import { createRoot } from 'react-dom/client';
 import * as previews from ${JSON.stringify(file)};
-import '../../src/styles/index.css';
+import './preview.css';
 const variants = Object.entries(previews);
 const requested = new URLSearchParams(location.search).get('variant') ?? 'default';
 const Preview = previews[requested as keyof typeof previews];
@@ -67,7 +67,15 @@ createRoot(document.getElementById('preview')!).render(<App />);
           `<ul>${links.join('\n')}</ul><script type="module" src="./index.ts"></script>`
         )
       );
-      writeFileSync(join(previewSource, 'index.ts'), "import '../../src/styles/index.css';\n");
+      // Tailwind looks for class names under Vite's root, which here is the generated folder, so the
+      // components' own classes were never found and the previews rendered unstyled. Naming the
+      // sources says where the classes are: the app's code, and the generated pages (git ignores
+      // that folder, and an ignored folder is only scanned when it is named).
+      writeFileSync(
+        join(previewSource, 'preview.css'),
+        "@import '../../src/styles/index.css';\n@source '../../src';\n@source './';\n"
+      );
+      writeFileSync(join(previewSource, 'index.ts'), "import './preview.css';\n");
       inputs.index = index;
       return {
         root: previewSource,
