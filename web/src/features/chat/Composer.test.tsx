@@ -59,6 +59,8 @@ describe('Composer', () => {
 
   it('is one box with a prompt mark and a named send key, with no terminal wording', () => {
     setup();
+    // The composer is part of the transcript, so it is monospace inside the sans chrome.
+    expect(input().closest('.font-mono')).not.toBeNull();
     const send = screen.getByRole('button', { name: 'Send message' });
     expect(send).toHaveTextContent('↵');
     expect(send.parentElement).toContainElement(input());

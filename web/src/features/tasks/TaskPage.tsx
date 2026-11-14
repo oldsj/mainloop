@@ -93,7 +93,7 @@ export function TaskPage({ id }: { id: string }) {
         </div>
         <h1 className="text-lg font-medium break-words">{view.task.title}</h1>
         {view.task.brief ? (
-          <p className="text-muted-foreground text-sm break-words whitespace-pre-wrap">
+          <p className="text-muted-foreground font-mono text-sm break-words whitespace-pre-wrap">
             {view.task.brief}
           </p>
         ) : null}

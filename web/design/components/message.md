@@ -9,7 +9,7 @@ One user or assistant message in a conversation. A user message also carries its
 ## Tokens
 
 - User message on `bg-card`; assistant message on `bg-background`. Border `border-border`.
-- Text `text-foreground`; timestamps and metadata `text-muted-foreground`.
+- Text `text-foreground` in `font-mono` (the transcript is monospace); timestamps and metadata `text-muted-foreground`.
 - Failure notice `text-destructive`; unconfirmed notice uses the warning token; queued notice and bubble use the muted token.
 - Radius `rounded-none`. Spacing from the spacing scale only.
 

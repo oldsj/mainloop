@@ -80,7 +80,7 @@ function ExplorerBody({
       <header className="gap-sm px-md py-xs border-border-subtle flex items-center justify-between border-b">
         <h2
           id="explorer-heading"
-          className="text-muted-foreground text-xs font-medium tracking-wide uppercase"
+          className="text-muted-foreground text-2xs font-medium tracking-wide uppercase"
         >
           Explorer
         </h2>

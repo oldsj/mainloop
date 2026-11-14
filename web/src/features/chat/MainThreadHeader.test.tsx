@@ -12,6 +12,15 @@ const view = (
 ) => render(<MainThreadHeader info={info} offline={false} {...props} />);
 
 describe('MainThreadHeader', () => {
+  it('is chrome: a sans row, even inside the monospace live view', () => {
+    render(
+      <div className="font-mono">
+        <MainThreadHeader info={mainThreadFixture()} offline={false} />
+      </div>
+    );
+    expect(screen.getByTestId('main-thread-header')).toHaveClass('font-sans');
+  });
+
   it('shows ready and no pending count, and leaves the model to the session controls', () => {
     view(mainThreadFixture());
     expect(screen.getByTestId('mt-state')).toHaveTextContent('ready');
