@@ -68,16 +68,23 @@ type Result struct {
 	Created bool
 	Elapsed time.Duration
 	Session string
+	// Restarted is the refusal that made the run restart the canary session and ping it again;
+	// empty when it did not. A run that restarted is reported once even when the second ping
+	// was answered.
+	Restarted string
 }
 
-// OK reports whether the run passed in time.
-func (r Result) OK() bool { return r.Err == nil && !r.Slow }
+// OK reports whether the run passed in time without restarting the session.
+func (r Result) OK() bool { return r.Err == nil && !r.Slow && r.Restarted == "" }
 
 // String is the one-line report.
 func (r Result) String() string {
 	switch {
 	case r.Err != nil:
 		return fmt.Sprintf("fail %s step=%s session=%s: %v", r.Target, r.Step, r.Session, r.Err)
+	case r.Restarted != "":
+		return fmt.Sprintf("restarted %s session=%s after kagent refused the ping (%s); reply in %s",
+			r.Target, r.Session, r.Restarted, r.Elapsed.Round(100*time.Millisecond))
 	case r.Slow:
 		return fmt.Sprintf("slow %s reply in %s session=%s%s", r.Target, r.Elapsed.Round(time.Second), r.Session, r.cold())
 	default:
@@ -177,20 +184,32 @@ func Run(ctx context.Context, o Options) (res Result) {
 		res.Session, res.Created = created.Id, true
 	} else {
 		res.Session = current.Id
-		messageID = uuid.NewString()
-		var sent api.SessionMessageResponse
-		if err := r.call(ctx, http.MethodPost, "/sessions/"+current.Id+"/message",
-			map[string]any{"message": Prompt, "message_id": messageID}, &sent); err != nil {
+		id, err := r.ping(ctx, current.Id)
+		if err != nil {
 			return fail(StepSend, err)
 		}
-		if sent.Status != api.SessionMessageResponseStatusOk {
-			// Queued or steered behind an open turn: an earlier canary turn never ended.
-			r.stop(ctx, current.Id)
-			return fail(StepSend, fmt.Errorf("message %s: an earlier turn is still open; stopped it", sent.Status))
-		}
+		messageID = id
 	}
 
 	err := r.awaitReply(ctx, res.Session, messageID)
+	var ended *deliveryEnded
+	if errors.As(err, &ended) && ended.refused() && ended.restartable {
+		// kagent refuses the session's input, so no ping can get through until its native
+		// Session is replaced: restart it, as the owner would from the chat, and ping again.
+		res.Restarted = ended.detail
+		if rerr := r.restart(ctx, res.Session); rerr != nil {
+			res.Elapsed = o.Now().Sub(start)
+			return fail(StepReply, fmt.Errorf("%w; restarting the session failed: %w", err, rerr))
+		}
+		id, perr := r.ping(ctx, res.Session)
+		if perr != nil {
+			res.Elapsed = o.Now().Sub(start)
+			return fail(StepSend, fmt.Errorf("after restarting the session: %w", perr))
+		}
+		if err = r.awaitReply(ctx, res.Session, id); err != nil {
+			err = fmt.Errorf("after restarting the session: %w", err)
+		}
+	}
 	res.Elapsed = o.Now().Sub(start)
 	if err != nil {
 		r.stop(ctx, res.Session)
@@ -198,6 +217,29 @@ func Run(ctx context.Context, o Options) (res Result) {
 	}
 	res.Slow = res.Elapsed > o.Slow
 	return res
+}
+
+// ping sends the canary prompt to an existing session and returns its message id.
+func (r runner) ping(ctx context.Context, session string) (string, error) {
+	id := uuid.NewString()
+	var sent api.SessionMessageResponse
+	if err := r.call(ctx, http.MethodPost, "/sessions/"+session+"/message",
+		map[string]any{"message": Prompt, "message_id": id}, &sent); err != nil {
+		return "", err
+	}
+	if sent.Status != api.SessionMessageResponseStatusOk {
+		// Queued or steered behind an open turn: an earlier canary turn never ended.
+		r.stop(ctx, session)
+		return "", fmt.Errorf("message %s: an earlier turn is still open; stopped it", sent.Status)
+	}
+	return id, nil
+}
+
+// restart replaces the session's native kagent Session (POST /sessions/{id}/restart). The next
+// message creates a new one.
+func (r runner) restart(ctx context.Context, session string) error {
+	return r.call(ctx, http.MethodPost, "/sessions/"+session+"/restart",
+		map[string]any{"request_id": uuid.NewString()}, nil)
 }
 
 // stop ends the session's open turn, best effort: a failed stop shows up as the next run's
@@ -235,8 +277,8 @@ func (r runner) awaitReply(ctx context.Context, session, messageID string) error
 			case api.SessionStatusFailed, api.SessionStatusCancelled, api.SessionStatusCompleted, api.SessionStatusSuperseded:
 				return fmt.Errorf("session ended %s without a reply", conv.Session.Status)
 			}
-			if err := r.deliveryEnded(ctx, session, sentID(conv.Messages, messageID)); err != nil {
-				return err
+			if ended := r.deliveryEnded(ctx, session, sentID(conv.Messages, messageID)); ended != nil {
+				return ended
 			}
 			lastErr = fmt.Errorf("no reply yet (session %s)", conv.Session.Status)
 		} else {
@@ -252,11 +294,33 @@ func (r runner) awaitReply(ctx context.Context, session, messageID string) error
 	}
 }
 
-// deliveryEnded reports a canary message whose delivery already ended without a turn: kagent
+// deliveryEnded is a canary message whose delivery already ended without a turn: kagent
 // refused it, or it was cancelled. POST /message answers 200 once the message is recorded, so
-// without this a refusal looks like a session that is merely slow to answer. A failed read of
-// the delivery ledger proves nothing and is ignored; the reply wait goes on.
-func (r runner) deliveryEnded(ctx context.Context, session, messageID string) error {
+// without this a refusal looks like a session that is merely slow to answer.
+type deliveryEnded struct {
+	state, detail string
+	// restartable is the session's POST /sessions/{id}/restart applies.
+	restartable bool
+}
+
+func (e *deliveryEnded) Error() string {
+	if e.detail == "" {
+		return "delivery " + e.state
+	}
+	return "delivery " + e.state + ": " + e.detail
+}
+
+// refused reports a delivery kagent answered with an A2A error, such as -32004 for a session that
+// accepts no input. A restart replaces that native Session; it cannot help a kagent that did not
+// answer at all.
+func (e *deliveryEnded) refused() bool {
+	return e.state == "failed" &&
+		(strings.HasPrefix(e.detail, "not sent: A2A error ") || strings.HasPrefix(e.detail, "send rejected: A2A error "))
+}
+
+// deliveryEnded reads the delivery ledger for messageID. A failed read proves nothing and is
+// nil; the reply wait goes on.
+func (r runner) deliveryEnded(ctx context.Context, session, messageID string) *deliveryEnded {
 	if messageID == "" {
 		return nil
 	}
@@ -268,10 +332,11 @@ func (r runner) deliveryEnded(ctx context.Context, session, messageID string) er
 		if d.MessageId != messageID || (d.State != "failed" && d.State != "cancelled") {
 			continue
 		}
-		if d.Detail != nil && *d.Detail != "" {
-			return fmt.Errorf("delivery %s: %s", d.State, *d.Detail)
+		e := &deliveryEnded{state: d.State, restartable: native.Restartable != nil && *native.Restartable}
+		if d.Detail != nil {
+			e.detail = *d.Detail
 		}
-		return fmt.Errorf("delivery %s", d.State)
+		return e
 	}
 	return nil
 }

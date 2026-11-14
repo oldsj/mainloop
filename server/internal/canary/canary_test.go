@@ -35,6 +35,13 @@ type fakeAPI struct {
 	sendStatus   string
 	// deliveries is what GET /sessions/{id}/native lists; nil answers 404.
 	deliveries []api.NativeDeliveryInfo
+	// restartable is the native strip's flag; restarts counts POST /restart, which answers
+	// restartStatus when set and otherwise makes the agent answer from then on when
+	// healOnRestart is set.
+	restartable   bool
+	restartStatus int
+	restarts      int
+	healOnRestart bool
 }
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +102,19 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		write(api.NativeSessionInfo{Deliveries: f.deliveries})
+		write(api.NativeSessionInfo{Deliveries: f.deliveries, Restartable: &f.restartable})
+	case len(parts) == 3 && parts[2] == "restart":
+		f.restarts++
+		if f.restartStatus != 0 {
+			w.WriteHeader(f.restartStatus)
+			return
+		}
+		if _, ok := body["request_id"].(string); !ok {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		f.reply = f.reply || f.healOnRestart
+		write(api.SessionRestartResponse{Status: "restarted", FailedMessageIds: []string{}})
 	case len(parts) == 3 && parts[2] == "archive":
 		if !f.ended[parts[1]] {
 			w.WriteHeader(http.StatusConflict)
@@ -251,6 +270,9 @@ func TestADeliveryKagentRefusedFailsTheRunWithItsReason(t *testing.T) {
 			if res.Step != canary.StepReply || res.Err == nil || !strings.Contains(res.Err.Error(), "delivery failed: "+refused) {
 				t.Fatalf("result: %v, want await-reply failing with the refusal", res)
 			}
+			if f.restarts != 0 {
+				t.Fatalf("restarts = %d, want none for a session that is not restartable", f.restarts)
+			}
 		})
 	}
 
@@ -267,8 +289,8 @@ func TestADeliveryKagentRefusedFailsTheRunWithItsReason(t *testing.T) {
 	})
 }
 
-// refusing records each sent message as a failed delivery, as the backend does once kagent
-// refuses it.
+// refusing records each sent message that got no reply as a failed delivery, as the backend
+// does once kagent refuses it.
 type refusing struct {
 	f      *fakeAPI
 	detail string
@@ -279,8 +301,9 @@ func (r *refusing) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.f.mu.Lock()
 	defer r.f.mu.Unlock()
 	for _, msgs := range r.f.messages {
-		for _, m := range msgs {
-			if m.Role == api.MessageRoleUser && !slices.ContainsFunc(r.f.deliveries, func(d api.NativeDeliveryInfo) bool { return d.MessageId == m.Id }) {
+		for i, m := range msgs {
+			answered := i+1 < len(msgs) && msgs[i+1].Role == api.MessageRoleAssistant
+			if m.Role == api.MessageRoleUser && !answered && !slices.ContainsFunc(r.f.deliveries, func(d api.NativeDeliveryInfo) bool { return d.MessageId == m.Id }) {
 				r.f.deliveries = append(r.f.deliveries, api.NativeDeliveryInfo{MessageId: m.Id, State: "failed", Detail: ptr(r.detail)})
 			}
 		}
@@ -288,3 +311,86 @@ func (r *refusing) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 func ptr(s string) *string { return &s }
+
+func TestARefusedPingRestartsARestartableSession(t *testing.T) {
+	const refused = "not sent: A2A error -32004: input was not accepted; retry after the session becomes available"
+	idle := []api.Session{{Id: "s-live", Title: canary.TitlePrefix + "2026-11-12 09:00", Status: api.SessionStatusIdle}}
+	runRefused := func(t *testing.T, f *fakeAPI, detail string) canary.Result {
+		t.Helper()
+		f.sendStatus, f.sessions, f.deliveries = "ok", idle, []api.NativeDeliveryInfo{}
+		f.messages, f.ended = map[string][]api.Message{}, map[string]bool{}
+		srv := httptest.NewServer(&refusing{f: f, detail: detail})
+		t.Cleanup(srv.Close)
+		return canary.Run(context.Background(), canary.Options{
+			Name: "prod", API: srv.URL, Slow: time.Hour, Deadline: 10 * time.Second,
+			Poll: 20 * time.Millisecond, Request: time.Second, Now: func() time.Time { return today },
+		})
+	}
+
+	t.Run("Given a restartable canary session, when kagent refuses the ping and the restart heals it, assert that the run restarts once and reports it", func(t *testing.T) {
+		f := &fakeAPI{restartable: true, healOnRestart: true}
+
+		res := runRefused(t, f, refused)
+
+		if res.Err != nil || res.Restarted != refused || res.OK() || f.restarts != 1 {
+			t.Fatalf("result %v, %d restarts; want one restart reported with the refusal", res, f.restarts)
+		}
+		if !strings.HasPrefix(res.String(), "restarted prod session=s-live after kagent refused the ping") {
+			t.Fatalf("report %q", res.String())
+		}
+	})
+
+	t.Run("Given a restartable canary session, when kagent still refuses the ping after the restart, assert that the run fails after one restart", func(t *testing.T) {
+		f := &fakeAPI{restartable: true}
+
+		res := runRefused(t, f, refused)
+
+		if res.Step != canary.StepReply || res.Err == nil || !strings.Contains(res.Err.Error(), "after restarting the session: delivery failed") || f.restarts != 1 {
+			t.Fatalf("result %v, %d restarts; want await-reply failing after one restart", res, f.restarts)
+		}
+	})
+
+	t.Run("Given a restartable canary session, when the restart is refused, assert that the run fails naming both", func(t *testing.T) {
+		f := &fakeAPI{restartable: true, restartStatus: http.StatusConflict}
+
+		res := runRefused(t, f, refused)
+
+		if res.Err == nil || !strings.Contains(res.Err.Error(), "delivery failed: "+refused) ||
+			!strings.Contains(res.Err.Error(), "restarting the session failed") || f.restarts != 1 {
+			t.Fatalf("result %v, %d restarts", res, f.restarts)
+		}
+	})
+
+	t.Run("Given a restartable canary session, when the ping was not sent because kagent did not answer, assert that the run does not restart", func(t *testing.T) {
+		f := &fakeAPI{restartable: true, healOnRestart: true}
+
+		res := runRefused(t, f, "not sent: kagent unreachable: connection refused")
+
+		if res.Err == nil || f.restarts != 0 {
+			t.Fatalf("result %v, %d restarts; want a failure and no restart", res, f.restarts)
+		}
+	})
+}
+
+func TestAlertReportsARestartOnce(t *testing.T) {
+	var got []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&m)
+		got = append(got, m)
+	}))
+	defer srv.Close()
+
+	err := canary.Ntfy{URL: srv.URL, Topic: "mainloop"}.Alert(context.Background(), []canary.Result{
+		{Target: "prod", Restarted: "not sent: A2A error -32004: input was not accepted", Elapsed: 9 * time.Second},
+	})
+
+	if err != nil || len(got) != 1 {
+		t.Fatalf("%v %v", err, got)
+	}
+	m := got[0]
+	if m["title"] != "Mainloop canary restarted its session" || m["priority"].(float64) != 3 ||
+		!strings.Contains(m["message"].(string), "prod: kagent refused the ping (not sent: A2A error -32004") {
+		t.Fatalf("alert: %+v", m)
+	}
+}
