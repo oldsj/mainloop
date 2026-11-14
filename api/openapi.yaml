@@ -4595,14 +4595,17 @@ components:
           type: string
           title: Id
         kind:
-          # approval, question and owner_decision are real owner decisions; problem is Mainloop's own
-          # recovery work (a stall, an unconfirmed stop) with no decision yet for the owner to make.
+          # approval, question and owner_decision are real owner decisions; review is a low-priority
+          # one (an agent's proposal, such as project memory, with nothing blocked on it): counted,
+          # listed after the others, never pushed; problem is Mainloop's own recovery work (a stall,
+          # an unconfirmed stop) with no decision yet for the owner to make.
           type: string
           enum:
             - approval
             - question
             - owner_decision
             - problem
+            - review
           title: Kind
         title:
           type: string
@@ -4648,7 +4651,7 @@ components:
           type: array
           title: Items
         count:
-          # open, visible items that are a real owner decision (kind != problem); a problem item is
+          # open, visible items that are a real owner decision (kind != problem, review included); a problem item is
           # not counted here, even while it is open and listed in items
           type: integer
           title: Count

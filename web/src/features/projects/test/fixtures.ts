@@ -7,6 +7,8 @@ export type DetailFixture = Schemas['ProjectDetail'];
 export type PolicyFixture = Schemas['MergePolicyView'];
 export type VerificationFixture = Schemas['ProjectVerification'];
 export type InstructionsFixture = Schemas['ProjectInstructions'];
+export type MemoryFixture = Schemas['ProjectMemory'];
+export type MemoryEntryFixture = Schemas['ProjectMemoryEntry'];
 export type WorkspaceFixture = Schemas['WorkspaceLifecycle'];
 
 export const REPO_URL = 'https://github.com/acme/widgets';
@@ -126,6 +128,32 @@ export function instructions(overrides: Partial<InstructionsFixture> = {}): Inst
     text: '',
     max_bytes: 8192,
     updated_at: null,
+    ...overrides
+  };
+}
+
+export function memoryEntry(overrides: Partial<MemoryEntryFixture> = {}): MemoryEntryFixture {
+  return {
+    id: 'mem-1',
+    project_id: 'project-a',
+    text: 'The owner reviews UI on a phone.',
+    state: 'active',
+    author: 'main',
+    source: { session_id: 'main-1', task_id: null, attempt_id: null, delivery_id: 'd-1' },
+    replaces_id: null,
+    created_at: '2026-11-01T12:00:00Z',
+    decided_at: '2026-11-01T12:00:00Z',
+    ...overrides
+  };
+}
+
+export function memory(overrides: Partial<MemoryFixture> = {}): MemoryFixture {
+  return {
+    project_id: 'project-a',
+    entries: [],
+    used_bytes: 0,
+    max_bytes: 4096,
+    max_entry_bytes: 500,
     ...overrides
   };
 }

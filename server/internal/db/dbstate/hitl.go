@@ -37,13 +37,15 @@ const (
 // AttentionKind is attention_items.kind, the contract's AttentionItem kind.
 type AttentionKind string
 
-// Attention kinds. Approval, question and owner_decision are real owner decisions; problem is
-// Mainloop's own recovery work with no decision yet for the owner to make.
+// Attention kinds. Approval, question and owner_decision are real owner decisions; review is a
+// low-priority one (an agent's proposal, with nothing blocked on it); problem is Mainloop's own
+// recovery work with no decision yet for the owner to make.
 const (
 	AttentionApproval      AttentionKind = "approval"
 	AttentionQuestion      AttentionKind = "question"
 	AttentionOwnerDecision AttentionKind = "owner_decision"
 	AttentionProblem       AttentionKind = "problem"
+	AttentionReview        AttentionKind = "review"
 )
 
 // AttentionState is attention_items.state.

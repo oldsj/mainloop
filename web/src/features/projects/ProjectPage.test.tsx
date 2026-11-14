@@ -97,7 +97,7 @@ describe('project page', () => {
     expect(screen.getByTestId('project-environment')).toBeInTheDocument();
   });
 
-  it('opens with tasks, open pull requests and sessions, and puts settings last', async () => {
+  it('opens with tasks, memory, open pull requests and sessions, and puts settings last', async () => {
     server.use(...serveProjectPage());
     renderProjects(PAGE);
     await heading('acme/widgets');
@@ -107,6 +107,7 @@ describe('project page', () => {
       .map((item) => item.textContent?.replace(/\[[-+]\]$/, '').trim());
     expect(sections).toEqual([
       'Tasks',
+      'Memory',
       'Open Pull Requests',
       'Sessions',
       'Branch workspaces',

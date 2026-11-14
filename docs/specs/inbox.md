@@ -10,7 +10,10 @@ links to its canonical input card or task. Idle sessions, CI waits, publication 
 ordinary reconciliation do not imply owner attention. An empty inbox says **Nothing needs you**.
 
 Needs you holds only items with a real owner decision (kind `approval`, `question` or
-`owner_decision`). A stall, an unresolved runtime stop, or any other `task_reconciliation` item is
+`owner_decision`, or the low-priority `review`). A `review` item is an agent's proposal that waits on
+the owner with nothing blocked on it, such as a project's memory proposals (one item per project; see
+[project context](project-context.md#memory-in-needs-you)): it counts toward the badge but is listed after
+the other items and sends no push notification. A stall, an unresolved runtime stop, or any other `task_reconciliation` item is
 Mainloop's own recovery work, not yet a decision: it opens with kind `problem` instead, is left out
 of the `count` the Needs-you badge shows, and is listed in the separate **Problems** view
 (`GET /attention`'s `items` still carries it; the explorer's Problems group and the Inbox's

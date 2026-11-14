@@ -166,6 +166,27 @@ describe('Needs you', () => {
     expect(screen.queryByText('Recover stopped child')).not.toBeInTheDocument();
   });
 
+  it('lists a project memory review as a decision and links it to the project page', async () => {
+    const review = attentionItem(queueItem(), {
+      id: 'memory:project-a',
+      kind: 'review',
+      queue_item: null,
+      task_id: null,
+      href: '/projects/project-a',
+      title: 'oldsj/mainloop',
+      needed: '2 project memory proposals wait for you. Accept or reject them.'
+    });
+    server.use(attentionRead(() => HttpResponse.json(attentionSnapshot([review]))));
+    renderInbox();
+    expect(
+      await screen.findByText('2 project memory proposals wait for you. Accept or reject them.')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review on the project page' })).toHaveAttribute(
+      'href',
+      '/projects/project-a#project-memory'
+    );
+  });
+
   it('links a stalled turn to its thread', async () => {
     const main = attentionItem(queueItem(), {
       id: 'stalled:msg-1',

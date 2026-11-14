@@ -13,6 +13,7 @@ import {
 import { agentLabel } from '@/lib/agentLabel';
 import { avatarUrl, httpsUrl } from '@/lib/url';
 import { InstructionsSection } from './InstructionsSection';
+import { MemorySection } from './MemorySection';
 import { MergePolicySection } from './MergePolicySection';
 import { VerificationSection } from './VerificationSection';
 import {
@@ -42,8 +43,8 @@ export interface ProjectPageProps {
 }
 
 /**
- * One project: its merge policy, environment, open pull requests, branch workspaces, recent commits
- * and sessions. It starts nothing: new work starts from the main chat. The route keys it by id, so
+ * One project: its tasks, memory, open pull requests, sessions, branch workspaces, recent commits
+ * and settings. It starts nothing: new work starts from the main chat. The route keys it by id, so
  * a different project starts on a fresh page.
  */
 export function ProjectPage({ id, tasks }: ProjectPageProps) {
@@ -162,6 +163,8 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
         </div>
         {tasks ?? <p className="text-muted-foreground text-sm">No tasks for this project yet.</p>}
       </section>
+
+      <MemorySection projectId={id} />
 
       <section aria-labelledby="project-prs-heading" className="gap-md flex flex-col">
         <h2 id="project-prs-heading" className="text-lg font-medium">

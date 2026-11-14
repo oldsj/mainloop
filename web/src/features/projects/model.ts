@@ -335,3 +335,64 @@ export function instructionsStatus(
 
 export const INSTRUCTIONS_EXPLANATION =
   "Standing instructions for every agent working on this project, added to each new task's brief. Repository facts such as build commands and code style belong in the repository's AGENTS.md instead.";
+
+export type ProjectMemoryEntry = Schemas['ProjectMemoryEntry'];
+
+const MEMORY_STATES = contractEnum<Schemas['ProjectMemoryState']>()([
+  'proposed',
+  'active',
+  'rejected',
+  'withdrawn',
+  'forgotten',
+  'replaced'
+]);
+const MEMORY_AUTHORS = contractEnum<ProjectMemoryEntry['author']>()(['main', 'task', 'agent']);
+
+export const memoryEntrySchema: z.ZodType<ProjectMemoryEntry> = z.object({
+  id: text,
+  project_id: text,
+  text,
+  state: z.enum(MEMORY_STATES),
+  author: z.enum(MEMORY_AUTHORS),
+  source: z.object({
+    session_id: text.nullable(),
+    task_id: text.nullable(),
+    attempt_id: text.nullable(),
+    delivery_id: text.nullable()
+  }),
+  replaces_id: text.nullable(),
+  created_at: text,
+  decided_at: text.nullable()
+});
+
+/** The memory's totals must parse; a malformed entry is dropped rather than failing the section. */
+export const projectMemorySchema = z.object({
+  project_id: text,
+  entries: z.array(z.unknown()),
+  used_bytes: z.number().int().nonnegative(),
+  max_bytes: z.number().int().positive(),
+  max_entry_bytes: z.number().int().positive()
+});
+
+/** Active entries and waiting proposals, each in the server's order (oldest first). */
+export function memoryLists(entries: unknown[]) {
+  const valid = keepValid(entries, memoryEntrySchema);
+  return {
+    active: valid.filter((entry) => entry.state === 'active'),
+    proposed: valid.filter((entry) => entry.state === 'proposed')
+  };
+}
+
+/** Who recorded an entry and when, as the owner reads it; an accepted proposal says so. */
+export function memoryOrigin(entry: ProjectMemoryEntry, ago: (iso: string) => string): string {
+  const who =
+    entry.author === 'main' ? 'By main' : entry.author === 'task' ? 'From a task' : 'From an agent';
+  const accepted =
+    entry.author !== 'main' && entry.state === 'active' && entry.decided_at
+      ? `, accepted ${ago(entry.decided_at)}`
+      : '';
+  return `${who}, ${ago(entry.created_at)}${accepted}`;
+}
+
+export const MEMORY_EXPLANATION =
+  "Lessons agents recorded for every later task on this project, added to each new task's brief after the instructions. The main session's entries apply at once; other agents' entries wait for you to accept them.";

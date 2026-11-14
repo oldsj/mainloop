@@ -12,7 +12,13 @@ export type AttentionSnapshot = Schemas['AttentionSnapshot'];
 export type ActivityItem = Schemas['ActivityItem'];
 export type QueueItem = Schemas['QueueItem'];
 
-const ATTENTION_KINDS: readonly string[] = ['approval', 'question', 'owner_decision', 'problem'];
+const ATTENTION_KINDS: readonly string[] = [
+  'approval',
+  'question',
+  'owner_decision',
+  'problem',
+  'review'
+];
 const TASK_PATH = /^\/tasks\/([^/?#]+)$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -72,8 +78,10 @@ export function attentionItems(snapshot: AttentionSnapshot | undefined): Attenti
 }
 
 /**
- * Needs you: items with a real owner decision. A problem (a stall, an unconfirmed stop) is
- * Mainloop's own recovery work, not a decision, so it is left out here; see `problemItems`.
+ * Needs you: items with a real owner decision, including a low-priority review (an agent's
+ * proposal, such as project memory), which the server lists last. A problem (a stall, an
+ * unconfirmed stop) is Mainloop's own recovery work, not a decision, so it is left out here; see
+ * `problemItems`.
  */
 export function needsYouItems(items: AttentionItem[]): AttentionItem[] {
   return items.filter((item) => item.kind !== 'problem');

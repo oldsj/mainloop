@@ -8,7 +8,7 @@ SELECT a.*
 FROM attention_items a
 JOIN attention_visible v ON v.id = a.id
 WHERE v.owner_id = $1
-ORDER BY a.created_at DESC, a.id;
+ORDER BY a.kind = 'review', a.created_at DESC, a.id;
 
 -- The sessions that need the owner, in one read: those with a visible item, and whether one of
 -- them is a native input request (the session then reads waiting_on_user).
@@ -333,4 +333,34 @@ UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at
 WHERE a.owner_id = $1 AND a.source_kind = 'turn_stalled' AND a.state = 'open'
   AND NOT EXISTS (
       SELECT 1 FROM deliveries d WHERE d.id = a.source_id AND d.state = 'delivered' AND d.stalled_at IS NOT NULL)
+RETURNING a.id;
+
+-- One low-priority review item per project of the owner with memory proposals waiting
+-- (docs/specs/project-context.md#project-memory). Its text carries the current count, so a new
+-- or decided proposal rewrites it; unchanged sweeps write nothing.
+-- name: OpenProjectMemoryAttention :many
+INSERT INTO attention_items AS a (id, owner_id, kind, source_kind, source_id, title, needed, href)
+SELECT 'attn_memory_' || p.id, p.user_id, 'review', 'project_memory', p.id, p.full_name,
+       CASE WHEN n.proposed = 1 THEN 'An agent proposed project memory. Accept or reject it.'
+            ELSE n.proposed::text || ' project memory proposals wait for you. Accept or reject them.' END,
+       '/projects/' || p.id
+FROM projects p
+CROSS JOIN LATERAL (
+    SELECT count(*)::int AS proposed FROM project_memory_entries m WHERE m.project_id = p.id AND m.state = 'proposed'
+) n
+WHERE p.user_id = $1 AND n.proposed > 0
+ON CONFLICT (source_kind, source_id) DO UPDATE
+SET state = 'open', resolved_at = NULL, updated_at = now(), title = EXCLUDED.title, needed = EXCLUDED.needed,
+    read_at = CASE WHEN a.state <> 'open' THEN NULL ELSE a.read_at END
+WHERE a.state <> 'open' OR a.title <> EXCLUDED.title OR a.needed <> EXCLUDED.needed
+RETURNING id;
+
+-- A memory item resolves once its project, still the owner's, has no proposal waiting: the exact
+-- negation of OpenProjectMemoryAttention's condition.
+-- name: ResolveProjectMemoryAttention :many
+UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at = now()
+WHERE a.owner_id = $1 AND a.source_kind = 'project_memory' AND a.state = 'open'
+  AND NOT EXISTS (
+      SELECT 1 FROM project_memory_entries m JOIN projects p ON p.id = m.project_id
+      WHERE m.project_id = a.source_id AND p.user_id = a.owner_id AND m.state = 'proposed')
 RETURNING a.id;

@@ -276,7 +276,7 @@ SELECT a.id, a.owner_id, a.kind, a.source_kind, a.source_id, a.session_id, a.tas
 FROM attention_items a
 JOIN attention_visible v ON v.id = a.id
 WHERE v.owner_id = $1
-ORDER BY a.created_at DESC, a.id
+ORDER BY a.kind = 'review', a.created_at DESC, a.id
 `
 
 // The owner's attention: what needs them now (attention_items) and the Activity log around it.
@@ -406,6 +406,47 @@ RETURNING id
 // eligible and also writes nothing. Neither side may drift from the other.
 func (q *Queries) OpenMergeProposalAttention(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, openMergeProposalAttention, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const openProjectMemoryAttention = `-- name: OpenProjectMemoryAttention :many
+INSERT INTO attention_items AS a (id, owner_id, kind, source_kind, source_id, title, needed, href)
+SELECT 'attn_memory_' || p.id, p.user_id, 'review', 'project_memory', p.id, p.full_name,
+       CASE WHEN n.proposed = 1 THEN 'An agent proposed project memory. Accept or reject it.'
+            ELSE n.proposed::text || ' project memory proposals wait for you. Accept or reject them.' END,
+       '/projects/' || p.id
+FROM projects p
+CROSS JOIN LATERAL (
+    SELECT count(*)::int AS proposed FROM project_memory_entries m WHERE m.project_id = p.id AND m.state = 'proposed'
+) n
+WHERE p.user_id = $1 AND n.proposed > 0
+ON CONFLICT (source_kind, source_id) DO UPDATE
+SET state = 'open', resolved_at = NULL, updated_at = now(), title = EXCLUDED.title, needed = EXCLUDED.needed,
+    read_at = CASE WHEN a.state <> 'open' THEN NULL ELSE a.read_at END
+WHERE a.state <> 'open' OR a.title <> EXCLUDED.title OR a.needed <> EXCLUDED.needed
+RETURNING id
+`
+
+// One low-priority review item per project of the owner with memory proposals waiting
+// (docs/specs/project-context.md#project-memory). Its text carries the current count, so a new
+// or decided proposal rewrites it; unchanged sweeps write nothing.
+func (q *Queries) OpenProjectMemoryAttention(ctx context.Context, userID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, openProjectMemoryAttention, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -687,6 +728,37 @@ RETURNING a.id
 // open there and still eligible here, so both write nothing and no inbox:updated event follows.
 func (q *Queries) ResolveMergeProposalAttention(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, resolveMergeProposalAttention, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const resolveProjectMemoryAttention = `-- name: ResolveProjectMemoryAttention :many
+UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at = now()
+WHERE a.owner_id = $1 AND a.source_kind = 'project_memory' AND a.state = 'open'
+  AND NOT EXISTS (
+      SELECT 1 FROM project_memory_entries m JOIN projects p ON p.id = m.project_id
+      WHERE m.project_id = a.source_id AND p.user_id = a.owner_id AND m.state = 'proposed')
+RETURNING a.id
+`
+
+// A memory item resolves once its project, still the owner's, has no proposal waiting: the exact
+// negation of OpenProjectMemoryAttention's condition.
+func (q *Queries) ResolveProjectMemoryAttention(ctx context.Context, ownerID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, resolveProjectMemoryAttention, ownerID)
 	if err != nil {
 		return nil, err
 	}

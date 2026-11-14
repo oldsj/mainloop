@@ -96,3 +96,28 @@ export function useUpdateInstructions(projectId: string) {
     onSettled: () => queryClient.invalidateQueries({ queryKey: versionsKey })
   });
 }
+
+export function useProjectMemory(projectId: string) {
+  return $api.useQuery('get', '/projects/{project_id}/memory', {
+    params: { path: { project_id: projectId } }
+  });
+}
+
+/**
+ * Accepts, rejects or revokes one entry. Settling re-reads the memory, so a refusal (an entry
+ * decided elsewhere, or memory that would pass its bound) shows the current entries, and the
+ * attention snapshot, whose review item counts the waiting proposals.
+ */
+export function useDecideMemory(projectId: string) {
+  const queryClient = useQueryClient();
+  const key = $api.queryOptions('get', '/projects/{project_id}/memory', {
+    params: { path: { project_id: projectId } }
+  }).queryKey;
+  return $api.useMutation('post', '/projects/{project_id}/memory/{entry_id}/decision', {
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: key }),
+        queryClient.invalidateQueries({ queryKey: keys.attention() })
+      ])
+  });
+}
