@@ -152,7 +152,10 @@ Built:
   `hitl_sessions` row; a row whose binding no longer names its kagent session is deleted. A scan
   that fails for one session (credentials or wrong-Agent refusal, a lost reply, a timeout, a bad
   reply) records a diagnostic and backs that session off (30 s, doubling to 10 min) while the
-  others go on; an unreachable kagent, or a refusal of our own bearer (HTTP 401, `UNAUTHENTICATED`), ends the
+  others go on. When the listing says not found and kagent still shows the session's Agent, kagent
+  no longer has the conversation: the session is marked gone (`hitl_sessions.gone_at`) and never
+  scanned again, its live requests become `unavailable`, and one info line is logged. A not-found
+  while the Agent is missing or cannot be read (kagent answers both the same way) keeps the backoff; an unreachable kagent, or a refusal of our own bearer (HTTP 401, `UNAUTHENTICATED`), ends the
   scanning for that pass and backs nobody off. Staleness never comes from
   a scan: it comes from each request's own refresh failing. A task in `input-required` whose status message
   carries the HITL extension becomes a `hitl_requests` row (`pending`), identified by a hash of

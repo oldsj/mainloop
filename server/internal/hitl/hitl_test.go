@@ -63,8 +63,12 @@ type fakeKagent struct {
 	// onSend runs inside SendHITL after the send is recorded. Nil moves the task out of
 	// input-required and adds the message to its history, like a kagent that accepts.
 	onSend func(f *fakeKagent, s hitl.Send) error
-	sends  []hitl.Send
-	finds  int // FindTaskForMessage calls
+	// missingAgent makes AgentExists say no; agentErr makes it fail.
+	missingAgent bool
+	agentErr     error
+	agentChecks  int
+	sends        []hitl.Send
+	finds        int // FindTaskForMessage calls
 	lists  []listCall
 	gets   int // GetTask calls
 }
@@ -209,6 +213,16 @@ func (f *fakeKagent) FindTaskForMessage(_ context.Context, _ kagent.AgentRef, co
 		}
 	}
 	return nil, false, nil
+}
+
+func (f *fakeKagent) AgentExists(context.Context, kagent.AgentRef) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.agentChecks++
+	if f.agentErr != nil {
+		return false, f.agentErr
+	}
+	return !f.missingAgent, nil
 }
 
 func (f *fakeKagent) SendHITL(_ context.Context, agent kagent.AgentRef, s hitl.Send) error {
@@ -1478,5 +1492,73 @@ func TestRespondPublishesTheInboxEventWithTheAnswer(t *testing.T) {
 	}
 	if n := len(inbox()); n != before+1 {
 		t.Fatalf("a repeat published: %d events", n)
+	}
+}
+
+// kagent no longer has the conversation while its Agent is still there: the session is given up at
+// once instead of failing every scan, and its live request is closed.
+func TestAConversationKagentNoLongerHasIsNoLongerScanned(t *testing.T) {
+	e := newEnv(t, func(s *hitl.Service) {
+		s.Opts.ScanBackoff, s.Opts.ScanBackoffCeiling = time.Millisecond, time.Millisecond
+	})
+	e.addSession("sess-2", "ks-2", "agent")
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.k.put(inContext(waitingTask("task-b", "msg-b", askRequest("q1")), "ks-2"))
+	e.observe()
+	e.k.set(func() { e.k.listErrFor = map[string]error{ksid: &kagent.TaskNotFound{}} })
+
+	e.observe()
+
+	got := e.requestFor("task-a")
+	if got.Availability != dbstate.HITLUnavailable || got.UnavailableReason == nil ||
+		*got.UnavailableReason != "kagent no longer has this conversation" {
+		t.Fatalf("the gone conversation's request is %s (%v), want unavailable", got.Availability, got.UnavailableReason)
+	}
+	if n := e.count(`SELECT count(*) FROM hitl_sessions WHERE kagent_session_id = $1 AND gone_at IS NOT NULL AND failures = 0`, ksid); n != 1 {
+		t.Fatalf("the session is not marked gone without a backoff")
+	}
+	if got := e.requestFor("task-b").Availability; got != dbstate.HITLPending {
+		t.Fatalf("the other session's request is %s", got)
+	}
+	before, beforeOther := e.k.listed(ksid), e.k.listed("ks-2")
+	e.observe()
+	if e.k.listed(ksid) != before || e.k.listed("ks-2") == beforeOther {
+		t.Fatalf("listed the gone session %d→%d, the other %d→%d", before, e.k.listed(ksid), beforeOther, e.k.listed("ks-2"))
+	}
+	if n := e.count(`SELECT count(*) FROM hitl_sessions WHERE kagent_session_id = $1`, ksid); n != 1 {
+		t.Fatalf("the gone session's row was dropped, so it would be adopted again")
+	}
+}
+
+// kagent says not found for a missing Agent too, so a session is kept, and backed off, while the
+// Agent is missing or cannot be read.
+func TestANotFoundWithoutTheAgentKeepsTheBackoff(t *testing.T) {
+	for name, set := range map[string]func(f *fakeKagent){
+		"agent missing":    func(f *fakeKagent) { f.missingAgent = true },
+		"agent unreadable": func(f *fakeKagent) { f.agentErr = &kagent.Unreachable{Err: context.DeadlineExceeded} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, func(s *hitl.Service) {
+				s.Opts.ScanBackoff, s.Opts.ScanBackoffCeiling = time.Hour, time.Hour
+			})
+			e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+			e.observe()
+			e.k.set(func() {
+				e.k.listErrFor = map[string]error{ksid: &kagent.TaskNotFound{}}
+				set(e.k)
+			})
+
+			e.observe()
+
+			if n := e.count(`SELECT count(*) FROM hitl_sessions WHERE kagent_session_id = $1 AND gone_at IS NULL AND failures = 1`, ksid); n != 1 {
+				t.Fatalf("the session was not kept and backed off")
+			}
+			if got := e.requestFor("task-a").Availability; got != dbstate.HITLPending {
+				t.Fatalf("the request is %s, want pending", got)
+			}
+			if e.k.agentChecks != 1 {
+				t.Fatalf("agent checks = %d, want 1", e.k.agentChecks)
+			}
+		})
 	}
 }

@@ -479,6 +479,7 @@ type HitlSession struct {
 	NextScanAt      *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	GoneAt          *time.Time
 }
 
 type KagentAgent struct {

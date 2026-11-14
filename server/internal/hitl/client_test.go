@@ -163,3 +163,21 @@ func TestRefusalPastSendTimeoutIsReAnsweredNotUncertain(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 }
+
+// The production check reads the Agent: kagent's not-found says it is missing, and a found Agent
+// says it exists.
+func TestProductionAgentCheckReadsTheAgent(t *testing.T) {
+	srv, client := testClient(t)
+	k := hitl.FromClient(client)
+	srv.AddAgent(agent.Namespace, agent.Name)
+
+	exists, err := k.AgentExists(context.Background(), agent)
+	if err != nil || !exists {
+		t.Fatalf("AgentExists = %v, %v; want true", exists, err)
+	}
+	srv.RemoveAgent(agent.Namespace, agent.Name)
+	exists, err = k.AgentExists(context.Background(), agent)
+	if err != nil || exists {
+		t.Fatalf("AgentExists after removal = %v, %v; want false", exists, err)
+	}
+}
