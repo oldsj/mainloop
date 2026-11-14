@@ -67,7 +67,7 @@ The `migrate` initContainer runs `mainloop migrate up` before each backend pod s
 
 ## Smoke after a deploy
 
-Run the read-only smoke in the backend container. It sends no writes and spends no quota. The production image has no Go toolchain; the binary is at `/usr/local/bin/mainloop`:
+Run the read-only smoke in the backend container. It sends no writes and spends no quota. It authenticates with the pod's read-scoped token (`MAINLOOP_API_TOKEN_FILE`; see [authentication](specs/authentication.md#machine-callers)). The production image has no Go toolchain; the binary is at `/usr/local/bin/mainloop`:
 
 ```sh
 kubectl --context <context> -n mainloop exec deploy/mainloop-backend -c backend -- \

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/auth"
 )
 
 // ReadOptions configures the read-only checks. Kagent is nil unless the operator asked for the kagent
@@ -17,6 +18,8 @@ import (
 type ReadOptions struct {
 	Endpoints
 	APIHost string
+	// Token is the bearer for owner API requests (a read-scoped ServiceAccount token in the pod).
+	Token auth.TokenSource
 
 	// Host headers for the probes, for port-forwards to a non-dev instance. Empty keeps the URL's host.
 	MCPHost     string
@@ -42,7 +45,7 @@ const probeRepo = "/smoke/probe"
 // no writes and needs no credentials: the owner API has no per-request auth, and the capability-gated
 // listeners are asked for a refusal with no credential attached.
 func ReadOnly(ctx context.Context, opts ReadOptions, emit func(Check)) {
-	c := newCaller(opts.APIHost, opts.Timeout)
+	c := newCaller(opts.APIHost, opts.Token, opts.Timeout)
 	base := opts.API
 	eventsWait := opts.eventsWait
 	if eventsWait == 0 {
@@ -114,8 +117,8 @@ func checkEvents(ctx context.Context, c caller, base string, wait time.Duration)
 		return failCheck(name, err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	if c.host != "" {
-		req.Host = c.host
+	if err := c.identify(req); err != nil {
+		return failCheck(name, err)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

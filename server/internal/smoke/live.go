@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/auth"
 )
 
 // MaxBudget is the ceiling on full live runs in one invocation: plan §7 item 1, the owner's approved
@@ -33,9 +34,10 @@ var (
 // LiveOptions configures the live run. Nothing defaults: every target is named by the operator, so a
 // run cannot start against a place nobody chose.
 type LiveOptions struct {
-	Endpoints           // API and GitPush are required
-	APIHost      string // Host header for owner API requests, for port-forwards to a non-dev instance
-	GitPushHost  string // Host header for the git push probe, for the same port-forwards
+	Endpoints                     // API and GitPush are required
+	APIHost      string           // Host header for owner API requests, for port-forwards to a non-dev instance
+	Token        auth.TokenSource // bearer for owner API requests: an owner-scoped operator token
+	GitPushHost  string           // Host header for the git push probe, for the same port-forwards
 	ProjectID    string
 	Repo         string // owner/name of the disposable test repository
 	AppLogin     string // the GitHub App login that must perform the merge
@@ -89,7 +91,7 @@ func Live(ctx context.Context, opts LiveOptions, emit func(Check)) {
 		emit(failCheck("github", err))
 		return
 	}
-	c := newCaller(opts.APIHost, opts.Timeout)
+	c := newCaller(opts.APIHost, opts.Token, opts.Timeout)
 	push := checkGitPush(ctx, c, opts.GitPush, opts.GitPushHost)
 	emit(push)
 	gitBlock := ""

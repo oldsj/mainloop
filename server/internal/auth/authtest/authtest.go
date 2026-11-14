@@ -1,12 +1,16 @@
-// Package authtest is a fake OpenID Connect issuer for tests: a discovery document, a key set and
-// a signer, served over TLS from httptest.
+// Package authtest has fakes for the owner API's authentication: an OpenID Connect issuer (a
+// discovery document, a key set and a signer, served over TLS from httptest), and a ServiceAccount
+// gate that a machine caller's tests run against.
 package authtest
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +20,9 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
+
+	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/auth"
 )
 
 // Issuer serves discovery and keys and signs tokens.
@@ -137,4 +144,57 @@ func ServiceAccountToken(t testing.TB, namespace, name, audience string, exp tim
 		t.Fatal(err)
 	}
 	return s
+}
+
+// SAAudience is the token audience the gate expects.
+const SAAudience = "mainloop-api"
+
+// Gate is the owner API's authentication in enforce mode with ServiceAccount callers only, over a
+// fake TokenReview. A machine caller's tests serve their fake API behind it, so a call outside the
+// caller's scope fails the test the way it would fail in a cluster.
+type Gate struct {
+	mu    sync.Mutex
+	users map[string]string
+	wrap  func(http.Handler) http.Handler
+}
+
+// NewGate allows the listed ServiceAccounts (namespace/name) their scopes.
+func NewGate(t testing.TB, scopes map[string]auth.Scope) *Gate {
+	t.Helper()
+	g := &Gate{users: map[string]string{}}
+	a := &auth.Authenticator{
+		Mode:            auth.ModeEnforce,
+		ServiceAccounts: &auth.ServiceAccounts{Audience: SAAudience, Reviewer: g},
+		Scopes:          scopes,
+		Log:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	spec, err := api.GetSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.wrap, err = a.Middleware(spec); err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
+// Wrap puts the gate in front of h.
+func (g *Gate) Wrap(h http.Handler) http.Handler { return g.wrap(h) }
+
+// Token returns a token the fake TokenReview accepts as namespace/name.
+func (g *Gate) Token(t testing.TB, namespace, name string) string {
+	t.Helper()
+	tok := ServiceAccountToken(t, namespace, name, SAAudience, time.Now().Add(time.Hour))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.users[tok] = "system:serviceaccount:" + namespace + ":" + name
+	return tok
+}
+
+// Review implements auth.TokenReviewer.
+func (g *Gate) Review(_ context.Context, token string, audiences []string) (auth.Review, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	u, ok := g.users[token]
+	return auth.Review{Authenticated: ok, Username: u, Audiences: audiences}, nil
 }

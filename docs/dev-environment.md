@@ -173,7 +173,7 @@ Git through the dev proxies also needs a matching kagent change, landing separat
 
 Production and mainloop-dev share one kagent principal, so each can list the other's Sessions. `mainloop sweep-orphans` and unbound HITL discovery only consider Sessions on the Agents their own settings name (`KAGENT_*_AGENT` and provider profiles), so keep the two instances' Agents disjoint, as the `*-dev` names do. HITL for an existing local binding retains its pinned Agent identity after configuration changes; creator, ownership, lifecycle and stored identity checks still apply.
 
-Smoke: `mainloop smoke --read-only` probes a running instance: health, the owner reads, the event stream, the MCP and Git listeners' refusals, and with `--kagent` the kagent probe. It sends no writes and spends no quota, so run it after each deploy. Run it in the backend container, where the in-cluster Service names resolve:
+Smoke: `mainloop smoke --read-only` probes a running instance: health, the owner reads, the event stream, the MCP and Git listeners' refusals, and with `--kagent` the kagent probe. It sends no writes and spends no quota, so run it after each deploy. Run it in the backend container, where the in-cluster Service names resolve and the pod's read-scoped token authenticates it to the owner API:
 
 ```bash
 kubectl --context "$DEV_LIVE_CONTEXT" -n mainloop-dev exec deploy/mainloop-backend -c backend -- \
@@ -187,10 +187,12 @@ kubectl --context "$DEV_LIVE_CONTEXT" -n mainloop-dev port-forward svc/mainloop-
 kubectl --context "$DEV_LIVE_CONTEXT" -n mainloop-dev port-forward svc/mainloop-git-push 8004:80
 ```
 
-Then, from `server/`:
+Then mint an operator token (see [authentication](specs/authentication.md#machine-callers)) and, from `server/`:
 
 ```bash
-go run ./cmd/mainloop smoke --live --budget 1 \
+kubectl --context "$DEV_LIVE_CONTEXT" -n mainloop-dev create token mainloop-operator \
+  --audience mainloop-api --duration 1h > /tmp/mainloop-dev-operator-token
+go run ./cmd/mainloop smoke --live --budget 1 --token-file /tmp/mainloop-dev-operator-token \
   --base-url http://127.0.0.1:8000 --git-push-url http://127.0.0.1:8004 \
   --project-id <project-id> --repo <owner/name> --app-login <app-login> \
   --provider claude --merge-tools <on|off>

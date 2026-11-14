@@ -60,6 +60,26 @@ securityContext:
     type: RuntimeDefault
 {{- end -}}
 
+{{/* MAINLOOP_AUTH_SERVICE_ACCOUNTS: the chart's own machine callers, then auth.serviceAccounts.extra. */}}
+{{- define "mainloop.authServiceAccounts" -}}
+{{- $ns := .Release.Namespace -}}
+{{- $list := list (printf "%s/mainloop-backend=read" $ns) (printf "%s/mainloop-operator=owner" $ns) -}}
+{{- if .Values.canary.enabled }}{{ $list = append $list (printf "%s/mainloop-canary=canary" $ns) }}{{ end -}}
+{{- join "," (concat $list .Values.auth.serviceAccounts.extra) -}}
+{{- end -}}
+
+{{/* A projected token for the owner API: the volume, and the file a caller reads. */}}
+{{- define "mainloop.apiTokenVolume" -}}
+- name: mainloop-api-token
+  projected:
+    sources:
+      - serviceAccountToken:
+          audience: {{ .Values.auth.audience }}
+          expirationSeconds: 3600
+          path: token
+{{- end -}}
+{{- define "mainloop.apiTokenFile" -}}/run/mainloop-api-token/token{{- end -}}
+
 {{/* envFrom, env and mounts shared by the three listeners. */}}
 {{- define "mainloop.serverEnv" -}}
 envFrom:
@@ -79,6 +99,11 @@ env:
       secretKeyRef:
         name: mainloop-secrets
         key: agent-token-key
+  {{- if .Values.auth.serviceAccounts.enabled }}
+  # The pod's read-scoped token, for `mainloop smoke --read-only` run in a container.
+  - name: MAINLOOP_API_TOKEN_FILE
+    value: {{ include "mainloop.apiTokenFile" . }}
+  {{- end }}
   - name: GITHUB_APP_ID
     valueFrom:
       secretKeyRef:
@@ -111,6 +136,11 @@ env:
 {{- end -}}
 
 {{- define "mainloop.serverMounts" -}}
+{{- if .Values.auth.serviceAccounts.enabled }}
+- name: mainloop-api-token
+  mountPath: /run/mainloop-api-token
+  readOnly: true
+{{- end }}
 {{- if .Values.kagentControlAuth.enabled }}
 - name: kagent-control-auth
   mountPath: /run/kagent-control-auth

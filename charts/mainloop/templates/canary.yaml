@@ -1,4 +1,13 @@
 {{- if .Values.canary.enabled }}
+# The canary's identity on the owner API: canary scope, through its projected token below. It reads
+# nothing from the Kubernetes API, so no token is automounted and it has no Role.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mainloop-canary
+  namespace: {{ .Release.Namespace }}
+automountServiceAccountToken: false
+---
 # One cheap synthetic turn every few minutes (docs/specs/canary.md); ntfy alert on failure or slowness.
 apiVersion: batch/v1
 kind: CronJob
@@ -22,6 +31,7 @@ spec:
             app: mainloop-canary
         spec:
           restartPolicy: Never
+          serviceAccountName: mainloop-canary
           automountServiceAccountToken: false
           {{- with .Values.imagePullSecrets }}
           imagePullSecrets:
@@ -44,12 +54,27 @@ spec:
                 {{- range .Values.canary.args }}
                 - {{ . | quote }}
                 {{- end }}
-              {{- with .Values.canary.env }}
               env:
+                - name: MAINLOOP_API_TOKEN_FILE
+                  value: {{ include "mainloop.apiTokenFile" . }}
+                {{- with .Values.canary.env }}
                 {{- toYaml . | nindent 16 }}
-              {{- end }}
+                {{- end }}
+              volumeMounts:
+                - name: mainloop-api-token
+                  mountPath: /run/mainloop-api-token
+                  readOnly: true
               {{- include "mainloop.securityContext" . | nindent 14 }}
               resources:
                 requests: { cpu: 10m, memory: 32Mi }
                 limits: { cpu: 200m, memory: 128Mi }
+          volumes:
+            # 10 minutes, the shortest the kubelet issues; a run lasts at most 6 and re-reads it.
+            - name: mainloop-api-token
+              projected:
+                sources:
+                  - serviceAccountToken:
+                      audience: {{ .Values.auth.audience }}
+                      expirationSeconds: 600
+                      path: token
 {{- end }}

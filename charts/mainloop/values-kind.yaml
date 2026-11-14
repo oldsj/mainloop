@@ -11,6 +11,11 @@ images:
     repository: mainloop-frontend
     tag: kind
 
+# No canary and no RBAC here: the local stack has no machine callers of the owner API.
+auth:
+  serviceAccounts:
+    enabled: false
+
 # Kind loads the images onto the nodes and has no ghcr.io pull secret to use.
 imagePullSecrets: []
 

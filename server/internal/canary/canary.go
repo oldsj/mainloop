@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/auth"
 )
 
 // TitlePrefix starts the title of every canary session; the date follows.
@@ -51,6 +52,9 @@ type Options struct {
 	// Request bounds each HTTP request.
 	Request time.Duration
 	Client  *http.Client
+	// Token is the bearer for each request: the canary ServiceAccount's projected token. Nil sends
+	// none.
+	Token auth.TokenSource
 	// Now is the clock (tests).
 	Now func() time.Time
 }
@@ -387,6 +391,14 @@ func (r runner) call(ctx context.Context, method, path string, payload, out any)
 	if r.o.Host != "" {
 		req.Host = r.o.Host
 	}
+	if r.o.Token != nil {
+		tok, err := r.o.Token()
+		if err != nil {
+			return fmt.Errorf("%s %s: %w", method, route(path), err)
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	req.Header.Set(auth.ClientHeader, "canary")
 	resp, err := r.o.Client.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {

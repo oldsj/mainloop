@@ -61,5 +61,11 @@ to detect an outage and doubles the turns. Failing runs alert every run, so an o
 ## Deployment
 
 The CronJob runs in the instance's namespace with the backend image; the chart adds an ingress
-rule letting pods labelled `app: mainloop-canary` reach the API on 8000. Each instance (prod,
+rule letting pods labelled `app: mainloop-canary` reach the API on 8000. It runs as the
+`mainloop-canary` ServiceAccount (no Kubernetes API token mounted) and sends a projected token for
+the `mainloop-api` audience, re-read on each request, with every call
+([authentication](authentication.md)). The backend allows that account the `canary` scope: exactly
+the session operations above. Every canary test runs against that scope in enforce mode, so a new
+call outside it fails the tests. A `--target` on another instance accepts the token only if that
+instance lists `<namespace>/mainloop-canary` in `auth.serviceAccounts.extra`. Each instance (prod,
 mainloop-dev) runs its own canary rather than one reaching across namespaces.

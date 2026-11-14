@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/oldsj/mainloop/server/internal/auth"
 	"github.com/oldsj/mainloop/server/internal/canary"
 	"github.com/oldsj/mainloop/server/internal/config"
 )
@@ -40,6 +41,7 @@ func runCanary(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	deadline := fs.Duration("deadline", 4*time.Minute, "how long to wait for the reply")
 	poll := fs.Duration("poll", 3*time.Second, "pause between conversation reads")
 	timeout := fs.Duration("timeout", 15*time.Second, "deadline for each request")
+	tokenFile := fs.String("token-file", config.APITokenFile(), "file holding the bearer for every target, re-read per request (default $MAINLOOP_API_TOKEN_FILE, set by the chart)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -61,6 +63,7 @@ func runCanary(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	var wg sync.WaitGroup
 	for i, t := range targets {
 		t.Model, t.Slow, t.Deadline, t.Poll, t.Request = *model, *slow, *deadline, *poll, *timeout
+		t.Token = auth.TokenFile(*tokenFile)
 		wg.Go(func() { results[i] = canary.Run(ctx, t) })
 	}
 	wg.Wait()

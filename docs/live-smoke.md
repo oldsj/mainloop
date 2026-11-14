@@ -19,10 +19,13 @@ kubectl --context <explicit-context> -n <namespace> port-forward svc/mainloop-ba
 kubectl --context <explicit-context> -n <namespace> port-forward svc/mainloop-git-push 18080:80
 ```
 
-Then, from `server/`:
+The owner API needs an identity ([authentication](specs/authentication.md#machine-callers)):
+mint a short-lived operator token. Then, from `server/`:
 
 ```bash
-go run ./cmd/mainloop smoke --live --budget 1 \
+kubectl --context <explicit-context> -n <namespace> create token mainloop-operator \
+  --audience mainloop-api --duration 1h > /tmp/mainloop-operator-token
+go run ./cmd/mainloop smoke --live --budget 1 --token-file /tmp/mainloop-operator-token \
   --base-url http://127.0.0.1:18000 --api-host <API_DOMAIN> \
   --git-push-url http://127.0.0.1:18080 \
   --git-push-host mainloop-git-push.<namespace>.svc.cluster.local \

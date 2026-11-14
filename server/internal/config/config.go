@@ -638,6 +638,17 @@ func (c *Config) GitPushHosts() map[string]bool {
 	return hostSet([]string{"mainloop-git-push." + c.Namespace + ".svc.cluster.local"})
 }
 
+// APITokenFile is MAINLOOP_API_TOKEN_FILE: the file holding the bearer a machine caller (`mainloop
+// canary`, `mainloop smoke`) sends to the owner API. The chart sets it to the pod's projected
+// ServiceAccount token; empty outside such a pod.
+func APITokenFile() string {
+	var v struct {
+		File string `env:"MAINLOOP_API_TOKEN_FILE"`
+	}
+	_ = env.ParseWithOptions(&v, env.Options{Environment: environ()})
+	return strings.TrimSpace(v.File)
+}
+
 // LoadNtfy reads only the ntfy settings, for commands such as `mainloop canary` that need no
 // database or agent key.
 func LoadNtfy() (Ntfy, error) {

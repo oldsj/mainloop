@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oldsj/mainloop/server/internal/auth"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/smoke"
 )
@@ -23,7 +24,7 @@ const (
 )
 
 // Each mode refuses the flags that only the other mode uses, so a live-only option cannot look like it
-// applied to a read-only run. Flags both modes use (base-url, git-push-url, api-host, git-push-host, timeout) are not listed.
+// applied to a read-only run. Flags both modes use (base-url, git-push-url, api-host, git-push-host, timeout, token-file) are not listed.
 var (
 	smokeReadOnlyFlags = []string{"mcp-url", "git-url", "mcp-host", "git-read-host", "kagent", "namespace"}
 	smokeLiveFlags     = []string{"budget", "project-id", "repo", "app-login", "provider", "merge-tools", "deadline", "step-deadline", "poll-interval"}
@@ -47,6 +48,7 @@ func runSmoke(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	mcpHost := fs.String("mcp-host", "", "read-only: Host header for the MCP probe, for a port-forward")
 	gitReadHost := fs.String("git-read-host", "", "read-only: Host header for the git read probe, for a port-forward")
 	timeout := fs.Duration("timeout", 15*time.Second, "deadline for each request")
+	tokenFile := fs.String("token-file", config.APITokenFile(), "file holding the owner API bearer, re-read per request (default $MAINLOOP_API_TOKEN_FILE: the backend pod's read-scoped token)")
 	projectID := fs.String("project-id", "", "live: the project to run in")
 	repo := fs.String("repo", "", "live: owner/name of the disposable test repository")
 	appLogin := fs.String("app-login", "", "live: the GitHub App login that must perform the merge")
@@ -81,7 +83,7 @@ func runSmoke(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 
 	if *live {
 		return runSmokeLive(ctx, stdout, stderr, liveFlags{
-			baseURL: *baseURL, gitPushURL: *gitPushURL, apiHost: *apiHost, gitPushHost: *gitPushHost, timeout: *timeout,
+			baseURL: *baseURL, gitPushURL: *gitPushURL, apiHost: *apiHost, gitPushHost: *gitPushHost, timeout: *timeout, token: auth.TokenFile(*tokenFile),
 			projectID: *projectID, repo: *repo, appLogin: *appLogin, provider: *provider, mergeTools: *mergeTools,
 			budget: *budget, deadline: *deadline, stepDeadline: *stepDeadline, pollInterval: *pollInterval,
 		})
@@ -130,6 +132,7 @@ func runSmoke(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	smoke.ReadOnly(ctx, smoke.ReadOptions{
 		Endpoints:   endpoints,
 		APIHost:     *apiHost,
+		Token:       auth.TokenFile(*tokenFile),
 		MCPHost:     *mcpHost,
 		GitReadHost: *gitReadHost,
 		GitPushHost: *gitPushHost,
@@ -149,6 +152,7 @@ type liveFlags struct {
 	baseURL, gitPushURL, apiHost, gitPushHost, projectID, repo, appLogin, provider, mergeTools string
 	timeout, deadline, stepDeadline, pollInterval                                              time.Duration
 	budget                                                                                     int
+	token                                                                                      auth.TokenSource
 }
 
 // runSmokeLive refuses unless every target is named, then runs the budgeted live path. It has no
@@ -171,6 +175,7 @@ func runSmokeLive(ctx context.Context, stdout, stderr io.Writer, f liveFlags) in
 	opts := smoke.LiveOptions{
 		Endpoints:    smoke.Endpoints{API: api, GitPush: gitPush},
 		APIHost:      f.apiHost,
+		Token:        f.token,
 		GitPushHost:  f.gitPushHost,
 		ProjectID:    f.projectID,
 		Repo:         f.repo,

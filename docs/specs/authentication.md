@@ -11,7 +11,7 @@ and is not yet proven live.
 | ---------------------------------------------------------------------------------------------- | -------------------------------- |
 | Contract: security schemes, `401`/`403` on every operation but `/health`                       | implemented                      |
 | Backend verification, scopes, write checks, `off`/`observe`/`enforce`; chart default `observe` | implemented                      |
-| Canary, in-pod smoke and operator ServiceAccount tokens (chart)                                | proposed                         |
+| Canary, in-pod smoke and operator ServiceAccount tokens (chart); `--token-file`                | implemented                      |
 | Web app sends `X-Mainloop-Client`, re-login on `401`, sign-out in Settings                     | implemented                      |
 | Production web build served same-origin at `/api` (needs the gateway's `/api` route first)     | proposed                         |
 | Pocket ID login at the admin gateway (Envoy SecurityPolicy) for dev, then prod                 | proposed (deployment repository) |
@@ -65,12 +65,43 @@ gone. This needs `create` on `tokenreviews` (`system:auth-delegator`), and works
 - `MAINLOOP_AUTH_SERVICE_ACCOUNTS` lists the allowed accounts as `namespace/name=scope`, comma-separated.
   An account not on the list is refused with `403`.
 
+## Machine callers
+
+With `auth.serviceAccounts.enabled` (the default; off in the Kind install), the chart renders the
+ServiceAccounts below and lists them in `MAINLOOP_AUTH_SERVICE_ACCOUNTS`. It also renders a
+ClusterRole `mainloop-tokenreview-<namespace>` that grants `create` on `tokenreviews` and nothing
+else, bound to the release's `mainloop-backend`. Extra entries (another instance's canary) go in
+`auth.serviceAccounts.extra`. Setting `MAINLOOP_AUTH_SERVICE_ACCOUNTS` in `config` replaces the list.
+
+| ServiceAccount      | Scope    | Token                                                                                                                                    |
+| ------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `mainloop-canary`   | `canary` | projected into the canary CronJob, 10 minutes                                                                                            |
+| `mainloop-backend`  | `read`   | projected into each backend container, one hour, for `mainloop smoke --read-only` run in the pod                                         |
+| `mainloop-operator` | `owner`  | none mounted; a namespace admin mints one: `kubectl -n <namespace> create token mainloop-operator --audience mainloop-api --duration 1h` |
+
+`mainloop canary` and `mainloop smoke` send the bearer from `--token-file` (default
+`$MAINLOOP_API_TOKEN_FILE`, which the chart sets to the mounted token). They re-read it on every
+request, so a token the kubelet rotates is picked up. They send it only to the owner API, never to
+the MCP or Git listeners, and they send `X-Mainloop-Client`.
+
+**Break-glass**, when Pocket ID is down or the gateway login is broken: port-forward the backend and
+call it with an operator token.
+
+```sh
+kubectl --context <context> -n mainloop port-forward svc/mainloop-backend 18000:8000 &
+TOKEN=$(kubectl --context <context> -n mainloop create token mainloop-operator --audience mainloop-api --duration 1h)
+curl -H "Authorization: Bearer $TOKEN" -H 'Host: <API host>' http://127.0.0.1:18000/attention
+```
+
+Anyone who can mint that token is already a namespace admin who could read the backend's Secrets,
+so this path gives nobody new access. The token expires on its own.
+
 ## Scopes
 
 | Scope    | May call                                                                                                                                        |
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `owner`  | everything (Pocket ID owner; the break-glass operator ServiceAccount)                                                                           |
-| `read`   | `GET`/`HEAD` operations except `GET /sessions/{id}/live` (in-pod `smoke --read-only`)                                                           |
+| `read`   | `GET`/`HEAD` operations except `GET /sessions/{id}/live` (`mainloop-backend`: in-pod `smoke --read-only`)                                       |
 | `canary` | list and create sessions, send a message, read the conversation and native strip, stop the turn, restart, cancel, archive ([canary](canary.md)) |
 
 ## Owner writes

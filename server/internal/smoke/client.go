@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/oldsj/mainloop/server/internal/auth"
 )
 
 // Endpoints are the base URLs of the listeners, as Service DNS names in a cluster or as port-forwards
@@ -27,7 +29,26 @@ const maxBody = 8 << 20
 type caller struct {
 	http    *http.Client
 	host    string // Host header for owner API requests; empty keeps the URL's host
+	token   auth.TokenSource
 	timeout time.Duration
+}
+
+// identify adds what an owner API request carries: the bearer, when there is one, and the client
+// header. The MCP and Git probes do not call it; those listeners have their own credentials.
+func (c caller) identify(req *http.Request) error {
+	if c.host != "" {
+		req.Host = c.host
+	}
+	req.Header.Set(auth.ClientHeader, "smoke")
+	if c.token == nil {
+		return nil
+	}
+	tok, err := c.token()
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	return nil
 }
 
 func (c caller) getJSON(ctx context.Context, target string, out any) error {
@@ -57,8 +78,8 @@ func (c caller) jsonCall(ctx context.Context, method, target string, payload, ou
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if c.host != "" {
-		req.Host = c.host
+	if err := c.identify(req); err != nil {
+		return fmt.Errorf("%s %s: %w", method, pathOf(target), err)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -75,9 +96,9 @@ func (c caller) jsonCall(ctx context.Context, method, target string, payload, ou
 }
 
 // newCaller returns a caller that never follows redirects: each listener's own status is the answer.
-func newCaller(host string, timeout time.Duration) caller {
+func newCaller(host string, token auth.TokenSource, timeout time.Duration) caller {
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	return caller{http: client, host: host, timeout: timeout}
+	return caller{http: client, host: host, token: token, timeout: timeout}
 }
 
 // probe sends one request, with host as its Host header when set, and returns the status and the first 256 bytes of the body.
