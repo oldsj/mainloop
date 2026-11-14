@@ -136,28 +136,30 @@ type Credential struct {
 }
 
 type Delivery struct {
-	ID              string
-	IdempotencyKey  string
-	SessionID       string
-	State           dbstate.DeliveryState
-	Source          string
-	TaskID          *string
-	EvidenceRef     *string
-	Detail          *string
-	OutcomeVersion  int64
-	KagentSessionID *string
-	HealthTracked   bool
-	Attempts        int32
-	CreateFailures  int32
-	NextAttemptAt   time.Time
-	LeaseOwner      *string
-	LeaseUntil      *time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	SentText        *string
-	ActivityAt      *time.Time
-	ActivityKind    *string
-	StalledAt       *time.Time
+	ID                       string
+	IdempotencyKey           string
+	SessionID                string
+	State                    dbstate.DeliveryState
+	Source                   string
+	TaskID                   *string
+	EvidenceRef              *string
+	Detail                   *string
+	OutcomeVersion           int64
+	KagentSessionID          *string
+	HealthTracked            bool
+	Attempts                 int32
+	CreateFailures           int32
+	NextAttemptAt            time.Time
+	LeaseOwner               *string
+	LeaseUntil               *time.Time
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
+	SentText                 *string
+	ActivityAt               *time.Time
+	ActivityKind             *string
+	StalledAt                *time.Time
+	GivenInstructionsVersion *int32
+	GivenMemorySeq           *int64
 }
 
 type DeliverySteer struct {

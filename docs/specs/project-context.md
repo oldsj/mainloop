@@ -3,9 +3,9 @@
 Status: **project instructions are implemented**: the API, task briefs, the `project_context` tool
 and the Instructions section of the project page. **Project memory is implemented on the server**:
 the `remember` and `forget` tools, the owner's API, task briefs, the Memory section of the project
-page and its Needs you item. The server is tested with Postgres and fakes, and the page with mocked
-API responses; none of it has been measured against a live agent. Updates to running sessions are
-**proposed**: see [Proposed](#proposed) below.
+page and its Needs you item. **Running task sessions** get changes on their next message. The
+server is tested with Postgres and fakes, and the page with mocked API responses; none of it has
+been measured against a live agent.
 
 A project's owner can say something once and have every later agent working on the project follow
 it: "UI demos use fictional data", "merge with --squash", "ask before touching billing". Mainloop
@@ -92,7 +92,8 @@ section and is pinned the same way (see [project memory](#project-memory)).
 
 An edit reaches every attempt briefed after it. An attempt already briefed keeps the version it
 was given: nothing is steered into a running turn. A running agent can read the current text with
-`project_context`. Telling running sessions about an edit on their next message is proposed below.
+`project_context`, and its next message carries the change (see
+[running sessions](#running-sessions)).
 
 The main session is not bound to one project and its standing context carries no project's
 instructions or memory; it reads them with `project_context` when it needs them, for example before
@@ -201,10 +202,32 @@ left and reopens the same item, unread, for a later proposal. `review` is a low-
 decision: it counts toward the Needs you badge, is listed after the other items and sends no push
 notification. Its row links to the project page's Memory section ("Review on the project page").
 
-## Proposed
+## Running sessions
 
-Not implemented; planned as the next slices.
+A task session briefed before its project's instructions or memory changed gets the change in
+front of its next Mainloop-delivered message, whoever sent it (the owner, main, or Mainloop). It
+never interrupts a turn, and it is given once:
 
-- **Running sessions:** a task session whose project context changed after its brief gets the
-  changed context in front of its next Mainloop-delivered message, the way a guidance version bump
-  reaches the main session ([chat](chat.md)). It never interrupts a turn.
+```text
+[mainloop:project-context] This project's context changed since your brief. Where they differ, this replaces what your brief said.
+## Project instructions (owner, v4, were v3)
+<the new instructions>
+## Project memory changes
+- New: <entry> (memory <entry id>)
+- Removed: <entry> (memory <entry id>)
+[mainloop:new-message]
+<the message>
+```
+
+- Only what changed goes: instructions up to 1 KiB are sent whole, longer ones as the lines removed
+  (`- `) and added (`+ `); cleared instructions say so. Memory lists the entries that became active
+  and the ones that stopped being active (forgotten, revoked or replaced), not the whole set.
+- The block is at most 2 KiB. Past that it is cut at a whole line and ends with "… more changed:
+  call `project_context` for the current instructions and memory."
+- What a session has is recorded on the delivery that gave it (`deliveries.given_instructions_version`
+  and `given_memory_seq`), in the transaction that freezes the sent text, so a resend sends the same
+  bytes. A session has what its newest such delivery gave, or with none, what its attempt's brief
+  pinned. A delivery kagent never saw (failed or cancelled with no native task) does not count, so
+  the change goes with the next message instead.
+- The mirrored message in the conversation stays what was written. The main session and sessions
+  that are not a task attempt's get nothing: main reads project context with `project_context`.

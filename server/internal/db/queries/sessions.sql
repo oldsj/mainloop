@@ -382,7 +382,10 @@ RETURNING create_failures;
 -- lock serializes this decision with stop; the native send follows only after commit.
 UPDATE deliveries d
 SET state = 'sending', detail = NULL, kagent_session_id = sqlc.arg(kagent_session_id),
-    sent_text = coalesce(sqlc.narg(sent_text)::text, d.sent_text), updated_at = now()
+    sent_text = coalesce(sqlc.narg(sent_text)::text, d.sent_text),
+    given_instructions_version = coalesce(sqlc.narg(given_instructions_version)::integer, d.given_instructions_version),
+    given_memory_seq = coalesce(sqlc.narg(given_memory_seq)::bigint, d.given_memory_seq),
+    updated_at = now()
 WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attempts = sqlc.arg(attempts)
   AND d.state = 'recorded'
   AND NOT EXISTS (
@@ -765,3 +768,27 @@ LIMIT 1;
 
 -- name: HideSession :exec
 UPDATE sessions SET hidden = true WHERE id = $1;
+
+-- What project context a task session has (docs/specs/project-context.md#running-sessions): the
+-- newest other delivery that gave it a change, unless kagent never saw that message (failed or
+-- cancelled with no task), else what its attempt's brief pinned. No row: the session is not a task
+-- attempt's, or its task has no project. A NULL instructions_version: the brief is not pinned yet.
+-- A NULL memory_seq with pinned instructions is a brief from before project memory, which had none.
+-- name: ProjectContextGiven :one
+SELECT a.id AS attempt_id, t.project_id::text AS project_id,
+       coalesce(g.given_instructions_version, a.instructions_version) AS instructions_version,
+       coalesce(g.given_memory_seq, a.memory_seq) AS memory_seq
+FROM task_attempts a
+JOIN tasks t ON t.id = a.task_id
+LEFT JOIN LATERAL (
+    SELECT d.given_instructions_version, d.given_memory_seq
+    FROM deliveries d
+    WHERE d.session_id = a.session_id AND d.id <> sqlc.arg(delivery_id)::text
+      AND d.given_instructions_version IS NOT NULL
+      AND NOT (d.state IN ('failed', 'cancelled') AND d.task_id IS NULL)
+    ORDER BY d.created_at DESC, d.id DESC
+    LIMIT 1
+) g ON true
+WHERE a.session_id = sqlc.arg(session_id)::text AND t.project_id IS NOT NULL
+ORDER BY a.number DESC
+LIMIT 1;
