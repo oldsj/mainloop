@@ -434,6 +434,36 @@ func (a *App) PullRequestsForHead(ctx context.Context, repo Repo, head, base str
 	return nil, ErrIncomplete
 }
 
+// MergedPullRequest is a merged pull request's number and the head commit it was merged from.
+type MergedPullRequest struct {
+	Number  int
+	HeadSHA string
+}
+
+// RecentlyMergedPullRequests lists the merged pull requests into base among the limit most
+// recently updated closed ones (at most 30), newest first. One page, no pagination.
+func (a *App) RecentlyMergedPullRequests(ctx context.Context, repo Repo, base string, limit int) ([]MergedPullRequest, error) {
+	q := url.Values{
+		"state": {"closed"}, "base": {base}, "sort": {"updated"}, "direction": {"desc"},
+		"per_page": {strconv.Itoa(min(max(limit, 1), 30))},
+	}
+	var got []struct {
+		Number   int     `json:"number"`
+		MergedAt *string `json:"merged_at"`
+		Head     refJSON `json:"head"`
+	}
+	if err := a.call(ctx, repo, Permissions{"pull_requests": Read}, http.MethodGet, repoPath(repo, "pulls")+"?"+q.Encode(), nil, &got); err != nil {
+		return nil, err
+	}
+	var out []MergedPullRequest
+	for _, p := range got {
+		if p.MergedAt != nil && isSHA(p.Head.SHA) {
+			out = append(out, MergedPullRequest{Number: p.Number, HeadSHA: p.Head.SHA})
+		}
+	}
+	return out, nil
+}
+
 // CreatePullRequest opens a pull request. It is sent at most once per intent by the caller; this
 // method never retries. A refusal comes back as a [*StatusError] with the 4xx status.
 func (a *App) CreatePullRequest(ctx context.Context, repo Repo, head, base, title, body string) (*PullRequestInfo, error) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"slices"
 	"strings"
 	"time"
 )
@@ -259,6 +260,11 @@ func pullJSON(repo *Repository, p PullRequest, detail bool) map[string]any {
 		"head":     refJSON(repo, p.HeadRef, p.HeadSHA, p.HeadRepoGone),
 		"base":     refJSON(repo, baseRef(repo, p), base, false),
 	}
+	// The list carries merged_at too; only the single read carries merged.
+	out["merged_at"] = nil
+	if p.Merged {
+		out["merged_at"] = p.UpdatedAt.UTC().Format(time.RFC3339)
+	}
 	if !detail {
 		return out
 	}
@@ -338,6 +344,9 @@ func (s *Server) pullList(w http.ResponseWriter, r *http.Request, repo *Reposito
 			continue
 		}
 		all = append(all, p)
+	}
+	if q.Get("sort") == "updated" {
+		slices.SortStableFunc(all, func(a, b PullRequest) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
 	}
 	from, to, pageNo, last := page(r, len(all))
 	out := []map[string]any{}

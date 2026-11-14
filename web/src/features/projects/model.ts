@@ -254,6 +254,7 @@ export const projectVerificationSchema = z.object({
     .object({
       usable: z.boolean(),
       branch: text,
+      pr_number: z.number().int().nullish(),
       checks: z.number().int(),
       sources: z.array(text),
       checked_at: text
@@ -283,7 +284,7 @@ export function verificationText(v: z.output<typeof projectVerificationSchema>):
   const d = v.detection;
   const found =
     d && d.usable
-      ? `CI found on ${d.branch}: ${d.sources.join(', ') || `${d.checks} checks`}`
+      ? `CI found on ${d.pr_number ? `pull request #${d.pr_number}` : d.branch}: ${d.sources.join(', ') || `${d.checks} checks`}`
       : `no CI reported on ${d?.branch ?? 'the default branch'}`;
   return `Heavy checks run in: ${effective} (automatic, ${found})`;
 }

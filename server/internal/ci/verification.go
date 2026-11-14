@@ -24,8 +24,13 @@ import (
 // DetectionTTL is how long a CI detection is trusted before a read refreshes it.
 const DetectionTTL = 24 * time.Hour
 
-// maxSources bounds the check sources a detection records.
-const maxSources = 10
+// Detection bounds: the check sources it records, how many recently closed pull requests it lists,
+// and how many merged heads it reads checks on when the default branch shows none.
+const (
+	maxSources     = 10
+	mergedLookback = 10
+	mergedProbes   = 3
+)
 
 // ErrInvalidMode is a verification mode that is not one of the four.
 var ErrInvalidMode = errors.New("ci: unknown verification mode")
@@ -33,13 +38,16 @@ var ErrInvalidMode = errors.New("ci: unknown verification mode")
 // Detection is what Mainloop found of a project's CI. It is stored as JSON, so later reads (whether
 // a workflow deploys or publishes on push, what CI costs) add fields here without a migration.
 type Detection struct {
-	// Usable is true when at least one check reported on the default branch's tip.
+	// Usable is true when at least one check reported on the default branch's tip or, failing
+	// that, on the head of one of the last merged pull requests into it.
 	Usable bool `json:"usable"`
-	// Branch and SHA are the default branch and the tip that was read.
+	// Branch is the default branch. SHA is the commit whose checks were counted: the branch's tip,
+	// or the head of pull request PR when CI was found there (CI that runs only on pull requests).
 	Branch string `json:"branch"`
 	SHA    string `json:"sha,omitempty"`
-	// Checks counts the checks on that tip, and Sources names what reported them: the check run's
-	// app, or the commit status's context. At most ten.
+	PR     int    `json:"pr_number,omitempty"`
+	// Checks counts the checks on that commit, and Sources names what reported them: the check
+	// run's app, or the commit status's context. At most ten.
 	Checks  int      `json:"checks"`
 	Sources []string `json:"sources,omitempty"`
 	// CheckedAt is when the detection ran.
@@ -185,21 +193,27 @@ func (s *Service) detect(ctx context.Context, ownerID string, row dbq.GetProject
 		return Detection{}, unavailable(err)
 	default:
 		d.SHA = sha
-		checks, err := s.Provider.Checks(ctx, repo, sha)
-		if err != nil && !errors.Is(err, ErrNotFound) {
+		if err := s.countChecks(ctx, repo, &d); err != nil {
+			return Detection{}, err
+		}
+	}
+	if !d.Usable {
+		// CI that runs only on pull requests reports nothing on the default branch; its checks
+		// stay on the heads of the pull requests merged into it.
+		heads, err := s.Provider.MergedHeads(ctx, repo, row.DefaultBranch, mergedLookback)
+		if err != nil {
 			return Detection{}, unavailable(err)
 		}
-		d.Checks, d.Usable = len(checks), len(checks) > 0
-		for _, c := range checks {
-			src := c.App
-			if src == "" || c.Kind == KindCommitStatus {
-				src = c.Name
+		for _, h := range heads[:min(len(heads), mergedProbes)] {
+			probe := Detection{Branch: d.Branch, SHA: h.SHA, PR: h.PR, CheckedAt: d.CheckedAt}
+			if err := s.countChecks(ctx, repo, &probe); err != nil {
+				return Detection{}, err
 			}
-			if src != "" && !slices.Contains(d.Sources, src) && len(d.Sources) < maxSources {
-				d.Sources = append(d.Sources, src)
+			if probe.Usable {
+				d = probe
+				break
 			}
 		}
-		slices.Sort(d.Sources)
 	}
 	raw, err := json.Marshal(d)
 	if err != nil {
@@ -231,4 +245,24 @@ func Instructions(effective dbstate.VerificationMode) string {
 	}
 	return "No usable CI: run the project's full checks in the workspace before you report done. " +
 		"If the project should have CI, propose a starter workflow in its own pull request."
+}
+
+// countChecks reads the checks on d.SHA into d.
+func (s *Service) countChecks(ctx context.Context, repo Repo, d *Detection) error {
+	checks, err := s.Provider.Checks(ctx, repo, d.SHA)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return unavailable(err)
+	}
+	d.Checks, d.Usable = len(checks), len(checks) > 0
+	for _, c := range checks {
+		src := c.App
+		if src == "" || c.Kind == KindCommitStatus {
+			src = c.Name
+		}
+		if src != "" && !slices.Contains(d.Sources, src) && len(d.Sources) < maxSources {
+			d.Sources = append(d.Sources, src)
+		}
+	}
+	slices.Sort(d.Sources)
+	return nil
 }

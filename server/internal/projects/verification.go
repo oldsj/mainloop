@@ -28,6 +28,9 @@ func toVerification(v ci.Verification) api.ProjectVerification {
 		if d.SHA != "" {
 			det.Sha = &d.SHA
 		}
+		if d.PR > 0 {
+			det.PrNumber = &d.PR
+		}
 		out.Detection = &det
 	}
 	return out
