@@ -33,6 +33,8 @@ type fakeAPI struct {
 	stopped      []string
 	hidden       bool
 	sendStatus   string
+	// deliveries is what GET /sessions/{id}/native lists; nil answers 404.
+	deliveries []api.NativeDeliveryInfo
 }
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -88,6 +90,12 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		write(map[string]any{})
 	case len(parts) == 3 && parts[2] == "conversation":
 		write(api.SessionConversationResponse{Session: api.Session{Id: parts[1], Status: api.SessionStatusActive}, Messages: f.messages[parts[1]]})
+	case len(parts) == 3 && parts[2] == "native":
+		if f.deliveries == nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		write(api.NativeSessionInfo{Deliveries: f.deliveries})
 	case len(parts) == 3 && parts[2] == "archive":
 		if !f.ended[parts[1]] {
 			w.WriteHeader(http.StatusConflict)
@@ -211,3 +219,72 @@ func TestAlert(t *testing.T) {
 		t.Fatalf("alert: %+v", m)
 	}
 }
+
+func TestADeliveryKagentRefusedFailsTheRunWithItsReason(t *testing.T) {
+	refused := "send rejected: A2A error -32004: dispatch busy"
+	scenarios := []struct {
+		name     string
+		existing bool
+	}{
+		{name: "Given a new canary session, when its first message is refused, assert that the run fails with the refusal", existing: false},
+		{name: "Given an idle canary session, when the ping is refused, assert that the run fails with the refusal", existing: true},
+	}
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
+			f := &fakeAPI{sendStatus: "ok"}
+			if sc.existing {
+				f.sessions = []api.Session{{Id: "s-live", Title: canary.TitlePrefix + "2026-11-12 09:00", Status: api.SessionStatusIdle}}
+			}
+			f.deliveries = []api.NativeDeliveryInfo{
+				{MessageId: "an-older-one", State: "failed", Detail: ptr("not this one")},
+			}
+			f.messages = map[string][]api.Message{}
+			f.ended = map[string]bool{}
+			srv := httptest.NewServer(&refusing{f: f, detail: refused})
+			t.Cleanup(srv.Close)
+
+			res := canary.Run(context.Background(), canary.Options{
+				Name: "prod", API: srv.URL, Slow: time.Hour, Deadline: 10 * time.Second,
+				Poll: 20 * time.Millisecond, Request: time.Second, Now: func() time.Time { return today },
+			})
+
+			if res.Step != canary.StepReply || res.Err == nil || !strings.Contains(res.Err.Error(), "delivery failed: "+refused) {
+				t.Fatalf("result: %v, want await-reply failing with the refusal", res)
+			}
+		})
+	}
+
+	t.Run("Given the delivery ledger cannot be read, when no reply comes, assert that the run still waits out its deadline", func(t *testing.T) {
+		f := &fakeAPI{sendStatus: "ok", sessions: []api.Session{
+			{Id: "s-live", Title: canary.TitlePrefix + "2026-11-12 09:00", Status: api.SessionStatusIdle},
+		}}
+
+		res := run(t, f)
+
+		if res.Step != canary.StepReply || res.Err == nil || !strings.Contains(res.Err.Error(), "no reply within") {
+			t.Fatalf("result: %v, want the reply deadline", res)
+		}
+	})
+}
+
+// refusing records each sent message as a failed delivery, as the backend does once kagent
+// refuses it.
+type refusing struct {
+	f      *fakeAPI
+	detail string
+}
+
+func (r *refusing) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	r.f.ServeHTTP(w, req)
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	for _, msgs := range r.f.messages {
+		for _, m := range msgs {
+			if m.Role == api.MessageRoleUser && !slices.ContainsFunc(r.f.deliveries, func(d api.NativeDeliveryInfo) bool { return d.MessageId == m.Id }) {
+				r.f.deliveries = append(r.f.deliveries, api.NativeDeliveryInfo{MessageId: m.Id, State: "failed", Detail: ptr(r.detail)})
+			}
+		}
+	}
+}
+
+func ptr(s string) *string { return &s }

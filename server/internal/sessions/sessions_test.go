@@ -1,6 +1,7 @@
 package sessions_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -350,6 +351,27 @@ func TestRefusalsEndInFailedAndTheOwnerMaySendAgain(t *testing.T) {
 			t.Fatalf("detail %q, %d sends", deref(d.Detail), e.sends())
 		}
 	})
+	t.Run("a rejected send is logged as a failed delivery", func(t *testing.T) {
+		logs := &lockedBuffer{}
+		e := newEnv(t)
+		e.svc.Log = slog.New(slog.NewJSONHandler(logs, nil))
+		e.srv.FailNext("SendStreamingMessage", kagenttest.Fault{RPC: &kagenttest.RPCError{Code: -32004, Message: "dispatch busy"}})
+		e.run()
+
+		id := e.send("hi")
+
+		e.waitState(id, dbstate.DeliveryFailed)
+		var line map[string]any
+		for l := range strings.Lines(logs.String()) {
+			var m map[string]any
+			if json.Unmarshal([]byte(l), &m) == nil && m["msg"] == "delivery failed" && m["message_id"] == id {
+				line = m
+			}
+		}
+		if line == nil || line["level"] != "WARN" || !strings.HasPrefix(line["detail"].(string), "send rejected:") {
+			t.Fatalf("no WARN naming the failed delivery and its reason in %s", logs.String())
+		}
+	})
 	t.Run("a failed task keeps its reason, redacted", func(t *testing.T) {
 		e := newEnv(t)
 		failed := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("boom\nAuthorization: Bearer abc.def.ghi and password=hunter2"))
@@ -694,4 +716,22 @@ func TestFencedWritesFromAStaleClaimMatchNothing(t *testing.T) {
 	if d := e.delivery(id); d.State != dbstate.DeliverySending {
 		t.Fatalf("state %s", d.State)
 	}
+}
+
+// lockedBuffer is a log sink the delivery handlers can write to concurrently.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

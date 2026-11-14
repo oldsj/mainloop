@@ -235,6 +235,9 @@ func (r runner) awaitReply(ctx context.Context, session, messageID string) error
 			case api.SessionStatusFailed, api.SessionStatusCancelled, api.SessionStatusCompleted, api.SessionStatusSuperseded:
 				return fmt.Errorf("session ended %s without a reply", conv.Session.Status)
 			}
+			if err := r.deliveryEnded(ctx, session, sentID(conv.Messages, messageID)); err != nil {
+				return err
+			}
 			lastErr = fmt.Errorf("no reply yet (session %s)", conv.Session.Status)
 		} else {
 			lastErr = err
@@ -247,6 +250,42 @@ func (r runner) awaitReply(ctx context.Context, session, messageID string) error
 		case <-t.C:
 		}
 	}
+}
+
+// deliveryEnded reports a canary message whose delivery already ended without a turn: kagent
+// refused it, or it was cancelled. POST /message answers 200 once the message is recorded, so
+// without this a refusal looks like a session that is merely slow to answer. A failed read of
+// the delivery ledger proves nothing and is ignored; the reply wait goes on.
+func (r runner) deliveryEnded(ctx context.Context, session, messageID string) error {
+	if messageID == "" {
+		return nil
+	}
+	var native api.NativeSessionInfo
+	if r.call(ctx, http.MethodGet, "/sessions/"+session+"/native", nil, &native) != nil {
+		return nil
+	}
+	for _, d := range native.Deliveries {
+		if d.MessageId != messageID || (d.State != "failed" && d.State != "cancelled") {
+			continue
+		}
+		if d.Detail != nil && *d.Detail != "" {
+			return fmt.Errorf("delivery %s: %s", d.State, *d.Detail)
+		}
+		return fmt.Errorf("delivery %s", d.State)
+	}
+	return nil
+}
+
+// sentID is the id of the user message the canary waits on: messageID, or the first user
+// message of a new session.
+func sentID(msgs []api.Message, messageID string) string {
+	if messageID != "" {
+		return messageID
+	}
+	if at := slices.IndexFunc(msgs, func(m api.Message) bool { return m.Role == api.MessageRoleUser }); at >= 0 {
+		return msgs[at].Id
+	}
+	return ""
 }
 
 func replied(msgs []api.Message, messageID string) bool {
