@@ -39,7 +39,8 @@ const (
 	// noChecksGrace is how long a commit may show no checks at all before the watch settles as
 	// no_checks: CI takes a moment to register its runs after a push.
 	noChecksGrace = 3 * time.Minute
-	// deliveryGrace is how long after the deadline a message that cannot be delivered yet (the
+	// deliveryGrace is how long after the deadline (SessionAwaitsCheckWatch, which keeps the task
+	// liveness sweep from reading a waiting worker as stalled, uses the same 30 minutes) a message that cannot be delivered yet (the
 	// workspace is not ready, say) is retried before the watch gives up on it.
 	deliveryGrace = 30 * time.Minute
 )

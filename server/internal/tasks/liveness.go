@@ -309,11 +309,26 @@ func (s *Service) checkLiveness(ctx context.Context, a dbq.TaskAttempt) error {
 	case !live.Exists || live.Terminal:
 		return s.blockAttempt(ctx, a, dbstate.ReasonSessionLost)
 	case !active.IsZero() && now.Sub(active) > s.stallTimeout():
-		return s.blockAttempt(ctx, a, dbstate.ReasonStalled)
-	case s.overRuntime(a, now):
+		waiting, err := s.awaitsCI(ctx, *a.BindingID, now)
+		if err != nil {
+			return err
+		}
+		if !waiting {
+			return s.blockAttempt(ctx, a, dbstate.ReasonStalled)
+		}
+	}
+	if s.overRuntime(a, now) {
 		return s.blockAttempt(ctx, a, dbstate.ReasonRuntimeLimit)
 	}
 	return s.touchLiveness(ctx, a.ID)
+}
+
+// awaitsCI reports whether the attempt's session ended its turn on a check watch (watch_checks)
+// that has not settled and been delivered yet. It is quiet on purpose, waiting for CI, not stalled;
+// the watch's message starts its next turn. The watch's own deadline bounds the wait, and the
+// runtime bound still holds.
+func (s *Service) awaitsCI(ctx context.Context, sessionID string, now time.Time) (bool, error) {
+	return dbq.New(s.Pool).SessionAwaitsCheckWatch(ctx, dbq.SessionAwaitsCheckWatchParams{SessionID: sessionID, Now: now})
 }
 
 // overRuntime reports whether the attempt has run past the runtime bound. It needs nothing from

@@ -148,6 +148,12 @@ that has ended or is not ready is retried until 30 minutes after the deadline an
 `undeliverable`, as is a watch whose session or project is gone. Final states are `delivered`,
 `undeliverable` and `superseded`.
 
+While the watch is open, the agent's task stays `running` with its session idle: the task
+liveness sweep does not count that quiet as `stalled` ([tasks](tasks.md)), the session has no
+native input request so it does not show under Needs you, and no `report` reaches the delegator
+until the agent sends one after reading the result. Nothing yet labels the task as waiting on CI
+in the task or session views.
+
 The watch uses the same credential and scoping as `check_status`: `projectAuthority` before the
 row is written, the project resolved by owner, and the watch bound to the calling session, which is
 the only session it can message.

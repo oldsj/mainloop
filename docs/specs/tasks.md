@@ -99,7 +99,10 @@ submitted or working task (a changed status, status time, newest history message
 Session.updated_at, which only moves on a lifecycle operation (create, rename, delete),
 never a turn. A working status alone is not activity: kagent keeps a turn working until it ends, and
 a turn whose native process has wedged never ends, so a working turn that records nothing new for
-the stall timeout is `stalled`. The sweep stores what it last saw on the attempt
+the stall timeout is `stalled`. A session that ended its turn on `watch_checks` is waiting for CI,
+not stalled: while it has a check watch still to settle or deliver (no later than 30 minutes past
+the watch's deadline), quiet past the stall timeout does not block the task, and the watch's
+message starts the next turn (see [CI checks](ci.md#watch_checks)). The sweep stores what it last saw on the attempt
 (`progress_marker`, `progress_at`), so the clock survives restarts and the first look after a
 restart or deploy starts a fresh window. `runtime_limit` is the last-resort safety net: the
 attempt has run longer than `TASK_MAX_RUNTIME` (default 6 hours) regardless of activity, including
