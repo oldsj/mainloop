@@ -1,4 +1,5 @@
 import { API_URL } from './config';
+import { API_SAME_ORIGIN, CLIENT_HEADER, CLIENT_NAME, signIn } from './signin';
 
 export interface SseMessage {
   event: string;
@@ -73,6 +74,10 @@ export interface SseClientOptions {
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   /** Reconnect when no bytes arrive for this long (default 75 s; the server heartbeats at 30 s). */
   idleTimeoutMs?: number;
+  /** Send the client header (default: when the API shares the app's origin). */
+  clientHeader?: boolean;
+  /** A 401: the owner's sign-in lapsed (default: the app's sign-in state). */
+  unauthorized?: () => void;
 }
 
 export const SSE_IDLE_TIMEOUT_MS = 75_000;
@@ -117,6 +122,8 @@ export function createSseClient(options: SseClientOptions) {
   const backoff = options.backoff ?? defaultBackoff;
   const sleep = options.sleep ?? defaultSleep;
   const idleTimeoutMs = options.idleTimeoutMs ?? SSE_IDLE_TIMEOUT_MS;
+  const clientHeader = options.clientHeader ?? API_SAME_ORIGIN;
+  const unauthorized = options.unauthorized ?? (() => signIn.expired());
   let controller: AbortController | undefined;
   let lastEventId = '';
 
@@ -140,11 +147,13 @@ export function createSseClient(options: SseClientOptions) {
       arm();
       const headers: Record<string, string> = { Accept: 'text/event-stream' };
       if (lastEventId) headers['Last-Event-ID'] = lastEventId;
+      if (clientHeader) headers[CLIENT_HEADER] = CLIENT_NAME;
       const response = await doFetch(url, {
         headers,
         signal: attemptController.signal,
         cache: 'no-store'
       });
+      if (response.status === 401) unauthorized();
       if (!response.ok || !response.body) throw new Error(`SSE ${response.status}`);
       options.onStatus?.('open');
       opened = true;

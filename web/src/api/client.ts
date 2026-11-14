@@ -4,6 +4,7 @@ import { API_URL } from './config';
 import { connection } from './connection';
 import { createMiddleware } from './middleware';
 import type { paths } from './schema.gen';
+import { API_SAME_ORIGIN, signIn } from './signin';
 
 /**
  * The typed fetch client. Components use `$api`; non-React code (probes, tests) can use this.
@@ -15,7 +16,13 @@ export const fetchClient = createFetchClient<paths>({
   baseUrl: API_URL,
   fetch: (request) => globalThis.fetch(request)
 });
-fetchClient.use(createMiddleware({ reportFailure: () => connection.reportFailure() }));
+fetchClient.use(
+  createMiddleware({
+    reportFailure: () => connection.reportFailure(),
+    unauthorized: () => signIn.expired(),
+    clientHeaderOnReads: API_SAME_ORIGIN
+  })
+);
 
 /** React Query bindings over the same client: `$api.useQuery('get', '/attention')`. */
 export const $api = createClient(fetchClient);

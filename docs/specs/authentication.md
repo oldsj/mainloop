@@ -12,7 +12,8 @@ and is not yet proven live.
 | Contract: security schemes, `401`/`403` on every operation but `/health`                       | implemented                      |
 | Backend verification, scopes, write checks, `off`/`observe`/`enforce`; chart default `observe` | implemented                      |
 | Canary, in-pod smoke and operator ServiceAccount tokens (chart)                                | proposed                         |
-| Web app served same-origin at `/api`, sends `X-Mainloop-Client`, re-login on `401`             | proposed                         |
+| Web app sends `X-Mainloop-Client`, re-login on `401`, sign-out in Settings                     | implemented                      |
+| Production web build served same-origin at `/api` (needs the gateway's `/api` route first)     | proposed                         |
 | Pocket ID login at the admin gateway (Envoy SecurityPolicy) for dev, then prod                 | proposed (deployment repository) |
 | `enforce` on dev, then prod; `mainloop-api.<domain>` route removed                             | proposed                         |
 
@@ -80,6 +81,27 @@ loopback in development. This applies to bearer requests too, because the gatewa
 cookie into a bearer. A page on another origin can't add the header without a CORS preflight, and
 only the frontend origin passes the preflight. That covers workspace previews, which are same-site
 with the app. A native client sends the header and no `Origin`.
+
+## The web app
+
+The app does no login of its own: the gateway signs the owner in and sets the login cookie, and
+the backend verifies it. The app's part:
+
+- Every write carries `X-Mainloop-Client: web`. Reads, the event stream and the `/health` probe
+  carry it too when the API is on the app's own origin (a relative API URL, such as `/api`). Then
+  the gateway answers a lapsed sign-in with `401` instead of a login redirect that `fetch` cannot
+  follow. Cross-origin, reads leave it off, because the header would cost a CORS preflight on every read.
+- A `401` from the API, the event stream, or the gateway on `/health` means the sign-in lapsed.
+  The app reloads the page once, a top-level navigation the gateway sends through the Pocket ID
+  login and back. If another `401` comes within a minute of that reload (the gateway accepts the
+  sign-in but the backend refuses it), the app does not reload again. Instead it shows **Signed
+  out · Sign in again**: the phone's banner at the top of the screen, or the status bar on
+  desktop. A `403` is not a lapsed sign-in and changes nothing. A `401` on `/health` does not
+  count as offline.
+- Settings has an **Account** section with **Sign out** (the gateway's `/oauth2/logout`), shown
+  only when the API is on the app's own origin.
+- The live terminal's WebSocket can't carry headers, so it relies on the cookie alone, which a
+  same-origin API sends.
 
 ## Responses
 
