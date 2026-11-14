@@ -211,12 +211,50 @@ export function reviewSeed() {
     }
   };
 
-  const tasks = [running, ready, landing, stuck, ops, failed, merged, old];
+  // A finished supervisor task with two children, so the project page shows nesting. They are two
+  // days old, outside "Since you were here" and the explorer's working groups.
+  const earlier = new Date(Date.now() - 2 * DAY).toISOString();
+  const family = [
+    view({
+      id: 'task-sup-0009',
+      project_id: repo.id,
+      title: 'Split the queue migration',
+      mode: 'coordination',
+      status: 'completed',
+      created_at: earlier,
+      updated_at: earlier
+    }),
+    view({
+      id: 'task-kid-0010',
+      project_id: repo.id,
+      parent_task_id: 'task-sup-0009',
+      title: 'Migrate the intent table',
+      status: 'completed',
+      created_at: earlier,
+      updated_at: earlier
+    }),
+    view({
+      id: 'task-kid-0011',
+      project_id: repo.id,
+      parent_task_id: 'task-sup-0009',
+      title: 'Backfill idempotency keys',
+      status: 'cancelled',
+      created_at: earlier,
+      updated_at: earlier
+    })
+  ];
+  const tasks = [running, ready, landing, stuck, ops, failed, merged, old, ...family];
   const handlers = [
     http.get(url('/attention'), () =>
       HttpResponse.json({ ...attention, count: attention.items.length })
     ),
-    http.get(url('/tasks'), () => HttpResponse.json(tasks)),
+    // The project page asks for one project's tasks; every other read gets them all.
+    http.get(url('/tasks'), ({ request }) => {
+      const projectId = new URL(request.url).searchParams.get('project_id');
+      return HttpResponse.json(
+        projectId ? tasks.filter((task) => task.task.project_id === projectId) : tasks
+      );
+    }),
     // A task's own page reads it by id.
     http.get(url('/tasks/:task_id'), ({ params }) => {
       const found = tasks.find((task) => task.task.id === params.task_id);

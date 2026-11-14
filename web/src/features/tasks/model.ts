@@ -97,14 +97,6 @@ export function unreadableTasksText(count: number): string {
     : `${count} tasks could not be read and are not shown.`;
 }
 
-/** Depth 0 is flush; depth 1 and 2 step in; anything deeper stops at the last step. */
-export function indentClass(depth: number): string {
-  if (depth <= 0) return '';
-  if (depth === 1) return 'pl-md';
-  if (depth === 2) return 'pl-lg';
-  return 'pl-xl';
-}
-
 /**
  * True while the task has no pull request. Publication has not happened, so the PR, CI and merge
  * facts have nothing to describe yet. `publication_state` is a publication mode, not a status, so

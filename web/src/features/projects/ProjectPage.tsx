@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { EnvironmentSection } from '@/features/environments/EnvironmentSection';
@@ -54,6 +55,16 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
   const providers = useProviders();
   // Settings stays folded until the owner opens it, and keeps its state while the page is open.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The header's jump links. Instructions are inside Settings, so that link opens Settings first;
+  // the scroll waits for the next render, when the section is on the page.
+  const [jump, setJump] = useState<{ to: string; at: number } | null>(null);
+  useEffect(() => {
+    if (jump) document.getElementById(jump.to)?.scrollIntoView?.({ block: 'start' });
+  }, [jump]);
+  const jumpTo = (to: string, openSettings = false) => {
+    if (openSettings) setSettingsOpen(true);
+    setJump((prev) => ({ to, at: (prev?.at ?? 0) + 1 }));
+  };
 
   const data = detail.data;
   if (!data) {
@@ -149,6 +160,34 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
               Scheduled runs
             </Link>
           </div>
+          {/* The task list can be long, so what sits below it is one press away from the top. */}
+          <nav
+            aria-label="On this page"
+            className="gap-sm text-muted-foreground flex flex-wrap items-center text-xs"
+          >
+            <span>On this page:</span>
+            <button
+              type="button"
+              onClick={() => jumpTo('project-memory')}
+              className="text-foreground min-h-control inline-flex items-center underline"
+            >
+              Memory
+            </button>
+            <button
+              type="button"
+              onClick={() => jumpTo('instructions-heading', true)}
+              className="text-foreground min-h-control inline-flex items-center underline"
+            >
+              Instructions
+            </button>
+            <button
+              type="button"
+              onClick={() => jumpTo('project-settings-heading', true)}
+              className="text-foreground min-h-control inline-flex items-center underline"
+            >
+              All settings
+            </button>
+          </nav>
         </div>
       </header>
 
@@ -283,9 +322,11 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
             className="gap-sm text-foreground hover:bg-accent min-h-control flex w-full items-center justify-between text-left"
           >
             Settings
-            <span aria-hidden="true" className="text-muted-foreground text-sm">
-              {settingsOpen ? '[-]' : '[+]'}
-            </span>
+            {settingsOpen ? (
+              <ChevronDown aria-hidden="true" className="text-muted-foreground size-4" />
+            ) : (
+              <ChevronRight aria-hidden="true" className="text-muted-foreground size-4" />
+            )}
           </button>
         </h2>
         <div id="project-settings-body" hidden={!settingsOpen}>

@@ -1,22 +1,23 @@
 import { Link } from '@tanstack/react-router';
-import { StatusBadge } from '@/components/shared/status-badge';
+import { useEffect, useState } from 'react';
+import { StatusDot } from '@/components/shared/status-dot';
+import { statusLine, workGroup } from '@/features/home/model';
 import type { TaskView } from '@/lib/contract';
 import {
   buildTree,
   isTerminal,
   openOperations,
-  providerLabel,
   publicationFacts,
-  reasonLabel,
+  relativeAge,
   statusLabel,
-  statusTone
+  type Tone
 } from '@/lib/taskState';
-import { indentClass, unreadableTasksText } from './model';
+import { unreadableTasksText } from './model';
 import { useTaskList, useUnreadableTaskCount } from './queries';
 
 /**
- * Tasks with their children beneath them, optionally limited to one project. Each row shows what
- * the list can say without opening the task. A row whose parent is not in this list is shown at
+ * Tasks with their children beneath them, optionally limited to one project. Each row is one line
+ * and shows what the list can say without opening the task. A row whose parent is not in this list is shown at
  * the top level and says so, so a filtered list never hides work. A row this page cannot read is
  * not shown, and the list says how many.
  */
@@ -24,6 +25,7 @@ export function TaskTree({ projectId }: { projectId?: string }) {
   const filter = projectId ? { project_id: projectId } : {};
   const list = useTaskList(filter);
   const unreadable = useUnreadableTaskCount(filter);
+  const now = useNow();
 
   if (list.data === undefined) {
     if (list.isPending) {
@@ -67,6 +69,7 @@ export function TaskTree({ projectId }: { projectId?: string }) {
               view={row.view}
               depth={row.depth}
               detached={row.detached}
+              now={now}
             />
           ))}
         </ul>
@@ -79,42 +82,106 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : 'unknown error';
 }
 
-function TaskRow({ view, depth, detached }: { view: TaskView; depth: number; detached: boolean }) {
+/** The clock a row's age is measured from. It ticks once a minute, so ages stay current. */
+function useNow(): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  return now;
+}
+
+/**
+ * The dot's tone, in the status language the explorer uses: amber while the task works, red when it
+ * needs the owner (a decision, an approval, or a failure they can still act on), hollow at rest.
+ */
+function rowTone(view: TaskView): Tone {
+  const group = workGroup(view, null);
+  if (group === 'needs-you' || group === 'blocked') return 'attention';
+  if (group === 'working') return 'active';
+  return 'muted';
+}
+
+/** Each level steps in by this much, and a guide line marks each ancestor. */
+const INDENT_PX = 16;
+const GUTTER_PX = 12;
+
+/**
+ * One task on one line: the status dot, the title, what state it is in, and how long ago it
+ * changed. A child sits under its parent, stepped in, with a guide line for each level above it.
+ */
+function TaskRow({
+  view,
+  depth,
+  detached,
+  now
+}: {
+  view: TaskView;
+  depth: number;
+  detached: boolean;
+  now: number;
+}) {
   const facts = publicationFacts(view.projection);
   const operation = openOperations(view)[0];
-  const reason = view.task.reason ? reasonLabel(view.task.reason) : null;
+  // CI is said only when it is known. A finished task says nothing about CI: "CI unknown" there is
+  // noise, not a fact the owner can act on.
+  const ci =
+    facts.ci.known && !isTerminal(view.task.status) ? `CI ${facts.ci.label.toLowerCase()}` : null;
+  const state = [
+    view.task.mode === 'coordination' ? 'supervisor' : null,
+    statusLine(view),
+    operation?.summary,
+    ci,
+    detached ? 'child of a task not shown here' : null
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const changed = Date.parse(view.task.updated_at);
   return (
-    <li className={indentClass(depth)}>
+    <li
+      data-depth={depth}
+      // A hairline sets each top-level task, with the children under it, apart from the next.
+      className={depth === 0 ? 'border-border-subtle border-t first:border-t-0' : undefined}
+    >
       <Link
         to="/tasks/$id"
         params={{ id: view.task.id }}
-        className="gap-xs border-border-subtle p-md min-h-control flex flex-col border-b"
+        className="gap-sm pr-sm min-h-control hover:bg-accent hover:text-accent-foreground relative flex items-center text-sm"
+        style={{ paddingLeft: `${depth * INDENT_PX + GUTTER_PX}px` }}
       >
-        <span className="gap-sm flex flex-wrap items-center">
-          <span data-testid="task-status">
-            <StatusBadge
-              label={`[${statusLabel(view.task.status)}]`}
-              tone={statusTone(view.task.status)}
-            />
-          </span>
-          {view.task.mode === 'coordination' ? (
-            <StatusBadge
-              label="[SUPERVISOR]"
-              tone={isTerminal(view.task.status) ? 'muted' : 'active'}
-            />
-          ) : null}
+        {Array.from({ length: depth }, (_, level) => (
+          <span
+            key={level}
+            aria-hidden="true"
+            data-testid="task-indent-guide"
+            className="bg-border absolute inset-y-0 w-px"
+            style={{ left: `${level * INDENT_PX + GUTTER_PX + 4}px` }}
+          />
+        ))}
+        <StatusDot tone={rowTone(view)} testId="task-dot" />
+        <span className="min-w-0 flex-1 basis-1/2 truncate">{view.task.title}</span>
+        {/* A narrow screen keeps the status word alone, so the state is never colour only. */}
+        <span
+          data-testid="task-status"
+          className="text-muted-foreground shrink-0 text-xs sm:hidden"
+        >
+          {statusLabel(view.task.status)}
         </span>
-        <span className="text-sm font-medium break-words">{view.task.title}</span>
-        <span className="text-muted-foreground text-xs break-words">
-          {providerLabel(view)}
-          {reason ? ` · ${reason}` : ''}
+        <span
+          data-testid="task-state"
+          className="text-muted-foreground hidden min-w-0 shrink truncate text-right text-xs sm:inline"
+        >
+          {state}
         </span>
-        {operation ? <span className="text-xs break-words">{operation.summary}</span> : null}
-        <span className="text-muted-foreground text-xs">
-          CI {facts.ci.known ? facts.ci.label.toLowerCase() : 'unknown'}
-        </span>
-        {detached ? (
-          <span className="text-muted-foreground text-xs">child of a task not shown here</span>
+        {Number.isFinite(changed) ? (
+          <time
+            dateTime={view.task.updated_at}
+            data-testid="task-age"
+            className="text-muted-foreground w-8 shrink-0 text-right text-xs"
+          >
+            {relativeAge(Math.max(0, now - changed))}
+          </time>
         ) : null}
       </Link>
     </li>

@@ -142,6 +142,39 @@ describe('project page', () => {
     expect(body).not.toBeVisible();
   });
 
+  it('reaches memory, instructions and settings from the top of the page', async () => {
+    server.use(...serveProjectPage());
+    const user = userEvent.setup();
+    const scrolled: string[] = [];
+    // jsdom has no scrollIntoView, so the test supplies one and records where it was sent.
+    const proto = Element.prototype as { scrollIntoView?: () => void };
+    proto.scrollIntoView = function (this: Element) {
+      scrolled.push(this.id);
+    };
+    renderProjects(PAGE);
+    await heading('acme/widgets');
+    const nav = screen.getByRole('navigation', { name: 'On this page' });
+
+    await user.click(within(nav).getByRole('button', { name: 'Memory' }));
+    expect(scrolled).toEqual(['project-memory']);
+
+    // Instructions are inside Settings, so the link opens Settings and then goes there.
+    const toggle = screen.getByRole('button', { name: 'Settings' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(within(nav).getByRole('button', { name: 'Instructions' }));
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('instructions')).toBeVisible();
+    expect(scrolled).toEqual(['project-memory', 'instructions-heading']);
+
+    // The same link again still goes there.
+    await user.click(within(nav).getByRole('button', { name: 'Instructions' }));
+    expect(scrolled).toHaveLength(3);
+
+    await user.click(within(nav).getByRole('button', { name: 'All settings' }));
+    expect(scrolled.at(-1)).toBe('project-settings-heading');
+    delete proto.scrollIntoView;
+  });
+
   it('opens Settings from the keyboard and keeps focus on the toggle', async () => {
     server.use(...serveProjectPage());
     const user = userEvent.setup();

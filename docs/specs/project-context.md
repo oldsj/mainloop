@@ -181,7 +181,7 @@ entries active at that number, so a resend carries the same entries even after o
 
 ### Memory on the project page
 
-A **Memory** section follows Tasks, outside the folded Settings, so waiting proposals are in view.
+A **Memory** section follows Tasks, outside the folded Settings, so waiting proposals are in view. The **On this page** links under the project's title go straight to Memory and to Instructions (opening Settings for the latter), so neither is a long scroll below a long task list.
 
 - **Waiting for you (N)** lists the proposals, oldest first, each with its text, the active entry it
   would replace, who recorded it and when ("From a task" or "From an agent", linked to the task or
