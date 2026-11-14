@@ -19,6 +19,18 @@ function geometry(el: HTMLElement, scrollTop: number, scrollHeight = 1000, clien
 }
 
 describe('MessageList', () => {
+  it('is monospace, with the request cards at its end in the chrome sans', () => {
+    render(
+      <MessageList
+        {...base}
+        messages={[messageFixture({ id: 'm1', content: 'hello' })]}
+        requests={<p>Approve a deploy</p>}
+      />
+    );
+    expect(screen.getByTestId('message-list')).toHaveClass('font-mono');
+    expect(screen.getByTestId('thread-requests')).toHaveClass('font-sans');
+  });
+
   it('shows the empty state once loaded, and "connecting" before', () => {
     const { rerender } = render(<MessageList {...base} messages={[]} loaded />);
     expect(screen.getByText('No messages yet.')).toBeInTheDocument();

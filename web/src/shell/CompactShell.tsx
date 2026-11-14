@@ -56,7 +56,7 @@ export function CompactShell({
         <Link
           to="/"
           search={(prev) => ({ ...prev, tab: undefined })}
-          className="py-sm text-primary text-sm font-semibold"
+          className="py-sm text-primary font-mono text-sm font-semibold"
         >
           $ mainloop
         </Link>

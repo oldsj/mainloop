@@ -140,7 +140,8 @@ export function MessageList({
       <div
         ref={scroller}
         onScroll={onScroll}
-        className="h-full overflow-y-auto"
+        // The transcript is monospace; the request cards at its end are chrome.
+        className="h-full overflow-y-auto font-mono"
         data-testid="message-list"
       >
         <div className={cn('gap-sm py-md flex min-h-full flex-col', MEASURE)}>
@@ -174,7 +175,7 @@ export function MessageList({
             {live ? <LiveTurn frame={live} context={context} agentKind={agentKind} /> : null}
           </div>
           {hasRequests ? (
-            <div ref={pending} data-testid="thread-requests">
+            <div ref={pending} className="font-sans" data-testid="thread-requests">
               {requests}
             </div>
           ) : null}

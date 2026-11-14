@@ -33,7 +33,8 @@ export function SessionBar({
   return (
     <div
       className={cn(
-        'border-border-subtle bg-card text-muted-foreground shrink-0 border-b text-xs',
+        // Chrome, even inside the monospace live view.
+        'border-border-subtle bg-card text-muted-foreground shrink-0 border-b font-sans text-xs',
         className
       )}
       data-testid={testId}

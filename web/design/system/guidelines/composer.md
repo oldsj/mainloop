@@ -9,7 +9,7 @@ The text box and send button at the bottom of a conversation. It submits one use
 ## Tokens
 
 - One box with a `border-border` edge holds the prompt mark `❯` (`text-term-accent`), the text and the send button. The text box has no edge of its own.
-- Text `text-foreground` at `text-base`, so a phone does not zoom on focus; placeholder `text-muted-foreground`.
+- Text `text-foreground` at `text-base`, so a phone does not zoom on focus; placeholder `text-muted-foreground`. The composer is `font-mono`, like the transcript above it.
 - Focus: the box's edge turns `border-ring` while the text has focus.
 - Send button: the `↵` glyph in `text-muted-foreground`, `text-foreground` on hover. It is not a filled button.
 - Below the box, one row in `text-xs text-muted-foreground`: the session controls chip, then the model and effort line (chat view) or the permission mode, working directory and history (live view).

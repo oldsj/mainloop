@@ -47,15 +47,20 @@
   --color-status-failed: var(--status-failed);
   --color-status-idle: var(--status-idle);
 
+  --font-sans: system-ui, 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', ui-monospace, monospace;
+  --text-2xs: 0.6875rem;
   --text-xs: 0.75rem;
+  --text-ui: 0.8125rem;
   --text-sm: 0.875rem;
   --text-base: 1rem;
   --text-lg: 1.125rem;
   --text-xl: 1.25rem;
   --text-2xl: 1.5rem;
   --text-3xl: 1.875rem;
+  --text-2xs--line-height: 1rem;
   --text-xs--line-height: 1rem;
+  --text-ui--line-height: 1.25rem;
   --text-sm--line-height: 1.25rem;
   --text-base--line-height: 1.5rem;
   --text-lg--line-height: 1.75rem;

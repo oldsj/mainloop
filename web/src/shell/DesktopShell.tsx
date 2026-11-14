@@ -24,7 +24,7 @@ export function DesktopShell({
   return (
     <div data-testid="desktop-shell" className="flex min-h-0 flex-1 flex-col">
       <header className="gap-md border-border-subtle px-md flex items-center border-b">
-        <Link to="/" className="py-sm text-primary text-sm font-semibold">
+        <Link to="/" className="py-sm text-primary font-mono text-sm font-semibold">
           $ mainloop
         </Link>
         <nav className="gap-sm ml-auto flex items-center" aria-label="Primary">

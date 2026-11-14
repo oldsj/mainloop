@@ -16,7 +16,7 @@ The build writes two things:
 
 ## Components use tokens only
 
-Components in `web/` use token-backed utilities such as `bg-card`, `text-muted-foreground`, `border-border-subtle`, `text-sm`, `p-md`, `min-h-control` and `rounded-none`.
+Components in `web/` use token-backed utilities such as `bg-card`, `text-muted-foreground`, `border-border-subtle`, `text-ui`, `p-md`, `min-h-control` and `rounded-none`.
 
 Do not put these in a component:
 
@@ -58,6 +58,15 @@ The build exits `1` and writes nothing if any of these fail:
 The output has no timestamps and keeps a fixed order. Running the build twice leaves the tree unchanged. The generated files are already in the format `trunk fmt` would produce, so formatting does not change them.
 
 CI (`.github/workflows/web.yml`) regenerates the files and fails on any diff.
+
+## Type
+
+Mainloop reads like an IDE around a terminal: the chrome is a sans and the transcript is monospace.
+
+- `font.family.sans` (the system UI font, so nothing is downloaded) is the page default. It is the chrome: navigation, the Explorer, page headings, buttons, forms, labels, status rows and the request cards.
+- `font.family.mono` (JetBrains Mono) is for the transcript and its composer, and for anything that is code: ids, branches, commits, paths, schedules, a task's brief, and `code` and `pre`. A component opts in with `font-mono`. The `$ mainloop` mark is monospace too.
+- A chrome element that sits inside a monospace area (the session row above the live transcript, the session controls picker) sets `font-sans` itself.
+- Sizes: `2xs` (11 px) for group headings in small capitals, `xs` (12 px) for secondary lines, `ui` (13 px) for the chrome's default (rows, buttons), `sm` (14 px) for the transcript and page text, and `base` and up for titles. A size added to the tokens must also be added to `TOKEN_FONT_SIZES` in `src/components/ui/cn.ts`, or `cn` treats it as a text colour and drops it; a test checks this.
 
 ## Control size
 

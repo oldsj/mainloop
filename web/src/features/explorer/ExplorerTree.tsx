@@ -220,7 +220,7 @@ export function ExplorerTree({
           <div
             className={cn(
               // A row is at least the control height: 44 px on touch, 28 px with a mouse or trackpad.
-              'group gap-xs px-xs min-h-control relative flex cursor-default items-center py-1 text-sm',
+              'group gap-xs px-xs min-h-control text-ui relative flex cursor-default items-center py-1',
               // A long press opens the row menu, not the phone's own text selection or link callout.
               'select-none [-webkit-touch-callout:none]',
               'hover:bg-accent hover:text-accent-foreground',
@@ -285,7 +285,7 @@ export function ExplorerTree({
                 <span
                   className={cn(
                     'min-w-0 flex-auto truncate',
-                    heading && 'text-muted-foreground text-xs font-medium tracking-wide uppercase'
+                    heading && 'text-muted-foreground text-2xs font-medium tracking-wide uppercase'
                   )}
                 >
                   {node.label}
