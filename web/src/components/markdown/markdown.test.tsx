@@ -174,6 +174,14 @@ describe('formatting', () => {
     expect(container.querySelector('em')).toHaveTextContent('it');
   });
 
+  it('keeps the accent colour for links: bold text and headings are the text colour', () => {
+    const container = view('# Title\n\n**Confirmed cause:** see [the PR](https://example.com/pr).');
+    expect(screen.getByRole('heading', { name: 'Title' })).toHaveClass('text-foreground');
+    expect(container.querySelector('strong')).toHaveClass('text-foreground', 'font-semibold');
+    expect(container.querySelector('strong')).not.toHaveClass('text-primary');
+    expect(screen.getByRole('link', { name: 'the PR' })).toHaveClass('text-primary', 'underline');
+  });
+
   it('renders nothing for empty text', () => {
     expect(view('').textContent).toBe('');
   });

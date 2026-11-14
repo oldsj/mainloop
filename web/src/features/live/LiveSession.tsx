@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { Markdown } from '@/components/markdown/markdown';
 import { ControlsHeading, SessionControls } from '@/components/shared/controls-sheet';
+import { MEASURE } from '@/components/shared/measure';
 import { SessionBar } from '@/components/shared/session-bar';
 import { cn } from '@/components/ui/cn';
 import { barStatus, type LiveStatus } from '@/lib/barStatus';
@@ -248,7 +249,10 @@ export function LiveSessionView({
         <div
           role="alert"
           data-testid="live-unavailable"
-          className="px-md py-sm border-term-warning mx-md mt-sm flex flex-col gap-2 border"
+          className={cn(
+            'px-md py-sm border-term-warning mt-sm flex flex-col gap-2 border',
+            MEASURE
+          )}
         >
           <div className="text-term-warning font-bold">Live view unavailable</div>
           <div className="text-term-fg-muted text-xs">
@@ -318,23 +322,87 @@ function Log({
         const el = e.currentTarget;
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
       }}
-      className="gap-sm px-md py-sm flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
+      className="px-md py-sm min-h-0 flex-1 overflow-y-auto overscroll-contain"
     >
-      {state.entries.map((e) => (
-        <Row
-          key={e.id}
-          entry={e}
-          perm={e.t === 'perm' ? state.perms[e.permId] : undefined}
-          answerable={e.t === 'perm' && Object.hasOwn(paired, e.permId)}
-          answer={answer}
-        />
-      ))}
-      {state.activity ? (
-        <div className="text-term-warning">
-          ✻ {state.activity}… <span className="text-term-fg-muted text-xs">esc to interrupt</span>
-        </div>
+      {/* The scroller is the full width; the transcript inside it keeps to the reading width. */}
+      <div className={cn('gap-sm flex flex-col', MEASURE)}>
+        {state.entries.map((e) => (
+          <Row
+            key={e.id}
+            entry={e}
+            perm={e.t === 'perm' ? state.perms[e.permId] : undefined}
+            answerable={e.t === 'perm' && Object.hasOwn(paired, e.permId)}
+            answer={answer}
+          />
+        ))}
+        {state.activity ? (
+          <div className="text-term-warning">
+            ✻ {state.activity}… <span className="text-term-fg-muted text-xs">esc to interrupt</span>
+          </div>
+        ) : null}
+        {requests ? <div className="font-sans">{requests}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+/** A report's line that names what the owner must do. A message carrying one is never cut. */
+const OWNER_ACTION = /^Owner action needed:/m;
+
+/**
+ * A message from the owner or from Mainloop on their behalf. A long one, such as a task report
+ * forwarded to this session, shows its first lines with "Show all", so one message cannot fill the
+ * transcript. It is cut by the lines actually drawn, so a phone and a wide window each get it right.
+ */
+function UserRow({ text, queued, joins }: { text: string; queued?: boolean; joins?: boolean }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  // Whether the clamped text is cut. Measured while clamped and kept while expanded, so the button
+  // that opened it stays to close it.
+  const [cut, setCut] = useState(false);
+  const clamps = !OWNER_ACTION.test(text);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el || !clamps || expanded) return;
+    const measure = () => setCut(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [text, clamps, expanded]);
+  return (
+    <div
+      data-testid="live-user"
+      className={cn('bg-term-bg-secondary px-sm py-xs', queued && 'opacity-60')}
+    >
+      <div
+        ref={box}
+        className={cn(
+          '[overflow-wrap:anywhere] whitespace-pre-wrap',
+          // Ten lines, then "Show all". The class is literal so Tailwind generates it.
+          clamps && !expanded && 'line-clamp-10'
+        )}
+      >
+        <span className="text-term-accent">❯ </span>
+        {text}
+        {queued ? (
+          <span className="text-term-fg-muted text-xs">
+            {joins ? ' queued · joins this turn' : ' queued · sends when this turn ends'}
+          </span>
+        ) : null}
+      </div>
+      {clamps && cut ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((open) => !open)}
+          className="text-term-fg-muted hover:text-term-fg min-h-control text-xs underline"
+          data-testid="live-user-toggle"
+        >
+          {expanded ? 'Show less' : 'Show all'}
+        </button>
       ) : null}
-      {requests ? <div className="font-sans">{requests}</div> : null}
     </div>
   );
 }
@@ -352,23 +420,7 @@ const Row = memo(function Row({
 }) {
   switch (e.t) {
     case 'user':
-      return (
-        <div
-          data-testid="live-user"
-          className={cn(
-            'bg-term-bg-secondary px-sm py-xs [overflow-wrap:anywhere] whitespace-pre-wrap',
-            e.queued && 'opacity-60'
-          )}
-        >
-          <span className="text-term-accent">❯ </span>
-          {e.text}
-          {e.queued ? (
-            <span className="text-term-fg-muted text-xs">
-              {e.joins ? ' queued · joins this turn' : ' queued · sends when this turn ends'}
-            </span>
-          ) : null}
-        </div>
-      );
+      return <UserRow text={e.text} queued={e.queued} joins={e.joins} />;
     case 'text':
       return (
         <div data-testid="live-text" className="flex min-w-0">
@@ -641,138 +693,141 @@ function Composer({
 
   const stop = busy && !text.trim();
   return (
-    <div className="px-md pt-sm border-border-subtle relative flex flex-col gap-1 border-t pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
-      {historyOpen && history.length ? (
-        <div
-          role="listbox"
-          aria-label="Sent messages"
-          className="bg-term-bg-secondary border-term-border absolute right-0 bottom-full left-0 flex max-h-[46vh] flex-col overflow-y-auto border"
-        >
-          {history.slice(-10).map((h, k, recent) => {
-            const index = history.length - recent.length + k;
-            return (
+    <div className="px-md pt-sm border-border-subtle border-t pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
+      {/* Centred on the transcript's reading width; the menus above the box open against it. */}
+      <div className={cn('relative flex flex-col gap-1', MEASURE)}>
+        {historyOpen && history.length ? (
+          <div
+            role="listbox"
+            aria-label="Sent messages"
+            className="bg-term-bg-secondary border-term-border absolute right-0 bottom-full left-0 flex max-h-[46vh] flex-col overflow-y-auto border"
+          >
+            {history.slice(-10).map((h, k, recent) => {
+              const index = history.length - recent.length + k;
+              return (
+                <button
+                  key={index}
+                  type="button"
+                  role="option"
+                  aria-selected={index === at}
+                  onClick={() => {
+                    recall(index);
+                    setHistoryOpen(false);
+                    ta.current?.focus();
+                  }}
+                  className={cn(
+                    'px-sm min-h-10 truncate py-2 text-left',
+                    index === at && 'bg-term-selection'
+                  )}
+                >
+                  {h}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+        {open ? (
+          <div
+            role="listbox"
+            aria-label="Commands"
+            className="bg-term-bg-secondary border-term-border absolute right-0 bottom-full left-0 flex max-h-[46vh] flex-col overflow-y-auto border"
+          >
+            {matches.slice(0, 80).map((c, k) => (
               <button
-                key={index}
+                key={c.name}
                 type="button"
                 role="option"
-                aria-selected={index === at}
+                aria-selected={k === sel}
                 onClick={() => {
-                  recall(index);
-                  setHistoryOpen(false);
+                  setText(c.name + ' ');
                   ta.current?.focus();
                 }}
                 className={cn(
-                  'px-sm min-h-10 truncate py-2 text-left',
-                  index === at && 'bg-term-selection'
+                  'px-sm py-xs gap-sm grid grid-cols-[auto_1fr] items-baseline text-left',
+                  k === sel && 'bg-term-selection'
                 )}
               >
-                {h}
+                <span>{c.name}</span>
+                <span className="text-term-fg-muted truncate text-xs">{c.description}</span>
               </button>
-            );
-          })}
-        </div>
-      ) : null}
-      {open ? (
-        <div
-          role="listbox"
-          aria-label="Commands"
-          className="bg-term-bg-secondary border-term-border absolute right-0 bottom-full left-0 flex max-h-[46vh] flex-col overflow-y-auto border"
-        >
-          {matches.slice(0, 80).map((c, k) => (
-            <button
-              key={c.name}
-              type="button"
-              role="option"
-              aria-selected={k === sel}
-              onClick={() => {
-                setText(c.name + ' ');
-                ta.current?.focus();
-              }}
-              className={cn(
-                'px-sm py-xs gap-sm grid grid-cols-[auto_1fr] items-baseline text-left',
-                k === sel && 'bg-term-selection'
-              )}
-            >
-              <span>{c.name}</span>
-              <span className="text-term-fg-muted truncate text-xs">{c.description}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
-      <div className="border-border focus-within:border-ring pl-sm flex items-end gap-2 border p-1">
-        <span className="text-term-accent pb-1" aria-hidden="true">
-          ❯
-        </span>
-        <textarea
-          ref={ta}
-          rows={1}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            setSel(0);
-            touch?.();
-          }}
-          onKeyDown={onKey}
-          placeholder={
-            state.deferred
-              ? 'Answer the request first'
-              : asleep
-                ? paused
-                  ? 'Message to resume the session'
-                  : 'Message to wake the session'
-                : busy
-                  ? 'Queue a message'
-                  : 'Message, or / for commands'
-          }
-          aria-label="Message"
-          className="placeholder:text-term-fg-muted max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 text-base leading-snug outline-none"
-        />
-        <button
-          type="button"
-          onClick={() => (stop ? interrupt() : submit())}
-          aria-label={stop ? 'Interrupt' : 'Send'}
-          className={cn(
-            'size-control min-h-9 min-w-9 flex-none',
-            stop ? 'text-term-error' : 'text-term-fg-muted hover:text-term-fg'
-          )}
-        >
-          {stop ? '■' : '↵'}
-        </button>
-      </div>
-      <div className="text-term-fg-muted gap-sm flex min-w-0 items-center text-xs">
-        <SessionControls
-          label={[provider?.label, short(state.model), state.effort].filter(Boolean).join(' · ')}
-          title="Session controls"
-          open={controlsOpen}
-          onOpenChange={setControlsOpen}
-          data-testid="session-controls"
-        >
-          <ControlsPicker
-            state={state}
-            set={set}
-            provider={provider}
-            close={() => setControlsOpen(false)}
+            ))}
+          </div>
+        ) : null}
+        <div className="border-border focus-within:border-ring pl-sm flex items-end gap-2 border p-1">
+          <span className="text-term-accent pb-1" aria-hidden="true">
+            ❯
+          </span>
+          <textarea
+            ref={ta}
+            rows={1}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              setSel(0);
+              touch?.();
+            }}
+            onKeyDown={onKey}
+            placeholder={
+              state.deferred
+                ? 'Answer the request first'
+                : asleep
+                  ? paused
+                    ? 'Message to resume the session'
+                    : 'Message to wake the session'
+                  : busy
+                    ? 'Queue a message'
+                    : 'Message, or / for commands'
+            }
+            aria-label="Message"
+            className="placeholder:text-term-fg-muted max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 text-base leading-snug outline-none"
           />
-        </SessionControls>
-        <button
-          type="button"
-          onClick={cycleMode}
-          className={cn('min-h-8 flex-none', state.mode !== 'default' && 'text-term-magenta')}
-        >
-          ⏵⏵ {MODE_LABELS[state.mode] ?? state.mode}
-        </button>
-        <span className="min-w-0 flex-1 truncate">{state.cwd}</span>
-        {history.length ? (
           <button
             type="button"
-            aria-label="Sent messages"
-            aria-expanded={historyOpen}
-            onClick={() => setHistoryOpen(!historyOpen)}
-            className={cn('px-xs min-h-8 flex-none', historyOpen && 'text-term-fg')}
+            onClick={() => (stop ? interrupt() : submit())}
+            aria-label={stop ? 'Interrupt' : 'Send'}
+            className={cn(
+              'size-control min-h-9 min-w-9 flex-none',
+              stop ? 'text-term-error' : 'text-term-fg-muted hover:text-term-fg'
+            )}
           >
-            ↑ history
+            {stop ? '■' : '↵'}
           </button>
-        ) : null}
+        </div>
+        <div className="text-term-fg-muted gap-sm flex min-w-0 items-center text-xs">
+          <SessionControls
+            label={[provider?.label, short(state.model), state.effort].filter(Boolean).join(' · ')}
+            title="Session controls"
+            open={controlsOpen}
+            onOpenChange={setControlsOpen}
+            data-testid="session-controls"
+          >
+            <ControlsPicker
+              state={state}
+              set={set}
+              provider={provider}
+              close={() => setControlsOpen(false)}
+            />
+          </SessionControls>
+          <button
+            type="button"
+            onClick={cycleMode}
+            className={cn('min-h-8 flex-none', state.mode !== 'default' && 'text-term-magenta')}
+          >
+            ⏵⏵ {MODE_LABELS[state.mode] ?? state.mode}
+          </button>
+          <span className="min-w-0 flex-1 truncate">{state.cwd}</span>
+          {history.length ? (
+            <button
+              type="button"
+              aria-label="Sent messages"
+              aria-expanded={historyOpen}
+              onClick={() => setHistoryOpen(!historyOpen)}
+              className={cn('px-xs min-h-8 flex-none', historyOpen && 'text-term-fg')}
+            >
+              ↑ history
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
   );

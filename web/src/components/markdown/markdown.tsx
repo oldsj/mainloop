@@ -25,7 +25,7 @@ const components: Components = {
           to="/tasks/$id"
           params={{ id: taskId }}
           title={title}
-          className="text-term-info hover:text-term-accent underline"
+          className="text-primary hover:text-foreground underline"
         >
           {children}
         </Link>
@@ -37,7 +37,7 @@ const components: Components = {
         title={title}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-term-info hover:text-term-accent underline"
+        className="text-primary hover:text-foreground underline"
       >
         {children}
       </a>
@@ -56,17 +56,19 @@ const components: Components = {
   ul: ({ children }) => <ul className="my-sm pl-lg list-disc">{children}</ul>,
   ol: ({ children }) => <ol className="my-sm pl-lg list-decimal">{children}</ol>,
   li: ({ children }) => <li className="my-xs">{children}</li>,
-  strong: ({ children }) => <strong className="text-primary font-semibold">{children}</strong>,
+  strong: ({ children }) => <strong className="text-foreground font-semibold">{children}</strong>,
   em: ({ children }) => <em className="text-muted-foreground italic">{children}</em>,
   blockquote: ({ children }) => (
     <blockquote className="border-border pl-md my-sm text-muted-foreground border-l-2">
       {children}
     </blockquote>
   ),
-  h1: ({ children }) => <h1 className="text-primary my-sm text-lg font-semibold">{children}</h1>,
-  h2: ({ children }) => <h2 className="text-primary my-sm text-base font-semibold">{children}</h2>,
-  h3: ({ children }) => <h3 className="text-primary my-sm text-sm font-semibold">{children}</h3>,
-  h4: ({ children }) => <h4 className="text-primary my-sm text-sm font-semibold">{children}</h4>,
+  h1: ({ children }) => <h1 className="text-foreground my-sm text-lg font-semibold">{children}</h1>,
+  h2: ({ children }) => (
+    <h2 className="text-foreground my-sm text-base font-semibold">{children}</h2>
+  ),
+  h3: ({ children }) => <h3 className="text-foreground my-sm text-sm font-semibold">{children}</h3>,
+  h4: ({ children }) => <h4 className="text-foreground my-sm text-sm font-semibold">{children}</h4>,
   hr: () => <hr className="border-border my-md border-0 border-t" />,
   // A wide table scrolls inside the message instead of stretching the page.
   table: ({ children }) => (
@@ -75,7 +77,7 @@ const components: Components = {
     </div>
   ),
   th: ({ children }) => (
-    <th className="border-border px-sm py-xs bg-background text-primary border text-left">
+    <th className="border-border px-sm py-xs bg-background text-foreground border text-left font-semibold">
       {children}
     </th>
   ),

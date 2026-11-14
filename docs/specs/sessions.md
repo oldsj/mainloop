@@ -177,7 +177,11 @@ page replaces the identity strip, actions and chat with a live view attached to
 protocol). It renders the way Claude Code does: assistant text after `●`, tool calls with their first
 output line after `⎿` (tap to expand), edits as diffs, permission prompts with numbered answers, and
 an interrupted turn as `⎿ Interrupted`; a finished turn prints nothing, and there are no status icons
-or cost lines. Input goes through Mainloop's API, never the socket, so every message is in
+or cost lines. A long message from the owner, or one Mainloop sent on their behalf such as a task
+report, shows its first ten lines with **Show all** (and **Show less** once open), measured by the
+lines actually drawn, so one message cannot fill the transcript. A message with an
+`Owner action needed:` line is never cut. In assistant text, bold and headings are the text colour
+and only links take the accent colour. Input goes through Mainloop's API, never the socket, so every message is in
 Mainloop's record before it reaches the runner. The composer sends each message with
 `POST /sessions/{id}/message`, with a message id chosen in the browser and `steer: true`; it shows at
 once and the runner's echo replaces it (matched by the message id the runner echoes as `mid`, or by

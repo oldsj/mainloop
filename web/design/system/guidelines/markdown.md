@@ -16,7 +16,9 @@ Renders message text, which agents write and so cannot be trusted. Used by chat 
 
 ## Tokens
 
-- Text `text-foreground`; strong `text-primary`; emphasis and quotes `text-muted-foreground`; links `text-term-info`, `text-term-accent` on hover.
+- Text `text-foreground`. Strong text, headings and table headings are `text-foreground` at `font-semibold`: weight marks them, not colour.
+- Links are `text-primary` and underlined, `text-foreground` on hover. The accent colour in prose means a link and nothing else.
+- Emphasis and quotes `text-muted-foreground`.
 - Code and tables use `bg-background` with `border-border`. Radius `rounded-none`.
 
 ## Don't
