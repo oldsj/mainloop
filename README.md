@@ -167,8 +167,9 @@ interior whitespace is rejected. Mainloop discovers installations and mints shor
 one repository and the requested operation's permissions. There is no PAT
 or anonymous fallback. App permissions, cache behavior and the issue-helper
 limitation are in [Pull requests](docs/specs/pull-requests.md). The `get_issue`,
-`list_dependabot_alerts` and `list_check_runs` read-only tools reuse the same App credential; see
-[GitHub issue, Dependabot alert and check-run reads](docs/specs/github-reads.md).
+`list_dependabot_alerts` and `check_status` read-only tools reuse the same App credential; see
+[GitHub issue and Dependabot alert reads](docs/specs/github-reads.md) and
+[CI checks](docs/specs/ci.md).
 
 ## Production Deployment
 

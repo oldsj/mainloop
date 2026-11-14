@@ -20,6 +20,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
+	"github.com/oldsj/mainloop/server/internal/ci"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/devloop"
 	"github.com/oldsj/mainloop/server/internal/httpx"
@@ -48,16 +49,19 @@ type Server struct {
 	// they are unavailable.
 	PRs   *prs.Service
 	Merge *merge.Service
-	// Issues serves the read-only issue, Dependabot-alert and check-run tools, over the same
+	// Issues serves the read-only issue and Dependabot-alert tools, over the same
 	// GitHub App as PRs and Merge. With none, those tools answer that they are unavailable.
 	Issues *issues.Service
+	// CI serves the check tools over the same App; nil without one, and then they answer that
+	// they are unavailable.
+	CI *ci.Service
 	// DevLease, DevOps and DevTargets serve the devloop tools. With DevLease or DevOps nil, those
 	// tools answer that they are unavailable; DevTargets resolves the calling session's project to
 	// its configured staging target (nil also answers unavailable).
 	DevLease   *devloop.LeaseService
 	DevOps     *devloop.OperationsService
 	DevTargets *devloop.TargetService
-	Log      *slog.Logger
+	Log        *slog.Logger
 	// AllowedHosts are the Host names the listener answers to; Dev also allows loopback.
 	AllowedHosts map[string]bool
 	Dev          bool
@@ -67,7 +71,7 @@ type Server struct {
 // later adds its function here and nothing else changes.
 func (s *Server) tools() map[string]Tool {
 	all := map[string]Tool{}
-	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.pullRequestTools(), s.issueTools(), s.devLoopTools()} {
+	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.pullRequestTools(), s.issueTools(), s.checkTools(), s.devLoopTools()} {
 		for _, t := range domain {
 			all[t.Name] = t
 		}

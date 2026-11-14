@@ -231,11 +231,15 @@
       }
     },
     {
-      "name": "list_check_runs",
-      "description": "List the GitHub Actions check runs at a pull request's current head commit, for the bound project's repository: each run's name, status, conclusion, timing and its own short output summary. Use this to see which checks failed and why after merge_pull_request reports checks_failed; it cannot rerun, cancel or trigger a check, and does not fetch raw CI logs.",
+      "name": "check_status",
+      "description": "Read the CI checks on a commit of the bound project's repository, now, without waiting: give pr_number (its current head) or commit_sha (40 hex; works before a pull request exists). Returns state green, failed, pending or no_checks, the checks that are not green, and for up to five failed checks their own output and annotations. It cannot rerun, cancel or trigger a check.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "commit_sha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "type": "string"
+          },
           "pr_number": {
             "exclusiveMinimum": 0,
             "type": "integer"
@@ -246,7 +250,7 @@
             "type": "string"
           }
         },
-        "required": ["project_id", "pr_number"],
+        "required": ["project_id"],
         "type": "object"
       }
     },
@@ -750,10 +754,10 @@
       "merge_tools_enabled": false,
       "devloop_enabled": false,
       "ordinary": [
+        "check_status",
         "decide",
         "delegate",
         "get_issue",
-        "list_check_runs",
         "list_dependabot_alerts",
         "note",
         "open_pull_request",
@@ -778,6 +782,7 @@
       "merge_tools_enabled": false,
       "devloop_enabled": true,
       "ordinary": [
+        "check_status",
         "decide",
         "delegate",
         "dev_lease_acquire",
@@ -785,7 +790,6 @@
         "dev_status",
         "dev_sync",
         "get_issue",
-        "list_check_runs",
         "list_dependabot_alerts",
         "note",
         "open_pull_request",
@@ -810,11 +814,11 @@
       "merge_tools_enabled": true,
       "devloop_enabled": false,
       "ordinary": [
+        "check_status",
         "decide",
         "delegate",
         "get_issue",
         "get_pull_request_merge_status",
-        "list_check_runs",
         "list_dependabot_alerts",
         "merge_pull_request",
         "note",
@@ -841,6 +845,7 @@
       "merge_tools_enabled": true,
       "devloop_enabled": true,
       "ordinary": [
+        "check_status",
         "decide",
         "delegate",
         "dev_lease_acquire",
@@ -849,7 +854,6 @@
         "dev_sync",
         "get_issue",
         "get_pull_request_merge_status",
-        "list_check_runs",
         "list_dependabot_alerts",
         "merge_pull_request",
         "note",
@@ -952,9 +956,9 @@
       "merge_tools_enabled": false,
       "devloop_enabled": false,
       "ordinary": [
+        "check_status",
         "delegate",
         "get_issue",
-        "list_check_runs",
         "list_dependabot_alerts",
         "open_pull_request",
         "report",
@@ -975,13 +979,13 @@
       "merge_tools_enabled": false,
       "devloop_enabled": true,
       "ordinary": [
+        "check_status",
         "delegate",
         "dev_lease_acquire",
         "dev_lease_release",
         "dev_status",
         "dev_sync",
         "get_issue",
-        "list_check_runs",
         "list_dependabot_alerts",
         "open_pull_request",
         "report",
@@ -1002,10 +1006,10 @@
       "merge_tools_enabled": true,
       "devloop_enabled": false,
       "ordinary": [
+        "check_status",
         "delegate",
         "get_issue",
         "get_pull_request_merge_status",
-        "list_check_runs",
         "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
@@ -1028,6 +1032,7 @@
       "merge_tools_enabled": true,
       "devloop_enabled": true,
       "ordinary": [
+        "check_status",
         "delegate",
         "dev_lease_acquire",
         "dev_lease_release",
@@ -1035,7 +1040,6 @@
         "dev_sync",
         "get_issue",
         "get_pull_request_merge_status",
-        "list_check_runs",
         "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
@@ -1098,8 +1102,8 @@
       "merge_tools_enabled": false,
       "devloop_enabled": false,
       "ordinary": [
+        "check_status",
         "get_issue",
-        "list_check_runs",
         "list_dependabot_alerts",
         "open_pull_request",
         "report",
@@ -1118,12 +1122,12 @@
       "merge_tools_enabled": false,
       "devloop_enabled": true,
       "ordinary": [
+        "check_status",
         "dev_lease_acquire",
         "dev_lease_release",
         "dev_status",
         "dev_sync",
         "get_issue",
-        "list_check_runs",
         "list_dependabot_alerts",
         "open_pull_request",
         "report",
@@ -1142,9 +1146,9 @@
       "merge_tools_enabled": true,
       "devloop_enabled": false,
       "ordinary": [
+        "check_status",
         "get_issue",
         "get_pull_request_merge_status",
-        "list_check_runs",
         "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
@@ -1165,13 +1169,13 @@
       "merge_tools_enabled": true,
       "devloop_enabled": true,
       "ordinary": [
+        "check_status",
         "dev_lease_acquire",
         "dev_lease_release",
         "dev_status",
         "dev_sync",
         "get_issue",
         "get_pull_request_merge_status",
-        "list_check_runs",
         "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
@@ -1192,8 +1196,8 @@
       "merge_tools_enabled": false,
       "devloop_enabled": false,
       "ordinary": [
+        "check_status",
         "get_issue",
-        "list_check_runs",
         "list_dependabot_alerts",
         "open_pull_request",
         "whoami"
@@ -1208,12 +1212,12 @@
       "merge_tools_enabled": false,
       "devloop_enabled": true,
       "ordinary": [
+        "check_status",
         "dev_lease_acquire",
         "dev_lease_release",
         "dev_status",
         "dev_sync",
         "get_issue",
-        "list_check_runs",
         "list_dependabot_alerts",
         "open_pull_request",
         "whoami"
@@ -1228,9 +1232,9 @@
       "merge_tools_enabled": true,
       "devloop_enabled": false,
       "ordinary": [
+        "check_status",
         "get_issue",
         "get_pull_request_merge_status",
-        "list_check_runs",
         "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
@@ -1247,13 +1251,13 @@
       "merge_tools_enabled": true,
       "devloop_enabled": true,
       "ordinary": [
+        "check_status",
         "dev_lease_acquire",
         "dev_lease_release",
         "dev_status",
         "dev_sync",
         "get_issue",
         "get_pull_request_merge_status",
-        "list_check_runs",
         "list_dependabot_alerts",
         "merge_pull_request",
         "open_pull_request",
