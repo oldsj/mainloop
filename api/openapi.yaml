@@ -1,10 +1,11 @@
-# trunk-ignore-begin(checkov/CKV_OPENAPI_4,checkov/CKV_OPENAPI_5): no global security scheme; auth is
-# network reachability plus the Host/Origin guards, so the empty security list is intended.
+# trunk-ignore-begin(checkov/CKV_OPENAPI_5): GET /health declares `security: []` on purpose (kubelet
+# probes address the pod by IP with no credential); every other operation inherits the root security.
 # Mainloop API contract, v1 (OpenAPI 3.1). Source of truth for the Go server and the React client.
 # Exported from the Python app, then typed: every response has a schema, errors are HTTPError or
 # TaskError, and Pydantic limits are copied in.
-# Auth is not an HTTP security scheme: owner identity comes from network reachability plus the
-# Host and Origin guards, so the root security requirement is empty on purpose.
+# Every operation except /health requires an identity the backend verifies itself (see
+# docs/specs/authentication.md): the owner's Pocket ID token, as a bearer or the gateway's login
+# cookie, or a Kubernetes ServiceAccount token. Network position is not identity.
 openapi: 3.1.0
 info:
   title: Mainloop API
@@ -12,8 +13,11 @@ info:
   version: 0.2.0
 servers:
   - url: /
-security: []
-# trunk-ignore-end(checkov/CKV_OPENAPI_4,checkov/CKV_OPENAPI_5)
+security:
+  - pocketId: []
+  - pocketIdCookie: []
+  - serviceAccount: []
+# trunk-ignore-end(checkov/CKV_OPENAPI_5)
 tags:
   - name: health
     description: Liveness and orchestration-health rollups.
@@ -59,6 +63,14 @@ paths:
                 type: array
                 title: Response Owner Activity Activity Get
                 maxItems: 100
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -78,6 +90,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AttentionSnapshot'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -98,6 +118,8 @@ paths:
               $ref: '#/components/schemas/ChatRequest'
         required: true
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -162,6 +184,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ChatImageUploadResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '413':
           description: Request Entity Too Large
           content:
@@ -195,6 +225,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConversationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -215,6 +253,14 @@ paths:
       description: Read the mainloop-dev live-sync lease without acquiring it or joining its queue.
       operationId: getDevloopLease
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '503':
           description: Service Unavailable
           content:
@@ -235,6 +281,14 @@ paths:
       description: Acquire the mainloop-dev lease as the owner, or report the owner's place in its FIFO queue.
       operationId: acquireDevloopLease
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '503':
           description: Service Unavailable
           content:
@@ -255,6 +309,14 @@ paths:
       description: Release the mainloop-dev lease if the owner holds it; a no-op otherwise.
       operationId: releaseDevloopLease
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '503':
           description: Service Unavailable
           content:
@@ -293,6 +355,14 @@ paths:
                 maxItems: 50
                 items:
                   $ref: '#/components/schemas/DevloopOperation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '503':
           description: Service Unavailable
           content:
@@ -315,6 +385,14 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/DevEnvironment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -333,6 +411,8 @@ paths:
               $ref: '#/components/schemas/RegisterEnvironment'
         required: true
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -385,6 +465,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DevEnvironment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -417,6 +505,8 @@ paths:
             schema:
               $ref: '#/components/schemas/UpdateEnvironment'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -469,6 +559,8 @@ paths:
             schema:
               $ref: '#/components/schemas/RefreshRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -527,6 +619,8 @@ paths:
             schema:
               $ref: '#/components/schemas/GrantRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -584,6 +678,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '404':
           description: Not Found
           content:
@@ -616,6 +712,8 @@ paths:
             schema:
               $ref: '#/components/schemas/RefreshRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -671,6 +769,14 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/EnvironmentVersion'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -709,6 +815,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/EnvironmentVersion'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -775,6 +889,14 @@ paths:
                   - $ref: '#/components/schemas/EventSessionProgress'
                   - $ref: '#/components/schemas/EventTaskUpdated'
                   - $ref: '#/components/schemas/EventWorkspaceUpdated'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -811,6 +933,7 @@ paths:
       summary: Health
       description: Health check endpoint.
       operationId: getHealth
+      security: []
       responses:
         '200':
           description: Successful Response
@@ -837,6 +960,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HITLObserverStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -863,6 +994,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HITLView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -923,6 +1062,14 @@ paths:
             default: 50
             title: Limit
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '503':
           description: Service Unavailable
           content:
@@ -973,6 +1120,8 @@ paths:
             schema:
               $ref: '#/components/schemas/HITLDecisionInput'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -1029,6 +1178,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MainThreadInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1052,6 +1209,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MainProviderInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
     put:
       tags:
         - chat
@@ -1083,6 +1248,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '409':
           description: Conflict
           content:
@@ -1171,6 +1338,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1212,6 +1387,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthEvents'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1250,6 +1433,14 @@ paths:
                 items:
                   $ref: '#/components/schemas/Project'
                 title: Response List Projects Projects Get
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1275,6 +1466,8 @@ paths:
             schema:
               $ref: '#/components/schemas/ProjectImportRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -1332,6 +1525,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Project'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1370,6 +1571,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TaskError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '404':
           description: Not Found
           content:
@@ -1403,6 +1606,8 @@ paths:
             schema:
               $ref: '#/components/schemas/ProjectProviderUpdate'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -1466,6 +1671,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1502,6 +1715,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DevloopTarget'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1538,6 +1759,14 @@ paths:
             schema:
               $ref: '#/components/schemas/DevloopTargetUpdate'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '413':
           description: Request Entity Too Large
           content:
@@ -1602,6 +1831,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectVerification'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1636,6 +1873,14 @@ paths:
             schema:
               $ref: '#/components/schemas/ProjectVerificationUpdate'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '413':
           description: Request Entity Too Large
           content:
@@ -1687,6 +1932,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkspaceService'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1723,6 +1976,14 @@ paths:
             schema:
               $ref: '#/components/schemas/WorkspaceService'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '413':
           description: Request Entity Too Large
           content:
@@ -1771,6 +2032,14 @@ paths:
                 $ref: '#/components/schemas/ProjectEnvironmentSelection'
         '204':
           description: No environment is selected for the project.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1802,6 +2071,8 @@ paths:
             schema:
               $ref: '#/components/schemas/SelectEnvironment'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -1860,6 +2131,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MergePolicyView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1891,6 +2170,8 @@ paths:
             schema:
               $ref: '#/components/schemas/MergePolicyUpdate'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -1957,6 +2238,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectInstructions'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1992,6 +2281,14 @@ paths:
             schema:
               $ref: '#/components/schemas/ProjectInstructionsUpdate'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '413':
           description: Request Entity Too Large
           content:
@@ -2046,6 +2343,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectInstructionVersionList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -2082,6 +2387,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectMemory'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -2132,6 +2445,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectMemoryEntry'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -2179,6 +2500,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SmokeObservations'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -2209,6 +2538,14 @@ paths:
                   $ref: '#/components/schemas/ProviderProfile'
                 type: array
                 title: Response List Providers Providers Get
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -2233,6 +2570,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Seen'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -2261,6 +2606,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Seen'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -2299,6 +2652,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SeenTask'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -2336,6 +2697,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SessionDefaults'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -2365,6 +2734,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SessionDefaults'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '422':
           description: Validation Error
           content:
@@ -2400,6 +2777,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '404':
           description: Not Found
           content:
@@ -2439,6 +2818,8 @@ paths:
             schema:
               $ref: '#/components/schemas/QueueItemResponse'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -2501,6 +2882,8 @@ paths:
             maxLength: 128
             title: Page Token
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -2553,6 +2936,8 @@ paths:
               $ref: '#/components/schemas/ScheduledRunCreate'
         required: true
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -2624,6 +3009,8 @@ paths:
             type: string
             title: Schedule Id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -2696,6 +3083,8 @@ paths:
               $ref: '#/components/schemas/ScheduledRunConfigInput'
         required: true
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -2778,6 +3167,8 @@ paths:
             type: string
             title: Schedule Id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -2844,6 +3235,8 @@ paths:
             maxLength: 128
             title: Page Token
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -2904,6 +3297,8 @@ paths:
               $ref: '#/components/schemas/ScheduledRunTriggerRequest'
         required: true
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -2988,6 +3383,14 @@ paths:
                 items:
                   $ref: '#/components/schemas/Session'
                 title: Response List Sessions Sessions Get
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -3013,6 +3416,8 @@ paths:
             schema:
               $ref: '#/components/schemas/SessionCreate'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -3066,6 +3471,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Session'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -3105,6 +3518,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '404':
           description: Not Found
           content:
@@ -3150,6 +3565,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '404':
           description: Not Found
           content:
@@ -3189,6 +3606,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SessionConversationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -3224,6 +3649,14 @@ paths:
                 items:
                   type: string
                 maxItems: 100
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -3257,6 +3690,8 @@ paths:
             schema:
               $ref: '#/components/schemas/SessionMessageRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -3332,6 +3767,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SessionModelEffort'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -3378,6 +3821,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SessionModelEffort'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -3441,6 +3892,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -3486,6 +3945,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NativeSessionInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -3529,6 +3996,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '404':
           description: Not Found
           content:
@@ -3585,6 +4054,8 @@ paths:
             schema:
               $ref: '#/components/schemas/SessionRestartRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: Request Entity Too Large
           content:
@@ -3654,6 +4125,14 @@ paths:
                 items:
                   $ref: '#/components/schemas/Checkpoint'
                 title: Response List Session Checkpoints
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -3711,6 +4190,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Checkpoint'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -3758,6 +4245,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Checkpoint'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -3806,6 +4301,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOk'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -3869,6 +4372,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CheckpointForkResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -3909,6 +4420,8 @@ paths:
             type: string
             title: Operation Id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -3965,6 +4478,8 @@ paths:
               - type: 'null'
             title: Parent Task Id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -4010,6 +4525,8 @@ paths:
             schema:
               $ref: '#/components/schemas/TaskCreate'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -4072,6 +4589,8 @@ paths:
             type: string
             title: Task Id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -4124,6 +4643,8 @@ paths:
             schema:
               $ref: '#/components/schemas/TaskAction'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -4192,6 +4713,8 @@ paths:
             schema:
               $ref: '#/components/schemas/TaskReassign'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -4260,6 +4783,8 @@ paths:
             schema:
               $ref: '#/components/schemas/TaskAction'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -4315,6 +4840,14 @@ paths:
       summary: List Workspaces
       operationId: listWorkspaces
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '503':
           description: Service Unavailable
           content:
@@ -4350,6 +4883,8 @@ paths:
               $ref: '#/components/schemas/CreateWorkspaceRequest'
         required: true
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -4414,6 +4949,14 @@ paths:
             type: string
             title: Workspace Id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '503':
           description: Service Unavailable
           content:
@@ -4451,6 +4994,8 @@ paths:
             type: string
             title: Workspace Id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -4503,6 +5048,14 @@ paths:
             type: string
             title: Workspace Id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '503':
           description: Service Unavailable
           content:
@@ -4541,6 +5094,8 @@ paths:
             type: string
             title: Workspace Id
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '503':
           description: Service Unavailable
           content:
@@ -4586,6 +5141,40 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
 components:
+  securitySchemes:
+    pocketId:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        The owner's Pocket ID token (ID or access token), signed by the configured issuer, with the
+        configured audience, and the owner's subject. The admin gateway forwards it after its login.
+    pocketIdCookie:
+      type: apiKey
+      in: cookie
+      name: mainloop-id
+      description: >-
+        The same Pocket ID ID token in the gateway's login cookie (MAINLOOP_AUTH_OIDC_COOKIE). A write
+        authenticated this way also needs an X-Mainloop-Client header and the frontend's Origin.
+    serviceAccount:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        A projected Kubernetes ServiceAccount token with the configured audience, checked with a
+        TokenReview. Each allowed ServiceAccount has a fixed scope (owner, read or canary).
+  responses:
+    Unauthorized:
+      description: No valid identity came with the request.
+      headers:
+        WWW-Authenticate:
+          description: Bearer challenge.
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/HTTPError'
   schemas:
     ActivityItem:
       properties:

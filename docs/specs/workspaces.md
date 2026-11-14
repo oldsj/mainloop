@@ -377,8 +377,10 @@ kubelet health probe (`/health`) is exempt because it addresses the pod by IP. P
 handled before this check. The preview base domain is a wildcard (an owner-controlled domain, or a
 name from a wildcard DNS service such as `sslip.io`), so preview origins and the API can be _same-site_ (they
 share a registrable domain for a deployment whose previews sit under the same domain as the API), and the agent writes the page served
-from a preview origin. The Origin guard, the Host check and the unauthenticated tailnet boundary
-are the only things between that page and the API. This is a known, accepted risk for one owner;
+from a preview origin. The Origin guard, the Host check and [owner API authentication](authentication.md)
+(its owner-write rule refuses a write without `X-Mainloop-Client`, which a preview page cannot send
+cross-origin) stand between that page and the API; until a deployment enforces authentication, the
+tailnet boundary does instead. This is a known, accepted risk for one owner;
 a deployment that cannot accept it must serve previews under a registrable domain of their own.
 The preview listener never reads an identity header (`X-User-ID` included): a
 workspace that is not the configured owner's is `404` (WebSocket close `4404`), and an undeclared

@@ -13,6 +13,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/attention"
+	"github.com/oldsj/mainloop/server/internal/auth"
 	"github.com/oldsj/mainloop/server/internal/buildinfo"
 	"github.com/oldsj/mainloop/server/internal/ci"
 	"github.com/oldsj/mainloop/server/internal/config"
@@ -116,6 +117,9 @@ type Deps struct {
 	// DevloopTargets serves a project's staging target (GET/PUT /projects/{id}/devloop-target).
 	// Nil answers those routes 404, the same as an unconfigured project.
 	DevloopTargets *devloop.TargetService
+	// Auth verifies who calls the owner API. Nil serves it unauthenticated, which only tests and
+	// development do; serve-api always builds one (auth.New refuses a missing mode outside dev).
+	Auth *auth.Authenticator
 	// CI serves a project's verification setting (GET/PUT /projects/{id}/verification). Nil
 	// without a GitHub App.
 	CI *ci.Service
@@ -169,9 +173,9 @@ func New(d Deps) *Server {
 	}
 }
 
-// Handler returns the owner API: the strict handlers behind request validation, the body cap, then the
-// Host guard, Origin guard and CORS, with preview hosts routed ahead of them, all inside panic
-// recovery, request id and access log.
+// Handler returns the owner API: the strict handlers behind request validation, the body cap,
+// authentication, then the Host guard, Origin guard and CORS, with preview hosts routed ahead of
+// them, all inside panic recovery, request id and access log.
 func (s *Server) Handler() (http.Handler, error) {
 	d := s.deps
 	if err := d.missing(); err != nil {
@@ -198,6 +202,13 @@ func (s *Server) Handler() (http.Handler, error) {
 			httpx.WriteError(w, http.StatusBadRequest, "Invalid request")
 		},
 	})
+	// Authentication sits inside CORS, so a refusal still carries the CORS headers the browser needs
+	// to read it, and ahead of the body cap and validator, so an unauthenticated caller learns
+	// nothing from a 422. It covers the live relay and the SSE streams, which are routes like any other.
+	authn, err := d.Auth.Middleware(spec)
+	if err != nil {
+		return nil, err
+	}
 	inner := routes
 	if d.LiveRelay != nil {
 		inner = d.LiveRelay.Route(routes)
@@ -206,6 +217,7 @@ func (s *Server) Handler() (http.Handler, error) {
 		httpx.HostGuard(cfg.AllowedAPIHosts(), cfg.IsDev(), "/health"),
 		httpx.OriginGuard(cfg.FrontendOrigin(), cfg.IsDev()),
 		httpx.CORS(cfg.FrontendOrigin(), cfg.IsDev()),
+		authn,
 		httpx.MaxBody(maxBodyBytes),
 		requestValidator(spec),
 	)

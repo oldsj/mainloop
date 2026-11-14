@@ -45,7 +45,8 @@ func HostAllowed(hostHeader string, allowed map[string]bool, dev bool) bool {
 
 // OriginGuard refuses with 403 {"detail":"Cross-origin request refused."} a browser write that
 // a page on another origin sent. CORS only stops such a page from reading the response; a
-// body-less no-cors POST is still sent, and the API has no per-request authentication.
+// body-less no-cors POST is still sent, and the login cookie may ride along (internal/auth's
+// owner-write rule is the stricter check once it enforces).
 // Browsers always send Origin on a cross-origin write, so a client that sends none (MCP
 // actors, scripts, curl) is not affected. Reads and preflights are not checked.
 func OriginGuard(frontendOrigin string, dev bool) func(http.Handler) http.Handler {

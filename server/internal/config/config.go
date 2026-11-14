@@ -30,6 +30,7 @@ type Config struct {
 	Sessions   Sessions
 	Server     Server
 	Ntfy       Ntfy
+	Auth       Auth
 
 	// EnvironmentRegistryAllowlist limits OCI registries for development environments.
 	EnvironmentRegistryAllowlist RegistryAllowlist `env:"ENVIRONMENT_REGISTRY_ALLOWLIST" envDefault:"[\"ghcr.io\"]"`
@@ -247,6 +248,86 @@ type Ntfy struct {
 // Enabled reports whether push notifications are configured.
 func (n Ntfy) Enabled() bool { return n.URL != "" && n.Topic != "" }
 
+// Auth is how the owner API verifies who is calling (docs/specs/authentication.md). Only serve-api
+// reads it; [Auth.Mode] must be set there outside development.
+type Auth struct {
+	// Mode is off, observe (verify and log, refuse nothing) or enforce. Empty is off in development
+	// and a startup error for serve-api elsewhere.
+	Mode string `env:"MAINLOOP_AUTH_MODE"`
+	// OIDCIssuer is the Pocket ID issuer whose tokens identify the owner, such as
+	// https://id.olds.network. Its keys come from the issuer's discovery document.
+	OIDCIssuer string `env:"MAINLOOP_AUTH_OIDC_ISSUER"`
+	// OIDCAudience is the audience (the OIDC client id) an owner token must carry.
+	OIDCAudience string `env:"MAINLOOP_AUTH_OIDC_AUDIENCE"`
+	// OIDCCookie is the gateway's login cookie holding the ID token.
+	OIDCCookie string `env:"MAINLOOP_AUTH_OIDC_COOKIE" envDefault:"mainloop-id"`
+	// OwnerSubject is the owner's Pocket ID subject (sub). Only that subject is the owner.
+	OwnerSubject string `env:"MAINLOOP_AUTH_OWNER_SUBJECT"`
+	// OwnerGroup, when set, is a group the owner token's groups claim must also contain.
+	OwnerGroup string `env:"MAINLOOP_AUTH_OWNER_GROUP"`
+	// ServiceAccountAudience is the audience a ServiceAccount token must be issued for.
+	ServiceAccountAudience string `env:"MAINLOOP_AUTH_SA_AUDIENCE" envDefault:"mainloop-api"`
+	// ServiceAccountList allows ServiceAccounts, comma-separated namespace/name=scope with scope
+	// owner, read or canary. Parsed into ServiceAccounts.
+	ServiceAccountList string `env:"MAINLOOP_AUTH_SERVICE_ACCOUNTS"`
+	// ServiceAccounts maps namespace/name to its scope.
+	ServiceAccounts map[string]string
+}
+
+// AuthScopes are the scopes a ServiceAccount can be given.
+var AuthScopes = map[string]bool{"owner": true, "read": true, "canary": true}
+
+// validate checks the syntax of the auth settings; whether they suffice for the mode is serve-api's
+// check, since other processes share the config and never authenticate owners.
+func (a *Auth) validate(dev bool) []error {
+	var errs []error
+	a.Mode = strings.TrimSpace(a.Mode)
+	switch a.Mode {
+	case "", "off", "observe", "enforce":
+	default:
+		errs = append(errs, errors.New("MAINLOOP_AUTH_MODE must be off, observe or enforce"))
+	}
+	a.OIDCIssuer = strings.TrimRight(strings.TrimSpace(a.OIDCIssuer), "/")
+	if a.OIDCIssuer != "" {
+		u, err := url.Parse(a.OIDCIssuer)
+		if err != nil || u.Host == "" || (u.Scheme != "https" && (!dev || u.Scheme != "http")) {
+			errs = append(errs, errors.New("MAINLOOP_AUTH_OIDC_ISSUER must be an https URL"))
+		}
+	}
+	a.OIDCAudience = strings.TrimSpace(a.OIDCAudience)
+	a.OIDCCookie = strings.TrimSpace(a.OIDCCookie)
+	a.OwnerSubject = strings.TrimSpace(a.OwnerSubject)
+	a.OwnerGroup = strings.TrimSpace(a.OwnerGroup)
+	a.ServiceAccountAudience = strings.TrimSpace(a.ServiceAccountAudience)
+	if (a.OIDCIssuer != "") != (a.OIDCAudience != "") {
+		errs = append(errs, errors.New("MAINLOOP_AUTH_OIDC_ISSUER and MAINLOOP_AUTH_OIDC_AUDIENCE must be set together"))
+	}
+	if a.OIDCIssuer != "" && a.OwnerSubject == "" {
+		errs = append(errs, errors.New("MAINLOOP_AUTH_OWNER_SUBJECT is required with MAINLOOP_AUTH_OIDC_ISSUER"))
+	}
+	a.ServiceAccounts = map[string]string{}
+	for _, entry := range strings.Split(a.ServiceAccountList, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		name, scope, ok := strings.Cut(entry, "=")
+		ns, sa, okName := strings.Cut(strings.TrimSpace(name), "/")
+		scope = strings.TrimSpace(scope)
+		if !ok || !okName || !dnsLabel.MatchString(ns) || !serviceAccountName.MatchString(sa) || !AuthScopes[scope] {
+			errs = append(errs, fmt.Errorf("MAINLOOP_AUTH_SERVICE_ACCOUNTS: %q is not namespace/name=owner|read|canary", entry))
+			continue
+		}
+		a.ServiceAccounts[ns+"/"+sa] = scope
+	}
+	if len(a.ServiceAccounts) > 0 && a.ServiceAccountAudience == "" {
+		errs = append(errs, errors.New("MAINLOOP_AUTH_SA_AUDIENCE must not be blank"))
+	}
+	return errs
+}
+
+var serviceAccountName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
+
 // Load reads and validates the process environment.
 func Load() (*Config, error) {
 	return Parse(nil)
@@ -307,6 +388,7 @@ func (c *Config) validate() error {
 		// names inside another instance's patterns.
 		fail("MAINLOOP_NAMESPACE collides with credential Secret names")
 	}
+	errs = append(errs, c.Auth.validate(c.IsDev())...)
 	c.Ntfy.URL = strings.TrimRight(strings.TrimSpace(c.Ntfy.URL), "/")
 	c.Ntfy.Topic = strings.TrimSpace(c.Ntfy.Topic)
 	if (c.Ntfy.URL != "") != (c.Ntfy.Topic != "") {
