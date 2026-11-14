@@ -33,6 +33,9 @@ type TaskObservation struct {
 	PRState   string
 	CIState   string
 	CIHeadSHA string
+	// CIRetry is set when CI could not be read for a reason that may pass (a 5xx, a rate limit, a
+	// lost reply): CIState is unknown for want of an answer, not because GitHub gave none.
+	CIRetry bool
 	// ObservedAt is captured when collection finishes, before persistence can wait on the DB.
 	ObservedAt time.Time
 }
@@ -121,6 +124,7 @@ func (o *TaskObserver) Observe(ctx context.Context, repository, branch string, e
 		return TaskObservation{}, nil
 	}
 	ci, ciErr := o.readCI(ctx, repo, pr.Head.SHA)
+	ciRetry := false
 	if ciErr != nil {
 		// CI availability is independent of PR identity and body. Re-read the PR below before
 		// keeping it, and discard every partial CI page. Cancellation still ends the observation.
@@ -128,6 +132,7 @@ func (o *TaskObserver) Observe(ctx context.Context, repository, branch string, e
 			return TaskObservation{}, observationError(ctx.Err())
 		}
 		ci = "unknown"
+		ciRetry = errors.Is(observationError(ciErr), ErrObservationRetry)
 	}
 	fresh, err := o.App.PullRequest(ctx, repo, pr.Number)
 	if err != nil {
@@ -145,7 +150,7 @@ func (o *TaskObserver) Observe(ctx context.Context, repository, branch string, e
 	out := TaskObservation{
 		PRNumber: pr.Number, PRURL: fmt.Sprintf("%s/pull/%d", repo.HTMLURL(), pr.Number),
 		PRHeadRef: pr.Head.Ref, PRRepo: repo.FullName(), PRHeadSHA: pr.Head.SHA, PRState: state,
-		CIState: ci,
+		CIState: ci, CIRetry: ciRetry,
 	}
 	if fresh.BodyAvailable {
 		out.PRBody = &fresh.Body
