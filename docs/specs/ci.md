@@ -7,8 +7,10 @@ Mainloop. This spec covers how an agent reads that result. Sandboxes have no `gh
 reach the forge's API, so the read goes through Mainloop's MCP tools and the project's GitHub App.
 
 Status: `check_status`, `watch_checks`, the per-project setting for where heavy checks run, and
-`get_verification` are implemented. The worker guidance that uses them is a follow-up slice and is
-not described here as behavior yet.
+`get_verification` are implemented, and the shared agent guidance (v4, see
+[delegation](delegation.md#shared-agent-guidance)) teaches the loop: run what `get_verification`
+says, push once, `watch_checks`, end the turn, fix from the message, and report `blocked` after
+three failed rounds on one check. Not measured: whether agents follow it.
 
 ## Providers
 
@@ -145,6 +147,12 @@ unknown is retried without a duplicate. A busy session is retried after a few se
 that has ended or is not ready is retried until 30 minutes after the deadline and then marked
 `undeliverable`, as is a watch whose session or project is gone. Final states are `delivered`,
 `undeliverable` and `superseded`.
+
+While the watch is open, the agent's task stays `running` with its session idle: the task
+liveness sweep does not count that quiet as `stalled` ([tasks](tasks.md)), the session has no
+native input request so it does not show under Needs you, and no `report` reaches the delegator
+until the agent sends one after reading the result. Nothing yet labels the task as waiting on CI
+in the task or session views.
 
 The watch uses the same credential and scoping as `check_status`: `projectAuthority` before the
 row is written, the project resolved by owner, and the watch bound to the calling session, which is

@@ -68,7 +68,14 @@ make dev-live-purge       # delete the namespace and the *-dev agents (typed con
 
 ## Verification
 
-Run the smallest checks that establish confidence for the changed area, then expand when risk warrants it. In a task workspace, leave the full suite, `-race`, and the full Vitest run to CI: run only the packages and test files you changed.
+Heavy checks run on GitHub-hosted CI, not in the workspace (a small microVM). In a task workspace:
+
+1. **Quick loop, in the workspace.** Run the commands below for what you changed only: `make lint`, the Go packages you touched (no `-race` unless the change touches concurrency), `tsc -b` and the Vitest files you changed. Leave the full suite, `-race`, the full Vitest run and image builds to CI.
+2. **Push once.** Commit in batches and push when the quick loop passes, not after every commit: each push runs the whole CI.
+3. **Wait without holding the turn.** Call `watch_checks` on the pull request (or the pushed commit) and end your turn. One message brings the result, with the failed checks' output and annotations. Fix from it and repeat; `check_status` gives a snapshot without waiting.
+4. **Escalate.** After three failed CI rounds on the same check, or when CI stays pending past the watch, report `outcome=blocked` with the check and what you tried.
+
+`get_verification` gives this project's mode (`hybrid`: CI runs the full suite; the quick loop runs the tests of what changed). The commands:
 
 ```bash
 # Repository lint and format (trunk; changed files against origin/main)

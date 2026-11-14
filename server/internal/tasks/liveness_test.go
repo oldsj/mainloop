@@ -111,6 +111,29 @@ func TestLivenessBlocksAStalledTask(t *testing.T) {
 	}
 }
 
+// A worker that called watch_checks and ended its turn is waiting for CI, not stalled: a watch
+// that is still to settle or deliver holds off the stall block, and once it is delivered (its
+// message starts the next turn) the stall clock applies again.
+func TestLivenessDoesNotReadAWorkerWaitingOnCIAsStalled(t *testing.T) {
+	r := newRig(t)
+	id, bindingID := r.liveTask("ks-1")
+	r.live.set("ks-1", kagent.SessionLiveness{Exists: true})
+	r.activity.set(bindingID, time.Now().Add(-50*time.Minute))
+	r.exec(`INSERT INTO projects (id, user_id, owner, name, full_name, html_url, default_branch)
+		VALUES ('p-ci', $1, 'o', 'n', 'o/n', 'https://x', 'main')`, owner)
+	r.exec(`INSERT INTO check_watches (id, idempotency_key, user_id, project_id, session_id, pr_number, deadline)
+		VALUES ('w-1', 'k-1', $1, 'p-ci', $2, 7, now() + interval '40 minutes')`, owner, bindingID)
+	r.sweep(r.svc.LivenessSweep())
+	if got := r.taskStatus(id); got != "running" {
+		t.Fatalf("status = %s, want running while the watch is pending", got)
+	}
+	r.exec(`UPDATE check_watches SET state = 'delivered', outcome = 'green' WHERE id = 'w-1'`)
+	r.sweep(r.svc.LivenessSweep())
+	if got, reason := r.taskStatus(id), r.taskReason(id); got != "blocked" || reason != "stalled" {
+		t.Fatalf("after delivery: status = %s reason = %s, want blocked stalled", got, reason)
+	}
+}
+
 // kagent keeps a turn "working" until it ends, and a turn whose native process wedged never ends,
 // so a working task is not proof of life. Prod incident: a Claude turn hung inside a tool call at
 // 14:58, kagent reported the task working with a 14:48 status time for five hours, and the sweep

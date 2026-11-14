@@ -194,6 +194,28 @@ func (q *Queries) InsertCheckWatch(ctx context.Context, arg InsertCheckWatchPara
 	return i, err
 }
 
+const sessionAwaitsCheckWatch = `-- name: SessionAwaitsCheckWatch :one
+SELECT EXISTS (
+    SELECT 1 FROM check_watches
+    WHERE session_id = $1 AND state IN ('watching', 'delivering')
+      AND deadline + interval '30 minutes' > $2::timestamptz
+)::boolean AS awaits
+`
+
+type SessionAwaitsCheckWatchParams struct {
+	SessionID string
+	Now       time.Time
+}
+
+// Whether a session has a check watch still to settle or deliver: it ended its turn to wait for CI.
+// A watch past its deadline by more than the delivery grace no longer counts.
+func (q *Queries) SessionAwaitsCheckWatch(ctx context.Context, arg SessionAwaitsCheckWatchParams) (bool, error) {
+	row := q.db.QueryRow(ctx, sessionAwaitsCheckWatch, arg.SessionID, arg.Now)
+	var awaits bool
+	err := row.Scan(&awaits)
+	return awaits, err
+}
+
 const setProjectCIDetection = `-- name: SetProjectCIDetection :execrows
 UPDATE projects SET ci_detection = $3, ci_detected_at = $4 WHERE id = $1 AND user_id = $2
 `

@@ -300,7 +300,7 @@ access, no cluster access beyond `mainloop-dev`'s four pods).
 
 ## Agent instructions
 
-`server/internal/agentcontext/agentcontext.go`'s `Guidance` (currently `Version = 3`) tells every
+`server/internal/agentcontext/agentcontext.go`'s `Guidance` (currently `Version = 4`) tells every
 agent that caches live under `/opt/cache` and to use them as set, with no mention of what is warm
 or as of which commit — the gap #288 names directly. A future slice adds a line stating, when a
 warm seed is in effect for the session's project: what commit the checkout and caches are warm for,
