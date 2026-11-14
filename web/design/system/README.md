@@ -36,6 +36,7 @@ Each file in `guidelines/` covers one product component: purpose, states, keyboa
 - `guidelines/merge-policy.md`
 - `guidelines/merge-review.md`
 - `guidelines/message.md`
+- `guidelines/page-header.md`
 - `guidelines/schedule-card.md`
 - `guidelines/session-controls.md`
 - `guidelines/session-defaults.md`

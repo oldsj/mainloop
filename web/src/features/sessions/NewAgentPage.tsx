@@ -1,3 +1,4 @@
+import { PageHeader } from '@/components/shared/page-header';
 import { useNavigate } from '@tanstack/react-router';
 import { useState, type KeyboardEvent } from 'react';
 import { ApiError } from '@/api';
@@ -73,7 +74,7 @@ export function NewAgentPage() {
         start();
       }}
     >
-      <h1 className="text-lg font-medium">New agent session</h1>
+      <PageHeader title="New agent session" />
 
       <fieldset className="gap-xs flex flex-col">
         <legend className="text-sm font-medium">Agent</legend>
