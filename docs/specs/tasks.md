@@ -455,9 +455,14 @@ tool; a supervisor or child cannot hold its own work or a child's. The task reco
 
 A hold is not a status. The task's lifecycle goes on: it keeps running, reports, and the liveness
 and runtime bounds still apply. What it changes is the owner's view: until `held_until` the task
-is meant to stay out of **Working** and out of the Needs you rows the explorer derives from task
-state (a `waiting` task with its pull request open and CI green). The explorer does not read
-`held_until` yet; that is a UI follow-up.
+stays out of **Working**, out of **Ready for review** and **Landing**, and out of the Needs you rows
+the explorer derives from task state. It waits in a **Snoozed** group instead, folded by default
+and left out when empty, where its row reads `<project> · until 15:40 · <reason>` (with the weekday,
+as in `until Sat 09:00`, when the hold ends on another day) with a hollow dot. The explorer reads `held_until` against the
+browser's clock, so the row returns to its usual group when the time passes, without waiting for
+the sweep. An owner action that `/attention` lists for the task still shows under Needs you, and a
+problem under Problems; the server clears the hold in both cases anyway (below).
+**Implemented in the web app, checked against fixtures, not a live backend.**
 
 A hold never hides a failure. It is cleared at once, by triggers in the database, when:
 
