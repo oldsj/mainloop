@@ -445,6 +445,40 @@ the same principal and `request_id` returns the original blocked operation. Chan
 request's payload still returns 409. Main or the owner must submit a new `request_id` to make a
 fresh attempt. The blocked operation holds no task, attempt, capacity slot or branch claim.
 
+## Holds
+
+**Implemented (server):** the main thread can set a task aside until a time with the MCP tool
+`task_hold` (`task_id`, and one of `minutes` (1 to 10080), `until` (RFC 3339, within seven days)
+or `clear: true`; an optional `reason` of up to 500 characters). Only the main thread has the
+tool; a supervisor or child cannot hold its own work or a child's. The task records
+`held_until` and `held_reason`, which every task view shows.
+
+A hold is not a status. The task's lifecycle goes on: it keeps running, reports, and the liveness
+and runtime bounds still apply. What it changes is the owner's view: until `held_until` the task
+is meant to stay out of **Working** and out of the Needs you rows the explorer derives from task
+state (a `waiting` task with its pull request open and CI green). The explorer does not read
+`held_until` yet; that is a UI follow-up.
+
+A hold never hides a failure. It is cleared at once, by triggers in the database, when:
+
+- the task stops being live: any move to `failed`, `blocked`, `completed` or `cancelled`
+  (liveness's `stalled`, `session_lost` and `runtime_limit` are `blocked`, so they clear it too);
+- anything needs the owner about it: an attention item opens (or reopens) naming the task, or the
+  session of one of its attempts.
+
+For the same reason a task that is not `queued`, `running` or `waiting`, or that has an open
+attention item, cannot be held (`409` `hold_task_not_live` / `hold_task_needs_owner`). A hold and
+a concurrent attention item serialize on one advisory lock per task, so one never slips past the
+other. A hold cleared early sends nothing of its own: the failure or the attention item is
+already the news.
+
+When a hold runs out, the `task-holds` sweep (every minute) sends the main thread one message
+naming the task, its status and the reason it was held, then clears the hold, so the task is
+back in the owner's views. The message id is derived from the task and its `held_until`, so a
+sweep that sent it but failed to clear the hold finds the message instead of sending another;
+the clear applies only while the hold is unchanged, so a hold main moved meanwhile waits for its
+new time.
+
 ## Notifications and recovery
 
 ```json

@@ -194,7 +194,7 @@ func TestPolicyTable(t *testing.T) {
 		got  string
 		want string
 	}{
-		{"main", join(off, main, ord), want("whoami", "topics", "topic_open", "note", "decide", "pending_add", "pending_done", "open_pull_request", "get_issue", "list_dependabot_alerts", "check_status", "watch_checks", "get_verification", "project_context", "task_get", "task_list", "task_history", "delegate", "task_cancel", "steer")},
+		{"main", join(off, main, ord), want("whoami", "topics", "topic_open", "note", "decide", "pending_add", "pending_done", "open_pull_request", "get_issue", "list_dependabot_alerts", "check_status", "watch_checks", "get_verification", "project_context", "task_get", "task_list", "task_history", "delegate", "task_cancel", "task_hold", "steer")},
 		{"supervisor coordination", join(off, sup, ord), want("whoami", "project_context", "task_get", "task_list", "task_history", "delegate", "task_cancel", "steer", "report")},
 		{"supervisor workspace", join(off, supWS, ord), want("whoami", "open_pull_request", "get_issue", "list_dependabot_alerts", "check_status", "watch_checks", "get_verification", "project_context", "task_get", "task_list", "task_history", "delegate", "task_cancel", "steer", "report")},
 		{"child", join(off, child, ord), want("whoami", "project_context", "task_get", "task_list", "task_history", "report")},

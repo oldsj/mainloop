@@ -254,7 +254,7 @@ func TestDiscoveryFollowsThePerActorTable(t *testing.T) {
 	// it) is listed of the pull request tools.
 	want := []string{
 		"check_status", "decide", "delegate", "get_issue", "get_verification", "list_dependabot_alerts", "note", "open_pull_request", "pending_add",
-		"pending_done", "project_context", "steer", "task_cancel", "task_get", "task_history", "task_list", "topic_open", "topics", "watch_checks", "whoami",
+		"pending_done", "project_context", "steer", "task_cancel", "task_get", "task_history", "task_hold", "task_list", "topic_open", "topics", "watch_checks", "whoami",
 	}
 	if got := h.list(t, mcpserver.PathOrdinary, main.Token); !slices.Equal(got, want) {
 		t.Errorf("main lists %v, want %v", got, want)

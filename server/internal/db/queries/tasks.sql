@@ -653,3 +653,28 @@ ORDER BY created_at, id;
 UPDATE task_attempts SET instructions_version = coalesce(instructions_version, sqlc.arg(version)::integer)
 WHERE id = sqlc.arg(id)
 RETURNING instructions_version;
+
+-- Holds (docs/specs/tasks.md#holds).
+
+-- name: CountOpenTaskAttention :one
+-- Open attention items about a task: naming it, or the session of one of its attempts.
+SELECT count(*) FROM attention_items a
+WHERE a.state = 'open'
+  AND (a.task_id = sqlc.arg(task_id)
+       OR a.session_id IN (SELECT ta.session_id FROM task_attempts ta WHERE ta.task_id = sqlc.arg(task_id)));
+
+-- name: SetTaskHold :one
+UPDATE tasks SET held_until = sqlc.narg(held_until), held_reason = sqlc.narg(held_reason), updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ListExpiredHolds :many
+SELECT * FROM tasks
+WHERE held_until IS NOT NULL AND held_until <= $1
+ORDER BY held_until, id
+LIMIT $2;
+
+-- name: ReleaseExpiredHold :execrows
+-- Clears a hold that has run out, only if it is still the same hold.
+UPDATE tasks SET held_until = NULL, held_reason = NULL, updated_at = now()
+WHERE id = $1 AND held_until = $2;

@@ -72,6 +72,8 @@ func toTask(t dbq.Task) (api.Task, error) {
 		CreatorBindingId:    t.CreatorBindingID,
 		CurrentAttemptId:    t.CurrentAttemptID,
 		Effort:              (*api.EffortLevel)(t.Effort),
+		HeldReason:          t.HeldReason,
+		HeldUntil:           t.HeldUntil,
 		Id:                  t.ID,
 		Mode:                api.TaskMode(t.Mode),
 		Model:               t.Model,

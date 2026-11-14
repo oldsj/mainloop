@@ -3939,6 +3939,18 @@ export interface components {
        */
       effort: components['schemas']['EffortLevel'] | null;
       /**
+       * Held Until
+       * @description Set while the main thread has the task on hold. A held task is left out of the owner's Working and Needs you views until then; the hold ends early when the task fails, blocks or ends, or something needs the owner about it.
+       * @default null
+       */
+      held_until: string | null;
+      /**
+       * Held Reason
+       * @description Why the main thread put the task on hold, in its own words.
+       * @default null
+       */
+      held_reason: string | null;
+      /**
        * Selection Source
        * @enum {string}
        */

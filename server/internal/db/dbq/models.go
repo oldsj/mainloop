@@ -829,6 +829,8 @@ type Task struct {
 	MergeProposalID     *string
 	Model               *string
 	Effort              *string
+	HeldUntil           *time.Time
+	HeldReason          *string
 }
 
 type TaskArtifact struct {

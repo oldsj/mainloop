@@ -8542,6 +8542,25 @@ components:
           description: >-
             The reasoning effort the create request chose, validated against
             assigned_profile_id. Null means the profile's default_effort.
+        held_until:
+          anyOf:
+            - format: date-time
+              type: string
+            - type: 'null'
+          default: null
+          title: Held Until
+          description: >-
+            Set while the main thread has the task on hold. A held task is left out of the
+            owner's Working and Needs you views until then; the hold ends early when the task
+            fails, blocks or ends, or something needs the owner about it.
+        held_reason:
+          anyOf:
+            - maxLength: 500
+              type: string
+            - type: 'null'
+          default: null
+          title: Held Reason
+          description: Why the main thread put the task on hold, in its own words.
         selection_source:
           enum:
             - explicit

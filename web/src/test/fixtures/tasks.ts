@@ -29,6 +29,8 @@ export function task(overrides: Partial<Task> = {}): Task {
     assigned_profile_id: 'claude-default',
     model: null,
     effort: null,
+    held_until: null,
+    held_reason: null,
     selection_source: 'explicit',
     provider_constraint: null,
     accepted_environment: null,
