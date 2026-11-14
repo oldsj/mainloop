@@ -1,8 +1,10 @@
 -- name: InsertCheckWatch :one
-INSERT INTO check_watches (id, idempotency_key, user_id, project_id, session_id, pr_number, commit_sha, deadline)
+INSERT INTO check_watches (
+    id, idempotency_key, user_id, project_id, session_id, pr_number, commit_sha, deadline, reviews, reviews_since
+)
 VALUES (
     sqlc.arg(id), sqlc.arg(idempotency_key), sqlc.arg(user_id), sqlc.arg(project_id), sqlc.arg(session_id),
-    sqlc.narg(pr_number), sqlc.narg(commit_sha), sqlc.arg(deadline)
+    sqlc.narg(pr_number), sqlc.narg(commit_sha), sqlc.arg(deadline), sqlc.arg(reviews), sqlc.narg(reviews_since)
 )
 ON CONFLICT (idempotency_key) DO NOTHING
 RETURNING *;
@@ -26,9 +28,22 @@ WHERE session_id = sqlc.arg(session_id) AND state = 'watching' AND id <> sqlc.ar
 -- name: SettleCheckWatch :execrows
 UPDATE check_watches
 SET state = 'delivering', outcome = sqlc.arg(outcome), head_sha = sqlc.narg(head_sha),
-    message = sqlc.arg(message), updated_at = now()
+    message = sqlc.arg(message), reviews_until = sqlc.narg(reviews_until), updated_at = now()
 WHERE id = sqlc.arg(id) AND lease_owner = sqlc.arg(lease_owner) AND attempts = sqlc.arg(attempts)
   AND state = 'watching';
+
+-- The point a new review watch of a session's pull request starts from: the newest feedback a
+-- settled watch of it carried, if any.
+-- name: ReviewCursor :one
+SELECT reviews_until FROM check_watches
+WHERE session_id = @session_id AND pr_number = @pr_number AND reviews_until IS NOT NULL
+ORDER BY reviews_until DESC
+LIMIT 1;
+
+-- How many review rounds a session has had on a pull request: watches settled on feedback.
+-- name: CountReviewRounds :one
+SELECT count(*) FROM check_watches
+WHERE session_id = @session_id AND pr_number = @pr_number AND outcome = 'review';
 
 -- Ends a watch in a final state, releasing its lease.
 -- name: FinishCheckWatch :execrows

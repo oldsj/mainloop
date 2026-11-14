@@ -11,6 +11,24 @@ import (
 	"time"
 )
 
+const countReviewRounds = `-- name: CountReviewRounds :one
+SELECT count(*) FROM check_watches
+WHERE session_id = $1 AND pr_number = $2 AND outcome = 'review'
+`
+
+type CountReviewRoundsParams struct {
+	SessionID string
+	PrNumber  *int32
+}
+
+// How many review rounds a session has had on a pull request: watches settled on feedback.
+func (q *Queries) CountReviewRounds(ctx context.Context, arg CountReviewRoundsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countReviewRounds, arg.SessionID, arg.PrNumber)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const finishCheckWatch = `-- name: FinishCheckWatch :execrows
 UPDATE check_watches
 SET state = $1, detail = $2, lease_owner = NULL, lease_until = NULL,
@@ -42,7 +60,7 @@ func (q *Queries) FinishCheckWatch(ctx context.Context, arg FinishCheckWatchPara
 }
 
 const getCheckWatch = `-- name: GetCheckWatch :one
-SELECT id, idempotency_key, user_id, project_id, session_id, pr_number, commit_sha, deadline, state, outcome, head_sha, message, detail, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM check_watches WHERE id = $1
+SELECT id, idempotency_key, user_id, project_id, session_id, pr_number, commit_sha, deadline, state, outcome, head_sha, message, detail, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at, reviews, reviews_since, reviews_until FROM check_watches WHERE id = $1
 `
 
 func (q *Queries) GetCheckWatch(ctx context.Context, id string) (CheckWatch, error) {
@@ -68,12 +86,15 @@ func (q *Queries) GetCheckWatch(ctx context.Context, id string) (CheckWatch, err
 		&i.LeaseUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Reviews,
+		&i.ReviewsSince,
+		&i.ReviewsUntil,
 	)
 	return i, err
 }
 
 const getCheckWatchByKey = `-- name: GetCheckWatchByKey :one
-SELECT id, idempotency_key, user_id, project_id, session_id, pr_number, commit_sha, deadline, state, outcome, head_sha, message, detail, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM check_watches WHERE idempotency_key = $1
+SELECT id, idempotency_key, user_id, project_id, session_id, pr_number, commit_sha, deadline, state, outcome, head_sha, message, detail, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at, reviews, reviews_since, reviews_until FROM check_watches WHERE idempotency_key = $1
 `
 
 func (q *Queries) GetCheckWatchByKey(ctx context.Context, idempotencyKey string) (CheckWatch, error) {
@@ -99,6 +120,9 @@ func (q *Queries) GetCheckWatchByKey(ctx context.Context, idempotencyKey string)
 		&i.LeaseUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Reviews,
+		&i.ReviewsSince,
+		&i.ReviewsUntil,
 	)
 	return i, err
 }
@@ -138,13 +162,15 @@ func (q *Queries) GetProjectVerification(ctx context.Context, arg GetProjectVeri
 }
 
 const insertCheckWatch = `-- name: InsertCheckWatch :one
-INSERT INTO check_watches (id, idempotency_key, user_id, project_id, session_id, pr_number, commit_sha, deadline)
+INSERT INTO check_watches (
+    id, idempotency_key, user_id, project_id, session_id, pr_number, commit_sha, deadline, reviews, reviews_since
+)
 VALUES (
     $1, $2, $3, $4, $5,
-    $6, $7, $8
+    $6, $7, $8, $9, $10
 )
 ON CONFLICT (idempotency_key) DO NOTHING
-RETURNING id, idempotency_key, user_id, project_id, session_id, pr_number, commit_sha, deadline, state, outcome, head_sha, message, detail, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at
+RETURNING id, idempotency_key, user_id, project_id, session_id, pr_number, commit_sha, deadline, state, outcome, head_sha, message, detail, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at, reviews, reviews_since, reviews_until
 `
 
 type InsertCheckWatchParams struct {
@@ -156,6 +182,8 @@ type InsertCheckWatchParams struct {
 	PrNumber       *int32
 	CommitSha      *string
 	Deadline       time.Time
+	Reviews        bool
+	ReviewsSince   *time.Time
 }
 
 func (q *Queries) InsertCheckWatch(ctx context.Context, arg InsertCheckWatchParams) (CheckWatch, error) {
@@ -168,6 +196,8 @@ func (q *Queries) InsertCheckWatch(ctx context.Context, arg InsertCheckWatchPara
 		arg.PrNumber,
 		arg.CommitSha,
 		arg.Deadline,
+		arg.Reviews,
+		arg.ReviewsSince,
 	)
 	var i CheckWatch
 	err := row.Scan(
@@ -190,8 +220,32 @@ func (q *Queries) InsertCheckWatch(ctx context.Context, arg InsertCheckWatchPara
 		&i.LeaseUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Reviews,
+		&i.ReviewsSince,
+		&i.ReviewsUntil,
 	)
 	return i, err
+}
+
+const reviewCursor = `-- name: ReviewCursor :one
+SELECT reviews_until FROM check_watches
+WHERE session_id = $1 AND pr_number = $2 AND reviews_until IS NOT NULL
+ORDER BY reviews_until DESC
+LIMIT 1
+`
+
+type ReviewCursorParams struct {
+	SessionID string
+	PrNumber  *int32
+}
+
+// The point a new review watch of a session's pull request starts from: the newest feedback a
+// settled watch of it carried, if any.
+func (q *Queries) ReviewCursor(ctx context.Context, arg ReviewCursorParams) (*time.Time, error) {
+	row := q.db.QueryRow(ctx, reviewCursor, arg.SessionID, arg.PrNumber)
+	var reviews_until *time.Time
+	err := row.Scan(&reviews_until)
+	return reviews_until, err
 }
 
 const sessionAwaitsCheckWatch = `-- name: SessionAwaitsCheckWatch :one
@@ -261,18 +315,19 @@ func (q *Queries) SetProjectVerificationMode(ctx context.Context, arg SetProject
 const settleCheckWatch = `-- name: SettleCheckWatch :execrows
 UPDATE check_watches
 SET state = 'delivering', outcome = $1, head_sha = $2,
-    message = $3, updated_at = now()
-WHERE id = $4 AND lease_owner = $5 AND attempts = $6
+    message = $3, reviews_until = $4, updated_at = now()
+WHERE id = $5 AND lease_owner = $6 AND attempts = $7
   AND state = 'watching'
 `
 
 type SettleCheckWatchParams struct {
-	Outcome    *string
-	HeadSha    *string
-	Message    *string
-	ID         string
-	LeaseOwner *string
-	Attempts   int32
+	Outcome      *string
+	HeadSha      *string
+	Message      *string
+	ReviewsUntil *time.Time
+	ID           string
+	LeaseOwner   *string
+	Attempts     int32
 }
 
 // Records the outcome and its message, keeping the lease so the same claim delivers it.
@@ -281,6 +336,7 @@ func (q *Queries) SettleCheckWatch(ctx context.Context, arg SettleCheckWatchPara
 		arg.Outcome,
 		arg.HeadSha,
 		arg.Message,
+		arg.ReviewsUntil,
 		arg.ID,
 		arg.LeaseOwner,
 		arg.Attempts,

@@ -95,6 +95,8 @@ type PullRequestInfo struct {
 	HTMLURL         string
 	Head, Base      PRRef
 	HeadRepoMissing bool
+	// Author is the login that opened the pull request.
+	Author string
 }
 
 // PullFile is one changed file of a pull request.
@@ -233,6 +235,9 @@ type pullJSON struct {
 	HTMLURL        string    `json:"html_url"`
 	Head           refJSON   `json:"head"`
 	Base           refJSON   `json:"base"`
+	User           *struct {
+		Login string `json:"login"`
+	} `json:"user"`
 }
 
 func (p pullJSON) info() PullRequestInfo {
@@ -254,6 +259,9 @@ func (p pullJSON) info() PullRequestInfo {
 	}
 	if p.Body != nil {
 		out.Body, out.BodyAvailable = string(*p.Body), true
+	}
+	if p.User != nil {
+		out.Author = p.User.Login
 	}
 	if p.MergeCommitSHA != nil {
 		out.MergeCommitSHA = *p.MergeCommitSHA

@@ -93,6 +93,9 @@ type CheckWatch struct {
 	LeaseUntil     *time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	Reviews        bool
+	ReviewsSince   *time.Time
+	ReviewsUntil   *time.Time
 }
 
 type CheckpointFork struct {

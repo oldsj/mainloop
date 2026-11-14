@@ -103,7 +103,7 @@ argument, and it never reruns, cancels or triggers a check.
 
 ## `watch_checks`
 
-`watch_checks(project_id, pr_number | commit_sha, request_id, timeout_minutes?)` waits for CI
+`watch_checks(project_id, pr_number | commit_sha, request_id, timeout_minutes?, reviews?)` waits for CI
 without holding the agent's turn. It records a durable watch and returns at once with `watch_id`,
 `state` (`watching`), `deadline` and `superseded`. The agent then ends its turn, so its workspace
 can go idle and suspend while CI runs. When the watch settles, Mainloop sends the agent's session
@@ -112,13 +112,14 @@ the next turn, like any other message from Mainloop.
 
 The watch settles with one outcome:
 
-| Outcome           | When                                                                             |
-| ----------------- | -------------------------------------------------------------------------------- |
-| `green`           | Checks exist and none is pending or failed                                       |
-| `failed`          | Nothing is pending and at least one check failed                                 |
-| `no_checks`       | No check appeared within three minutes of the watch starting, or by the deadline |
-| `pending_timeout` | Checks were still pending (or CI could not be read) at the deadline              |
-| `not_found`       | The pull request or commit does not exist                                        |
+| Outcome           | When                                                                                        |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| `green`           | Checks exist and none is pending or failed                                                  |
+| `failed`          | Nothing is pending and at least one check failed                                            |
+| `no_checks`       | No check appeared within three minutes of the watch starting, or by the deadline            |
+| `pending_timeout` | Checks were still pending (or CI could not be read) at the deadline                         |
+| `not_found`       | The pull request or commit does not exist                                                   |
+| `review`          | With `reviews`: a trusted reviewer said something (see [Review feedback](#review-feedback)) |
 
 A failure does not settle the watch while other checks still run, so the message reports every
 failure at once. The message carries the same rendered text as `check_status` (verdict, checks
@@ -153,6 +154,45 @@ liveness sweep does not count that quiet as `stalled` ([tasks](tasks.md)), the s
 native input request so it does not show under Needs you, and no `report` reaches the delegator
 until the agent sends one after reading the result. Nothing yet labels the task as waiting on CI
 in the task or session views.
+
+### Review feedback
+
+`watch_checks(..., reviews: true)` also wakes the agent on review feedback on the pull request
+(`pr_number` only; with `commit_sha` it is refused as `invalid_ref`). On every poll the loop reads
+the pull request's submitted reviews, inline review comments and conversation comments made after
+the watch's start point. As soon as one is from a trusted author, the watch settles as `review`
+and the message carries the feedback with the CI state as of then. With `reviews`:
+
+- A green (or check-less) result does not settle the watch early: it waits until the deadline so a
+  review can arrive, then settles `green` (or `no_checks`) saying no reviewer spoke. A failure
+  still settles at once.
+- **Trusted** means a GitHub author association of `OWNER`, `MEMBER` or `COLLABORATOR`, or a bot
+  account (an App comments only where it is installed). Anyone can comment on a public pull
+  request, so feedback from anyone else is counted ("N comments ... were left out") but its text
+  never reaches the agent. The pull request's own author (Mainloop's App, for an agent's pull
+  request) never counts. A review with no text whose state is `COMMENTED` only groups inline
+  comments, which come on their own, and is skipped; a pending review is never listed.
+- The message lists at most ten items, each with kind (approval, changes requested, review,
+  inline comment, comment), author, file and line for inline comments, a link, and the text capped
+  at 1,500 characters between quote markers, marked as the reviewer's text rather than an
+  instruction. It numbers the **review round** (the watches of that session and pull request that
+  settled on feedback) and ends by asking the agent to address the feedback, push, watch again with
+  `reviews`, and report `blocked` after three rounds that do not converge. The bound is guidance;
+  the server does not enforce it.
+- **Start point.** A first review watch of a session's pull request starts at its creation. A
+  later one starts at the newest feedback a settled watch of that session and pull request carried
+  (`reviews_until`), so feedback given while the agent worked is delivered and nothing is delivered
+  twice. Feedback before a session's first review watch is not delivered.
+- The reads (`GET /pulls/{n}/reviews`, `/pulls/{n}/comments`, `/issues/{n}/comments`) need only
+  `pull_requests: read`, which GitHub accepts for a pull request's conversation comments. Comments
+  come one page of 100 after the start point; reviews, which GitHub cannot filter by time, at most
+  three pages of 100. There is no webhook: the watch polls on its usual schedule, so feedback
+  arrives within a poll interval (15 seconds to a minute).
+- Feedback reaches only a session that is still running. A task that already reported
+  `completed` has ended its session; its watches end `undeliverable`.
+
+Not live-proven: the tests use the fake GitHub transport; the permission GitHub requires for the
+conversation-comments read has not been checked against GitHub.
 
 The watch uses the same credential and scoping as `check_status`: `projectAuthority` before the
 row is written, the project resolved by owner, and the watch bound to the calling session, which is

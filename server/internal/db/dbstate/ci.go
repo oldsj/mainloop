@@ -23,6 +23,8 @@ const (
 	WatchPendingTimeout CheckWatchOutcome = "pending_timeout"
 	WatchNoChecks       CheckWatchOutcome = "no_checks"
 	WatchNotFound       CheckWatchOutcome = "not_found"
+	// WatchReview: a trusted reviewer said something on the pull request (a watch with reviews).
+	WatchReview CheckWatchOutcome = "review"
 )
 
 // VerificationMode is projects.verification_mode: where a project's heavy checks run. Auto follows

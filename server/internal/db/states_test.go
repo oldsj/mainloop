@@ -173,7 +173,7 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.WatchUndeliverable), string(dbstate.WatchSuperseded))},
 		{"check_watches", "outcome", strs(
 			string(dbstate.WatchGreen), string(dbstate.WatchFailed), string(dbstate.WatchPendingTimeout),
-			string(dbstate.WatchNoChecks), string(dbstate.WatchNotFound))},
+			string(dbstate.WatchNoChecks), string(dbstate.WatchNotFound), string(dbstate.WatchReview))},
 		// No state machine, so no dbstate type: the contract enum is the constant the CHECK must match.
 		{"attention_items", "reason_code", strs(
 			string(api.AttentionItemReasonCodeReconciliation), string(api.AttentionItemReasonCodeRuntimeStopUnresolved),

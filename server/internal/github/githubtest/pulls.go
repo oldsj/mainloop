@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -314,6 +314,10 @@ func (s *Server) pullCall(w http.ResponseWriter, r *http.Request, repo *Reposito
 		s.pullGet(w, repo, rest[1])
 	case len(rest) == 3 && rest[2] == "files":
 		s.pullFiles(w, r, repo, rest[1])
+	case len(rest) == 3 && rest[2] == "reviews" && r.Method == http.MethodGet:
+		s.feedbackCall(w, r, repo, rest[1], FeedbackReview)
+	case len(rest) == 3 && rest[2] == "comments" && r.Method == http.MethodGet:
+		s.feedbackCall(w, r, repo, rest[1], FeedbackReviewComment)
 	case len(rest) == 3 && rest[2] == "merge":
 		s.pullMerge(w, r, repo, rest[1])
 	default:

@@ -95,6 +95,11 @@ var rules = []rule{
 	// Pull requests and merges (pulls.go). The merge call is the only write that changes a branch.
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/pulls/*", kindRepo, Permissions{"pull_requests": Read}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/pulls/*/files", kindRepo, Permissions{"pull_requests": Read}),
+	// Review feedback (feedback.go). GitHub serves a pull request's conversation comments to Pull
+	// requests read as well as Issues read.
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/pulls/*/reviews", kindRepo, Permissions{"pull_requests": Read}),
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/pulls/*/comments", kindRepo, Permissions{"pull_requests": Read}),
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/issues/*/comments", kindRepo, Permissions{"pull_requests": Read}),
 	// Creation also needs Contents read: GitHub checks the head branch with the same token.
 	newRule(http.MethodPost, "/repos/{owner}/{repo}/pulls", kindRepo, Permissions{"pull_requests": Write, "contents": Read}),
 	newRule(http.MethodPut, "/repos/{owner}/{repo}/pulls/*/merge", kindRepo,

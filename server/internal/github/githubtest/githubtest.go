@@ -94,6 +94,8 @@ type PullRequest struct {
 	ChangedFiles int
 	// HeadRepoGone answers a null head repository (a deleted fork).
 	HeadRepoGone bool
+	// Feedback are the pull request's reviews, inline review comments and conversation comments.
+	Feedback []Feedback
 }
 
 // Commit is a commit in the fake. Commits are served newest first, in the order given.
@@ -449,7 +451,10 @@ func need(method string, segs []string) map[string]string {
 		return read("metadata")
 	case method == http.MethodGet && len(rest) == 1 && rest[0] == "pulls",
 		method == http.MethodGet && len(rest) == 2 && rest[0] == "pulls",
-		method == http.MethodGet && len(rest) == 3 && rest[0] == "pulls" && rest[2] == "files":
+		method == http.MethodGet && len(rest) == 3 && rest[0] == "pulls" && rest[2] == "files",
+		method == http.MethodGet && len(rest) == 3 && rest[0] == "pulls" && (rest[2] == "reviews" || rest[2] == "comments"),
+		// GitHub serves a pull request's conversation comments to Pull requests read as well as Issues read.
+		method == http.MethodGet && len(rest) == 3 && rest[0] == "issues" && rest[2] == "comments":
 		return read("pull_requests")
 	case method == http.MethodPost && len(rest) == 1 && rest[0] == "pulls":
 		return map[string]string{"pull_requests": "write"}
@@ -570,6 +575,8 @@ func (s *Server) repoCall(w http.ResponseWriter, r *http.Request, segs []string)
 		s.ruleCall(w, r, repo)
 	case rest[0] == "compare" && len(rest) == 2:
 		s.compareCall(w, r, repo, rest[1])
+	case rest[0] == "issues" && len(rest) == 3 && rest[2] == "comments":
+		s.feedbackCall(w, r, repo, rest[1], FeedbackComment)
 	case rest[0] == "issues" && len(rest) == 2:
 		s.issueCall(w, repo, rest[1])
 	case rest[0] == "dependabot" && len(rest) == 2 && rest[1] == "alerts":
