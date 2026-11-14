@@ -28,7 +28,8 @@ CREATE TABLE project_memory_entries (
     decided_at timestamptz,
     CHECK ((state = 'active') = (activated_seq IS NOT NULL AND ended_seq IS NULL)),
     CHECK (ended_seq IS NULL OR (activated_seq IS NOT NULL AND ended_seq > activated_seq)),
-    CHECK ((state IN ('forgotten', 'replaced')) = (ended_seq IS NOT NULL))
+    -- Spelled with OR, not IN, so it is not an enumeration check (see TestStateConstantsMatchChecks).
+    CHECK ((state = 'forgotten' OR state = 'replaced') = (ended_seq IS NOT NULL))
 );
 CREATE INDEX project_memory_entries_open ON project_memory_entries (project_id, created_at, id)
 WHERE state IN ('active', 'proposed');

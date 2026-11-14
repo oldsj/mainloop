@@ -10,6 +10,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/projectcontext"
 	"github.com/oldsj/mainloop/server/internal/testdb"
 )
 
@@ -175,6 +176,11 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"check_watches", "outcome", strs(
 			string(dbstate.WatchGreen), string(dbstate.WatchFailed), string(dbstate.WatchPendingTimeout),
 			string(dbstate.WatchNoChecks), string(dbstate.WatchNotFound), string(dbstate.WatchReview))},
+		{"project_memory_entries", "state", strs(
+			projectcontext.StateProposed, projectcontext.StateActive, projectcontext.StateRejected,
+			projectcontext.StateWithdrawn, projectcontext.StateForgotten, projectcontext.StateReplaced)},
+		{"project_memory_entries", "author", strs(
+			string(projectcontext.AuthorMain), string(projectcontext.AuthorTask), string(projectcontext.AuthorAgent))},
 		// No state machine, so no dbstate type: the contract enum is the constant the CHECK must match.
 		{"attention_items", "reason_code", strs(
 			string(api.AttentionItemReasonCodeReconciliation), string(api.AttentionItemReasonCodeRuntimeStopUnresolved),
