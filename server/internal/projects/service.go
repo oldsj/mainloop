@@ -27,12 +27,13 @@ import (
 
 // Typed failures the API layer maps to the contract's statuses.
 var (
-	ErrNotFound        = errors.New("projects: project not found")
-	ErrInvalidRepo     = errors.New("projects: invalid GitHub repository")
-	ErrInvalidPolicy   = errors.New("projects: unknown merge policy")
-	ErrWritesDisabled  = errors.New("projects: owner policy writes are disabled")
-	ErrVersionConflict = errors.New("projects: merge policy version changed")
-	ErrInvalidService  = errors.New("projects: invalid workspace service command")
+	ErrNotFound            = errors.New("projects: project not found")
+	ErrInvalidRepo         = errors.New("projects: invalid GitHub repository")
+	ErrInvalidPolicy       = errors.New("projects: unknown merge policy")
+	ErrWritesDisabled      = errors.New("projects: owner policy writes are disabled")
+	ErrVersionConflict     = errors.New("projects: merge policy version changed")
+	ErrInvalidService      = errors.New("projects: invalid workspace service command")
+	ErrInvalidServicePorts = errors.New("projects: invalid workspace service ports")
 )
 
 // Remote is the part of the GitHub client the projects use.

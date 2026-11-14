@@ -25,11 +25,14 @@ under Settings, and carried in every task brief of the project. See
 [project context](project-context.md#on-the-project-page).
 
 A project can declare a **workspace service**, a development server kagent keeps running in each
-of its workspaces across sleep, with `GET`/`PUT /projects/{id}/workspace-service`. The Workspace
-service section, last under Settings, shows the saved command and edits it one argument per line
-(spaces at each line's ends dropped, blank lines skipped). It refuses a draft over the contract's
-bounds (61 arguments, 4096 bytes each) before sending, and an empty draft removes the service.
-A save applies to workspaces created afterwards. See [workspaces](workspaces.md#workspace-service).
+of its workspaces across sleep, and the preview ports of those workspaces, with
+`GET`/`PUT /projects/{id}/workspace-service`. The Workspace service section, last under Settings,
+shows the saved command and ports. It edits the command one argument per line and the ports one
+`name=number` per line (spaces at each line's ends dropped, blank lines skipped), and refuses a
+draft over the contract's bounds (61 arguments of 4096 bytes; 16 ports, named and numbered as
+`dev.ports` are, unique) before sending. An empty command removes the service; the ports stay
+unless they are cleared too. A save applies to workspaces created afterwards, task workspaces
+included. See [workspaces](workspaces.md#workspace-service).
 
 The owner imports a repository as a project from **Import a project** on the Settings page
 (`/settings#import-project`), with `owner/name` or a GitHub URL (`POST /projects`). Importing a

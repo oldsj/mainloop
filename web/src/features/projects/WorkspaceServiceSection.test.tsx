@@ -5,7 +5,11 @@ import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection } from '@/api';
 import { server } from '@/test/msw/server';
-import { commandFromDraft, WorkspaceServiceSection } from './WorkspaceServiceSection';
+import {
+  commandFromDraft,
+  portsFromDraft,
+  WorkspaceServiceSection
+} from './WorkspaceServiceSection';
 import { problem, workspaceServiceRead, workspaceServiceWrite } from './test/handlers';
 
 // The section makes its reads through the app's limiter, which the tests skip. See fastReads.ts.
@@ -33,7 +37,10 @@ function controls() {
   const section = screen.getByTestId('workspace-service');
   return {
     command: within(section).getByRole('textbox', { name: 'Command, one argument per line' }),
-    save: within(section).getByRole('button', { name: /Save|Saving…|Remove service/ })
+    ports: within(section).getByRole('textbox', {
+      name: 'Preview ports, one name=number per line'
+    }),
+    save: within(section).getByRole('button', { name: /Save|Saving…/ })
   };
 }
 
@@ -56,9 +63,37 @@ describe('commandFromDraft', () => {
   });
 });
 
+describe('portsFromDraft', () => {
+  it('reads one name=number per line', () => {
+    expect(portsFromDraft(' web=3000 \n\napi = 8080')).toEqual({
+      ports: [
+        { name: 'web', number: 3000 },
+        { name: 'api', number: 8080 }
+      ],
+      error: null
+    });
+  });
+
+  it('refuses what the server would', () => {
+    expect(portsFromDraft('Web=3000').error).toMatch(/"Web=3000" is not a port/);
+    expect(portsFromDraft('web=0').error).toMatch(/is not a port/);
+    expect(portsFromDraft('web=65536').error).toMatch(/is not a port/);
+    expect(portsFromDraft('3000').error).toMatch(/is not a port/);
+    expect(portsFromDraft('web=3000\napi=3000').error).toBe(
+      'Each port needs its own name and number.'
+    );
+    expect(portsFromDraft('web=3000\nweb=3001').error).toBe(
+      'Each port needs its own name and number.'
+    );
+    expect(
+      portsFromDraft(Array.from({ length: 17 }, (_, i) => `p${i}=${3000 + i}`).join('\n')).error
+    ).toBe('At most 16 ports; this has 17.');
+  });
+});
+
 describe('workspace service section', () => {
   it('says when no service is declared', async () => {
-    server.use(workspaceServiceRead(() => HttpResponse.json({ command: [] })));
+    server.use(workspaceServiceRead(() => HttpResponse.json({ command: [], ports: [] })));
     renderSection();
     expect(
       await screen.findByText('No workspace service. Workspaces start no server of their own.')
@@ -66,10 +101,10 @@ describe('workspace service section', () => {
     expect(controls().save).toBeDisabled();
   });
 
-  it('saves the command as an argv and shows what runs', async () => {
+  it('saves the command as an argv with its ports and shows what runs', async () => {
     let body: Record<string, unknown> | undefined;
     server.use(
-      workspaceServiceRead(() => HttpResponse.json({ command: [] })),
+      workspaceServiceRead(() => HttpResponse.json({ command: [], ports: [] })),
       workspaceServiceWrite(async ({ request }) => {
         body = (await request.json()) as Record<string, unknown>;
         return HttpResponse.json(body);
@@ -79,18 +114,28 @@ describe('workspace service section', () => {
     renderSection();
     await screen.findByText(/No workspace service/);
     await user.type(controls().command, 'scripts/dev/workspace.sh{Enter}run');
+    await user.type(controls().ports, 'web=3000');
     await user.click(controls().save);
     expect(
       await screen.findByText('scripts/dev/workspace.sh run', { selector: 'code' })
     ).toBeInTheDocument();
-    expect(body).toEqual({ command: ['scripts/dev/workspace.sh', 'run'] });
+    expect(screen.getByText('Preview ports: web 3000')).toBeInTheDocument();
+    expect(body).toEqual({
+      command: ['scripts/dev/workspace.sh', 'run'],
+      ports: [{ name: 'web', number: 3000 }]
+    });
     expect(controls().save).toBeDisabled();
   });
 
-  it('removes a declared service with an empty command', async () => {
+  it('removes a declared service with an empty command and keeps its ports', async () => {
     let body: Record<string, unknown> | undefined;
     server.use(
-      workspaceServiceRead(() => HttpResponse.json({ command: ['npm', 'run', 'dev'] })),
+      workspaceServiceRead(() =>
+        HttpResponse.json({
+          command: ['npm', 'run', 'dev'],
+          ports: [{ name: 'web', number: 3000 }]
+        })
+      ),
       workspaceServiceWrite(async ({ request }) => {
         body = (await request.json()) as Record<string, unknown>;
         return HttpResponse.json(body);
@@ -100,18 +145,18 @@ describe('workspace service section', () => {
     renderSection();
     expect(await screen.findByText('npm run dev', { selector: 'code' })).toBeInTheDocument();
     await user.clear(controls().command);
-    await user.click(screen.getByRole('button', { name: 'Remove service' }));
+    await user.click(controls().save);
     expect(await screen.findByText(/No workspace service/)).toBeInTheDocument();
-    expect(body).toEqual({ command: [] });
+    expect(body).toEqual({ command: [], ports: [{ name: 'web', number: 3000 }] });
   });
 
   it('keeps a draft over the bounds from being sent', async () => {
     let writes = 0;
     server.use(
-      workspaceServiceRead(() => HttpResponse.json({ command: [] })),
+      workspaceServiceRead(() => HttpResponse.json({ command: [], ports: [] })),
       workspaceServiceWrite(() => {
         writes += 1;
-        return HttpResponse.json({ command: [] });
+        return HttpResponse.json({ command: [], ports: [] });
       })
     );
     const user = userEvent.setup();
@@ -121,12 +166,16 @@ describe('workspace service section', () => {
     await user.paste(Array.from({ length: 62 }, (_, i) => `a${i}`).join('\n'));
     expect(screen.getByRole('alert')).toHaveTextContent('At most 61 arguments; this has 62.');
     expect(controls().save).toBeDisabled();
+    await user.clear(controls().command);
+    await user.type(controls().ports, 'web=99999');
+    expect(screen.getByRole('alert')).toHaveTextContent('"web=99999" is not a port.');
+    expect(controls().save).toBeDisabled();
     expect(writes).toBe(0);
   });
 
   it('shows a refused save and keeps the draft', async () => {
     server.use(
-      workspaceServiceRead(() => HttpResponse.json({ command: [] })),
+      workspaceServiceRead(() => HttpResponse.json({ command: [], ports: [] })),
       workspaceServiceWrite(problem(422, 'command is too long for the workspace'))
     );
     const user = userEvent.setup();
@@ -150,7 +199,7 @@ describe('workspace service section', () => {
   });
 
   it('refuses a read that breaks the contract', async () => {
-    server.use(workspaceServiceRead(() => HttpResponse.json({ command: 'npm run dev' })));
+    server.use(workspaceServiceRead(() => HttpResponse.json({ command: ['npm'] })));
     renderSection();
     expect(
       await screen.findByText('Mainloop sent a workspace service that does not match the contract.')

@@ -313,9 +313,16 @@ dev server again, unless the project declares a workspace service (below).
 ## Workspace service
 
 A project can declare a workspace service: the argv of a long-running process, such as a
-development server, set with `PUT /projects/{id}/workspace-service` or the project page's Workspace service section (`{"command": [...]}`, at most
-61 non-empty arguments of at most 4096 bytes; `[]` declares none) and read with `GET`. It is
-owner-only Mainloop configuration, never read from the repository.
+development server, and the preview ports of its workspaces. Both are set with
+`PUT /projects/{id}/workspace-service` or the project page's Workspace service section
+(`{"command": [...], "ports": [{"name": "web", "number": 3000}]}`: at most 61 non-empty arguments
+of at most 4096 bytes, `[]` declaring none; at most 16 ports, unique by name and number, checked
+as `dev.ports` is) and read with `GET`. It is owner-only Mainloop configuration, never read from
+the repository. Ports and command are independent: ports without a service are allowed.
+
+- **Ports.** A workspace whose create request has no `dev.ports`, which includes every task
+  workspace, declares the project's ports when it is planned, stored in `workspaces.ports` like
+  its own would be. A request that names ports, an empty list included, keeps them.
 
 - **Create.** A workspace created afterwards stores the command it sends kagent in
   `workspaces.service_command`: the declared argv run through `env` with
