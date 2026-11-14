@@ -658,14 +658,37 @@ func (t *turn) decideSend(ctx context.Context, ksid string) (string, error) {
 		if err != nil {
 			return err
 		}
+		// A task session's first send of this message also carries any change to its project's
+		// context; a resend keeps the text and the record the first send froze.
+		var project *projectGiven
+		if t.d.SentText == nil {
+			block, p, err := t.projectUpdate(ctx, q)
+			if err != nil {
+				return err
+			}
+			project = p
+			if p != nil {
+				// Frozen even when nothing readable changed, so the record and the text go together.
+				withUpdate := t.d.Content
+				if block != "" {
+					withUpdate = block + newMessageMarker + "\n" + t.d.Content
+				}
+				frozen = &withUpdate
+			}
+		}
 		if frozen != nil {
 			text = *frozen
 		}
+		send := dbq.MarkDeliverySendingParams{
+			KagentSessionID: &ksid, SentText: frozen,
+		}
+		if project != nil {
+			send.GivenInstructionsVersion, send.GivenMemorySeq = &project.instructionsVersion, &project.memorySeq
+		}
 		id, owner, attempts := t.fence()
+		send.ID, send.LeaseOwner, send.Attempts = id, owner, attempts
 		// The delivery row is written before the binding row, the order stop and settle take them in.
-		if err := lost(q.MarkDeliverySending(ctx, dbq.MarkDeliverySendingParams{
-			ID: id, LeaseOwner: owner, Attempts: attempts, KagentSessionID: &ksid, SentText: frozen,
-		})); err != nil {
+		if err := lost(q.MarkDeliverySending(ctx, send)); err != nil {
 			return err
 		}
 		if given == nil {
