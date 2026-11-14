@@ -80,6 +80,15 @@ export const providersReadWith = (resolve: HttpResponseResolver) =>
   http.get(url('/providers'), resolve);
 
 /** A non-2xx response with the backend's `{ detail }` body, as the client reads it. */
+export const workspaceServiceRead = (resolve: HttpResponseResolver) =>
+  http.get(url('/projects/:project_id/workspace-service'), resolve);
+
+export const workspaceServiceWrite = (resolve: HttpResponseResolver) =>
+  http.put(url('/projects/:project_id/workspace-service'), resolve);
+
+export const projectImport = (resolve: HttpResponseResolver) =>
+  http.post(url('/projects'), resolve);
+
 export function problem(status: number, message: string): HttpResponseResolver {
   return () => HttpResponse.json({ detail: message }, { status });
 }
@@ -97,6 +106,7 @@ export function serveProjectPage(
     environments?: EnvironmentFixture[];
     versions?: Record<string, VersionFixture[]>;
     selection?: SelectionFixture | null;
+    serviceCommand?: string[];
   } = {}
 ) {
   const current = options.project ?? project();
@@ -111,6 +121,7 @@ export function serveProjectPage(
     providersRead(),
     environmentsRead(options.environments ?? [environment()]),
     versionsRead(options.versions ?? { env: [version()] }),
-    savedSelection(options.selection ?? null)
+    savedSelection(options.selection ?? null),
+    workspaceServiceRead(() => HttpResponse.json({ command: options.serviceCommand ?? [] }))
   ];
 }

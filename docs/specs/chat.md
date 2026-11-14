@@ -91,7 +91,8 @@ provider carrying both fields, so setting one never clears the other; both back 
 default removes the row's default. The row says **Saving…**, then **Saved.**, or **Not saved** with
 the server's reason, in which case the select returns to what was saved. A saved model the profile
 does not list stays selectable, and a saved effort the profile stopped offering is shown with a note
-that turns leave the effort to the provider. Settings is reached from the activity bar on desktop and
+that turns leave the effort to the provider. Below it, **Import a project** (`#import-project`)
+adds a repository as a project; see [projects](projects.md). Settings is reached from the activity bar on desktop and
 from the tree's header on a phone.
 
 The composer still shows `default` for a session with no override of its own; showing which default

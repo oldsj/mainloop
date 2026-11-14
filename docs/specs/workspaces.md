@@ -313,7 +313,7 @@ dev server again, unless the project declares a workspace service (below).
 ## Workspace service
 
 A project can declare a workspace service: the argv of a long-running process, such as a
-development server, set with `PUT /projects/{id}/workspace-service` (`{"command": [...]}`, at most
+development server, set with `PUT /projects/{id}/workspace-service` or the project page's Workspace service section (`{"command": [...]}`, at most
 61 non-empty arguments of at most 4096 bytes; `[]` declares none) and read with `GET`. It is
 owner-only Mainloop configuration, never read from the repository.
 
