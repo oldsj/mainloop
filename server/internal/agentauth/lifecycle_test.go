@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
@@ -381,5 +382,110 @@ func TestIssueForAnIdentityWaitsForASwitchInFlightAndIsRefused(t *testing.T) {
 	}
 	if live, err := dbq.New(d.Pool).GetLiveCredential(ctx, dbq.GetLiveCredentialParams{BindingID: s.SessionID, Kind: dbstate.CredentialMCP}); err == nil {
 		t.Fatalf("a credential %s was planned for the retired identity", live.ID)
+	}
+}
+
+// The invariant the store's no-read design rests on (see agentauth.SecretStore): while a credential
+// row is not deleted, no other row can take its Secret name, so the only Secret under the name is
+// that row's own. A revoked row keeps the name through cleanup; the name is free again only once
+// cleanup has deleted the Secret and marked the row deleted. If this breaks, a taken name on create
+// and a delete by name without a UID could act on another credential's Secret.
+func TestASecretNameHasOneCredentialUntilItIsDeleted(t *testing.T) {
+	d := testdb.New(t)
+	env := authtest.NewEnv(d.Pool)
+	ctx := context.Background()
+	q := dbq.New(d.Pool)
+	s := env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
+	name := "mainloop-mcp-" + s.SessionID
+	if _, err := env.Creds.Revoke(ctx, s.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	// Revoked, Secret not yet deleted: a new credential for the binding cannot take the name...
+	if _, err := env.Creds.Issue(ctx, s.SessionID, dbstate.CredentialMCP); !errors.Is(err, agentauth.ErrCleanupPending) {
+		t.Fatalf("Issue while the old credential is revoked = %v, want ErrCleanupPending", err)
+	}
+	// ...and neither can any other row, whatever its binding or kind.
+	other := env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
+	for _, state := range []dbstate.CredentialState{dbstate.CredentialPlanned, dbstate.CredentialPublished, dbstate.CredentialRevoked} {
+		_, err := d.Pool.Exec(ctx, `UPDATE credentials SET secret_name=$1, state=$2 WHERE id=$3`, name, state, other.CredentialID)
+		var pg *pgconn.PgError
+		if !errors.As(err, &pg) || pg.ConstraintName != "credentials_secret_name" {
+			t.Fatalf("a %s row took a revoked row's Secret name: err = %v", state, err)
+		}
+	}
+	runCleanup(t, env, func() bool {
+		got, _ := q.GetCredential(ctx, s.CredentialID)
+		return got.State == dbstate.CredentialDeleted
+	})
+	if env.Cluster.UID(authtest.Namespace, name) != "" {
+		t.Fatal("the name was freed before its Secret was deleted")
+	}
+	issued, err := env.Creds.Issue(ctx, s.SessionID, dbstate.CredentialMCP)
+	if err != nil || issued.SecretName != name {
+		t.Fatalf("Issue after cleanup = %+v, %v; want the same name", issued, err)
+	}
+}
+
+type lostReplyStore struct {
+	agentauth.SecretStore
+	lost bool
+}
+
+func (s *lostReplyStore) Create(ctx context.Context, name, purpose, bearer string) (string, error) {
+	uid, err := s.SecretStore.Create(ctx, name, purpose, bearer)
+	if err == nil && !s.lost {
+		s.lost = true
+		return "", errors.New("fixture lost Secret create reply")
+	}
+	return uid, err
+}
+
+// A create whose reply was lost leaves the Secret behind. The retry finds the name taken and counts
+// it as its own, without reading the Secret; the credential is published with no UID, and cleanup
+// later deletes the Secret by name.
+func TestIssueCountsATakenNameAsItsOwnLostCreate(t *testing.T) {
+	d := testdb.New(t)
+	env := authtest.NewEnv(d.Pool)
+	ctx := context.Background()
+	q := dbq.New(d.Pool)
+	s := env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
+	freeName(t, env, s)
+	name := "mainloop-mcp-" + s.SessionID
+	c := *env.Creds
+	c.Secrets = &lostReplyStore{SecretStore: env.Creds.Secrets}
+	if _, err := c.Issue(ctx, s.SessionID, dbstate.CredentialMCP); err == nil {
+		t.Fatal("fixture did not lose the reply")
+	}
+	landed := env.Cluster.UID(authtest.Namespace, name)
+	if landed == "" {
+		t.Fatal("fixture left no Secret")
+	}
+	issued, err := c.Issue(ctx, s.SessionID, dbstate.CredentialMCP)
+	if err != nil || issued.SecretName != name || issued.SecretUID != "" {
+		t.Fatalf("retry = %+v, %v; want published under the name with no UID", issued, err)
+	}
+	if got, _ := q.GetCredential(ctx, issued.CredentialID); got.State != dbstate.CredentialPublished || got.SecretUID != nil {
+		t.Fatalf("row = %s uid %v", got.State, got.SecretUID)
+	}
+	if env.Cluster.UID(authtest.Namespace, name) != landed {
+		t.Fatal("the landed Secret was replaced")
+	}
+	for _, a := range env.Cluster.Actions() {
+		if a.GetVerb() != "create" && a.GetVerb() != "delete" {
+			t.Errorf("Secret verb %q used; Mainloop is granted create and delete only", a.GetVerb())
+		}
+	}
+	if _, err := env.Creds.Revoke(ctx, s.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	runCleanup(t, env, func() bool {
+		got, _ := q.GetCredential(ctx, issued.CredentialID)
+		return got.State == dbstate.CredentialDeleted
+	})
+	if env.Cluster.UID(authtest.Namespace, name) != "" {
+		t.Error("cleanup left the Secret")
+	}
+	if last := env.Cluster.Deletes[len(env.Cluster.Deletes)-1]; last != name+"@" {
+		t.Errorf("last delete = %s, want one by name", last)
 	}
 }

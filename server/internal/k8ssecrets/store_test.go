@@ -2,7 +2,6 @@ package k8ssecrets_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -39,7 +38,9 @@ func TestCreatePublishesImmutableLabelledSecret(t *testing.T) {
 	}
 }
 
-func TestCreateIsIdempotentAndNeverOverwrites(t *testing.T) {
+// A taken name is the caller's own lost create: Create reports it with an empty UID, and neither
+// reads nor replaces the Secret that holds it.
+func TestCreateOfATakenNameLeavesTheSecret(t *testing.T) {
 	cl := secretstest.New()
 	s := k8ssecrets.New(cl, ns)
 	ctx := context.Background()
@@ -48,35 +49,16 @@ func TestCreateIsIdempotentAndNeverOverwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	again, err := s.Create(ctx, "n", "mcp", "ml_one")
-	if err != nil || again != first {
-		t.Errorf("same Secret: uid %q, %v; want %q", again, err, first)
-	}
-	if _, err := s.Create(ctx, "n", "mcp", "ml_other"); !errors.Is(err, k8ssecrets.ErrMismatch) {
-		t.Errorf("different bearer: err = %v, want ErrMismatch", err)
-	}
-	if _, err := s.Create(ctx, "n", "git-read", "ml_one"); !errors.Is(err, k8ssecrets.ErrMismatch) {
-		t.Errorf("different purpose: err = %v, want ErrMismatch", err)
+	if err != nil || again != "" {
+		t.Errorf("taken name: uid %q, %v; want empty, nil", again, err)
 	}
 	if cl.UID(ns, "n") != first {
 		t.Error("the Secret was replaced")
 	}
-}
-
-func TestCreateRefusesAnExistingSecretOfAnotherType(t *testing.T) {
-	cl := secretstest.New()
-	immutable := true
-	_, err := cl.CoreV1().Secrets(ns).Create(context.Background(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: ns, Labels: map[string]string{
-			"mainloop.dev/actor-egress": "true", "mainloop.dev/purpose": "mcp",
-		}},
-		Type: corev1.SecretTypeBasicAuth, Immutable: &immutable,
-		Data: map[string][]byte{k8ssecrets.DataKey: []byte("Bearer ml_one")},
-	}, metav1.CreateOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := k8ssecrets.New(cl, ns).Create(context.Background(), "n", "mcp", "ml_one"); !errors.Is(err, k8ssecrets.ErrMismatch) {
-		t.Errorf("err = %v, want ErrMismatch", err)
+	for _, a := range cl.Actions() {
+		if a.GetVerb() == "get" {
+			t.Error("Create read the existing Secret")
+		}
 	}
 }
 
@@ -94,51 +76,58 @@ func TestDeleteCarriesUIDPrecondition(t *testing.T) {
 	if fresh == old {
 		t.Fatal("test setup: UIDs are equal")
 	}
-	if err := s.Delete(ctx, "n", old); err != nil {
+	if _, err := s.Delete(ctx, "n", old); err != nil {
 		t.Fatalf("Delete with a stale UID = %v, want nil", err)
 	}
 	if cl.UID(ns, "n") != fresh {
 		t.Fatal("a delete aimed at the old UID removed the new Secret")
 	}
-	if err := s.Delete(ctx, "n", fresh); err != nil {
-		t.Fatal(err)
+	if found, err := s.Delete(ctx, "n", fresh); err != nil || !found {
+		t.Fatal(found, err)
 	}
 	if cl.UID(ns, "n") != "" {
 		t.Error("Secret not deleted")
 	}
 	// Already gone is success.
-	if err := s.Delete(ctx, "n", fresh); err != nil {
-		t.Errorf("Delete of a missing Secret = %v", err)
-	}
-	if err := s.Delete(ctx, "n", ""); err == nil {
-		t.Error("Delete without a UID succeeded")
+	if found, err := s.Delete(ctx, "n", fresh); err != nil || found {
+		t.Errorf("Delete of a missing Secret = %v, %v", found, err)
 	}
 }
 
-func TestLookup(t *testing.T) {
+// Without a UID the delete goes by name, with no precondition, and a missing Secret is success.
+func TestDeleteWithoutAUIDGoesByName(t *testing.T) {
 	cl := secretstest.New()
 	s := k8ssecrets.New(cl, ns)
-	if _, found, err := s.Lookup(context.Background(), "n"); found || err != nil {
-		t.Errorf("Lookup of a missing Secret = %v, %v", found, err)
+	ctx := context.Background()
+	if _, err := s.Create(ctx, "n", "mcp", "ml_one"); err != nil {
+		t.Fatal(err)
 	}
-	want, _ := s.Create(context.Background(), "n", "mcp", "ml_one")
-	if uid, found, err := s.Lookup(context.Background(), "n"); uid != want || !found || err != nil {
-		t.Errorf("Lookup = %q, %v, %v", uid, found, err)
+	if found, err := s.Delete(ctx, "n", ""); err != nil || !found {
+		t.Fatal(found, err)
+	}
+	if cl.UID(ns, "n") != "" {
+		t.Error("Secret not deleted")
+	}
+	if found, err := s.Delete(ctx, "n", ""); err != nil || found {
+		t.Errorf("Delete of a missing Secret = %v, %v", found, err)
+	}
+	if len(cl.Deletes) != 2 || cl.Deletes[0] != "n@" {
+		t.Errorf("deletes = %v, want two without a precondition", cl.Deletes)
 	}
 }
 
-// The role grants get, create and delete only; any other verb would be refused in the cluster.
-func TestOnlyGetCreateDelete(t *testing.T) {
+// The role grants create and delete only; any other verb, get included, would be refused in the
+// cluster.
+func TestOnlyCreateDelete(t *testing.T) {
 	cl := secretstest.New()
 	s := k8ssecrets.New(cl, ns)
 	ctx := context.Background()
 	uid, _ := s.Create(ctx, "n", "mcp", "ml_one")
-	_, _, _ = s.Lookup(ctx, "n")
 	_, _ = s.Create(ctx, "n", "mcp", "ml_one")
-	_ = s.Delete(ctx, "n", uid)
+	_, _ = s.Delete(ctx, "n", uid)
 	for _, a := range cl.Actions() {
 		switch a.GetVerb() {
-		case "get", "create", "delete":
+		case "create", "delete":
 		default:
 			t.Errorf("verb %q used", a.GetVerb())
 		}

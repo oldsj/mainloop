@@ -386,9 +386,9 @@ func TestStateChecks(t *testing.T) {
 			}
 		}
 	})
-	t.Run("credential state needs a Secret UID when published", func(t *testing.T) {
-		_, err := q.MarkCredentialPublished(ctx, dbq.MarkCredentialPublishedParams{ID: string(dbstate.CredentialMCP)})
-		if pgCode(err) != pgCheckViolation {
+	// A create whose reply was lost publishes with the name alone (00560).
+	t.Run("credential can be published without a Secret UID", func(t *testing.T) {
+		if _, err := q.MarkCredentialPublished(ctx, dbq.MarkCredentialPublishedParams{ID: string(dbstate.CredentialMCP)}); err != nil {
 			t.Errorf("published without a UID: %v", err)
 		}
 	})
