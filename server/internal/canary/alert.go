@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -26,11 +27,15 @@ func (n Ntfy) Alert(ctx context.Context, results []Result) error {
 		if r.OK() {
 			continue
 		}
-		if r.Err != nil {
+		switch {
+		case r.Err != nil:
 			priority = 4
 			failed++
 			lines = append(lines, fmt.Sprintf("%s: %s failed: %v", r.Target, r.Step, r.Err))
-		} else {
+		case r.Restarted != "":
+			lines = append(lines, fmt.Sprintf("%s: kagent refused the ping (%s); the canary restarted its session and got a reply in %s",
+				r.Target, r.Restarted, r.Elapsed.Round(time.Second)))
+		default:
 			lines = append(lines, fmt.Sprintf("%s: reply took %s", r.Target, r.Elapsed.Round(time.Second)))
 		}
 	}
@@ -38,6 +43,9 @@ func (n Ntfy) Alert(ctx context.Context, results []Result) error {
 		return nil
 	}
 	title := "Mainloop canary slow"
+	if slices.ContainsFunc(results, func(r Result) bool { return r.Err == nil && r.Restarted != "" }) {
+		title = "Mainloop canary restarted its session"
+	}
 	if failed > 0 {
 		title = "Mainloop canary failed"
 	}
