@@ -1,8 +1,15 @@
 import { ChevronDown, ChevronRight, MessageSquarePlus } from 'lucide-react';
-import { useCallback, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode
+} from 'react';
 import { cn } from '@/components/ui/cn';
-import type { Tone } from '@/lib/taskState';
-import { visibleRows, type ExplorerNode, type Target } from './model';
+import { relativeAge, type Tone } from '@/lib/taskState';
+import { sameTarget, visibleRows, type ExplorerNode, type Target } from './model';
 import { RowMenu, useLongPress, type RowMenuAction } from './RowMenu';
 
 /** The status dot's colour. Muted is the default, so an unknown state never reads as a problem. */
@@ -20,16 +27,51 @@ export interface ExplorerTreeProps {
   onToggle: (id: string) => void;
   onOpen: (target: Target) => void;
   onAsk: (text: string) => void;
+  /** The page being shown. Every row that leads to it is marked as the current one. */
+  current?: Target | null;
+  /** The clock a row's age is measured from, in ms. Defaults to now. */
+  now?: number;
+}
+
+/** The clock for row ages: `fixed` when given, else the time now, read again each minute. */
+function useNow(fixed?: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (fixed !== undefined) return;
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, [fixed]);
+  return fixed ?? now;
+}
+
+/**
+ * The line under a row's title: its project, what state it is in or what it needs, and how long ago
+ * it changed. A top-level row has no such line; its detail sits beside its label.
+ */
+function metaLine(node: ExplorerNode, now: number): string {
+  const age = node.at ? relativeAge(Math.max(0, now - Date.parse(node.at))) : undefined;
+  return [node.project, node.detail, age].filter(Boolean).join(' · ');
 }
 
 /**
  * The explorer tree: `role="tree"` with roving focus. Up and down move, right expands or steps into
  * the first child, left collapses or steps to the parent, Enter opens the row, and `a` asks Mainloop
  * about it. Each row is one treeitem, so a screen reader hears its level, position and state.
+ * A row's first line is its title alone; what it is, where and how old sits on a muted line below.
+ * The row for the page being shown is filled and marked `aria-current`.
  * A row's actions (Open, Ask Mainloop) are also in a small menu: right-click on desktop, a long
  * press on the phone, or Shift+F10 and the menu key.
  */
-export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: ExplorerTreeProps) {
+export function ExplorerTree({
+  nodes,
+  isExpanded,
+  onToggle,
+  onOpen,
+  onAsk,
+  current = null,
+  now: fixedNow
+}: ExplorerTreeProps) {
+  const now = useNow(fixedNow);
   const rows = visibleRows(nodes, isExpanded);
   const [focusId, setFocusId] = useState<string | null>(null);
   const items = useRef(new Map<string, HTMLLIElement>());
@@ -128,9 +170,15 @@ export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: Exp
       const expandable = node.children.length > 0;
       const open = expandable && isExpanded(node.id);
       const focused = node.id === activeId;
+      const here = sameTarget(node.target, current);
+      // A top-level group (Needs you, Working, …) is a heading with its count. Mainloop and Insights
+      // are top-level rows with a state beside them.
+      const top = depth === 1;
+      const heading = top && node.count !== undefined;
+      const meta = top ? '' : metaLine(node, now);
       const name = [
         node.label,
-        node.detail,
+        top ? node.detail : meta,
         node.count !== undefined ? String(node.count) : undefined
       ]
         .filter(Boolean)
@@ -143,6 +191,7 @@ export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: Exp
           aria-setsize={level.length}
           aria-posinset={index + 1}
           aria-selected={focused}
+          aria-current={here ? 'page' : undefined}
           aria-expanded={expandable ? open : undefined}
           aria-label={name}
           tabIndex={focused ? 0 : -1}
@@ -164,14 +213,15 @@ export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: Exp
           {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
           <div
             className={cn(
-              // A phone row is a 44 px touch target with the status on a second line; desktop is one dense line.
-              'group gap-xs px-xs min-h-control relative flex cursor-default items-center py-1 text-sm lg:py-0',
+              // A row is at least the control height: 44 px on touch, 28 px with a mouse or trackpad.
+              'group gap-xs px-xs min-h-control relative flex cursor-default items-center py-1 text-sm',
               // A long press opens the row menu, not the phone's own text selection or link callout.
               'select-none [-webkit-touch-callout:none]',
               'hover:bg-accent hover:text-accent-foreground',
-              menu?.id === node.id && 'bg-accent text-accent-foreground',
+              (here || menu?.id === node.id) && 'bg-accent text-accent-foreground',
               node.note && 'text-muted-foreground italic'
             )}
+            data-current={here ? 'true' : undefined}
             style={{ paddingLeft: `${(depth - 1) * 12 + 4}px` }}
             {...longPress.handlers(node.id)}
             onContextMenu={(event) => {
@@ -218,21 +268,37 @@ export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: Exp
             {node.tone ? (
               <span aria-hidden="true" className={cn('size-2 shrink-0', DOT[node.tone])} />
             ) : null}
-            {/* The status sits under the label on a phone, which has no hover to reveal it, and beside it
-                on desktop, where it gives way before the label on a narrow line. */}
-            <span className="lg:gap-xs flex min-w-0 flex-1 flex-col lg:flex-row lg:items-baseline">
-              <span className="min-w-0 truncate lg:flex-auto">{node.label}</span>
-              {node.detail ? (
-                <span className="text-muted-foreground min-w-0 truncate text-xs lg:shrink-[4] lg:text-right">
-                  {node.detail}
+            {top ? (
+              // A top-level row is one line: a group heading, or Mainloop and Insights with their state.
+              <span className="gap-xs flex min-w-0 flex-1 items-baseline">
+                <span
+                  className={cn(
+                    'min-w-0 flex-auto truncate',
+                    heading && 'text-muted-foreground text-xs font-medium tracking-wide uppercase'
+                  )}
+                >
+                  {node.label}
                 </span>
-              ) : null}
-            </span>
-            {node.tag ? (
-              <span className="text-muted-foreground border-border shrink-0 border px-1 text-[10px]">
-                {node.tag}
+                {node.detail ? (
+                  <span className="text-muted-foreground min-w-0 shrink-[4] truncate text-right text-xs">
+                    {node.detail}
+                  </span>
+                ) : null}
               </span>
-            ) : null}
+            ) : (
+              // Any other row gives its first line to the title alone, so the title is what truncates last.
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="min-w-0 truncate">{node.label}</span>
+                {meta ? (
+                  <span
+                    data-testid="explorer-meta"
+                    className="text-muted-foreground group-hover:text-accent-foreground min-w-0 truncate text-xs"
+                  >
+                    {meta}
+                  </span>
+                ) : null}
+              </span>
+            )}
             {node.count !== undefined ? (
               <span
                 className="text-muted-foreground pl-xs shrink-0 text-xs tabular-nums"
@@ -259,15 +325,6 @@ export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: Exp
               </button>
             ) : null}
           </div>
-          {node.summary ? (
-            <div
-              data-testid="explorer-summary"
-              className="text-muted-foreground truncate pb-1 text-xs"
-              style={{ paddingLeft: `${(depth - 1) * 12 + 24}px` }}
-            >
-              {node.summary}
-            </div>
-          ) : null}
           {open ? (
             <ul role="group" className="m-0 list-none p-0">
               {renderLevel(node.children, node.id, depth + 1)}

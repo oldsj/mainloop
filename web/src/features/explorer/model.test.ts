@@ -16,6 +16,9 @@ import {
   FINISHED_WINDOW_MS,
   mainloopState,
   needsCount,
+  sameTarget,
+  shortProject,
+  targetOfLocation,
   taskNode,
   visibleRows,
   type ExplorerSource
@@ -244,6 +247,26 @@ describe('projects and schedules', () => {
     expect(schedules?.children[1]?.tone).toBe('ok');
   });
 
+  it('gives a completed or cancelled task no marker under Finished recently, and keeps a failed one red', () => {
+    const now = Date.parse('2026-01-10T00:00:00Z');
+    const recent = '2026-01-09T00:00:00Z';
+    const tasks = [
+      view({ id: 'done', status: 'completed', updated_at: recent }),
+      view({ id: 'gone', status: 'cancelled', updated_at: recent }),
+      view({ id: 'stuck', status: 'failed', reason: null, updated_at: recent })
+    ];
+    const finished = buildExplorer(source({ tasks, now })).find((node) => node.id === 'finished');
+    const tones = Object.fromEntries(
+      (finished?.children ?? []).map((node) => [
+        node.target && 'id' in node.target ? node.target.id : '',
+        node.tone
+      ])
+    );
+    expect(tones.done).toBeUndefined();
+    expect(tones.gone).toBeUndefined();
+    if ('stuck' in tones) expect(tones.stuck).toBe('bad');
+  });
+
   it('lists only tasks finished in the last seven days, and counts the same rows', () => {
     const now = Date.parse('2026-01-10T12:00:00Z');
     const recent = view({ id: 'recent', status: 'completed', updated_at: '2026-01-09T12:00:00Z' });
@@ -335,7 +358,7 @@ describe('brief snippet', () => {
 });
 
 describe('task row identity', () => {
-  it('shows the title as the label, a brief snippet as the summary, and the project as a tag', () => {
+  it('shows the title as the label, with the short project name and the time it last changed', () => {
     const projects = keepValid([project()], projectRowSchema);
     const task = view({
       id: 'task-1',
@@ -345,29 +368,74 @@ describe('task row identity', () => {
     });
     const node = taskNode(task, source({ projects, tasks: [task] }), 'working');
     expect(node.label).toBe('Add retry button');
-    expect(node.summary).toBe(
-      'Add a retry button to the task page so a failed send can be sent again.'
-    );
-    expect(node.tag).toBe('acme/widgets');
+    expect(node.project).toBe('widgets');
+    expect(node.at).toBe(task.task.updated_at);
+    // The brief is an instruction to the agent, not a summary of the task: it is not on the row.
+    expect(JSON.stringify(node)).not.toContain('so a failed send can be sent again');
   });
 
-  it('falls back to a brief snippet, with no project tag, when the task has no title', () => {
+  it('falls back to a brief snippet, with no project, when the task has no title', () => {
     const brief = 'A legacy task created before a title was required on every delegated brief.';
     const task = view({ id: 'task-2', project_id: null, title: '', brief });
     const node = taskNode(task, source({ tasks: [task] }), 'working');
     expect(node.label).toBe(briefSnippet(brief, 60));
-    expect(node.summary).toBeUndefined();
-    expect(node.tag).toBeUndefined();
+    expect(node.project).toBeUndefined();
   });
 
-  it('keeps a long title whole on the node, for CSS to truncate, and still shortens the summary', () => {
+  it('keeps a long title whole on the node, for CSS to truncate', () => {
     const title = 'A'.repeat(200);
-    const brief = `${'B'.repeat(200)} and some more detail after the cut.`;
-    const task = view({ id: 'task-3', project_id: null, title, brief });
+    const task = view({ id: 'task-3', project_id: null, title });
     const node = taskNode(task, source({ tasks: [task] }), 'working');
     expect(node.label).toBe(title);
-    expect(node.summary).toHaveLength(141);
-    expect(node.summary?.endsWith('…')).toBe(true);
+  });
+});
+
+describe('shortProject', () => {
+  it('drops the owner from a repository name', () => {
+    expect(shortProject('acme/widgets')).toBe('widgets');
+    expect(shortProject('widgets')).toBe('widgets');
+    expect(shortProject('acme/')).toBe('acme/');
+  });
+});
+
+describe('the row for the current page', () => {
+  it.each([
+    ['/', {}, { to: 'chat' }],
+    ['/health', {}, { to: 'health' }],
+    ['/inbox', {}, { to: 'needs', item: undefined }],
+    ['/inbox', { item: 'queue:q1' }, { to: 'needs', item: 'queue:q1' }],
+    ['/inbox', { show: 'problems', item: 'p1' }, { to: 'problems', item: 'p1' }],
+    ['/tasks/t1', {}, { to: 'task', id: 't1' }],
+    ['/tasks/t1/', {}, { to: 'task', id: 't1' }],
+    ['/sessions/s1', {}, { to: 'session', id: 's1' }],
+    ['/workspaces/w1', {}, { to: 'workspace', id: 'w1' }],
+    ['/projects/p1', {}, { to: 'project', id: 'p1' }],
+    ['/schedules/sc1', {}, { to: 'schedule', id: 'sc1' }]
+  ])('maps %s %o to its target', (pathname, search, target) => {
+    expect(targetOfLocation(pathname, search)).toEqual(target);
+  });
+
+  it.each([
+    ['/inbox', { show: 'activity' }],
+    ['/schedules', {}],
+    ['/schedules/new', {}],
+    ['/agents', {}],
+    ['/nope', {}]
+  ])('has no row for %s %o', (pathname, search) => {
+    expect(targetOfLocation(pathname, search)).toBeNull();
+  });
+
+  it('matches a target by kind and by id or inbox item', () => {
+    expect(sameTarget({ to: 'task', id: 't1' }, { to: 'task', id: 't1' })).toBe(true);
+    expect(sameTarget({ to: 'task', id: 't1' }, { to: 'task', id: 't2' })).toBe(false);
+    expect(sameTarget({ to: 'task', id: 't1' }, { to: 'session', id: 't1' })).toBe(false);
+    expect(sameTarget({ to: 'chat' }, { to: 'chat' })).toBe(true);
+    // The Needs you heading is the page with no item; a row is the page on its own item.
+    expect(sameTarget({ to: 'needs' }, { to: 'needs', item: undefined })).toBe(true);
+    expect(sameTarget({ to: 'needs' }, { to: 'needs', item: 'q1' })).toBe(false);
+    expect(sameTarget({ to: 'needs', item: 'q1' }, { to: 'needs', item: 'q1' })).toBe(true);
+    expect(sameTarget(undefined, { to: 'chat' })).toBe(false);
+    expect(sameTarget({ to: 'chat' }, null)).toBe(false);
   });
 });
 

@@ -40,12 +40,15 @@ export interface ExplorerNode {
   /** Unique within the tree: the parent's id plus this row's own id, so one task under two projects keeps its own expansion. */
   id: string;
   label: string;
-  /** Muted text after the label: a status line, a schedule or a workspace state. */
+  /**
+   * Muted text about the row: a status line, what an owner action needs, a schedule or a workspace
+   * state. A top-level row shows it beside the label; any other row shows it on the line below.
+   */
   detail?: string;
-  /** A second line under the row: a short snippet so a task reads apart from its siblings unopened. */
-  summary?: string;
-  /** A small badge naming the row's project, shown as metadata rather than the row's identity. */
-  tag?: string;
+  /** The short name of the row's project (`widgets` for `acme/widgets`), first on the line below. */
+  project?: string;
+  /** When the row last changed, as an ISO time. The line below ends with its age. */
+  at?: string;
   tone?: Tone;
   /** The muted count on the right of a group row. */
   count?: number;
@@ -82,7 +85,12 @@ export const shortId = (id: string) => id.slice(0, 8);
 /** A task with no stored title, which the schema has never allowed but a row still guards against. */
 const FALLBACK_TITLE = 'Untitled task';
 
-/** The brief's first `max` characters, flattened to one line, for the row's snippet or a title fallback. */
+/** A project's short name: the repository without its owner. The row's title says the rest. */
+export function shortProject(fullName: string): string {
+  return fullName.split('/').pop() || fullName;
+}
+
+/** The first `max` characters of a brief or report, flattened to one line. */
 export function briefSnippet(brief: string, max = 140): string {
   const flat = brief.trim().replace(/\s+/g, ' ');
   return flat.length > max ? `${flat.slice(0, max).trimEnd()}…` : flat;
@@ -185,9 +193,8 @@ export function taskNode(view: TaskView, source: ExplorerSource, parent: string)
     id,
     label,
     detail: childTasks.length > 0 ? parentDetail(view, childTasks, source) : statusLine(view),
-    // A task with no title already shows its brief as the label, so the snippet would repeat it.
-    summary: title ? briefSnippet(task.brief) : undefined,
-    tag: project?.full_name,
+    project: project ? shortProject(project.full_name) : undefined,
+    at: task.updated_at,
     // A problem is Mainloop's own recovery work, not an owner decision, so it reads muted, never
     // the attention yellow a real decision gets.
     tone:
@@ -196,6 +203,14 @@ export function taskNode(view: TaskView, source: ExplorerSource, parent: string)
     ask: askPrefill({ label }, target),
     children: taskChildren(view, source, id, childTasks)
   };
+}
+
+/**
+ * A row in Finished recently. The group already says the work is over, so a completed or cancelled
+ * task carries no marker there; a failed one keeps its red.
+ */
+function finishedNode(node: ExplorerNode): ExplorerNode {
+  return node.tone === 'bad' ? node : { ...node, tone: undefined };
 }
 
 /** A task nested under a loaded parent is shown there, not again as a flat sibling. */
@@ -466,7 +481,7 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
       id: 'finished',
       label: 'Finished recently',
       count: finished.length,
-      children: finished.map((view) => taskNode(view, source, 'finished'))
+      children: finished.map((view) => finishedNode(taskNode(view, source, 'finished')))
     },
     {
       id: 'health',
@@ -477,6 +492,49 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
       children: []
     }
   ];
+}
+
+/**
+ * The row the current page belongs to, from the router's path and search. It is the inverse of the
+ * shell's navigation for a `Target`. A page no row leads to (a new schedule, the activity view)
+ * gives null.
+ */
+export function targetOfLocation(
+  pathname: string,
+  search: { show?: unknown; item?: unknown } = {}
+): Target | null {
+  const item = typeof search.item === 'string' && search.item ? search.item : undefined;
+  const path = pathname.replace(/\/+$/, '') || '/';
+  if (path === '/') return { to: 'chat' };
+  if (path === '/health') return { to: 'health' };
+  if (path === '/inbox') {
+    if (search.show === 'problems') return { to: 'problems', item };
+    if (search.show === 'activity') return null;
+    return { to: 'needs', item };
+  }
+  const match = /^\/(tasks|sessions|workspaces|projects|schedules)\/([^/]+)$/.exec(path);
+  if (!match || match[2] === 'new') return null;
+  const id = decodeURIComponent(match[2]!);
+  switch (match[1]) {
+    case 'tasks':
+      return { to: 'task', id };
+    case 'sessions':
+      return { to: 'session', id };
+    case 'workspaces':
+      return { to: 'workspace', id };
+    case 'projects':
+      return { to: 'project', id };
+    default:
+      return { to: 'schedule', id };
+  }
+}
+
+/** Whether two targets lead to the same page: the same kind, and the same id or inbox item. */
+export function sameTarget(a: Target | null | undefined, b: Target | null | undefined): boolean {
+  if (!a || !b || a.to !== b.to) return false;
+  const idOf = (t: Target) => ('id' in t ? t.id : undefined);
+  const itemOf = (t: Target) => ('item' in t ? t.item : undefined);
+  return idOf(a) === idOf(b) && itemOf(a) === itemOf(b);
 }
 
 /** The count the Explorer tab's badge shows: the Needs you group. */

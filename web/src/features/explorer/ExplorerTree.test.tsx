@@ -263,6 +263,7 @@ describe('explorer tree focus state', () => {
 });
 
 describe('task identity on a row', () => {
+  const NOW = Date.parse('2026-01-10T12:00:00Z');
   const identityNodes: ExplorerNode[] = [
     {
       id: 'working',
@@ -273,33 +274,37 @@ describe('task identity on a row', () => {
           id: 'working/task:t3',
           label: 'Add retry button',
           detail: 'Running',
-          summary: 'Add a retry button to the task page so a failed send can be sent again.',
-          tag: 'acme/widgets',
+          project: 'widgets',
+          at: '2026-01-10T09:00:00Z',
           target: { to: 'task', id: 't3' },
           children: []
         }
       ]
     }
   ];
-
-  it('shows the brief snippet under the row and the project as a small tag', () => {
+  const renderIdentity = (tree: ExplorerNode[] = identityNodes) =>
     render(
       <ExplorerTree
-        nodes={identityNodes}
+        nodes={tree}
         isExpanded={() => true}
         onToggle={vi.fn()}
         onOpen={vi.fn()}
         onAsk={vi.fn()}
+        now={NOW}
       />
     );
-    expect(screen.getByText('Add retry button')).toBeInTheDocument();
-    expect(
-      screen.getByText('Add a retry button to the task page so a failed send can be sent again.')
-    ).toBeInTheDocument();
-    expect(screen.getByText('acme/widgets')).toBeInTheDocument();
+
+  it('gives the first line to the title alone, and puts project, state and age on the line below', () => {
+    renderIdentity();
+    const title = screen.getByText('Add retry button');
+    expect(title.parentElement?.children).toHaveLength(2);
+    expect(screen.getByTestId('explorer-meta')).toHaveTextContent('widgets · Running · 3h');
+    expect(screen.getByRole('treeitem', { name: /Add retry button/ })).toHaveAccessibleName(
+      'Add retry button, widgets · Running · 3h'
+    );
   });
 
-  it('omits the snippet and the tag when the row has neither', () => {
+  it('has no line below when the row has no project, state or age', () => {
     render(
       <ExplorerTree
         nodes={nodes}
@@ -309,7 +314,56 @@ describe('task identity on a row', () => {
         onAsk={vi.fn()}
       />
     );
-    expect(screen.queryByTestId('explorer-summary')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('explorer-meta')).not.toBeInTheDocument();
+  });
+
+  it('draws a top-level group as a heading with its count, and keeps a top-level state beside its label', () => {
+    renderIdentity([...nodes, ...identityNodes]);
+    expect(screen.getByText('Needs you')).toHaveClass('uppercase');
+    expect(screen.getByText('Mainloop')).not.toHaveClass('uppercase');
+    // Mainloop's state is on its own line, not in a meta line under it.
+    expect(screen.getByRole('treeitem', { name: 'Mainloop, Idle' })).toBeInTheDocument();
+  });
+});
+
+describe('the row for the current page', () => {
+  const renderAt = (current: React.ComponentProps<typeof ExplorerTree>['current']) =>
+    render(
+      <ExplorerTree
+        nodes={nodes}
+        isExpanded={() => true}
+        onToggle={vi.fn()}
+        onOpen={vi.fn()}
+        onAsk={vi.fn()}
+        current={current}
+      />
+    );
+  const currentRows = () => screen.getAllByRole('treeitem', { current: 'page' });
+
+  it('marks the row that leads to the page being shown, and no other', () => {
+    renderAt({ to: 'task', id: 't1' });
+    expect(currentRows()).toHaveLength(1);
+    expect(currentRows()[0]).toHaveAccessibleName(/Fix login/);
+    expect(currentRows()[0]?.firstElementChild).toHaveClass('bg-accent');
+  });
+
+  it('marks Mainloop on the main chat', () => {
+    renderAt({ to: 'chat' });
+    expect(currentRows()[0]).toHaveAccessibleName('Mainloop, Idle');
+  });
+
+  it('marks nothing on a page no row leads to', () => {
+    renderAt(null);
+    expect(screen.queryAllByRole('treeitem', { current: 'page' })).toHaveLength(0);
+  });
+
+  it('keeps the current row apart from keyboard focus', async () => {
+    renderAt({ to: 'task', id: 't1' });
+    const first = screen.getByRole('treeitem', { name: 'Mainloop, Idle' });
+    act(() => first.focus());
+    expect(first).toHaveAttribute('aria-selected', 'true');
+    expect(first).not.toHaveAttribute('aria-current');
+    expect(currentRows()[0]).toHaveAccessibleName(/Fix login/);
   });
 });
 

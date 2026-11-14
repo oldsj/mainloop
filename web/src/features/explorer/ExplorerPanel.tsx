@@ -1,8 +1,9 @@
+import { useLocation } from '@tanstack/react-router';
 import { PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { badgeText } from '@/features/inbox/model';
-import { needsCount, type ExplorerNode } from './model';
+import { needsCount, targetOfLocation, type ExplorerNode } from './model';
 import {
   RAIL_WIDTH,
   WIDTH_MAX,
@@ -58,7 +59,7 @@ interface BodyProps {
   onCollapse?: () => void;
 }
 
-/** The header, the one-line hint and the tree. Shared by the desktop aside and the phone pane. */
+/** The header and the tree. Shared by the desktop aside and the phone pane. */
 function ExplorerBody({
   nodes,
   ready,
@@ -69,28 +70,31 @@ function ExplorerBody({
   onAsk,
   onCollapse
 }: BodyProps) {
+  // The row for the page being shown is marked, so the tree says where the owner is.
+  const current = useLocation({
+    select: (location) => targetOfLocation(location.pathname, location.search),
+    structuralSharing: true
+  });
   return (
     <section aria-labelledby="explorer-heading" className="flex min-h-0 flex-1 flex-col">
-      <header className="gap-xs px-md py-sm border-border-subtle flex flex-col border-b">
-        <div className="gap-sm flex items-center justify-between">
-          <h2 id="explorer-heading" className="text-sm font-medium">
-            Explorer
-          </h2>
-          {onCollapse ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-label="Collapse explorer"
-              onClick={onCollapse}
-            >
-              <PanelRightClose aria-hidden="true" />
-            </Button>
-          ) : null}
-        </div>
-        <p className="text-muted-foreground text-xs">
-          Ask Mainloop to start, stop or change anything.
-        </p>
+      <header className="gap-sm px-md py-xs border-border-subtle flex items-center justify-between border-b">
+        <h2
+          id="explorer-heading"
+          className="text-muted-foreground text-xs font-medium tracking-wide uppercase"
+        >
+          Explorer
+        </h2>
+        {onCollapse ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-label="Collapse explorer"
+            onClick={onCollapse}
+          >
+            <PanelRightClose aria-hidden="true" />
+          </Button>
+        ) : null}
       </header>
       <div className="p-xs min-h-0 flex-1 overflow-y-auto">
         {failed ? (
@@ -108,6 +112,7 @@ function ExplorerBody({
             onToggle={onToggle}
             onOpen={onOpen}
             onAsk={onAsk}
+            current={current}
           />
         )}
       </div>

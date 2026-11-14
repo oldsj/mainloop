@@ -8,7 +8,7 @@ import { DEFAULT_EXPANDED } from './model';
 export const PREFS_KEY = 'mainloop.explorer.v1';
 export const WIDTH_MIN = 240;
 export const WIDTH_MAX = 480;
-export const WIDTH_DEFAULT = 384;
+export const WIDTH_DEFAULT = 300;
 /** The rail's width when the panel is folded. */
 export const RAIL_WIDTH = 40;
 
