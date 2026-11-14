@@ -166,6 +166,12 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.ForkRequested), string(dbstate.ForkAccepted), string(dbstate.ForkReady), string(dbstate.ForkFailed))},
 		{"checkpoint_forks", "failure_reason", strs(
 			string(dbstate.FailureInvalidArgument), string(dbstate.FailureNotFound), string(dbstate.FailureFailedPrecondition))},
+		{"check_watches", "state", strs(
+			string(dbstate.WatchWatching), string(dbstate.WatchDelivering), string(dbstate.WatchDelivered),
+			string(dbstate.WatchUndeliverable), string(dbstate.WatchSuperseded))},
+		{"check_watches", "outcome", strs(
+			string(dbstate.WatchGreen), string(dbstate.WatchFailed), string(dbstate.WatchPendingTimeout),
+			string(dbstate.WatchNoChecks), string(dbstate.WatchNotFound))},
 		// No state machine, so no dbstate type: the contract enum is the constant the CHECK must match.
 		{"attention_items", "reason_code", strs(
 			string(api.AttentionItemReasonCodeReconciliation), string(api.AttentionItemReasonCodeRuntimeStopUnresolved),

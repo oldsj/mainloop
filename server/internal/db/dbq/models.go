@@ -73,6 +73,28 @@ type AttentionVisible struct {
 	ReadAt     *time.Time
 }
 
+type CheckWatch struct {
+	ID             string
+	IdempotencyKey string
+	UserID         string
+	ProjectID      string
+	SessionID      string
+	PrNumber       *int32
+	CommitSha      *string
+	Deadline       time.Time
+	State          string
+	Outcome        *string
+	HeadSha        *string
+	Message        *string
+	Detail         *string
+	Attempts       int32
+	NextAttemptAt  time.Time
+	LeaseOwner     *string
+	LeaseUntil     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 type CheckpointFork struct {
 	ID                    string
 	CheckpointID          string

@@ -265,6 +265,11 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	if devOps != nil {
 		devOps.Register(runner)
 	}
+	if ciSvc := newCIService(pool, gh); ciSvc != nil {
+		// watch_checks rows are written by the MCP process; this one polls CI and delivers.
+		ciSvc.Sender = svc
+		runner.Add(ciSvc.WatchLoop())
+	}
 	if prSvc != nil {
 		runner.Add(prSvc.Loop())
 		// Merges run only where the merge tools are on: nothing else creates a candidate.

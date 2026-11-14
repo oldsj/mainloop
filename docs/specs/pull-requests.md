@@ -1,7 +1,7 @@
 # Pull request creation
 
 See also [GitHub issue and Dependabot alert reads](github-reads.md) for the read-only `get_issue`
-and `list_dependabot_alerts` tools, and [CI checks](ci.md) for `check_status`; both reuse the same
+and `list_dependabot_alerts` tools, and [CI checks](ci.md) for `check_status` and `watch_checks`; both reuse the same
 GitHub App credential described below.
 
 The `open_pull_request` Mainloop MCP tool is available to authenticated `main` and `child`

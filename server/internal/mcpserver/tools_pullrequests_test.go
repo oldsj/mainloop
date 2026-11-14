@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/agentauth/authtest"
+	"github.com/oldsj/mainloop/server/internal/ci"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/github"
@@ -64,6 +65,7 @@ func newPRHarness(t *testing.T) *prHarness {
 	h := &prHarness{fake: fake}
 	h.harness = buildHarness(t, true, false, func(srv *mcpserver.Server, pool *pgxpool.Pool) {
 		h.pool = pool
+		srv.CI = ci.NewService(pool, app)
 		srv.PRs = &prs.Service{Pool: pool, GitHub: app, Log: log, Settle: 5 * time.Second, Recheck: 10 * time.Millisecond, Ceiling: 20 * time.Millisecond}
 		srv.Merge = &merge.Service{
 			Pool: pool, GitHub: app, Log: log, Configs: cfgs, Runtime: staticRuntime{}, Settle: 5 * time.Second, Poll: 20 * time.Millisecond,
@@ -118,7 +120,7 @@ func TestBothSurfacesListTheMergeToolsByRoute(t *testing.T) {
 	a := h.seedAgent(t, nil)
 	want := []string{
 		"check_status", "get_issue", "get_pull_request_merge_status", "list_dependabot_alerts", "merge_pull_request",
-		"open_pull_request", "prepare_pull_request_merge", "whoami",
+		"open_pull_request", "prepare_pull_request_merge", "watch_checks", "whoami",
 	}
 	if got := h.list(t, mcpserver.PathOrdinary, a.Token); !slices.Equal(got, want) {
 		t.Errorf("/mcp lists %v, want %v", got, want)

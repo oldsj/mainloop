@@ -55,6 +55,8 @@ func StatusResult(state string) string {
 const (
 	KindCheckRun     = "check_run"
 	KindCommitStatus = "commit_status"
+	// KindCheckSuite is a suite still running with no pending run of its own; it is always pending.
+	KindCheckSuite = "check_suite"
 )
 
 // Repo names a repository at its provider.
