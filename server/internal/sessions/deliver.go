@@ -757,6 +757,8 @@ func (t *turn) markUncertain(ctx context.Context, detail string) error {
 		return err
 	}
 	t.cur, t.uncertainSince = dbstate.DeliveryUncertain, time.Now()
+	t.s.log().WarnContext(ctx, "delivery uncertain; it is looked up, not sent again",
+		"session_id", t.d.SessionID, "message_id", t.c.ID, "detail", d)
 	return nil
 }
 
@@ -1146,6 +1148,12 @@ func (t *turn) settle(
 		return reconcile.Retry(), err
 	}
 	t.cur = final
+	if final == dbstate.DeliveryFailed {
+		// POST /message answered 200 when the message was recorded; this is where the owner's
+		// message is known not to have been answered, so say so (the detail is already redacted).
+		t.s.log().WarnContext(ctx, "delivery failed", "session_id", t.d.SessionID, "message_id", t.c.ID,
+			"native_failure", nativeFailure, "detail", derefStr(det))
+	}
 	t.s.endProgress(t.d.UserID, t.d.SessionID, t.c.ID, t.d.CreatedAt, stored)
 	return reconcile.Recorded(), nil
 }
