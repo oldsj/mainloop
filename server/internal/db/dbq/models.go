@@ -563,6 +563,13 @@ type MessageImage struct {
 	CreatedAt time.Time
 }
 
+type OwnerSeen struct {
+	UserID        string
+	Since         time.Time
+	LastVisit     *time.Time
+	PreviousVisit *time.Time
+}
+
 type PrCreation struct {
 	ID             string
 	IdempotencyKey string
@@ -968,6 +975,12 @@ type TaskReport struct {
 	EvidenceRefs  []string
 	TaskVersion   int32
 	CreatedAt     time.Time
+}
+
+type TaskSeen struct {
+	UserID string
+	TaskID string
+	SeenAt time.Time
 }
 
 type Topic struct {
