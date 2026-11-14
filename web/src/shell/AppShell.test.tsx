@@ -84,12 +84,27 @@ describe('shell switch', () => {
     expect(screen.queryByTestId('mobile-tab-bar')).not.toBeInTheDocument();
   });
 
-  it('renders the explorer as the desktop aside, with the tree', async () => {
+  it('lays the desktop out as an IDE: activity bar, sidebar, main, status bar, and no top header', async () => {
     setViewport(true);
     await renderAt('/');
-    const aside = screen.getByRole('complementary', { name: 'Explorer' });
+    const bar = screen.getByRole('navigation', { name: 'Primary' });
+    const aside = screen.getByRole('complementary', { name: 'Sessions sidebar' });
+    const main = screen.getByRole('main');
+    const status = screen.getByTestId('status-bar');
     expect(await within(aside).findByRole('tree')).toBeInTheDocument();
-    expect(screen.getByRole('main')).not.toContainElement(aside);
+    expect(main).not.toContainElement(aside);
+    // Left to right, then the status bar last.
+    const follows = (a: Element, b: Element) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(bar, aside)).toBe(true);
+    expect(follows(aside, main)).toBe(true);
+    expect(follows(main, status)).toBe(true);
+    // The old top header is gone: its mark, health link and theme menu are in the activity bar.
+    expect(screen.queryByText('$ mainloop')).toBeNull();
+    expect(within(bar).getByRole('link', { name: 'Mainloop home' })).toBeInTheDocument();
+    expect(within(bar).getByTestId('header-health')).toBeInTheDocument();
+    expect(within(bar).getByTestId('theme-selector')).toBeInTheDocument();
+    expect(screen.getByTestId('desktop-shell').firstElementChild?.firstElementChild).toBe(bar);
   });
 
   it('renders the compact shell on a narrow viewport', async () => {
@@ -371,7 +386,7 @@ describe('home work placement', () => {
     setViewport(true);
     serveFailedSinceVisit();
     await renderAt('/');
-    const aside = screen.getByRole('complementary', { name: 'Explorer' });
+    const aside = screen.getByRole('complementary', { name: 'Sessions sidebar' });
     expect(
       await within(aside).findByRole('treeitem', { name: 'Since you were here, 1' })
     ).toBeInTheDocument();
@@ -431,11 +446,8 @@ describe('offline banner', () => {
     });
   });
 
-  it.each([
-    ['compact', false, 'compact-shell'],
-    ['desktop', true, 'desktop-shell']
-  ])('sits in the screen-high column above main in the %s shell', async (_name, wide, shell) => {
-    setViewport(wide);
+  it('sits in the screen-high column above main in the compact shell', async () => {
+    setViewport(false);
     await renderAt('/');
     reach.up = false;
     await act(async () => {
@@ -445,38 +457,111 @@ describe('offline banner', () => {
     const banner = await screen.findByTestId('connection-banner');
     const column = banner.parentElement;
     expect(column).toHaveClass('h-dvh');
-    expect(column).toContainElement(screen.getByTestId(shell));
+    expect(column).toContainElement(screen.getByTestId('compact-shell'));
     const main = screen.getByRole('main');
     expect(column).toContainElement(main);
     expect(banner.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    if (!wide) expect(column).toContainElement(screen.getByTestId('mobile-tab-bar'));
+    expect(column).toContainElement(screen.getByTestId('mobile-tab-bar'));
+  });
+
+  it('is the status bar on desktop: it turns to the offline colour in place, with no banner', async () => {
+    setViewport(true);
+    await renderAt('/');
+    const status = screen.getByTestId('status-bar');
+    expect(within(status).getByRole('status')).toHaveTextContent('Connected');
+    reach.up = false;
+    await act(async () => {
+      await connection.check();
+    });
+    await waitFor(() => expect(status).toHaveAttribute('data-offline', 'true'));
+    expect(within(status).getByRole('status')).toHaveTextContent(/^Offline.*· reconnecting…$/);
+    expect(status).toHaveClass('bg-destructive');
+    // Nothing is added above the page, so nothing moves.
+    expect(screen.queryByTestId('connection-banner')).toBeNull();
+    expect(screen.getByTestId('desktop-shell')).toContainElement(status);
   });
 });
 
 describe('explorer panel', () => {
-  it('folds the explorer to a rail, and opens it again from the rail', async () => {
+  it('hides the sidebar, and brings it back from the activity bar', async () => {
     setViewport(true);
     const user = userEvent.setup();
     await renderAt('/');
-    await user.click(screen.getByRole('button', { name: 'Collapse explorer' }));
-    expect(screen.getByTestId('explorer-rail')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Hide sidebar' }));
+    expect(screen.queryByTestId('explorer-aside')).toBeNull();
     expect(JSON.parse(localStorage.getItem('mainloop.explorer.v1') ?? '{}')).toMatchObject({
       collapsed: true
     });
-    await user.click(screen.getByRole('button', { name: 'Show explorer' }));
+    const sessions = screen.getByRole('button', { name: 'Sessions' });
+    expect(sessions).toHaveAttribute('aria-pressed', 'false');
+    await user.click(sessions);
     expect(await screen.findByTestId('explorer-aside')).toBeInTheDocument();
+    expect(sessions).toHaveAttribute('aria-pressed', 'true');
+    // Choosing the view that is showing hides it again.
+    await user.click(sessions);
+    expect(screen.queryByTestId('explorer-aside')).toBeNull();
+  });
+
+  it('hides and shows the sidebar with Ctrl+B', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    await renderAt('/');
+    expect(screen.getByTestId('explorer-aside')).toBeInTheDocument();
+    await user.keyboard('{Control>}b{/Control}');
+    expect(screen.queryByTestId('explorer-aside')).toBeNull();
+    await user.keyboard('{Control>}b{/Control}');
+    expect(screen.getByTestId('explorer-aside')).toBeInTheDocument();
+  });
+
+  it('shows one view at a time: Sessions is the work, Projects the catalogue', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    await renderAt('/');
+    const aside = () => screen.getByTestId('explorer-aside');
+    await within(aside()).findByRole('tree');
+    const top = () =>
+      within(aside())
+        .getAllByRole('treeitem')
+        .filter((row) => row.getAttribute('aria-level') === '1')
+        .map((row) => row.getAttribute('aria-label')?.split(',')[0]);
+    expect(top()).toEqual(['Mainloop', 'Needs you', 'Problems', 'Working', 'Finished recently']);
+    await user.click(screen.getByRole('button', { name: 'Projects' }));
+    expect(screen.getByRole('complementary', { name: 'Projects sidebar' })).toBe(aside());
+    expect(top()).toEqual(['Projects', 'Schedules']);
+    expect(JSON.parse(localStorage.getItem('mainloop.explorer.v1') ?? '{}')).toMatchObject({
+      view: 'projects'
+    });
+  });
+
+  it('keeps the Needs-you count on the activity bar and the status bar, whichever view shows', async () => {
+    setViewport(true);
+    server.use(tasksList(() => HttpResponse.json([view({ reason: 'owner_decision' })])));
+    const user = userEvent.setup();
+    await renderAt('/');
+    const inbox = await screen.findByRole('link', { name: 'Inbox, 1 need you' });
+    expect(within(inbox).getByTestId('activity-needs')).toHaveTextContent('1');
+    expect(screen.getByTestId('status-needs')).toHaveTextContent('1 needs you');
+    await user.click(screen.getByRole('button', { name: 'Projects' }));
+    await user.click(screen.getByRole('button', { name: 'Projects' }));
+    expect(screen.queryByTestId('explorer-aside')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Inbox, 1 need you' })).toBeInTheDocument();
+    expect(screen.getByTestId('status-needs')).toHaveTextContent('1 needs you');
+    // The working count opens the Sessions view.
+    await user.click(screen.getByTestId('status-working'));
+    expect(screen.getByRole('complementary', { name: 'Sessions sidebar' })).toBeInTheDocument();
   });
 
   it('resizes from the keyboard, clamps the width and remembers it', async () => {
     setViewport(true);
     const user = userEvent.setup();
     await renderAt('/');
-    const handle = screen.getByRole('separator', { name: 'Resize explorer' });
+    const handle = screen.getByRole('separator', { name: 'Resize sidebar' });
     expect(handle).toHaveAttribute('aria-valuenow', '300');
     handle.focus();
-    await user.keyboard('{ArrowLeft}{ArrowLeft}');
+    // The sidebar is on the left, so the right arrow widens it.
+    await user.keyboard('{ArrowRight}{ArrowRight}');
     expect(handle).toHaveAttribute('aria-valuenow', '332');
-    await user.keyboard('{ArrowLeft}'.repeat(12));
+    await user.keyboard('{ArrowRight}'.repeat(12));
     expect(handle).toHaveAttribute('aria-valuenow', '480');
     expect(JSON.parse(localStorage.getItem('mainloop.explorer.v1') ?? '{}')).toMatchObject({
       width: 480

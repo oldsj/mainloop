@@ -553,6 +553,44 @@ export function sameTarget(a: Target | null | undefined, b: Target | null | unde
   return idOf(a) === idOf(b) && itemOf(a) === itemOf(b);
 }
 
+/**
+ * The desktop sidebar's two views. **Sessions** is the work and what it needs: Mainloop, Needs you,
+ * Problems, Since you were here, Working and Finished recently. **Projects** is the catalogue:
+ * Projects and Schedules. Insights is in neither: on desktop the connection is in the status bar.
+ */
+export type SidebarView = 'sessions' | 'projects';
+
+export const SIDEBAR_VIEWS: readonly { id: SidebarView; label: string }[] = [
+  { id: 'sessions', label: 'Sessions' },
+  { id: 'projects', label: 'Projects' }
+];
+
+const VIEW_NODES: Record<SidebarView, readonly string[]> = {
+  sessions: ['mainloop', 'needs', 'problems', 'since', 'working', 'finished'],
+  projects: ['projects', 'schedules']
+};
+
+/** The top-level nodes one sidebar view shows, in the tree's own order. */
+export function viewNodes(nodes: ExplorerNode[], view: SidebarView): ExplorerNode[] {
+  return nodes.filter((node) => VIEW_NODES[view].includes(node.id));
+}
+
+/** The view a top-level node belongs to, or null for one that is in neither (Insights). */
+export function viewOf(nodeId: string): SidebarView | null {
+  const top = nodeId.split('/')[0] ?? nodeId;
+  return SIDEBAR_VIEWS.find(({ id }) => VIEW_NODES[id].includes(top))?.id ?? null;
+}
+
+/** The three counts the status bar shows, read from the same groups the tree draws. */
+export function shellCounts(nodes: ExplorerNode[]): {
+  needs: number;
+  working: number;
+  problems: number;
+} {
+  const count = (id: string) => nodes.find((node) => node.id === id)?.count ?? 0;
+  return { needs: count('needs'), working: count('working'), problems: count('problems') };
+}
+
 /** The count the Explorer tab's badge shows: the Needs you group. */
 export function needsCount(nodes: ExplorerNode[]): number {
   return nodes.find((node) => node.id === 'needs')?.count ?? 0;

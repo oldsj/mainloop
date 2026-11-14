@@ -3,18 +3,30 @@ import { DropdownMenu } from 'radix-ui';
 import { Button } from '@/components/ui/button';
 import { THEMES, useTheme } from './themes';
 
-export function ThemeSelector() {
+/**
+ * The theme menu. `compact` is the activity bar's form: the icon alone, with the menu opening to the
+ * side of the bar.
+ */
+export function ThemeSelector({ compact = false }: { compact?: boolean }) {
   const [theme, setTheme] = useTheme();
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <Button variant="ghost" data-testid="theme-selector" aria-label={`Theme: ${theme}`}>
+        <Button
+          variant="ghost"
+          size={compact ? 'icon' : 'default'}
+          data-testid="theme-selector"
+          aria-label={`Theme: ${theme}`}
+          title={compact ? `Theme: ${theme}` : undefined}
+          className={compact ? 'text-muted-foreground hover:text-foreground size-9' : undefined}
+        >
           <Palette aria-hidden="true" />
-          <span className="hidden sm:inline">{theme}</span>
+          {compact ? null : <span className="hidden sm:inline">{theme}</span>}
         </Button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
+          side={compact ? 'right' : 'bottom'}
           align="end"
           sideOffset={4}
           className="border-border bg-popover p-xs text-popover-foreground z-50 min-w-44 rounded-none border"

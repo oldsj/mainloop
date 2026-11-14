@@ -34,13 +34,22 @@ describe('remembered layout', () => {
     expect(readPrefs()).toEqual(DEFAULT_PREFS);
   });
 
-  it('round-trips the width, the rail and each node’s expanded state', () => {
-    writePrefs({ width: 420, collapsed: true, expanded: { working: true, needs: false } });
-    expect(readPrefs()).toEqual({
+  it('round-trips the width, whether it is hidden, the view and each node’s expanded state', () => {
+    const prefs = {
       width: 420,
       collapsed: true,
-      expanded: { working: true, needs: false }
-    });
+      expanded: { working: true, needs: false },
+      view: 'projects' as const
+    };
+    writePrefs(prefs);
+    expect(readPrefs()).toEqual(prefs);
+  });
+
+  it('shows the Sessions view when none, or an unknown one, is stored', () => {
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify({ width: 300 }));
+    expect(readPrefs().view).toBe('sessions');
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify({ view: 'files' }));
+    expect(readPrefs().view).toBe('sessions');
   });
 
   it('ignores junk and keeps the defaults for the parts it cannot read', () => {
@@ -48,7 +57,12 @@ describe('remembered layout', () => {
       PREFS_KEY,
       JSON.stringify({ width: 'wide', collapsed: 'yes', expanded: { a: 1, b: true } })
     );
-    expect(readPrefs()).toEqual({ width: WIDTH_DEFAULT, collapsed: false, expanded: { b: true } });
+    expect(readPrefs()).toEqual({
+      width: WIDTH_DEFAULT,
+      collapsed: false,
+      expanded: { b: true },
+      view: 'sessions'
+    });
   });
 
   it('falls back to the defaults for text that is not JSON', () => {
