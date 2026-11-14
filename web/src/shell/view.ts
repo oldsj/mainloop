@@ -29,6 +29,22 @@ export function resolveTab(tab: ShellSearch['tab']): Tab {
   return 'explorer';
 }
 
+/** The three items of the phone's tab bar. `needs` is the answer view at `/inbox`, not a `?tab=`. */
+export type NavTab = 'chat' | 'needs' | 'explorer';
+
+/**
+ * Which tab-bar item is lit. It follows where the owner is: the tree, the main chat, the answer
+ * view, or a page reached from the tree (a task, a session, a project, health), which lights the
+ * tree's own tab, since that is where the page was opened from and where "back" leads.
+ */
+export function activeNavTab(tab: Tab, pathname: string): NavTab {
+  if (tab === 'explorer') return 'explorer';
+  const path = pathname.replace(/\/+$/, '') || '/';
+  if (path === '/') return 'chat';
+  if (path === '/inbox') return 'needs';
+  return 'explorer';
+}
+
 /** Desktop layout starts here (Tailwind `lg`), as the frozen app did. */
 export const DESKTOP_QUERY = '(min-width: 1024px)';
 

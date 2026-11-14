@@ -1,6 +1,13 @@
 import { useLocation } from '@tanstack/react-router';
 import { PanelLeftClose } from 'lucide-react';
-import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import {
+  useCallback,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode
+} from 'react';
 import { Button } from '@/components/ui/button';
 import { shortcutLabel } from '@/lib/platform';
 import {
@@ -65,6 +72,8 @@ interface BodyProps {
   title: string;
   /** Desktop only: folds the sidebar away; the activity bar brings it back. */
   onCollapse?: () => void;
+  /** Phone only: controls at the end of the header (health and the theme). */
+  actions?: ReactNode;
 }
 
 /** The header and the tree. Shared by the desktop sidebar and the phone pane. */
@@ -77,7 +86,8 @@ function ExplorerBody({
   onOpen,
   onAsk,
   title,
-  onCollapse
+  onCollapse,
+  actions
 }: BodyProps) {
   // The row for the page being shown is marked, so the tree says where the owner is.
   const current = useLocation({
@@ -105,6 +115,7 @@ function ExplorerBody({
             <PanelLeftClose aria-hidden="true" />
           </Button>
         ) : null}
+        {actions ? <div className="gap-xs flex items-center">{actions}</div> : null}
       </header>
       <div className="p-xs min-h-0 flex-1 overflow-y-auto">
         {failed ? (
@@ -221,7 +232,17 @@ export function ExplorerSidebar({ prefs, update, nodes, ready, failed }: Explore
 }
 
 /** Phone: the same tree, full width, in the Explorer tab. */
-export function ExplorerPane({ lastVisit = null }: { lastVisit?: number | null }) {
+export function ExplorerPane({
+  lastVisit = null,
+  title = 'Explorer',
+  actions
+}: {
+  lastVisit?: number | null;
+  /** The pane's heading: the tab's own label. */
+  title?: string;
+  /** Controls at the end of the header: health and the theme, which have no header of their own on a phone. */
+  actions?: ReactNode;
+}) {
   const { prefs, update } = useExplorerPrefs();
   const { nodes, ready, failed } = useExplorer(lastVisit);
   const { open, ask, toggle } = useTree(update);
@@ -234,7 +255,8 @@ export function ExplorerPane({ lastVisit = null }: { lastVisit?: number | null }
       onToggle={toggle}
       onOpen={open}
       onAsk={ask}
-      title="Explorer"
+      title={title}
+      actions={actions}
     />
   );
 }
