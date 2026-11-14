@@ -485,8 +485,9 @@ func TestCleanupFindsASecretWhosePublishNeverRecorded(t *testing.T) {
 	q := dbq.New(d.Pool)
 	s := env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
 	// Simulate a crash between the Secret create and the UID being recorded: planned, no UID, but
-	// the Secret exists. Age it past the stray threshold so the sweep revokes it.
-	if _, err := d.Pool.Exec(ctx, `UPDATE credentials SET state='planned', secret_uid=NULL, updated_at = now() - interval '1 hour' WHERE id=$1`, s.CredentialID); err != nil {
+	// the Secret exists. Age it past the stray threshold so the sweep revokes it, and its create
+	// past its deadline so cleanup does not wait for another one.
+	if _, err := d.Pool.Exec(ctx, `UPDATE credentials SET state='planned', secret_uid=NULL, updated_at = now() - interval '1 hour', create_started_at = now() - interval '1 hour' WHERE id=$1`, s.CredentialID); err != nil {
 		t.Fatal(err)
 	}
 	if err := env.Creds.RevokeStrays(ctx); err != nil {

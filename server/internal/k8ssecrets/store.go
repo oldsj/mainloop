@@ -85,19 +85,16 @@ func (s *Store) Create(ctx context.Context, name, purpose, bearer string) (strin
 // to the Secret that was published, and a Secret now under the name with a different UID is left
 // alone. An empty UID (a create whose UID was never seen) deletes by name: the caller vouches that
 // nothing else can hold the name. A Secret that is already gone, or has a different UID, counts as
-// deleted; found reports whether this call removed one.
-func (s *Store) Delete(ctx context.Context, name, uid string) (found bool, err error) {
+// deleted.
+func (s *Store) Delete(ctx context.Context, name, uid string) error {
 	var opts metav1.DeleteOptions
 	if uid != "" {
 		u := types.UID(uid)
 		opts.Preconditions = &metav1.Preconditions{UID: &u}
 	}
-	err = s.client.CoreV1().Secrets(s.namespace).Delete(ctx, name, opts)
-	if err == nil {
-		return true, nil
+	err := s.client.CoreV1().Secrets(s.namespace).Delete(ctx, name, opts)
+	if err == nil || apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
+		return nil
 	}
-	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
-		return false, nil
-	}
-	return false, fmt.Errorf("k8ssecrets: delete %s: %w", name, err)
+	return fmt.Errorf("k8ssecrets: delete %s: %w", name, err)
 }

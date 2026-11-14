@@ -76,21 +76,21 @@ func TestDeleteCarriesUIDPrecondition(t *testing.T) {
 	if fresh == old {
 		t.Fatal("test setup: UIDs are equal")
 	}
-	if _, err := s.Delete(ctx, "n", old); err != nil {
+	if err := s.Delete(ctx, "n", old); err != nil {
 		t.Fatalf("Delete with a stale UID = %v, want nil", err)
 	}
 	if cl.UID(ns, "n") != fresh {
 		t.Fatal("a delete aimed at the old UID removed the new Secret")
 	}
-	if found, err := s.Delete(ctx, "n", fresh); err != nil || !found {
-		t.Fatal(found, err)
+	if err := s.Delete(ctx, "n", fresh); err != nil {
+		t.Fatal(err)
 	}
 	if cl.UID(ns, "n") != "" {
 		t.Error("Secret not deleted")
 	}
 	// Already gone is success.
-	if found, err := s.Delete(ctx, "n", fresh); err != nil || found {
-		t.Errorf("Delete of a missing Secret = %v, %v", found, err)
+	if err := s.Delete(ctx, "n", fresh); err != nil {
+		t.Errorf("Delete of a missing Secret = %v", err)
 	}
 }
 
@@ -102,14 +102,14 @@ func TestDeleteWithoutAUIDGoesByName(t *testing.T) {
 	if _, err := s.Create(ctx, "n", "mcp", "ml_one"); err != nil {
 		t.Fatal(err)
 	}
-	if found, err := s.Delete(ctx, "n", ""); err != nil || !found {
-		t.Fatal(found, err)
+	if err := s.Delete(ctx, "n", ""); err != nil {
+		t.Fatal(err)
 	}
 	if cl.UID(ns, "n") != "" {
 		t.Error("Secret not deleted")
 	}
-	if found, err := s.Delete(ctx, "n", ""); err != nil || found {
-		t.Errorf("Delete of a missing Secret = %v, %v", found, err)
+	if err := s.Delete(ctx, "n", ""); err != nil {
+		t.Errorf("Delete of a missing Secret = %v", err)
 	}
 	if len(cl.Deletes) != 2 || cl.Deletes[0] != "n@" {
 		t.Errorf("deletes = %v, want two without a precondition", cl.Deletes)
@@ -124,7 +124,7 @@ func TestOnlyCreateDelete(t *testing.T) {
 	ctx := context.Background()
 	uid, _ := s.Create(ctx, "n", "mcp", "ml_one")
 	_, _ = s.Create(ctx, "n", "mcp", "ml_one")
-	_, _ = s.Delete(ctx, "n", uid)
+	_ = s.Delete(ctx, "n", uid)
 	for _, a := range cl.Actions() {
 		switch a.GetVerb() {
 		case "create", "delete":

@@ -478,6 +478,10 @@ func TestIssueCountsATakenNameAsItsOwnLostCreate(t *testing.T) {
 	if _, err := env.Creds.Revoke(ctx, s.SessionID); err != nil {
 		t.Fatal(err)
 	}
+	// Past the create's deadline, so cleanup frees the name without waiting.
+	if _, err := d.Pool.Exec(ctx, `UPDATE credentials SET create_started_at = now() - interval '1 hour' WHERE id=$1`, issued.CredentialID); err != nil {
+		t.Fatal(err)
+	}
 	runCleanup(t, env, func() bool {
 		got, _ := q.GetCredential(ctx, issued.CredentialID)
 		return got.State == dbstate.CredentialDeleted
@@ -487,5 +491,73 @@ func TestIssueCountsATakenNameAsItsOwnLostCreate(t *testing.T) {
 	}
 	if last := env.Cluster.Deletes[len(env.Cluster.Deletes)-1]; last != name+"@" {
 		t.Errorf("last delete = %s, want one by name", last)
+	}
+}
+
+// Cleanup of a credential with no recorded UID deletes the Secret it finds, but another Issue of the
+// same row may still land its create afterwards. The row keeps the name until that create's
+// deadline and deletes again then, so no stale-bearer Secret is left under a free name for the next
+// credential's create to take as its own.
+func TestCleanupHoldsTheNameAgainstALateCreateOfTheSameRow(t *testing.T) {
+	d := testdb.New(t)
+	env := authtest.NewEnv(d.Pool)
+	ctx := context.Background()
+	q := dbq.New(d.Pool)
+	s := env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
+	name := "mainloop-mcp-" + s.SessionID
+	// Published before its UID was recorded, the Secret present, and a create of the row started just
+	// now, so one may still be in flight.
+	if _, err := d.Pool.Exec(ctx, `UPDATE credentials SET state='planned', secret_uid=NULL, create_started_at = now() WHERE id=$1`, s.CredentialID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.Creds.Revoke(ctx, s.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	rctx, cancel := context.WithCancel(ctx)
+	r := reconcile.NewRunner(d.Pool, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	env.Creds.Register(r)
+	done := make(chan error, 1)
+	go func() { done <- r.Run(rctx) }()
+	defer func() { cancel(); <-done }()
+
+	wait := func(what string, cond func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(20 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatal(what)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	wait("cleanup did not delete the Secret it found", func() bool { return env.Cluster.UID(authtest.Namespace, name) == "" })
+	time.Sleep(300 * time.Millisecond)
+	if got, _ := q.GetCredential(ctx, s.CredentialID); got.State != dbstate.CredentialRevoked {
+		t.Fatalf("state = %s: the name was freed while a create of the row may still land", got.State)
+	}
+	if _, err := env.Creds.Issue(ctx, s.SessionID, dbstate.CredentialMCP); !errors.Is(err, agentauth.ErrCleanupPending) {
+		t.Fatalf("Issue while the name is held = %v, want ErrCleanupPending", err)
+	}
+	// The in-flight create lands after cleanup's delete, with the revoked row's bearer.
+	if _, err := env.Creds.Secrets.Create(ctx, name, "mcp", agentauth.Token(env.Creds.Key, s.CredentialID)); err != nil {
+		t.Fatal(err)
+	}
+	late := env.Cluster.UID(authtest.Namespace, name)
+	// Past the create's deadline nothing more can land: cleanup deletes again and frees the name.
+	if _, err := d.Pool.Exec(ctx, `UPDATE credentials SET create_started_at = now() - interval '1 hour', next_attempt_at = now() WHERE id=$1`, s.CredentialID); err != nil {
+		t.Fatal(err)
+	}
+	wait("cleanup did not finish after the deadline", func() bool {
+		got, _ := q.GetCredential(ctx, s.CredentialID)
+		return got.State == dbstate.CredentialDeleted
+	})
+	if late == "" || env.Cluster.UID(authtest.Namespace, name) != "" {
+		t.Fatal("the late create's Secret survived under a freed name")
+	}
+	// The next credential gets a Secret of its own, not the stale one.
+	issued, err := env.Creds.Issue(ctx, s.SessionID, dbstate.CredentialMCP)
+	if err != nil || issued.SecretUID == "" || issued.SecretUID == late {
+		t.Fatalf("Issue after cleanup = %+v, %v; want a fresh Secret", issued, err)
 	}
 }
