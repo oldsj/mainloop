@@ -471,11 +471,11 @@ describe('explorer panel', () => {
     const user = userEvent.setup();
     await renderAt('/');
     const handle = screen.getByRole('separator', { name: 'Resize explorer' });
-    expect(handle).toHaveAttribute('aria-valuenow', '384');
+    expect(handle).toHaveAttribute('aria-valuenow', '300');
     handle.focus();
     await user.keyboard('{ArrowLeft}{ArrowLeft}');
-    expect(handle).toHaveAttribute('aria-valuenow', '416');
-    await user.keyboard('{ArrowLeft}'.repeat(10));
+    expect(handle).toHaveAttribute('aria-valuenow', '332');
+    await user.keyboard('{ArrowLeft}'.repeat(12));
     expect(handle).toHaveAttribute('aria-valuenow', '480');
     expect(JSON.parse(localStorage.getItem('mainloop.explorer.v1') ?? '{}')).toMatchObject({
       width: 480
