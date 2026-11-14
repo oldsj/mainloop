@@ -136,6 +136,89 @@ describe('live session', () => {
     expect(LIVE_SUBPROTOCOL).toBe('kagent.sdk-runner.v1');
   });
 
+  describe('a long message', () => {
+    // jsdom has no layout. A clamped box (line-clamp) reports a ten-line height and its full
+    // content height, as a browser does; an unclamped one reports them equal.
+    const heights = (full: number) => {
+      const scroll = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get');
+      const client = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get');
+      scroll.mockImplementation(function (this: HTMLElement) {
+        return this.className.includes('whitespace-pre-wrap') ? full : 0;
+      });
+      client.mockImplementation(function (this: HTMLElement) {
+        if (!this.className.includes('whitespace-pre-wrap')) return 0;
+        return this.className.includes('line-clamp-10') ? Math.min(full, 200) : full;
+      });
+      return () => {
+        scroll.mockRestore();
+        client.mockRestore();
+      };
+    };
+
+    it('shows its first lines with Show all, and opens and closes', async () => {
+      const restore = heights(900);
+      try {
+        const { user } = setup();
+        await attached();
+        await say(user, 'a long report');
+        const row = screen.getByTestId('live-user');
+        const toggle = await within(row).findByRole('button', { name: 'Show all' });
+        expect(toggle).toHaveAttribute('aria-expanded', 'false');
+        expect(within(row).getByText(/a long report/)).toHaveClass('line-clamp-10');
+        await user.click(toggle);
+        expect(within(row).getByText(/a long report/)).not.toHaveClass('line-clamp-10');
+        const less = within(row).getByRole('button', { name: 'Show less' });
+        expect(less).toHaveAttribute('aria-expanded', 'true');
+        await user.click(less);
+        expect(within(row).getByText(/a long report/)).toHaveClass('line-clamp-10');
+      } finally {
+        restore();
+      }
+    });
+
+    it('offers nothing when the message fits', async () => {
+      const restore = heights(120);
+      try {
+        const { user } = setup();
+        await attached();
+        await say(user, 'short');
+        expect(
+          within(screen.getByTestId('live-user')).queryByRole('button')
+        ).not.toBeInTheDocument();
+      } finally {
+        restore();
+      }
+    });
+
+    it('never cuts a report that names what the owner must do', async () => {
+      const restore = heights(900);
+      try {
+        const { user } = setup();
+        await attached();
+        // Typed as one line; the store keeps the text as sent.
+        await user.click(screen.getByRole('textbox', { name: 'Message' }));
+        await user.paste('report body\nOwner action needed: decide the schema');
+        await user.keyboard('{Enter}');
+        const row = await screen.findByTestId('live-user');
+        expect(within(row).getByText(/Owner action needed/)).not.toHaveClass('line-clamp-10');
+        expect(within(row).queryByRole('button')).not.toBeInTheDocument();
+      } finally {
+        restore();
+      }
+    });
+  });
+
+  it('keeps the transcript and the composer to the reading width, inside a full-width scroller', async () => {
+    setup();
+    await attached();
+    const log = screen.getByTestId('live-log');
+    expect(log).not.toHaveClass('max-w-measure');
+    expect(log.firstElementChild).toHaveClass('max-w-measure', 'mx-auto');
+    expect(
+      screen.getByRole('textbox', { name: 'Message' }).closest('.max-w-measure')
+    ).not.toBeNull();
+  });
+
   it('streams a turn: the message, the text after a dot, the tool and its output', async () => {
     const { runner, user } = setup();
     await attached();

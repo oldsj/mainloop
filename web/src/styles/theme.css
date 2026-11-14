@@ -74,6 +74,7 @@
   --max-width-lg: 32rem;
   --max-width-xl: 36rem;
   --max-width-2xl: 42rem;
+  --max-width-measure: 56rem;
   --radius-xs: var(--radius);
   --radius-sm: var(--radius);
   --radius-md: var(--radius);

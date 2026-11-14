@@ -10,6 +10,7 @@ import {
   type KeyboardEvent,
   type ReactNode
 } from 'react';
+import { MEASURE } from '@/components/shared/measure';
 import { cn } from '@/components/ui/cn';
 import { clearDraft, loadDraft, NEW_CONVERSATION, saveDraft } from './drafts';
 import {
@@ -358,140 +359,144 @@ export function Composer({
 
   return (
     <div className="border-border-subtle bg-background border-t">
-      {allowImages && images.length > 0 ? (
-        <div className="gap-xs px-md pt-sm flex flex-wrap" data-testid="composer-images">
-          {images.map((image, index) => (
-            <div key={index} className="relative">
-              <img
-                src={imageDataUrl(image)}
-                alt=""
-                className="border-border size-14 border object-cover"
-                data-testid="composer-image-thumbnail"
-              />
-              <button
-                type="button"
-                onClick={() => removeImage(index)}
-                aria-label="Remove image"
-                data-testid="composer-image-remove"
-                className="bg-background border-border text-foreground absolute -top-2 -right-2 flex size-5 items-center justify-center border"
-              >
-                <X className="size-3" aria-hidden="true" />
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {imageError ? (
-        <p
-          className="text-destructive px-md pt-xs text-xs"
-          role="alert"
-          data-testid="composer-image-error"
-        >
-          {imageError}
-        </p>
-      ) : null}
-      <div
-        className="px-md pt-sm pb-sm relative flex shrink-0 flex-col gap-1"
-        data-testid="input-bar"
-        aria-busy={sending || busy || turnBusy}
-        onDrop={drop}
-        onDragOver={dragOver}
-      >
-        {menuOpen ? (
-          <ul
-            id={listboxId}
-            role="listbox"
-            aria-label="Slash commands"
-            data-testid="slash-command-menu"
-            className="border-border bg-popover text-popover-foreground absolute inset-x-0 bottom-full z-10 mb-1 max-h-48 overflow-auto border text-sm shadow-md"
-          >
-            {matches.map((command, index) => (
-              <li
-                key={command.name}
-                id={`${listboxId}-${command.name}`}
-                role="option"
-                aria-selected={index === highlightIndex}
-                data-testid={`slash-command-option-${command.name}`}
-                className={cn(
-                  'px-md gap-sm min-h-control flex cursor-pointer items-baseline',
-                  index === highlightIndex && 'bg-accent text-accent-foreground'
-                )}
-                // A press here must not blur the textarea before the completion lands.
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  acceptCommand(command);
-                }}
-                onMouseEnter={() => setHighlight(index)}
-              >
-                <span className="text-term-accent shrink-0">/{command.name}</span>
-                <span className="text-muted-foreground truncate">{command.summary}</span>
-              </li>
+      {/* Centred on the transcript's reading width, so the box lines up with the messages above it. */}
+      <div className={MEASURE}>
+        {allowImages && images.length > 0 ? (
+          <div className="gap-xs px-md pt-sm flex flex-wrap" data-testid="composer-images">
+            {images.map((image, index) => (
+              <div key={index} className="relative">
+                <img
+                  src={imageDataUrl(image)}
+                  alt=""
+                  className="border-border size-14 border object-cover"
+                  data-testid="composer-image-thumbnail"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeImage(index)}
+                  aria-label="Remove image"
+                  data-testid="composer-image-remove"
+                  className="bg-background border-border text-foreground absolute -top-2 -right-2 flex size-5 items-center justify-center border"
+                >
+                  <X className="size-3" aria-hidden="true" />
+                </button>
+              </div>
             ))}
-          </ul>
-        ) : null}
-        {/* One box, as in the live view: the prompt mark, the text and the send key. */}
-        <div
-          className={cn(
-            'border-border focus-within:border-ring pl-sm flex items-end gap-2 border p-1',
-            disabled && 'opacity-60'
-          )}
-        >
-          <span className="text-term-accent pb-1" aria-hidden="true">
-            ❯
-          </span>
-          <textarea
-            ref={input}
-            rows={1}
-            value={text}
-            disabled={disabled}
-            placeholder={placeholder(
-              offline,
-              busy || turnBusy,
-              loading,
-              unavailable,
-              closed ? closedPlaceholder : null,
-              (commands?.length ?? 0) > 0
-            )}
-            aria-label="Message"
-            aria-controls={menuOpen ? listboxId : undefined}
-            aria-activedescendant={
-              menuOpen ? `${listboxId}-${matches[highlightIndex]!.name}` : undefined
-            }
-            onChange={(event) => {
-              change(event.target.value);
-              setCaret(event.target.selectionStart ?? event.target.value.length);
-            }}
-            onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
-            onKeyDown={keyDown}
-            onPaste={paste}
-            data-testid="command-input"
-            className="text-foreground placeholder:text-muted-foreground max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 text-base leading-snug outline-none"
-          />
-          <button
-            type="button"
-            disabled={disabled || (!text.trim() && images.length === 0)}
-            onClick={() => void submit()}
-            aria-label="Send message"
-            data-testid="exec-button"
-            className="text-muted-foreground hover:text-foreground size-control min-h-9 min-w-9 flex-none disabled:pointer-events-none disabled:opacity-40"
-          >
-            ↵
-          </button>
-        </div>
-        {controls || modelEffort ? (
-          <div className="text-muted-foreground gap-sm flex min-w-0 items-center text-xs">
-            {controls}
-            {modelEffort ? (
-              <p className="min-w-0 truncate" data-testid="composer-model-effort">
-                model: {modelEffort.model ?? 'default'} · effort: {modelEffort.effort ?? 'default'}
-              </p>
-            ) : null}
           </div>
         ) : null}
-        {/* sr-only is absolutely positioned. The bar is its positioned ancestor, so it cannot grow the page. */}
-        <span role="status" className="sr-only">
-          {sending ? 'Sending' : ''}
-        </span>
+        {imageError ? (
+          <p
+            className="text-destructive px-md pt-xs text-xs"
+            role="alert"
+            data-testid="composer-image-error"
+          >
+            {imageError}
+          </p>
+        ) : null}
+        <div
+          className="px-md pt-sm pb-sm relative flex shrink-0 flex-col gap-1"
+          data-testid="input-bar"
+          aria-busy={sending || busy || turnBusy}
+          onDrop={drop}
+          onDragOver={dragOver}
+        >
+          {menuOpen ? (
+            <ul
+              id={listboxId}
+              role="listbox"
+              aria-label="Slash commands"
+              data-testid="slash-command-menu"
+              className="border-border bg-popover text-popover-foreground absolute inset-x-0 bottom-full z-10 mb-1 max-h-48 overflow-auto border text-sm shadow-md"
+            >
+              {matches.map((command, index) => (
+                <li
+                  key={command.name}
+                  id={`${listboxId}-${command.name}`}
+                  role="option"
+                  aria-selected={index === highlightIndex}
+                  data-testid={`slash-command-option-${command.name}`}
+                  className={cn(
+                    'px-md gap-sm min-h-control flex cursor-pointer items-baseline',
+                    index === highlightIndex && 'bg-accent text-accent-foreground'
+                  )}
+                  // A press here must not blur the textarea before the completion lands.
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    acceptCommand(command);
+                  }}
+                  onMouseEnter={() => setHighlight(index)}
+                >
+                  <span className="text-term-accent shrink-0">/{command.name}</span>
+                  <span className="text-muted-foreground truncate">{command.summary}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {/* One box, as in the live view: the prompt mark, the text and the send key. */}
+          <div
+            className={cn(
+              'border-border focus-within:border-ring pl-sm flex items-end gap-2 border p-1',
+              disabled && 'opacity-60'
+            )}
+          >
+            <span className="text-term-accent pb-1" aria-hidden="true">
+              ❯
+            </span>
+            <textarea
+              ref={input}
+              rows={1}
+              value={text}
+              disabled={disabled}
+              placeholder={placeholder(
+                offline,
+                busy || turnBusy,
+                loading,
+                unavailable,
+                closed ? closedPlaceholder : null,
+                (commands?.length ?? 0) > 0
+              )}
+              aria-label="Message"
+              aria-controls={menuOpen ? listboxId : undefined}
+              aria-activedescendant={
+                menuOpen ? `${listboxId}-${matches[highlightIndex]!.name}` : undefined
+              }
+              onChange={(event) => {
+                change(event.target.value);
+                setCaret(event.target.selectionStart ?? event.target.value.length);
+              }}
+              onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
+              onKeyDown={keyDown}
+              onPaste={paste}
+              data-testid="command-input"
+              className="text-foreground placeholder:text-muted-foreground max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 text-base leading-snug outline-none"
+            />
+            <button
+              type="button"
+              disabled={disabled || (!text.trim() && images.length === 0)}
+              onClick={() => void submit()}
+              aria-label="Send message"
+              data-testid="exec-button"
+              className="text-muted-foreground hover:text-foreground size-control min-h-9 min-w-9 flex-none disabled:pointer-events-none disabled:opacity-40"
+            >
+              ↵
+            </button>
+          </div>
+          {controls || modelEffort ? (
+            <div className="text-muted-foreground gap-sm flex min-w-0 items-center text-xs">
+              {controls}
+              {modelEffort ? (
+                <p className="min-w-0 truncate" data-testid="composer-model-effort">
+                  model: {modelEffort.model ?? 'default'} · effort:{' '}
+                  {modelEffort.effort ?? 'default'}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          {/* sr-only is absolutely positioned. The bar is its positioned ancestor, so it cannot grow the page. */}
+          <span role="status" className="sr-only">
+            {sending ? 'Sending' : ''}
+          </span>
+        </div>
       </div>
     </div>
   );

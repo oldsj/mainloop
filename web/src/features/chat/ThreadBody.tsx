@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
+import { MEASURE } from '@/components/shared/measure';
+import { cn } from '@/components/ui/cn';
 import { Composer } from './Composer';
 import { assignmentIds } from './assignments';
 import { MessageList } from './MessageList';
@@ -83,7 +85,7 @@ export function ThreadBody({
         </div>
       ) : null}
       {thread.conversationFailed && thread.loaded ? (
-        <p className="text-muted-foreground px-md py-xs text-xs" role="status">
+        <p className={cn('text-muted-foreground px-md py-xs text-xs', MEASURE)} role="status">
           Could not refresh the conversation. Showing the last messages.
         </p>
       ) : null}
@@ -104,7 +106,10 @@ export function ThreadBody({
 
       {thread.sendError ? (
         <p
-          className="text-destructive px-md py-xs shrink-0 text-sm [overflow-wrap:anywhere]"
+          className={cn(
+            'text-destructive px-md py-xs shrink-0 text-sm [overflow-wrap:anywhere]',
+            MEASURE
+          )}
           role="alert"
           data-testid="send-error"
         >
@@ -112,20 +117,28 @@ export function ThreadBody({
         </p>
       ) : null}
       {thread.stopError ? (
-        <p className="text-destructive px-md py-xs shrink-0 text-sm" role="alert">
+        <p className={cn('text-destructive px-md py-xs shrink-0 text-sm', MEASURE)} role="alert">
           {thread.stopError}
         </p>
       ) : null}
-      <TurnRecovery thread={thread} offline={offline} />
+      <div className={cn('shrink-0', MEASURE)}>
+        <TurnRecovery thread={thread} offline={offline} />
+      </div>
 
       {closedReason ? (
-        <p className="text-muted-foreground px-md py-xs shrink-0 text-sm" role="status">
+        <p
+          className={cn('text-muted-foreground px-md py-xs shrink-0 text-sm', MEASURE)}
+          role="status"
+        >
           {closedReason}
         </p>
       ) : null}
       {commandNotice ? (
         <p
-          className="text-muted-foreground px-md py-xs shrink-0 text-sm whitespace-pre-line"
+          className={cn(
+            'text-muted-foreground px-md py-xs shrink-0 text-sm whitespace-pre-line',
+            MEASURE
+          )}
           role="status"
           data-testid="command-notice"
         >
