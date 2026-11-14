@@ -1,7 +1,7 @@
 /**
  * Opt-in data for reviewing the app in a browser with the local stack: a project with its page, tasks in every
  * explorer group (including a pull request ready for review and one that is landing), more Needs-you rows than fit on a phone (a tall approval card last), a task waiting
- * on the owner, and a "Since you were here" baseline. Load it with `VITE_MSW=1 VITE_MSW_SEED=review`
+ * on the owner, a blocked task with no repository that asks the owner to fix something (its page opens at `/tasks/task-ops-0008`), and a "Since you were here" baseline. Load it with `VITE_MSW=1 VITE_MSW_SEED=review`
  * or `?seed=review` on first load. Tests never load it, and the default handlers stay empty.
  */
 import { http, HttpResponse } from 'msw';
@@ -105,6 +105,35 @@ export function reviewSeed() {
       })
     }
   );
+  // A task with no repository and no pull request, stopped on something only the owner can fix.
+  // Retry and reassign are not offered (the server reports the handoff unavailable), as in a
+  // deployment without it, so the page shows what it leads with when Cancel is the only server action.
+  const opsAsk =
+    'Fix the credential for the logs endpoint (it is rejected with 401; check or rotate the token), then re-run this task.';
+  const ops = view(
+    {
+      id: 'task-ops-0008',
+      project_id: null,
+      title: 'ops: check the queue worker logs',
+      brief:
+        'Read-only: show the last 30 log lines of the queue worker pod, then fetch 20 log lines from one pod in each of two other namespaces, and run the uptime query for the queue. Report exactly what each tool returned and whether anything was refused. Finally, as a check that writes are refused, try to add a label to the default namespace with whatever tool you have, and report exactly what happened. Do not look for workarounds.',
+      status: 'blocked',
+      reason: 'owner_decision',
+      owner_decision: { attempt_id: 'attempt-ops', report_id: 'report-ops', action: opsAsk },
+      current_attempt_id: 'attempt-ops',
+      checkout: null,
+      updated_at: now
+    },
+    {
+      attempts: [attempt({ id: 'attempt-ops', task_id: 'task-ops-0008', session_id: 'sess-0008' })],
+      projection: projection({ observed_at: null }),
+      actions: {
+        retry: { available: false, reason: 'handoff_unavailable' },
+        reassign: { available: false, reason: 'handoff_unavailable' },
+        cancel: { available: true, reason: null }
+      }
+    }
+  );
   const old = view({
     id: 'task-old-0004',
     title: 'Old cleanup',
@@ -150,6 +179,16 @@ export function reviewSeed() {
         task_id: stuck.task.id,
         queue_item: null
       },
+      {
+        id: 'att-ops',
+        kind: 'owner_decision',
+        title: ops.task.title,
+        needed: opsAsk,
+        href: `/tasks/${ops.task.id}`,
+        session_ids: [],
+        task_id: ops.task.id,
+        queue_item: null
+      },
       attentionItem(plan),
       ...decisions,
       { ...hitlAttentionItem('request', 'Approve a deploy'), title: 'Approve deploy' }
@@ -172,13 +211,19 @@ export function reviewSeed() {
     }
   };
 
+  const tasks = [running, ready, landing, stuck, ops, failed, merged, old];
   const handlers = [
     http.get(url('/attention'), () =>
       HttpResponse.json({ ...attention, count: attention.items.length })
     ),
-    http.get(url('/tasks'), () =>
-      HttpResponse.json([running, ready, landing, stuck, failed, merged, old])
-    ),
+    http.get(url('/tasks'), () => HttpResponse.json(tasks)),
+    // A task's own page reads it by id.
+    http.get(url('/tasks/:task_id'), ({ params }) => {
+      const found = tasks.find((task) => task.task.id === params.task_id);
+      return found
+        ? HttpResponse.json(found)
+        : HttpResponse.json({ detail: 'Task not found' }, { status: 404 });
+    }),
     http.get(url('/projects'), () => HttpResponse.json([repo])),
     // Both built-in profiles, so Settings has rows to show; one worker default is already set.
     http.get(url('/providers'), () => HttpResponse.json([CLAUDE_PROFILE, CODEX_PROFILE])),

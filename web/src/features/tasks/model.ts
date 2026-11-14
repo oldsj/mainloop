@@ -5,7 +5,6 @@
  */
 import type { TaskProjection, TaskView } from '@/lib/contract';
 import type { ActionIntent, ActionOutcome } from '@/lib/taskActions';
-import { currentAttempt } from '@/lib/taskState';
 
 export type NoticeTone = 'info' | 'warn' | 'error';
 
@@ -52,11 +51,43 @@ export function resendSummary(intent: ActionIntent): string {
   return `Original ${intent.kind}: version ${intent.body.expected_version}, attempt ${attempt}, target ${target}.`;
 }
 
-/** The version and attempt a new action will act on, so the owner knows what they are changing. */
-export function actingOn(view: TaskView): string {
-  const attempt = currentAttempt(view);
-  const at = attempt ? `, attempt ${attempt.number}` : ', no attempt yet';
-  return `Acting on version ${view.task.version}${at}.`;
+/**
+ * The start of a message to Mainloop about this task, in the form the explorer's "Ask Mainloop"
+ * uses, so the main thread reads both the same way. `say` is the sentence that follows.
+ */
+export function askAbout(view: TaskView, say = ''): string {
+  const title = view.task.title.trim() || 'untitled';
+  return `About task ${title} (${view.task.id.slice(0, 8)}): ${say}`;
+}
+
+/** What "I fixed it, retry" puts in the composer. It is not sent until the owner sends it. */
+export const FIXED_RETRY = 'I fixed it. Retry this task.';
+
+/**
+ * Whether the task is stopped on something only the owner can clear: an open decision, or a
+ * blocked or failed task. Such a task leads with the ways to clear it.
+ */
+export function waitsOnOwner(view: TaskView): boolean {
+  const { status, owner_decision } = view.task;
+  return owner_decision != null || status === 'blocked' || status === 'failed';
+}
+
+/**
+ * Whether the task has anything to say about a pull request: a repository or branch to publish
+ * from, or a publication fact the server has reported. A task with neither (an ops task, say) has no pull
+ * request section at all.
+ */
+export function hasPublication(view: TaskView): boolean {
+  const p = view.projection;
+  return Boolean(
+    p.repository ||
+    view.task.checkout?.branch ||
+    p.pr_number != null ||
+    p.pr_url ||
+    (p.pr_state ?? 'unknown') !== 'unknown' ||
+    p.merge_state ||
+    p.pr_description
+  );
 }
 
 /** The list's line for rows this page cannot read. Such a row is not shown, and the line says so. */
