@@ -1,3 +1,4 @@
+import { BACK_LINK, BackIcon, PageHeader } from '@/components/shared/page-header';
 import { useState } from 'react';
 import { useNavigate, Link } from '@tanstack/react-router';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
@@ -43,14 +44,14 @@ export function ScheduleCreatePage() {
 
   return (
     <div className="gap-lg p-md flex min-w-0 flex-col">
-      <header className="gap-sm flex flex-col">
-        <p className="text-muted-foreground text-sm">
-          <Link to="/schedules" className="text-foreground underline">
-            Scheduled runs
+      <PageHeader
+        title="New schedule"
+        back={
+          <Link to="/schedules" aria-label="Back to scheduled runs" className={BACK_LINK}>
+            <BackIcon />
           </Link>
-        </p>
-        <h1 className="text-xl font-medium">New schedule</h1>
-      </header>
+        }
+      />
 
       {providers.isError ? (
         <ErrorRecovery

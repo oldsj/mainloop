@@ -1,3 +1,4 @@
+import { BACK_LINK, BackIcon, PageHeader } from '@/components/shared/page-header';
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
@@ -219,14 +220,14 @@ function ScheduleEditor({ id, latest }: { id: string; latest: ScheduleView }) {
 
   return (
     <div className="gap-lg p-md flex min-w-0 flex-col">
-      <header className="gap-sm flex flex-col">
-        <p className="text-muted-foreground text-sm">
-          <Link to="/schedules" className="text-foreground underline">
-            Scheduled runs
+      <PageHeader
+        title="Schedule"
+        back={
+          <Link to="/schedules" aria-label="Back to scheduled runs" className={BACK_LINK}>
+            <BackIcon />
           </Link>
-        </p>
-        <h1 className="text-xl font-medium">Schedule</h1>
-      </header>
+        }
+      />
 
       <div className="border-border p-md min-w-0 border">
         <ScheduleCard

@@ -1,3 +1,4 @@
+import { BACK_LINK, BackIcon, PageHeader } from '@/components/shared/page-header';
 import { Link } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
@@ -86,24 +87,20 @@ export function HealthPage({ search }: { search: HealthSearch }) {
 
   return (
     <article className="p-md gap-md mx-auto flex w-full max-w-6xl flex-col">
-      <Link
-        to="/"
-        className="text-muted-foreground min-h-control inline-flex items-center text-sm underline underline-offset-4"
-      >
-        Home
-      </Link>
-
-      <header className="gap-md flex flex-wrap items-start justify-between">
-        <div>
-          <h1 className="text-lg font-medium">Orchestration health</h1>
-          <p className="text-muted-foreground mt-sm max-w-prose text-sm">
-            Tool failures and reported tokens, alongside blocked claims and approval state.
-          </p>
-        </div>
-        <Button variant="outline" onClick={refresh} disabled={busy}>
-          {busy ? 'Refreshing…' : 'Refresh'}
-        </Button>
-      </header>
+      <PageHeader
+        title="Orchestration health"
+        description="Tool failures and reported tokens, alongside blocked claims and approval state."
+        back={
+          <Link to="/" aria-label="Back to the main chat" className={BACK_LINK}>
+            <BackIcon />
+          </Link>
+        }
+        actions={
+          <Button variant="outline" onClick={refresh} disabled={busy}>
+            {busy ? 'Refreshing…' : 'Refresh'}
+          </Button>
+        }
+      />
 
       <div className="border-border-subtle mt-sm py-sm border-y">
         <button

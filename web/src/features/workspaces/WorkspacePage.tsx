@@ -1,3 +1,4 @@
+import { BACK_LINK, BackIcon, PageHeader } from '@/components/shared/page-header';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
@@ -100,22 +101,21 @@ export function WorkspacePage({ id }: { id: string }) {
   return (
     <article className="p-md gap-md mx-auto flex max-w-4xl flex-col">
       <header className="gap-sm border-border-subtle pb-md flex flex-col border-b">
-        <Link
-          to="/sessions/$id"
-          params={{ id: workspace.session_id }}
-          className="text-muted-foreground min-h-control self-start text-xs underline"
-        >
-          Back to session
-        </Link>
-        <div className="gap-sm flex flex-wrap items-start justify-between">
-          <div className="min-w-0">
-            <h1 className="text-lg font-medium">Workspace</h1>
-            <div className="text-muted-foreground">
-              <ShortId id={workspace.workspace_id} label="workspace" />
-            </div>
-          </div>
-          <WorkspaceLifecycleBadge workspace={workspace} />
-        </div>
+        <PageHeader
+          title="Workspace"
+          back={
+            <Link
+              to="/sessions/$id"
+              params={{ id: workspace.session_id }}
+              aria-label="Back to session"
+              className={BACK_LINK}
+            >
+              <BackIcon />
+            </Link>
+          }
+          status={<WorkspaceLifecycleBadge workspace={workspace} />}
+          description={<ShortId id={workspace.workspace_id} label="workspace" />}
+        />
         {task ? (
           <p data-testid="workspace-task-link" className="text-sm">
             <span className="text-muted-foreground">Task </span>

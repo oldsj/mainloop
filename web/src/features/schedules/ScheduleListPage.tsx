@@ -1,3 +1,4 @@
+import { PageHeader } from '@/components/shared/page-header';
 import { Link } from '@tanstack/react-router';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Button } from '@/components/ui/button';
@@ -12,17 +13,15 @@ export function ScheduleListPage() {
 
   return (
     <div className="gap-lg p-md flex min-w-0 flex-col">
-      <header className="gap-sm flex flex-col">
-        <h1 className="text-xl font-medium">Scheduled runs</h1>
-        <p className="text-muted-foreground text-sm">
-          An agent runs your prompt on a timetable. Each run starts a native session you can open.
-        </p>
-        <div>
+      <PageHeader
+        title="Scheduled runs"
+        description="An agent runs your prompt on a timetable. Each run starts a native session you can open."
+        actions={
           <Button asChild>
             <Link to="/schedules/new">New schedule</Link>
           </Button>
-        </div>
-      </header>
+        }
+      />
 
       {schedules.isPending ? <p className="text-sm">Loading schedules…</p> : null}
 

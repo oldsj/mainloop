@@ -1,3 +1,4 @@
+import { PageHeader } from '@/components/shared/page-header';
 import { API_SAME_ORIGIN, SIGN_OUT_PATH } from '@/api/signin';
 import { ThemeSelector } from '@/shell/ThemeSelector';
 import { ImportProjectSection } from './ImportProjectSection';
@@ -7,7 +8,7 @@ import { SessionDefaultsSection } from './SessionDefaultsSection';
 export function SettingsPage() {
   return (
     <div className="gap-lg p-md mx-auto flex w-full max-w-3xl flex-col" data-testid="settings-page">
-      <h1 className="text-lg font-semibold">Settings</h1>
+      <PageHeader title="Settings" />
       <SessionDefaultsSection />
       <ImportProjectSection />
       <section aria-labelledby="appearance-heading" className="gap-sm flex flex-col">
