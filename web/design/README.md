@@ -103,7 +103,7 @@ A row's state is one dot, in the same language as herdr's agent list, so the two
 - The accent blue is for focus, selection and links only. It is not a status.
 - `term-green` is for facts that are good, not for a row's state: a healthy connection, passing CI, a merged PR, diff additions and success notices.
 - Warning paragraphs still use `term-yellow` directly; that is text, not a status.
-- "Seen" is kept per browser for now (see `docs/specs/layout.md`).
+- "Seen" is the owner's, kept on the server, so it follows them between devices (see `docs/specs/seen.md`).
 
 ## Radius
 
