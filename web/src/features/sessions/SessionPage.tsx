@@ -168,7 +168,10 @@ export function SessionPage({ id }: { id: string }) {
   const canCancel = CANCELLABLE.includes(session.status);
   const canArchive = CLEARABLE.includes(session.status);
   // A session whose agent runs the SDK runner is driven live. `?live=1` forces it for local work.
-  const live = !archived && (native.data?.live === true || liveForced()) && !chatView;
+  // A cancelled session has no runner left to attach to: the live view would say "reconnecting…"
+  // for ever, so it gets the regular view, with its record and the Clear action.
+  const cancelled = session.status === 'cancelled';
+  const live = !archived && !cancelled && (native.data?.live === true || liveForced()) && !chatView;
 
   function runStop() {
     setNotice(null);
@@ -224,7 +227,7 @@ export function SessionPage({ id }: { id: string }) {
           <BackLink taskId={task?.view.task.id ?? null} projectId={session.project_id} />
           <span data-testid="session-status">
             <StatusBadge
-              label={`[${statusLabel(session.status, session.needs_owner)}]`}
+              label={statusLabel(session.status, session.needs_owner)}
               tone={sessionTone(session)}
             />
           </span>

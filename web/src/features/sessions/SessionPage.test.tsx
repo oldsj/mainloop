@@ -67,6 +67,24 @@ describe('session page', () => {
     await waitFor(() => expect(screen.getByTestId('live-status')).toHaveTextContent('needs you'));
   });
 
+  it('does not try to attach to a cancelled session, whose runner is gone', async () => {
+    const runner = createFakeRunner();
+    server.use(
+      ...runner.handlers,
+      ...serveSession(
+        session({ id: 's1', status: 'cancelled' }),
+        native({ session_id: 's1', live: true })
+      )
+    );
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    // The regular view: the record and the Clear action, and nothing that says "reconnecting…".
+    expect(await screen.findByTestId('identity-strip')).toBeInTheDocument();
+    expect(screen.queryByTestId('live-session')).not.toBeInTheDocument();
+    expect(screen.getByTestId('session-status')).toHaveTextContent(/^cancelled$/i);
+    expect(screen.getByTestId('archive-session')).toBeInTheDocument();
+  });
+
   it('keeps the regular view for a session that is not live', async () => {
     server.use(...serveSession(session({ id: 's1' }), native({ session_id: 's1', live: false })));
     renderSessions('/sessions/s1');
@@ -84,7 +102,7 @@ describe('session page', () => {
     renderSessions('/sessions/s1');
     expect(await heading('Fix login redirect')).toBeInTheDocument();
     expect(screen.getByText('Investigate the loop.')).toBeInTheDocument();
-    expect(screen.getByTestId('session-status')).toHaveTextContent('[ACTIVE]');
+    expect(screen.getByTestId('session-status')).toHaveTextContent(/^active$/i);
     expect(screen.getByRole('link', { name: 'Back' })).toHaveAttribute('href', '/');
   });
 
