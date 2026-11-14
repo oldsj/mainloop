@@ -6,12 +6,13 @@ import (
 	"slices"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
 // Session default roles: the main thread, and every other session (task sessions, supervisors).
 const (
-	DefaultRoleMain   = "main"
-	DefaultRoleWorker = "worker"
+	DefaultRoleMain   = string(dbstate.DefaultRoleMain)
+	DefaultRoleWorker = string(dbstate.DefaultRoleWorker)
 )
 
 // SessionDefault is the owner's default model and effort for one role and provider profile. A nil
