@@ -637,9 +637,9 @@ func (q *Queries) ListHITLDiagnostics(ctx context.Context, ownerID string) ([]Li
 }
 
 const listHITLSessionsToScan = `-- name: ListHITLSessionsToScan :many
-SELECT hs.kagent_session_id, hs.session_id, hs.owner_id, hs.agent_namespace, hs.agent_name, hs.context_id, hs.task_cursor, hs.scanned_at, hs.failures, hs.next_scan_at, hs.created_at, hs.updated_at FROM hitl_sessions hs
+SELECT hs.kagent_session_id, hs.session_id, hs.owner_id, hs.agent_namespace, hs.agent_name, hs.context_id, hs.task_cursor, hs.scanned_at, hs.failures, hs.next_scan_at, hs.created_at, hs.updated_at, hs.gone_at FROM hitl_sessions hs
 JOIN sessions s ON s.id = hs.session_id AND s.archived_at IS NULL
-WHERE hs.owner_id = $1
+WHERE hs.owner_id = $1 AND hs.gone_at IS NULL
   AND (hs.scanned_at IS NULL OR hs.scanned_at <= now() - make_interval(secs => $2::float8))
   AND (hs.next_scan_at IS NULL OR hs.next_scan_at <= now())
 ORDER BY hs.scanned_at NULLS FIRST, hs.kagent_session_id
@@ -674,6 +674,7 @@ func (q *Queries) ListHITLSessionsToScan(ctx context.Context, arg ListHITLSessio
 			&i.NextScanAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.GoneAt,
 		); err != nil {
 			return nil, err
 		}
@@ -701,6 +702,52 @@ type ListHITLToRefreshParams struct {
 
 func (q *Queries) ListHITLToRefresh(ctx context.Context, arg ListHITLToRefreshParams) ([]HitlRequest, error) {
 	rows, err := q.db.Query(ctx, listHITLToRefresh, arg.OwnerID, arg.EverySeconds, arg.MaxRequests)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []HitlRequest{}
+	for rows.Next() {
+		var i HitlRequest
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.SessionID,
+			&i.KagentSessionID,
+			&i.AgentNamespace,
+			&i.AgentName,
+			&i.ContextID,
+			&i.TaskID,
+			&i.StatusMessageID,
+			&i.RequestHash,
+			&i.Kind,
+			&i.Payload,
+			&i.Availability,
+			&i.UnavailableReason,
+			&i.ObservedAt,
+			&i.CheckedAt,
+			&i.AttemptedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLiveHITLForKagentSession = `-- name: ListLiveHITLForKagentSession :many
+SELECT id, owner_id, session_id, kagent_session_id, agent_namespace, agent_name, context_id, task_id, status_message_id, request_hash, kind, payload, availability, unavailable_reason, observed_at, checked_at, attempted_at, created_at, updated_at FROM hitl_requests
+WHERE kagent_session_id = $1 AND availability IN ('pending', 'stale')
+ORDER BY id
+`
+
+func (q *Queries) ListLiveHITLForKagentSession(ctx context.Context, kagentSessionID string) ([]HitlRequest, error) {
+	rows, err := q.db.Query(ctx, listLiveHITLForKagentSession, kagentSessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -892,6 +939,21 @@ func (q *Queries) MarkHITLResponseUncertain(ctx context.Context, arg MarkHITLRes
 	var i MarkHITLResponseUncertainRow
 	err := row.Scan(&i.Rechecks, &i.UpdatedAt)
 	return i, err
+}
+
+const markHITLSessionGone = `-- name: MarkHITLSessionGone :execrows
+UPDATE hitl_sessions
+SET gone_at = now(), task_cursor = NULL, failures = 0, next_scan_at = NULL, updated_at = now()
+WHERE kagent_session_id = $1 AND gone_at IS NULL
+`
+
+// kagent no longer has this conversation: it is not scanned again.
+func (q *Queries) MarkHITLSessionGone(ctx context.Context, kagentSessionID string) (int64, error) {
+	result, err := q.db.Exec(ctx, markHITLSessionGone, kagentSessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const pruneHITLDiagnostics = `-- name: PruneHITLDiagnostics :exec

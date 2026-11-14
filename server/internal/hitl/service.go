@@ -66,6 +66,10 @@ type Kagent interface {
 	// caller reads the task to learn whether kagent took it. An error for which kagent.NotSent is
 	// true proves nothing was sent.
 	SendHITL(ctx context.Context, agent kagent.AgentRef, s Send) error
+	// AgentExists reports whether kagent has the Agent. kagent answers a missing Agent and a missing
+	// conversation with the same not-found, so the observer asks before it gives a conversation up.
+	// An error proves neither.
+	AgentExists(ctx context.Context, agent kagent.AgentRef) (bool, error)
 }
 
 // AgentResolver says which kagent Agent runs a session. kagent scopes a conversation to the Agent

@@ -35,7 +35,7 @@ WHERE h.owner_id = $1
 -- name: ListHITLSessionsToScan :many
 SELECT hs.* FROM hitl_sessions hs
 JOIN sessions s ON s.id = hs.session_id AND s.archived_at IS NULL
-WHERE hs.owner_id = $1
+WHERE hs.owner_id = $1 AND hs.gone_at IS NULL
   AND (hs.scanned_at IS NULL OR hs.scanned_at <= now() - make_interval(secs => sqlc.arg(every_seconds)::float8))
   AND (hs.next_scan_at IS NULL OR hs.next_scan_at <= now())
 ORDER BY hs.scanned_at NULLS FIRST, hs.kagent_session_id
@@ -55,6 +55,17 @@ UPDATE hitl_sessions
 SET failures = failures + 1, updated_at = now(),
     next_scan_at = now() + make_interval(secs => sqlc.arg(delay_seconds)::float8)
 WHERE kagent_session_id = sqlc.arg(kagent_session_id);
+
+-- name: MarkHITLSessionGone :execrows
+-- kagent no longer has this conversation: it is not scanned again.
+UPDATE hitl_sessions
+SET gone_at = now(), task_cursor = NULL, failures = 0, next_scan_at = NULL, updated_at = now()
+WHERE kagent_session_id = $1 AND gone_at IS NULL;
+
+-- name: ListLiveHITLForKagentSession :many
+SELECT * FROM hitl_requests
+WHERE kagent_session_id = $1 AND availability IN ('pending', 'stale')
+ORDER BY id;
 
 -- name: ListHITLToRefresh :many
 SELECT * FROM hitl_requests

@@ -77,6 +77,9 @@ func (s *Service) Observe(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if s.retireGoneSession(ctx, hs, err) {
+			continue
+		}
 		s.diagnose(ctx, hs.KagentSessionID, errDetail(err))
 		if stopsScan(err) {
 			break // kagent is not there, or refused our bearer: the other sessions would fail the same way
@@ -107,6 +110,45 @@ func (s *Service) Observe(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// retireGoneSession stops scanning a session whose conversation kagent no longer has, and reports
+// whether it did. kagent answers the listing of a missing conversation and of a missing Agent with
+// the same not-found, so the session is given up only once kagent shows the Agent; a missing Agent,
+// or one that cannot be read, leaves the session to the usual backoff. The session's live requests
+// become unavailable: nobody can answer them any more.
+func (s *Service) retireGoneSession(ctx context.Context, hs dbq.HitlSession, err error) bool {
+	var gone *kagent.TaskNotFound
+	if !errors.As(err, &gone) {
+		return false
+	}
+	rctx, cancel := context.WithTimeout(ctx, s.opts().ReadTimeout)
+	exists, aerr := s.Kagent.AgentExists(rctx, s.agentOf(hs.AgentNamespace, hs.AgentName))
+	cancel()
+	if aerr != nil || !exists {
+		return false
+	}
+	q := dbq.New(s.Pool)
+	live, lerr := q.ListLiveHITLForKagentSession(ctx, hs.KagentSessionID)
+	if lerr != nil {
+		s.log().WarnContext(ctx, "list requests of a gone hitl session", "kagent_session_id", hs.KagentSessionID, "error", lerr)
+		return false
+	}
+	for _, r := range live {
+		if serr := s.setAvailability(ctx, r, dbstate.HITLUnavailable, "kagent no longer has this conversation",
+			dbstate.HITLPending, dbstate.HITLStale); serr != nil {
+			s.log().WarnContext(ctx, "close a request of a gone hitl session", "request_id", r.ID, "error", serr)
+			return false
+		}
+	}
+	// Mark it gone only after its requests are closed, so a failure above is retried by a later scan.
+	if _, merr := q.MarkHITLSessionGone(ctx, hs.KagentSessionID); merr != nil {
+		s.log().WarnContext(ctx, "mark hitl session gone", "kagent_session_id", hs.KagentSessionID, "error", merr)
+		return false
+	}
+	s.log().InfoContext(ctx, "hitl session gone from kagent; no longer scanned",
+		"kagent_session_id", hs.KagentSessionID, "session_id", hs.SessionID, "closed_requests", len(live))
+	return true
 }
 
 // stopsScan reports a failure that every session would meet: kagent is unreachable, or it refused
