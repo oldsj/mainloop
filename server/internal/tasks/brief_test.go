@@ -97,7 +97,7 @@ func TestBriefCarriesProjectInstructionsBeforeTheGuidance(t *testing.T) {
 	for _, mode := range []dbstate.TaskMode{dbstate.TaskModeCode, dbstate.TaskModeCoordination} {
 		got := tasks.DelegatedBrief(dbstate.AttemptChild, mode, work, section)
 		w, p, g := strings.Index(got, "## Assigned work"), strings.Index(got, "## Project instructions (owner, v3)"), strings.Index(got, agentcontext.Guidance)
-		if w < 0 || p < 0 || g < 0 || !(w < p && p < g) {
+		if w < 0 || p < 0 || g < 0 || w >= p || p >= g {
 			t.Fatalf("%s: want assigned work, then project instructions, then guidance:\n%s", mode, got)
 		}
 		if !strings.Contains(got, "UI demos use fictional data.\n") {
