@@ -1,9 +1,18 @@
 import { Link, useRouterState } from '@tanstack/react-router';
-import { Activity, FolderGit2, Inbox, ListTree, Settings, type LucideIcon } from 'lucide-react';
+import {
+  Activity,
+  FolderGit2,
+  Inbox,
+  ListTree,
+  Search,
+  Settings,
+  type LucideIcon
+} from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '@/components/ui/cn';
 import { badgeText } from '@/features/inbox/model';
 import { SIDEBAR_VIEWS, type SidebarView } from '@/features/explorer';
+import { shortcutLabel } from '@/lib/platform';
 import { LogoMark } from './LogoMark';
 import { ThemeSelector } from './ThemeSelector';
 
@@ -23,6 +32,8 @@ export interface ActivityBarProps {
   needs: number;
   /** Shows a view. Choosing the view that is already showing hides the sidebar. */
   onView: (view: SidebarView) => void;
+  /** Opens the command palette. */
+  onSearch: () => void;
 }
 
 /**
@@ -31,7 +42,7 @@ export interface ActivityBarProps {
  * and the theme. The Inbox is first because what needs the owner is the first thing to check. The
  * count is always on screen here, whichever view the sidebar shows and when it is hidden.
  */
-export function ActivityBar({ view, collapsed, needs, onView }: ActivityBarProps) {
+export function ActivityBar({ view, collapsed, needs, onView, onSearch }: ActivityBarProps) {
   const path = useRouterState({ select: (state) => state.location.pathname });
   return (
     <nav
@@ -83,6 +94,16 @@ export function ActivityBar({ view, collapsed, needs, onView }: ActivityBarProps
           </button>
         );
       })}
+      <button
+        type="button"
+        aria-label="Search"
+        title={`Search and commands (${shortcutLabel('k')})`}
+        onClick={onSearch}
+        data-testid="activity-search"
+        className={ITEM}
+      >
+        <Search aria-hidden="true" />
+      </button>
       <span className="flex-1" />
       <RouteItem
         to="/health"

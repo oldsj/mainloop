@@ -21,6 +21,7 @@ Each file in `guidelines/` covers one product component: purpose, states, keyboa
 
 - `guidelines/activity-list.md`
 - `guidelines/attention-card.md`
+- `guidelines/command-palette.md`
 - `guidelines/composer.md`
 - `guidelines/confirm-dialog.md`
 - `guidelines/delivery-receipt.md`

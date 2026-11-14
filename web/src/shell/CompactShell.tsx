@@ -1,5 +1,13 @@
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
-import { Activity, Compass, Inbox, MessageSquare, Settings, type LucideIcon } from 'lucide-react';
+import {
+  Activity,
+  Compass,
+  Inbox,
+  MessageSquare,
+  Search,
+  Settings,
+  type LucideIcon
+} from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
@@ -51,10 +59,13 @@ function TabPane({ active, children }: { active: boolean; children: ReactNode })
 export function CompactShell({
   tab,
   lastVisit,
+  onSearch,
   children
 }: {
   tab: Tab;
   lastVisit: number | null;
+  /** Opens the command palette. */
+  onSearch: () => void;
   children: ReactNode;
 }) {
   const navigate = useNavigate();
@@ -104,6 +115,15 @@ export function CompactShell({
                 title={EXPLORER_TAB_LABEL}
                 actions={
                   <>
+                    <button
+                      type="button"
+                      data-testid="header-search"
+                      aria-label="Search"
+                      onClick={onSearch}
+                      className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }))}
+                    >
+                      <Search aria-hidden="true" />
+                    </button>
                     <Link
                       to="/health"
                       data-testid="header-health"
