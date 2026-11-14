@@ -2,9 +2,9 @@ import { useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { ActivityList } from './ActivityList';
 import { AttentionList, ProblemList } from './AttentionList';
-import { attentionItems, badgeText, problemItems, unresolvedCount } from './model';
+import { badgeText } from './model';
+import { needsTotal, problemTotal, useOwnerWork } from './ownerWork';
 import { useAttentionPoll } from './poll';
-import { useAttention } from './queries';
 
 export type InboxView = 'needs' | 'problems' | 'activity';
 
@@ -29,10 +29,12 @@ export function InboxPanel({
   const [own, setOwn] = useState<InboxView>('needs');
   const view = shown ?? own;
   const show = onView ?? setOwn;
-  const attention = useAttention();
   useAttentionPoll();
-  const count = badgeText(unresolvedCount(attention.data));
-  const problemCount = badgeText(problemItems(attentionItems(attention.data)).length);
+  // The same list the tree and the status bar count, so the number on a badge is the number of rows
+  // its view shows.
+  const work = useOwnerWork();
+  const count = badgeText(needsTotal(work));
+  const problemCount = badgeText(problemTotal(work));
 
   return (
     <section aria-labelledby="inbox-heading" className="flex flex-col">

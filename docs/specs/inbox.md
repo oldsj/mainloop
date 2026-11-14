@@ -9,6 +9,18 @@ cards, and tasks explicitly blocked on an owner decision. Each item states what 
 links to its canonical input card or task. Idle sessions, CI waits, publication updates and
 ordinary reconciliation do not imply owner attention. An empty inbox says **Nothing needs you**.
 
+**One number.** The Needs-you number is the same wherever it shows (the activity bar's Inbox item,
+the status bar, the phone's Needs you tab, the tree's Needs you heading and the Inbox's own Needs
+you tab), and it is the number of rows the Inbox's Needs you view lists. It counts the owner
+actions `GET /attention` lists, plus each task that needs a decision and that no listed item names:
+a failed task that can still be retried, reassigned or cancelled, a blocked task, or a task whose
+pull request waits on the owner. Those tasks follow the listed items in the Inbox, newest first,
+each with its state and a link to its page, where it is decided. A task the main thread has set
+aside (Snoozed) is left out until its time passes. The **Problems** number works the same way: the
+listed problems plus each task Mainloop is recovering that no listed problem names, and the
+Problems view lists both. The client derives the task rows from the task read; the server's
+`count` field is not what the web app shows.
+
 Needs you holds only items with a real owner decision (kind `approval`, `question` or
 `owner_decision`, or the low-priority `review`). A `review` item is an agent's proposal that waits on
 the owner with nothing blocked on it, such as a project's memory proposals (one item per project; see
@@ -124,7 +136,7 @@ History before `e776537` describes the retired Python backend. Where other text 
 - **Implemented:** the **Problems** list, the same `GET /attention` read filtered the other way (kind == `problem`): a stall or an unresolved runtime stop, with a plain-language explanation and a **Review task evidence** link, never a decision's buttons. The empty state says **Nothing here**.
 - **Implemented:** the **Activity** view from `GET /activity`, read only while it is open. Provider reports keep the server's `unverified` label and link to their task.
 - **Implemented:** **Dismiss notice** on an Activity row the server marks `dismissible` (an input notice with no structured request reference), through `POST /queue/{id}/dismiss` with the row's `queue_item_id`. The client does not copy the rule. The row leaves Activity at once. A refusal, including a `409`, restores the row and shows the server's reason above the list. That reason clears once the re-read removes the row. Both Needs you and Activity re-read once the request settles, so the owner sees the current state.
-- **Implemented:** the count covers unresolved, real-decision attention only (never a problem) and reads `99+` above 99. Attention polls only while the page is visible, one read at a time, on the shared cadence and deadline. `inbox:updated` refreshes attention and activity.
+- **Implemented:** the count covers unresolved, real-decision attention and the tasks that need a decision without an item of their own (never a problem; see **One number** above) and reads `99+` above 99. Attention polls only while the page is visible, one read at a time, on the shared cadence and deadline. `inbox:updated` refreshes attention and activity.
 - **Implemented:** the Needs-you count is always on screen. On the phone it is a red badge on the **Needs you** tab, which opens the answer view, and that tab's accessible name includes it. On desktop it is on the activity bar's **Inbox** item and in the status bar. In both layouts it is also on the tree's **Needs you** group. A separate **Problems** group sits just below it, counting only problems, muted rather than attention-coloured. The explorer reads attention, so it keeps polling while the chat or another page is open.
 - **Implemented:** the answer view at `/inbox` (`?show=activity` for Activity, `?show=problems` for Problems, `?item=<request or queue item id>` for one row). It replaces the chat in the centre column. The explorer's **Needs you** and **Problems** groups and each of their rows, the waiting row under **Since you were here**, a task's **Open Inbox** link and an old `/?tab=inbox` link open it. The chosen row is brought to the top of the view and marked, and it is brought back to the top while its card fills in, until the owner scrolls, taps or types. The view's header (the back link, **Needs you**, **Problems** and **Activity**) stays at the top while the list scrolls. The view has one scroll: the page's own.
 - **Implemented:** a task page whose current attempt holds an open `owner_decision` leads with the ask (the report's `owner_action`, `Task.owner_decision.action`) and the actions that answer it (`features/tasks/TaskActions`), before the task's facts and history, which sit behind a collapsed **Task details** disclosure. A task with no open owner decision keeps the plain, uncollapsed layout.

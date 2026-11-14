@@ -5,16 +5,10 @@ import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import { HITLCard } from '@/features/hitl';
 import { type AnsweredRequest, useAnswered } from '@/features/hitl/hitl-client';
-import {
-  type AttentionItem,
-  attentionAnchor,
-  attentionItems,
-  attentionKey,
-  messageOf,
-  needsYouItems,
-  problemItems,
-  taskIdOf
-} from './model';
+import { statusLine } from '@/features/home/model';
+import type { TaskView } from '@/lib/contract';
+import { type AttentionItem, attentionAnchor, attentionKey, messageOf, taskIdOf } from './model';
+import { useOwnerWork } from './ownerWork';
 import { QueueCard } from './QueueCard';
 import { useAttention } from './queries';
 
@@ -24,14 +18,16 @@ const SETTLE_MS = 3000;
 const STOP_EVENTS = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
 
 /**
- * Needs you: what the owner must answer or decide now, in the order the server sent it. A problem
- * (a stall, an unconfirmed stop) is Mainloop's own recovery work, not a decision, so it is left out
+ * Needs you: what the owner must answer or decide now, in the order the server sent it, followed by
+ * the tasks that need a decision and that no listed item names (see `ownerWork`). A problem (a
+ * stall, an unconfirmed stop) is Mainloop's own recovery work, not a decision, so it is left out
  * here; see `ProblemList`. The row whose key is `selected` (an approval request id or a queue item
  * id) is scrolled into view once it is listed.
  */
 export function AttentionList({ selected }: { selected?: string }) {
   const attention = useAttention();
-  const items = needsYouItems(attentionItems(attention.data));
+  const work = useOwnerWork();
+  const items = work.needs;
 
   // Brings the selected row to the top when it is first listed. Cards fill in after that, the selected
   // one and those above it, so the row is brought back to the top while the list grows, until the owner
@@ -73,7 +69,12 @@ export function AttentionList({ selected }: { selected?: string }) {
   return (
     <div className="flex flex-col">
       {failure}
-      <AttentionRows items={items} refreshFailed={attention.isError} selected={selected} />
+      <AttentionRows
+        items={items}
+        tasks={work.needsTasks}
+        refreshFailed={attention.isError}
+        selected={selected}
+      />
     </div>
   );
 }
@@ -85,7 +86,8 @@ export function AttentionList({ selected }: { selected?: string }) {
  */
 export function ProblemList() {
   const attention = useAttention();
-  const items = problemItems(attentionItems(attention.data));
+  const work = useOwnerWork();
+  const items = work.problems;
 
   const failure = attention.isError ? (
     <div className="p-md" data-testid="inbox-error">
@@ -113,6 +115,8 @@ export function ProblemList() {
       {failure}
       <AttentionRows
         items={items}
+        tasks={work.problemTasks}
+        taskAction="Review task evidence"
         refreshFailed={attention.isError}
         ariaLabel="Problems"
         emptyTitle="Nothing here"
@@ -173,6 +177,8 @@ function rowOf(item: AttentionItem): Row {
  */
 export function AttentionRows({
   items,
+  tasks = [],
+  taskAction = 'Review task and decide',
   refreshFailed = false,
   selected,
   ariaLabel = 'Needs you',
@@ -180,6 +186,10 @@ export function AttentionRows({
   emptyBody = 'Approvals, questions and decisions appear here.'
 }: {
   items: AttentionItem[];
+  /** Tasks that belong in this list and that no item names. They follow the items. */
+  tasks?: TaskView[];
+  /** What the link on a task row says. */
+  taskAction?: string;
   /** The key of the row the owner came to answer. It is marked, so it stands out among the rest. */
   selected?: string;
   /** The last refresh failed: no rows then means unknown, so the empty state is not shown. */
@@ -195,7 +205,7 @@ export function AttentionRows({
   // React allows for state derived from props; the next pass finds nothing to change.
   if (!sameRows(rows, shown)) setShown(rows);
 
-  if (rows.length === 0) {
+  if (rows.length === 0 && tasks.length === 0) {
     if (refreshFailed) return null;
     return (
       <div className="p-md text-sm">
@@ -209,6 +219,15 @@ export function AttentionRows({
     <ul aria-label={ariaLabel} className="flex flex-col">
       {rows.map((row) => (
         <NeedsRow key={row.key} row={row} selected={selected} />
+      ))}
+      {tasks.map((view) => (
+        <li
+          key={`task:${view.task.id}`}
+          data-testid="inbox-task-row"
+          className="border-border-subtle border-b"
+        >
+          <TaskEntry view={view} action={taskAction} />
+        </li>
       ))}
     </ul>
   );
@@ -301,6 +320,27 @@ function NeedsRow({ row, selected }: { row: Row; selected?: string }) {
         <HITLCard requestId={row.requestId} />
       </div>
     </li>
+  );
+}
+
+/**
+ * A task that belongs in the list without an item of its own: its title, its state in the words the
+ * tree uses, and the way to its page, where it is decided.
+ */
+function TaskEntry({ view, action }: { view: TaskView; action: string }) {
+  const { task } = view;
+  return (
+    <div className="gap-xs p-md flex flex-col">
+      <h3 className="text-sm font-medium break-words">{task.title.trim() || 'Untitled task'}</h3>
+      <p className="text-muted-foreground text-sm break-words">{statusLine(view)}</p>
+      <Link
+        to="/tasks/$id"
+        params={{ id: task.id }}
+        className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'self-start')}
+      >
+        {action}
+      </Link>
+    </div>
   );
 }
 
