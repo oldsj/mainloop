@@ -3,26 +3,27 @@
  * and each node's expanded state. Storage can be blocked or hold junk, so every read and write is
  * guarded and a bad value falls back to the default.
  */
-import { DEFAULT_EXPANDED } from './model';
+import { DEFAULT_EXPANDED, SIDEBAR_VIEWS, type SidebarView } from './model';
 
 export const PREFS_KEY = 'mainloop.explorer.v1';
 export const WIDTH_MIN = 240;
 export const WIDTH_MAX = 480;
 export const WIDTH_DEFAULT = 300;
-/** The rail's width when the panel is folded. */
-export const RAIL_WIDTH = 40;
 
 export interface ExplorerPrefs {
   width: number;
   collapsed: boolean;
   /** Node id to its expanded state. A node not listed takes its default. */
   expanded: Record<string, boolean>;
+  /** Which view the desktop sidebar shows. */
+  view: SidebarView;
 }
 
 export const DEFAULT_PREFS: ExplorerPrefs = {
   width: WIDTH_DEFAULT,
   collapsed: false,
-  expanded: {}
+  expanded: {},
+  view: 'sessions'
 };
 
 /** Keeps a dragged width inside the range the panel can show. */
@@ -50,7 +51,10 @@ function parse(raw: string | null): ExplorerPrefs {
     return {
       width: typeof record.width === 'number' ? clampWidth(record.width) : WIDTH_DEFAULT,
       collapsed: record.collapsed === true,
-      expanded
+      expanded,
+      view: SIDEBAR_VIEWS.some(({ id }) => id === record.view)
+        ? (record.view as SidebarView)
+        : DEFAULT_PREFS.view
     };
   } catch {
     return DEFAULT_PREFS;

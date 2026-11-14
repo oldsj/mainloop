@@ -1,11 +1,17 @@
 import { useLocation } from '@tanstack/react-router';
-import { PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { PanelLeftClose } from 'lucide-react';
 import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { Button } from '@/components/ui/button';
-import { badgeText } from '@/features/inbox/model';
-import { needsCount, targetOfLocation, type ExplorerNode } from './model';
+import { shortcutLabel } from '@/lib/platform';
 import {
-  RAIL_WIDTH,
+  needsCount,
+  SIDEBAR_VIEWS,
+  targetOfLocation,
+  viewNodes,
+  type ExplorerNode,
+  type SidebarView
+} from './model';
+import {
   WIDTH_MAX,
   WIDTH_MIN,
   clampWidth,
@@ -21,7 +27,7 @@ import { useAsk, useExplorer, useOpenTarget } from './useExplorer';
 const RESIZE_STEP = 16;
 
 /** The prefs, read once per mount and written on every change, so a reload keeps the layout. */
-function useExplorerPrefs() {
+export function useExplorerPrefs() {
   const [prefs, setPrefs] = useState<ExplorerPrefs>(readPrefs);
   const update = useCallback((change: (prev: ExplorerPrefs) => ExplorerPrefs) => {
     setPrefs((prev) => {
@@ -55,11 +61,13 @@ interface BodyProps {
   onToggle: (id: string) => void;
   onOpen: ReturnType<typeof useOpenTarget>;
   onAsk: (text: string) => void;
-  /** Desktop only: folds the panel to its rail. */
+  /** The panel's heading: the view's name on desktop, "Explorer" on the phone. */
+  title: string;
+  /** Desktop only: folds the sidebar away; the activity bar brings it back. */
   onCollapse?: () => void;
 }
 
-/** The header and the tree. Shared by the desktop aside and the phone pane. */
+/** The header and the tree. Shared by the desktop sidebar and the phone pane. */
 function ExplorerBody({
   nodes,
   ready,
@@ -68,6 +76,7 @@ function ExplorerBody({
   onToggle,
   onOpen,
   onAsk,
+  title,
   onCollapse
 }: BodyProps) {
   // The row for the page being shown is marked, so the tree says where the owner is.
@@ -82,17 +91,18 @@ function ExplorerBody({
           id="explorer-heading"
           className="text-muted-foreground text-2xs font-medium tracking-wide uppercase"
         >
-          Explorer
+          {title}
         </h2>
         {onCollapse ? (
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            aria-label="Collapse explorer"
+            aria-label="Hide sidebar"
+            title={`Hide sidebar (${shortcutLabel('b')})`}
             onClick={onCollapse}
           >
-            <PanelRightClose aria-hidden="true" />
+            <PanelLeftClose aria-hidden="true" />
           </Button>
         ) : null}
       </header>
@@ -120,15 +130,27 @@ function ExplorerBody({
   );
 }
 
-/** Desktop: the explorer down the right of the main chat. Resizable, and folds to a rail. */
-export function ExplorerAside({ lastVisit = null }: { lastVisit?: number | null }) {
-  const { prefs, update } = useExplorerPrefs();
-  const { nodes, ready, failed } = useExplorer(lastVisit);
+export interface ExplorerSidebarProps {
+  prefs: ExplorerPrefs;
+  update: ReturnType<typeof useExplorerPrefs>['update'];
+  nodes: ExplorerNode[];
+  ready: boolean;
+  failed: boolean;
+}
+
+/**
+ * Desktop: the sidebar on the left, between the activity bar and the page. It shows one view of the
+ * tree at a time (Sessions or Projects, chosen in the activity bar), is resizable from its right
+ * edge, and is hidden from the activity bar or with the sidebar shortcut (⌘B on a Mac, Ctrl+B elsewhere). The shell owns the prefs and the
+ * data, since the activity bar and the status bar read them too.
+ */
+export function ExplorerSidebar({ prefs, update, nodes, ready, failed }: ExplorerSidebarProps) {
   const { open, ask, toggle } = useTree(update);
   const drag = useRef<{ startX: number; startWidth: number; width: number } | null>(null);
   // The width while a drag is in progress. It is drawn from here and saved only when the drag ends.
   const [dragWidth, setDragWidth] = useState<number | null>(null);
-  const needs = needsCount(nodes);
+  const view: SidebarView = prefs.view;
+  const title = SIDEBAR_VIEWS.find(({ id }) => id === view)?.label ?? 'Explorer';
 
   const setWidth = (width: number) => update((prev) => ({ ...prev, width: clampWidth(width) }));
 
@@ -136,11 +158,11 @@ export function ExplorerAside({ lastVisit = null }: { lastVisit?: number | null 
     event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = { startX: event.clientX, startWidth: prefs.width, width: prefs.width };
   };
-  // The panel sits on the right, so dragging left widens it.
+  // The sidebar sits on the left, so dragging its right edge to the right widens it.
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const start = drag.current;
     if (!start) return;
-    start.width = clampWidth(start.startWidth + (start.startX - event.clientX));
+    start.width = clampWidth(start.startWidth + (event.clientX - start.startX));
     // Each move is a render only; the width is written once, when the drag ends.
     setDragWidth(start.width);
   };
@@ -151,55 +173,37 @@ export function ExplorerAside({ lastVisit = null }: { lastVisit?: number | null 
     if (start && start.width !== prefs.width) setWidth(start.width);
   };
   const onHandleKey = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'ArrowLeft') setWidth(prefs.width + RESIZE_STEP);
-    else if (event.key === 'ArrowRight') setWidth(prefs.width - RESIZE_STEP);
+    if (event.key === 'ArrowRight') setWidth(prefs.width + RESIZE_STEP);
+    else if (event.key === 'ArrowLeft') setWidth(prefs.width - RESIZE_STEP);
     else return;
     event.preventDefault();
   };
 
-  if (prefs.collapsed) {
-    return (
-      <aside
-        aria-label="Explorer"
-        data-testid="explorer-rail"
-        style={{ width: RAIL_WIDTH }}
-        className="border-border-subtle gap-sm py-sm flex shrink-0 flex-col items-center border-l"
-      >
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label={needs > 0 ? `Show explorer, ${needs} need you` : 'Show explorer'}
-          aria-expanded={false}
-          onClick={() => update((prev) => ({ ...prev, collapsed: false }))}
-        >
-          <PanelRightOpen aria-hidden="true" />
-        </Button>
-        {needs > 0 ? (
-          <span
-            aria-hidden="true"
-            className="border-term-yellow text-term-yellow bg-background inline-flex min-w-5 items-center justify-center border px-1 text-xs tabular-nums"
-          >
-            {badgeText(needs)}
-          </span>
-        ) : null}
-      </aside>
-    );
-  }
-
   return (
     <aside
-      aria-label="Explorer"
+      aria-label={`${title} sidebar`}
       data-testid="explorer-aside"
+      data-view={view}
       style={{ width: dragWidth ?? prefs.width }}
-      className="border-border-subtle relative flex min-h-0 shrink-0 flex-col border-l"
+      className="border-border-subtle relative flex min-h-0 shrink-0 flex-col border-r"
     >
+      <ExplorerBody
+        nodes={viewNodes(nodes, view)}
+        ready={ready}
+        failed={failed}
+        prefs={prefs}
+        onToggle={toggle}
+        onOpen={open}
+        onAsk={ask}
+        title={title}
+        onCollapse={() => update((prev) => ({ ...prev, collapsed: true }))}
+      />
       {/* A focusable window splitter (WAI-ARIA): the separator takes keys, so it is not a plain static element. */}
       {/* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize explorer"
+        aria-label="Resize sidebar"
         aria-valuemin={WIDTH_MIN}
         aria-valuemax={WIDTH_MAX}
         aria-valuenow={prefs.width}
@@ -209,19 +213,9 @@ export function ExplorerAside({ lastVisit = null }: { lastVisit?: number | null 
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onKeyDown={onHandleKey}
-        className="hover:bg-accent focus-visible:bg-ring absolute inset-y-0 left-0 z-10 w-1 cursor-col-resize touch-none outline-none focus-visible:w-1.5"
+        className="hover:bg-accent focus-visible:bg-ring absolute inset-y-0 right-0 z-10 w-1 cursor-col-resize touch-none outline-none focus-visible:w-1.5"
       />
       {/* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
-      <ExplorerBody
-        nodes={nodes}
-        ready={ready}
-        failed={failed}
-        prefs={prefs}
-        onToggle={toggle}
-        onOpen={open}
-        onAsk={ask}
-        onCollapse={() => update((prev) => ({ ...prev, collapsed: true }))}
-      />
     </aside>
   );
 }
@@ -240,6 +234,7 @@ export function ExplorerPane({ lastVisit = null }: { lastVisit?: number | null }
       onToggle={toggle}
       onOpen={open}
       onAsk={ask}
+      title="Explorer"
     />
   );
 }

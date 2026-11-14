@@ -15,7 +15,9 @@ export function AppShell({ view, tab }: { view?: View; tab?: ShellSearch['tab'] 
   // clear of a notch or a rounded corner; the bottom inset belongs to the tab bar.
   return (
     <div className="flex h-dvh flex-col pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)]">
-      <ConnectionBanner />
+      {/* The desktop shell says "offline" in its status bar, so nothing shifts; the phone has no
+          status bar and keeps the one-line banner. */}
+      {resolved === 'desktop' ? null : <ConnectionBanner />}
       {resolved === 'desktop' ? (
         <DesktopShell lastVisit={lastVisit}>
           <Outlet />

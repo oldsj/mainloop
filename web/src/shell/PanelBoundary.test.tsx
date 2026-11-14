@@ -16,7 +16,7 @@ vi.mock('@/features/explorer', async (importOriginal) => {
   const actual = await importOriginal<typeof Explorer>();
   return {
     ...actual,
-    ExplorerAside: () => {
+    ExplorerSidebar: () => {
       if (failing.on) throw new Error('explorer exploded');
       return <section data-testid="explorer-aside">Explorer</section>;
     },
