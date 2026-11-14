@@ -4874,7 +4874,9 @@ components:
         usable:
           type: boolean
           title: Usable
-          description: At least one check reported on the default branch's tip.
+          description: >-
+            At least one check reported on the default branch's tip or, failing that, on the head
+            of one of the last three pull requests merged into it.
         branch:
           type: string
           title: Branch
@@ -4883,6 +4885,16 @@ components:
             - type: string
             - type: 'null'
           title: Sha
+          description: The commit whose checks were counted.
+        pr_number:
+          anyOf:
+            - type: integer
+              minimum: 1
+            - type: 'null'
+          title: Pr Number
+          description: >-
+            Set when CI was found on this merged pull request's head rather than on the default
+            branch (CI that runs only on pull requests).
         checks:
           type: integer
           minimum: 0

@@ -165,18 +165,22 @@ from the project's repository, so it works the same for any repository the owner
 
 `auto` resolves from a **CI detection**: Mainloop reads the checks on the default branch's tip
 through the CI provider (`contents: read` for the branch tip, then the same check reads as
-`check_status`). At least one check there is usable CI, and `auto` resolves to `hybrid`; none
-resolves to `local`, as does a project never detected. The detection records the branch, the tip,
-how many checks reported and what reported them (a check run's app, a commit status's context; at
-most ten). It is cached on the project and refreshed by the next read once it is a day old, or on
+`check_status`). When nothing reports there, it lists the ten most recently updated closed pull
+requests into the default branch (`pull_requests: read`) and reads the checks on the heads of up to
+three that were merged, newest first, so CI that runs only on pull requests is found without
+reading workflow files. At least one check on either is usable CI, and `auto` resolves to
+`hybrid`; none resolves to `local`, as does a project never detected. The detection records the
+branch, the commit whose checks were counted (and the pull request, when it was a merged head), how
+many checks reported and what reported them (a check run's app, a commit status's context; at most
+ten). It is cached on the project and refreshed by the next read once it is a day old, or on
 `GET …/verification?refresh=true`. A failed refresh is reported as `detect_error` and leaves the
 last good detection in place. The detection is stored as JSON so later reads can add to it without
 a migration.
 
 The answer names the mode, the effective mode, its source (`owner`, `detected`, or `default` when
-`auto` had no detection to go on), and the detection. Known limit: a repository whose CI runs only
-on pull requests, never on its default branch, is detected as having none; its owner sets `ci` or
-`hybrid` explicitly.
+`auto` had no detection to go on), and the detection. A repository with neither checks on its
+default branch nor on its recent merged pull requests is detected as having none; its owner can
+still set `ci` or `hybrid` explicitly.
 
 Proposed, not built: auditing a repository's workflows for steps that deploy, publish or notify on
 push before agents rely on them; reporting what agents' CI use costs (Actions minutes on private

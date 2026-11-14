@@ -16,6 +16,7 @@ import (
 type GitHubAPI interface {
 	PullRequest(ctx context.Context, repo github.Repo, number int) (*github.PullRequestInfo, error)
 	BranchTip(ctx context.Context, repo github.Repo, branch string) (string, error)
+	RecentlyMergedPullRequests(ctx context.Context, repo github.Repo, base string, limit int) ([]github.MergedPullRequest, error)
 	CheckSuites(ctx context.Context, repo github.Repo, sha string) ([]github.CheckSuite, error)
 	CheckRuns(ctx context.Context, repo github.Repo, sha string) ([]github.CheckRun, error)
 	CommitStatuses(ctx context.Context, repo github.Repo, sha string) ([]github.CommitStatus, error)
@@ -54,6 +55,20 @@ func (g GitHub) BranchHead(ctx context.Context, repo Repo, branch string) (strin
 		return "", ErrNotFound
 	}
 	return sha, err
+}
+
+// MergedHeads lists the heads of the pull requests most recently merged into branch. It reads
+// the limit most recently updated closed pull requests, so fewer may come back.
+func (g GitHub) MergedHeads(ctx context.Context, repo Repo, branch string, limit int) ([]MergedHead, error) {
+	prs, err := g.API.RecentlyMergedPullRequests(ctx, ghRepo(repo), branch, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MergedHead, 0, len(prs))
+	for _, p := range prs {
+		out = append(out, MergedHead{PR: p.Number, SHA: p.HeadSHA})
+	}
+	return out, nil
 }
 
 // unknownCommit reports an answer that means GitHub has no such commit: 404, or the 422 ("No

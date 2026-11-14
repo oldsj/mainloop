@@ -95,3 +95,29 @@ func TestVerificationModeIsTheOwnersChoice(t *testing.T) {
 		t.Errorf("foreign read = %v", err)
 	}
 }
+
+func TestVerificationFindsCIThatRunsOnlyOnPullRequests(t *testing.T) {
+	svc, fake := newService(t)
+	ctx := context.Background()
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fake.Update("o", "n", func(r *githubtest.Repository) {
+		// Nothing reports on main. The newest closed pull request was closed unmerged (its checks
+		// say nothing about the merged code path); the one before was merged and has checks.
+		r.Branches = map[string]string{"main": emptySHA}
+		r.PullRequests = append(r.PullRequests,
+			githubtest.PullRequest{Number: 40, HeadRef: "a", HeadSHA: greenSHA, Merged: true, Closed: true, UpdatedAt: t0},
+			githubtest.PullRequest{Number: 41, HeadRef: "b", HeadSHA: headSHA, Closed: true, UpdatedAt: t0.Add(time.Hour)},
+		)
+	})
+	v, err := svc.Verification(ctx, owner, "p1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := v.Detection
+	if v.Effective != dbstate.VerifyHybrid || d == nil || !d.Usable || d.PR != 40 || d.SHA != greenSHA || d.Branch != "main" || d.Checks != 1 {
+		t.Fatalf("verification = %+v, detection = %+v", v, d)
+	}
+	if n := fake.Count("GET", "/repos/o/n/commits/"+headSHA+"/check-runs"); n != 0 {
+		t.Errorf("read checks on an unmerged pull request's head %d times", n)
+	}
+}
