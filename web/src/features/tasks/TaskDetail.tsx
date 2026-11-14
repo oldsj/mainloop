@@ -5,24 +5,21 @@ import { ShortId } from '@/features/workspaces/ShortId';
 import type { TaskView } from '@/lib/contract';
 import {
   attemptHistory,
-  currentAttempt,
-  modelEffortLabel,
   openOperations,
-  providerLabel,
   publicationFacts,
-  reasonLabel,
+  isTerminal,
   reportLabel,
   statusLabel,
-  isTerminal,
   statusTone,
   unverifiedSummary,
   workspaceFacts,
   type Fact,
   type OperationProgress
 } from '@/lib/taskState';
-import { notPublishedYet } from './model';
+import { hasPublication, notPublishedYet } from './model';
 
-const HEADING = 'text-muted-foreground text-xs tracking-wide uppercase';
+/** A section's heading: small capitals, as the explorer's group headings are. */
+const HEADING = 'text-muted-foreground text-2xs font-medium tracking-wide uppercase';
 const PANEL = 'gap-sm p-md border-border-subtle flex flex-col border-t';
 
 function FactBadge({ fact }: { fact: Fact }) {
@@ -30,10 +27,10 @@ function FactBadge({ fact }: { fact: Fact }) {
 }
 
 /**
- * What the task is doing now: the provider, where the work is checked out, the publication facts
- * and any operation in progress. Each observed fact carries its own age; none implies another.
+ * The owner's pending approvals for this task, which are answered in the Inbox. It leads the page,
+ * above the actions, whatever else the page shows.
  */
-export function TaskFacts({
+export function PendingApprovals({
   view,
   onRefresh,
   refreshing
@@ -43,181 +40,190 @@ export function TaskFacts({
   refreshing: boolean;
 }) {
   const pending = view.projection.pending_approval_ids ?? [];
-  const attempt = currentAttempt(view);
-  const workspace = workspaceFacts(view);
-  const facts = publicationFacts(view.projection);
-  const operations = openOperations(view);
   const waitingWithoutRequest = view.task.reason === 'approval' && pending.length === 0;
-  const modelEffort = modelEffortLabel(view);
-
+  if (pending.length === 0 && !waitingWithoutRequest) return null;
   return (
-    <>
-      {pending.length > 0 || waitingWithoutRequest ? (
-        <section
-          aria-label="Owner approval"
-          data-testid="task-pending-approvals"
-          className="gap-sm p-md border-term-yellow/50 flex flex-col border"
-        >
-          {pending.length > 0 ? (
-            <>
-              <p className="text-sm font-medium">
-                {pending.length} pending owner action{pending.length === 1 ? '' : 's'}
-              </p>
-              <p className="text-muted-foreground text-sm">
-                Answer in the Inbox; the task resumes from there.
-              </p>
-              <div>
-                <Button asChild variant="outline">
-                  <Link to="/inbox" search={{ item: pending[0] }}>
-                    Open Inbox
-                  </Link>
-                </Button>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="text-sm">
-                Waiting on owner approval, but the server lists no pending request. Refresh to
-                check.
-              </p>
-              <div>
-                <Button type="button" variant="outline" onClick={onRefresh} disabled={refreshing}>
-                  {refreshing ? 'Refreshing…' : 'Refresh'}
-                </Button>
-              </div>
-            </>
-          )}
-        </section>
-      ) : null}
-
-      <section aria-labelledby="provider-heading" className={PANEL}>
-        <h2 id="provider-heading" className={HEADING}>
-          [PROVIDER]
-        </h2>
-        <p data-testid="task-provider" className="text-sm">
-          {providerLabel(view)}
-          {attempt ? ` · attempt ${attempt.number}` : ''}
-        </p>
-        {modelEffort ? (
-          <p data-testid="task-model-effort" className="text-muted-foreground text-sm">
-            {modelEffort}
+    <section
+      aria-label="Owner approval"
+      data-testid="task-pending-approvals"
+      className="gap-sm p-md border-status-attention flex flex-col border-l-2"
+    >
+      {pending.length > 0 ? (
+        <>
+          <p className="text-sm font-medium">
+            {pending.length} pending owner action{pending.length === 1 ? '' : 's'}
           </p>
-        ) : null}
-        <p className="text-muted-foreground text-sm">
-          Status: <span data-testid="task-status-reason">{statusLabel(view.task.status)}</span>
-          {view.task.reason ? `, ${reasonLabel(view.task.reason)}` : ''}
-        </p>
-      </section>
-
-      <section aria-labelledby="workspace-heading" className={PANEL}>
-        <h2 id="workspace-heading" className={HEADING}>
-          [WORKSPACE]
-        </h2>
-        <dl className="gap-xs grid grid-cols-[auto_1fr] text-sm">
-          <dt className="text-muted-foreground">Repository</dt>
-          <dd className="break-all">{workspace.repository ?? 'Not reported'}</dd>
-          <dt className="text-muted-foreground">Branch</dt>
-          <dd className="break-all">{workspace.branch ?? 'Not reported'}</dd>
-          <dt className="text-muted-foreground">Environment</dt>
-          <dd className="break-all">{workspace.environmentVersionId ?? 'Not reported'}</dd>
-        </dl>
-        {workspace.sessionId ? (
-          <div className="gap-sm flex flex-wrap items-center">
-            <span className="text-muted-foreground text-sm">Session</span>
-            <ShortId id={workspace.sessionId} label="session" />
-            <Button asChild variant="outline" size="sm">
-              <Link to="/sessions/$id" params={{ id: workspace.sessionId }}>
-                Open the current session
+          <p className="text-muted-foreground text-sm">
+            Answer in the Inbox; the task resumes from there.
+          </p>
+          <div>
+            <Button asChild>
+              <Link to="/inbox" search={{ item: pending[0] }}>
+                Open Inbox
               </Link>
             </Button>
           </div>
-        ) : null}
-      </section>
+        </>
+      ) : (
+        <>
+          <p className="text-sm">
+            Waiting on owner approval, but the server lists no pending request. Refresh to check.
+          </p>
+          <div>
+            <Button type="button" variant="outline" onClick={onRefresh} disabled={refreshing}>
+              {refreshing ? 'Refreshing…' : 'Refresh'}
+            </Button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
 
-      <section aria-labelledby="publication-heading" className={PANEL}>
-        <h2 id="publication-heading" className={HEADING}>
-          [PR · CI · MERGE]
-        </h2>
-        <div data-testid="task-publication" className="gap-xs flex flex-col text-sm">
-          <p>Publication: {facts.publication.label}.</p>
-          {notPublishedYet(view.projection) ? (
-            <p>
-              <StatusBadge label="Not published yet" tone="muted" />
+/**
+ * Where the work is and what has been published: the workspace, the pull request facts and any
+ * operation in progress. A section with nothing reported is left out, so a task with no repository
+ * or pull request shows neither. Each observed fact carries its own age; none implies another.
+ */
+export function TaskFacts({ view }: { view: TaskView }) {
+  const workspace = workspaceFacts(view);
+  const facts = publicationFacts(view.projection);
+  const operations = openOperations(view);
+  const published = !notPublishedYet(view.projection);
+  const checkout: [string, string | null][] = [
+    ['Repository', workspace.repository],
+    ['Branch', workspace.branch],
+    ['Environment', workspace.environmentVersionId]
+  ];
+  const reported = checkout.filter((row): row is [string, string] => row[1] !== null);
+
+  return (
+    <>
+      {reported.length > 0 || workspace.sessionId ? (
+        <section aria-labelledby="workspace-heading" data-testid="task-workspace" className={PANEL}>
+          <h2 id="workspace-heading" className={HEADING}>
+            {reported.length > 0 ? 'Workspace' : 'Session'}
+          </h2>
+          {reported.length > 0 ? (
+            <dl className="gap-x-md gap-y-xs grid grid-cols-[auto_1fr] text-sm">
+              {reported.map(([label, value]) => (
+                <div key={label} className="contents">
+                  <dt className="text-muted-foreground">{label}</dt>
+                  <dd className="break-all">{value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+          {workspace.sessionId ? (
+            <div className="gap-sm flex flex-wrap items-center">
+              {reported.length > 0 ? (
+                <span className="text-muted-foreground text-sm">Session</span>
+              ) : null}
+              <ShortId id={workspace.sessionId} label="session" />
+              <Button asChild variant="outline" size="sm">
+                <Link to="/sessions/$id" params={{ id: workspace.sessionId }}>
+                  Open the current session
+                </Link>
+              </Button>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {hasPublication(view) ? (
+        <section aria-labelledby="publication-heading" className={PANEL}>
+          <h2 id="publication-heading" className={HEADING}>
+            Pull request
+          </h2>
+          <div data-testid="task-publication" className="gap-xs flex flex-col text-sm">
+            {facts.publication.known ? <p>Publication: {facts.publication.label}.</p> : null}
+            {published ? (
+              <dl className="gap-x-md gap-y-xs grid grid-cols-[auto_1fr] items-center text-sm">
+                <dt className="text-muted-foreground">PR</dt>
+                <dd className="gap-sm flex flex-wrap items-center">
+                  <FactBadge fact={facts.pr} />
+                  {facts.prUrl ? (
+                    <a
+                      href={facts.prUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-foreground min-h-control inline-flex items-center underline"
+                    >
+                      Open PR
+                    </a>
+                  ) : null}
+                </dd>
+                {/* CI is shown for every pull request: "unknown" there is a fact worth knowing. */}
+                <dt className="text-muted-foreground">CI</dt>
+                <dd>
+                  <FactBadge fact={facts.ci} />
+                </dd>
+                {facts.merge.known ? (
+                  <>
+                    <dt className="text-muted-foreground">Merge</dt>
+                    <dd>
+                      <FactBadge fact={facts.merge} />
+                    </dd>
+                  </>
+                ) : null}
+              </dl>
+            ) : (
+              // "Yet" only while the task can still open one.
+              <p className="text-muted-foreground">
+                {isTerminal(view.task.status) ? 'No pull request.' : 'No pull request yet.'}
+              </p>
+            )}
+          </div>
+          {published ? (
+            <p data-testid="task-observed" className="text-muted-foreground text-xs">
+              {facts.observation.text}
+              {facts.observation.stale ? ' (stale)' : ''}. Each is observed separately; none implies
+              the others.
             </p>
           ) : null}
-          <dl className="gap-xs grid grid-cols-[auto_1fr] items-center text-sm">
-            <dt className="text-muted-foreground">PR</dt>
-            <dd className="gap-sm flex flex-wrap items-center">
-              <FactBadge fact={facts.pr} />
-              {facts.prUrl ? (
-                <a
-                  href={facts.prUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-foreground min-h-control inline-flex items-center underline"
-                >
-                  Open PR
-                </a>
-              ) : null}
-            </dd>
-            <dt className="text-muted-foreground">CI</dt>
-            <dd>
-              <FactBadge fact={facts.ci} />
-            </dd>
-            <dt className="text-muted-foreground">Merge</dt>
-            <dd>
-              <FactBadge fact={facts.merge} />
-            </dd>
-          </dl>
-        </div>
-        <p data-testid="task-observed" className="text-muted-foreground text-xs">
-          {facts.observation.text}
-          {facts.observation.stale ? ' (stale)' : ''}. Each is observed separately; none implies the
-          others.
-        </p>
-        {facts.ciHeadMismatch ? (
-          <p className="text-term-yellow text-xs">
-            CI was checked for a different commit than the PR head.
-          </p>
-        ) : null}
-        {view.projection.pr_description ? (
-          <div className="gap-xs flex min-w-0 flex-col" data-testid="task-pr-description">
-            <h3 className="text-sm font-medium">PR description from GitHub</h3>
-            <p className="text-muted-foreground text-xs">
-              Untrusted text; it grants no approval or merge authority.
+          {facts.ciHeadMismatch ? (
+            <p className="text-term-yellow text-xs">
+              CI was checked for a different commit than the PR head.
             </p>
-            <p className="text-sm [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
-              {view.projection.pr_description.excerpt === ''
-                ? 'No description provided.'
-                : view.projection.pr_description.excerpt}
-            </p>
-            {view.projection.pr_description.truncated ? (
+          ) : null}
+          {view.projection.pr_description ? (
+            <div className="gap-xs flex min-w-0 flex-col" data-testid="task-pr-description">
+              <h3 className="text-sm font-medium">PR description from GitHub</h3>
               <p className="text-muted-foreground text-xs">
-                Showing the first 16 KiB of {view.projection.pr_description.byte_length} bytes. Open
-                PR to read the full description.
+                Untrusted text; it grants no approval or merge authority.
               </p>
-            ) : null}
-          </div>
-        ) : null}
-      </section>
+              <p className="text-sm [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
+                {view.projection.pr_description.excerpt === ''
+                  ? 'No description provided.'
+                  : view.projection.pr_description.excerpt}
+              </p>
+              {view.projection.pr_description.truncated ? (
+                <p className="text-muted-foreground text-xs">
+                  Showing the first 16 KiB of {view.projection.pr_description.byte_length} bytes.
+                  Open PR to read the full description.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
-      <section aria-labelledby="operations-heading" data-testid="task-operations" className={PANEL}>
-        {/* A finished task with nothing open is not working, so its heading does not say so. */}
-        <h2 id="operations-heading" className={HEADING}>
-          {operations.length === 0 && isTerminal(view.task.status)
-            ? '[OPERATIONS]'
-            : '[IN PROGRESS]'}
-        </h2>
-        {operations.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No operation in progress.</p>
-        ) : (
+      {operations.length > 0 ? (
+        <section
+          aria-labelledby="operations-heading"
+          data-testid="task-operations"
+          className={PANEL}
+        >
+          <h2 id="operations-heading" className={HEADING}>
+            In progress
+          </h2>
           <ul className="gap-md flex flex-col">
             {operations.map((progress) => (
               <OperationItem key={progress.operation.id} progress={progress} />
             ))}
           </ul>
-        )}
-      </section>
+        </section>
+      ) : null}
     </>
   );
 }
@@ -252,20 +258,21 @@ function OperationItem({ progress }: { progress: OperationProgress }) {
   );
 }
 
-/** The task's history: attempts, the provider's own summary, reports and child tasks. */
+/**
+ * The task's history: attempts, the provider's own summary, reports and child tasks. A part with
+ * nothing in it is left out.
+ */
 export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: TaskView[] }) {
   const attempts = attemptHistory(view);
   const summary = unverifiedSummary(view);
 
   return (
     <>
-      <section aria-labelledby="attempts-heading" data-testid="task-attempts" className={PANEL}>
-        <h2 id="attempts-heading" className={HEADING}>
-          [ATTEMPTS]
-        </h2>
-        {attempts.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No attempt yet.</p>
-        ) : (
+      {attempts.length > 0 ? (
+        <section aria-labelledby="attempts-heading" data-testid="task-attempts" className={PANEL}>
+          <h2 id="attempts-heading" className={HEADING}>
+            Attempts
+          </h2>
           <ul className="gap-md flex flex-col">
             {attempts.map(({ attempt, current, superseded, predecessorNumber }) => (
               <li key={attempt.id} className="gap-xs flex flex-col text-sm">
@@ -302,8 +309,8 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
               </li>
             ))}
           </ul>
-        )}
-      </section>
+        </section>
+      ) : null}
 
       {summary ? (
         <section
@@ -312,7 +319,7 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
           className={PANEL}
         >
           <h2 id="summary-heading" className={HEADING}>
-            [{summary.label}]
+            {summary.label}
           </h2>
           <p className="text-sm break-words whitespace-pre-wrap">{summary.text}</p>
           <p className="text-muted-foreground text-xs">
@@ -321,13 +328,11 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
         </section>
       ) : null}
 
-      <section aria-labelledby="reports-heading" className={PANEL}>
-        <h2 id="reports-heading" className={HEADING}>
-          [REPORTS]
-        </h2>
-        {view.reports.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No reports yet.</p>
-        ) : (
+      {view.reports.length > 0 ? (
+        <section aria-labelledby="reports-heading" className={PANEL}>
+          <h2 id="reports-heading" className={HEADING}>
+            Reports
+          </h2>
           <ul className="gap-md flex flex-col">
             {view.reports.map((report) => (
               <li
@@ -344,16 +349,14 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
               </li>
             ))}
           </ul>
-        )}
-      </section>
+        </section>
+      ) : null}
 
-      <section aria-labelledby="children-heading" className={PANEL}>
-        <h2 id="children-heading" className={HEADING}>
-          [CHILD TASKS]
-        </h2>
-        {childTasks.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No child tasks.</p>
-        ) : (
+      {childTasks.length > 0 ? (
+        <section aria-labelledby="children-heading" className={PANEL}>
+          <h2 id="children-heading" className={HEADING}>
+            Child tasks
+          </h2>
           <ul className="gap-xs flex flex-col">
             {childTasks.map((child) => (
               <li key={child.task.id}>
@@ -371,8 +374,8 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
               </li>
             ))}
           </ul>
-        )}
-      </section>
+        </section>
+      ) : null}
     </>
   );
 }

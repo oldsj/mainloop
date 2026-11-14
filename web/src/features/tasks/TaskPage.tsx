@@ -1,11 +1,21 @@
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { ArrowLeft } from 'lucide-react';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/components/ui/cn';
+import type { TaskView } from '@/lib/contract';
 import { createActionTracker } from '@/lib/taskActions';
-import { childrenOf, statusLabel, statusTone } from '@/lib/taskState';
+import {
+  childrenOf,
+  currentAttempt,
+  modelEffortLabel,
+  providerLabel,
+  reasonLabel,
+  statusLabel,
+  statusTone
+} from '@/lib/taskState';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { isTaskView, readableView } from './cache';
 import { taskLoadFailure, type LoadFailure } from './model';
@@ -16,12 +26,14 @@ import {
   useTask,
   useTaskList
 } from './queries';
-import { TaskFacts, TaskHistory } from './TaskDetail';
+import { PendingApprovals, TaskFacts, TaskHistory } from './TaskDetail';
 import { TaskActions } from './TaskActions';
 
 /**
- * One task: its status, facts, owner actions and history. The detail is the owner read for this
- * task. The parent is read by its own id and the children through the list's parent filter, so the
+ * One task. The page leads with what the owner needs to know and do: the status and title, what
+ * is needed from them, and the actions. The facts and history follow, and only the parts that have
+ * something to say; on a task with an open decision they sit behind **Task details**. The detail is
+ * the owner read for this task. The parent is read by its own id and the children through the list's parent filter, so the
  * page never reads the whole list. A failed parent or child read does not put the detail into a
  * failed state. Each action re-reads the task once it settles.
  */
@@ -36,6 +48,9 @@ export function TaskPage({ id }: { id: string }) {
   // One tracker per page: a lost reply stays resendable while this task is on screen.
   const [tracker] = useState(() => createActionTracker(sendTaskAction));
   const onRetry = () => void detail.refetch();
+  const navigate = useNavigate();
+  // Opens the main chat with the composer filled, not sent, as "Ask Mainloop" does in the explorer.
+  const ask = (text: string) => void navigate({ to: '/', search: { prefill: text } });
 
   // A later read that says the task is gone (an action's re-read, say) must not leave the last view
   // on screen as if it were still current.
@@ -80,23 +95,20 @@ export function TaskPage({ id }: { id: string }) {
   const childTasks = childrenOf(children.data ?? [], id);
 
   return (
-    <article className="flex min-h-0 flex-col">
+    // The version shown is on the page, so a stale read that must not replace it can be told apart.
+    <article className="flex min-h-0 flex-col" data-task-version={view.task.version}>
       <header className="gap-sm border-border-subtle p-md flex flex-col border-b">
         <div className="gap-sm flex items-center">
           <BackLink parentTaskId={view.task.parent_task_id} projectId={view.task.project_id} />
           <span data-testid="task-status">
             <StatusBadge
-              label={`[${statusLabel(view.task.status)}]`}
+              label={statusLabel(view.task.status)}
               tone={statusTone(view.task.status)}
             />
           </span>
         </div>
         <h1 className="text-lg font-medium break-words">{view.task.title}</h1>
-        {view.task.brief ? (
-          <p className="text-muted-foreground font-mono text-sm break-words whitespace-pre-wrap">
-            {view.task.brief}
-          </p>
-        ) : null}
+        <TaskMeta view={view} />
         {parentId ? (
           <p className="text-sm">
             Child of{' '}
@@ -109,6 +121,7 @@ export function TaskPage({ id }: { id: string }) {
             </Link>
           </p>
         ) : null}
+        {view.task.brief ? <Brief text={view.task.brief} /> : null}
       </header>
 
       {detail.isError ? (
@@ -136,42 +149,33 @@ export function TaskPage({ id }: { id: string }) {
         </p>
       ) : null}
 
+      <PendingApprovals
+        view={view}
+        onRefresh={() => void detail.refetch()}
+        refreshing={detail.isFetching}
+      />
       {view.task.owner_decision ? (
-        <>
-          <OwnerAskBanner action={view.task.owner_decision.action} />
-          <TaskActions
-            view={view}
-            tracker={tracker}
-            profiles={providers.data}
-            profilesError={providers.error}
-            offline={offline}
-          />
-          <details className="border-border-subtle border-b">
-            <summary className="p-md text-muted-foreground min-h-control cursor-pointer text-sm font-medium">
-              Task details
-            </summary>
-            <TaskFacts
-              view={view}
-              onRefresh={() => void detail.refetch()}
-              refreshing={detail.isFetching}
-            />
-            <TaskHistory view={view} childTasks={childTasks} />
-          </details>
-        </>
+        <OwnerAskBanner action={view.task.owner_decision.action} />
+      ) : null}
+      <TaskActions
+        view={view}
+        tracker={tracker}
+        profiles={providers.data}
+        profilesError={providers.error}
+        offline={offline}
+        onAsk={ask}
+      />
+      {view.task.owner_decision ? (
+        <details className="border-border-subtle border-t">
+          <summary className="p-md text-muted-foreground min-h-control cursor-pointer text-sm font-medium">
+            Task details
+          </summary>
+          <TaskFacts view={view} />
+          <TaskHistory view={view} childTasks={childTasks} />
+        </details>
       ) : (
         <>
-          <TaskFacts
-            view={view}
-            onRefresh={() => void detail.refetch()}
-            refreshing={detail.isFetching}
-          />
-          <TaskActions
-            view={view}
-            tracker={tracker}
-            profiles={providers.data}
-            profilesError={providers.error}
-            offline={offline}
-          />
+          <TaskFacts view={view} />
           <TaskHistory view={view} childTasks={childTasks} />
         </>
       )}
@@ -180,16 +184,92 @@ export function TaskPage({ id }: { id: string }) {
 }
 
 /**
- * The one-line ask for a real owner decision: the agent's own `owner_action` text, leading the
- * page, immediately above the actions that answer it. Everything else about the task sits behind
- * the collapsed "Task details" disclosure below.
+ * One muted line under the title: why the task is where it is, who is running it and on which
+ * attempt. It replaces a section of its own, so the facts sit with the title they describe.
+ */
+function TaskMeta({ view }: { view: TaskView }) {
+  const attempt = currentAttempt(view);
+  const modelEffort = modelEffortLabel(view);
+  const reason = view.task.reason ? reasonLabel(view.task.reason) : '';
+  // Each part after the first is led by a middle dot, so the line reads as one sentence of facts.
+  const dot = (
+    <span aria-hidden="true" className="px-xs">
+      ·
+    </span>
+  );
+  return (
+    <p className="text-muted-foreground text-xs">
+      {reason ? (
+        <>
+          <span data-testid="task-status-reason">{reason}</span>
+          {dot}
+        </>
+      ) : null}
+      <span data-testid="task-provider">
+        {providerLabel(view)}
+        {attempt ? ` · attempt ${attempt.number}` : ''}
+      </span>
+      {modelEffort ? (
+        <>
+          {dot}
+          <span data-testid="task-model-effort">{modelEffort}</span>
+        </>
+      ) : null}
+    </p>
+  );
+}
+
+/** A brief longer than this many characters, or with more lines than `BRIEF_LINES`, is cut short. */
+const BRIEF_CHARS = 200;
+const BRIEF_LINES = 2;
+
+/**
+ * The task's brief, quiet and small: it is what the agent was told, not what the owner must read
+ * first. A long one shows its first two lines until the owner opens it.
+ */
+function Brief({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const long = text.length > BRIEF_CHARS || text.split('\n').length > BRIEF_LINES;
+  return (
+    <div className="gap-xs flex flex-col items-start" data-testid="task-brief">
+      <p
+        id={id}
+        className={cn(
+          'text-muted-foreground font-mono text-xs break-words whitespace-pre-wrap',
+          long && !open && 'line-clamp-2'
+        )}
+      >
+        {text}
+      </p>
+      {long ? (
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={id}
+          onClick={() => setOpen((was) => !was)}
+          className="text-muted-foreground hover:text-foreground min-h-control text-xs underline lg:min-h-0"
+        >
+          {open ? 'Show less of the brief' : 'Show the whole brief'}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * What is needed from the owner on a real decision: the agent's own `owner_action` text, leading
+ * the page under the status language's red edge, immediately above the actions that answer it.
  */
 function OwnerAskBanner({ action }: { action: string }) {
   return (
     <section
       aria-labelledby="owner-ask-heading"
-      className="gap-xs p-md border-term-yellow/50 bg-term-yellow/5 flex flex-col border-b"
+      className="gap-xs p-md border-status-attention flex flex-col border-l-2"
     >
+      <p className="text-muted-foreground text-2xs font-medium tracking-wide uppercase">
+        Needs you
+      </p>
       <h2
         id="owner-ask-heading"
         data-testid="task-owner-ask"

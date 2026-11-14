@@ -1,4 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { Button } from '@/components/ui/button';
@@ -11,7 +12,14 @@ import {
   type ActionTracker
 } from '@/lib/taskActions';
 import { currentAttempt, switchBlockers } from '@/lib/taskState';
-import { actingOn, actionNotice, resendSummary, type Notice } from './model';
+import {
+  actionNotice,
+  askAbout,
+  FIXED_RETRY,
+  resendSummary,
+  waitsOnOwner,
+  type Notice
+} from './model';
 import { rereadTask } from './queries';
 
 const KINDS: readonly TaskActionKind[] = ['retry', 'reassign', 'cancel'];
@@ -46,6 +54,11 @@ interface TaskActionsProps {
   profiles: ProviderProfile[] | undefined;
   profilesError: unknown;
   offline: boolean;
+  /**
+   * Puts a message about this task in the main chat's composer, unsent. Offered on a task that
+   * waits on the owner, as the way to say what was done about it.
+   */
+  onAsk?: (text: string) => void;
 }
 
 /**
@@ -53,8 +66,19 @@ interface TaskActionsProps {
  * every submission; this panel only sends what the owner saw. A request whose outcome is unknown
  * stays as a resend with its original version, attempt and target until the owner resends or
  * discards it.
+ *
+ * The actions that move the task on come first: Retry when the server offers it, and on a task that
+ * waits on the owner, the two ways to answer in the main chat. Cancel is last and quiet; it turns
+ * red only in its confirmation.
  */
-export function TaskActions({ view, tracker, profiles, profilesError, offline }: TaskActionsProps) {
+export function TaskActions({
+  view,
+  tracker,
+  profiles,
+  profilesError,
+  offline,
+  onAsk
+}: TaskActionsProps) {
   const queryClient = useQueryClient();
   const taskId = view.task.id;
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -127,18 +151,15 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
 
   const retry = gate('retry');
   const cancel = gate('cancel');
-  // Retry and reassign need the provider handoff, which is not installed yet. The server reports that
-  // reason, and the owner sees no control for it: a disabled control that cannot work is not shown.
+  // Retry and reassign need the provider handoff. While the server reports it unavailable, the
+  // owner sees no control for them and no note about why: a control that cannot work is not shown,
+  // and how the server is built is not the owner's concern.
   const retryHidden = view.actions.retry?.reason === 'handoff_unavailable';
   const reassignHidden = view.actions.reassign?.reason === 'handoff_unavailable';
-  const handoffHidden = retryHidden || reassignHidden;
-  // The note names only the actions it hides: "Retry and reassign need", or one of them alone.
-  const handoffNote =
-    retryHidden && reassignHidden
-      ? 'Retry and reassign need the provider handoff, which is not installed yet.'
-      : retryHidden
-        ? 'Retry needs the provider handoff, which is not installed yet.'
-        : 'Reassign needs the provider handoff, which is not installed yet.';
+  // On a task that waits on the owner, the main chat is where they say what they did about it. When
+  // the server's own Retry works, that is the direct way, so the chat's "retry" is not offered too.
+  const answerInChat = onAsk !== undefined && waitsOnOwner(view);
+  const sessionId = currentAttempt(view)?.session_id ?? null;
   // The dialog closes, sending nothing, once the task has moved on from what the owner confirmed:
   // a new version or attempt, or cancel no longer offered. The owner then re-opens it on the new task.
   const cancelMoved =
@@ -171,14 +192,12 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
   return (
     <section
       aria-labelledby="actions-heading"
+      data-testid="task-actions"
       className="gap-sm p-md border-border-subtle flex flex-col border-t"
     >
-      <h2 id="actions-heading" className="text-muted-foreground text-xs tracking-wide uppercase">
-        [ACTIONS]
+      <h2 id="actions-heading" className="sr-only">
+        Actions
       </h2>
-      <p className="text-muted-foreground text-xs">
-        {actingOn(view)} If the task changes first, the server refuses and this page refreshes.
-      </p>
 
       {blockers.length > 0 ? (
         <div data-testid="task-blockers" className="gap-xs flex flex-col text-sm">
@@ -235,34 +254,93 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
         ) : null;
       })}
 
-      <div className="gap-md flex flex-col">
-        {handoffHidden ? (
-          <p data-testid="task-handoff-unavailable" className="text-muted-foreground text-xs">
-            {handoffNote}
-          </p>
-        ) : null}
-
+      <div className="gap-sm flex flex-wrap items-center">
         {retryHidden ? null : (
-          <div className="gap-xs flex flex-col">
-            <Button
-              type="button"
-              variant="outline"
-              data-testid="task-action-retry"
-              disabled={!retry.enabled}
-              onClick={() => void submit('retry')}
-              className="self-start"
-            >
-              {LABELS.retry}
-            </Button>
-            {retry.reason ? <p className="text-muted-foreground text-xs">{retry.reason}</p> : null}
-          </div>
+          <Button
+            type="button"
+            variant={retry.enabled ? 'default' : 'outline'}
+            data-testid="task-action-retry"
+            disabled={!retry.enabled}
+            onClick={() => void submit('retry')}
+          >
+            {LABELS.retry}
+          </Button>
         )}
+        {answerInChat && (retryHidden || !retry.enabled) ? (
+          <Button
+            type="button"
+            data-testid="task-action-fixed"
+            onClick={() => onAsk(askAbout(view, FIXED_RETRY))}
+          >
+            I fixed it, retry
+          </Button>
+        ) : null}
+        {answerInChat ? (
+          <Button
+            type="button"
+            variant="outline"
+            data-testid="task-action-answer"
+            onClick={() => onAsk(askAbout(view))}
+          >
+            Answer in chat
+          </Button>
+        ) : null}
+        {answerInChat && sessionId ? (
+          <Button asChild variant="outline">
+            <Link to="/sessions/$id" params={{ id: sessionId }} data-testid="task-action-session">
+              Open session
+            </Link>
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          variant="outline"
+          data-testid="task-action-cancel"
+          disabled={!cancel.enabled}
+          onClick={() => {
+            setCancelSeen(view);
+            setCancelChanged(false);
+          }}
+          className="text-destructive"
+        >
+          {LABELS.cancel}
+        </Button>
+      </div>
 
-        {reassignHidden ? null : (
-          <div className="gap-xs flex flex-col">
-            <label htmlFor="reassign-target" className="text-sm font-medium">
-              Provider to reassign to
-            </label>
+      {answerInChat ? (
+        <p className="text-muted-foreground text-xs">
+          The first two open the main chat with a message about this task, ready for you to send.
+        </p>
+      ) : null}
+      {/* A disabled action keeps its reason on screen, named, so it is read with the button. */}
+      {!retryHidden && retry.reason ? (
+        <p className="text-muted-foreground text-xs">
+          {LABELS.retry}: {retry.reason}
+        </p>
+      ) : null}
+      {cancel.reason ? (
+        <p className="text-muted-foreground text-xs">
+          {LABELS.cancel}: {cancel.reason}
+        </p>
+      ) : null}
+      {cancelChanged ? (
+        <p role="status" className="text-muted-foreground text-xs">
+          The task changed before you confirmed, so nothing was cancelled. Check it, then cancel
+          again.
+        </p>
+      ) : null}
+
+      {reassignHidden ? null : targets.length === 0 && profiles !== undefined && !profilesError ? (
+        // Nobody to hand the task to: one line says so, in place of an empty picker.
+        <p className="text-muted-foreground text-xs" data-testid="task-reassign-none">
+          {LABELS.reassign}: {reassign.reason}
+        </p>
+      ) : (
+        <div className="gap-xs flex flex-col">
+          <label htmlFor="reassign-target" className="text-sm font-medium">
+            Provider to reassign to
+          </label>
+          <div className="gap-sm flex flex-wrap items-center">
             <select
               id="reassign-target"
               value={selected}
@@ -282,39 +360,15 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
               data-testid="task-action-reassign"
               disabled={!reassign.enabled}
               onClick={() => void submit('reassign', { targetProfileId: selected })}
-              className="self-start"
             >
               {LABELS.reassign}
             </Button>
-            {reassign.reason ? (
-              <p className="text-muted-foreground text-xs">{reassign.reason}</p>
-            ) : null}
           </div>
-        )}
-
-        <div className="gap-xs flex flex-col">
-          <Button
-            type="button"
-            variant="destructive"
-            data-testid="task-action-cancel"
-            disabled={!cancel.enabled}
-            onClick={() => {
-              setCancelSeen(view);
-              setCancelChanged(false);
-            }}
-            className="self-start"
-          >
-            {LABELS.cancel}
-          </Button>
-          {cancel.reason ? <p className="text-muted-foreground text-xs">{cancel.reason}</p> : null}
-          {cancelChanged ? (
-            <p role="status" className="text-muted-foreground text-xs">
-              The task changed before you confirmed, so nothing was cancelled. Check it, then cancel
-              again.
-            </p>
+          {reassign.reason ? (
+            <p className="text-muted-foreground text-xs">{reassign.reason}</p>
           ) : null}
         </div>
-      </div>
+      )}
 
       {notice ? (
         <div

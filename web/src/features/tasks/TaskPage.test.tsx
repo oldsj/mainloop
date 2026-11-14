@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection } from '@/api';
 import { createSseApplier } from '@/api/invalidation';
 import { server } from '@/test/msw/server';
-import { operation, projection, view } from '@/test/fixtures/tasks';
+import type { TaskView } from '@/lib/contract';
+import { attempt, operation, projection, view } from '@/test/fixtures/tasks';
 import { renderTasks } from './test/render';
 import {
   problem,
@@ -41,23 +42,79 @@ function deferred() {
 
 const REQUEST_ID = expect.stringMatching(/^ui-/);
 
+function report(): TaskView['reports'][number] {
+  return {
+    task_id: 'task-1',
+    attempt_id: 'attempt-1',
+    request_id: 'report-1',
+    summary: 'Checked the logs.',
+    outcome: 'progress',
+    owner_action: null,
+    evidence_refs: []
+  };
+}
+
 describe('task page layout', () => {
-  it('shows the sections in the frozen order, each under its own heading', async () => {
+  it('leads with the actions, then only the sections that have something to say, with plain headings', async () => {
     server.use(...serveTaskPage(taskScreen(view())));
     renderTasks('/tasks/task-1');
 
     await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(headings).toEqual([
-      '[PROVIDER]',
-      '[WORKSPACE]',
-      '[PR · CI · MERGE]',
-      '[IN PROGRESS]',
-      '[ACTIONS]',
-      '[ATTEMPTS]',
-      '[REPORTS]',
-      '[CHILD TASKS]'
+    // No operation, report or child task here, so those sections are not drawn at all.
+    expect(headings).toEqual(['Actions', 'Workspace', 'Pull request', 'Attempts']);
+    // No label on the page is wrapped in brackets.
+    expect(screen.getByRole('article').textContent).not.toMatch(/\[[A-Z ·]+\]/);
+    expect(screen.getByTestId('task-status')).toHaveTextContent(/^running$/i);
+  });
+
+  it('draws every section when the task has something for each', async () => {
+    const full = view(
+      {},
+      {
+        operations: [operation()],
+        reports: [report()],
+        projection: projection({ repository: 'acme/widgets', pr_state: 'open', pr_number: 7 })
+      }
+    );
+    const child = view({ id: 'child-1', parent_task_id: 'task-1', title: 'Child' });
+    server.use(...serveTaskPage(taskScreen(full, [child])));
+    renderTasks('/tasks/task-1');
+
+    await screen.findByRole('link', { name: /Child/ });
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
+      'Actions',
+      'Workspace',
+      'Pull request',
+      'In progress',
+      'Attempts',
+      'Reports',
+      'Child tasks'
     ]);
+  });
+
+  it('shows no workspace or pull request section on a task with no repository, branch or pull request', async () => {
+    const ops = view({ checkout: null }, { attempts: [attempt({ session_id: null })] });
+    server.use(...serveTaskPage(taskScreen(ops)));
+    renderTasks('/tasks/task-1');
+
+    await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
+    expect(screen.queryByTestId('task-workspace')).toBeNull();
+    expect(screen.queryByTestId('task-publication')).toBeNull();
+    const page = screen.getByRole('article');
+    expect(page).not.toHaveTextContent('Not reported');
+    expect(page).not.toHaveTextContent(/unknown/i);
+  });
+
+  it('puts the reason, the provider and the attempt on one line under the title', async () => {
+    const blocked = view({ status: 'blocked', reason: 'owner_decision' });
+    server.use(...serveTaskPage(taskScreen(blocked)));
+    renderTasks('/tasks/task-1');
+
+    expect(await screen.findByTestId('task-provider')).toHaveTextContent('claude · attempt 1');
+    expect(screen.getByTestId('task-status-reason')).not.toBeEmptyDOMElement();
+    const header = screen.getByRole('heading', { level: 1 }).closest('header');
+    expect(header).toContainElement(screen.getByTestId('task-provider'));
   });
 
   it('reports the provider, publication and attempts under their test ids', async () => {
@@ -66,8 +123,8 @@ describe('task page layout', () => {
 
     expect(await screen.findByTestId('task-provider')).toHaveTextContent('claude');
     expect(screen.getByTestId('task-status')).toHaveTextContent(/running/i);
-    expect(screen.getByTestId('task-publication')).toHaveTextContent('Publication:');
-    expect(screen.getByTestId('task-operations')).toHaveTextContent('No operation in progress.');
+    expect(screen.getByTestId('task-publication')).toHaveTextContent('No pull request yet.');
+    expect(screen.queryByTestId('task-operations')).toBeNull();
     expect(screen.getByTestId('task-attempts')).toHaveTextContent('Attempt 1 · claude');
   });
 
@@ -141,7 +198,16 @@ describe('task page layout', () => {
   });
 
   it('marks observed facts stale and says each is observed separately', async () => {
-    const stale = view({}, { projection: projection({ observed_at: '2020-01-01T00:00:00Z' }) });
+    const stale = view(
+      {},
+      {
+        projection: projection({
+          pr_state: 'open',
+          pr_number: 7,
+          observed_at: '2020-01-01T00:00:00Z'
+        })
+      }
+    );
     server.use(...serveTaskPage(taskScreen(stale)));
     renderTasks('/tasks/task-1');
 
@@ -362,14 +428,13 @@ describe('back links and finished tasks', () => {
     renderTasks('/tasks/task-1');
 
     await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
-    expect(screen.queryByRole('heading', { name: '[IN PROGRESS]' })).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '[OPERATIONS]' })).toBeInTheDocument();
-    expect(screen.getByTestId('task-operations')).toHaveTextContent('No operation in progress.');
+    expect(screen.queryByRole('heading', { name: 'In progress' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('task-operations')).toBeNull();
   });
 });
 
 describe('owner actions', () => {
-  it('hides retry and reassign while the handoff is not installed, and says so once', async () => {
+  it('hides retry and reassign while the handoff is not installed, and says nothing about why', async () => {
     const page = view(
       {},
       {
@@ -383,17 +448,15 @@ describe('owner actions', () => {
     server.use(...serveTaskPage(taskScreen(page)));
     renderTasks('/tasks/task-1');
 
-    expect(await screen.findByTestId('task-handoff-unavailable')).toHaveTextContent(
-      'Retry and reassign need the provider handoff, which is not installed yet.'
-    );
+    // Cancel is still offered, so only the dead controls go.
+    expect(await screen.findByTestId('task-action-cancel')).toBeEnabled();
     expect(screen.queryByTestId('task-action-retry')).not.toBeInTheDocument();
     expect(screen.queryByTestId('task-action-reassign')).not.toBeInTheDocument();
-    expect(screen.queryByText('handoff is not available yet')).not.toBeInTheDocument();
-    // Cancel is still offered, so only the dead controls go.
-    expect(screen.getByTestId('task-action-cancel')).toBeEnabled();
+    // How the server is built is not the owner's concern: nothing on the page names the handoff.
+    expect(screen.getByRole('article')).not.toHaveTextContent(/handoff/i);
   });
 
-  it('names only the hidden action in the handoff note when just one is unavailable', async () => {
+  it('hides only the action the handoff makes unavailable', async () => {
     const page = view(
       {},
       {
@@ -406,12 +469,10 @@ describe('owner actions', () => {
     server.use(...serveTaskPage(taskScreen(page)));
     renderTasks('/tasks/task-1');
 
-    expect(await screen.findByTestId('task-handoff-unavailable')).toHaveTextContent(
-      /^Retry needs the provider handoff, which is not installed yet\.$/
-    );
+    // Reassign is still offered.
+    expect(await screen.findByTestId('task-action-reassign')).toBeInTheDocument();
     expect(screen.queryByTestId('task-action-retry')).not.toBeInTheDocument();
-    // Reassign is still offered, so the note does not claim it is hidden.
-    expect(screen.getByTestId('task-action-reassign')).toBeInTheDocument();
+    expect(screen.getByRole('article')).not.toHaveTextContent(/handoff/i);
   });
 
   it('keeps a disabled action with its server reason when the reason is not the handoff', async () => {
@@ -428,8 +489,10 @@ describe('owner actions', () => {
     renderTasks('/tasks/task-1');
 
     expect(await screen.findByTestId('task-action-retry')).toBeDisabled();
-    expect(screen.getByText('workspace provisioning is not available yet')).toBeInTheDocument();
-    expect(screen.queryByTestId('task-handoff-unavailable')).not.toBeInTheDocument();
+    // The reason is named, so it reads with its button though the buttons share a row.
+    expect(
+      screen.getByText('Retry: workspace provisioning is not available yet')
+    ).toBeInTheDocument();
   });
 
   it('asks twice before cancelling, and sends the version and attempt the owner saw', async () => {
@@ -713,6 +776,119 @@ describe('owner actions', () => {
   });
 });
 
+describe('what leads a task that waits on the owner', () => {
+  const blocked = (rest: Parameters<typeof view>[1] = {}) =>
+    view(
+      {
+        id: 'task-abcdef123456',
+        title: 'ops: check the logs',
+        status: 'blocked',
+        reason: 'owner_decision',
+        owner_decision: { attempt_id: 'attempt-1', report_id: 'report-1', action: 'Fix the token.' }
+      },
+      {
+        actions: {
+          retry: { available: false, reason: 'handoff_unavailable' },
+          reassign: { available: false, reason: 'handoff_unavailable' },
+          cancel: { available: true, reason: null }
+        },
+        ...rest
+      }
+    );
+
+  it('offers the ways to answer first, and Cancel last and not as the red primary', async () => {
+    server.use(...serveTaskPage(taskScreen(blocked())));
+    renderTasks('/tasks/task-abcdef123456');
+
+    const actions = await screen.findByTestId('task-actions');
+    const labels = [...actions.querySelectorAll('button, a')].map((control) => control.textContent);
+    expect(labels).toEqual(['I fixed it, retry', 'Answer in chat', 'Open session', 'Cancel task']);
+    // Cancel turns red only in its confirmation; here it is an outline button with red text.
+    expect(screen.getByTestId('task-action-cancel').className).not.toMatch(/bg-destructive/);
+    // Nothing internal: no version or attempt bookkeeping, and no word about the handoff.
+    expect(screen.getByRole('article')).not.toHaveTextContent(/Acting on version|handoff/i);
+  });
+
+  it('opens the main chat with the message filled in, not sent', async () => {
+    const user = userEvent.setup();
+    server.use(...serveTaskPage(taskScreen(blocked())));
+    const { router } = renderTasks('/tasks/task-abcdef123456');
+
+    await user.click(await screen.findByRole('button', { name: 'I fixed it, retry' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(router.state.location.search).toEqual({
+      prefill: 'About task ops: check the logs (task-abc): I fixed it. Retry this task.'
+    });
+  });
+
+  it('starts a blank message about the task from Answer in chat', async () => {
+    const user = userEvent.setup();
+    server.use(...serveTaskPage(taskScreen(blocked())));
+    const { router } = renderTasks('/tasks/task-abcdef123456');
+
+    await user.click(await screen.findByRole('button', { name: 'Answer in chat' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(router.state.location.search).toEqual({
+      prefill: 'About task ops: check the logs (task-abc): '
+    });
+  });
+
+  it('leads with the server Retry when it is available, and does not also offer the chat retry', async () => {
+    const page = blocked({
+      actions: {
+        retry: { available: true, reason: null },
+        reassign: { available: false, reason: 'handoff_unavailable' },
+        cancel: { available: true, reason: null }
+      }
+    });
+    server.use(...serveTaskPage(taskScreen(page)));
+    renderTasks('/tasks/task-abcdef123456');
+
+    expect(await screen.findByTestId('task-action-retry')).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'I fixed it, retry' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Answer in chat' })).toBeInTheDocument();
+  });
+
+  it('offers no chat answers on a task that is just running', async () => {
+    server.use(...serveTaskPage(taskScreen(view())));
+    renderTasks('/tasks/task-1');
+
+    await screen.findByTestId('task-action-cancel');
+    expect(screen.queryByRole('button', { name: 'I fixed it, retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Answer in chat' })).toBeNull();
+  });
+});
+
+describe('the brief', () => {
+  it('shows a short brief whole, with nothing to open', async () => {
+    server.use(...serveTaskPage(taskScreen(view({ brief: 'Add a retry button.' }))));
+    renderTasks('/tasks/task-1');
+
+    const brief = await screen.findByTestId('task-brief');
+    expect(brief).toHaveTextContent('Add a retry button.');
+    expect(within(brief).queryByRole('button')).toBeNull();
+  });
+
+  it('cuts a long brief to two lines until the owner opens it', async () => {
+    const user = userEvent.setup();
+    const long = 'Read the logs and report what each tool returned. '.repeat(8);
+    server.use(...serveTaskPage(taskScreen(view({ brief: long }))));
+    renderTasks('/tasks/task-1');
+
+    const brief = await screen.findByTestId('task-brief');
+    const text = brief.querySelector('p');
+    expect(text).toHaveClass('line-clamp-2');
+    const toggle = within(brief).getByRole('button', { name: 'Show the whole brief' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(toggle);
+    expect(text).not.toHaveClass('line-clamp-2');
+    expect(within(brief).getByRole('button', { name: 'Show less of the brief' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+  });
+});
+
 describe('owner decision banner', () => {
   it('leads with the one-line ask and the actions, with the rest collapsed behind Task details', async () => {
     const page = view({
@@ -730,14 +906,27 @@ describe('owner decision banner', () => {
     expect(await screen.findByTestId('task-owner-ask')).toHaveTextContent(
       'Pick a region: eu or us?'
     );
-    // The action that answers the ask (Cancel; retry/reassign stay hidden by the handoff note)
-    // renders right away, not after a page of facts and history.
+    // The actions render right away, not after a page of facts and history.
     expect(screen.getByTestId('task-action-cancel')).toBeInTheDocument();
     // Everything else sits behind a collapsed disclosure.
     const details = screen.getByText('Task details').closest('details');
     expect(details).not.toBeNull();
     expect(details).not.toHaveAttribute('open');
-    expect(within(details as HTMLElement).getByTestId('task-provider')).toBeInTheDocument();
+    expect(within(details as HTMLElement).getByTestId('task-attempts')).toBeInTheDocument();
+    // The ask comes before the actions, and the actions before the details.
+    const order = [
+      screen.getByTestId('task-owner-ask'),
+      screen.getByTestId('task-actions'),
+      details as HTMLElement
+    ];
+    for (const [index, element] of order.entries()) {
+      const next = order[index + 1];
+      if (next) {
+        expect(
+          element.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+      }
+    }
   });
 
   it('keeps the plain layout, with no banner or collapsed details, without an owner decision', async () => {
@@ -777,7 +966,7 @@ describe('the held view survives older and malformed reads', () => {
     await settle(queryClient);
     expect(heading('Add retry button')).toBeInTheDocument();
     expect(screen.queryByText('Stale title')).not.toBeInTheDocument();
-    expect(screen.getByText(/Acting on version 5/)).toBeInTheDocument();
+    expect(screen.getByRole('article')).toHaveAttribute('data-task-version', '5');
   });
 
   it('makes no read for a task update older than the view held', async () => {
@@ -833,12 +1022,20 @@ describe('the held view survives older and malformed reads', () => {
 });
 
 describe('task publication and session ID', () => {
-  it('says Not published yet while the task has no pull request', async () => {
+  it('says No pull request yet while the task has none', async () => {
     server.use(...serveTaskPage(taskScreen(view())));
     renderTasks('/tasks/task-1');
 
     await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
-    expect(screen.getByText('Not published yet')).toBeInTheDocument();
+    expect(screen.getByText('No pull request yet.')).toBeInTheDocument();
+  });
+
+  it('drops the "yet" once the task has finished without a pull request', async () => {
+    server.use(...serveTaskPage(taskScreen(view({ status: 'completed' }))));
+    renderTasks('/tasks/task-1');
+
+    await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
+    expect(screen.getByTestId('task-publication')).toHaveTextContent(/^No pull request\.$/);
   });
 
   it('drops the chip once there is a pull request', async () => {
@@ -870,7 +1067,7 @@ describe('task publication and session ID', () => {
     renderTasks('/tasks/task-1');
 
     await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
-    const section = screen.getByRole('heading', { level: 2, name: '[WORKSPACE]' }).parentElement;
+    const section = screen.getByRole('heading', { level: 2, name: 'Workspace' }).parentElement;
     expect(section).not.toBeNull();
     const scoped = within(section as HTMLElement);
     expect(scoped.getByText('session-')).toBeInTheDocument();
