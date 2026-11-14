@@ -1788,7 +1788,12 @@ describe('a live main session', () => {
     server.use(...runner.handlers);
     const live = await screen.findByTestId('live-session');
     expect(screen.getByTestId('main-thread')).toContainElement(live);
-    await waitFor(() => expect(within(live).getByTestId('live-conn')).toHaveTextContent('live'));
+    // One row: the main thread header sits inside the live view and carries the one status.
+    await waitFor(() => expect(live).toHaveAttribute('data-conn', 'attached'));
+    expect(within(live).getByTestId('main-thread-header')).toBeInTheDocument();
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(within(live).queryByTestId('live-status')).toBeNull();
+    expect(within(live).queryByTestId('mt-model')).toBeNull();
     const box = within(live).getByRole('textbox', { name: 'Message' });
     await user.type(box, '/comp');
     const list = screen.getByRole('listbox', { name: 'Commands' });
@@ -1797,7 +1802,7 @@ describe('a live main session', () => {
     await user.type(box, 'look around{Enter}');
     await waitFor(() => expect(runner.echoed).toContain('look around'));
     await within(live).findByTestId('live-user');
-    await waitFor(() => expect(within(live).getByTestId('live-status')).toHaveTextContent('idle'));
+    await waitFor(() => expect(within(live).getByTestId('mt-state')).toHaveTextContent('ready'));
     await user.click(box);
     await user.keyboard('{ArrowUp}');
     expect(box).toHaveValue('look around');

@@ -123,3 +123,28 @@ export function ProviderFailedPreview() {
     />
   );
 }
+
+/** Under the live view: one status word for thread and channel, with the live view's controls. */
+export function LiveAsleepPreview() {
+  const button = 'border-border-subtle text-foreground px-sm min-h-control border';
+  return (
+    <MainThreadHeader
+      info={thread(providerFixture())}
+      offline={false}
+      provider={idleControl}
+      live={{
+        status: 'asleep',
+        controls: (
+          <>
+            <button type="button" className={button}>
+              Wake now
+            </button>
+            <button type="button" className="px-xs min-h-control" aria-label="Model">
+              opus-5-5 · high
+            </button>
+          </>
+        )
+      }}
+    />
+  );
+}

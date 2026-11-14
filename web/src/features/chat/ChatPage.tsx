@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { HITLCard } from '@/features/hitl';
 import { useSessionRequests } from '@/features/hitl/session-requests';
-import { LiveSession, liveForced } from '@/features/live';
+import { LiveSession, liveForced, type LiveBar } from '@/features/live';
 import { PanelBoundary } from '@/shell/PanelBoundary';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { mainInputLock } from './mainProvider';
@@ -63,50 +63,62 @@ export function ChatPage({
     chat.draftKey
   );
 
+  // One row above the conversation. The live view draws it in place of its own, with its status and
+  // controls, so the thread and the live channel never show two rows that can disagree.
+  const header = (bar?: LiveBar) =>
+    info ? (
+      <MainThreadHeader
+        info={info}
+        offline={offline}
+        onStop={chat.stop}
+        stopping={chat.stopping}
+        renderIdentity={renderIdentity}
+        provider={provider}
+        live={bar}
+      />
+    ) : null;
+
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="main-thread">
-      {info ? (
-        <MainThreadHeader
-          info={info}
-          offline={offline}
-          onStop={chat.stop}
-          stopping={chat.stopping}
-          renderIdentity={renderIdentity}
-          provider={provider}
-        />
-      ) : null}
-
       {live && sessionId ? (
         <PanelBoundary name="Live session">
-          <LiveMain sessionId={sessionId} hitlId={hitlId} onFallback={() => setChatView(true)} />
+          <LiveMain
+            sessionId={sessionId}
+            hitlId={hitlId}
+            onFallback={() => setChatView(true)}
+            renderBar={header}
+          />
         </PanelBoundary>
       ) : (
-        <ThreadBody
-          thread={chat}
-          offline={offline}
-          label="main thread"
-          closedReason={inputLock}
-          closedPlaceholder="Main input is locked"
-          prefill={prefill}
-          onPrefillUsed={onPrefillUsed}
-          starters={starters}
-          allowImages
-          onSend={intercept}
-          commandNotice={commandNotice}
-          commands={SLASH_COMMANDS}
-          requests={
-            <PanelBoundary name="Requests">
-              {hitlId ? (
-                <div className="border-border mx-md border">
-                  <HITLCard requestId={hitlId} />
-                </div>
-              ) : null}
-              {info?.session_id ? (
-                <SessionRequests sessionId={info.session_id} skip={[hitlId]} />
-              ) : null}
-            </PanelBoundary>
-          }
-        />
+        <>
+          {header()}
+          <ThreadBody
+            thread={chat}
+            offline={offline}
+            label="main thread"
+            closedReason={inputLock}
+            closedPlaceholder="Main input is locked"
+            prefill={prefill}
+            onPrefillUsed={onPrefillUsed}
+            starters={starters}
+            allowImages
+            onSend={intercept}
+            commandNotice={commandNotice}
+            commands={SLASH_COMMANDS}
+            requests={
+              <PanelBoundary name="Requests">
+                {hitlId ? (
+                  <div className="border-border mx-md border">
+                    <HITLCard requestId={hitlId} />
+                  </div>
+                ) : null}
+                {info?.session_id ? (
+                  <SessionRequests sessionId={info.session_id} skip={[hitlId]} />
+                ) : null}
+              </PanelBoundary>
+            }
+          />
+        </>
       )}
     </div>
   );
@@ -119,11 +131,13 @@ export function ChatPage({
 function LiveMain({
   sessionId,
   hitlId,
-  onFallback
+  onFallback,
+  renderBar
 }: {
   sessionId: string;
   hitlId?: string;
   onFallback: () => void;
+  renderBar: (bar: LiveBar) => ReactNode;
 }) {
   const { pending } = useSessionRequests(sessionId);
   return (
@@ -131,6 +145,7 @@ function LiveMain({
       sessionId={sessionId}
       onFallback={onFallback}
       pending={pending}
+      renderBar={renderBar}
       requests={(skip) => (
         <PanelBoundary name="Requests">
           {hitlId && !skip.includes(hitlId) ? (

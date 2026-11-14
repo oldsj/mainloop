@@ -1,6 +1,9 @@
+import { Info } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
+import { SessionBar } from '@/components/shared/session-bar';
 import { cn } from '@/components/ui/cn';
 import { agentLabel } from '@/lib/agentLabel';
+import { barStatus, threadWords, type LiveStatus } from '@/lib/barStatus';
 import { threadStatus, type ThreadStatus } from '@/lib/delivery';
 import {
   boundedText,
@@ -12,20 +15,9 @@ import {
 } from './mainProvider';
 import type { MainProvider, MainThreadInfo } from './types';
 
-const DOT: Record<ThreadStatus, string> = {
-  ready: 'bg-term-green',
-  idle: 'bg-status-idle',
-  unreachable: 'bg-status-failed',
-  failed: 'bg-status-failed',
-  unconfirmed: 'bg-status-attention',
-  working: 'bg-status-working animate-pulse'
-};
-
 /** The words for a status. A failed or unconfirmed last delivery is never called ready. */
 export function statusWords(status: ThreadStatus): string {
-  if (status === 'failed') return 'last message failed';
-  if (status === 'unconfirmed') return 'last message unconfirmed';
-  return status;
+  return threadWords(status);
 }
 
 export interface MainThreadHeaderProps {
@@ -38,6 +30,11 @@ export interface MainThreadHeaderProps {
   renderIdentity?: (sessionId: string) => ReactNode;
   /** The owner's main-provider controls. Omitted, the provider row is not shown. */
   provider?: MainProviderControl;
+  /**
+   * The live view under this header: its status joins the thread's into one word, and its wake and
+   * model controls sit in this row, so the live view draws no row of its own.
+   */
+  live?: { status: LiveStatus; controls: ReactNode };
 }
 
 /** The select the owner uses to switch the main provider; one per page, always in the top strip. */
@@ -158,7 +155,8 @@ export function MainThreadHeader({
   onStop,
   stopping = false,
   renderIdentity,
-  provider
+  provider,
+  live
 }: MainThreadHeaderProps) {
   const [open, setOpen] = useState(false);
   const { native } = info;
@@ -183,47 +181,51 @@ export function MainThreadHeader({
   });
 
   return (
-    <div
-      className="border-border-subtle bg-card text-muted-foreground shrink-0 border-b text-xs"
+    <SessionBar
       data-testid="main-thread-header"
-    >
-      <div className="gap-sm px-md min-h-control flex flex-wrap items-center py-1">
-        <span className={cn('size-2 shrink-0', DOT[status])} aria-hidden="true" />
-        <span className="text-foreground" data-testid="mt-state" role="status">
-          {statusWords(status)}
-        </span>
-        <span aria-hidden="true">·</span>
-        {provider ? <ProviderSelect info={info} provider={provider} /> : null}
-        <span data-testid="mt-model">{model}</span>
-        {pending > 0 ? (
+      status={barStatus(status, live?.status ?? null)}
+      statusTestId="mt-state"
+      lead={
+        pending > 0 ? (
           <>
             <span aria-hidden="true">·</span>
             <span data-testid="mt-pending">{pending} pending</span>
           </>
-        ) : null}
-        {onStop && native?.turn_in_flight ? (
+        ) : null
+      }
+      trail={
+        <>
+          {onStop && native?.turn_in_flight ? (
+            <button
+              type="button"
+              className="border-border-subtle text-foreground hover:text-term-red px-md min-h-control border disabled:opacity-50"
+              disabled={stopping || offline}
+              onClick={onStop}
+              data-testid="mt-stop-turn"
+            >
+              {stopping ? 'stopping…' : 'stop'}
+            </button>
+          ) : null}
+          {provider ? <ProviderSelect info={info} provider={provider} /> : null}
+          {/* The live view's own model control replaces the thread's model text. */}
+          {live ? live.controls : <span data-testid="mt-model">{model}</span>}
           <button
             type="button"
-            className="border-border text-foreground hover:text-term-red px-md min-h-control border disabled:opacity-50"
-            disabled={stopping || offline}
-            onClick={onStop}
-            data-testid="mt-stop-turn"
+            className={cn(
+              'hover:text-foreground min-h-control w-control inline-flex items-center justify-center',
+              open && 'text-foreground'
+            )}
+            aria-label="Session info"
+            aria-expanded={open}
+            aria-controls="main-thread-details"
+            onClick={() => setOpen((value) => !value)}
+            data-testid="mt-details-toggle"
           >
-            {stopping ? 'stopping…' : 'stop'}
+            <Info className="size-4" aria-hidden="true" />
           </button>
-        ) : null}
-        <button
-          type="button"
-          className="hover:text-term-accent px-sm min-h-control ml-auto"
-          aria-expanded={open}
-          aria-controls="main-thread-details"
-          onClick={() => setOpen((value) => !value)}
-          data-testid="mt-details-toggle"
-        >
-          details {open ? '▴' : '▾'}
-        </button>
-      </div>
-
+        </>
+      }
+    >
       {provider && providerInline ? (
         <ProviderRow info={info} offline={offline} provider={provider} />
       ) : null}
@@ -255,6 +257,6 @@ export function MainThreadHeader({
           </div>
         </div>
       ) : null}
-    </div>
+    </SessionBar>
   );
 }

@@ -216,6 +216,14 @@ card the chat view shows, answered through the A2A task. Until it is answered th
 answer the request first, and a message sent anyway is queued by Mainloop behind the waiting turn;
 the answer replays the call, the turn continues, and the queued message runs after it.
 
+The view has one row above the transcript, with one status word. A request waiting on the owner
+reads "needs you" whether or not the view is attached. Otherwise an attached view reads "starting",
+"working" or "ready", and a detached one reads what the channel is doing: "asleep", "paused",
+"waking…", "connecting…", "reconnecting…" or "unavailable". Wake now and Resume are buttons in that
+row; there is no banner under it, and the composer's placeholder says a message wakes (or resumes)
+the session. The model and effort button is at the end of the row. On `/` the row is the
+main-thread header (see [the live main thread](chat.md)).
+
 The view never wakes a sleeping session on its own (#348): an attach goes through the Substrate
 router, which wakes the actor, so a view that reconnected whenever kagent suspended the actor would
 keep it awake for as long as the page is open. Before every attach the owner did not ask for, it

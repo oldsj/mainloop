@@ -10,7 +10,9 @@ import {
   type ReactNode
 } from 'react';
 import { Markdown } from '@/components/markdown/markdown';
+import { SessionBar } from '@/components/shared/session-bar';
 import { cn } from '@/components/ui/cn';
+import { barStatus, type LiveStatus } from '@/lib/barStatus';
 import {
   EFFORTS,
   MODE_IDS,
@@ -43,9 +45,12 @@ export function LiveSession({
   onFallback,
   requests,
   pending = [],
+  renderBar,
   deps
 }: {
   sessionId: string;
+  /** Draws the row above the transcript; the main thread passes its header. */
+  renderBar?: (bar: LiveBar) => ReactNode;
   /** Leaves the live view for the regular one, offered when the live channel is unavailable. */
   onFallback?: () => void;
   /**
@@ -116,6 +121,7 @@ export function LiveSession({
       onFallback={onFallback}
       requests={requests?.(skip)}
       needsAnswer={pending.length > 0}
+      renderBar={renderBar}
     />
   );
 }
@@ -137,10 +143,18 @@ export interface LiveSessionViewProps {
   onFallback?: () => void;
   requests?: ReactNode;
   needsAnswer?: boolean;
+  /** Draws the row above the transcript. Without it the view draws its own. */
+  renderBar?: (bar: LiveBar) => ReactNode;
 }
 
-const CONN_LABEL: Record<Conn, string> = {
-  attached: 'live',
+/** What the live view gives the row above it: its status, and its wake and model controls. */
+export interface LiveBar {
+  status: LiveStatus;
+  controls: ReactNode;
+}
+
+/** What the channel is doing while it is not attached. */
+const DETACHED: Record<Exclude<Conn, 'attached'>, LiveStatus> = {
   connecting: 'connecting…',
   reconnecting: 'reconnecting…',
   paused: 'paused',
@@ -148,6 +162,18 @@ const CONN_LABEL: Record<Conn, string> = {
   waking: 'waking…',
   unavailable: 'unavailable'
 };
+
+/**
+ * One status for the live view. A request waiting on the owner comes first, attached or not; a
+ * detached channel says what it is doing, since the runner's last turn state is stale by then.
+ */
+export function liveStatus(state: LiveState, conn: Conn, waiting: boolean): LiveStatus {
+  if (waiting && state.runner !== 'starting') return 'needs you';
+  if (conn !== 'attached') return DETACHED[conn];
+  if (state.runner === 'starting') return 'starting';
+  if (state.status === 'running') return 'working';
+  return 'ready';
+}
 
 export function LiveSessionView({
   state,
@@ -162,7 +188,8 @@ export function LiveSessionView({
   touch,
   onFallback,
   requests,
-  needsAnswer = false
+  needsAnswer = false,
+  renderBar
 }: LiveSessionViewProps) {
   const resting = conn === 'asleep' || conn === 'paused';
   const [sheet, setSheet] = useState(false);
@@ -172,59 +199,50 @@ export function LiveSessionView({
     const i = MODE_IDS.indexOf(state.mode as (typeof MODE_IDS)[number]);
     send({ k: 'mode', mode: MODE_IDS[(i + 1) % MODE_IDS.length] });
   };
-
-  return (
-    <section
-      aria-label="Live session"
-      data-testid="live-session"
-      className="bg-term-bg text-term-fg flex min-h-0 flex-1 flex-col font-mono text-sm"
-    >
-      <div className="gap-sm px-md py-xs border-border-subtle flex items-center border-b text-xs">
-        <span
-          className={cn(statusClass(waiting ? 'waiting' : state.status))}
-          data-testid="live-status"
-        >
-          {waiting && state.runner !== 'starting' ? 'needs you' : statusLabel(state)}
-        </span>
-        <span className="flex-1" />
-        <span
-          data-testid="live-conn"
-          className={
-            conn === 'attached'
-              ? 'text-term-green'
-              : resting
-                ? 'text-term-fg-muted'
-                : 'text-term-warning'
-          }
-        >
-          {CONN_LABEL[conn]}
-        </span>
+  // A resting session wakes on the next message, which the composer's placeholder says; the row
+  // offers the same as a button.
+  const bar: LiveBar = {
+    status: liveStatus(state, conn, waiting),
+    controls: (
+      <>
+        {resting ? (
+          <button
+            type="button"
+            onClick={retry}
+            className="border-border-subtle text-foreground hover:bg-accent px-sm min-h-control border"
+          >
+            {conn === 'paused' ? 'Resume' : 'Wake now'}
+          </button>
+        ) : null}
         <button
           type="button"
-          className="text-term-fg-muted hover:text-term-fg px-xs min-h-8"
+          className="hover:text-foreground px-xs min-h-control"
           aria-label="Model"
           onClick={() => setSheet(true)}
         >
           {short(state.model)}
           {state.effort ? ` · ${state.effort}` : ''}
         </button>
-      </div>
+      </>
+    )
+  };
 
-      {resting ? (
-        <div
-          data-testid="live-asleep"
-          className="px-md py-sm border-border mx-md mt-sm flex flex-wrap items-center gap-2 border text-xs"
-        >
-          <span className="text-term-fg-muted flex-1">
-            {conn === 'paused'
-              ? 'Paused while idle, so the session can sleep. Send a message or resume to attach again.'
-              : 'Asleep. It wakes when you send a message; the view attaches when it is up.'}
-          </span>
-          <button type="button" onClick={retry} className="border-border px-sm min-h-10 border">
-            {conn === 'paused' ? 'Resume' : 'Wake now'}
-          </button>
-        </div>
-      ) : null}
+  return (
+    <section
+      aria-label="Live session"
+      data-testid="live-session"
+      data-conn={conn}
+      className="bg-term-bg text-term-fg flex min-h-0 flex-1 flex-col font-mono text-sm"
+    >
+      {renderBar ? (
+        renderBar(bar)
+      ) : (
+        <SessionBar
+          status={barStatus(null, bar.status)}
+          statusTestId="live-status"
+          trail={bar.controls}
+        />
+      )}
 
       {conn === 'unavailable' ? (
         <div
@@ -259,6 +277,7 @@ export function LiveSessionView({
       <Composer
         state={state}
         asleep={resting}
+        paused={conn === 'paused'}
         busy={busy}
         say={say}
         set={set}
@@ -271,21 +290,6 @@ export function LiveSessionView({
       {sheet ? <ModelSheet state={state} set={set} close={() => setSheet(false)} /> : null}
     </section>
   );
-}
-
-function statusLabel(s: LiveState): string {
-  if (s.runner === 'starting') return 'starting';
-  if (s.status === 'waiting') return 'needs you';
-  if (s.status === 'running') return 'working';
-  return 'idle';
-}
-
-function statusClass(st: string) {
-  return st === 'waiting'
-    ? 'text-term-warning'
-    : st === 'running'
-      ? 'text-term-accent'
-      : 'text-term-fg-muted';
 }
 
 function Log({
@@ -509,6 +513,7 @@ function PermCard({
 function Composer({
   state,
   asleep,
+  paused,
   busy,
   say,
   set,
@@ -518,7 +523,9 @@ function Composer({
   openModel
 }: {
   state: LiveState;
+  /** The session is resting: asleep, or `paused` by this view while idle. */
   asleep: boolean;
+  paused: boolean;
   busy: boolean;
   say: LiveSessionViewProps['say'];
   set: LiveSessionViewProps['set'];
@@ -705,7 +712,9 @@ function Composer({
             state.deferred
               ? 'Answer the request first'
               : asleep
-                ? 'Message to wake the session'
+                ? paused
+                  ? 'Message to resume the session'
+                  : 'Message to wake the session'
                 : busy
                   ? 'Queue a message'
                   : 'Message, or / for commands'
