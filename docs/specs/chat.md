@@ -79,9 +79,23 @@ read when each turn starts, not copied into the session, so:
 - a delegation's `model` and `effort` are overrides and win over the default.
 
 A default effort its provider stopped offering (the profile changed after it was set) is left out
-of the turn rather than failing it. The composer still shows `default` for a session with no
-override of its own; showing which default applies, and a settings page for these, are UI follow-ups
-(today they are set through the API).
+of the turn rather than failing it.
+
+**Settings page (implemented, checked against MSW, not a live backend).** `/settings` has a
+**Session defaults** section: for **Main thread** and for **Workers**, one row per enabled provider
+profile with a **Model** and an **Effort** select. Each select's first choice is
+**Provider default (<the profile's own default>)**, which sends `null` for that field; the profile's
+default is named as a hint only, since it is never sent. The choices are the profile's `models` and
+`effort_levels` from `GET /providers`. A choice saves as it is made, with one `PUT` for that role and
+provider carrying both fields, so setting one never clears the other; both back to the provider
+default removes the row's default. The row says **Saving…**, then **Saved.**, or **Not saved** with
+the server's reason, in which case the select returns to what was saved. A saved model the profile
+does not list stays selectable, and a saved effort the profile stopped offering is shown with a note
+that turns leave the effort to the provider. Settings is reached from the activity bar on desktop and
+from the tree's header on a phone.
+
+The composer still shows `default` for a session with no override of its own; showing which default
+applies there is a UI follow-up.
 
 ## Sending messages
 

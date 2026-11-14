@@ -7,11 +7,13 @@
 import { http, HttpResponse } from 'msw';
 import { API_URL } from '@/api/config';
 import { attentionItem, hitlAttentionItem, queueItem } from '@/features/inbox/test/fixtures';
+import { CLAUDE_PROFILE, CODEX_PROFILE } from '@/features/chat/handlers';
 import { project } from '@/features/projects/test/fixtures';
 import { serveProjectPage } from '@/features/projects/test/handlers';
 import { session } from '@/features/sessions/test/fixtures';
 import { approvalRequest, hitlView } from '@/test/fixtures/hitl';
 import { attempt, projection, view } from '@/test/fixtures/tasks';
+import { sessionDefaultsHandlers } from './handlers';
 
 const url = (path: string) => `${API_URL}${path}`;
 const DAY = 24 * 60 * 60 * 1000;
@@ -184,6 +186,11 @@ export function reviewSeed() {
       HttpResponse.json([running, ready, landing, stuck, failed, merged, old])
     ),
     http.get(url('/projects'), () => HttpResponse.json([repo])),
+    // Both built-in profiles, so Settings has rows to show; one worker default is already set.
+    http.get(url('/providers'), () => HttpResponse.json([CLAUDE_PROFILE, CODEX_PROFILE])),
+    ...sessionDefaultsHandlers([
+      { role: 'worker', provider: 'claude', model: 'claude-opus-5', effort: 'high' }
+    ]),
     ...serveProjectPage({ project: repo }),
     http.post(url('/queue/:id/respond'), () => HttpResponse.json({ status: 'ok', message: 'Sent' }))
   ];

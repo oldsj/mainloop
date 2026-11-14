@@ -29,6 +29,23 @@ const orchestrationHealth: Schemas['HealthView'] = {
 };
 const providers: Schemas['ProviderProfile'][] = [];
 
+/**
+ * `GET` and `PUT /session-defaults`, kept in memory. A save answers with every default, and one
+ * with both fields null removes its row, as the server does.
+ */
+export function sessionDefaultsHandlers(initial: Schemas['SessionDefault'][] = []) {
+  let rows = [...initial];
+  return [
+    http.get(url('/session-defaults'), () => HttpResponse.json({ defaults: rows })),
+    http.put(url('/session-defaults'), async ({ request }) => {
+      const body = (await request.json()) as Schemas['SessionDefault'];
+      rows = rows.filter((row) => !(row.role === body.role && row.provider === body.provider));
+      if (body.model !== null || body.effort !== null) rows.push(body);
+      return HttpResponse.json({ defaults: rows });
+    })
+  ];
+}
+
 /** A stream that sends `connected` and then stays open, like the real /events. */
 function eventStream() {
   const encoder = new TextEncoder();
@@ -67,7 +84,8 @@ export const baseHandlers = [
   ),
   // A test that only passes through /health incidentally (on its way elsewhere) still needs these.
   http.get(url('/orchestration-health'), () => HttpResponse.json(orchestrationHealth)),
-  http.get(url('/providers'), () => HttpResponse.json(providers))
+  http.get(url('/providers'), () => HttpResponse.json(providers)),
+  ...sessionDefaultsHandlers()
 ];
 
 /**
