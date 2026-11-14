@@ -21,6 +21,7 @@ const (
 	ToolCheckStatus               = "check_status"
 	ToolWatchChecks               = "watch_checks"
 	ToolGetVerification           = "get_verification"
+	ToolProjectContext            = "project_context"
 	ToolTaskGet                   = "task_get"
 	ToolTaskList                  = "task_list"
 	ToolTaskHistory               = "task_history"
@@ -43,6 +44,7 @@ var AllTools = []string{
 	ToolWhoami, ToolTopics, ToolTopicOpen, ToolNote, ToolDecide, ToolPendingAdd, ToolPendingDone,
 	ToolOpenPullRequest,
 	ToolGetIssue, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
+	ToolProjectContext,
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolDelegate, ToolTaskCancel, ToolSteer, ToolReport,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
@@ -171,6 +173,11 @@ func (p Policy) actorTools(a Actor) []string {
 		}
 	case a.Role == dbstate.RoleAgent && a.Depth == 0:
 		tools = append(tools, workspaceTools...)
+	}
+	// Every live role reads its project's owner context: main any of its owner's projects, a
+	// task or workspace agent its own project only (the handler checks which).
+	if len(tools) > 0 {
+		tools = append(tools, ToolProjectContext)
 	}
 	if slices.Contains(tools, ToolOpenPullRequest) {
 		tools = append(tools, issueTools...)

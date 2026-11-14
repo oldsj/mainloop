@@ -79,7 +79,11 @@ func (s *Service) sendNextBrief(ctx context.Context, a dbq.TaskAttempt, id strin
 	if err != nil {
 		return err
 	}
-	_, err = s.Sessions.SendToAs(ctx, sessions.SourceMainloop, *a.SessionID, id, DelegatedBrief(a.Role, t.Mode, t.Brief))
+	brief, err := attemptBrief(ctx, q, a, t)
+	if err != nil {
+		return err
+	}
+	_, err = s.Sessions.SendToAs(ctx, sessions.SourceMainloop, *a.SessionID, id, brief)
 	switch {
 	case err == nil:
 		return q.SetAttemptBrief(ctx, dbq.SetAttemptBriefParams{ID: a.ID, BriefDeliveryID: &id})

@@ -646,3 +646,10 @@ WHERE session_id = $1 AND kagent_session_id IS NOT NULL AND kagent_session_id <>
   AND (task_id IS NULL OR task_id = '')
   AND state IN ('sending', 'uncertain', 'cancelled')
 ORDER BY created_at, id;
+
+-- name: PinAttemptInstructionsVersion :one
+-- Pins the project instructions version an attempt's brief carries, once: a pinned attempt keeps
+-- its version, so every send of its brief renders the same text.
+UPDATE task_attempts SET instructions_version = coalesce(instructions_version, sqlc.arg(version)::integer)
+WHERE id = sqlc.arg(id)
+RETURNING instructions_version;

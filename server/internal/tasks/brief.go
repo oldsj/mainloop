@@ -1,17 +1,21 @@
 package tasks
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/oldsj/mainloop/server/internal/agentcontext"
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/projectcontext"
 )
 
 // DelegatedBrief is the first message a task's agent receives: the role and tool guidance, then
-// the brief as the delegator wrote it, then the shared guidance for working in Mainloop. The
-// stored brief is not changed; this is only what reaches the agent.
-func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief string) string {
+// the brief as the delegator wrote it, then the project's instructions section (project, "" when
+// it has none), then the shared guidance for working in Mainloop. The stored brief is not
+// changed; this is only what reaches the agent.
+func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief, project string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the Mainloop task %s. First call `whoami`, then `task_get` with its task_id.", role)
 	if mode == dbstate.TaskModeCode {
@@ -31,6 +35,10 @@ func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief strin
 	b.WriteString("\n\n## Assigned work\n")
 	b.WriteString(brief)
 	b.WriteString("\n\n")
+	if project != "" {
+		b.WriteString(project)
+		b.WriteString("\n")
+	}
 	b.WriteString(agentcontext.Guidance)
 	if mode == dbstate.TaskModeCode {
 		b.WriteString("\n## Workspace environment\n" +
@@ -39,4 +47,19 @@ func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief strin
 			"- You may run as root, but OS packages cannot be installed.\n")
 	}
 	return b.String()
+}
+
+// attemptBrief renders the brief an attempt's agent receives. A task with a project carries the
+// project's instructions at the version pinned on the attempt by its first render, so a resend of
+// the brief carries the same text.
+func attemptBrief(ctx context.Context, q *dbq.Queries, a dbq.TaskAttempt, t dbq.Task) (string, error) {
+	project := ""
+	if t.ProjectID != nil {
+		in, err := projectcontext.ForAttempt(ctx, q, a.ID, *t.ProjectID)
+		if err != nil {
+			return "", err
+		}
+		project = projectcontext.Section(in)
+	}
+	return DelegatedBrief(a.Role, t.Mode, t.Brief, project), nil
 }

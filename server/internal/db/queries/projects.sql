@@ -54,3 +54,25 @@ WHERE user_id = $1
   AND (default_branch = '' OR html_url = '' OR metadata_updated_at IS NULL OR metadata_updated_at < $2)
 ORDER BY (default_branch = '' OR html_url = '') DESC, metadata_updated_at NULLS FIRST, id
 LIMIT $3;
+
+-- name: GetCurrentProjectInstructions :one
+-- The project's current instructions: its highest version. No row means none were ever set.
+SELECT * FROM project_instruction_versions
+WHERE project_id = $1
+ORDER BY version DESC
+LIMIT 1;
+
+-- name: GetProjectInstructionVersion :one
+SELECT * FROM project_instruction_versions WHERE project_id = $1 AND version = $2;
+
+-- name: ListProjectInstructionVersions :many
+SELECT * FROM project_instruction_versions
+WHERE project_id = $1
+ORDER BY version DESC
+LIMIT $2;
+
+-- name: InsertProjectInstructionVersion :one
+-- Callers hold the project row lock; the primary key refuses a second writer of the same version.
+INSERT INTO project_instruction_versions (project_id, version, text)
+VALUES ($1, $2, $3)
+RETURNING *;

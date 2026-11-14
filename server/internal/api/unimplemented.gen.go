@@ -184,6 +184,11 @@ func (Unimplemented) GetProjectEnvironment(context.Context, GetProjectEnvironmen
 	return nil, apierr.NotImplemented
 }
 
+// GetProjectInstructions is not implemented yet.
+func (Unimplemented) GetProjectInstructions(context.Context, GetProjectInstructionsRequestObject) (GetProjectInstructionsResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetProjectSmokeObservations is not implemented yet.
 func (Unimplemented) GetProjectSmokeObservations(context.Context, GetProjectSmokeObservationsRequestObject) (GetProjectSmokeObservationsResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -266,6 +271,11 @@ func (Unimplemented) ListEnvironmentVersions(context.Context, ListEnvironmentVer
 
 // ListEnvironments is not implemented yet.
 func (Unimplemented) ListEnvironments(context.Context, ListEnvironmentsRequestObject) (ListEnvironmentsResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// ListProjectInstructionVersions is not implemented yet.
+func (Unimplemented) ListProjectInstructionVersions(context.Context, ListProjectInstructionVersionsRequestObject) (ListProjectInstructionVersionsResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 
@@ -431,6 +441,11 @@ func (Unimplemented) UpdateProjectDefaultProvider(context.Context, UpdateProject
 
 // UpdateProjectDevloopTarget is not implemented yet.
 func (Unimplemented) UpdateProjectDevloopTarget(context.Context, UpdateProjectDevloopTargetRequestObject) (UpdateProjectDevloopTargetResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// UpdateProjectInstructions is not implemented yet.
+func (Unimplemented) UpdateProjectInstructions(context.Context, UpdateProjectInstructionsRequestObject) (UpdateProjectInstructionsResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

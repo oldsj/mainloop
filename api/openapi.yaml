@@ -1844,6 +1844,131 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+  /projects/{project_id}/instructions:
+    get:
+      tags:
+        - projects
+      summary: Get Project Instructions
+      description: >-
+        The owner's standing instructions for the project's agents, and their version. Version 0
+        with empty text means none were ever set. Every task brief of the project carries the
+        version current when its attempt first got its brief.
+      operationId: getProjectInstructions
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectInstructions'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+        - projects
+      summary: Update Project Instructions
+      description: >-
+        Replace the project's instructions if expected_version is still current. Each change is
+        kept as a new version; writing the current text again changes nothing. Empty text clears
+        them. The text is at most 8192 bytes of UTF-8 without NUL.
+      operationId: updateProjectInstructions
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectInstructionsUpdate'
+      responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectInstructions'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
+  /projects/{project_id}/instructions/versions:
+    get:
+      tags:
+        - projects
+      summary: List Project Instruction Versions
+      description: >-
+        Earlier and current versions of the project's instructions, newest first, at most 50.
+      operationId: listProjectInstructionVersions
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectInstructionVersionList'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /projects/{project_id}/smoke-observations:
     get:
       tags:
@@ -4813,6 +4938,87 @@ components:
         - provider
         - topics
       title: MainThreadInfo
+    ProjectInstructions:
+      properties:
+        project_id:
+          type: string
+          title: Project Id
+        version:
+          type: integer
+          minimum: 0
+          title: Version
+          description: 0 when instructions were never set.
+        text:
+          type: string
+          title: Text
+        max_bytes:
+          type: integer
+          title: Max Bytes
+          description: The most UTF-8 bytes the text may hold.
+        updated_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Updated At
+      additionalProperties: false
+      type: object
+      required:
+        - project_id
+        - version
+        - text
+        - max_bytes
+        - updated_at
+      title: ProjectInstructions
+    ProjectInstructionsUpdate:
+      properties:
+        text:
+          type: string
+          maxLength: 8192
+          title: Text
+          description: At most 8192 UTF-8 bytes; empty clears the instructions.
+        expected_version:
+          type: integer
+          minimum: 0
+          title: Expected Version
+      additionalProperties: false
+      type: object
+      required:
+        - text
+        - expected_version
+      title: ProjectInstructionsUpdate
+    ProjectInstructionVersion:
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          title: Version
+        text:
+          type: string
+          title: Text
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      additionalProperties: false
+      type: object
+      required:
+        - version
+        - text
+        - created_at
+      title: ProjectInstructionVersion
+    ProjectInstructionVersionList:
+      properties:
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectInstructionVersion'
+          title: Versions
+      additionalProperties: false
+      type: object
+      required:
+        - versions
+      title: ProjectInstructionVersionList
     ProjectVerification:
       properties:
         mode:

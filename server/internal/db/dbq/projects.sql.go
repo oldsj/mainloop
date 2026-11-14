@@ -13,6 +13,26 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
+const getCurrentProjectInstructions = `-- name: GetCurrentProjectInstructions :one
+SELECT project_id, version, text, created_at FROM project_instruction_versions
+WHERE project_id = $1
+ORDER BY version DESC
+LIMIT 1
+`
+
+// The project's current instructions: its highest version. No row means none were ever set.
+func (q *Queries) GetCurrentProjectInstructions(ctx context.Context, projectID string) (ProjectInstructionVersion, error) {
+	row := q.db.QueryRow(ctx, getCurrentProjectInstructions, projectID)
+	var i ProjectInstructionVersion
+	err := row.Scan(
+		&i.ProjectID,
+		&i.Version,
+		&i.Text,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getOwnedProject = `-- name: GetOwnedProject :one
 SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at FROM projects WHERE id = $1 AND user_id = $2
 `
@@ -45,6 +65,27 @@ func (q *Queries) GetOwnedProject(ctx context.Context, arg GetOwnedProjectParams
 		&i.VerificationMode,
 		&i.CiDetection,
 		&i.CiDetectedAt,
+	)
+	return i, err
+}
+
+const getProjectInstructionVersion = `-- name: GetProjectInstructionVersion :one
+SELECT project_id, version, text, created_at FROM project_instruction_versions WHERE project_id = $1 AND version = $2
+`
+
+type GetProjectInstructionVersionParams struct {
+	ProjectID string
+	Version   int32
+}
+
+func (q *Queries) GetProjectInstructionVersion(ctx context.Context, arg GetProjectInstructionVersionParams) (ProjectInstructionVersion, error) {
+	row := q.db.QueryRow(ctx, getProjectInstructionVersion, arg.ProjectID, arg.Version)
+	var i ProjectInstructionVersion
+	err := row.Scan(
+		&i.ProjectID,
+		&i.Version,
+		&i.Text,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -128,6 +169,31 @@ func (q *Queries) InsertMergePolicyAudit(ctx context.Context, arg InsertMergePol
 	return err
 }
 
+const insertProjectInstructionVersion = `-- name: InsertProjectInstructionVersion :one
+INSERT INTO project_instruction_versions (project_id, version, text)
+VALUES ($1, $2, $3)
+RETURNING project_id, version, text, created_at
+`
+
+type InsertProjectInstructionVersionParams struct {
+	ProjectID string
+	Version   int32
+	Text      string
+}
+
+// Callers hold the project row lock; the primary key refuses a second writer of the same version.
+func (q *Queries) InsertProjectInstructionVersion(ctx context.Context, arg InsertProjectInstructionVersionParams) (ProjectInstructionVersion, error) {
+	row := q.db.QueryRow(ctx, insertProjectInstructionVersion, arg.ProjectID, arg.Version, arg.Text)
+	var i ProjectInstructionVersion
+	err := row.Scan(
+		&i.ProjectID,
+		&i.Version,
+		&i.Text,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listOwnedProjects = `-- name: ListOwnedProjects :many
 SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at FROM projects WHERE user_id = $1 ORDER BY last_used_at DESC, id LIMIT $2
 `
@@ -166,6 +232,43 @@ func (q *Queries) ListOwnedProjects(ctx context.Context, arg ListOwnedProjectsPa
 			&i.VerificationMode,
 			&i.CiDetection,
 			&i.CiDetectedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectInstructionVersions = `-- name: ListProjectInstructionVersions :many
+SELECT project_id, version, text, created_at FROM project_instruction_versions
+WHERE project_id = $1
+ORDER BY version DESC
+LIMIT $2
+`
+
+type ListProjectInstructionVersionsParams struct {
+	ProjectID string
+	Limit     int32
+}
+
+func (q *Queries) ListProjectInstructionVersions(ctx context.Context, arg ListProjectInstructionVersionsParams) ([]ProjectInstructionVersion, error) {
+	rows, err := q.db.Query(ctx, listProjectInstructionVersions, arg.ProjectID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ProjectInstructionVersion{}
+	for rows.Next() {
+		var i ProjectInstructionVersion
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.Version,
+			&i.Text,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

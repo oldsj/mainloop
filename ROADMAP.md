@@ -120,6 +120,7 @@ Agents in Mainloop currently receive less context than prior native-harness work
 - An owner-level instruction document, stored in Mainloop and rendered into every main, supervisor, and child brief, would carry communication style, evidence rules, no-hidden-subagents, and review expectations shared across projects. Bounded in size, versioned, and visible in the UI.
 - Briefs should state what the agent is — its role, that it runs in an isolated workspace, which tools it has, and what it may not do — rather than adding another prompt layer. This extends the existing brief construction instead of layering on top of it.
 - Agent dotfiles ([#313](https://github.com/oldsj/mainloop/issues/313), see [docs/specs/agent-dotfiles.md](docs/specs/agent-dotfiles.md)) is the proposed delivery mechanism for the owner-level instructions and skills described above: native files from a git repository, materialized read-only into each agent's home directory, rather than a document stored and rendered by Mainloop itself.
+- Per-project instructions and memory live in Mainloop, not in dotfiles or the repository ([docs/specs/project-context.md](docs/specs/project-context.md)): the owner edits them from any client, including a phone, and agents record source-linked memory that a git repository cannot take safely. Instructions are owner-authored, versioned, bounded and rendered into every task brief of the project (implemented). Memory is recorded by main from the owner's words or verified facts, proposed by tasks for the owner to accept, and rendered within a fixed budget (proposed). Owner-wide instructions stay with the dotfiles; repository facts stay in the repository's `AGENTS.md`.
 
 ### Tasks as the native unit
 
@@ -140,7 +141,7 @@ Agents in Mainloop currently receive less context than prior native-harness work
 
 ### Slices
 
-In rough order: agent context docs (this section, plus a repository `CLAUDE.md`); explorer progress showing child state counts and the latest report line per parent task, reusing existing task reads without new server API where a count can be derived; a task-steering tool for sending messages into running tasks; the owner policy document rendered into briefs; goal limits and done-when conditions on supervisor tasks; Markdown export and one-time import of prior note archives.
+In rough order: agent context docs (this section, plus a repository `CLAUDE.md`); per-project instructions, then project memory; explorer progress showing child state counts and the latest report line per parent task, reusing existing task reads without new server API where a count can be derived; a task-steering tool for sending messages into running tasks; the owner policy document rendered into briefs; goal limits and done-when conditions on supervisor tasks; Markdown export and one-time import of prior note archives.
 
 ## Scheduling and capacity
 
