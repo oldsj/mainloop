@@ -26,7 +26,7 @@ func TestGuidanceCoversTheEnvironment(t *testing.T) {
 	for _, want := range []string{
 		"isolated", "`/data/workspace`", "survives a pause", "`/data`", "`/opt/cache`", "`GOCACHE`",
 		"do not move them", "AGENTS.md and CLAUDE.md", "`get_verification`", "`watch_checks`", "end your turn", "push once",
-		"three failed CI rounds", "starter workflow", "pull request", "no production commands", "`dev_*`",
+		"three failed rounds", "starter workflow", "pull request", "no production commands", "`dev_*`",
 		"evidence", "`owner_action`", "directly in chat", "`/health`",
 	} {
 		if !strings.Contains(strings.ToLower(agentcontext.Guidance), strings.ToLower(want)) {

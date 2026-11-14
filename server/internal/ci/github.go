@@ -21,6 +21,7 @@ type GitHubAPI interface {
 	CheckRuns(ctx context.Context, repo github.Repo, sha string) ([]github.CheckRun, error)
 	CommitStatuses(ctx context.Context, repo github.Repo, sha string) ([]github.CommitStatus, error)
 	CheckRunAnnotations(ctx context.Context, repo github.Repo, runID int64) ([]github.Annotation, error)
+	PullRequestFeedback(ctx context.Context, repo github.Repo, number int, since time.Time) ([]github.PRFeedback, error)
 }
 
 // GitHub is the [Provider] over the GitHub App. Now is the clock for the abandoned-suite rule;
@@ -214,4 +215,45 @@ func runSummary(r github.CheckRun) string {
 		return r.OutputTitle
 	}
 	return r.OutputTitle + "\n\n" + r.OutputSummary
+}
+
+// trustedAssociations are the author associations whose feedback reaches the agent: people with
+// a role in the repository. Anyone can comment on a public pull request, so a comment from
+// anyone else is counted but never read out to the agent.
+var trustedAssociations = []string{"OWNER", "MEMBER", "COLLABORATOR"}
+
+// Feedback reads the trusted review feedback on a pull request after since. An author is trusted
+// when it is the repository's owner, a member or a collaborator, or a bot (a GitHub App only
+// comments where it is installed). The pull request's own author never counts: Mainloop's App
+// opens the agents' pull requests, and its own text is not review. A submitted review with no
+// text and no verdict to act on (COMMENTED, empty) only groups inline comments, which come on
+// their own, so it is skipped; a pending review is not submitted and never listed.
+func (g GitHub) Feedback(ctx context.Context, repo Repo, pr int, since time.Time) (Feedback, error) {
+	info, err := g.API.PullRequest(ctx, ghRepo(repo), pr)
+	if errors.Is(err, github.ErrNotFound) {
+		return Feedback{}, ErrNotFound
+	}
+	if err != nil {
+		return Feedback{}, err
+	}
+	got, err := g.API.PullRequestFeedback(ctx, ghRepo(repo), pr, since)
+	if err != nil {
+		return Feedback{}, err
+	}
+	var out Feedback
+	for _, f := range got {
+		switch {
+		case strings.EqualFold(f.Author, info.Author):
+			continue
+		case f.Kind == github.FeedbackReview && (f.State == "PENDING" || f.State == "COMMENTED" && strings.TrimSpace(f.Body) == ""):
+			continue
+		case f.AuthorType != "Bot" && !slices.Contains(trustedAssociations, f.Association):
+			out.Ignored++
+			continue
+		}
+		out.Items = append(out.Items, FeedbackItem{
+			Kind: f.Kind, Author: f.Author, State: f.State, Path: f.Path, Line: f.Line, Body: f.Body, URL: f.URL, At: f.At,
+		})
+	}
+	return out, nil
 }

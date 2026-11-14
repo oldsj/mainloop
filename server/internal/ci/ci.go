@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 )
 
 // Results of one check.
@@ -124,6 +125,32 @@ type Provider interface {
 	Checks(ctx context.Context, repo Repo, sha string) ([]Check, error)
 	// Failure reads why a failed check failed.
 	Failure(ctx context.Context, repo Repo, c Check) (Failure, error)
+	// Feedback reads the review feedback on a pull request after since: what trusted reviewers
+	// said, and how many items from anyone else were left out.
+	Feedback(ctx context.Context, repo Repo, pr int, since time.Time) (Feedback, error)
+}
+
+// Feedback is what reviewers said on a pull request since a point in time.
+type Feedback struct {
+	// Items are the trusted items, oldest first.
+	Items []FeedbackItem
+	// Ignored counts the items from authors who are not trusted; their text is never read out.
+	Ignored int
+}
+
+// FeedbackItem is one review, inline review comment or conversation comment. Body is the
+// reviewer's own text: untrusted input to the agent, bounded when rendered.
+type FeedbackItem struct {
+	// Kind is review, review_comment or comment.
+	Kind   string
+	Author string
+	// State is a review's verdict (APPROVED, CHANGES_REQUESTED, COMMENTED).
+	State string
+	Path  string
+	Line  int
+	Body  string
+	URL   string
+	At    time.Time
 }
 
 // State is the verdict over all the checks of a commit.

@@ -15,10 +15,10 @@ const Version = 4
 const Guidance = "## Working in Mainloop (guidance v4)\n" +
 	"- Where you run: sessions are isolated. Code tasks run in an isolated workspace checked out at `/data/workspace`; the main session and coordination tasks have no checkout and hand code work to code tasks.\n" +
 	"- What survives a pause: committed work and `/data`. Other writes, `/tmp` and processes may be reset: commit work in progress or keep it under `/data`, and run builds and tests in the foreground.\n" +
-	"- Caches: with a prebuilt cache image, Go, pnpm and similar caches live under `/opt/cache` (`GOCACHE`, `GOMODCACHE`, `pnpm_config_store_dir`). Use them as set; do not move them into `/data` or the repository.\n" +
+	"- Caches: with a prebuilt cache image, Go, pnpm and similar caches live under `/opt/cache` (`GOCACHE`, `GOMODCACHE`, `pnpm_config_store_dir`). Use them as set; do not move them.\n" +
 	"- Project specifics: the repository's AGENTS.md and CLAUDE.md apply.\n" +
-	"- Checks: run what `get_verification` says; CI runs the rest. Push once, call `watch_checks` and end your turn; a message brings the result. After three failed CI rounds on one check, report `outcome=blocked`. No CI: run all checks and propose a starter workflow.\n" +
-	"- Publishing: code tasks publish through Mainloop's tools (branch, pull request, CI, then merge subject to policy). Run no production commands unless the task says so. Where your tools include `dev_*`, the shared dev instance (not production) is where to try a change before merge.\n" +
+	"- Checks: run what `get_verification` says; CI runs the rest. Push once, call `watch_checks` (`reviews` on a pull request) and end your turn; a message brings the result or review feedback. After three failed rounds on one check or review, report `outcome=blocked`. No CI: run all checks and propose a starter workflow.\n" +
+	"- Publishing: code tasks publish through Mainloop's tools (branch, pull request, CI, then merge subject to policy). Run no production commands unless the task says so. With `dev_*` tools, try a change on the shared dev instance (not production) before merge.\n" +
 	"- GitHub: Mainloop's tools only (no `gh`); ask the owner to file issues.\n" +
 	"- Task links: write tasks as `[<title>](/tasks/<id>)`, not bare ids.\n" +
 	"- Reporting: tasks `report` evidence (commits, pull requests, check output), not claims. For an owner-only decision, a task reports `outcome=blocked` with `owner_action` stating the question; the main session asks the owner directly in chat.\n" +

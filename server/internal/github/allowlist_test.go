@@ -93,7 +93,7 @@ func TestAllowlistRefusesEverythingElseWithoutSending(t *testing.T) {
 		"unlisted path":           {"GET", "https://api.github.com/user", ""},
 		"unlisted repo path":      {"GET", "https://api.github.com/repos/oldsj/mainloop/issues", ""},
 		"commits not granted":     {"GET", "https://api.github.com/repos/oldsj/mainloop/commits", ""},
-		"deeper path":             {"GET", "https://api.github.com/repos/oldsj/mainloop/pulls/1/comments", ""},
+		"deeper path":             {"GET", "https://api.github.com/repos/oldsj/mainloop/pulls/1/requested_reviewers", ""},
 		"pull merge not granted":  {"PUT", "https://api.github.com/repos/oldsj/mainloop/pulls/1/merge", "{}"},
 		"pull create not granted": {"POST", "https://api.github.com/repos/oldsj/mainloop/pulls", "{}"},
 		"protection not granted":  {"GET", "https://api.github.com/repos/oldsj/mainloop/branches/main/protection", ""},

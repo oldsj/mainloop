@@ -36,12 +36,15 @@ func (s *Server) checkTools() []Tool {
 			Description: "Wait for CI without holding your turn: give pr_number or commit_sha and a stable request_id. " +
 				"Returns at once; when nothing is pending any more (or at the timeout, default 30 minutes) Mainloop sends you " +
 				"one message with the outcome (green, failed, pending_timeout, no_checks or not_found) and why checks failed. " +
-				"End your turn after calling it. A newer watch of the same ref replaces an older one.",
+				"With reviews: true (pr_number only) it also wakes you when a reviewer with a role in the repository " +
+				"reviews or comments (outcome review, with their text), and a green result waits for the timeout so a " +
+				"review can arrive. End your turn after calling it. A newer watch of the same ref replaces an older one.",
 			InputSchema: objectSchema(map[string]any{
 				"project_id":      stringSchema(1, 100),
 				"pr_number":       map[string]any{"type": "integer", "exclusiveMinimum": 0},
 				"commit_sha":      map[string]any{"type": "string", "pattern": "^[0-9a-f]{40}$"},
 				"request_id":      stringSchema(1, 100),
+				"reviews":         map[string]any{"type": "boolean"},
 				"timeout_minutes": map[string]any{"type": "integer", "minimum": 1, "maximum": int(ci.MaxWatchTimeout.Minutes())},
 			}, "project_id", "request_id"),
 			Handle: s.watchChecks,
@@ -105,6 +108,7 @@ func (s *Server) watchChecks(ctx context.Context, a agentauth.Actor, raw json.Ra
 		CommitSHA      string `json:"commit_sha"`
 		RequestID      string `json:"request_id"`
 		TimeoutMinutes int    `json:"timeout_minutes"`
+		Reviews        bool   `json:"reviews"`
 	}
 	if err := decode(raw, &in); err != nil {
 		return Result{}, err
@@ -128,7 +132,7 @@ func (s *Server) watchChecks(ctx context.Context, a agentauth.Actor, raw json.Ra
 	}
 	w, err := s.CI.StartWatch(ctx, ci.WatchInput{
 		OwnerID: a.UserID, ProjectID: in.ProjectID, SessionID: a.BindingID, Ref: ref, RequestID: in.RequestID,
-		Timeout: time.Duration(in.TimeoutMinutes) * time.Minute,
+		Timeout: time.Duration(in.TimeoutMinutes) * time.Minute, Reviews: in.Reviews,
 	})
 	if err != nil {
 		return Result{}, ciFailure(err)
@@ -137,7 +141,7 @@ func (s *Server) watchChecks(ctx context.Context, a agentauth.Actor, raw json.Ra
 		w.ID, w.Deadline.UTC().Format(time.RFC3339))
 	m := map[string]any{
 		"watch_id": w.ID, "state": string(w.State), "deadline": w.Deadline.UTC().Format(time.RFC3339),
-		"superseded": w.Superseded, "text": line,
+		"superseded": w.Superseded, "reviews": in.Reviews, "text": line,
 	}
 	return Result{Text: line, Structured: m}, nil
 }
