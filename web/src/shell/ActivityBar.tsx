@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { cn } from '@/components/ui/cn';
 import { badgeText } from '@/features/inbox/model';
 import { SIDEBAR_VIEWS, type SidebarView } from '@/features/explorer';
+import { LogoMark } from './LogoMark';
 import { ThemeSelector } from './ThemeSelector';
 
 const VIEW_ICONS: Record<SidebarView, LucideIcon> = { sessions: ListTree, projects: FolderGit2 };
@@ -25,9 +26,10 @@ export interface ActivityBarProps {
 }
 
 /**
- * Desktop: the strip down the left edge. It replaces the old top header: the home mark, the two
- * sidebar views, the Inbox with its Needs-you count, and at the foot orchestration health, Settings
- * and the theme. The count is always on screen here, whichever view the sidebar shows and when it is hidden.
+ * Desktop: the strip down the left edge. It replaces the old top header: the home mark, the Inbox
+ * with its Needs-you count, the two sidebar views, and at the foot orchestration health, Settings
+ * and the theme. The Inbox is first because what needs the owner is the first thing to check. The
+ * count is always on screen here, whichever view the sidebar shows and when it is hidden.
  */
 export function ActivityBar({ view, collapsed, needs, onView }: ActivityBarProps) {
   const path = useRouterState({ select: (state) => state.location.pathname });
@@ -41,28 +43,10 @@ export function ActivityBar({ view, collapsed, needs, onView }: ActivityBarProps
         to="/"
         aria-label="Mainloop home"
         title="Mainloop"
-        className={cn(ITEM, 'text-primary hover:text-primary font-mono text-sm font-semibold')}
+        className={cn(ITEM, '[&_svg]:size-5')}
       >
-        $
+        <LogoMark />
       </Link>
-      {SIDEBAR_VIEWS.map(({ id, label }) => {
-        const Icon = VIEW_ICONS[id];
-        const showing = !collapsed && view === id;
-        return (
-          <button
-            key={id}
-            type="button"
-            aria-label={label}
-            aria-pressed={showing}
-            title={showing ? `Hide ${label}` : label}
-            onClick={() => onView(id)}
-            data-testid={`activity-${id}`}
-            className={cn(ITEM, showing && ITEM_ON)}
-          >
-            <Icon aria-hidden="true" />
-          </button>
-        );
-      })}
       <RouteItem
         to="/inbox"
         on={path === '/inbox'}
@@ -81,6 +65,24 @@ export function ActivityBar({ view, collapsed, needs, onView }: ActivityBarProps
           </span>
         ) : null}
       </RouteItem>
+      {SIDEBAR_VIEWS.map(({ id, label }) => {
+        const Icon = VIEW_ICONS[id];
+        const showing = !collapsed && view === id;
+        return (
+          <button
+            key={id}
+            type="button"
+            aria-label={label}
+            aria-pressed={showing}
+            title={showing ? `Hide ${label}` : label}
+            onClick={() => onView(id)}
+            data-testid={`activity-${id}`}
+            className={cn(ITEM, showing && ITEM_ON)}
+          >
+            <Icon aria-hidden="true" />
+          </button>
+        );
+      })}
       <span className="flex-1" />
       <RouteItem
         to="/health"

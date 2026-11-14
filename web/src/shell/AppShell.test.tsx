@@ -100,7 +100,22 @@ describe('shell switch', () => {
     expect(follows(main, status)).toBe(true);
     // The old top header is gone: its mark, health link and theme menu are in the activity bar.
     expect(screen.queryByText('$ mainloop')).toBeNull();
-    expect(within(bar).getByRole('link', { name: 'Mainloop home' })).toBeInTheDocument();
+    const home = within(bar).getByRole('link', { name: 'Mainloop home' });
+    expect(within(home).getByTestId('logo-mark')).toBeInTheDocument();
+    // The Inbox comes first, under the mark; then the sidebar's views; health, Settings and the
+    // theme are at the foot.
+    expect(
+      [...bar.querySelectorAll('a, button')]
+        .map((item) => item.getAttribute('aria-label'))
+        .slice(0, 6)
+    ).toEqual([
+      'Mainloop home',
+      'Inbox',
+      'Sessions',
+      'Projects',
+      'Orchestration health',
+      'Settings'
+    ]);
     expect(within(bar).getByTestId('header-health')).toBeInTheDocument();
     expect(within(bar).getByTestId('theme-selector')).toBeInTheDocument();
     expect(screen.getByTestId('desktop-shell').firstElementChild?.firstElementChild).toBe(bar);
