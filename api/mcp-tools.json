@@ -308,6 +308,22 @@
       }
     },
     {
+      "name": "project_context",
+      "description": "Read the project owner's current standing instructions for the project: instructions and version. A task brief carries them at the version current when the task started; read this when you need the current text. The main session may read any of its owner's projects; other sessions only their own.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["project_id"],
+        "type": "object"
+      }
+    },
+    {
       "name": "task_get",
       "description": "Read a scoped task and its stored projections without a native turn.",
       "input_schema": {
@@ -817,6 +833,7 @@
         "open_pull_request",
         "pending_add",
         "pending_done",
+        "project_context",
         "steer",
         "task_cancel",
         "task_get",
@@ -851,6 +868,7 @@
         "open_pull_request",
         "pending_add",
         "pending_done",
+        "project_context",
         "steer",
         "task_cancel",
         "task_get",
@@ -884,6 +902,7 @@
         "pending_add",
         "pending_done",
         "prepare_pull_request_merge",
+        "project_context",
         "steer",
         "task_cancel",
         "task_get",
@@ -921,6 +940,7 @@
         "pending_add",
         "pending_done",
         "prepare_pull_request_merge",
+        "project_context",
         "steer",
         "task_cancel",
         "task_get",
@@ -942,6 +962,7 @@
       "devloop_enabled": false,
       "ordinary": [
         "delegate",
+        "project_context",
         "report",
         "steer",
         "task_cancel",
@@ -961,6 +982,7 @@
       "devloop_enabled": true,
       "ordinary": [
         "delegate",
+        "project_context",
         "report",
         "steer",
         "task_cancel",
@@ -980,6 +1002,7 @@
       "devloop_enabled": false,
       "ordinary": [
         "delegate",
+        "project_context",
         "report",
         "steer",
         "task_cancel",
@@ -999,6 +1022,7 @@
       "devloop_enabled": true,
       "ordinary": [
         "delegate",
+        "project_context",
         "report",
         "steer",
         "task_cancel",
@@ -1023,6 +1047,7 @@
         "get_verification",
         "list_dependabot_alerts",
         "open_pull_request",
+        "project_context",
         "report",
         "steer",
         "task_cancel",
@@ -1052,6 +1077,7 @@
         "get_verification",
         "list_dependabot_alerts",
         "open_pull_request",
+        "project_context",
         "report",
         "steer",
         "task_cancel",
@@ -1080,6 +1106,7 @@
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",
+        "project_context",
         "report",
         "steer",
         "task_cancel",
@@ -1112,6 +1139,7 @@
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",
+        "project_context",
         "report",
         "steer",
         "task_cancel",
@@ -1130,7 +1158,7 @@
       "merge_status_only": false,
       "merge_tools_enabled": false,
       "devloop_enabled": false,
-      "ordinary": ["report", "task_get", "task_history", "task_list", "whoami"],
+      "ordinary": ["project_context", "report", "task_get", "task_history", "task_list", "whoami"],
       "approval": []
     },
     {
@@ -1140,7 +1168,7 @@
       "merge_status_only": false,
       "merge_tools_enabled": false,
       "devloop_enabled": true,
-      "ordinary": ["report", "task_get", "task_history", "task_list", "whoami"],
+      "ordinary": ["project_context", "report", "task_get", "task_history", "task_list", "whoami"],
       "approval": []
     },
     {
@@ -1150,7 +1178,7 @@
       "merge_status_only": false,
       "merge_tools_enabled": true,
       "devloop_enabled": false,
-      "ordinary": ["report", "task_get", "task_history", "task_list", "whoami"],
+      "ordinary": ["project_context", "report", "task_get", "task_history", "task_list", "whoami"],
       "approval": []
     },
     {
@@ -1160,7 +1188,7 @@
       "merge_status_only": false,
       "merge_tools_enabled": true,
       "devloop_enabled": true,
-      "ordinary": ["report", "task_get", "task_history", "task_list", "whoami"],
+      "ordinary": ["project_context", "report", "task_get", "task_history", "task_list", "whoami"],
       "approval": []
     },
     {
@@ -1176,6 +1204,7 @@
         "get_verification",
         "list_dependabot_alerts",
         "open_pull_request",
+        "project_context",
         "report",
         "task_get",
         "task_history",
@@ -1202,6 +1231,7 @@
         "get_verification",
         "list_dependabot_alerts",
         "open_pull_request",
+        "project_context",
         "report",
         "task_get",
         "task_history",
@@ -1227,6 +1257,7 @@
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",
+        "project_context",
         "report",
         "task_get",
         "task_history",
@@ -1256,71 +1287,11 @@
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",
+        "project_context",
         "report",
         "task_get",
         "task_history",
         "task_list",
-        "watch_checks",
-        "whoami"
-      ],
-      "approval": ["merge_pull_request_with_approval"]
-    },
-    {
-      "role": "agent",
-      "depth": 0,
-      "grant": "workspace",
-      "merge_status_only": false,
-      "merge_tools_enabled": false,
-      "devloop_enabled": false,
-      "ordinary": [
-        "check_status",
-        "get_issue",
-        "get_verification",
-        "list_dependabot_alerts",
-        "open_pull_request",
-        "watch_checks",
-        "whoami"
-      ],
-      "approval": []
-    },
-    {
-      "role": "agent",
-      "depth": 0,
-      "grant": "workspace",
-      "merge_status_only": false,
-      "merge_tools_enabled": false,
-      "devloop_enabled": true,
-      "ordinary": [
-        "check_status",
-        "dev_lease_acquire",
-        "dev_lease_release",
-        "dev_status",
-        "dev_sync",
-        "get_issue",
-        "get_verification",
-        "list_dependabot_alerts",
-        "open_pull_request",
-        "watch_checks",
-        "whoami"
-      ],
-      "approval": []
-    },
-    {
-      "role": "agent",
-      "depth": 0,
-      "grant": "workspace",
-      "merge_status_only": false,
-      "merge_tools_enabled": true,
-      "devloop_enabled": false,
-      "ordinary": [
-        "check_status",
-        "get_issue",
-        "get_pull_request_merge_status",
-        "get_verification",
-        "list_dependabot_alerts",
-        "merge_pull_request",
-        "open_pull_request",
-        "prepare_pull_request_merge",
         "watch_checks",
         "whoami"
       ],
@@ -1331,6 +1302,70 @@
       "depth": 0,
       "grant": "workspace",
       "merge_status_only": false,
+      "merge_tools_enabled": false,
+      "devloop_enabled": false,
+      "ordinary": [
+        "check_status",
+        "get_issue",
+        "get_verification",
+        "list_dependabot_alerts",
+        "open_pull_request",
+        "project_context",
+        "watch_checks",
+        "whoami"
+      ],
+      "approval": []
+    },
+    {
+      "role": "agent",
+      "depth": 0,
+      "grant": "workspace",
+      "merge_status_only": false,
+      "merge_tools_enabled": false,
+      "devloop_enabled": true,
+      "ordinary": [
+        "check_status",
+        "dev_lease_acquire",
+        "dev_lease_release",
+        "dev_status",
+        "dev_sync",
+        "get_issue",
+        "get_verification",
+        "list_dependabot_alerts",
+        "open_pull_request",
+        "project_context",
+        "watch_checks",
+        "whoami"
+      ],
+      "approval": []
+    },
+    {
+      "role": "agent",
+      "depth": 0,
+      "grant": "workspace",
+      "merge_status_only": false,
+      "merge_tools_enabled": true,
+      "devloop_enabled": false,
+      "ordinary": [
+        "check_status",
+        "get_issue",
+        "get_pull_request_merge_status",
+        "get_verification",
+        "list_dependabot_alerts",
+        "merge_pull_request",
+        "open_pull_request",
+        "prepare_pull_request_merge",
+        "project_context",
+        "watch_checks",
+        "whoami"
+      ],
+      "approval": ["merge_pull_request_with_approval"]
+    },
+    {
+      "role": "agent",
+      "depth": 0,
+      "grant": "workspace",
+      "merge_status_only": false,
       "merge_tools_enabled": true,
       "devloop_enabled": true,
       "ordinary": [
@@ -1346,6 +1381,7 @@
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",
+        "project_context",
         "watch_checks",
         "whoami"
       ],

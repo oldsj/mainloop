@@ -629,6 +629,13 @@ type ProjectEnvironmentSelection struct {
 	Revision      int64
 }
 
+type ProjectInstructionVersion struct {
+	ProjectID string
+	Version   int32
+	Text      string
+	CreatedAt time.Time
+}
+
 type ProjectMergePolicyAudit struct {
 	ID        int64
 	ProjectID string
@@ -870,6 +877,7 @@ type TaskAttempt struct {
 	LivenessFailingSince      *time.Time
 	Model                     *string
 	Effort                    *string
+	InstructionsVersion       *int32
 }
 
 type TaskEventDelivery struct {

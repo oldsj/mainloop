@@ -6,6 +6,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/agentcontext"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/projectcontext"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 )
 
@@ -64,7 +65,7 @@ func TestBriefsStateTheRoleAndShareTheGuidance(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := tasks.DelegatedBrief(c.role, c.mode, work)
+			got := tasks.DelegatedBrief(c.role, c.mode, work, "")
 			if !strings.Contains(got, "## Assigned work\n"+work+"\n\n") {
 				t.Fatalf("the assigned work is not intact in %q", got)
 			}
@@ -85,5 +86,28 @@ func TestBriefsStateTheRoleAndShareTheGuidance(t *testing.T) {
 				t.Errorf("guidance is %d bytes, want at most %d", n, maxGuidanceBytes)
 			}
 		})
+	}
+}
+
+// TestBriefCarriesProjectInstructionsBeforeTheGuidance: the owner's project instructions follow the
+// assigned work and come before the shared guidance; a project without any adds no section.
+func TestBriefCarriesProjectInstructionsBeforeTheGuidance(t *testing.T) {
+	const work = "Ship the thing"
+	section := projectcontext.Section(projectcontext.Instructions{ProjectID: "p1", Version: 3, Text: "UI demos use fictional data."})
+	for _, mode := range []dbstate.TaskMode{dbstate.TaskModeCode, dbstate.TaskModeCoordination} {
+		got := tasks.DelegatedBrief(dbstate.AttemptChild, mode, work, section)
+		w, p, g := strings.Index(got, "## Assigned work"), strings.Index(got, "## Project instructions (owner, v3)"), strings.Index(got, agentcontext.Guidance)
+		if w < 0 || p < 0 || g < 0 || !(w < p && p < g) {
+			t.Fatalf("%s: want assigned work, then project instructions, then guidance:\n%s", mode, got)
+		}
+		if !strings.Contains(got, "UI demos use fictional data.\n") {
+			t.Errorf("%s: instructions text missing:\n%s", mode, got)
+		}
+	}
+	if s := projectcontext.Section(projectcontext.Instructions{ProjectID: "p1"}); s != "" {
+		t.Errorf("no instructions rendered %q", s)
+	}
+	if got := tasks.DelegatedBrief(dbstate.AttemptChild, dbstate.TaskModeCode, work, ""); strings.Contains(got, "Project instructions") {
+		t.Errorf("a project without instructions got a section:\n%s", got)
 	}
 }

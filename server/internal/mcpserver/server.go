@@ -71,7 +71,7 @@ type Server struct {
 // later adds its function here and nothing else changes.
 func (s *Server) tools() map[string]Tool {
 	all := map[string]Tool{}
-	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.pullRequestTools(), s.issueTools(), s.checkTools(), s.devLoopTools()} {
+	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.pullRequestTools(), s.issueTools(), s.checkTools(), s.devLoopTools(), s.projectTools()} {
 		for _, t := range domain {
 			all[t.Name] = t
 		}

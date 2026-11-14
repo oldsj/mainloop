@@ -681,6 +681,50 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/projects/{project_id}/instructions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Project Instructions
+     * @description The owner's standing instructions for the project's agents, and their version. Version 0 with empty text means none were ever set. Every task brief of the project carries the version current when its attempt first got its brief.
+     */
+    get: operations['getProjectInstructions'];
+    /**
+     * Update Project Instructions
+     * @description Replace the project's instructions if expected_version is still current. Each change is kept as a new version; writing the current text again changes nothing. Empty text clears them. The text is at most 8192 bytes of UTF-8 without NUL.
+     */
+    put: operations['updateProjectInstructions'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/projects/{project_id}/instructions/versions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Project Instruction Versions
+     * @description Earlier and current versions of the project's instructions, newest first, at most 50.
+     */
+    get: operations['listProjectInstructionVersions'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/projects/{project_id}/smoke-observations': {
     parameters: {
       query?: never;
@@ -1816,6 +1860,52 @@ export interface components {
        * @default []
        */
       topics: components['schemas']['TopicLine'][];
+    };
+    /** ProjectInstructions */
+    ProjectInstructions: {
+      /** Project Id */
+      project_id: string;
+      /**
+       * Version
+       * @description 0 when instructions were never set.
+       */
+      version: number;
+      /** Text */
+      text: string;
+      /**
+       * Max Bytes
+       * @description The most UTF-8 bytes the text may hold.
+       */
+      max_bytes: number;
+      /** Updated At */
+      updated_at: string | null;
+    };
+    /** ProjectInstructionsUpdate */
+    ProjectInstructionsUpdate: {
+      /**
+       * Text
+       * @description At most 8192 UTF-8 bytes; empty clears the instructions.
+       */
+      text: string;
+      /** Expected Version */
+      expected_version: number;
+    };
+    /** ProjectInstructionVersion */
+    ProjectInstructionVersion: {
+      /** Version */
+      version: number;
+      /** Text */
+      text: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+    };
+    /** ProjectInstructionVersionList */
+    ProjectInstructionVersionList: {
+      /** Versions */
+      versions: components['schemas']['ProjectInstructionVersion'][];
     };
     /** ProjectVerification */
     ProjectVerification: {
@@ -7523,6 +7613,150 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  getProjectInstructions: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProjectInstructions'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  updateProjectInstructions: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ProjectInstructionsUpdate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProjectInstructions'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Request Entity Too Large */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  listProjectInstructionVersions: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProjectInstructionVersionList'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
         };
       };
     };

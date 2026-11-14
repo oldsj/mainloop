@@ -20,6 +20,10 @@ CI Mainloop found on the default branch, or that none was found yet), what agent
 when the last re-check of the project's CI failed. Saving takes effect at once, with no version
 check. See [CI checks](ci.md#where-heavy-checks-run).
 
+The owner's per-project **instructions** for agents are served by the API and carried in every
+task brief of the project; the project page section to edit them is not built yet. See
+[project context](project-context.md).
+
 Project detail lists unarchived project sessions and excludes bindings with the `main` role.
 Unbound sessions remain visible.
 

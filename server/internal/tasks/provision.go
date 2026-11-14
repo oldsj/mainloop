@@ -599,7 +599,11 @@ func (s *Service) sendBrief(ctx context.Context, c reconcile.Claim, op dbq.TaskO
 	}
 	mid := briefMessageID(a.ID)
 	if _, err := q.GetDelivery(ctx, mid); errors.Is(err, pgx.ErrNoRows) {
-		_, err := s.Sessions.SendToAs(ctx, sessions.SourceMainloop, *a.SessionID, mid, DelegatedBrief(a.Role, t.Mode, t.Brief))
+		brief, err := attemptBrief(ctx, q, a, t)
+		if err != nil {
+			return reconcile.Outcome{}, err
+		}
+		_, err = s.Sessions.SendToAs(ctx, sessions.SourceMainloop, *a.SessionID, mid, brief)
 		switch {
 		case errors.Is(err, sessions.ErrNotFound):
 			return s.giveUpInitialBrief(ctx, c, op, a, mid)
