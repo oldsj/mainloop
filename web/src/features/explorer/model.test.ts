@@ -14,6 +14,8 @@ import {
   briefSnippet,
   buildExplorer,
   FINISHED_WINDOW_MS,
+  heldUntilText,
+  isHeld,
   mainloopState,
   needsCount,
   prStage,
@@ -815,5 +817,115 @@ describe('groups by pull request state', () => {
       expect.arrayContaining(['review', 'landing'])
     );
     expect(topLevel(viewNodes(nodes, 'projects'))).toEqual(['projects', 'schedules']);
+  });
+});
+
+describe('snoozed tasks', () => {
+  const now = new Date(2026, 0, 10, 12, 0).getTime();
+  const later = new Date(2026, 0, 10, 15, 40).toISOString();
+  const tomorrow = new Date(2026, 0, 11, 9, 0).toISOString();
+  const earlier = new Date(2026, 0, 10, 11, 0).toISOString();
+  const group = (nodes: ReturnType<typeof buildExplorer>, id: string) =>
+    nodes.find((node) => node.id === id);
+  const time = (iso: string) =>
+    new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  it('reads a hold as held only until its time', () => {
+    expect(isHeld(view({ held_until: later }), now)).toBe(true);
+    expect(isHeld(view({ held_until: earlier }), now)).toBe(false);
+    expect(isHeld(view({ held_until: null }), now)).toBe(false);
+    expect(isHeld(view({ held_until: 'not a time' }), now)).toBe(false);
+  });
+
+  it('says when a hold ends: the time today, the weekday as well otherwise', () => {
+    expect(heldUntilText(later, now)).toBe(`until ${time(later)}`);
+    const weekday = new Date(tomorrow).toLocaleDateString([], { weekday: 'short' });
+    expect(heldUntilText(tomorrow, now)).toBe(`until ${weekday} ${time(tomorrow)}`);
+  });
+
+  it('moves a held working task out of Working into Snoozed, at rest, with when and why', () => {
+    const held = view({
+      id: 'h',
+      status: 'running',
+      title: 'Wait for the vendor',
+      held_until: later,
+      held_reason: 'Vendor replies after lunch'
+    });
+    const busy = view({ id: 'w', status: 'running' });
+    const nodes = buildExplorer(source({ tasks: [held, busy], now }));
+    expect(group(nodes, 'working')?.children.map((n) => n.target)).toEqual([
+      { to: 'task', id: 'w' }
+    ]);
+    const snoozed = group(nodes, 'snoozed');
+    expect(snoozed).toEqual(expect.objectContaining({ label: 'Snoozed', count: 1 }));
+    expect(snoozed?.children[0]).toEqual(
+      expect.objectContaining({
+        label: 'Wait for the vendor',
+        detail: `until ${time(later)} · Vendor replies after lunch`,
+        tone: 'muted',
+        target: { to: 'task', id: 'h' }
+      })
+    );
+    // The age is left out: the time that matters is when it comes back.
+    expect(snoozed?.children[0]?.at).toBeUndefined();
+  });
+
+  it('keeps a held task out of Ready for review and Landing', () => {
+    const green = { pr_state: 'open' as const, pr_number: 3, ci_state: 'success' as const };
+    const ready = view(
+      { id: 'r', status: 'waiting', held_until: later },
+      { projection: projection(green) }
+    );
+    const landing = view(
+      { id: 'l', status: 'waiting', held_until: later },
+      { projection: projection({ ...green, merge_proposal_id: 'mp' }) }
+    );
+    const nodes = buildExplorer(source({ tasks: [ready, landing], now }));
+    expect(group(nodes, 'review')).toBeUndefined();
+    expect(group(nodes, 'landing')).toBeUndefined();
+    expect(group(nodes, 'snoozed')?.count).toBe(2);
+  });
+
+  it('drops a held task from the Needs you rows read from task state', () => {
+    const waiting = view({
+      id: 'n',
+      status: 'waiting',
+      reason: 'owner_decision',
+      held_until: later
+    });
+    const nodes = buildExplorer(source({ tasks: [waiting], now }));
+    expect(group(nodes, 'needs')?.count).toBe(0);
+    expect(group(nodes, 'snoozed')?.count).toBe(1);
+  });
+
+  it('still shows an owner action that /attention lists for a held task, under Needs you only', () => {
+    const task = view({ id: 'a', status: 'running', held_until: later });
+    const attention = [{ ...hitlAttentionItem('req-1'), task_id: 'a' }];
+    const nodes = buildExplorer(source({ tasks: [task], attention, now }));
+    expect(group(nodes, 'needs')?.count).toBe(1);
+    expect(group(nodes, 'snoozed')).toBeUndefined();
+  });
+
+  it('brings the task back when the hold has run out', () => {
+    const task = view({ id: 'b', status: 'running', held_until: earlier });
+    const nodes = buildExplorer(source({ tasks: [task], now }));
+    expect(group(nodes, 'working')?.count).toBe(1);
+    expect(group(nodes, 'snoozed')).toBeUndefined();
+  });
+
+  it('does not count a held task as Mainloop working', () => {
+    const task = view({ id: 'h', status: 'running', held_until: later });
+    expect(group(buildExplorer(source({ tasks: [task], now })), 'mainloop')?.detail).toBe('Idle');
+  });
+
+  it('sits after Landing, folded, in the Sessions view, and is left out when empty', () => {
+    const task = view({ id: 'h', status: 'running', held_until: later });
+    const nodes = buildExplorer(source({ tasks: [task], now }));
+    const ids = topLevel(nodes);
+    expect(ids.indexOf('snoozed')).toBe(ids.indexOf('working') + 1);
+    expect(ids.indexOf('snoozed')).toBeLessThan(ids.indexOf('projects'));
+    expect(isExpanded(DEFAULT_PREFS, 'snoozed')).toBe(false);
+    expect(topLevel(viewNodes(nodes, 'sessions'))).toContain('snoozed');
+    expect(group(buildExplorer(source({ now })), 'snoozed')).toBeUndefined();
   });
 });

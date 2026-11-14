@@ -135,6 +135,42 @@ export function prStage(view: TaskView): PrStage | null {
   return p.ci_state === 'success' ? 'review' : null;
 }
 
+/**
+ * Whether the main thread has set the task aside for now (`task_hold`). A hold is not a status:
+ * the task goes on. It only keeps the task out of the owner's way until the time passes.
+ */
+export function isHeld(view: TaskView, now: number): boolean {
+  const until = view.task.held_until ? Date.parse(view.task.held_until) : Number.NaN;
+  return Number.isFinite(until) && until > now;
+}
+
+/**
+ * "until 15:40" for later today, "until Sat 15:40" for another day. A hold lasts at most seven
+ * days, so the weekday alone says which day, and the line keeps room for the reason.
+ */
+export function heldUntilText(iso: string, now: number): string {
+  const until = new Date(iso);
+  const time = until.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (until.toDateString() === new Date(now).toDateString()) return `until ${time}`;
+  return `until ${until.toLocaleDateString([], { weekday: 'short' })} ${time}`;
+}
+
+/**
+ * A row in Snoozed: at rest, with when it comes back and, when the main thread gave one, why it
+ * was set aside. Its age is left out: the time that matters is the one it returns at.
+ */
+function snoozedNode(view: TaskView, source: ExplorerSource, now: number): ExplorerNode {
+  const node = taskNode(view, source, 'snoozed');
+  const until = heldUntilText(view.task.held_until ?? '', now);
+  const reason = view.task.held_reason?.trim();
+  return {
+    ...node,
+    detail: reason ? `${until} · ${briefSnippet(reason, 80)}` : until,
+    at: undefined,
+    tone: 'muted'
+  };
+}
+
 /** "PR #12", or "PR" when the number is not known. */
 const prLabel = (view: TaskView) =>
   view.projection.pr_number != null ? `PR #${view.projection.pr_number}` : 'PR';
@@ -418,8 +454,8 @@ export function mainloopState(needs: number, working: number): { label: string; 
 
 /**
  * The top-level tree, in the order the owner sees it: Mainloop, Needs you, Problems, Since you were
- * here (only when something changed), Working, Ready for review and Landing (each only when it has
- * rows), Projects, Schedules, Finished recently, Insights (the health row; its page is still
+ * here (only when something changed), Working, Ready for review, Landing and Snoozed (each only
+ * when it has rows), Projects, Schedules, Finished recently, Insights (the health row; its page is still
  * `/health`).
  */
 export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
@@ -429,6 +465,7 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
     working: [] as TaskView[],
     review: [] as TaskView[],
     landing: [] as TaskView[],
+    snoozed: [] as TaskView[],
     finished: [] as TaskView[]
   };
   const attentionTasks = new Set<string>();
@@ -454,13 +491,19 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
     // Finished row; Needs you stays flat regardless, so an owner action is never hidden a level down.
     // Working is what is still in progress. A task whose pull request is ready to be looked at, or
     // is landing, moves to its own group, so Working does not hide what only waits on a review.
-    if (group === 'working' && !named && !nested) {
+    // A task the main thread set aside is out of the way until its time: it leaves Working, the two
+    // pull request groups and the Needs you rows read from task state, and waits under Snoozed. An
+    // owner action listed by `/attention` still shows under Needs you, and a problem under Problems.
+    const held = isHeld(view, now);
+    if (held && !nested && (group === 'working' || group === 'needs-you' || group === 'blocked')) {
+      if (!named) groups.snoozed.push(view);
+    } else if (group === 'working' && !named && !nested) {
       const stage = prStage(view);
       if (stage === 'review') groups.review.push(view);
       else if (stage === 'landing') groups.landing.push(view);
       else groups.working.push(view);
     }
-    if ((group === 'needs-you' || group === 'blocked') && !named) {
+    if ((group === 'needs-you' || group === 'blocked') && !named && !held) {
       needs.push(taskNode(view, source, 'needs'));
     }
     if (group === 'problem' && !named) {
@@ -570,6 +613,16 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
           } satisfies ExplorerNode
         ]
       : []),
+    ...(groups.snoozed.length > 0
+      ? [
+          {
+            id: 'snoozed',
+            label: 'Snoozed',
+            count: groups.snoozed.length,
+            children: groups.snoozed.map((view) => snoozedNode(view, source, now))
+          } satisfies ExplorerNode
+        ]
+      : []),
     {
       id: 'projects',
       label: 'Projects',
@@ -644,7 +697,7 @@ export function sameTarget(a: Target | null | undefined, b: Target | null | unde
 
 /**
  * The desktop sidebar's two views. **Sessions** is the work and what it needs: Mainloop, Needs you,
- * Problems, Since you were here, Working, Ready for review, Landing and Finished recently. **Projects** is the catalogue:
+ * Problems, Since you were here, Working, Ready for review, Landing, Snoozed and Finished recently. **Projects** is the catalogue:
  * Projects and Schedules. Insights is in neither: on desktop the connection is in the status bar.
  */
 export type SidebarView = 'sessions' | 'projects';
@@ -655,7 +708,17 @@ export const SIDEBAR_VIEWS: readonly { id: SidebarView; label: string }[] = [
 ];
 
 const VIEW_NODES: Record<SidebarView, readonly string[]> = {
-  sessions: ['mainloop', 'needs', 'problems', 'since', 'working', 'review', 'landing', 'finished'],
+  sessions: [
+    'mainloop',
+    'needs',
+    'problems',
+    'since',
+    'working',
+    'review',
+    'landing',
+    'snoozed',
+    'finished'
+  ],
   projects: ['projects', 'schedules']
 };
 
