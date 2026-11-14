@@ -130,6 +130,10 @@ spec:
         - name: git-spool
           emptyDir:
             sizeLimit: 3Gi
+        {{- if .Values.auth.serviceAccounts.enabled }}
+        # Read scope on the owner API, for `mainloop smoke --read-only` in the pod.
+        {{- include "mainloop.apiTokenVolume" . | nindent 8 }}
+        {{- end }}
         {{- if .Values.kagentControlAuth.enabled }}
         # kagent verifies this ServiceAccount token by TokenReview; the kubelet rotates the file and
         # the server re-reads it. The principal is the ServiceAccount's UID, so recreating the

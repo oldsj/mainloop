@@ -12,8 +12,22 @@ import (
 	"time"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/auth"
+	"github.com/oldsj/mainloop/server/internal/auth/authtest"
 	"github.com/oldsj/mainloop/server/internal/canary"
 )
+
+// serve puts h behind the owner API's authentication in enforce mode, allowing the canary
+// ServiceAccount the canary scope, and returns the URL and the canary's token. Every run in these
+// tests goes through it, so a call outside the canary scope fails the test.
+func serve(t *testing.T, h http.Handler) (string, auth.TokenSource) {
+	t.Helper()
+	gate := authtest.NewGate(t, map[string]auth.Scope{"mainloop/mainloop-canary": auth.ScopeCanary})
+	tok := gate.Token(t, "mainloop", "mainloop-canary")
+	srv := httptest.NewServer(gate.Wrap(h))
+	t.Cleanup(srv.Close)
+	return srv.URL, func() (string, error) { return tok, nil }
+}
 
 var today = time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
 
@@ -135,10 +149,9 @@ func run(t *testing.T, f *fakeAPI) canary.Result {
 	if f.ended == nil {
 		f.ended = map[string]bool{}
 	}
-	srv := httptest.NewServer(f)
-	t.Cleanup(srv.Close)
+	url, token := serve(t, f)
 	return canary.Run(context.Background(), canary.Options{
-		Name: "prod", API: srv.URL, Model: "claude-haiku-5-5", Slow: time.Hour, Deadline: 300 * time.Millisecond,
+		Name: "prod", API: url, Token: token, Model: "claude-haiku-5-5", Slow: time.Hour, Deadline: 300 * time.Millisecond,
 		Poll: 20 * time.Millisecond, Request: time.Second, Now: func() time.Time { return today },
 	})
 }
@@ -259,11 +272,10 @@ func TestADeliveryKagentRefusedFailsTheRunWithItsReason(t *testing.T) {
 			}
 			f.messages = map[string][]api.Message{}
 			f.ended = map[string]bool{}
-			srv := httptest.NewServer(&refusing{f: f, detail: refused})
-			t.Cleanup(srv.Close)
+			url, token := serve(t, &refusing{f: f, detail: refused})
 
 			res := canary.Run(context.Background(), canary.Options{
-				Name: "prod", API: srv.URL, Slow: time.Hour, Deadline: 10 * time.Second,
+				Name: "prod", API: url, Token: token, Slow: time.Hour, Deadline: 10 * time.Second,
 				Poll: 20 * time.Millisecond, Request: time.Second, Now: func() time.Time { return today },
 			})
 
@@ -319,10 +331,9 @@ func TestARefusedPingRestartsARestartableSession(t *testing.T) {
 		t.Helper()
 		f.sendStatus, f.sessions, f.deliveries = "ok", idle, []api.NativeDeliveryInfo{}
 		f.messages, f.ended = map[string][]api.Message{}, map[string]bool{}
-		srv := httptest.NewServer(&refusing{f: f, detail: detail})
-		t.Cleanup(srv.Close)
+		url, token := serve(t, &refusing{f: f, detail: detail})
 		return canary.Run(context.Background(), canary.Options{
-			Name: "prod", API: srv.URL, Slow: time.Hour, Deadline: 10 * time.Second,
+			Name: "prod", API: url, Token: token, Slow: time.Hour, Deadline: 10 * time.Second,
 			Poll: 20 * time.Millisecond, Request: time.Second, Now: func() time.Time { return today },
 		})
 	}
@@ -393,4 +404,47 @@ func TestAlertReportsARestartOnce(t *testing.T) {
 		!strings.Contains(m["message"].(string), "prod: kagent refused the ping (not sent: A2A error -32004") {
 		t.Fatalf("alert: %+v", m)
 	}
+}
+
+func TestTheCanaryAuthenticatesAsItsServiceAccount(t *testing.T) {
+	var (
+		mu  sync.Mutex
+		got http.Header
+	)
+	f := &fakeAPI{reply: true, messages: map[string][]api.Message{}, ended: map[string]bool{}}
+	url, token := serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got = r.Header.Clone()
+		mu.Unlock()
+		f.ServeHTTP(w, r)
+	}))
+	opts := canary.Options{Name: "prod", API: url, Model: "claude-haiku-5-5", Slow: time.Hour, Deadline: 300 * time.Millisecond,
+		Poll: 20 * time.Millisecond, Request: time.Second, Now: func() time.Time { return today }}
+
+	t.Run("without a token the first step is refused", func(t *testing.T) {
+		res := canary.Run(context.Background(), opts)
+		if res.Step != canary.StepList || res.Err == nil || !strings.Contains(res.Err.Error(), "status 401") {
+			t.Fatalf("result: %v", res)
+		}
+	})
+	t.Run("an unreadable token fails the step without a request", func(t *testing.T) {
+		o := opts
+		o.Token = auth.TokenFile(t.TempDir() + "/missing")
+		res := canary.Run(context.Background(), o)
+		if res.Step != canary.StepList || res.Err == nil || !strings.Contains(res.Err.Error(), "token file") {
+			t.Fatalf("result: %v", res)
+		}
+	})
+	t.Run("with its token every step passes", func(t *testing.T) {
+		o := opts
+		o.Token = token
+		if res := canary.Run(context.Background(), o); !res.OK() {
+			t.Fatalf("result: %v", res)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if got.Get(auth.ClientHeader) != "canary" || !strings.HasPrefix(got.Get("Authorization"), "Bearer ") {
+			t.Fatalf("headers: %v", got)
+		}
+	})
 }

@@ -164,6 +164,21 @@ frontend:
   livenessProbe: {}
   readinessProbe: {}
 
+# Machine callers of the owner API (docs/specs/authentication.md). Each sends a projected token of
+# its own ServiceAccount for this audience, and the backend checks it with a TokenReview.
+auth:
+  audience: mainloop-api
+  serviceAccounts:
+    # Lets the backend create TokenReviews (a ClusterRole named after the release namespace) and
+    # allows the chart's ServiceAccounts in MAINLOOP_AUTH_SERVICE_ACCOUNTS: mainloop-canary (canary
+    # scope, when the canary is on), mainloop-backend (read, for `smoke --read-only` in the pod) and
+    # mainloop-operator (owner, for break-glass and `smoke --live`; no pod runs as it, an operator
+    # mints its token with `kubectl create token`). Setting MAINLOOP_AUTH_SERVICE_ACCOUNTS in config
+    # replaces the list.
+    enabled: true
+    # More namespace/name=scope entries, such as another instance's canary.
+    extra: []
+
 # Authenticated, TLS calls to kagent's control gateway. The backend sends a projected token of its
 # own ServiceAccount, for the audience below, which kagent verifies by TokenReview. Needs Secret
 # kagent-control-ca (key ca.crt) in the release namespace.

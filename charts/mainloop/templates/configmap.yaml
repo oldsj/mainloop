@@ -5,6 +5,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
 data:
   {{- $data := merge (dict) .Values.config }}
+  {{- if not (hasKey $data "MAINLOOP_AUTH_SA_AUDIENCE") }}
+  {{- $_ := set $data "MAINLOOP_AUTH_SA_AUDIENCE" .Values.auth.audience }}
+  {{- end }}
+  {{- if and .Values.auth.serviceAccounts.enabled (not (hasKey $data "MAINLOOP_AUTH_SERVICE_ACCOUNTS")) }}
+  {{- $_ := set $data "MAINLOOP_AUTH_SERVICE_ACCOUNTS" (include "mainloop.authServiceAccounts" .) }}
+  {{- end }}
   {{- if not (hasKey $data "DB_HOST") }}
   {{- $_ := set $data "DB_HOST" (include "mainloop.dbHost" .) }}
   {{- end }}

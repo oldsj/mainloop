@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -28,11 +29,16 @@ const chart = "../../../charts/mainloop"
 
 // installs are the values files a deployment of the chart is rendered with. The production and
 // live-dev files are generic stand-ins; real deployments keep theirs in their own repository.
-var installs = map[string]struct{ namespace, values string }{
-	"defaults":   {"mainloop", ""},
-	"production": {"mainloop", "ci/production-values.yaml"},
-	"live-dev":   {"mainloop-dev", "ci/live-dev-values.yaml"},
-	"kind":       {"mainloop", "values-kind.yaml"},
+var installs = map[string]struct {
+	namespace, values string
+	set               []string
+}{
+	"defaults":   {"mainloop", "", nil},
+	"production": {"mainloop", "ci/production-values.yaml", nil},
+	"live-dev":   {"mainloop-dev", "ci/live-dev-values.yaml", nil},
+	"kind":       {"mainloop", "values-kind.yaml", nil},
+	// Production with its canary on, as the real production values have it.
+	"production-canary": {"mainloop", "ci/production-values.yaml", []string{"canary.enabled=true"}},
 }
 
 // rendered is one install after `helm template`, split by kind.
@@ -45,6 +51,8 @@ type rendered struct {
 	clusterRoles []rbacv1.ClusterRole
 	bindings     []rbacv1.ClusterRoleBinding
 	roleBindings []rbacv1.RoleBinding
+	cronJobs     map[string]batchv1.CronJob
+	accounts     map[string]corev1.ServiceAccount
 	// objects is "Kind/name" for every object, so a test can assert what is absent.
 	objects []string
 }
@@ -64,6 +72,9 @@ func render(t *testing.T, path string) rendered {
 	if install.values != "" {
 		args = append(args, "--values", filepath.Join(chart, install.values))
 	}
+	for _, kv := range install.set {
+		args = append(args, "--set", kv)
+	}
 	cmd := exec.CommandContext(t.Context(), helm, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -77,6 +88,8 @@ func render(t *testing.T, path string) rendered {
 		statefulSets: map[string]appsv1.StatefulSet{},
 		configMaps:   map[string]corev1.ConfigMap{},
 		services:     map[string]corev1.Service{},
+		cronJobs:     map[string]batchv1.CronJob{},
+		accounts:     map[string]corev1.ServiceAccount{},
 	}
 	docs := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(out)))
 	for {
@@ -135,6 +148,14 @@ func render(t *testing.T, path string) rendered {
 			var b rbacv1.RoleBinding
 			mustUnmarshal(t, raw, &b)
 			r.roleBindings = append(r.roleBindings, b)
+		case "CronJob":
+			var c batchv1.CronJob
+			mustUnmarshal(t, raw, &c)
+			r.cronJobs[name] = c
+		case "ServiceAccount":
+			var a corev1.ServiceAccount
+			mustUnmarshal(t, raw, &a)
+			r.accounts[name] = a
 		}
 	}
 	return r
@@ -816,4 +837,114 @@ func TestTheAPIGetsTheSubstrateRouterCredentials(t *testing.T) {
 			}
 		})
 	}
+}
+
+// apiToken checks that pod carries a projected token for the owner API's audience, mounted where
+// container's MAINLOOP_API_TOKEN_FILE points, and returns its lifetime.
+func apiToken(t *testing.T, pod corev1.PodSpec, c corev1.Container) int64 {
+	t.Helper()
+	var src *corev1.ServiceAccountTokenProjection
+	for _, v := range pod.Volumes {
+		if v.Name == "mainloop-api-token" && v.Projected != nil && len(v.Projected.Sources) == 1 {
+			src = v.Projected.Sources[0].ServiceAccountToken
+		}
+	}
+	if src == nil || src.Audience != "mainloop-api" || src.ExpirationSeconds == nil {
+		t.Fatalf("no projected mainloop-api token volume: %+v", pod.Volumes)
+	}
+	file := envByName(c)["MAINLOOP_API_TOKEN_FILE"].Value
+	for _, m := range c.VolumeMounts {
+		if m.Name == "mainloop-api-token" && m.ReadOnly && filepath.Join(m.MountPath, src.Path) == file {
+			return *src.ExpirationSeconds
+		}
+	}
+	t.Fatalf("container %s: MAINLOOP_API_TOKEN_FILE=%q is not the mounted token (%+v)", c.Name, file, c.VolumeMounts)
+	return 0
+}
+
+// Every install lets its machine callers authenticate (docs/specs/authentication.md): the backend
+// may create TokenReviews and nothing more, the allowlist names this release's own ServiceAccounts,
+// and each caller carries a projected token for the API's audience. Kind has no machine callers (see
+// TestKindBootsWithoutKagentOrGitHubApp).
+func TestMachineCallersAuthenticate(t *testing.T) {
+	for _, path := range []string{"defaults", "production", "production-canary", "live-dev"} {
+		t.Run(path, func(t *testing.T) {
+			r := render(t, path)
+			ns := installs[path].namespace
+			data := r.configMaps["mainloop-config"].Data
+			if data["MAINLOOP_AUTH_MODE"] != "observe" || data["MAINLOOP_AUTH_SA_AUDIENCE"] != "mainloop-api" {
+				t.Errorf("auth mode %q, audience %q", data["MAINLOOP_AUTH_MODE"], data["MAINLOOP_AUTH_SA_AUDIENCE"])
+			}
+			want := []string{ns + "/mainloop-backend=read", ns + "/mainloop-operator=owner"}
+			if _, ok := r.cronJobs["mainloop-canary"]; ok {
+				want = append(want, ns+"/mainloop-canary=canary")
+			}
+			if got := strings.Split(data["MAINLOOP_AUTH_SERVICE_ACCOUNTS"], ","); !slices.Equal(got, want) {
+				t.Errorf("MAINLOOP_AUTH_SERVICE_ACCOUNTS = %v, want %v", got, want)
+			}
+
+			// TokenReview, and only that, for this release's backend.
+			var roles []rbacv1.ClusterRole
+			for _, c := range r.clusterRoles {
+				if strings.Contains(c.Name, "tokenreview") {
+					roles = append(roles, c)
+				}
+			}
+			review := []rbacv1.PolicyRule{{APIGroups: []string{"authentication.k8s.io"}, Resources: []string{"tokenreviews"}, Verbs: []string{"create"}}}
+			if len(roles) != 1 || roles[0].Name != "mainloop-tokenreview-"+ns || !reflect.DeepEqual(roles[0].Rules, review) {
+				t.Fatalf("TokenReview ClusterRole: %+v", roles)
+			}
+			bound := false
+			for _, b := range r.bindings {
+				if b.RoleRef.Name == roles[0].Name {
+					bound = len(b.Subjects) == 1 && b.Subjects[0] == rbacv1.Subject{Kind: "ServiceAccount", Name: "mainloop-backend", Namespace: ns}
+				}
+			}
+			if !bound {
+				t.Fatal("the TokenReview role is not bound to this release's mainloop-backend alone")
+			}
+
+			// The operator ServiceAccount has no pod and mounts nothing; its tokens are minted by hand.
+			op, ok := r.accounts["mainloop-operator"]
+			if !ok || op.AutomountServiceAccountToken == nil || *op.AutomountServiceAccountToken {
+				t.Errorf("mainloop-operator: %+v", op)
+			}
+
+			pod := r.backend(t)
+			for _, c := range pod.Containers {
+				apiToken(t, pod, c)
+			}
+
+			cj, ok := r.cronJobs["mainloop-canary"]
+			if !ok {
+				return
+			}
+			cpod := cj.Spec.JobTemplate.Spec.Template.Spec
+			if cpod.ServiceAccountName != "mainloop-canary" || cpod.AutomountServiceAccountToken == nil || *cpod.AutomountServiceAccountToken {
+				t.Errorf("canary pod runs as %q, automount %v", cpod.ServiceAccountName, cpod.AutomountServiceAccountToken)
+			}
+			if sa, ok := r.accounts["mainloop-canary"]; !ok || sa.AutomountServiceAccountToken == nil || *sa.AutomountServiceAccountToken {
+				t.Errorf("mainloop-canary ServiceAccount: %+v", sa)
+			}
+			if exp := apiToken(t, cpod, cpod.Containers[0]); exp != 600 {
+				t.Errorf("canary token lives %ds, want 600", exp)
+			}
+		})
+	}
+	t.Run("off renders none of it", func(t *testing.T) {
+		helm, err := exec.LookPath("helm")
+		if err != nil {
+			t.Skip("helm is not installed")
+		}
+		out, err := exec.CommandContext(t.Context(), helm, "template", "mainloop", chart, "--namespace", "mainloop",
+			"--set", "canary.enabled=true", "--set", "auth.serviceAccounts.enabled=false").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range []string{"tokenreview", "mainloop-operator", "MAINLOOP_AUTH_SERVICE_ACCOUNTS"} {
+			if bytes.Contains(out, []byte(s)) {
+				t.Errorf("rendered %q with auth.serviceAccounts off", s)
+			}
+		}
+	})
 }

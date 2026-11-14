@@ -8,8 +8,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/oldsj/mainloop/server/internal/auth"
+	"github.com/oldsj/mainloop/server/internal/auth/authtest"
 )
 
 // jsonHandler answers 200 with a fixed JSON body.
@@ -53,6 +57,13 @@ func guardMethods(t *testing.T, next http.Handler) http.Handler {
 // changes one answer and keeps the rest.
 func stubAPI(t *testing.T, overrides map[string]http.HandlerFunc) string {
 	t.Helper()
+	srv := httptest.NewServer(stubAPIHandler(t, overrides))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func stubAPIHandler(t *testing.T, overrides map[string]http.HandlerFunc) http.Handler {
+	t.Helper()
 	routes := map[string]http.HandlerFunc{
 		"/health":      jsonHandler(`{"status":"healthy","database":"ok"}`),
 		"/projects":    jsonHandler(`[]`),
@@ -74,9 +85,7 @@ func stubAPI(t *testing.T, overrides map[string]http.HandlerFunc) string {
 	for path, h := range routes {
 		mux.HandleFunc(path, h)
 	}
-	srv := httptest.NewServer(guardMethods(t, mux))
-	t.Cleanup(srv.Close)
-	return srv.URL
+	return guardMethods(t, mux)
 }
 
 // statusServer answers every request with one status, for the listeners whose answer is the status alone.
@@ -280,7 +289,7 @@ func TestCheckLineFormat(t *testing.T) {
 func TestDecodeIsStrictAboutStatus(t *testing.T) {
 	api := stubAPI(t, map[string]http.HandlerFunc{"/attention": statusHandler(404, `{"count":3}`)})
 	var out struct{ Count int }
-	err := newCaller("", 5*time.Second).getJSON(context.Background(), api+"/attention", &out)
+	err := newCaller("", nil, 5*time.Second).getJSON(context.Background(), api+"/attention", &out)
 	if err == nil || out.Count != 0 {
 		t.Fatalf("getJSON on 404 = %v, count %d; want an error and no decode", err, out.Count)
 	}
@@ -383,4 +392,43 @@ func TestProbesKeepTheURLHostWhenNoneIsConfigured(t *testing.T) {
 			t.Errorf("%s listener saw Host %q, want exactly [%q]", name, got, want)
 		}
 	}
+}
+
+// The pod's read-scoped token covers every read-only check, through the owner API's own
+// authentication in enforce mode, and goes only to the owner API.
+func TestReadOnlyAuthenticatesWithTheBackendsReadToken(t *testing.T) {
+	gate := authtest.NewGate(t, map[string]auth.Scope{"mainloop/mainloop-backend": auth.ScopeRead})
+	tok := gate.Token(t, "mainloop", "mainloop-backend")
+	api := httptest.NewServer(gate.Wrap(stubAPIHandler(t, nil)))
+	t.Cleanup(api.Close)
+	var leaked atomic.Bool
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked.Store(leaked.Load() || r.Header.Get("Authorization") != "")
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(mcp.Close)
+
+	opts := healthyOptions(t)
+	opts.API, opts.MCP = api.URL, mcp.URL
+
+	t.Run("without a token the owner reads are refused and health is not", func(t *testing.T) {
+		checks := runReadOnly(opts)
+		if c := findCheck(t, checks, "health"); c.Status != OK {
+			t.Fatalf("health: %v", c)
+		}
+		if c := findCheck(t, checks, "events"); c.Status != Fail || !strings.Contains(c.Detail, "401") {
+			t.Fatalf("events without a token: %v", c)
+		}
+	})
+	t.Run("with the read token every check passes", func(t *testing.T) {
+		opts.Token = func() (string, error) { return tok, nil }
+		for _, c := range runReadOnly(opts) {
+			if c.Status == Fail {
+				t.Errorf("check %v", c)
+			}
+		}
+		if leaked.Load() {
+			t.Fatal("the owner API bearer reached the MCP listener")
+		}
+	})
 }
