@@ -12,6 +12,7 @@ import {
 } from '@/features/sessions/WorkspaceBadges';
 import { agentLabel } from '@/lib/agentLabel';
 import { avatarUrl, httpsUrl } from '@/lib/url';
+import { InstructionsSection } from './InstructionsSection';
 import { MergePolicySection } from './MergePolicySection';
 import { VerificationSection } from './VerificationSection';
 import {
@@ -285,6 +286,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
         </h2>
         <div id="project-settings-body" hidden={!settingsOpen}>
           <div className="gap-md flex flex-col">
+            <InstructionsSection projectId={id} />
             <MergePolicySection projectId={id} />
             <VerificationSection projectId={id} />
             <EnvironmentSection projectId={id} />

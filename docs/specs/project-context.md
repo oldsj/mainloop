@@ -1,9 +1,9 @@
 # Project context
 
-Status: **project instructions are implemented** on the server (API, task briefs and the
-`project_context` tool), tested with Postgres and fakes and not measured against a live agent. The
-project page section, project memory and updates to running sessions are **proposed**: see
-[Proposed](#proposed) below.
+Status: **project instructions are implemented**: the API, task briefs, the `project_context` tool
+and the Instructions section of the project page. The server is tested with Postgres and fakes,
+and the page with mocked API responses; none of it has been measured against a live agent. Project
+memory and updates to running sessions are **proposed**: see [Proposed](#proposed) below.
 
 A project's owner can say something once and have every later agent working on the project follow
 it: "UI demos use fictional data", "merge with --squash", "ask before touching billing". Mainloop
@@ -47,6 +47,20 @@ One Markdown text per project, written only by the owner. Agents read it and can
   instructions, 409 when `expected_version` is not current, 422 for text over the bound or not
   valid text, 404 for a project that is not the owner's.
 - `GET /projects/{project_id}/instructions/versions`: up to the 50 newest versions, newest first.
+
+### On the project page
+
+The Instructions section sits first under the project page's Settings. It shows the saved version
+and when it was saved, or "No instructions yet.", and a text box with the current text.
+
+- The byte count under the box is of the trimmed text in UTF-8, as the server measures it. Save is
+  offered only for a draft that differs from the saved text after trimming and is within the bound.
+- A draft remembers the version it was started from. If the saved version moves under it, from
+  another tab or a save refused with 409, the draft is kept as typed, the section shows the current
+  version's text, and Save becomes "Save over version N", which sends that version. Discard draft
+  returns the box to the saved text.
+- Any other refused save shows the server's message and keeps the draft.
+- Earlier versions lists the stored versions, read only when the owner opens it.
 
 ### In task briefs
 

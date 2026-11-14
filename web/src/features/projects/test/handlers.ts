@@ -15,10 +15,12 @@ import {
 import type { SelectionFixture } from '@/features/environments/test/fixtures';
 import {
   detail,
+  instructions,
   policy,
   project,
   verification,
   type DetailFixture,
+  type InstructionsFixture,
   type PolicyFixture,
   type ProjectFixture,
   type VerificationFixture,
@@ -41,6 +43,15 @@ export const policyRead = (resolve: HttpResponseResolver) =>
 
 export const verificationRead = (resolve: HttpResponseResolver) =>
   http.get(url('/projects/:project_id/verification'), resolve);
+
+export const instructionsRead = (resolve: HttpResponseResolver) =>
+  http.get(url('/projects/:project_id/instructions'), resolve);
+
+export const instructionsWrite = (resolve: HttpResponseResolver) =>
+  http.put(url('/projects/:project_id/instructions'), resolve);
+
+export const instructionVersionsRead = (resolve: HttpResponseResolver) =>
+  http.get(url('/projects/:project_id/instructions/versions'), resolve);
 
 export const verificationWrite = (resolve: HttpResponseResolver) =>
   http.put(url('/projects/:project_id/verification'), resolve);
@@ -72,6 +83,7 @@ export function serveProjectPage(
     detail?: DetailFixture;
     policy?: PolicyFixture;
     verification?: VerificationFixture;
+    instructions?: InstructionsFixture;
     workspaces?: WorkspaceFixture[];
     environments?: EnvironmentFixture[];
     versions?: Record<string, VersionFixture[]>;
@@ -84,6 +96,7 @@ export function serveProjectPage(
     detailRead(() => HttpResponse.json(value)),
     policyRead(() => HttpResponse.json(options.policy ?? policy())),
     verificationRead(() => HttpResponse.json(options.verification ?? verification())),
+    instructionsRead(() => HttpResponse.json(options.instructions ?? instructions())),
     workspacesRead(options.workspaces ?? []),
     providersRead(),
     environmentsRead(options.environments ?? [environment()]),

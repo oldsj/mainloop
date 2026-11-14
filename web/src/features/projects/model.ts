@@ -288,3 +288,50 @@ export function verificationText(v: z.output<typeof projectVerificationSchema>):
       : `no CI reported on ${d?.branch ?? 'the default branch'}`;
   return `Heavy checks run in: ${effective} (automatic, ${found})`;
 }
+
+export type ProjectInstructions = Schemas['ProjectInstructions'];
+
+/** One object, like the merge policy view: a bad one fails the section rather than being dropped. */
+export const projectInstructionsSchema = z.object({
+  project_id: text,
+  version: z.number().int().nonnegative(),
+  text,
+  max_bytes: z.number().int().positive(),
+  updated_at: text.nullable()
+});
+
+export const instructionVersionListSchema = z.object({
+  versions: z.array(z.object({ version: z.number().int().positive(), text, created_at: text }))
+});
+
+const utf8 = new TextEncoder();
+
+/** The UTF-8 size of text, which is what the server bounds. */
+export function utf8Bytes(value: string): number {
+  return utf8.encode(value).length;
+}
+
+/**
+ * What saving a draft would do. The server trims surrounding whitespace before it compares and
+ * measures, so the draft is judged the same way: a draft that differs only in surrounding
+ * whitespace is unchanged, and the byte count is of the trimmed text.
+ */
+export function instructionsDraft(draft: string, saved: string, maxBytes: number) {
+  const trimmed = draft.trim();
+  const bytes = utf8Bytes(trimmed);
+  return { bytes, over: bytes > maxBytes, changed: trimmed !== saved };
+}
+
+/** The saved instructions' version and age, or that there are none. */
+export function instructionsStatus(
+  view: { version: number; text: string; updated_at: string | null },
+  ago: (iso: string) => string
+): string {
+  if (view.version === 0) return 'No instructions yet.';
+  const when = view.updated_at ? `, saved ${ago(view.updated_at)}` : '';
+  if (view.text === '') return `Cleared (version ${view.version}${when}).`;
+  return `Version ${view.version}${when}.`;
+}
+
+export const INSTRUCTIONS_EXPLANATION =
+  "Standing instructions for every agent working on this project, added to each new task's brief. Repository facts such as build commands and code style belong in the repository's AGENTS.md instead.";

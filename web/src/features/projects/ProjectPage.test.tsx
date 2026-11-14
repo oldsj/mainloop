@@ -115,7 +115,7 @@ describe('project page', () => {
     ]);
   });
 
-  it('folds merge policy and environment under Settings, collapsed until opened', async () => {
+  it('folds instructions, merge policy and environment under Settings, collapsed until opened', async () => {
     server.use(...serveProjectPage());
     const user = userEvent.setup();
     renderProjects(PAGE);
@@ -132,6 +132,7 @@ describe('project page', () => {
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(body).toBeVisible();
+    expect(screen.getByTestId('instructions')).toBeVisible();
     expect(screen.getByTestId('merge-policy')).toBeVisible();
     expect(screen.getByTestId('project-environment')).toBeVisible();
 
