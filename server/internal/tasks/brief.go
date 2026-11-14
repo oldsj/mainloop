@@ -19,15 +19,14 @@ func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief, proj
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the Mainloop task %s. First call `whoami`, then `task_get` with its task_id.", role)
 	if mode == dbstate.TaskModeCode {
-		b.WriteString(" Do the work. `git push` the task branch." +
-			" If you have `dev_sync`, try the pushed head on mainloop-dev before the pull request:" +
-			" `dev_lease_acquire` until `acquired` (within 2 minutes while `queued`), then `dev_sync` with that SHA." +
-			" Repeat while `pending`/`unknown`. Proceed only on `succeeded` with `result.health_ok` true; else fix, push, sync again." +
-			" Then `dev_lease_release`. Put the sync id in `evidence_refs`; re-sync after any push." +
-			" Open the pull request with `open_pull_request`." +
-			" If CI fails in a test your change does not touch, run that test locally; if it passes, push an empty commit once to rerun CI and say so in your report." +
-			" After CI is green, call `merge_pull_request`, subject to policy." +
-			" If it answers `approval_required`, call `merge_pull_request_with_approval`, or report the missing approval tooling as a blocker.")
+		b.WriteString(" Do the work and `git push` the task branch." +
+			" With `dev_sync`, try the pushed head on mainloop-dev first:" +
+			" `dev_lease_acquire` until `acquired` (within 2 minutes while `queued`), then `dev_sync` that SHA, repeating while `pending`/`unknown`." +
+			" Proceed only on `succeeded` with `result.health_ok` true; else fix, push, sync again." +
+			" Then `dev_lease_release`; put the sync id in `evidence_refs`; re-sync after any push." +
+			" Then `open_pull_request`." +
+			" If CI fails a test your change does not touch but it passes locally, push one empty commit to rerun CI and say so in your report." +
+			" Once CI is green, `merge_pull_request` (subject to policy); on `approval_required`, use `merge_pull_request_with_approval` or report missing approval tooling as a blocker.")
 	} else {
 		b.WriteString(" Do the assigned coordination work; you have no repository authority.")
 	}
@@ -42,16 +41,16 @@ func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief, proj
 	b.WriteString(agentcontext.Guidance)
 	if mode == dbstate.TaskModeCode {
 		b.WriteString("\n## Workspace environment\n" +
-			"- The workspace is a gVisor sandbox, so prefer fewer, larger commands.\n" +
-			"- Keep `SSL_CERT_FILE`, `SSL_CERT_DIR` and `NODE_EXTRA_CA_CERTS` as they are. Only allowlisted hosts are reachable, and the GitHub API is not.\n" +
-			"- You may run as root, but OS packages cannot be installed.\n")
+			"- The workspace is a gVisor sandbox: prefer fewer, larger commands.\n" +
+			"- Keep `SSL_CERT_FILE`, `SSL_CERT_DIR` and `NODE_EXTRA_CA_CERTS` as set. Only allowlisted hosts are reachable; the GitHub API is not.\n" +
+			"- You may run as root but cannot install OS packages.\n")
 	}
 	return b.String()
 }
 
 // attemptBrief renders the brief an attempt's agent receives. A task with a project carries the
-// project's instructions at the version pinned on the attempt by its first render, so a resend of
-// the brief carries the same text.
+// project's instructions and active memory as of the version and memory sequence pinned on the
+// attempt by its first render, so a resend of the brief carries the same text.
 func attemptBrief(ctx context.Context, q *dbq.Queries, a dbq.TaskAttempt, t dbq.Task) (string, error) {
 	project := ""
 	if t.ProjectID != nil {
@@ -59,7 +58,17 @@ func attemptBrief(ctx context.Context, q *dbq.Queries, a dbq.TaskAttempt, t dbq.
 		if err != nil {
 			return "", err
 		}
+		memory, err := projectcontext.MemoryForAttempt(ctx, q, a.ID, *t.ProjectID)
+		if err != nil {
+			return "", err
+		}
 		project = projectcontext.Section(in)
+		if m := projectcontext.MemorySection(memory); m != "" {
+			if project != "" {
+				project += "\n"
+			}
+			project += m
+		}
 	}
 	return DelegatedBrief(a.Role, t.Mode, t.Brief, project), nil
 }

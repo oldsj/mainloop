@@ -194,12 +194,12 @@ func TestPolicyTable(t *testing.T) {
 		got  string
 		want string
 	}{
-		{"main", join(off, main, ord), want("whoami", "topics", "topic_open", "note", "decide", "pending_add", "pending_done", "open_pull_request", "get_issue", "list_dependabot_alerts", "check_status", "watch_checks", "get_verification", "project_context", "task_get", "task_list", "task_history", "delegate", "task_cancel", "task_hold", "steer")},
-		{"supervisor coordination", join(off, sup, ord), want("whoami", "project_context", "task_get", "task_list", "task_history", "delegate", "task_cancel", "steer", "report")},
-		{"supervisor workspace", join(off, supWS, ord), want("whoami", "open_pull_request", "get_issue", "list_dependabot_alerts", "check_status", "watch_checks", "get_verification", "project_context", "task_get", "task_list", "task_history", "delegate", "task_cancel", "steer", "report")},
-		{"child", join(off, child, ord), want("whoami", "project_context", "task_get", "task_list", "task_history", "report")},
-		{"workspace agent", join(off, ws, ord), want("whoami", "open_pull_request", "get_issue", "list_dependabot_alerts", "check_status", "watch_checks", "get_verification", "project_context")},
-		{"workspace agent with merge", join(on, ws, ord), want("whoami", "open_pull_request", "get_issue", "list_dependabot_alerts", "check_status", "watch_checks", "get_verification", "project_context", "prepare_pull_request_merge", "merge_pull_request", "get_pull_request_merge_status")},
+		{"main", join(off, main, ord), want("whoami", "topics", "topic_open", "note", "decide", "pending_add", "pending_done", "open_pull_request", "get_issue", "list_dependabot_alerts", "check_status", "watch_checks", "get_verification", "project_context", "remember", "forget", "task_get", "task_list", "task_history", "delegate", "task_cancel", "task_hold", "steer")},
+		{"supervisor coordination", join(off, sup, ord), want("whoami", "project_context", "remember", "forget", "task_get", "task_list", "task_history", "delegate", "task_cancel", "steer", "report")},
+		{"supervisor workspace", join(off, supWS, ord), want("whoami", "open_pull_request", "get_issue", "list_dependabot_alerts", "check_status", "watch_checks", "get_verification", "project_context", "remember", "forget", "task_get", "task_list", "task_history", "delegate", "task_cancel", "steer", "report")},
+		{"child", join(off, child, ord), want("whoami", "project_context", "remember", "forget", "task_get", "task_list", "task_history", "report")},
+		{"workspace agent", join(off, ws, ord), want("whoami", "open_pull_request", "get_issue", "list_dependabot_alerts", "check_status", "watch_checks", "get_verification", "project_context", "remember", "forget")},
+		{"workspace agent with merge", join(on, ws, ord), want("whoami", "open_pull_request", "get_issue", "list_dependabot_alerts", "check_status", "watch_checks", "get_verification", "project_context", "remember", "forget", "prepare_pull_request_merge", "merge_pull_request", "get_pull_request_merge_status")},
 		{"workspace agent approval", join(on, ws, agentauth.SurfaceApproval), "merge_pull_request_with_approval"},
 		{"approval off", join(off, ws, agentauth.SurfaceApproval), ""},
 		{"child has no merge", join(on, child, agentauth.SurfaceApproval), ""},

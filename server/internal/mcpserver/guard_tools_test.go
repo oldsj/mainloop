@@ -84,6 +84,15 @@ func setupCall(t *testing.T, h *harness, a authtest.Seeded, tool string, args ma
 	return r.Result.StructuredContent
 }
 
+// memoryProject adds the owner's project mem-p for the memory write cases.
+func memoryProject(t *testing.T, h *harness) {
+	t.Helper()
+	if _, err := h.env.Pool.Exec(context.Background(), `INSERT INTO projects (id, user_id, owner, name, full_name, html_url)
+		VALUES ('mem-p', 'owner', 'o', 'm', 'o/m', 'https://x') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func mergeArgs() map[string]any {
 	return map[string]any{"project_id": "p1", "pr_number": 1, "expected_sha": prTip, "request_id": "dead"}
 }
@@ -170,6 +179,17 @@ var writeCases = []writeCase{
 	{tool: "watch_checks", prs: true,
 		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
 			return map[string]any{"project_id": "p1", "pr_number": 1, "request_id": "dead"}
+		}},
+	{tool: "remember", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(t *testing.T, h *harness, _ *prHarness, _ authtest.Seeded) map[string]any {
+			memoryProject(t, h)
+			return map[string]any{"project_id": "mem-p", "text": "The owner reviews UI on a phone."}
+		}},
+	{tool: "forget", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(t *testing.T, h *harness, _ *prHarness, a authtest.Seeded) map[string]any {
+			memoryProject(t, h)
+			e := setupCall(t, h, a, "remember", map[string]any{"project_id": "mem-p", "text": "Wrong."})
+			return map[string]any{"project_id": "mem-p", "entry_id": e["entry_id"]}
 		}},
 	// get_verification may write the project's cached CI detection.
 	{tool: "get_verification", prs: true,

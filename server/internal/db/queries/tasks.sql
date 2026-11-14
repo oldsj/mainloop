@@ -678,3 +678,11 @@ LIMIT $2;
 -- Clears a hold that has run out, only if it is still the same hold.
 UPDATE tasks SET held_until = NULL, held_reason = NULL, updated_at = now()
 WHERE id = $1 AND held_until = $2;
+
+-- name: PinAttemptMemorySeq :one
+-- Pins the project memory an attempt's brief carries, once, at the project's current memory
+-- sequence: one statement reads the sequence, so every entry at or below it is already committed.
+UPDATE task_attempts SET memory_seq = coalesce(memory_seq, (
+    SELECT coalesce(max(greatest(m.activated_seq, coalesce(m.ended_seq, 0))), 0)::bigint
+    FROM project_memory_entries m WHERE m.project_id = sqlc.arg(project_id)))
+WHERE task_attempts.id = sqlc.arg(id) RETURNING memory_seq;

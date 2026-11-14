@@ -64,6 +64,11 @@ func (Unimplemented) CreateWorkspace(context.Context, CreateWorkspaceRequestObje
 	return nil, apierr.NotImplemented
 }
 
+// DecideProjectMemoryEntry is not implemented yet.
+func (Unimplemented) DecideProjectMemoryEntry(context.Context, DecideProjectMemoryEntryRequestObject) (DecideProjectMemoryEntryResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // DeleteCheckpoint is not implemented yet.
 func (Unimplemented) DeleteCheckpoint(context.Context, DeleteCheckpointRequestObject) (DeleteCheckpointResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -186,6 +191,11 @@ func (Unimplemented) GetProjectEnvironment(context.Context, GetProjectEnvironmen
 
 // GetProjectInstructions is not implemented yet.
 func (Unimplemented) GetProjectInstructions(context.Context, GetProjectInstructionsRequestObject) (GetProjectInstructionsResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// GetProjectMemory is not implemented yet.
+func (Unimplemented) GetProjectMemory(context.Context, GetProjectMemoryRequestObject) (GetProjectMemoryResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

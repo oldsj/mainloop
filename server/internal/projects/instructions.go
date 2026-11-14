@@ -9,7 +9,8 @@ import (
 	"github.com/oldsj/mainloop/server/internal/projectcontext"
 )
 
-// instructions is the owner's project-context service, over the projects service's pool.
+// instructions is the owner's project-context service (instructions and memory), over the
+// projects service's pool.
 func (a *ProjectsAPI) instructions() *projectcontext.Service {
 	return &projectcontext.Service{Pool: a.Svc.Pool, OwnerID: a.Svc.OwnerID}
 }

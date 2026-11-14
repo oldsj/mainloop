@@ -17,7 +17,7 @@ func TestGuidanceIsBounded(t *testing.T) {
 }
 
 func TestGuidanceNamesItsVersion(t *testing.T) {
-	if want := "(guidance v4)"; agentcontext.Version != 4 || !strings.Contains(agentcontext.Guidance, want) {
+	if want := "(guidance v5)"; agentcontext.Version != 5 || !strings.Contains(agentcontext.Guidance, want) {
 		t.Fatalf("version %d does not match the heading %q", agentcontext.Version, want)
 	}
 }
@@ -27,7 +27,7 @@ func TestGuidanceCoversTheEnvironment(t *testing.T) {
 		"isolated", "`/data/workspace`", "survives a pause", "`/data`", "`/opt/cache`", "`GOCACHE`",
 		"do not move them", "AGENTS.md and CLAUDE.md", "`get_verification`", "`watch_checks`", "end your turn", "push once",
 		"three failed rounds", "starter workflow", "pull request", "no production commands", "`dev_*`",
-		"evidence", "`owner_action`", "directly in chat", "`/health`",
+		"evidence", "`owner_action`", "directly in chat", "`/health`", "`remember`", "`forget`", "proposals the owner decides",
 	} {
 		if !strings.Contains(strings.ToLower(agentcontext.Guidance), strings.ToLower(want)) {
 			t.Errorf("guidance lacks %q", want)

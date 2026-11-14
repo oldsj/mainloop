@@ -22,6 +22,8 @@ const (
 	ToolWatchChecks               = "watch_checks"
 	ToolGetVerification           = "get_verification"
 	ToolProjectContext            = "project_context"
+	ToolRemember                  = "remember"
+	ToolForget                    = "forget"
 	ToolTaskGet                   = "task_get"
 	ToolTaskList                  = "task_list"
 	ToolTaskHistory               = "task_history"
@@ -45,7 +47,7 @@ var AllTools = []string{
 	ToolWhoami, ToolTopics, ToolTopicOpen, ToolNote, ToolDecide, ToolPendingAdd, ToolPendingDone,
 	ToolOpenPullRequest,
 	ToolGetIssue, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
-	ToolProjectContext,
+	ToolProjectContext, ToolRemember, ToolForget,
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolDelegate, ToolTaskCancel, ToolTaskHold, ToolSteer, ToolReport,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
@@ -177,10 +179,11 @@ func (p Policy) actorTools(a Actor) []string {
 	case a.Role == dbstate.RoleAgent && a.Depth == 0:
 		tools = append(tools, workspaceTools...)
 	}
-	// Every live role reads its project's owner context: main any of its owner's projects, a
-	// task or workspace agent its own project only (the handler checks which).
+	// Every live role reads its project's owner context and records memory on it: main any of its
+	// owner's projects, a task or workspace agent its own project only (the handlers check which).
+	// Only main's entries are active at once; the others are proposals for the owner.
 	if len(tools) > 0 {
-		tools = append(tools, ToolProjectContext)
+		tools = append(tools, ToolProjectContext, ToolRemember, ToolForget)
 	}
 	if slices.Contains(tools, ToolOpenPullRequest) {
 		tools = append(tools, issueTools...)

@@ -30,7 +30,7 @@ func TestProjectContextReadsTheOwnersInstructions(t *testing.T) {
 		return r
 	}
 
-	if r := call(ws.Token, "p1"); r.Result.IsError || r.Result.StructuredContent["version"] != float64(0) || r.text() != "This project has no owner instructions." {
+	if r := call(ws.Token, "p1"); r.Result.IsError || r.Result.StructuredContent["version"] != float64(0) || r.text() != "This project has no owner instructions.\nNo active project memory." {
 		t.Fatalf("unset = %v %q", r.Result.StructuredContent, r.text())
 	}
 	pc := &projectcontext.Service{Pool: h.pool, OwnerID: "owner"}
@@ -40,7 +40,7 @@ func TestProjectContextReadsTheOwnersInstructions(t *testing.T) {
 	r := call(ws.Token, "p1")
 	sc := r.Result.StructuredContent
 	if r.Result.IsError || sc["version"] != float64(1) || sc["instructions"] != "Merge with --squash." || sc["updated_at"] == nil ||
-		r.text() != "Project instructions (owner, v1):\nMerge with --squash." {
+		r.text() != "Project instructions (owner, v1):\nMerge with --squash.\nNo active project memory." {
 		t.Fatalf("set = %v %q", sc, r.text())
 	}
 	if r := call(main.Token, "p1"); r.Result.IsError || r.Result.StructuredContent["instructions"] != "Merge with --squash." {

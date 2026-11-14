@@ -725,6 +725,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/projects/{project_id}/memory': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Project Memory
+     * @description The project's memory: entries agents recorded for later agents on the project. Active entries are carried in every new task brief after the instructions; proposed entries wait for the owner. Active entries come first, then proposals, each oldest first.
+     */
+    get: operations['getProjectMemory'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/projects/{project_id}/memory/{entry_id}/decision': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Decide Project Memory Entry
+     * @description The owner's decision on one entry. accept activates a proposal, replacing the entry it names as replaced if that is still active; reject declines a proposal; revoke ends an active entry. A decision on an entry already in the state it would leave it in answers that entry again. An accept that would take active memory past max_bytes is refused with 409 and changes nothing.
+     */
+    post: operations['decideProjectMemoryEntry'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/projects/{project_id}/smoke-observations': {
     parameters: {
       query?: never;
@@ -1930,6 +1970,87 @@ export interface components {
     ProjectInstructionVersionList: {
       /** Versions */
       versions: components['schemas']['ProjectInstructionVersion'][];
+    };
+    /** ProjectMemory */
+    ProjectMemory: {
+      /** Project Id */
+      project_id: string;
+      /**
+       * Entries
+       * @description Active entries, then proposed ones.
+       */
+      entries: components['schemas']['ProjectMemoryEntry'][];
+      /**
+       * Used Bytes
+       * @description UTF-8 bytes of the active entries' text.
+       */
+      used_bytes: number;
+      /**
+       * Max Bytes
+       * @description The most UTF-8 bytes active entries may hold together.
+       */
+      max_bytes: number;
+      /** Max Entry Bytes */
+      max_entry_bytes: number;
+    };
+    /** ProjectMemoryEntry */
+    ProjectMemoryEntry: {
+      /** Id */
+      id: string;
+      /** Project Id */
+      project_id: string;
+      /** Text */
+      text: string;
+      state: components['schemas']['ProjectMemoryState'];
+      /**
+       * Author
+       * @description Who recorded it: the main session, a task, or a workspace agent. Only the main session's entries are active from the start.
+       * @enum {string}
+       */
+      author: 'main' | 'task' | 'agent';
+      source: components['schemas']['ProjectMemorySource'];
+      /** Replaces Id */
+      replaces_id: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Decided At
+       * @description When it was accepted, rejected, withdrawn or ended.
+       */
+      decided_at: string | null;
+    };
+    /**
+     * ProjectMemoryState
+     * @enum {string}
+     */
+    ProjectMemoryState: 'proposed' | 'active' | 'rejected' | 'withdrawn' | 'forgotten' | 'replaced';
+    /**
+     * ProjectMemorySource
+     * @description Where an entry came from, as the server resolved it, not as the agent said.
+     */
+    ProjectMemorySource: {
+      /** Session Id */
+      session_id: string | null;
+      /** Task Id */
+      task_id: string | null;
+      /** Attempt Id */
+      attempt_id: string | null;
+      /**
+       * Delivery Id
+       * @description The session's latest message when the entry was recorded.
+       */
+      delivery_id: string | null;
+    };
+    /** ProjectMemoryDecision */
+    ProjectMemoryDecision: {
+      /**
+       * Decision
+       * @enum {string}
+       */
+      decision: 'accept' | 'reject' | 'revoke';
     };
     /** ProjectVerification */
     ProjectVerification: {
@@ -7809,6 +7930,100 @@ export interface operations {
       };
       /** @description Not Found */
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  getProjectMemory: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProjectMemory'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  decideProjectMemoryEntry: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+        entry_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ProjectMemoryDecision'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProjectMemoryEntry'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
         headers: {
           [name: string]: unknown;
         };
