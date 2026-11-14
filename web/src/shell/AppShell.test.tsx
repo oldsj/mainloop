@@ -3,7 +3,7 @@ import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeHITL } from '@/features/hitl/handlers';
 import { activityRead, attentionRead, respondPost } from '@/features/inbox/test/handlers';
 import {
@@ -107,12 +107,13 @@ describe('shell switch', () => {
     expect(
       [...bar.querySelectorAll('a, button')]
         .map((item) => item.getAttribute('aria-label'))
-        .slice(0, 6)
+        .slice(0, 7)
     ).toEqual([
       'Mainloop home',
       'Inbox',
       'Sessions',
       'Projects',
+      'Search',
       'Orchestration health',
       'Settings'
     ]);
@@ -938,6 +939,169 @@ describe('answer view', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/inbox'));
     expect(router.state.location.search).not.toHaveProperty('tab');
     expect(await screen.findByText('Review the plan')).toBeInTheDocument();
+  });
+});
+
+describe('command palette', () => {
+  // A composer draft lives in session storage for the tab, so one left by an earlier test would be
+  // joined to the text these tests put in the box.
+  beforeEach(() => sessionStorage.clear());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    sessionStorage.clear();
+  });
+  const as = (platform: string) =>
+    vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue(platform);
+  const palette = () => screen.queryByTestId('command-palette');
+  const press = (modifier: 'metaKey' | 'ctrlKey', target: Element = document.body) => {
+    const event = new KeyboardEvent('keydown', {
+      key: 'k',
+      [modifier]: true,
+      bubbles: true,
+      cancelable: true
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  };
+  const seedTask = () =>
+    server.use(
+      tasksList(() =>
+        HttpResponse.json([view({ id: 'task-q', title: 'Queue backend', status: 'running' })])
+      ),
+      taskRead(() => HttpResponse.json(view({ id: 'task-q', title: 'Queue backend' })))
+    );
+
+  it('is Ctrl+K off a Mac, and ⌘K does nothing there', async () => {
+    as('Win32');
+    setViewport(true);
+    await renderAt('/');
+    expect(press('metaKey').defaultPrevented).toBe(false);
+    expect(palette()).toBeNull();
+    expect(press('ctrlKey').defaultPrevented).toBe(true);
+    expect(await screen.findByTestId('command-palette')).toBeInTheDocument();
+    // The same key closes it.
+    press('ctrlKey');
+    await waitFor(() => expect(palette()).toBeNull());
+  });
+
+  it('is ⌘K on a Mac, and leaves Ctrl+K to the system’s text keys, also while typing', async () => {
+    as('MacIntel');
+    setViewport(true);
+    await renderAt('/');
+    const box = await screen.findByRole('textbox', { name: 'Message' });
+    act(() => box.focus());
+    // Ctrl+K is "delete to the end of the line" on macOS: the app neither acts on it nor cancels it.
+    expect(press('ctrlKey', box).defaultPrevented).toBe(false);
+    expect(palette()).toBeNull();
+    expect(press('metaKey', box).defaultPrevented).toBe(true);
+    expect(await screen.findByTestId('command-palette')).toBeInTheDocument();
+    // The page behind an open dialog is hidden from the accessibility tree, so it is found by id.
+    expect(screen.getByTestId('activity-search')).toHaveAttribute(
+      'title',
+      'Search and commands (⌘K)'
+    );
+  });
+
+  it('jumps to a task: type, then Enter', async () => {
+    as('Win32');
+    setViewport(true);
+    seedTask();
+    const user = userEvent.setup();
+    const router = await renderAt('/');
+    await within(screen.getByTestId('explorer-aside')).findByRole('tree');
+    await user.click(screen.getByTestId('activity-search'));
+    const field = await screen.findByRole('combobox');
+    expect(field).toHaveFocus();
+    await user.type(field, 'queue');
+    const options = within(screen.getByRole('listbox')).getAllByRole('option');
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringMatching(/^Queue backend.*Task$/),
+      'Ask Mainloop: queueAsk'
+    ]);
+    // The first row is the highlighted one, and the field says so to a screen reader.
+    expect(options[0]).toHaveAttribute('aria-selected', 'true');
+    expect(field).toHaveAttribute('aria-activedescendant', options[0]?.id);
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/task-q'));
+    expect(palette()).toBeNull();
+  });
+
+  it('moves with the arrows and wraps, and Escape closes without going anywhere', async () => {
+    as('Win32');
+    setViewport(true);
+    const user = userEvent.setup();
+    const router = await renderAt('/');
+    await user.click(screen.getByTestId('activity-search'));
+    const field = await screen.findByRole('combobox');
+    const selected = () =>
+      within(screen.getByRole('listbox'))
+        .getAllByRole('option')
+        .find((option) => option.getAttribute('aria-selected') === 'true')?.textContent;
+    expect(selected()).toBe('Main chatPage');
+    await user.keyboard('{ArrowDown}');
+    expect(selected()).toBe('Inbox: Needs youPage');
+    await user.keyboard('{ArrowUp}{ArrowUp}');
+    // Up from the first row wraps to the last, a theme.
+    expect(selected()).toMatch(/^Theme: /);
+    expect(field).toHaveFocus();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(palette()).toBeNull());
+    expect(router.state.location.pathname).toBe('/');
+  });
+
+  it('asks Mainloop about the highlighted row with the modifier and Enter', async () => {
+    as('Win32');
+    setViewport(true);
+    seedTask();
+    const user = userEvent.setup();
+    const router = await renderAt('/inbox');
+    await within(screen.getByTestId('explorer-aside')).findByRole('tree');
+    await user.click(screen.getByTestId('activity-search'));
+    await user.type(await screen.findByRole('combobox'), 'queue');
+    await user.keyboard('{Control>}{Enter}{/Control}');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    // The main chat takes the text into its composer, unsent.
+    await waitFor(() =>
+      expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue(
+        'About task Queue backend (task-q): '
+      )
+    );
+  });
+
+  it('asks Mainloop the query itself from the last row', async () => {
+    as('Win32');
+    setViewport(true);
+    const user = userEvent.setup();
+    await renderAt('/inbox');
+    await user.click(screen.getByTestId('activity-search'));
+    await user.type(await screen.findByRole('combobox'), 'what is running');
+    await user.click(screen.getByRole('option', { name: /^Ask Mainloop: what is running/ }));
+    await waitFor(() =>
+      expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('what is running')
+    );
+  });
+
+  it('changes the theme', async () => {
+    as('Win32');
+    setViewport(true);
+    const user = userEvent.setup();
+    await renderAt('/');
+    await user.click(screen.getByTestId('activity-search'));
+    await user.type(await screen.findByRole('combobox'), 'nord');
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(document.documentElement).toHaveAttribute('data-theme', 'nord'));
+    document.documentElement.removeAttribute('data-theme');
+    localStorage.removeItem('mainloop-theme');
+  });
+
+  it('opens from the tree’s header on a phone', async () => {
+    setViewport(false);
+    const user = userEvent.setup();
+    await renderAt('/?tab=explorer');
+    await user.click(await screen.findByTestId('header-search'));
+    expect(await screen.findByRole('combobox')).toHaveFocus();
   });
 });
 

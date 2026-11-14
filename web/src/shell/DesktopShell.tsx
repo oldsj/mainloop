@@ -25,10 +25,13 @@ import { StatusBar } from './StatusBar';
  */
 export function DesktopShell({
   children,
-  lastVisit
+  lastVisit,
+  onSearch
 }: {
   children: ReactNode;
   lastVisit: number | null;
+  /** Opens the command palette. */
+  onSearch: () => void;
 }) {
   const onHome = useRouterState({ select: (state) => state.location.pathname === '/' });
   const { prefs, update } = useExplorerPrefs();
@@ -64,6 +67,7 @@ export function DesktopShell({
           collapsed={prefs.collapsed}
           needs={needsCount(explorer.nodes)}
           onView={chooseView}
+          onSearch={onSearch}
         />
         {prefs.collapsed ? null : (
           <PanelBoundary name="Explorer">
