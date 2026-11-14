@@ -75,6 +75,21 @@ describe('verification section', () => {
     expect(body).toEqual({ mode: 'ci' });
   });
 
+  it('says when CI was found on a merged pull request instead of the default branch', async () => {
+    const found = verification();
+    server.use(
+      verificationRead(() =>
+        HttpResponse.json(verification({ detection: { ...found.detection!, pr_number: 40 } }))
+      )
+    );
+    renderSection();
+    expect(
+      await screen.findByText(
+        'Heavy checks run in: Hybrid (automatic, CI found on pull request #40: github-actions)'
+      )
+    ).toBeInTheDocument();
+  });
+
   it('says when CI was never detected, and when a re-check failed', async () => {
     server.use(
       verificationRead(() =>

@@ -88,6 +88,9 @@ func (s *Server) getVerification(ctx context.Context, a agentauth.Actor, raw jso
 			"usable": d.Usable, "branch": d.Branch, "sha": d.SHA, "checks": d.Checks, "sources": d.Sources,
 			"checked_at": d.CheckedAt.UTC().Format(time.RFC3339),
 		}
+		if d.PR > 0 {
+			m["detection"].(map[string]any)["pr_number"] = d.PR
+		}
 	}
 	if v.DetectError != "" {
 		m["detect_error"] = v.DetectError

@@ -1849,13 +1849,21 @@ export interface components {
     CIDetection: {
       /**
        * Usable
-       * @description At least one check reported on the default branch's tip.
+       * @description At least one check reported on the default branch's tip or, failing that, on the head of one of the last three pull requests merged into it.
        */
       usable: boolean;
       /** Branch */
       branch: string;
-      /** Sha */
+      /**
+       * Sha
+       * @description The commit whose checks were counted.
+       */
       sha?: string | null;
+      /**
+       * Pr Number
+       * @description Set when CI was found on this merged pull request's head rather than on the default branch (CI that runs only on pull requests).
+       */
+      pr_number?: number | null;
       /** Checks */
       checks: number;
       /** Sources */
