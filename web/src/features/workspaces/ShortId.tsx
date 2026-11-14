@@ -44,7 +44,7 @@ export function ShortId({ id, label }: { id: string; label: string }) {
       <Button
         variant="outline"
         size="sm"
-        className="min-h-11"
+        className="min-h-control"
         aria-label={`Copy full ${label} ID`}
         onClick={() => void copyFull()}
       >

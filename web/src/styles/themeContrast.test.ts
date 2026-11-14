@@ -234,3 +234,62 @@ describe('Dracula accent and purple', () => {
     ).toBeGreaterThanOrEqual(20);
   });
 });
+
+describe('quiet border', () => {
+  // `border-subtle` separates regions and outlines secondary buttons. It must show on both
+  // surfaces, and stay well below the 3:1 border that marks a field.
+  const VISIBLE = 1.25;
+  const QUIET = 2.2;
+  it.each(Object.keys(themes))(
+    '%s: shows on bg and bg-secondary, below the field border',
+    (theme) => {
+      const subtle = colour(theme, 'semantic', 'border-subtle');
+      const onBg = contrast(subtle, colour(theme, 'term', 'bg'));
+      expect(onBg, `border-subtle on bg in ${theme}`).toBeGreaterThanOrEqual(VISIBLE);
+      expect(
+        contrast(subtle, colour(theme, 'term', 'bg-secondary')),
+        `border-subtle on bg-secondary in ${theme}`
+      ).toBeGreaterThanOrEqual(VISIBLE);
+      expect(onBg, `border-subtle is quieter than border in ${theme}`).toBeLessThanOrEqual(QUIET);
+    }
+  );
+});
+
+describe('status colours', () => {
+  // Each status colour is drawn as badge text, so it meets text contrast on both surfaces.
+  const STATUS_KEYS = ['status-attention', 'status-working', 'status-failed', 'status-idle'];
+  const cases = Object.keys(themes).flatMap((theme) =>
+    STATUS_KEYS.flatMap((key): [string, string, string][] => [
+      [theme, key, 'bg'],
+      [theme, key, 'bg-secondary']
+    ])
+  );
+  it.each(cases)('%s: %s text on %s', (theme, key, surface) => {
+    expect(
+      contrast(colour(theme, 'semantic', key), colour(theme, 'term', surface))
+    ).toBeGreaterThanOrEqual(AA_TEXT);
+  });
+
+  // Working must not read as needs-you or failed. Gruvbox's accent is its yellow, so it takes cyan.
+  it.each(Object.keys(themes))(
+    '%s: working is a different hue from attention and failed',
+    (theme) => {
+      const working = colour(theme, 'semantic', 'status-working');
+      expect(
+        hueDistance(working, colour(theme, 'semantic', 'status-attention'))
+      ).toBeGreaterThanOrEqual(60);
+      expect(
+        hueDistance(working, colour(theme, 'semantic', 'status-failed'))
+      ).toBeGreaterThanOrEqual(60);
+    }
+  );
+
+  it.each(Object.keys(themes))('%s: attention is a different hue from failed', (theme) => {
+    expect(
+      hueDistance(
+        colour(theme, 'semantic', 'status-attention'),
+        colour(theme, 'semantic', 'status-failed')
+      )
+    ).toBeGreaterThanOrEqual(30);
+  });
+});

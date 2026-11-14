@@ -88,7 +88,7 @@ function TaskRow({ view, depth, detached }: { view: TaskView; depth: number; det
       <Link
         to="/tasks/$id"
         params={{ id: view.task.id }}
-        className="gap-xs border-border p-md flex min-h-11 flex-col border-b"
+        className="gap-xs border-border-subtle p-md min-h-control flex flex-col border-b"
       >
         <span className="gap-sm flex flex-wrap items-center">
           <span data-testid="task-status">

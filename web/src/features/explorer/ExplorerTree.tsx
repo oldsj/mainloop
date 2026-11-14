@@ -7,11 +7,11 @@ import { RowMenu, useLongPress, type RowMenuAction } from './RowMenu';
 
 /** The status dot's colour. Muted is the default, so an unknown state never reads as a problem. */
 const DOT: Record<Tone, string> = {
-  active: 'bg-term-cyan',
-  attention: 'bg-term-yellow',
+  active: 'bg-status-working',
+  attention: 'bg-status-attention',
   ok: 'bg-term-green',
-  bad: 'bg-term-red',
-  muted: 'bg-term-fg-muted'
+  bad: 'bg-status-failed',
+  muted: 'bg-status-idle'
 };
 
 export interface ExplorerTreeProps {
@@ -165,7 +165,7 @@ export function ExplorerTree({ nodes, isExpanded, onToggle, onOpen, onAsk }: Exp
           <div
             className={cn(
               // A phone row is a 44 px touch target with the status on a second line; desktop is one dense line.
-              'group gap-xs px-xs relative flex min-h-11 cursor-default items-center py-1 text-sm lg:min-h-7 lg:py-0',
+              'group gap-xs px-xs min-h-control relative flex cursor-default items-center py-1 text-sm lg:py-0',
               // A long press opens the row menu, not the phone's own text selection or link callout.
               'select-none [-webkit-touch-callout:none]',
               'hover:bg-accent hover:text-accent-foreground',

@@ -10,7 +10,7 @@ One task in the project task tree. A row shows what the list can say without ope
 
 - Status badge: the shared status badge, with its tone from `statusTone`. The `[SUPERVISOR]` marker uses the active tone.
 - Title `text-sm font-medium`. Provider, reason and CI line `text-muted-foreground text-xs`. Operation summary `text-xs`.
-- Divider `border-border`, padding `p-md`, gap `gap-xs`. Indent steps are `pl-md` and `pl-lg`, and `pl-xl` beyond that; `indentClass` is the only place these are chosen.
+- Divider `border-border-subtle`, padding `p-md`, gap `gap-xs`. Indent steps are `pl-md` and `pl-lg`, and `pl-xl` beyond that; `indentClass` is the only place these are chosen.
 - Radius `rounded-none`. Tokens only: no colour literals.
 
 ## States
@@ -28,7 +28,7 @@ One task in the project task tree. A row shows what the list can say without ope
 
 ## Touch
 
-- The row is the touch target. It has a minimum height of 44 px (`min-h-11`).
+- The row is the touch target. It takes the control height (`min-h-control`): at least 44 px on touch.
 - Long titles wrap (`break-words`). Nothing is truncated with an ellipsis that hides the status.
 
 ## Behaviour that must hold

@@ -89,7 +89,7 @@ export function SelectionForm({
           Environment
           <select
             aria-label="Environment"
-            className="border-border bg-background text-foreground px-md min-h-11 border text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
             value={draft.environmentId}
             onChange={(event) =>
               setDraft({ ...draft, environmentId: event.target.value, versionId: '' })
@@ -104,7 +104,7 @@ export function SelectionForm({
           </select>
         </label>
 
-        <label className="gap-sm flex min-h-11 items-center text-sm">
+        <label className="gap-sm min-h-control flex items-center text-sm">
           <input
             type="checkbox"
             className="size-5"
@@ -132,7 +132,7 @@ export function SelectionForm({
           Version
           <select
             aria-label="Version"
-            className="border-border bg-background text-foreground px-md min-h-11 border text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
             value={draft.versionId}
             disabled={draft.follow || !draft.environmentId}
             onChange={(event) => setDraft({ ...draft, versionId: event.target.value })}

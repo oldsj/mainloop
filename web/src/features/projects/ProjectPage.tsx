@@ -126,7 +126,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
                 href={github}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-foreground inline-flex min-h-11 items-center underline"
+                className="text-foreground min-h-control inline-flex items-center underline"
               >
                 View on GitHub →
               </a>
@@ -135,13 +135,13 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
             <Link
               to="/health"
               search={{ project_id: id }}
-              className="text-foreground inline-flex min-h-11 items-center underline"
+              className="text-foreground min-h-control inline-flex items-center underline"
             >
               Orchestration health
             </Link>
             <Link
               to="/schedules"
-              className="text-foreground inline-flex min-h-11 items-center underline"
+              className="text-foreground min-h-control inline-flex items-center underline"
             >
               Scheduled runs
             </Link>
@@ -221,7 +221,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
                 <Link
                   to="/workspaces/$id"
                   params={{ id: workspace.workspace_id }}
-                  className="group gap-sm p-md border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground flex min-h-11 flex-wrap items-center justify-between border"
+                  className="group gap-sm p-md border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground min-h-control flex flex-wrap items-center justify-between border"
                 >
                   <span className="truncate text-sm font-medium">{workspace.manifest.branch}</span>
                   <span className="gap-sm flex flex-wrap items-center text-xs">
@@ -275,7 +275,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
             aria-expanded={settingsOpen}
             aria-controls="project-settings-body"
             onClick={() => setSettingsOpen((open) => !open)}
-            className="gap-sm text-foreground hover:bg-accent flex min-h-11 w-full items-center justify-between text-left"
+            className="gap-sm text-foreground hover:bg-accent min-h-control flex w-full items-center justify-between text-left"
           >
             Settings
             <span aria-hidden="true" className="text-muted-foreground text-sm">
@@ -305,7 +305,7 @@ function PullRequestLine({ pr }: { pr: PullRequestRow }) {
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex min-h-11 min-w-11 items-center justify-center font-medium underline"
+            className="min-h-control min-w-control inline-flex items-center justify-center font-medium underline"
           >
             #{pr.number}
           </a>
@@ -336,7 +336,7 @@ function CommitLine({ commit }: { commit: CommitRow }) {
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex min-h-11 min-w-11 items-center justify-center font-mono underline"
+            className="min-h-control min-w-control inline-flex items-center justify-center font-mono underline"
           >
             {commit.sha.slice(0, 7)}
           </a>

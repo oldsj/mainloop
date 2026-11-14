@@ -71,7 +71,7 @@ function ExplorerBody({
 }: BodyProps) {
   return (
     <section aria-labelledby="explorer-heading" className="flex min-h-0 flex-1 flex-col">
-      <header className="gap-xs px-md py-sm border-border flex flex-col border-b">
+      <header className="gap-xs px-md py-sm border-border-subtle flex flex-col border-b">
         <div className="gap-sm flex items-center justify-between">
           <h2 id="explorer-heading" className="text-sm font-medium">
             Explorer
@@ -158,7 +158,7 @@ export function ExplorerAside({ lastVisit = null }: { lastVisit?: number | null 
         aria-label="Explorer"
         data-testid="explorer-rail"
         style={{ width: RAIL_WIDTH }}
-        className="border-border gap-sm py-sm flex shrink-0 flex-col items-center border-l"
+        className="border-border-subtle gap-sm py-sm flex shrink-0 flex-col items-center border-l"
       >
         <Button
           type="button"
@@ -187,7 +187,7 @@ export function ExplorerAside({ lastVisit = null }: { lastVisit?: number | null 
       aria-label="Explorer"
       data-testid="explorer-aside"
       style={{ width: dragWidth ?? prefs.width }}
-      className="border-border relative flex min-h-0 shrink-0 flex-col border-l"
+      className="border-border-subtle relative flex min-h-0 shrink-0 flex-col border-l"
     >
       {/* A focusable window splitter (WAI-ARIA): the separator takes keys, so it is not a plain static element. */}
       {/* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}

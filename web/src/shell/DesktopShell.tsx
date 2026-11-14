@@ -23,7 +23,7 @@ export function DesktopShell({
   const onHome = useRouterState({ select: (state) => state.location.pathname === '/' });
   return (
     <div data-testid="desktop-shell" className="flex min-h-0 flex-1 flex-col">
-      <header className="gap-md border-border px-md flex items-center border-b">
+      <header className="gap-md border-border-subtle px-md flex items-center border-b">
         <Link to="/" className="py-sm text-primary text-sm font-semibold">
           $ mainloop
         </Link>

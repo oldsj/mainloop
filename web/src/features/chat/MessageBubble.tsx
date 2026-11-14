@@ -55,7 +55,7 @@ export function MessageBubble({
         )}
       >
         <details data-testid="assignment-block">
-          <summary className="text-muted-foreground min-h-11 cursor-pointer text-xs md:text-sm">
+          <summary className="text-muted-foreground min-h-control cursor-pointer text-xs md:text-sm">
             Assignment from Mainloop · {messageTime(message.created_at)}
           </summary>
           <div className="mt-xs min-w-0">

@@ -16,7 +16,7 @@ The build writes two things:
 
 ## Components use tokens only
 
-Components in `web/` use token-backed utilities such as `bg-card`, `text-muted-foreground`, `border-border`, `text-sm`, `p-md` and `rounded-none`.
+Components in `web/` use token-backed utilities such as `bg-card`, `text-muted-foreground`, `border-border-subtle`, `text-sm`, `p-md`, `min-h-control` and `rounded-none`.
 
 Do not put these in a component:
 
@@ -58,6 +58,37 @@ The build exits `1` and writes nothing if any of these fail:
 The output has no timestamps and keeps a fixed order. Running the build twice leaves the tree unchanged. The generated files are already in the format `trunk fmt` would produce, so formatting does not change them.
 
 CI (`.github/workflows/web.yml`) regenerates the files and fails on any diff.
+
+## Control size
+
+`size.control` sets the minimum height of every button, field, link target and menu row, and the width of an icon button. It has two values and one variable, `--spacing-control`:
+
+- `touch`, 44 px, is the default. It applies on touch screens and on every screen narrower than the desktop layout.
+- `pointer`, 28 px, applies at 1024 px and wider when the primary pointer is a mouse or trackpad (`(min-width: 1024px) and (pointer: fine)`).
+
+Components write `min-h-control`, `w-control` or `min-w-control`, never `min-h-11` or a breakpoint pair such as `min-h-11 lg:min-h-7`. A guideline that says a target is "at least 44 px" describes the touch value. The phone tab bar is the one exception: it is always 44 px.
+
+## Borders
+
+There are two border colours.
+
+- `border` (and `input`) is at least 3:1 against the background. It marks the edge of a field: a text input, a select, a checkbox, or a control whose edge is its only cue.
+- `border-subtle` is the quiet one. It is the rule between regions and rows, and the outline of a secondary (`outline`) button. It shows on `bg` and `bg-secondary` but stays well under 3:1, so it never competes with content.
+
+Write `border-border-subtle` for a divider. Bare `border` still resolves to `border`, so a new field is visible by default.
+
+## Status colours
+
+State is drawn with four semantic colours, each with one meaning. Components use these, not the raw palette, for a status dot, badge or word.
+
+| Token              | Meaning                           | Palette colour                                                     |
+| ------------------ | --------------------------------- | ------------------------------------------------------------------ |
+| `status-attention` | waiting on the owner              | `term-yellow`                                                      |
+| `status-working`   | a turn or task is running         | `term-accent` (`term-cyan` in gruvbox, whose accent is its yellow) |
+| `status-failed`    | failed or a problem               | `term-error`                                                       |
+| `status-idle`      | idle, asleep, finished or unknown | `term-fg-muted`                                                    |
+
+`term-green` stays for a healthy connection, diff additions and success notices. Warning paragraphs still use `term-yellow` directly; that is text, not a status.
 
 ## Radius
 

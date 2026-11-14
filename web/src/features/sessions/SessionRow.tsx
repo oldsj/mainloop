@@ -46,7 +46,7 @@ export function SessionRow({ session, workspace, providers, taskTitle }: Session
       to="/sessions/$id"
       params={{ id: session.id }}
       search={(prev) => ({ ...prev, tab: undefined })}
-      className="group gap-xs border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground aria-[current=page]:bg-accent aria-[current=page]:text-accent-foreground p-md flex min-h-11 flex-col border"
+      className="group gap-xs border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground aria-[current=page]:bg-accent aria-[current=page]:text-accent-foreground p-md min-h-control flex flex-col border"
     >
       <div className="gap-sm flex items-center justify-between">
         <div className="gap-sm flex min-w-0 items-center">
@@ -59,7 +59,7 @@ export function SessionRow({ session, workspace, providers, taskTitle }: Session
           </span>
           {running ? (
             <LoaderCircle
-              className={`text-term-cyan size-3 shrink-0 animate-spin ${ON_FILL}`}
+              className={`text-status-working size-3 shrink-0 animate-spin ${ON_FILL}`}
               aria-hidden="true"
             />
           ) : null}

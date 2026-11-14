@@ -32,7 +32,7 @@ export function HITLCard({ requestId }: HITLCardProps) {
           <Link
             to="/tasks/$id"
             params={{ id: task.task.id }}
-            className="text-primary inline-flex min-h-11 items-center underline underline-offset-4"
+            className="text-primary min-h-control inline-flex items-center underline underline-offset-4"
           >
             {task.task.title}
           </Link>{' '}

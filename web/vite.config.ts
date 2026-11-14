@@ -46,7 +46,7 @@ export default defineConfig(({ mode }) => ({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
-    include: ['src/**/*.test.{ts,tsx}', 'eslint-rules/*.test.js'],
+    include: ['src/**/*.test.{ts,tsx}', 'eslint-rules/*.test.js', 'design/*.test.js'],
     css: false,
     // Absolute, so requests resolve to a real URL under jsdom and MSW can match them.
     env: { VITE_API_URL: 'http://localhost:3000/api' }

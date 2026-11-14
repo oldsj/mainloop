@@ -41,7 +41,7 @@ export function HealthRowCard({
         aria-expanded={expanded}
         aria-controls={panelId}
         onClick={() => setExpanded((value) => !value)}
-        className="block min-h-11 w-full text-left"
+        className="min-h-control block w-full text-left"
       >
         <span className="gap-sm flex flex-wrap items-center justify-between">
           <span className="font-medium break-words">{rowTitle(row)}</span>
@@ -64,7 +64,7 @@ export function HealthRowCard({
             <Link
               to="/tasks/$id"
               params={{ id: row.task_id }}
-              className="text-foreground inline-flex min-h-11 items-center underline underline-offset-4"
+              className="text-foreground min-h-control inline-flex items-center underline underline-offset-4"
             >
               Open task
             </Link>
@@ -89,12 +89,12 @@ export function HealthRowCard({
               <section
                 key={session.session_id}
                 aria-label={`Session ${session.title ?? session.session_id}`}
-                className="border-border pt-md gap-sm grid border-t"
+                className="border-border-subtle pt-md gap-sm grid border-t"
               >
                 <Link
                   to="/sessions/$id"
                   params={{ id: session.session_id }}
-                  className="text-foreground inline-flex min-h-11 items-center break-words underline underline-offset-4"
+                  className="text-foreground min-h-control inline-flex items-center break-words underline underline-offset-4"
                 >
                   {session.title ?? session.session_id}
                 </Link>

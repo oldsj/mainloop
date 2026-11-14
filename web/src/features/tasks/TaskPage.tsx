@@ -81,7 +81,7 @@ export function TaskPage({ id }: { id: string }) {
 
   return (
     <article className="flex min-h-0 flex-col">
-      <header className="gap-sm border-border p-md flex flex-col border-b">
+      <header className="gap-sm border-border-subtle p-md flex flex-col border-b">
         <div className="gap-sm flex items-center">
           <BackLink parentTaskId={view.task.parent_task_id} projectId={view.task.project_id} />
           <span data-testid="task-status">
@@ -103,7 +103,7 @@ export function TaskPage({ id }: { id: string }) {
             <Link
               to="/tasks/$id"
               params={{ id: parentId }}
-              className="text-foreground inline-flex min-h-11 items-center break-words underline"
+              className="text-foreground min-h-control inline-flex items-center break-words underline"
             >
               {parent ? parent.task.title : 'parent task'}
             </Link>
@@ -146,8 +146,8 @@ export function TaskPage({ id }: { id: string }) {
             profilesError={providers.error}
             offline={offline}
           />
-          <details className="border-border border-b">
-            <summary className="p-md text-muted-foreground min-h-11 cursor-pointer text-sm font-medium">
+          <details className="border-border-subtle border-b">
+            <summary className="p-md text-muted-foreground min-h-control cursor-pointer text-sm font-medium">
               Task details
             </summary>
             <TaskFacts

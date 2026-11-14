@@ -81,7 +81,7 @@ export function NewAgentPage() {
           {KINDS.map((option) => (
             <label
               key={option.value}
-              className="gap-xs px-md border-border has-checked:bg-accent has-checked:text-accent-foreground flex min-h-11 cursor-pointer items-center border text-sm"
+              className="gap-xs px-md border-border has-checked:bg-accent has-checked:text-accent-foreground min-h-control flex cursor-pointer items-center border text-sm"
             >
               <input
                 type="radio"
@@ -104,7 +104,7 @@ export function NewAgentPage() {
           data-testid="agent-title"
           value={title}
           onChange={(event) => setTitleOverride(event.target.value)}
-          className="border-border bg-background text-foreground px-md min-h-11 w-full border text-sm"
+          className="border-border bg-background text-foreground px-md min-h-control w-full border text-sm"
         />
       </label>
 

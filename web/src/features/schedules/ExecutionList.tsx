@@ -74,7 +74,7 @@ function ExecutionRow({ execution }: { execution: ScheduleExecution }) {
         <Link
           to="/sessions/$id"
           params={{ id: execution.session_id }}
-          className="text-foreground inline-flex min-h-11 items-center text-sm underline"
+          className="text-foreground min-h-control inline-flex items-center text-sm underline"
         >
           Open session
         </Link>

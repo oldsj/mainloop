@@ -179,7 +179,7 @@ export function LiveSessionView({
       data-testid="live-session"
       className="bg-term-bg text-term-fg flex min-h-0 flex-1 flex-col font-mono text-sm"
     >
-      <div className="gap-sm px-md py-xs border-border flex items-center border-b text-xs">
+      <div className="gap-sm px-md py-xs border-border-subtle flex items-center border-b text-xs">
         <span
           className={cn(statusClass(waiting ? 'waiting' : state.status))}
           data-testid="live-status"
@@ -383,7 +383,7 @@ const Row = memo(function Row({
     case 'diff':
       return (
         <div className="border-border overflow-x-auto border text-xs">
-          <div className="text-term-fg-muted px-sm py-xs border-border border-b">
+          <div className="text-term-fg-muted px-sm py-xs border-border-subtle border-b">
             {e.verb} {e.file} · +{e.lines.filter((l) => l[0] === '+').length} −
             {e.lines.filter((l) => l[0] === '-').length}
           </div>
@@ -629,7 +629,7 @@ function Composer({
 
   const stop = busy && !text.trim();
   return (
-    <div className="px-md pt-sm border-border relative flex flex-col gap-1 border-t pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
+    <div className="px-md pt-sm border-border-subtle relative flex flex-col gap-1 border-t pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
       {historyOpen && history.length ? (
         <div
           role="listbox"

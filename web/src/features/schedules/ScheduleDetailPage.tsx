@@ -50,7 +50,7 @@ export function ScheduleDetailPage({ id }: { id: string }) {
         <p className="text-sm font-medium">This schedule no longer exists.</p>
         <Link
           to="/schedules"
-          className="text-foreground inline-flex min-h-11 items-center underline"
+          className="text-foreground min-h-control inline-flex items-center underline"
         >
           Back to scheduled runs
         </Link>
@@ -210,7 +210,7 @@ function ScheduleEditor({ id, latest }: { id: string; latest: ScheduleView }) {
         </p>
         <Link
           to="/schedules"
-          className="text-foreground inline-flex min-h-11 items-center underline"
+          className="text-foreground min-h-control inline-flex items-center underline"
         >
           Back to scheduled runs
         </Link>
@@ -323,7 +323,7 @@ function SavedValues({ config }: { config: Config }) {
         <dd>{config.paused ? 'Paused' : 'Active'}</dd>
       </dl>
       <details>
-        <summary className="text-foreground inline-flex min-h-11 cursor-pointer items-center text-xs underline">
+        <summary className="text-foreground min-h-control inline-flex cursor-pointer items-center text-xs underline">
           Latest saved prompt
         </summary>
         <pre className="text-xs break-words whitespace-pre-wrap">{config.prompt}</pre>

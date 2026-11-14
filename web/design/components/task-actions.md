@@ -34,7 +34,7 @@ The owner's actions on one task: Retry, Reassign and Cancel. The server decides 
 
 ## Touch
 
-- Every button and the picker have a minimum height of 44 px (`min-h-11`).
+- Every button and the picker take the control height (`min-h-control`): 44 px on touch.
 
 ## Behaviour that must hold
 

@@ -21,7 +21,7 @@ export function RegisterForm({ busy, uncertain, error, onSubmit }: RegisterFormP
 
   return (
     <details className="border-border p-md border">
-      <summary className="py-sm min-h-11 cursor-pointer text-sm font-medium">
+      <summary className="py-sm min-h-control cursor-pointer text-sm font-medium">
         Register a public image
       </summary>
       <form
@@ -35,7 +35,7 @@ export function RegisterForm({ busy, uncertain, error, onSubmit }: RegisterFormP
           Name
           <input
             aria-label="Name"
-            className="border-border bg-background text-foreground px-md min-h-11 border text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
             maxLength={200}
             required
             value={draft.name}
@@ -47,7 +47,7 @@ export function RegisterForm({ busy, uncertain, error, onSubmit }: RegisterFormP
           Image
           <input
             aria-label="Image"
-            className="border-border bg-background text-foreground px-md min-h-11 border font-mono text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control border font-mono text-sm"
             required
             pattern={IMAGE_PATTERN}
             placeholder="registry/repository@sha256:digest"
@@ -60,7 +60,7 @@ export function RegisterForm({ busy, uncertain, error, onSubmit }: RegisterFormP
           Architecture
           <select
             aria-label="Architecture"
-            className="border-border bg-background text-foreground px-md min-h-11 border text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
             value={draft.architecture}
             onChange={(event) =>
               setDraft({ ...draft, architecture: event.target.value as Architecture })

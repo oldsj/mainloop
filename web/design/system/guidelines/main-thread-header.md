@@ -8,8 +8,8 @@ A one-line summary above the main conversation: whether the agent is ready, the 
 
 ## Tokens
 
-- Surface `bg-card`, border `border-border`, text `text-muted-foreground`; the state word is `text-foreground`.
-- State marker: ready `bg-term-green`, idle `bg-term-fg-muted`, working and unconfirmed `bg-term-yellow` (working pulses), failed and unreachable `bg-term-red`. The marker is a square (`rounded-none`).
+- Surface `bg-card`, rule `border-border-subtle`, text `text-muted-foreground`; the state word is `text-foreground`.
+- State marker: ready `bg-term-green`, idle `bg-status-idle`, working `bg-status-working` (it pulses), unconfirmed `bg-status-attention`, failed and unreachable `bg-status-failed`. The marker is a square (`rounded-none`).
 
 ## States
 

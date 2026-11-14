@@ -171,7 +171,7 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
   return (
     <section
       aria-labelledby="actions-heading"
-      className="gap-sm p-md border-border flex flex-col border-t"
+      className="gap-sm p-md border-border-subtle flex flex-col border-t"
     >
       <h2 id="actions-heading" className="text-muted-foreground text-xs tracking-wide uppercase">
         [ACTIONS]
@@ -268,7 +268,7 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
               value={selected}
               disabled={targets.length === 0 || sending !== null || !reassignGate.enabled}
               onChange={(event) => setTarget(event.target.value)}
-              className="border-border text-foreground bg-background px-md min-h-11 rounded-none border text-sm"
+              className="border-border text-foreground bg-background px-md min-h-control rounded-none border text-sm"
             >
               {targets.map((profile) => (
                 <option key={profile.id} value={profile.id}>

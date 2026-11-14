@@ -9,8 +9,8 @@ The filter form for the orchestration health page: window, project, task, sessio
 ## Tokens
 
 - A grid of labelled selects: two columns on phones, three from `sm`, six from `lg`.
-- Labels use `text-muted-foreground text-xs`. Selects use `bg-background border-border text-foreground`, `text-sm`, `min-h-11` and `rounded-none`.
-- Apply is an outline button. Clear filters is a ghost button. Both are at least 44 px tall.
+- Labels use `text-muted-foreground text-xs`. Selects use `bg-background border-border text-foreground`, `text-sm`, `min-h-control` and `rounded-none`.
+- Apply is an outline button. Clear filters is a ghost button. Both take the control height (44 px on touch, 28 px with a mouse or trackpad).
 
 ## Behaviour
 

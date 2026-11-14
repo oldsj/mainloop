@@ -52,7 +52,7 @@ export function CompactShell({
   if (!opened.has(tab)) setOpened(new Set([...opened, tab]));
   return (
     <div data-testid="compact-shell" className="flex min-h-0 flex-1 flex-col">
-      <header className="gap-sm border-border px-md flex items-center border-b">
+      <header className="gap-sm border-border-subtle px-md flex items-center border-b">
         <Link
           to="/"
           search={(prev) => ({ ...prev, tab: undefined })}
@@ -99,7 +99,7 @@ export function CompactShell({
       <nav
         data-testid="mobile-tab-bar"
         aria-label="Sections"
-        className="border-border flex border-t pb-[env(safe-area-inset-bottom)]"
+        className="border-border-subtle flex border-t pb-[env(safe-area-inset-bottom)]"
       >
         {TAB_ITEMS.map(({ tab: id, label, Icon }) => (
           <button

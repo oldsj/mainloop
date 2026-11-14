@@ -14,11 +14,11 @@ import type { MainProvider, MainThreadInfo } from './types';
 
 const DOT: Record<ThreadStatus, string> = {
   ready: 'bg-term-green',
-  idle: 'bg-term-fg-muted',
-  unreachable: 'bg-term-red',
-  failed: 'bg-term-red',
-  unconfirmed: 'bg-term-yellow',
-  working: 'bg-term-yellow animate-pulse'
+  idle: 'bg-status-idle',
+  unreachable: 'bg-status-failed',
+  failed: 'bg-status-failed',
+  unconfirmed: 'bg-status-attention',
+  working: 'bg-status-working animate-pulse'
 };
 
 /** The words for a status. A failed or unconfirmed last delivery is never called ready. */
@@ -57,7 +57,7 @@ function ProviderSelect({
       </label>
       <select
         id="main-provider-select"
-        className="border-border bg-background text-foreground px-sm min-h-11 border text-sm disabled:opacity-50"
+        className="border-border bg-background text-foreground px-sm min-h-control border text-sm disabled:opacity-50"
         value={desired ?? ''}
         disabled={provider.switchBlocked}
         onChange={(event) => provider.select(event.target.value as MainProvider)}
@@ -96,7 +96,8 @@ function ProviderRow({
   });
   const stateError =
     current?.status === 'failed' && current.error ? boundedText(current.error) : null;
-  const buttonClass = 'border-border text-foreground px-md min-h-11 border disabled:opacity-50';
+  const buttonClass =
+    'border-border text-foreground px-md min-h-control border disabled:opacity-50';
 
   return (
     <div className="gap-sm px-md pb-xs flex flex-wrap items-center" data-testid="mt-provider">
@@ -183,10 +184,10 @@ export function MainThreadHeader({
 
   return (
     <div
-      className="border-border bg-card text-muted-foreground shrink-0 border-b text-xs"
+      className="border-border-subtle bg-card text-muted-foreground shrink-0 border-b text-xs"
       data-testid="main-thread-header"
     >
-      <div className="gap-sm px-md flex min-h-11 flex-wrap items-center py-1">
+      <div className="gap-sm px-md min-h-control flex flex-wrap items-center py-1">
         <span className={cn('size-2 shrink-0', DOT[status])} aria-hidden="true" />
         <span className="text-foreground" data-testid="mt-state" role="status">
           {statusWords(status)}
@@ -203,7 +204,7 @@ export function MainThreadHeader({
         {onStop && native?.turn_in_flight ? (
           <button
             type="button"
-            className="border-border text-foreground hover:text-term-red px-md min-h-11 border disabled:opacity-50"
+            className="border-border text-foreground hover:text-term-red px-md min-h-control border disabled:opacity-50"
             disabled={stopping || offline}
             onClick={onStop}
             data-testid="mt-stop-turn"
@@ -213,7 +214,7 @@ export function MainThreadHeader({
         ) : null}
         <button
           type="button"
-          className="hover:text-term-accent px-sm ml-auto min-h-11"
+          className="hover:text-term-accent px-sm min-h-control ml-auto"
           aria-expanded={open}
           aria-controls="main-thread-details"
           onClick={() => setOpen((value) => !value)}
@@ -228,7 +229,7 @@ export function MainThreadHeader({
       ) : null}
 
       {open ? (
-        <div id="main-thread-details" className="border-border border-t">
+        <div id="main-thread-details" className="border-border-subtle border-t">
           {provider && !providerInline ? (
             <ProviderRow info={info} offline={offline} provider={provider} />
           ) : null}

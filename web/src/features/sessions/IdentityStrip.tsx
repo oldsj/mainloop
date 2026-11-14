@@ -38,7 +38,7 @@ export function IdentityStrip({ session }: { session: Session }) {
     <section
       data-testid="identity-strip"
       aria-label="Session identity"
-      className="gap-xs border-border bg-card text-muted-foreground px-md py-sm border-b font-mono text-xs"
+      className="gap-xs border-border-subtle bg-card text-muted-foreground px-md py-sm border-b font-mono text-xs"
     >
       <div className="gap-sm flex items-center">
         <span
@@ -57,7 +57,7 @@ export function IdentityStrip({ session }: { session: Session }) {
           aria-expanded={open}
           aria-controls={open ? 'identity-details' : undefined}
           onClick={() => setOpen((value) => !value)}
-          className="hover:text-accent-foreground px-sm ml-auto min-h-11 shrink-0"
+          className="hover:text-accent-foreground px-sm min-h-control ml-auto shrink-0"
         >
           details {open ? '▴' : '▾'}
         </button>
