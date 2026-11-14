@@ -7,8 +7,10 @@ Mainloop. This spec covers how an agent reads that result. Sandboxes have no `gh
 reach the forge's API, so the read goes through Mainloop's MCP tools and the project's GitHub App.
 
 Status: `check_status`, `watch_checks`, the per-project setting for where heavy checks run, and
-`get_verification` are implemented. The worker guidance that uses them is a follow-up slice and is
-not described here as behavior yet.
+`get_verification` are implemented, and the shared agent guidance (v4, see
+[delegation](delegation.md#shared-agent-guidance)) teaches the loop: run what `get_verification`
+says, push once, `watch_checks`, end the turn, fix from the message, and report `blocked` after
+three failed rounds on one check. Not measured: whether agents follow it.
 
 ## Providers
 
