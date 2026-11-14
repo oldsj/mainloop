@@ -128,6 +128,9 @@ export function useOpenTarget() {
       case 'health':
         void navigate({ to: '/health', search: {} });
         return;
+      case 'import':
+        void navigate({ to: '/settings', search: {}, hash: 'import-project' });
+        return;
     }
   };
 }

@@ -229,6 +229,8 @@ describe('projects and schedules', () => {
     );
     const projects = nodes.find((node) => node.id === 'projects');
     expect(projects?.count).toBe(1);
+    // The heading's "+" leads to where a project is imported.
+    expect(projects?.add).toEqual({ label: 'Import a project', target: { to: 'import' } });
     expect(projects?.children[0]?.label).toBe('acme/widgets');
     expect(projects?.children[0]?.count).toBe(1);
     expect(projects?.children[0]?.children.map((child) => child.label)).toEqual(['One']);

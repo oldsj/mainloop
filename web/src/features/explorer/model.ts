@@ -35,7 +35,9 @@ export type Target =
   | { to: 'workspace'; id: string }
   | { to: 'project'; id: string }
   | { to: 'schedule'; id: string }
-  | { to: 'health' };
+  | { to: 'health' }
+  /** The Settings section that imports a project. */
+  | { to: 'import' };
 
 export interface ExplorerNode {
   /** Unique within the tree: the parent's id plus this row's own id, so one task under two projects keeps its own expansion. */
@@ -58,6 +60,8 @@ export interface ExplorerNode {
   note?: boolean;
   /** The prefill "Ask Mainloop" puts in the composer for this row. */
   ask?: string;
+  /** A "+" on a group's heading: what it adds, and where that is done. */
+  add?: { label: string; target: Target };
   children: ExplorerNode[];
 }
 
@@ -627,6 +631,7 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
       id: 'projects',
       label: 'Projects',
       count: projects.length,
+      add: { label: 'Import a project', target: { to: 'import' } },
       children: projects.length > 0 ? projects : [note('projects/none', 'No projects yet')]
     },
     {

@@ -695,6 +695,17 @@ describe('explorer panel', () => {
     });
   });
 
+  it('leads from the Projects heading to where a project is imported', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    const router = await renderAt('/');
+    await within(screen.getByTestId('explorer-aside')).findByRole('tree');
+    await user.click(screen.getByRole('button', { name: 'Projects' }));
+    await user.click(screen.getByRole('button', { name: 'Import a project' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
+    expect(router.state.location.hash).toBe('import-project');
+  });
+
   it('keeps the Needs-you count on the activity bar and the status bar, whichever view shows', async () => {
     setViewport(true);
     server.use(tasksList(() => HttpResponse.json([view({ reason: 'owner_decision' })])));
