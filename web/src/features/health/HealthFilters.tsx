@@ -124,7 +124,7 @@ export function HealthFilters({
 }
 
 const SELECT_CLASS =
-  'bg-background border-border text-foreground p-sm mt-xs min-h-11 w-full border text-sm rounded-none';
+  'bg-background border-border text-foreground p-sm mt-xs min-h-control w-full border text-sm rounded-none';
 
 /** A label beside its select. The label is not wrapped around the select, so its name is just the label text. */
 function SelectField({

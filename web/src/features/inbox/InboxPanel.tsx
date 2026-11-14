@@ -37,7 +37,7 @@ export function InboxPanel({
   return (
     <section aria-labelledby="inbox-heading" className="flex flex-col">
       {/* Sticky, so the way back and the view switch stay in reach on a long list. */}
-      <div className="gap-sm p-md bg-background border-border sticky top-0 z-10 flex flex-wrap items-center justify-between border-b">
+      <div className="gap-sm p-md bg-background border-border-subtle sticky top-0 z-10 flex flex-wrap items-center justify-between border-b">
         <div className="gap-xs flex items-center">
           {back}
           <h2 id="inbox-heading" className="text-sm font-medium">

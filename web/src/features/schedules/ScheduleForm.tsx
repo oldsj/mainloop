@@ -12,7 +12,7 @@ import {
 } from './model';
 
 const CONTROL =
-  'border-border bg-background text-foreground px-md min-h-11 w-full min-w-0 border text-sm aria-[invalid=true]:border-destructive';
+  'border-border bg-background text-foreground px-md min-h-control w-full min-w-0 border text-sm aria-[invalid=true]:border-destructive';
 
 export interface ScheduleFormProps {
   mode: 'create' | 'edit';
@@ -235,7 +235,7 @@ export function ScheduleForm({
         </Field>
 
         {mode === 'create' ? (
-          <label className="gap-sm px-md border-border flex min-h-11 cursor-pointer items-center border text-sm">
+          <label className="gap-sm px-md border-border min-h-control flex cursor-pointer items-center border text-sm">
             <input
               type="checkbox"
               className="size-4"

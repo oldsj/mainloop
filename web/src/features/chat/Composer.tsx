@@ -353,7 +353,7 @@ export function Composer({
   }
 
   return (
-    <div className="border-border bg-background border-t">
+    <div className="border-border-subtle bg-background border-t">
       {allowImages && images.length > 0 ? (
         <div className="gap-xs px-md pt-sm flex flex-wrap" data-testid="composer-images">
           {images.map((image, index) => (
@@ -417,7 +417,7 @@ export function Composer({
                 aria-selected={index === highlightIndex}
                 data-testid={`slash-command-option-${command.name}`}
                 className={cn(
-                  'px-md gap-sm flex min-h-11 cursor-pointer items-baseline lg:min-h-7',
+                  'px-md gap-sm min-h-control flex cursor-pointer items-baseline',
                   index === highlightIndex && 'bg-accent text-accent-foreground'
                 )}
                 // A press here must not blur the textarea before the completion lands.
@@ -433,7 +433,7 @@ export function Composer({
             ))}
           </ul>
         ) : null}
-        <span className="text-term-accent flex min-h-11 items-center" aria-hidden="true">
+        <span className="text-term-accent min-h-control flex items-center" aria-hidden="true">
           $
         </span>
         <textarea
@@ -461,7 +461,7 @@ export function Composer({
           onKeyDown={keyDown}
           onPaste={paste}
           data-testid="command-input"
-          className="border-input bg-background text-foreground placeholder:text-muted-foreground focus-visible:ring-ring px-sm py-sm min-h-11 min-w-0 flex-1 resize-none border text-sm outline-none focus-visible:ring-1 disabled:opacity-50"
+          className="border-input bg-background text-foreground placeholder:text-muted-foreground focus-visible:ring-ring px-sm py-sm min-h-control min-w-0 flex-1 resize-none border text-sm outline-none focus-visible:ring-1 disabled:opacity-50"
         />
         <Button
           disabled={disabled || (!text.trim() && images.length === 0)}

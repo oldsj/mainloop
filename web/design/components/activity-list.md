@@ -8,7 +8,7 @@ The quieter log of FYIs: merged PRs, provider reports and unavailable input noti
 
 ## Tokens
 
-- Rows divided by `border-border`, padding `p-md`, radius `rounded-none`.
+- Rows divided by `border-border-subtle`, padding `p-md`, radius `rounded-none`.
 - Title `text-foreground` medium. Content and time `text-muted-foreground`.
 - **View task** is the ghost button.
 

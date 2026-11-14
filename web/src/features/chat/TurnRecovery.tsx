@@ -17,7 +17,7 @@ export function quietMinutes(iso: string, now: number): number {
 }
 
 const BUTTON =
-  'border-border text-foreground hover:text-term-red px-md min-h-11 border disabled:opacity-50';
+  'border-border text-foreground hover:text-term-red px-md min-h-control border disabled:opacity-50';
 
 /**
  * What the owner can do about a turn that is stuck. A stalled turn (the server saw no task activity

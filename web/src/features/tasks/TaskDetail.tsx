@@ -23,7 +23,7 @@ import {
 import { notPublishedYet } from './model';
 
 const HEADING = 'text-muted-foreground text-xs tracking-wide uppercase';
-const PANEL = 'gap-sm p-md border-border flex flex-col border-t';
+const PANEL = 'gap-sm p-md border-border-subtle flex flex-col border-t';
 
 function FactBadge({ fact }: { fact: Fact }) {
   return <StatusBadge label={fact.label} tone={fact.tone} />;
@@ -154,7 +154,7 @@ export function TaskFacts({
                   href={facts.prUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-foreground inline-flex min-h-11 items-center underline"
+                  className="text-foreground min-h-control inline-flex items-center underline"
                 >
                   Open PR
                 </a>
@@ -235,7 +235,7 @@ function OperationItem({ progress }: { progress: OperationProgress }) {
               step.status === 'pending'
                 ? 'text-muted-foreground'
                 : step.status === 'current'
-                  ? 'text-term-cyan'
+                  ? 'text-status-working'
                   : 'text-foreground'
             }
           >
@@ -292,7 +292,7 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
                     <Link
                       to="/sessions/$id"
                       params={{ id: attempt.session_id }}
-                      className="text-foreground inline-flex min-h-11 items-center text-xs underline"
+                      className="text-foreground min-h-control inline-flex items-center text-xs underline"
                     >
                       session
                     </Link>
@@ -360,7 +360,7 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
                 <Link
                   to="/tasks/$id"
                   params={{ id: child.task.id }}
-                  className="gap-sm flex min-h-11 items-center text-sm"
+                  className="gap-sm min-h-control flex items-center text-sm"
                 >
                   <span className="break-words underline">{child.task.title}</span>
                   <StatusBadge

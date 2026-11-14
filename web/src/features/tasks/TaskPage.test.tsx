@@ -229,7 +229,7 @@ describe('task page layout', () => {
     expect(filters).not.toContain(null);
   });
 
-  it('keeps every button a button and every target at least 44px', async () => {
+  it('keeps every button a button and every target at the control height', async () => {
     server.use(...serveTaskPage(taskScreen(allowedView())));
     renderTasks('/tasks/task-1');
     await screen.findByTestId('task-action-retry');
@@ -238,10 +238,10 @@ describe('task page layout', () => {
     expect(buttons.length).toBeGreaterThan(0);
     for (const button of buttons) {
       expect(button).toHaveAttribute('type', 'button');
-      expect(button).toHaveClass('min-h-11');
+      expect(button).toHaveClass('min-h-control');
     }
     for (const link of screen.getAllByRole('link')) {
-      expect(link).toHaveClass('min-h-11');
+      expect(link).toHaveClass('min-h-control');
     }
   });
 });

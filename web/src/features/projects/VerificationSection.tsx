@@ -116,7 +116,7 @@ function VerificationForm({
           Heavy checks run in
           <select
             aria-label="Heavy checks run in"
-            className="border-border bg-background text-foreground px-md min-h-11 border text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
             value={draft}
             disabled={busy}
             onChange={(event) => setDraft(event.target.value as VerificationMode)}

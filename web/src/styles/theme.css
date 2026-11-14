@@ -7,6 +7,7 @@
   --color-term-fg: var(--term-fg);
   --color-term-fg-muted: var(--term-fg-muted);
   --color-term-border: var(--term-border);
+  --color-term-border-subtle: var(--term-border-subtle);
   --color-term-accent: var(--term-accent);
   --color-term-accent-alt: var(--term-accent-alt);
   --color-term-warning: var(--term-warning);
@@ -37,8 +38,13 @@
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-status-attention: var(--status-attention);
+  --color-status-working: var(--status-working);
+  --color-status-failed: var(--status-failed);
+  --color-status-idle: var(--status-idle);
 
   --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', ui-monospace, monospace;
   --text-xs: 0.75rem;
@@ -61,6 +67,7 @@
   --spacing-lg: 1.5rem;
   --spacing-xl: 2rem;
   --spacing-2xl: 3rem;
+  --spacing-control: 2.75rem;
   --max-width-xs: 20rem;
   --max-width-sm: 24rem;
   --max-width-md: 28rem;
@@ -85,6 +92,7 @@
   --term-fg: #d3d0c8;
   --term-fg-muted: #a3a399;
   --term-border: #767676;
+  --term-border-subtle: #4e4e4e;
   --term-accent: #79a6d2;
   --term-accent-alt: #99cc99;
   --term-warning: #f99157;
@@ -115,8 +123,13 @@
   --destructive: var(--term-error);
   --destructive-foreground: var(--term-bg);
   --border: var(--term-border);
+  --border-subtle: var(--term-border-subtle);
   --input: var(--term-border);
   --ring: var(--term-accent);
+  --status-attention: var(--term-yellow);
+  --status-working: var(--term-accent);
+  --status-failed: var(--term-error);
+  --status-idle: var(--term-fg-muted);
 
   --radius: 0px;
   --duration-fast: 100ms;
@@ -126,12 +139,20 @@
   --focus-ring-offset: 2px;
 }
 
+/* Controls are touch-sized by default and compact on a wide screen with a fine pointer. */
+@media (min-width: 1024px) and (pointer: fine) {
+  :root {
+    --spacing-control: 1.75rem;
+  }
+}
+
 [data-theme='dracula'] {
   --term-bg: #282a36;
   --term-bg-secondary: #44475a;
   --term-fg: #f8f8f2;
   --term-fg-muted: #acb6d0;
   --term-border: #6d7290;
+  --term-border-subtle: #52566d;
   --term-accent: #c9a7fa;
   --term-accent-alt: #50fa7b;
   --term-warning: #ffb86c;
@@ -162,8 +183,13 @@
   --destructive: var(--term-error);
   --destructive-foreground: var(--term-bg);
   --border: var(--term-border);
+  --border-subtle: var(--term-border-subtle);
   --input: var(--term-border);
   --ring: var(--term-accent);
+  --status-attention: var(--term-yellow);
+  --status-working: var(--term-accent);
+  --status-failed: var(--term-error);
+  --status-idle: var(--term-fg-muted);
 }
 
 [data-theme='nord'] {
@@ -172,6 +198,7 @@
   --term-fg: #eceff4;
   --term-fg-muted: #a5aebf;
   --term-border: #6f7d98;
+  --term-border-subtle: #4d576a;
   --term-accent: #88c0d0;
   --term-accent-alt: #a3be8c;
   --term-warning: #ebcb8b;
@@ -202,8 +229,13 @@
   --destructive: var(--term-error);
   --destructive-foreground: var(--term-bg);
   --border: var(--term-border);
+  --border-subtle: var(--term-border-subtle);
   --input: var(--term-border);
   --ring: var(--term-accent);
+  --status-attention: var(--term-yellow);
+  --status-working: var(--term-accent);
+  --status-failed: var(--term-error);
+  --status-idle: var(--term-fg-muted);
 }
 
 [data-theme='gruvbox'] {
@@ -212,6 +244,7 @@
   --term-fg: #ebdbb2;
   --term-fg-muted: #aaa093;
   --term-border: #796f68;
+  --term-border-subtle: #514b48;
   --term-accent: #fabd2f;
   --term-accent-alt: #b8bb26;
   --term-warning: #fe8019;
@@ -242,8 +275,13 @@
   --destructive: var(--term-error);
   --destructive-foreground: var(--term-bg);
   --border: var(--term-border);
+  --border-subtle: var(--term-border-subtle);
   --input: var(--term-border);
   --ring: var(--term-accent);
+  --status-attention: var(--term-yellow);
+  --status-working: var(--term-cyan);
+  --status-failed: var(--term-error);
+  --status-idle: var(--term-fg-muted);
 }
 
 [data-theme='tokyo-night'] {
@@ -252,6 +290,7 @@
   --term-fg: #c0caf5;
   --term-fg-muted: #848eb3;
   --term-border: #5b6591;
+  --term-border-subtle: #373d59;
   --term-accent: #7aa2f7;
   --term-accent-alt: #9ece6a;
   --term-warning: #e0af68;
@@ -282,6 +321,11 @@
   --destructive: var(--term-error);
   --destructive-foreground: var(--term-bg);
   --border: var(--term-border);
+  --border-subtle: var(--term-border-subtle);
   --input: var(--term-border);
   --ring: var(--term-accent);
+  --status-attention: var(--term-yellow);
+  --status-working: var(--term-accent);
+  --status-failed: var(--term-error);
+  --status-idle: var(--term-fg-muted);
 }

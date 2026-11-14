@@ -160,7 +160,7 @@ function PolicyForm({
           Policy
           <select
             aria-label="Policy"
-            className="border-border bg-background text-foreground px-md min-h-11 border text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
             value={draft}
             disabled={!editable}
             onChange={(event) => setDraft(event.target.value as MergePolicy)}
@@ -189,7 +189,9 @@ function PolicyForm({
       </form>
 
       <details className="text-sm">
-        <summary className="py-sm min-h-11 cursor-pointer">Protected paths (read-only)</summary>
+        <summary className="py-sm min-h-control cursor-pointer">
+          Protected paths (read-only)
+        </summary>
         <ul className="gap-xs pt-sm flex flex-col">
           {view.protected_globs.map((glob) => (
             <li key={glob}>

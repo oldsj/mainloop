@@ -270,7 +270,7 @@ function NeedsRow({ row, selected }: { row: Row; selected?: string }) {
   const mark = key === selected;
   // The scroll margin keeps a row brought to the top clear of the sticky Inbox header.
   const className = cn(
-    'border-border scroll-mt-20 border-b',
+    'border-border-subtle scroll-mt-20 border-b',
     mark && 'ring-term-yellow/70 ring-1 ring-inset'
   );
   if (row.kind === 'entry') {

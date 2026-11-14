@@ -35,6 +35,7 @@ const TERM_KEYS = [
   'fg',
   'fg-muted',
   'border',
+  'border-subtle',
   'accent',
   'accent-alt',
   'warning',
@@ -67,10 +68,24 @@ const SEMANTIC_KEYS = [
   'destructive',
   'destructive-foreground',
   'border',
+  'border-subtle',
   'input',
-  'ring'
+  'ring',
+  'status-attention',
+  'status-working',
+  'status-failed',
+  'status-idle'
 ];
-const REQUIRED_TOKENS = ['font.family.mono', 'radius.default'];
+const REQUIRED_TOKENS = [
+  'font.family.mono',
+  'radius.default',
+  'size.control.touch',
+  'size.control.pointer'
+];
+
+// A control's size has two values. `touch` is the default; `pointer` replaces it inside this query:
+// the desktop layout (DESKTOP_QUERY in web/src/shell/view.ts) used with a mouse or trackpad.
+const POINTER_QUERY = '(min-width: 1024px) and (pointer: fine)';
 
 const TOKEN_KEYS = ['$value', '$type', '$description', '$extensions'];
 const GROUP_KEYS = ['$type', '$description', '$extensions'];
@@ -256,6 +271,9 @@ function cssName(path: string): string | undefined {
     return undefined;
   }
   if (group === 'spacing') return `--spacing-${a}`;
+  // size.<name>.touch and size.<name>.pointer share one variable. It sits in the spacing namespace so
+  // min-h-<name>, h-<name>, w-<name> and min-w-<name> all read it.
+  if (group === 'size') return b === 'touch' || b === 'pointer' ? `--spacing-${a}` : undefined;
   if (group === 'max-width') return `--max-width-${a}`;
   if (group === 'radius') return a === 'default' ? '--radius' : `--radius-${a}`;
   if (group === 'motion') {
@@ -412,6 +430,7 @@ if (errors.length > 0 || !source) {
   // Non-colour tokens: Tailwind namespaces go in @theme, the rest are plain variables on :root.
   const themeNamespaced: string[] = [];
   const sharedRoot: string[] = [];
+  const pointerRoot: string[] = [];
   for (const path of tokens.keys()) {
     if (path.startsWith('color.')) continue;
     const name = cssName(path);
@@ -420,7 +439,8 @@ if (errors.length > 0 || !source) {
       continue;
     }
     const line = `${name}: ${cssValueOf(path)};`;
-    if (/^--(font|text|spacing|max-width|radius|ease)-/.test(name)) themeNamespaced.push(line);
+    if (path.startsWith('size.') && path.endsWith('.pointer')) pointerRoot.push(line);
+    else if (/^--(font|text|spacing|max-width|radius|ease)-/.test(name)) themeNamespaced.push(line);
     else sharedRoot.push(line);
   }
   for (const message of await maxWidthProblems(['@theme {', ...themeNamespaced, '}'].join('\n')))
@@ -450,6 +470,13 @@ if (errors.length > 0 || !source) {
       '',
       ...indent(sharedRoot),
       '}',
+      '',
+      '/* Controls are touch-sized by default and compact on a wide screen with a fine pointer. */',
+      `@media ${POINTER_QUERY} {`,
+      '  :root {',
+      ...indent(indent(pointerRoot)),
+      '  }',
+      '}',
       ''
     ];
     for (const name of themeNames) {
@@ -472,7 +499,10 @@ if (errors.length > 0 || !source) {
       '- `tokens.json`: resolved values in W3C Design Tokens format. Aliases are already resolved.',
       `- Themes: ${themeNames.join(', ')}. \`${DEFAULT_THEME}\` is the default.`,
       '- Colours: `term-*` is the terminal palette (background, text, accent, status colours). Semantic names such as `background`, `primary`, `muted` and `border` follow shadcn/ui and map onto that palette.',
+      '- Borders: `border` (3:1 against the background) marks fields and other controls. `border-subtle` is the quiet rule between regions and around secondary buttons.',
+      '- Status: `status-attention`, `status-working`, `status-failed` and `status-idle` each carry one meaning. Use them for state, not the raw palette.',
       '- Type: JetBrains Mono, with sizes in `font.size` and line heights in `font.line-height`.',
+      '- Control size: `size.control` is 44px on touch and narrow screens and 28px on a wide screen with a mouse or trackpad. Components use `min-h-control` and `w-control`.',
       '- Radius is 0 everywhere: no rounded corners, pills or circular avatars.',
       '',
       '## Components',

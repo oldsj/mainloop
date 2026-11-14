@@ -27,7 +27,7 @@ export function WorkspaceManifest({ workspace }: { workspace: WorkspaceLifecycle
               href={repoHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex min-h-11 items-center break-all underline"
+              className="min-h-control inline-flex items-center break-all underline"
             >
               {manifest.repo_url}
             </a>

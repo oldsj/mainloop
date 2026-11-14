@@ -99,11 +99,11 @@ export function WorkspacePage({ id }: { id: string }) {
 
   return (
     <article className="p-md gap-md mx-auto flex max-w-4xl flex-col">
-      <header className="gap-sm border-border pb-md flex flex-col border-b">
+      <header className="gap-sm border-border-subtle pb-md flex flex-col border-b">
         <Link
           to="/sessions/$id"
           params={{ id: workspace.session_id }}
-          className="text-muted-foreground min-h-11 self-start text-xs underline"
+          className="text-muted-foreground min-h-control self-start text-xs underline"
         >
           Back to session
         </Link>
@@ -315,7 +315,7 @@ function WorkspaceUnavailable({
           {title ? (
             <Link
               to="/"
-              className="text-muted-foreground inline-flex min-h-11 items-center text-sm underline"
+              className="text-muted-foreground min-h-control inline-flex items-center text-sm underline"
             >
               Back to sessions
             </Link>

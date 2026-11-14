@@ -8,7 +8,7 @@ A status word in its token colour: session status in the list and session page, 
 
 ## Tokens
 
-- Tones map to the terminal tokens: active `term-cyan`, attention `term-yellow`, ok `term-green`, bad `term-red`, muted `term-fg-muted` with `term-border`.
+- Tones map to the status tokens: active `status-working`, attention `status-attention`, bad `status-failed`, muted `status-idle` with `border-subtle`. Ok stays `term-green`.
 - The border is the tone colour at half strength. Text is uppercase by CSS; the label in the DOM keeps its words.
 - On a filled row (open or hovered, `bg-accent`), the badge text takes `text-accent-foreground` and the tone border is dropped. The label carries the status there, so no tone colour is drawn on the fill.
 - Radius `rounded-none`. Spacing `px-sm py-xs`. Type `text-xs`, medium weight.
@@ -33,7 +33,7 @@ An unknown status shows its own words in muted tone rather than failing the row.
 
 ## Touch
 
-- The badge is not a control, so it has no minimum size. If a badge becomes a button, it gets the 44 px target.
+- The badge is not a control, so it has no minimum size. If a badge becomes a button, it gets the control height (`min-h-control`).
 
 ## Behaviour that must hold
 

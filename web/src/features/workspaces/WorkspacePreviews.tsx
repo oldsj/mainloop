@@ -54,7 +54,7 @@ export function WorkspacePreviews({ workspaceId }: { workspaceId: string }) {
           {links.map((link) => (
             <li
               key={`${link.port}-${link.url}`}
-              className="gap-md border-border py-sm flex flex-wrap items-center justify-between border-b"
+              className="gap-md border-border-subtle py-sm flex flex-wrap items-center justify-between border-b"
             >
               <span className="min-w-0 text-sm break-words">
                 {link.name}
@@ -65,7 +65,7 @@ export function WorkspacePreviews({ workspaceId }: { workspaceId: string }) {
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label={`Open preview ${link.name}, port ${link.port}`}
-                className="text-foreground inline-flex min-h-11 items-center text-sm underline"
+                className="text-foreground min-h-control inline-flex items-center text-sm underline"
               >
                 Open preview
               </a>

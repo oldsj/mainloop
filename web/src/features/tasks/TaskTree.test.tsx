@@ -124,7 +124,7 @@ describe('task tree', () => {
     expect(screen.getByRole('link', { name: /Parent work/ }).closest('li')).not.toHaveClass(
       'pl-md'
     );
-    expect(row).toHaveClass('min-h-11');
+    expect(row).toHaveClass('min-h-control');
     expect(row).toHaveAttribute('href', '/tasks/task-child');
   });
 
@@ -176,8 +176,8 @@ describe('task tree', () => {
 
     const row = await screen.findByRole('link', { name: /Supervise done/ });
     const badge = within(row).getByText('[SUPERVISOR]');
-    expect(badge).toHaveClass('text-term-fg-muted');
-    expect(badge).not.toHaveClass('text-term-cyan');
+    expect(badge).toHaveClass('text-status-idle');
+    expect(badge).not.toHaveClass('text-status-working');
   });
 
   it('says there are no tasks when the list is empty', async () => {

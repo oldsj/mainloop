@@ -505,11 +505,11 @@ export function switchBlockers(view: TaskView): string[] {
 }
 
 const TONE_CLASSES: Record<Tone, string> = {
-  active: 'text-term-cyan border-term-cyan/50',
-  attention: 'text-term-yellow border-term-yellow/50',
+  active: 'text-status-working border-status-working/50',
+  attention: 'text-status-attention border-status-attention/50',
   ok: 'text-term-green border-term-green/50',
-  bad: 'text-term-red border-term-red/50',
-  muted: 'text-term-fg-muted border-term-border'
+  bad: 'text-status-failed border-status-failed/50',
+  muted: 'text-status-idle border-border-subtle'
 };
 
 /** Text and border colour classes for a badge. Colour is never the only signal: badges carry text. */

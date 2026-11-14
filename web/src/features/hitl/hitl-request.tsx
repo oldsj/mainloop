@@ -38,7 +38,7 @@ export interface HITLRequestProps {
   answeredAt?: string | null;
 }
 
-const link = 'text-primary inline-flex min-h-11 items-center underline underline-offset-4';
+const link = 'text-primary inline-flex min-h-control items-center underline underline-offset-4';
 const field = 'border-input bg-background text-foreground p-sm w-full rounded-none border text-sm';
 const choiceBase = 'aria-pressed:border-foreground';
 const approveChoice = cn(
@@ -278,7 +278,7 @@ export function HITLRequest({
               ) : null}
               <fieldset
                 disabled={disabled}
-                className="gap-sm border-border pt-sm grid min-w-0 border-t"
+                className="gap-sm border-border-subtle pt-sm grid min-w-0 border-t"
               >
                 <legend className="pr-sm font-medium">{tool.name}</legend>
                 <p className="text-muted-foreground">
@@ -355,7 +355,7 @@ export function HITLRequest({
           <fieldset
             key={i}
             disabled={disabled}
-            className="gap-sm border-border pt-sm grid min-w-0 border-t"
+            className="gap-sm border-border-subtle pt-sm grid min-w-0 border-t"
           >
             <legend className="pr-sm font-medium">{question.question}</legend>
             {question.choices?.length ? (
@@ -428,7 +428,7 @@ export function HITLRequest({
         {context?.title ?? 'Observed session'}
       </p>
       <details>
-        <summary className="py-sm min-h-11 cursor-pointer">Session and task</summary>
+        <summary className="py-sm min-h-control cursor-pointer">Session and task</summary>
         <p>
           Session: <code>{view.request.outer.runtime_session_id}</code>
         </p>
@@ -497,7 +497,9 @@ export function HITLRequest({
         </>
       ) : null}
       <details>
-        <summary className="py-sm min-h-11 cursor-pointer">Request data (agent supplied)</summary>
+        <summary className="py-sm min-h-control cursor-pointer">
+          Request data (agent supplied)
+        </summary>
         {/* Already folded by the disclosure, so it shows whole and grows with the page. */}
         <pre className="bg-muted p-sm [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
           {clipText(JSON.stringify(view.request.payload, null, 2))}

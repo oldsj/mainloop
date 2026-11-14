@@ -84,7 +84,7 @@ export function QueueCard({ item }: { item: QueueItem }) {
           href={pr}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-primary inline-flex min-h-11 items-center text-sm underline underline-offset-4"
+          className="text-primary min-h-control inline-flex items-center text-sm underline underline-offset-4"
         >
           View PR
         </a>
@@ -126,7 +126,7 @@ export function QueueCard({ item }: { item: QueueItem }) {
               item.item_type === 'plan_review' ? 'Request changes...' : 'Type your response...'
             }
             disabled={respond.isPending}
-            className="border-input bg-background text-foreground placeholder:text-muted-foreground focus-visible:border-ring min-h-11 min-w-0 flex-1 border px-3 text-sm focus-visible:outline-none disabled:opacity-50"
+            className="border-input bg-background text-foreground placeholder:text-muted-foreground focus-visible:border-ring min-h-control min-w-0 flex-1 border px-3 text-sm focus-visible:outline-none disabled:opacity-50"
           />
           <Button
             type="submit"

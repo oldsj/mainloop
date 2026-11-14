@@ -209,8 +209,8 @@ export function SessionPage({ id }: { id: string }) {
       <header
         className={
           live
-            ? 'gap-sm border-border px-sm py-xs flex items-center border-b'
-            : 'gap-sm border-border p-md flex flex-col border-b'
+            ? 'gap-sm border-border-subtle px-sm py-xs flex items-center border-b'
+            : 'gap-sm border-border-subtle p-md flex flex-col border-b'
         }
       >
         <div className="gap-sm flex flex-none items-center">
@@ -306,7 +306,7 @@ export function SessionPage({ id }: { id: string }) {
           {workspace ? (
             <section
               aria-label="Workspace"
-              className="gap-sm p-md border-border flex flex-col border-t"
+              className="gap-sm p-md border-border-subtle flex flex-col border-t"
             >
               <div className="gap-sm flex flex-wrap items-center">
                 <WorkspaceLifecycleBadge workspace={workspace} />

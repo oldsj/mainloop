@@ -33,7 +33,7 @@ export function SessionObservations({ sessionId, hours }: { sessionId: string; h
         type="button"
         disabled={loading}
         onClick={() => (requested ? void events.refetch() : setRequested(true))}
-        className="border-border hover:border-foreground px-md min-h-11 justify-self-start border text-sm disabled:opacity-50"
+        className="border-border hover:border-foreground px-md min-h-control justify-self-start border text-sm disabled:opacity-50"
       >
         {loading ? 'Loading…' : 'Load source observations'}
       </button>

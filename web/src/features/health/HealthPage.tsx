@@ -88,7 +88,7 @@ export function HealthPage({ search }: { search: HealthSearch }) {
     <article className="p-md gap-md mx-auto flex w-full max-w-6xl flex-col">
       <Link
         to="/"
-        className="text-muted-foreground inline-flex min-h-11 items-center text-sm underline underline-offset-4"
+        className="text-muted-foreground min-h-control inline-flex items-center text-sm underline underline-offset-4"
       >
         Home
       </Link>
@@ -105,13 +105,13 @@ export function HealthPage({ search }: { search: HealthSearch }) {
         </Button>
       </header>
 
-      <div className="border-border mt-sm py-sm border-y">
+      <div className="border-border-subtle mt-sm py-sm border-y">
         <button
           type="button"
           aria-expanded={open}
           aria-controls="health-filters"
           onClick={() => setToggle({ wide, open: !open })}
-          className="min-h-11 text-sm"
+          className="min-h-control text-sm"
         >
           Filters · {windowSummary(hours)}
         </button>
@@ -214,7 +214,7 @@ export function HealthPage({ search }: { search: HealthSearch }) {
             <p className="text-muted-foreground py-xl">{EMPTY_NOTICE}</p>
           ) : null}
 
-          <ul className="border-border divide-border divide-y border-y">
+          <ul className="border-border-subtle divide-border-subtle divide-y border-y">
             {sortByFailures(view.rows).map((row) => (
               <li key={row.id} className="py-md">
                 <HealthRowCard row={row} hours={hours} generation={health.dataUpdatedAt} />

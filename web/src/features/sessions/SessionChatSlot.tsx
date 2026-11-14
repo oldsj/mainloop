@@ -56,14 +56,14 @@ export function SessionChatSlot({
       aria-label="Session chat"
       className="border-border flex min-h-0 flex-1 flex-col border"
     >
-      <div className="gap-sm px-md border-border text-muted-foreground flex min-h-11 flex-wrap items-center border-b py-1 text-xs">
+      <div className="gap-sm px-md border-border-subtle text-muted-foreground min-h-control flex flex-wrap items-center border-b py-1 text-xs">
         <span className="text-foreground" data-testid="session-chat-state" role="status">
           {cancelled ? 'cancelled' : needsYou ? 'needs you' : statusWords(status)}
         </span>
         {thread.busy && closedReason === null ? (
           <button
             type="button"
-            className="border-border text-foreground hover:text-term-red px-md min-h-11 border disabled:opacity-50"
+            className="border-border text-foreground hover:text-term-red px-md min-h-control border disabled:opacity-50"
             disabled={thread.stopping || offline}
             onClick={thread.stop}
             data-testid="session-chat-stop"

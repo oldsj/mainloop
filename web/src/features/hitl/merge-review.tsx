@@ -29,7 +29,7 @@ const text = (v: unknown, fallback = ''): string =>
 const when = (iso: string | null | undefined): string =>
   (iso && messageTime(iso)) || iso || 'time unavailable';
 
-const link = 'text-primary inline-flex min-h-11 items-center underline underline-offset-4';
+const link = 'text-primary inline-flex min-h-control items-center underline underline-offset-4';
 
 interface PagedState {
   loaded: boolean;
@@ -128,12 +128,12 @@ function DetailSection({
 
   return (
     <details
-      className="border-border border-t"
+      className="border-border-subtle border-t"
       onToggle={(event) => {
         if (event.currentTarget.open && !state.loaded) void fetchPage(state.retryCursor);
       }}
     >
-      <summary className="py-sm min-h-11 cursor-pointer text-sm">{title}</summary>
+      <summary className="py-sm min-h-control cursor-pointer text-sm">{title}</summary>
       <div className="gap-sm pb-md grid text-sm">
         {state.loading && !state.loaded ? <p role="status">Loading…</p> : null}
         {state.error ? (
@@ -195,7 +195,7 @@ function ShortSha({ sha }: { sha: string | null }) {
       <Button
         variant="outline"
         size="sm"
-        className="min-h-11"
+        className="min-h-control"
         aria-label={`Copy full SHA ${sha}`}
         onClick={() => void copyFull(sha)}
       >
