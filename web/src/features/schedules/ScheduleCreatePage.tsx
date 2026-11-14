@@ -1,3 +1,5 @@
+import { cn } from '@/components/ui/cn';
+import { PAGE } from '@/components/shared/measure';
 import { BACK_LINK, BackIcon, PageHeader } from '@/components/shared/page-header';
 import { useState } from 'react';
 import { useNavigate, Link } from '@tanstack/react-router';
@@ -43,7 +45,7 @@ export function ScheduleCreatePage() {
   const failed = create.error;
 
   return (
-    <div className="gap-lg p-md flex min-w-0 flex-col">
+    <div className={cn(PAGE, 'gap-lg')}>
       <PageHeader
         title="New schedule"
         back={

@@ -1,3 +1,5 @@
+import { cn } from '@/components/ui/cn';
+import { PAGE } from '@/components/shared/measure';
 import { PageHeader } from '@/components/shared/page-header';
 import { Link } from '@tanstack/react-router';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
@@ -12,7 +14,7 @@ export function ScheduleListPage() {
   const items = schedules.data?.pages.flatMap((page) => page.items) ?? [];
 
   return (
-    <div className="gap-lg p-md flex min-w-0 flex-col">
+    <div className={cn(PAGE, 'gap-lg')}>
       <PageHeader
         title="Scheduled runs"
         description="An agent runs your prompt on a timetable. Each run starts a native session you can open."

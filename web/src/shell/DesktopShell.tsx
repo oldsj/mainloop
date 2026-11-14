@@ -96,6 +96,7 @@ export function DesktopShell({
         needs={counts.needs}
         working={counts.working}
         problems={counts.problems}
+        counts={explorer.ready ? 'ready' : explorer.failed ? 'failed' : 'loading'}
         onShowWorking={() => update((prev) => ({ ...prev, view: 'sessions', collapsed: false }))}
       />
     </div>

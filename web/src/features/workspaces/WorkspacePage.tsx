@@ -1,3 +1,4 @@
+import { PAGE } from '@/components/shared/measure';
 import { BACK_LINK, BackIcon, PageHeader } from '@/components/shared/page-header';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
@@ -99,7 +100,7 @@ export function WorkspacePage({ id }: { id: string }) {
       : 'Delete this workspace? Its checkout and any uncommitted work are removed.';
 
   return (
-    <article className="p-md gap-md mx-auto flex max-w-4xl flex-col">
+    <article className={cn(PAGE, 'gap-md')}>
       <header className="gap-sm border-border-subtle pb-md flex flex-col border-b">
         <PageHeader
           title="Workspace"
