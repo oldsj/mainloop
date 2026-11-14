@@ -534,6 +534,42 @@ func (a *SessionsAPI) SetSessionEffort(ctx context.Context, r api.SetSessionEffo
 	return api.SetSessionEffort200JSONResponse(toModelEffort(st)), nil
 }
 
+// ListSessionDefaults implements api.StrictServerInterface.
+func (a *SessionsAPI) ListSessionDefaults(ctx context.Context, _ api.ListSessionDefaultsRequestObject) (api.ListSessionDefaultsResponseObject, error) {
+	ds, err := a.Svc.SessionDefaults(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return api.ListSessionDefaults200JSONResponse(toSessionDefaults(ds)), nil
+}
+
+// SetSessionDefault implements api.StrictServerInterface.
+func (a *SessionsAPI) SetSessionDefault(ctx context.Context, r api.SetSessionDefaultRequestObject) (api.SetSessionDefaultResponseObject, error) {
+	if r.Body == nil {
+		return nil, apierr.Invalid("the body is required")
+	}
+	ds, err := a.Svc.SetSessionDefault(ctx, SessionDefault{
+		Role: string(r.Body.Role), Provider: r.Body.Provider, Model: r.Body.Model, Effort: (*string)(r.Body.Effort),
+	})
+	switch {
+	case errors.Is(err, ErrInvalid):
+		return nil, apierr.Invalid(reason(err, ErrInvalid))
+	case err != nil:
+		return nil, err
+	}
+	return api.SetSessionDefault200JSONResponse(toSessionDefaults(ds)), nil
+}
+
+func toSessionDefaults(ds []SessionDefault) api.SessionDefaults {
+	out := api.SessionDefaults{Defaults: make([]api.SessionDefault, 0, len(ds))}
+	for _, d := range ds {
+		out.Defaults = append(out.Defaults, api.SessionDefault{
+			Role: api.SessionDefaultRole(d.Role), Provider: d.Provider, Model: d.Model, Effort: (*api.EffortLevel)(d.Effort),
+		})
+	}
+	return out
+}
+
 // toModelEffort is the wire form of a session's /model and /effort override state.
 func toModelEffort(st ModelEffortState) api.SessionModelEffort {
 	return api.SessionModelEffort{SessionId: st.SessionID, Model: st.Model, Effort: (*api.EffortLevel)(st.Effort)}

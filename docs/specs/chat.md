@@ -56,7 +56,32 @@ The wire routes are `POST /sessions/{session_id}/model` (`{"model": "<name>"|nul
 
 A task-owned session's override may already be set when the composer first shows it: `TaskCreate`/`delegate`'s optional `model` and `effort` (#318) apply as this same override before the attempt's first brief, not through these routes after the fact — see [delegation](delegation.md#choosing-a-workers-model-and-effort-318).
 
-The A2A message that starts a turn carries the override as metadata, keyed `kagent.dev/model` and `kagent.dev/effort`; `server/internal/kagent` places it on the message `server/internal/sessions` builds for `SendMessage`, without changing its no-replay or `OutcomeUnknown` behavior. A key is sent only when the owner or a supervisor chose a value for the session; otherwise it is absent and kagent runs the turn on the Agent's own ModelConfig model and the harness's default effort. The profile's `default_model` and `default_effort` are only what `/model` and `/effort` show as the default; they are never sent, so a stale built-in list cannot fail a turn (it did on production with Codex, where the built-in `gpt-5.1-codex` failed every turn against the `gpt-6.1-sol` ModelConfig). Resetting to "default" sends no key, and that takes effect on the next turn: the Claude SDK driver sets the model and effort at the start of every turn, to the metadata value or else the Agent's ModelConfig model and the default effort (measured on prod 2026-11-12: `/model opus` ran `claude-opus-5-5`, and after `/model default` the next turn ran `claude-sonnet-5-5`). A value kagent rejects (an unknown model, most often, since effort is pre-validated) is refused synchronously before the turn starts; this reads as a plain A2A error, shown on the delivery as "send rejected: …", the same clear per-message failure a bad prompt gets — never folded into the generic "could not prepare the kagent session" configuration-failure bucket.
+The A2A message that starts a turn carries the override as metadata, keyed `kagent.dev/model` and `kagent.dev/effort`; `server/internal/kagent` places it on the message `server/internal/sessions` builds for `SendMessage`, without changing its no-replay or `OutcomeUnknown` behavior. A key is sent only when the owner or a supervisor chose a value for the session, or the owner set a [session default](#session-defaults) for its role and provider; otherwise it is absent and kagent runs the turn on the Agent's own ModelConfig model and the harness's default effort. The profile's `default_model` and `default_effort` are only what `/model` and `/effort` show as the default; they are never sent, so a stale built-in list cannot fail a turn (it did on production with Codex, where the built-in `gpt-5.1-codex` failed every turn against the `gpt-6.1-sol` ModelConfig). Resetting to "default" sends no key, and that takes effect on the next turn: the Claude SDK driver sets the model and effort at the start of every turn, to the metadata value or else the Agent's ModelConfig model and the default effort (measured on prod 2026-11-12: `/model opus` ran `claude-opus-5-5`, and after `/model default` the next turn ran `claude-sonnet-5-5`). A value kagent rejects (an unknown model, most often, since effort is pre-validated) is refused synchronously before the turn starts; this reads as a plain A2A error, shown on the delivery as "send rejected: …", the same clear per-message failure a bad prompt gets — never folded into the generic "could not prepare the kagent session" configuration-failure bucket.
+
+## Session defaults
+
+The owner can set a default model and reasoning effort by role and provider profile:
+`GET /session-defaults` lists them, and `PUT /session-defaults` sets one
+(`{"role": "main"|"worker", "provider": "<profile id>", "model": "<name>"|null, "effort": "<level>"|null}`;
+both `null` removes it) and answers with all of them. `main` is the main thread; `worker` is every
+other session, task sessions and supervisors alike. They are keyed by provider because model names
+and effort levels differ between providers: a Claude default never applies to a Codex session.
+The provider must be a configured profile and the effort one of its `effort_levels` (`422`
+otherwise); the model is checked only against the contract's pattern, as `/model` is.
+
+A turn's model is the session's `/model` override if set, else the default for its role and
+provider, else none (the Agent's ModelConfig model); effort resolves the same way. The default is
+read when each turn starts, not copied into the session, so:
+
+- a change to a default reaches running sessions from their next turn;
+- `/model default` and `/effort default` clear the session's override back to the role default
+  (or the provider's, when there is none);
+- a delegation's `model` and `effort` are overrides and win over the default.
+
+A default effort its provider stopped offering (the profile changed after it was set) is left out
+of the turn rather than failing it. The composer still shows `default` for a session with no
+override of its own; showing which default applies, and a settings page for these, are UI follow-ups
+(today they are set through the API).
 
 ## Sending messages
 

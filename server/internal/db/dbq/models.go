@@ -755,6 +755,15 @@ type SessionCheckpoint struct {
 	UpdatedAt          time.Time
 }
 
+type SessionDefault struct {
+	UserID    string
+	Role      string
+	Provider  string
+	Model     *string
+	Effort    *string
+	UpdatedAt time.Time
+}
+
 type SessionMessage struct {
 	ID        string
 	SessionID string

@@ -234,6 +234,7 @@ SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.u
        b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
        b.credential_identity,
        b.model_override, b.effort_override,
+       sd.model AS default_model, sd.effort AS default_effort,
        coalesce(b.mcp_grant_kind::text, '')::text AS binding_grant, s.user_id, s.title AS session_title,
        w.id AS workspace_id,
        coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
@@ -243,7 +244,25 @@ FROM deliveries d
 JOIN sessions s ON s.id = d.session_id
 LEFT JOIN agent_bindings b ON b.session_id = d.session_id
 LEFT JOIN workspaces w ON w.id = d.session_id
+-- The owner's default for the session's role and provider (a binding with no kind is Claude's).
+LEFT JOIN session_defaults sd ON sd.user_id = s.user_id
+    AND sd.role = CASE WHEN b.role = 'main' THEN 'main' ELSE 'worker' END
+    AND sd.provider = coalesce(nullif(b.kind, ''), 'claude')
 WHERE d.id = $1;
+
+-- name: ListSessionDefaults :many
+SELECT role, provider, model, effort FROM session_defaults
+WHERE user_id = $1
+ORDER BY role, provider;
+
+-- name: UpsertSessionDefault :exec
+INSERT INTO session_defaults (user_id, role, provider, model, effort)
+VALUES (sqlc.arg(user_id), sqlc.arg(role), sqlc.arg(provider), sqlc.narg(model), sqlc.narg(effort))
+ON CONFLICT (user_id, role, provider)
+DO UPDATE SET model = excluded.model, effort = excluded.effort, updated_at = now();
+
+-- name: DeleteSessionDefault :exec
+DELETE FROM session_defaults WHERE user_id = $1 AND role = $2 AND provider = $3;
 
 -- Stores the kagent Session the create returned. Fenced on the delivery's claim and on the
 -- request id the create used, so a claimer that lost its lease, or one whose request id has since

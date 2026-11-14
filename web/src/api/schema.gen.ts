@@ -765,6 +765,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/session-defaults': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Session Defaults
+     * @description The owner's default model and reasoning effort for new turns, by role (`main` for the main thread, `worker` for every task session) and provider profile. A turn uses the session's own `/model` or `/effort` override when set, else the default for its role and provider, else the provider's own default. Read at each turn, so a change reaches running sessions from their next turn.
+     */
+    get: operations['listSessionDefaults'];
+    /**
+     * Set Session Default
+     * @description Set the default model and effort for one role and provider profile. `null` leaves that field to the provider; both `null` removes the default. The provider must be a configured profile and the effort one of its `effort_levels` (`GET /providers`); otherwise `422`. Returns every default.
+     */
+    put: operations['setSessionDefault'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/queue/{item_id}/dismiss': {
     parameters: {
       query?: never;
@@ -3075,6 +3099,36 @@ export interface components {
     SessionEffortRequest: {
       /** Effort */
       effort: components['schemas']['EffortLevel'] | null;
+    };
+    /**
+     * SessionDefaultRole
+     * @description Which sessions a default applies to, the main thread or every task session.
+     * @enum {string}
+     */
+    SessionDefaultRole: 'main' | 'worker';
+    /**
+     * SessionDefault
+     * @description The default model and effort for one role and provider profile.
+     */
+    SessionDefault: {
+      role: components['schemas']['SessionDefaultRole'];
+      /**
+       * Provider
+       * @description A provider profile id (`GET /providers`).
+       */
+      provider: string;
+      /** Model */
+      model: string | null;
+      /** Effort */
+      effort: components['schemas']['EffortLevel'] | null;
+    };
+    /**
+     * SessionDefaults
+     * @description Every session default the owner set.
+     */
+    SessionDefaults: {
+      /** Defaults */
+      defaults: components['schemas']['SessionDefault'][];
     };
     /**
      * SessionModelEffort
@@ -7828,6 +7882,70 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  listSessionDefaults: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SessionDefaults'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  setSessionDefault: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SessionDefault'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SessionDefaults'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
         };
       };
     };

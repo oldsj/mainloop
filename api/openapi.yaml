@@ -2034,6 +2034,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+  /session-defaults:
+    get:
+      tags:
+        - sessions
+      summary: List Session Defaults
+      description: >-
+        The owner's default model and reasoning effort for new turns, by role (`main` for the main
+        thread, `worker` for every task session) and provider profile. A turn uses the session's
+        own `/model` or `/effort` override when set, else the default for its role and provider,
+        else the provider's own default. Read at each turn, so a change reaches running sessions
+        from their next turn.
+      operationId: listSessionDefaults
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDefaults'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+    put:
+      tags:
+        - sessions
+      summary: Set Session Default
+      description: >-
+        Set the default model and effort for one role and provider profile. `null` leaves that
+        field to the provider; both `null` removes the default. The provider must be a configured
+        profile and the effort one of its `effort_levels` (`GET /providers`); otherwise `422`.
+        Returns every default.
+      operationId: setSessionDefault
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionDefault'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDefaults'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
   /queue/{item_id}/dismiss:
     post:
       tags:
@@ -6823,6 +6879,56 @@ components:
         - effort
       title: SessionEffortRequest
       description: Request to set (or, null, clear) a session's reasoning-effort override.
+    SessionDefaultRole:
+      type: string
+      enum:
+        - main
+        - worker
+      title: SessionDefaultRole
+      description: Which sessions a default applies to, the main thread or every task session.
+    SessionDefault:
+      properties:
+        role:
+          $ref: '#/components/schemas/SessionDefaultRole'
+        provider:
+          type: string
+          maxLength: 80
+          minLength: 1
+          pattern: ^[a-z][a-z0-9_-]*$
+          title: Provider
+          description: A provider profile id (`GET /providers`).
+        model:
+          anyOf:
+            - type: string
+              pattern: ^[A-Za-z0-9._:/-]{1,200}$
+            - type: 'null'
+          title: Model
+        effort:
+          anyOf:
+            - $ref: '#/components/schemas/EffortLevel'
+            - type: 'null'
+          title: Effort
+      type: object
+      required:
+        - role
+        - provider
+        - model
+        - effort
+      title: SessionDefault
+      description: The default model and effort for one role and provider profile.
+    SessionDefaults:
+      properties:
+        defaults:
+          # bounded by roles (2) x configured provider profiles
+          items:
+            $ref: '#/components/schemas/SessionDefault'
+          type: array
+          title: Defaults
+      type: object
+      required:
+        - defaults
+      title: SessionDefaults
+      description: Every session default the owner set.
     SessionModelEffort:
       properties:
         session_id:
