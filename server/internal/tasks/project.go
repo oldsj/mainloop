@@ -49,6 +49,8 @@ type Observation struct {
 	// answer.
 	CIState   string
 	CIHeadSHA string
+	// CIRetry is set when CI could not be read for a reason that may pass; see [Service.project].
+	CIRetry bool
 	// ObservedAt is the collection-finish time, preserved through persistence. A zero value
 	// means no observation time is known and cannot establish fresh CI.
 	ObservedAt time.Time
@@ -107,7 +109,8 @@ func eqPtr[T comparable](a, b *T) bool {
 
 // ProjectionSweep refreshes the stored GitHub observation of code tasks that are still open. It
 // changes only the projection: it never moves a task's status, and a task with no change gets a
-// new observation time and no new version or event. A failed observation clears cached facts.
+// new observation time and no new version or event. A refused observation clears cached facts;
+// one that may pass on retry keeps them, with their own time, until the next sweep.
 // It needs an Observer.
 func (s *Service) ProjectionSweep() reconcile.Sweep {
 	return reconcile.Sweep{Name: "task-projection", Every: s.Limits.ProjectionEvery, Run: s.runProjection}
@@ -146,6 +149,15 @@ func (s *Service) project(ctx context.Context, id, branch, repo string) error {
 		return err
 	}
 	obs, err := s.Observer.Observe(ctx, repo, branch, expected)
+	// A read that failed for a reason that may pass (a 5xx, a rate limit, a lost reply), whole or
+	// for CI alone, changes nothing: the last facts stay with their own observation time, so a
+	// green pull request does not flicker to unknown and back on one bad minute. The read
+	// rule in view.go still shows CI as unknown once that time is five minutes old, so failures
+	// that last are not covered for. A refused read (4xx, auth) degrades at once, below.
+	if (err != nil && errors.Is(err, github.ErrObservationRetry)) || (err == nil && obs.CIRetry) {
+		s.log().WarnContext(ctx, "task projection: keeping the last observation", "task", id, "error", err, "ci_retry", obs.CIRetry)
+		return nil
+	}
 	if err != nil {
 		// Degrade to unknown rather than keep showing a state nobody can vouch for.
 		s.log().WarnContext(ctx, "task projection", "task", id, "error", err)

@@ -1,6 +1,8 @@
 package tasks_test
 
 import (
+	"github.com/oldsj/mainloop/server/internal/github"
+	"fmt"
 	"errors"
 	"testing"
 	"time"
@@ -193,5 +195,50 @@ func TestProjectionRacesAFinishingTask(t *testing.T) {
 	r.project()
 	if r.view(r.own, id).Projection.PrNumber != nil {
 		t.Fatal("a task that ended during observation was projected")
+	}
+}
+
+// A read that may pass on retry, whole or for CI alone, keeps the last facts and their time: a
+// green pull request stays green through one bad minute, and the five-minute rule still ends it
+// when the failures last.
+func TestProjectionKeepsTheLastFactsThroughATransientFailure(t *testing.T) {
+	green := tasks.Observation{
+		PRNumber: 7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "a", PRState: "open", CIState: "success", CIHeadSHA: "a",
+	}
+	for name, fail := range map[string]func(r *rig){
+		"whole read": func(r *rig) {
+			r.obs.set(tasks.Observation{}, fmt.Errorf("%w: 503", github.ErrObservationRetry))
+		},
+		"ci read": func(r *rig) {
+			o := green
+			o.ObservedAt, o.CIState, o.CIHeadSHA, o.CIRetry = time.Now(), "unknown", "", true
+			r.obs.set(o, nil)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t)
+			id := r.projected()
+			o := green
+			o.ObservedAt = time.Now()
+			r.obs.set(o, nil)
+			r.project()
+			// Two minutes old: due for the next sweep, still fresh for a read.
+			r.exec(`UPDATE tasks SET projected_at = now() - interval '2 minutes' WHERE id = $1`, id)
+			before := r.view(r.own, id)
+			events := r.updates(id)
+			fail(r)
+			r.sweep(r.svc.ProjectionSweep())
+			after := r.view(r.own, id)
+			if string(after.Projection.CiState) != "success" || after.Task.Version != before.Task.Version || r.updates(id) != events {
+				t.Fatalf("a transient failure changed the projection: %+v version %d -> %d", after.Projection, before.Task.Version, after.Task.Version)
+			}
+			if !after.Projection.ObservedAt.Equal(*before.Projection.ObservedAt) {
+				t.Fatal("a transient failure refreshed the observation time")
+			}
+			r.exec(`UPDATE tasks SET projected_at = now() - interval '6 minutes' WHERE id = $1`, id)
+			if got := r.view(r.own, id).Projection; string(got.CiState) != "unknown" {
+				t.Fatalf("CI after failures past five minutes = %s", got.CiState)
+			}
+		})
 	}
 }

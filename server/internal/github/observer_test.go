@@ -354,6 +354,11 @@ func TestTaskObserverErrorClasses(t *testing.T) {
 				got, err := o.Observe(context.Background(), "o/n", "feature", 0)
 				if strings.Contains(path, "/commits/") {
 					requirePRWithUnknownCI(t, got, err)
+					// Only a failure that may pass marks CI for a retry; a 404 means no CI, and a
+					// refusal will not pass by waiting.
+					if retry := status == 429 || status >= 500; got.CIRetry != retry {
+						t.Fatalf("%d: CIRetry = %v, want %v", status, got.CIRetry, retry)
+					}
 					return
 				}
 				if status == 404 {
@@ -384,6 +389,9 @@ func TestTaskObserverErrorClasses(t *testing.T) {
 			got, err := o.Observe(context.Background(), "o/n", "feature", 0)
 			if strings.Contains(path, "/commits/") {
 				requirePRWithUnknownCI(t, got, err)
+				if !got.CIRetry {
+					t.Fatal("a rate-limited CI read is not marked for a retry")
+				}
 				return
 			}
 			if got != (github.TaskObservation{}) || !errors.Is(err, github.ErrObservationRetry) {
