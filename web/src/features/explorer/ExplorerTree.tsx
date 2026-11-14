@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, MessageSquarePlus } from 'lucide-react';
+import { ChevronDown, ChevronRight, MessageSquarePlus, Plus } from 'lucide-react';
 import {
   useCallback,
   useEffect,
@@ -26,6 +26,13 @@ const DOT: Record<Tone, string> = {
   ok: 'bg-term-green',
   muted: 'border border-status-idle'
 };
+
+/**
+ * A row's small button: a touch target on the phone, 24 px with a mouse. The negative margin keeps
+ * a one-line row at the control height, so a row with a button is no taller than one without.
+ */
+const ROW_ACTION =
+  'text-muted-foreground hover:text-foreground inline-flex size-11 shrink-0 items-center justify-center lg:-my-0.5 lg:size-6';
 
 export interface ExplorerTreeProps {
   nodes: ExplorerNode[];
@@ -182,6 +189,7 @@ export function ExplorerTree({
       const top = depth === 1;
       const heading = top && node.count !== undefined;
       const meta = top ? '' : metaLine(node, now);
+      const add = node.add;
       const name = [
         node.label,
         top ? node.detail : meta,
@@ -310,14 +318,6 @@ export function ExplorerTree({
                 ) : null}
               </span>
             )}
-            {node.count !== undefined ? (
-              <span
-                className="text-muted-foreground pl-xs shrink-0 text-xs tabular-nums"
-                aria-hidden="true"
-              >
-                {node.count}
-              </span>
-            ) : null}
             {node.ask ? (
               <button
                 type="button"
@@ -330,10 +330,41 @@ export function ExplorerTree({
                 }}
                 // A phone has no hover, so it stays visible there as a touch target. Desktop shows it on
                 // hover or while its row has keyboard focus.
-                className="text-muted-foreground hover:text-foreground inline-flex size-11 shrink-0 items-center justify-center lg:size-6 lg:opacity-0 lg:group-hover:opacity-100 lg:[li:focus-visible>div>&]:opacity-100"
+                className={cn(
+                  ROW_ACTION,
+                  'lg:opacity-0 lg:group-hover:opacity-100 lg:[li:focus-visible>div>&]:opacity-100'
+                )}
               >
                 <MessageSquarePlus className="size-3.5" aria-hidden="true" />
               </button>
+            ) : null}
+            {add ? (
+              // A heading's "+": always shown, since it is the only way to what it adds.
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label={add.label}
+                title={add.label}
+                data-testid="explorer-add"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOpen(add.target);
+                }}
+                className={ROW_ACTION}
+              >
+                <Plus className="size-3.5" aria-hidden="true" />
+              </button>
+            ) : null}
+            {/* The count is the row's last item, so every count in the tree ends on one right edge,
+                whether or not the row has a button before it. */}
+            {node.count !== undefined ? (
+              <span
+                data-testid="explorer-count"
+                className="text-muted-foreground pl-xs min-w-4 shrink-0 text-right text-xs tabular-nums"
+                aria-hidden="true"
+              >
+                {node.count}
+              </span>
             ) : null}
           </div>
           {open ? (
@@ -364,15 +395,16 @@ export function ExplorerTree({
   );
 }
 
-/** A row's menu: Open when it leads somewhere, Ask Mainloop when it has a prefill. */
+/** A row's menu: Open when it leads somewhere, Ask Mainloop when it has a prefill, and a heading's "+". */
 function actionsFor(
   node: ExplorerNode,
   onOpen: (target: Target) => void,
   onAsk: (text: string) => void
 ): RowMenuAction[] {
-  const { target, ask } = node;
+  const { target, ask, add } = node;
   return [
     ...(target ? [{ label: 'Open', run: () => onOpen(target) }] : []),
-    ...(ask ? [{ label: 'Ask Mainloop', run: () => onAsk(ask) }] : [])
+    ...(ask ? [{ label: 'Ask Mainloop', run: () => onAsk(ask) }] : []),
+    ...(add ? [{ label: add.label, run: () => onOpen(add.target) }] : [])
   ];
 }

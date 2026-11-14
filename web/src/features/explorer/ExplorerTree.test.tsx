@@ -326,6 +326,68 @@ describe('task identity on a row', () => {
   });
 });
 
+describe('the count and buttons on a row', () => {
+  const counted: ExplorerNode[] = [
+    {
+      id: 'projects',
+      label: 'Projects',
+      count: 1,
+      add: { label: 'Import a project', target: { to: 'import' } },
+      children: [
+        {
+          id: 'projects/p1',
+          label: 'acme/widgets',
+          count: 12,
+          target: { to: 'project', id: 'p1' },
+          ask: 'About project acme/widgets: ',
+          children: []
+        }
+      ]
+    }
+  ];
+
+  function renderCounted() {
+    const onOpen = vi.fn();
+    render(
+      <ExplorerTree
+        nodes={counted}
+        isExpanded={() => true}
+        onToggle={vi.fn()}
+        onOpen={onOpen}
+        onAsk={vi.fn()}
+      />
+    );
+    return { onOpen, user: userEvent.setup() };
+  }
+
+  it('ends every counted row with its count, so the counts share one right edge', () => {
+    renderCounted();
+    const counts = screen.getAllByTestId('explorer-count');
+    expect(counts.map((count) => count.textContent)).toEqual(['1', '12']);
+    for (const count of counts) {
+      // Nothing follows the count in its row: a row's buttons come before it.
+      expect(count.nextElementSibling).toBeNull();
+      expect(count).toHaveClass('tabular-nums', 'text-right');
+    }
+  });
+
+  it('opens what a heading adds from its "+", without folding the group', async () => {
+    const { onOpen, user } = renderCounted();
+    await user.click(screen.getByRole('button', { name: 'Import a project' }));
+    expect(onOpen).toHaveBeenCalledExactlyOnceWith({ to: 'import' });
+    expect(screen.getByRole('treeitem', { name: /acme\/widgets/ })).toBeInTheDocument();
+  });
+
+  it('offers what a heading adds in its row menu, for the keyboard', async () => {
+    const { onOpen, user } = renderCounted();
+    const heading = screen.getByRole('treeitem', { name: 'Projects, 1' });
+    act(() => heading.focus());
+    await user.keyboard('{Shift>}{F10}{/Shift}');
+    await user.click(await screen.findByRole('menuitem', { name: 'Import a project' }));
+    expect(onOpen).toHaveBeenCalledExactlyOnceWith({ to: 'import' });
+  });
+});
+
 describe('the status dot', () => {
   const dotNodes: ExplorerNode[] = (
     [
