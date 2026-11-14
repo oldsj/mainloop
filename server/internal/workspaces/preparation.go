@@ -50,8 +50,9 @@ const (
 // update both, and keep the harness image pins in step.
 //
 // Re-read 2026-11-11 at oldsj/kagent 7988e65b, the merge of #87 (the preparation port): unchanged
-// from the 0.4 line's (b785c99d, a1164013).
-const setupDigestsSource = "7988e65bf90aecd84d537e58dec585527e75942b"
+// from the 0.4 line's (b785c99d, a1164013). Re-read 2026-11-13 at 92061451, the merge of #107 (the
+// workspace service): unchanged, since go/api/workspace did not change.
+const setupDigestsSource = "92061451411ad848c79ab52de6e955d8c4a487d7"
 
 var setupDigests = map[string]string{
 	profileSupervisor: "c9b2c5bf815f6b0dd45ee11f02e343ab6a25d4ce39c93663e6feb25281cb87f6",

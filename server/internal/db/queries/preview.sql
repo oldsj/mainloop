@@ -6,7 +6,10 @@
 -- task's current one, the task is not final, and (for a code attempt) it still holds the branch's
 -- writer claim at the generation it was admitted with; a fenced, superseded or finished attempt, a
 -- final task and a lost claim no longer own it. This is a read, not a lock: the dial checks again.
-SELECT w.id, w.ports, b.kagent_session_id::text AS kagent_session_id
+-- declares_service says kagent starts a workspace service at every resume, so a closed port is
+-- most likely that service still starting.
+SELECT w.id, w.ports, b.kagent_session_id::text AS kagent_session_id,
+    cardinality(w.service_command) > 0 AS declares_service
 FROM workspaces w
 JOIN sessions s ON s.id = w.id
 JOIN agent_bindings b ON b.session_id = w.id

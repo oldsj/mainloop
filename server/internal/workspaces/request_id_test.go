@@ -51,7 +51,9 @@ func TestARepeatThatArrivesWhileTheCreateIsInFlightWaitsForIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.run()
-	h.svc.Config.Workspaces.OperationWait = config.Seconds(time.Second)
+	// The repeat returns as soon as the create settles; the bound only has to outlast a slow
+	// runner under -race, as the package's other waits do.
+	h.svc.Config.Workspaces.OperationWait = config.Seconds(5 * time.Second)
 	again, err := h.svc.CreateWithRequestID(bg, id, body)
 	if err != nil {
 		t.Fatal(err)

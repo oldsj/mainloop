@@ -57,7 +57,7 @@ func (q *Queries) BindWorkspaceSession(ctx context.Context, arg BindWorkspaceSes
 }
 
 const bumpWorkspace = `-- name: BumpWorkspace :one
-UPDATE workspaces SET updated_at = now() WHERE id = $1 RETURNING id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name, ports, idle_timeout_minutes, environment, git_read_decided, git_read_credential, git_push_decided, git_push_credential, request_id, last_active_at, idle_suspended_at, created_at, updated_at
+UPDATE workspaces SET updated_at = now() WHERE id = $1 RETURNING id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name, ports, idle_timeout_minutes, environment, git_read_decided, git_read_credential, git_push_decided, git_push_credential, request_id, last_active_at, idle_suspended_at, created_at, updated_at, service_command
 `
 
 func (q *Queries) BumpWorkspace(ctx context.Context, id string) (Workspace, error) {
@@ -86,6 +86,7 @@ func (q *Queries) BumpWorkspace(ctx context.Context, id string) (Workspace, erro
 		&i.IdleSuspendedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ServiceCommand,
 	)
 	return i, err
 }
@@ -316,7 +317,7 @@ func (q *Queries) GetWorkspaceAttemptRole(ctx context.Context, workspaceRequestI
 }
 
 const getWorkspaceByRequestID = `-- name: GetWorkspaceByRequestID :one
-SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
+SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, w.service_command, b.kagent_session_id, b.kagent_deleted_at
 FROM workspaces w
 JOIN agent_bindings b ON b.session_id = w.id
 WHERE w.request_id = $1 AND w.user_id = $2
@@ -350,6 +351,7 @@ type GetWorkspaceByRequestIDRow struct {
 	IdleSuspendedAt    *time.Time
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	ServiceCommand     []string
 	KagentSessionID    *string
 	KagentDeletedAt    *time.Time
 }
@@ -381,6 +383,7 @@ func (q *Queries) GetWorkspaceByRequestID(ctx context.Context, arg GetWorkspaceB
 		&i.IdleSuspendedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ServiceCommand,
 		&i.KagentSessionID,
 		&i.KagentDeletedAt,
 	)
@@ -424,7 +427,7 @@ func (q *Queries) GetWorkspaceEnvironmentVersion(ctx context.Context, projectID 
 }
 
 const getWorkspaceForOp = `-- name: GetWorkspaceForOp :one
-SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
+SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, w.service_command, b.kagent_session_id, b.kagent_deleted_at
 FROM workspaces w
 JOIN agent_bindings b ON b.session_id = w.id
 WHERE w.id = $1
@@ -453,6 +456,7 @@ type GetWorkspaceForOpRow struct {
 	IdleSuspendedAt    *time.Time
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	ServiceCommand     []string
 	KagentSessionID    *string
 	KagentDeletedAt    *time.Time
 }
@@ -484,6 +488,7 @@ func (q *Queries) GetWorkspaceForOp(ctx context.Context, id string) (GetWorkspac
 		&i.IdleSuspendedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ServiceCommand,
 		&i.KagentSessionID,
 		&i.KagentDeletedAt,
 	)
@@ -603,7 +608,7 @@ func (q *Queries) GetWorkspacePushReservation(ctx context.Context, workspaceID s
 }
 
 const getWorkspaceRow = `-- name: GetWorkspaceRow :one
-SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
+SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, w.service_command, b.kagent_session_id, b.kagent_deleted_at
 FROM workspaces w
 JOIN sessions s ON s.id = w.id
 JOIN agent_bindings b ON b.session_id = w.id
@@ -638,6 +643,7 @@ type GetWorkspaceRowRow struct {
 	IdleSuspendedAt    *time.Time
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	ServiceCommand     []string
 	KagentSessionID    *string
 	KagentDeletedAt    *time.Time
 }
@@ -669,6 +675,7 @@ func (q *Queries) GetWorkspaceRow(ctx context.Context, arg GetWorkspaceRowParams
 		&i.IdleSuspendedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ServiceCommand,
 		&i.KagentSessionID,
 		&i.KagentDeletedAt,
 	)
@@ -679,9 +686,9 @@ const insertWorkspace = `-- name: InsertWorkspace :one
 
 INSERT INTO workspaces (
     id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name,
-    ports, idle_timeout_minutes, environment, request_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-RETURNING id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name, ports, idle_timeout_minutes, environment, git_read_decided, git_read_credential, git_push_decided, git_push_credential, request_id, last_active_at, idle_suspended_at, created_at, updated_at
+    ports, idle_timeout_minutes, environment, request_id, service_command
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+RETURNING id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name, ports, idle_timeout_minutes, environment, git_read_decided, git_read_credential, git_push_decided, git_push_credential, request_id, last_active_at, idle_suspended_at, created_at, updated_at, service_command
 `
 
 type InsertWorkspaceParams struct {
@@ -699,6 +706,7 @@ type InsertWorkspaceParams struct {
 	IdleTimeoutMinutes int32
 	Environment        json.RawMessage
 	RequestID          string
+	ServiceCommand     []string
 }
 
 // Workspaces and their lifecycle operations. Session and binding rows come from core.sql.
@@ -718,6 +726,7 @@ func (q *Queries) InsertWorkspace(ctx context.Context, arg InsertWorkspaceParams
 		arg.IdleTimeoutMinutes,
 		arg.Environment,
 		arg.RequestID,
+		arg.ServiceCommand,
 	)
 	var i Workspace
 	err := row.Scan(
@@ -743,6 +752,7 @@ func (q *Queries) InsertWorkspace(ctx context.Context, arg InsertWorkspaceParams
 		&i.IdleSuspendedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ServiceCommand,
 	)
 	return i, err
 }
@@ -1089,7 +1099,7 @@ func (q *Queries) ListUnsettledWorkspacePushReservations(ctx context.Context, li
 }
 
 const listWorkspaceRows = `-- name: ListWorkspaceRows :many
-SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
+SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, w.service_command, b.kagent_session_id, b.kagent_deleted_at
 FROM workspaces w
 JOIN sessions s ON s.id = w.id
 JOIN agent_bindings b ON b.session_id = w.id
@@ -1120,6 +1130,7 @@ type ListWorkspaceRowsRow struct {
 	IdleSuspendedAt    *time.Time
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	ServiceCommand     []string
 	KagentSessionID    *string
 	KagentDeletedAt    *time.Time
 }
@@ -1156,6 +1167,7 @@ func (q *Queries) ListWorkspaceRows(ctx context.Context, userID string) ([]ListW
 			&i.IdleSuspendedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ServiceCommand,
 			&i.KagentSessionID,
 			&i.KagentDeletedAt,
 		); err != nil {

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -32,8 +33,18 @@ type hop struct {
 
 type hopKey struct{}
 
-func withHop(ctx context.Context, h Host) context.Context {
-	return context.WithValue(ctx, hopKey{}, hop{h.WorkspaceID, h.Port})
+// serviceKey marks a request to a workspace that declared a workspace service when the request
+// was admitted.
+type serviceKey struct{}
+
+func withHop(ctx context.Context, h Host, service bool) context.Context {
+	ctx = context.WithValue(ctx, hopKey{}, hop{h.WorkspaceID, h.Port})
+	return context.WithValue(ctx, serviceKey{}, service)
+}
+
+func declaresService(ctx context.Context) bool {
+	service, _ := ctx.Value(serviceKey{}).(bool)
+	return service
 }
 
 // wakingError is a tunnel that could not be opened, before any byte of the request was sent, so
@@ -133,7 +144,12 @@ func (p *Proxy) proxyError(w http.ResponseWriter, r *http.Request, err error) {
 		refuse(w, http.StatusNotFound, "Workspace no longer admits preview")
 	case errors.As(err, &waking):
 		p.Log.InfoContext(r.Context(), "preview tunnel not ready", "error", waking.err)
-		wakingPage(w)
+		wakingPage(w, declaresService(r.Context()))
+	case declaresService(r.Context()) && safeMethod(r.Method) && closedBeforeResponse(err):
+		// The router opened the tunnel but nothing answered on the port: the declared service is
+		// not listening yet. A safe request has no outcome to lose.
+		p.Log.InfoContext(r.Context(), "preview service not answering", "error", err)
+		wakingPage(w, true)
 	case errors.Is(err, context.Canceled):
 		// The client went away; there is nobody to answer.
 		w.WriteHeader(499)
@@ -144,17 +160,30 @@ func (p *Proxy) proxyError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
+// closedBeforeResponse reports an upstream that closed or reset the connection before sending a
+// response.
+func closedBeforeResponse(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
+}
+
 // dial opens a CONNECT tunnel through the router to the workspace's actor. It re-resolves the
 // owner, Session and port on every attempt, and retries a router refusal once (the actor may
 // still be waking): nothing of the request has been sent at that point, so a retry cannot
-// duplicate application work.
+// duplicate application work. For a workspace that declares a service, which kagent starts at
+// every resume, it keeps retrying with backoff for ServiceHold, so a page load that wakes the
+// workspace waits for the service instead of failing at once.
 func (p *Proxy) dial(ctx context.Context, _, addr string) (net.Conn, error) {
 	h, ok := parseHop(addr)
 	if !ok {
 		return nil, fmt.Errorf("preview: unexpected dial address %q", addr)
 	}
+	hold := time.Time{}
+	if declaresService(ctx) {
+		hold = p.now().Add(p.ServiceHold)
+	}
+	delay := serviceRetryMin
 	var last error
-	for range 2 {
+	for attempt := 0; ; attempt++ {
 		conn, err := p.tunnel(ctx, h)
 		if err == nil {
 			return conn, nil
@@ -163,8 +192,19 @@ func (p *Proxy) dial(ctx context.Context, _, addr string) (net.Conn, error) {
 			return nil, err
 		}
 		last = err
+		if attempt == 0 {
+			continue
+		}
+		if !p.now().Add(delay).Before(hold) {
+			return nil, &wakingError{last}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+		delay = min(2*delay, serviceRetryMax)
 	}
-	return nil, &wakingError{last}
 }
 
 func parseHop(addr string) (hop, bool) {

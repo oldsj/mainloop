@@ -24,6 +24,10 @@ The owner's per-project **instructions** for agents are edited in the Instructio
 under Settings, and carried in every task brief of the project. See
 [project context](project-context.md#on-the-project-page).
 
+A project can declare a **workspace service**, a development server kagent keeps running in each
+of its workspaces across sleep, with `GET`/`PUT /projects/{id}/workspace-service`. API only for
+now. See [workspaces](workspaces.md#workspace-service).
+
 Project detail lists unarchived project sessions and excludes bindings with the `main` role.
 Unbound sessions remain visible.
 

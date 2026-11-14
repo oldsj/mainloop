@@ -671,6 +671,10 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 		return plan{}, err
 	}
 	id := uuid.NewString()
+	service, err := serviceCommand(project.WorkspaceServiceCommand, s.Config.Preview.BaseURL, id, ports)
+	if err != nil {
+		return plan{}, &InvalidError{err.Error()}
+	}
 	return plan{
 		id: id, kind: kind, project: project, repoURL: project.HTMLURL, ref: ref, branch: branch,
 		insert: dbq.InsertWorkspaceParams{
@@ -678,6 +682,7 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 			Branch: branch, Depth: int32(depth), AgentKind: kind, AgentNamespace: agent.Namespace, AgentName: agent.Name,
 			Ports:              portJSON,
 			IdleTimeoutMinutes: int32(idle), Environment: env, RequestID: uuid.NewString(),
+			ServiceCommand: service,
 		},
 	}, nil
 }

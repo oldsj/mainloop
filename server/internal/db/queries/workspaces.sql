@@ -3,8 +3,8 @@
 -- name: InsertWorkspace :one
 INSERT INTO workspaces (
     id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name,
-    ports, idle_timeout_minutes, environment, request_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    ports, idle_timeout_minutes, environment, request_id, service_command
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 RETURNING *;
 
 -- name: GetWorkspaceRow :one

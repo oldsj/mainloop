@@ -365,7 +365,9 @@ func (w wsRow) createRequest() *kagentapi.CreateSessionRequest {
 	req := &kagentapi.CreateSessionRequest{
 		Agent:     &kagentapi.ResourceReference{Namespace: w.AgentNamespace, Name: w.AgentName},
 		RequestId: w.RequestID,
-		Workspace: &kagentapi.Workspace{Repo: w.RepoURL, Ref: w.Ref, Branch: w.Branch, Depth: w.Depth},
+		Workspace: &kagentapi.Workspace{
+			Repo: w.RepoURL, Ref: w.Ref, Branch: w.Branch, Depth: w.Depth, ServiceCommand: w.ServiceCommand,
+		},
 	}
 	if e := w.environment(); e != nil {
 		req.DevelopmentEnvironment = &kagentapi.DevelopmentEnvironment{

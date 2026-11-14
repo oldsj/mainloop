@@ -645,6 +645,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/projects/{project_id}/workspace-service': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Project Workspace Service
+     * @description The argv of the project's workspace service, a long-running process such as a development server. kagent starts it in the checkout at every start and resume of a workspace's runtime, so it is running again when a suspended workspace wakes. Empty declares none.
+     */
+    get: operations['getProjectWorkspaceService'];
+    /**
+     * Set Project Workspace Service
+     * @description Set the argv of the project's workspace service. Workspaces created afterwards run it; existing workspaces keep the command they were created with. An empty command declares none. Owner-only, Mainloop-side configuration, never read from the project's repository.
+     */
+    put: operations['updateProjectWorkspaceService'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/projects/{project_id}/environment': {
     parameters: {
       query?: never;
@@ -2129,6 +2153,14 @@ export interface components {
     /** ProjectVerificationUpdate */
     ProjectVerificationUpdate: {
       mode: components['schemas']['VerificationMode'];
+    };
+    /** WorkspaceService */
+    WorkspaceService: {
+      /**
+       * Command
+       * @description argv of the service; the first element is resolved through PATH in the workspace's environment. Empty declares no service. A workspace runs it through env(1) with MAINLOOP_WORKSPACE_ID and MAINLOOP_PREVIEW_URLS (`<port>=<url>` per declared port, comma-separated) set, which is why it takes at most 61 arguments.
+       */
+      command: string[];
     };
     /**
      * VerificationMode
@@ -7622,6 +7654,101 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ProjectVerification'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Request Entity Too Large */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  getProjectWorkspaceService: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WorkspaceService'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  updateProjectWorkspaceService: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['WorkspaceService'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WorkspaceService'];
         };
       };
       /** @description Not Found */
