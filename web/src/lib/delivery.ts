@@ -55,6 +55,21 @@ export function deliveryNotices(deliveries: NativeDelivery[]): Map<string, Deliv
   return notices;
 }
 
+/**
+ * The newest delivery when kagent refused it: it failed with an A2A error (`-32004` for a native
+ * session that accepts no input, for one), so the agent never saw it. Retrying sends a new message
+ * that the same native session refuses again; restarting the session replaces it. A delivery that
+ * failed because kagent did not answer at all is not a refusal.
+ */
+export function refusedDelivery(deliveries: NativeDelivery[]): NativeDelivery | undefined {
+  const last = deliveries.at(-1);
+  if (last?.state !== 'failed') return undefined;
+  const detail = last.detail ?? '';
+  return detail.startsWith('not sent: A2A error ') || detail.startsWith('send rejected: A2A error ')
+    ? last
+    : undefined;
+}
+
 /** The thread's status. A failed or unconfirmed last delivery is never shown as ready or working. */
 export function threadStatus(opts: {
   offline: boolean;

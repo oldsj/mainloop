@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
+import { refusedDelivery } from '@/lib/delivery';
 import type { ThreadView } from './useThread';
 
 export interface TurnRecoveryProps {
@@ -25,15 +26,28 @@ const BUTTON =
  * next event clears it. When the thread can be restarted, a stalled turn or one whose stop failed
  * also offers restart. Restarting asks first, in the app, because the native context is lost: the
  * open turn ends as failed and is not resent, and queued messages run on a new native session that
- * carries the recent conversation. Nothing here retries or replays anything on its own.
+ * carries the recent conversation. With no turn in flight, a restartable thread whose newest message
+ * kagent refused (its native session accepts no input) offers restart too: retrying would only be
+ * refused again. Nothing here retries or replays anything on its own.
  */
 export function TurnRecovery({ thread, offline, now = Date.now }: TurnRecoveryProps) {
   const [confirm, setConfirm] = useState(false);
+  // The refused message a restart was confirmed for: the restart leaves that failed delivery as it
+  // is, so this keeps the offer from coming back for it.
+  const [restartedFor, setRestartedFor] = useState<string | null>(null);
   const stall = thread.native?.stalled_turn ?? null;
   const canRestart = thread.restartable;
-  if (!thread.busy) return null;
+  const refused = refusedDelivery(thread.native?.deliveries ?? []);
+  const idleRefused =
+    !thread.busy &&
+    canRestart &&
+    refused !== undefined &&
+    (refused.message_id !== restartedFor || thread.restartError !== null);
+  if (!thread.busy && !idleRefused) return null;
   let why: string;
-  if (stall) {
+  if (idleRefused) {
+    why = 'The agent’s session is not accepting messages, so a retry would be refused too.';
+  } else if (stall) {
     const minutes = quietMinutes(stall.last_activity_at, now());
     why = `No activity for ${minutes}m${stall.tool_running ? ' while a tool runs' : ''}. It may still finish.`;
   } else if (thread.stopError && canRestart) {
@@ -91,6 +105,7 @@ export function TurnRecovery({ thread, offline, now = Date.now }: TurnRecoveryPr
         pending={thread.restarting}
         onConfirm={() => {
           thread.restart();
+          if (idleRefused) setRestartedFor(refused.message_id);
           setConfirm(false);
         }}
       />
