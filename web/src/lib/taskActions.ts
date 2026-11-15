@@ -120,7 +120,15 @@ const REASON_MESSAGES: Record<string, string> = {
   task_not_found: 'Task not found.',
   inherited_provider_constraint:
     'The owner’s provider choice for this task cannot be changed here.',
-  inactive_principal: 'This session is no longer authorized for the task.'
+  inactive_principal: 'This session is no longer authorized for the task.',
+  operation_pending: 'Another action on this task is in progress. Try again when it settles.',
+  task_settling: 'The task is still stopping its last attempt. Try again in a moment.',
+  task_not_running: 'The task has no attempt yet. Try again once it starts.',
+  task_terminal: 'This task has ended.',
+  parent_not_active: 'The parent task has ended, so this task cannot start again.',
+  child_capacity: 'The parent task is at its limit of open children.',
+  handoff_limit:
+    'This task has been retried or reassigned as often as agents may. The owner decides.'
 };
 
 function providerMessage(code: string): string | undefined {

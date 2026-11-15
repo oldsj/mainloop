@@ -62,8 +62,8 @@ An ops request is a coordination task. Once the agent reports and the task compl
 (the task page's "Follow up" box) or main (`follow_up`) can send it another message: the task
 reopens on the same native session, with the earlier conversation intact (see
 [tasks](tasks.md#follow-up)). A task whose kagent Session is gone is refused rather than given a
-fresh Session without the context. Retry and reassign are still unavailable
-(`handoff_unavailable`).
+fresh Session without the context; a [retry](task-handoff.md) starts the task again in a new
+session, with the last report in its brief.
 
 ## Not yet built (slice 2, designed)
 

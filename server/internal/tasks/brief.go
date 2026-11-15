@@ -50,7 +50,8 @@ func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief, proj
 
 // attemptBrief renders the brief an attempt's agent receives. A task with a project carries the
 // project's instructions and active memory as of the version and memory sequence pinned on the
-// attempt by its first render, so a resend of the brief carries the same text.
+// attempt by its first render, so a resend of the brief carries the same text. A retry's or
+// reassign's attempt also gets a continuation note after the brief; see [continuation].
 func attemptBrief(ctx context.Context, q *dbq.Queries, a dbq.TaskAttempt, t dbq.Task) (string, error) {
 	project := ""
 	if t.ProjectID != nil {
@@ -70,5 +71,11 @@ func attemptBrief(ctx context.Context, q *dbq.Queries, a dbq.TaskAttempt, t dbq.
 			project += m
 		}
 	}
-	return DelegatedBrief(a.Role, t.Mode, t.Brief, project), nil
+	brief := t.Brief
+	if note, err := continuation(ctx, q, a); err != nil {
+		return "", err
+	} else if note != "" {
+		brief += "\n\n" + note
+	}
+	return DelegatedBrief(a.Role, t.Mode, brief, project), nil
 }

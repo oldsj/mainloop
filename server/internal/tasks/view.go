@@ -190,8 +190,9 @@ func toReport(r dbq.TaskReport) api.TaskReport {
 	}
 }
 
-// eligibility is what the owner may ask for next. Retry and reassign wait for the handoff
-// stack, so they are never available here; cancel is available until the task is final.
+// eligibility is what the owner may ask for next. Cancel is available until the task is final.
+// Retry and reassign are offered on a coordination task with an attempt that is running, waiting,
+// blocked or failed, and not already in a handoff; a code task's wait for the branch handoff.
 func eligibility(t dbq.Task) map[string]api.TaskEligibility {
 	unavailable := func(r api.TaskEligibilityReason) api.TaskEligibility {
 		return api.TaskEligibility{Reason: &r}
@@ -201,6 +202,13 @@ func eligibility(t dbq.Task) map[string]api.TaskEligibility {
 		cancel = unavailable(api.TaskEligibilityReason(dbstate.ReasonCancelUnavailable))
 	}
 	handoff := unavailable(api.TaskEligibilityReason(dbstate.ReasonHandoffUnavailable))
+	if t.Mode == dbstate.TaskModeCoordination && t.CurrentAttemptID != nil &&
+		(t.Reason == nil || *t.Reason != dbstate.ReasonHandoff) {
+		switch t.Status {
+		case dbstate.TaskRunning, dbstate.TaskWaiting, dbstate.TaskBlocked, dbstate.TaskFailed:
+			handoff = api.TaskEligibility{Available: true}
+		}
+	}
 	// A follow-up goes to the task's own session: not before it has one, and not after an owner's
 	// cancel, a failure (retried instead) or a code task's merge (more work is a new task).
 	followUp := api.TaskEligibility{Available: true}

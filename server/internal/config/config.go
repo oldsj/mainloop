@@ -126,6 +126,9 @@ type Tasks struct {
 	ReconcileInterval        Seconds `env:"TASK_RECONCILE_SECONDS" envDefault:"5"`
 	// ProvisionWindow is how long a new attempt may wait for its workspace before it is aborted.
 	ProvisionWindow Seconds `env:"TASK_PROVISION_WINDOW_SECONDS" envDefault:"900"`
+	// MaxHandoffs is how many retries and reassigns main and supervisors may make of one task. The
+	// owner decides after that.
+	MaxHandoffs int `env:"TASK_MAX_HANDOFFS" envDefault:"3"`
 	// ProjectionEvery is how often the GitHub observation of code tasks runs.
 	ProjectionEvery Seconds `env:"TASK_PROJECTION_SECONDS" envDefault:"60"`
 	// StallTimeout is how long a running task's attempt may show no activity before the liveness
@@ -438,6 +441,9 @@ func (c *Config) validate() error {
 	}
 	if c.Tasks.MaxChildrenPerParent < 1 || c.Tasks.MaxChildrenGlobal < 1 {
 		fail("TASK_MAX_CHILDREN_PER_PARENT and TASK_MAX_CHILDREN_GLOBAL must be at least 1")
+	}
+	if c.Tasks.MaxHandoffs < 1 {
+		fail("TASK_MAX_HANDOFFS must be at least 1")
 	}
 	if !validProviderID(c.Tasks.DefaultProviderProfileID) {
 		fail("TASK_DEFAULT_PROVIDER_PROFILE_ID must match ^[a-z][a-z0-9_-]*$")

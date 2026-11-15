@@ -175,9 +175,9 @@ WHERE kind = 'create' AND target_attempt_id = $1 AND state IN ('target_creating'
 INSERT INTO task_attempts (
     id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name,
     role, depth, writer_generation, initial_ref, session_id, binding_id, workspace_id, workspace_request_id,
-    model, effort
+    model, effort, predecessor_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, sqlc.narg(predecessor_id)
 )
 RETURNING *;
 
@@ -726,3 +726,39 @@ WHERE session_id = $1 AND state IN ('queued', 'recorded', 'sending', 'delivered'
 -- name: RestartAttemptRuntime :exec
 -- The owner's follow-up to a task blocked on its runtime bound starts the bound again.
 UPDATE task_attempts SET reopened_at = now(), updated_at = now() WHERE id = $1;
+
+-- name: SupersedeAttempt :one
+-- A retry or reassign links the attempt it replaces to the successor, in the transaction that makes
+-- the successor. A fenced attempt (stopped for the handoff) becomes superseded; one that had already
+-- ended keeps its final state. Either way a follow-up never reopens it again.
+UPDATE task_attempts
+SET successor_id = sqlc.arg(successor_id), superseded_at = now(), updated_at = now(),
+    state = CASE WHEN state = 'fenced' THEN 'superseded' ELSE state END
+WHERE id = sqlc.arg(id) AND successor_id IS NULL
+  AND state IN ('fenced', 'failed', 'cancelled', 'completed')
+RETURNING *;
+
+-- name: CountTaskHandoffs :one
+-- Retries and reassigns that made a successor attempt.
+SELECT count(*) FROM task_attempts WHERE task_id = $1 AND predecessor_id IS NOT NULL;
+
+-- name: SetTaskProfile :one
+-- A reassign moves the task to its new provider. The model and effort were checked against the old
+-- provider, so they go back to the new provider's defaults. The caller bumps the version in the same
+-- transaction.
+UPDATE tasks
+SET assigned_profile_id = $2, selection_source = 'explicit', model = NULL, effort = NULL, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ReopenFailedTask :one
+-- A retry or reassign of a failed task reopens it, waiting on the handoff. Only that path calls it;
+-- the task state machine never leaves a final status otherwise.
+UPDATE tasks
+SET status = 'waiting', reason = 'handoff', decision_attempt_id = NULL, decision_report_id = NULL,
+    decision_action = NULL, version = version + 1, updated_at = now()
+WHERE id = $1 AND version = $2 AND status = 'failed'
+RETURNING *;
+
+-- name: LatestAttemptReport :one
+SELECT * FROM task_reports WHERE attempt_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1;

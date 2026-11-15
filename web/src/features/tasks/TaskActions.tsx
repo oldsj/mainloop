@@ -151,7 +151,7 @@ export function TaskActions({
 
   const retry = gate('retry');
   const cancel = gate('cancel');
-  // Retry and reassign need the provider handoff. While the server reports it unavailable, the
+  // A code task's retry and reassign wait for the branch handoff. While the server reports it unavailable, the
   // owner sees no control for them and no note about why: a control that cannot work is not shown,
   // and how the server is built is not the owner's concern.
   const retryHidden = view.actions.retry?.reason === 'handoff_unavailable';

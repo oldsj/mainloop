@@ -67,16 +67,17 @@ func (s *Service) Register(r *reconcile.Runner) {
 	r.AddSweep(s.HoldSweep())
 }
 
-// OpTable is the table of operations the loop drives. Retry and reassign operations are recorded
-// blocked and never reach it.
+// OpTable is the table of operations the loop drives. A code task's retry or reassign is recorded
+// blocked and never reaches it.
 func OpTable() reconcile.Table {
 	return reconcile.NewTable("task_operations",
 		string(dbstate.TaskOpRequested), string(dbstate.TaskOpDraining), string(dbstate.TaskOpSourceFencing),
 		string(dbstate.TaskOpSourceFenced), string(dbstate.TaskOpTargetCreating), string(dbstate.TaskOpTargetReady))
 }
 
-// OpLoop drives create and cancel operations: provisioning of a new attempt, and the drain, fence
-// and final steps of a cancel. It needs Workspaces and Sessions.
+// OpLoop drives create, cancel and handoff operations: provisioning of a new attempt, the drain,
+// fence and final steps of a cancel, and a retry or reassign's stop of the old attempt and
+// provisioning of its successor. It needs Workspaces and Sessions.
 func (s *Service) OpLoop() reconcile.Loop {
 	return reconcile.Loop{
 		Name: "task-operations", Table: OpTable(), Handle: s.handleOp,
@@ -131,6 +132,8 @@ func (s *Service) handleOp(ctx context.Context, c reconcile.Claim) (reconcile.Ou
 		out, err = s.driveCreate(ctx, c, op)
 	case dbstate.TaskOpCancel:
 		out, err = s.driveCancel(ctx, c, op)
+	case dbstate.TaskOpRetry, dbstate.TaskOpReassign:
+		out, err = s.driveHandoff(ctx, c, op)
 	default:
 		return reconcile.Done(string(dbstate.TaskOpBlocked)), nil
 	}
@@ -200,7 +203,6 @@ func bindingRole(shape attemptShape) dbstate.BindingRole {
 // in one transaction. Nothing outside the database has been touched, so a crash leaves either
 // nothing or all of it.
 func (s *Service) beginCreate(ctx context.Context, c reconcile.Claim, op dbq.TaskOperation) (reconcile.Outcome, error) {
-	var held bool
 	err := s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
 		t, err := q.GetTaskByIDForUpdate(ctx, *op.TaskID)
 		if err != nil {
@@ -223,60 +225,8 @@ func (s *Service) beginCreate(ctx context.Context, c reconcile.Claim, op dbq.Tas
 				return []events.Draft{s.updated(after)}, advance(ctx, q, c, op, dbstate.TaskOpBlocked, nil, nil)
 			}
 		}
-		shape := shapeOf(t)
-		prof, err := s.Providers.Resolve(t.AssignedProfileID, agentKey(shape, t.Mode), false)
+		att, err := s.insertAttempt(ctx, q, t, nil)
 		if err != nil {
-			return nil, err
-		}
-		agent, err := agentOf(prof, shape, t.Mode)
-		if err != nil {
-			return nil, err
-		}
-		number, err := q.NextAttemptNumber(ctx, t.ID)
-		if err != nil {
-			return nil, err
-		}
-		a := dbq.InsertTaskAttemptParams{
-			ID: uuid.NewString(), TaskID: t.ID, Number: number, ProfileID: prof.ID,
-			NativeProvider: dbstate.NativeProvider(prof.NativeProvider), ConfigurationRevision: prof.ConfigurationRevision,
-			AgentNamespace: agent.Namespace, AgentName: agent.Name, Role: shape.role, Depth: shape.depth,
-			Model: t.Model, Effort: t.Effort,
-		}
-		var repo string
-		if t.Mode == dbstate.TaskModeCode {
-			if t.ProjectID == nil || t.CheckoutBranch == nil {
-				return nil, errors.New("tasks: a code task has no project or branch")
-			}
-			full, err := q.GetProjectFullName(ctx, *t.ProjectID)
-			if err != nil {
-				return nil, err
-			}
-			repo = strings.ToLower(full)
-			a.InitialRef = t.CheckoutRef
-			a.WorkspaceRequestID = ptr(workspaceRequestID(a.ID))
-		} else {
-			id := uuid.NewString()
-			a.SessionID, a.BindingID = &id, &id
-		}
-		att, err := q.InsertTaskAttempt(ctx, a)
-		if err != nil {
-			return nil, err
-		}
-		if t.Mode == dbstate.TaskModeCode {
-			gen, err := q.ClaimTaskWriter(ctx, dbq.ClaimTaskWriterParams{
-				OwnerID: t.OwnerID, Repository: repo, Branch: *t.CheckoutBranch, AttemptID: &att.ID,
-			})
-			if errors.Is(err, pgx.ErrNoRows) {
-				held = true
-				return nil, errWriterHeld
-			}
-			if err != nil {
-				return nil, err
-			}
-			if err := q.SetAttemptWriterGeneration(ctx, dbq.SetAttemptWriterGenerationParams{ID: att.ID, WriterGeneration: &gen}); err != nil {
-				return nil, err
-			}
-		} else if err := s.createCoordinationSession(ctx, q, t, att, prof); err != nil {
 			return nil, err
 		}
 		reason := dbstate.ReasonProvisioningUnavailable
@@ -288,8 +238,8 @@ func (s *Service) beginCreate(ctx context.Context, c reconcile.Claim, op dbq.Tas
 		}
 		return []events.Draft{s.updated(after)}, advance(ctx, q, c, op, dbstate.TaskOpTargetCreating, nil, &att.ID)
 	})
-	if errors.Is(err, errWriterHeld) && held {
-		return s.waitForBranch(ctx, c, op)
+	if errors.Is(err, errWriterHeld) {
+		return s.waitForSlot(ctx, c, op)
 	}
 	if err != nil {
 		return reconcile.Outcome{}, err
@@ -297,9 +247,73 @@ func (s *Service) beginCreate(ctx context.Context, c reconcile.Claim, op dbq.Tas
 	return reconcile.Recorded(), nil
 }
 
-// waitForBranch is a create whose branch has a writer already. It tries again until the
-// provisioning window ends, then fails the task.
-func (s *Service) waitForBranch(ctx context.Context, c reconcile.Claim, op dbq.TaskOperation) (reconcile.Outcome, error) {
+// insertAttempt records a new attempt of the task t, which the caller holds locked, on the task's
+// assigned profile: its writer claim (code) or its session and binding (coordination). predecessor
+// is the attempt a retry or reassign replaces. It returns errWriterHeld when another attempt holds
+// the task branch.
+func (s *Service) insertAttempt(ctx context.Context, q *dbq.Queries, t dbq.Task, predecessor *string) (dbq.TaskAttempt, error) {
+	shape := shapeOf(t)
+	prof, err := s.Providers.Resolve(t.AssignedProfileID, agentKey(shape, t.Mode), false)
+	if err != nil {
+		return dbq.TaskAttempt{}, err
+	}
+	agent, err := agentOf(prof, shape, t.Mode)
+	if err != nil {
+		return dbq.TaskAttempt{}, err
+	}
+	number, err := q.NextAttemptNumber(ctx, t.ID)
+	if err != nil {
+		return dbq.TaskAttempt{}, err
+	}
+	a := dbq.InsertTaskAttemptParams{
+		ID: uuid.NewString(), TaskID: t.ID, Number: number, ProfileID: prof.ID,
+		NativeProvider: dbstate.NativeProvider(prof.NativeProvider), ConfigurationRevision: prof.ConfigurationRevision,
+		AgentNamespace: agent.Namespace, AgentName: agent.Name, Role: shape.role, Depth: shape.depth,
+		Model: t.Model, Effort: t.Effort, PredecessorID: predecessor,
+	}
+	var repo string
+	if t.Mode == dbstate.TaskModeCode {
+		if t.ProjectID == nil || t.CheckoutBranch == nil {
+			return dbq.TaskAttempt{}, errors.New("tasks: a code task has no project or branch")
+		}
+		full, err := q.GetProjectFullName(ctx, *t.ProjectID)
+		if err != nil {
+			return dbq.TaskAttempt{}, err
+		}
+		repo = strings.ToLower(full)
+		a.InitialRef = t.CheckoutRef
+		a.WorkspaceRequestID = ptr(workspaceRequestID(a.ID))
+	} else {
+		id := uuid.NewString()
+		a.SessionID, a.BindingID = &id, &id
+	}
+	att, err := q.InsertTaskAttempt(ctx, a)
+	if err != nil {
+		return dbq.TaskAttempt{}, err
+	}
+	if t.Mode == dbstate.TaskModeCode {
+		gen, err := q.ClaimTaskWriter(ctx, dbq.ClaimTaskWriterParams{
+			OwnerID: t.OwnerID, Repository: repo, Branch: *t.CheckoutBranch, AttemptID: &att.ID,
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return dbq.TaskAttempt{}, errWriterHeld
+		}
+		if err != nil {
+			return dbq.TaskAttempt{}, err
+		}
+		if err := q.SetAttemptWriterGeneration(ctx, dbq.SetAttemptWriterGenerationParams{ID: att.ID, WriterGeneration: &gen}); err != nil {
+			return dbq.TaskAttempt{}, err
+		}
+	} else if err := s.createCoordinationSession(ctx, q, t, att, prof); err != nil {
+		return dbq.TaskAttempt{}, err
+	}
+	return att, nil
+}
+
+// waitForSlot is a create or handoff that cannot make its attempt yet: the branch has a writer
+// already, or the parent has no free child slot. It tries again until the provisioning window ends,
+// then fails the task.
+func (s *Service) waitForSlot(ctx context.Context, c reconcile.Claim, op dbq.TaskOperation) (reconcile.Outcome, error) {
 	if s.now().Sub(op.CreatedAt) < s.Limits.ProvisionWindow {
 		return reconcile.RetryAfter(10 * time.Second), nil
 	}

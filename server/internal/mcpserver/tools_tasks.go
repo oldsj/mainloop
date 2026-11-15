@@ -16,7 +16,7 @@ import (
 )
 
 // taskTools are the tools of the task domain: delegate, report, task_get, task_history,
-// task_list and task_cancel. They record and read durable task state; provisioning an attempt and
+// task_list, task_cancel, task_retry and task_reassign. They record and read durable task state; provisioning an attempt and
 // delivering a report are the reconciler's work, not these handlers'.
 func (s *Server) taskTools() []Tool {
 	id := stringSchema(1, 100)
@@ -103,6 +103,35 @@ func (s *Server) taskTools() []Tool {
 				"task_id":             id,
 			}, "request_id", "expected_version", "expected_attempt_id", "task_id"),
 			Handle: s.taskCancel,
+		},
+		{
+			Name: agentauth.ToolTaskRetry,
+			Description: "Retry a managed coordination task using its current version/attempt: Mainloop stops its attempt " +
+				"and starts a new one on the same provider, in a new session briefed with the task's brief and the old " +
+				"attempt's last report. Works on a running, waiting, blocked or failed task; a supervisor's open children " +
+				"are cancelled with it. To keep the agent's context, use follow_up instead. Main and supervisors may " +
+				"retry or reassign a task a limited number of times (handoff_limit); then the owner decides. " +
+				"Reuse request_id to retry the call.",
+			InputSchema: objectSchema(map[string]any{
+				"request_id":          id,
+				"expected_version":    map[string]any{"type": "integer", "minimum": 1},
+				"expected_attempt_id": nullable(stringSchema(1, 100)),
+				"task_id":             id,
+			}, "request_id", "expected_version", "expected_attempt_id", "task_id"),
+			Handle: s.taskRetry,
+		},
+		{
+			Name: agentauth.ToolTaskReassign,
+			Description: "Like task_retry, but the new attempt runs on another provider profile (target_profile_id), " +
+				"which becomes the task's provider.",
+			InputSchema: objectSchema(map[string]any{
+				"request_id":          id,
+				"expected_version":    map[string]any{"type": "integer", "minimum": 1},
+				"expected_attempt_id": nullable(stringSchema(1, 100)),
+				"task_id":             id,
+				"target_profile_id":   id,
+			}, "request_id", "expected_version", "expected_attempt_id", "task_id", "target_profile_id"),
+			Handle: s.taskReassign,
 		},
 		{
 			Name: agentauth.ToolTaskHold,
@@ -465,11 +494,27 @@ func (s *Server) taskList(ctx context.Context, a agentauth.Actor, args json.RawM
 }
 
 func (s *Server) taskCancel(ctx context.Context, a agentauth.Actor, args json.RawMessage) (Result, error) {
+	return s.taskAction(ctx, a, args, s.Tasks.Cancel)
+}
+
+func (s *Server) taskRetry(ctx context.Context, a agentauth.Actor, args json.RawMessage) (Result, error) {
+	return s.taskAction(ctx, a, args, s.Tasks.Retry)
+}
+
+func (s *Server) taskReassign(ctx context.Context, a agentauth.Actor, args json.RawMessage) (Result, error) {
+	return s.taskAction(ctx, a, args, s.Tasks.Reassign)
+}
+
+// taskAction decodes a cancel, retry or reassign and runs it with do.
+func (s *Server) taskAction(ctx context.Context, a agentauth.Actor, args json.RawMessage,
+	do func(context.Context, tasks.Principal, tasks.ActionInput) (api.TaskOperation, error),
+) (Result, error) {
 	var in struct {
 		RequestID         string  `json:"request_id"`
 		ExpectedVersion   int     `json:"expected_version"`
 		ExpectedAttemptID *string `json:"expected_attempt_id"`
 		TaskID            string  `json:"task_id"`
+		TargetProfileID   *string `json:"target_profile_id"`
 	}
 	if err := decode(args, &in); err != nil {
 		return Result{}, err
@@ -485,11 +530,16 @@ func (s *Server) taskCancel(ctx context.Context, a agentauth.Actor, args json.Ra
 	if act.TaskID, err = text(in.TaskID, 1, 100); err != nil {
 		return Result{}, err
 	}
+	if in.TargetProfileID != nil {
+		if act.TargetProfileID, err = text(*in.TargetProfileID, 1, 100); err != nil {
+			return Result{}, err
+		}
+	}
 	p, err := s.taskPrincipal(ctx, a)
 	if err != nil {
 		return Result{}, err
 	}
-	op, err := s.Tasks.Cancel(ctx, p, act)
+	op, err := do(ctx, p, act)
 	if err != nil {
 		return Result{}, taskFailure(err)
 	}

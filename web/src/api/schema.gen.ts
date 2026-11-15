@@ -1510,7 +1510,10 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Reassign Task */
+    /**
+     * Reassign Task
+     * @description Like retryTask, but the new attempt runs on target_profile_id, which becomes the task's provider.
+     */
     post: operations['reassignTask'];
     delete?: never;
     options?: never;
@@ -1527,7 +1530,10 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Retry Task */
+    /**
+     * Retry Task
+     * @description Replace a coordination task's attempt with a new one on the same provider, in a new native session briefed with the task's brief and a continuation note (docs/specs/task-handoff.md). A failed task reopens. A code task's retry is recorded blocked with reason handoff_unavailable.
+     */
     post: operations['retryTask'];
     delete?: never;
     options?: never;

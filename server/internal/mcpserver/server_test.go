@@ -255,7 +255,7 @@ func TestDiscoveryFollowsThePerActorTable(t *testing.T) {
 	// it) is listed of the pull request tools.
 	want := []string{
 		"check_status", "decide", "delegate", "follow_up", "forget", "get_issue", "get_verification", "list_dependabot_alerts", "note", "open_pull_request", "pending_add",
-		"pending_done", "project_context", "remember", "steer", "task_cancel", "task_get", "task_history", "task_hold", "task_list", "topic_open", "topics", "watch_checks", "whoami",
+		"pending_done", "project_context", "remember", "steer", "task_cancel", "task_get", "task_history", "task_hold", "task_list", "task_reassign", "task_retry", "topic_open", "topics", "watch_checks", "whoami",
 	}
 	if got := h.list(t, mcpserver.PathOrdinary, main.Token); !slices.Equal(got, want) {
 		t.Errorf("main lists %v, want %v", got, want)
@@ -263,7 +263,7 @@ func TestDiscoveryFollowsThePerActorTable(t *testing.T) {
 	if got := h.list(t, mcpserver.PathOrdinary, ws.Token); !slices.Equal(got, []string{"check_status", "forget", "get_issue", "get_verification", "list_dependabot_alerts", "open_pull_request", "project_context", "remember", "watch_checks", "whoami"}) {
 		t.Errorf("workspace agent lists %v", got)
 	}
-	if got := h.list(t, mcpserver.PathOrdinary, sup.Token); !slices.Equal(got, []string{"delegate", "follow_up", "forget", "project_context", "remember", "report", "steer", "task_cancel", "task_get", "task_history", "task_list", "whoami"}) {
+	if got := h.list(t, mcpserver.PathOrdinary, sup.Token); !slices.Equal(got, []string{"delegate", "follow_up", "forget", "project_context", "remember", "report", "steer", "task_cancel", "task_get", "task_history", "task_list", "task_reassign", "task_retry", "whoami"}) {
 		t.Errorf("supervisor lists %v", got)
 	}
 

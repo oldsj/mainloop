@@ -157,6 +157,9 @@ test('after a stale 409 the next submit builds a fresh request from the refreshe
 test('failures are sorted by what the owner should do', () => {
   expect(classifyFailure(new HttpError(409, 'request_payload_conflict')).kind).toBe('conflict');
   expect(classifyFailure(new HttpError(409, 'branch_writer_exists')).kind).toBe('conflict');
+  expect(classifyFailure(new HttpError(409, 'operation_pending')).message).toBe(
+    'Another action on this task is in progress. Try again when it settles.'
+  );
   expect(classifyFailure(new HttpError(404, 'task_not_found')).kind).toBe('not_found');
   expect(classifyFailure(new HttpError(403)).kind).toBe('denied');
   expect(classifyFailure(new HttpError(422, 'provider_unavailable')).kind).toBe('invalid');
