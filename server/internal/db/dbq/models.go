@@ -989,6 +989,7 @@ type TaskLoop struct {
 	UnchangedFirings   int32
 	StopReason         *string
 	StoppedVersion     *int32
+	FireRequestID      *string
 }
 
 type TaskLoopFiring struct {

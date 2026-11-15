@@ -5,7 +5,8 @@ fires, Mainloop sends one message to the session that armed it, so that session 
 and still hear when something is worth looking at. Issue #314.
 
 Status: **implemented** for task, pull request, quiet and time triggers and the no-progress stop,
-armed and managed by agents through MCP. The owner's view and controls are **proposed** (see
+armed and managed by agents through MCP, and for the owner's REST routes to list and control a
+task's loops. The task page section that uses those routes is **proposed** (see
 [Not built](#not-built)).
 
 ## Why
@@ -110,9 +111,36 @@ it (otherwise 422 `invalid_request`). A plain periodic check-in, such as "check 
 minutes", leaves it false and is never stopped for seeing no change; `max_firings` and the expiry
 still bound it.
 
+## The owner's view and controls
+
+Main and supervisors arm loops; the owner sees and steers them from the task they concern.
+
+- **`GET /tasks/{task_id}/loops`** lists the loops watching the task and the loops its supervisor
+  armed, live ones first, then the latest that ended (at most 50). Each carries its trigger and
+  settings, who it wakes (`main`, or `supervisor` with the supervisor's task), its firing count and
+  limit, its next fire time (a live time loop's timer, or when a live quiet loop fires if its task
+  stays unchanged; null for a loop that waits on a change), its `stop_reason`, and its latest five
+  firings with their facts and delivery state.
+- **`POST /loops/{loop_id}/pause`** pauses an armed loop: its trigger is not evaluated until it is
+  resumed. Its expiry and an ended recipient still end it, and a supervisor waiting on a paused loop
+  is still waiting, not stalled.
+- **`POST /loops/{loop_id}/resume`** resumes a paused loop, which looks at once: a change while it
+  was paused fires as a task or pull request loop would, a timer that passed fires once, and a
+  quiet loop's period starts again.
+- **`POST /loops/{loop_id}/fire`** (`request_id`) fires a live loop now with the fact `fired now by
+the owner …`: one firing, without waiting for the minimum interval, counting against
+  `max_firings`, or folded into its firing still waiting to be sent. The same `request_id` again
+  fires nothing more.
+- **`DELETE /loops/{loop_id}`** stops a live loop for good. A firing it already made is still
+  delivered, and the loop stays in the task's history as `stopped`.
+
+A control the loop's state does not allow (pausing a loop that is not armed, resuming one that is
+not paused, firing or deleting one that ended) is 409 `loop_state_conflict`; another owner's or an
+unknown loop is 404 `loop_not_found`.
+
 ## States and limits
 
-`armed` is the only live state. The final states: `done` (a one-time timer fired), `exhausted` (its
+`armed` and `paused` (by the owner) are the live states. The final states: `done` (a one-time timer fired), `exhausted` (its
 last firing made, or stopped for no progress), `expired`, `stopped` (by `loop_stop`) and `ended`
 (its supervisor's task ended, or a quiet loop's task finished).
 A firing already made when a loop stops or ends is still delivered, unless its recipient ended.
@@ -122,12 +150,12 @@ A firing already made when a loop stops or ends is still delivered, unless its r
 | `max_firings`          | 20      | 1 to 100                 |
 | `min_interval_seconds` | 60      | 0 to 86400               |
 | `expires_minutes`      | 1440    | 1 to 10080               |
-| armed loops per caller | 20      | 409 `loop_limit` past it |
+| live loops per caller  | 20      | 409 `loop_limit` past it |
 
 Each firing counts once against `max_firings`; occurrences folded into a firing do not count. The
 loop becomes `exhausted` when it makes its last firing.
 
-**Liveness.** A supervisor with an armed loop, or a firing to it on its way, ended its turn to wait:
+**Liveness.** A supervisor with a live loop (armed or paused), or a firing to it on its way, ended its turn to wait:
 the liveness sweep does not block it as `stalled` (as for [`watch_checks`](ci.md)). The loop's
 expiry bounds that wait, and the runtime bound still holds.
 
@@ -151,11 +179,11 @@ turn (#72), a loop's usage is the sum over its firings' turns, labelled _attribu
 
 ## Not built
 
-- **Owner view and controls** (proposed): the task page lists a task's loops, armed ones first, with
-  the next fire time or what each waits on and its last firings, and offers pause, resume, fire now
-  and delete through REST routes. A paused loop is not evaluated; fire now takes the same firing path
-  once, ignoring the minimum interval and counting against `max_firings`. A `loop:updated` event
-  frame lands with that view if the task page needs one.
+- **The task page section** (proposed, next): the task page lists the task's loops with the routes
+  above, with pause, resume, fire now and delete. It refetches on a timer and after each control;
+  no `loop:updated` event frame is planned unless the page needs one.
+- **Main's loops without a task** (a time loop main armed with no `task_id`) appear on no task
+  page; `loop_list` is their only listing.
 - **Other sources**: delivery stalls, attention items, and deploy or production health (which
   Mainloop does not observe yet).
 - **Goals** ([goals](goals.md)): a goal's supervisor arms loops like any supervisor; a goal-level

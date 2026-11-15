@@ -1477,6 +1477,106 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/loops/{loop_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Delete Loop
+     * @description Stops a live (armed or paused) loop for good. A firing it already made is still delivered, and the loop stays in the task's history as stopped. A loop that already ended is 409 loop_state_conflict.
+     */
+    delete: operations['deleteLoop'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/loops/{loop_id}/pause': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Pause Loop
+     * @description Pauses an armed loop: its trigger is not evaluated until it is resumed. Expiry and an ended recipient still end it. 409 loop_state_conflict unless armed.
+     */
+    post: operations['pauseLoop'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/loops/{loop_id}/resume': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Resume Loop
+     * @description Resumes a paused loop, which looks at once: a timer that passed while paused fires once, and a quiet loop's period starts again. 409 loop_state_conflict unless paused.
+     */
+    post: operations['resumeLoop'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/loops/{loop_id}/fire': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Fire Loop
+     * @description Fires a live loop now: one firing, as its trigger would make, without waiting for the minimum interval, counting against max_firings (or folded into its firing still waiting to be sent). The same request_id again fires nothing more. 409 loop_state_conflict unless armed or paused.
+     */
+    post: operations['fireLoop'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/tasks/{task_id}/loops': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Task Loops
+     * @description The loops on a task's page, live ones (armed or paused) first, then the latest that ended. These are the loops watching the task and the loops its supervisor armed, each with its latest firings.
+     */
+    get: operations['listTaskLoops'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/tasks': {
     parameters: {
       query?: never;
@@ -3853,6 +3953,63 @@ export interface components {
       current_attempt_id: string | null;
       held_attempt_id: string;
       attempt_state: string;
+    };
+    TaskLoopList: {
+      loops: components['schemas']['TaskLoop'][];
+    };
+    /** @description A durable wake-up armed by main or a supervisor (docs/specs/loops.md). */
+    TaskLoop: {
+      id: string;
+      /** @enum {string} */
+      state: 'armed' | 'paused' | 'done' | 'exhausted' | 'expired' | 'stopped' | 'ended';
+      /** @enum {string} */
+      trigger: 'task' | 'pull_request' | 'quiet' | 'time';
+      /** @description The task it watches; null for a time loop without one. */
+      task_id: string | null;
+      /**
+       * @description Who it wakes, main or the supervisor of recipient_task_id.
+       * @enum {string}
+       */
+      recipient: 'main' | 'supervisor';
+      /** @description The supervisor's task, for recipient supervisor. */
+      recipient_task_id: string | null;
+      note: string;
+      statuses: string[];
+      pr_conditions: ('ci_success' | 'ci_failure' | 'merged' | 'closed')[];
+      every_minutes: number | null;
+      quiet_minutes: number | null;
+      expect_change: boolean;
+      /** @description no_progress when a loop armed with expect_change stopped for finding its task unchanged. */
+      stop_reason: 'no_progress' | null;
+      firings: number;
+      max_firings: number;
+      min_interval_seconds: number;
+      /** @description A live time loop's next timer, or a live quiet loop's next fire if its task stays unchanged; null for a loop that waits on a change. */
+      next_fire_at: string | null;
+      last_fired_at: string | null;
+      /** Format: date-time */
+      expires_at: string;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      updated_at: string;
+      /** @description The latest firings, newest first. */
+      recent_firings: components['schemas']['LoopFiring'][];
+    };
+    LoopFiring: {
+      number: number;
+      facts: string[];
+      /** @description Occurrences folded in beyond the facts kept. */
+      folded: number;
+      /** @enum {string} */
+      delivery_state: 'pending' | 'queued' | 'delivered' | 'uncertain' | 'cancelled';
+      stops_loop: 'no_progress' | null;
+      /** Format: date-time */
+      created_at: string;
+    };
+    LoopFireRequest: {
+      /** @description The same id again fires nothing more. */
+      request_id: string;
     };
     /** @description Task route error body: `{detail: {reason, ...}}`. Raised as TaskError in the store. */
     TaskError: {
@@ -11272,6 +11429,314 @@ export interface operations {
           'application/json': components['schemas']['TaskError'];
         };
       };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  deleteLoop: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        loop_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskLoop'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['TaskError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  pauseLoop: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        loop_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskLoop'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['TaskError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  resumeLoop: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        loop_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskLoop'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['TaskError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  fireLoop: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        loop_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['LoopFireRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskLoop'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['TaskError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  listTaskLoops: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        task_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskLoopList'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
       /** @description Not Found */
       404: {
         headers: {

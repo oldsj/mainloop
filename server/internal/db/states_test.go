@@ -116,7 +116,7 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.TaskDeliveryPending), string(dbstate.TaskDeliveryQueued), string(dbstate.TaskDeliveryDelivered),
 			string(dbstate.TaskDeliveryUncertain), string(dbstate.TaskDeliveryCancelled))},
 		{"task_loops", "state", strs(
-			string(dbstate.LoopArmed), string(dbstate.LoopDone), string(dbstate.LoopExhausted),
+			string(dbstate.LoopArmed), string(dbstate.LoopPaused), string(dbstate.LoopDone), string(dbstate.LoopExhausted),
 			string(dbstate.LoopExpired), string(dbstate.LoopStopped), string(dbstate.LoopEnded))},
 		{"task_loops", "trigger", strs(
 			string(dbstate.LoopTriggerTask), string(dbstate.LoopTriggerTime), string(dbstate.LoopTriggerPullRequest),

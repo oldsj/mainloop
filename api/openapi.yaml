@@ -4625,6 +4625,263 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /loops/{loop_id}:
+    delete:
+      tags:
+        - tasks
+      summary: Delete Loop
+      operationId: deleteLoop
+      description: Stops a live (armed or paused) loop for good. A firing it already made is still delivered, and the loop stays in the task's history as stopped. A loop that already ended is 409 loop_state_conflict.
+      parameters:
+        - name: loop_id
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 100
+            minLength: 1
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskLoop'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TaskError'
+                  - $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/TaskError'
+  /loops/{loop_id}/pause:
+    post:
+      tags:
+        - tasks
+      summary: Pause Loop
+      operationId: pauseLoop
+      description: 'Pauses an armed loop: its trigger is not evaluated until it is resumed. Expiry and an ended recipient still end it. 409 loop_state_conflict unless armed.'
+      parameters:
+        - name: loop_id
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 100
+            minLength: 1
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskLoop'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TaskError'
+                  - $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/TaskError'
+  /loops/{loop_id}/resume:
+    post:
+      tags:
+        - tasks
+      summary: Resume Loop
+      operationId: resumeLoop
+      description: "Resumes a paused loop, which looks at once: a timer that passed while paused fires once, and a quiet loop's period starts again. 409 loop_state_conflict unless paused."
+      parameters:
+        - name: loop_id
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 100
+            minLength: 1
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskLoop'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TaskError'
+                  - $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/TaskError'
+  /loops/{loop_id}/fire:
+    post:
+      tags:
+        - tasks
+      summary: Fire Loop
+      operationId: fireLoop
+      description: 'Fires a live loop now: one firing, as its trigger would make, without waiting for the minimum interval, counting against max_firings (or folded into its firing still waiting to be sent). The same request_id again fires nothing more. 409 loop_state_conflict unless armed or paused.'
+      parameters:
+        - name: loop_id
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 100
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoopFireRequest'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskLoop'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TaskError'
+                  - $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/TaskError'
+  /tasks/{task_id}/loops:
+    get:
+      tags:
+        - tasks
+      summary: List Task Loops
+      operationId: listTaskLoops
+      description: The loops on a task's page, live ones (armed or paused) first, then the latest that ended. These are the loops watching the task and the loops its supervisor armed, each with its latest firings.
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Task Id
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskLoopList'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TaskError'
+                  - $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /tasks:
     get:
       tags:
@@ -9057,6 +9314,196 @@ components:
         - held_attempt_id
         - attempt_state
       additionalProperties: false
+    TaskLoopList:
+      type: object
+      additionalProperties: false
+      properties:
+        loops:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/TaskLoop'
+      required:
+        - loops
+    TaskLoop:
+      type: object
+      additionalProperties: false
+      description: A durable wake-up armed by main or a supervisor (docs/specs/loops.md).
+      properties:
+        id:
+          type: string
+        state:
+          type: string
+          enum:
+            - armed
+            - paused
+            - done
+            - exhausted
+            - expired
+            - stopped
+            - ended
+        trigger:
+          type: string
+          enum:
+            - task
+            - pull_request
+            - quiet
+            - time
+        task_id:
+          description: The task it watches; null for a time loop without one.
+          anyOf:
+            - type: string
+            - type: 'null'
+        recipient:
+          type: string
+          enum:
+            - main
+            - supervisor
+          description: Who it wakes, main or the supervisor of recipient_task_id.
+        recipient_task_id:
+          description: The supervisor's task, for recipient supervisor.
+          anyOf:
+            - type: string
+            - type: 'null'
+        note:
+          type: string
+          maxLength: 2000
+        statuses:
+          type: array
+          maxItems: 7
+          items:
+            type: string
+        pr_conditions:
+          type: array
+          maxItems: 4
+          items:
+            type: string
+            enum:
+              - ci_success
+              - ci_failure
+              - merged
+              - closed
+        every_minutes:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        quiet_minutes:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        expect_change:
+          type: boolean
+        stop_reason:
+          description: no_progress when a loop armed with expect_change stopped for finding its task unchanged.
+          anyOf:
+            - type: string
+              enum:
+                - no_progress
+            - type: 'null'
+        firings:
+          type: integer
+        max_firings:
+          type: integer
+        min_interval_seconds:
+          type: integer
+        next_fire_at:
+          description: A live time loop's next timer, or a live quiet loop's next fire if its task stays unchanged; null for a loop that waits on a change.
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        last_fired_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        recent_firings:
+          type: array
+          maxItems: 5
+          description: The latest firings, newest first.
+          items:
+            $ref: '#/components/schemas/LoopFiring'
+      required:
+        - id
+        - state
+        - trigger
+        - task_id
+        - recipient
+        - recipient_task_id
+        - note
+        - statuses
+        - pr_conditions
+        - every_minutes
+        - quiet_minutes
+        - expect_change
+        - stop_reason
+        - firings
+        - max_firings
+        - min_interval_seconds
+        - next_fire_at
+        - last_fired_at
+        - expires_at
+        - created_at
+        - updated_at
+        - recent_firings
+    LoopFiring:
+      type: object
+      additionalProperties: false
+      properties:
+        number:
+          type: integer
+        facts:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+        folded:
+          type: integer
+          description: Occurrences folded in beyond the facts kept.
+        delivery_state:
+          type: string
+          enum:
+            - pending
+            - queued
+            - delivered
+            - uncertain
+            - cancelled
+        stops_loop:
+          anyOf:
+            - type: string
+              enum:
+                - no_progress
+            - type: 'null'
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - number
+        - facts
+        - folded
+        - delivery_state
+        - stops_loop
+        - created_at
+    LoopFireRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        request_id:
+          type: string
+          maxLength: 100
+          minLength: 1
+          description: The same id again fires nothing more.
+      required:
+        - request_id
     TaskError:
       type: object
       properties:

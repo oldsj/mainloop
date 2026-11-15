@@ -198,18 +198,21 @@ An owner-selected provider constraint cannot be overridden by a supervisor.
 Owner routes use the configured-owner dependency, ignoring caller identity headers. MCP never
 uses the owner REST listener.
 
-| Route                                    | Implemented result                                                                 |
-| ---------------------------------------- | ---------------------------------------------------------------------------------- |
-| `GET /tasks?project_id=&parent_task_id=` | Array of task views within owner scope                                             |
-| `GET /tasks/{id}`                        | Task, attempt history, projection, action eligibility                              |
-| `POST /tasks`                            | 202, idempotent provisioning operation; admission reserves task/attempt/capacity   |
-| `POST /tasks/{id}/retry`                 | 202, handoff operation after authority/version check ([handoff](task-handoff.md))  |
-| `POST /tasks/{id}/reassign`              | Same, with explicit target profile                                                 |
-| `POST /tasks/{id}/cancel`                | 202, durable cancellation operation; capacity retained until confirmed termination |
-| `POST /tasks/{id}/follow-up`             | 202, a message to the task's own session; reopens a completed coordination task    |
-| `GET /task-operations/{id}`              | Durable operation, including step and reason                                       |
-| `GET /projects/{id}/default-provider`    | Profile or null, preference version (initially 0)                                  |
-| `PUT /projects/{id}/default-provider`    | Compare-and-swap preference; null removes selection                                |
+| Route                                         | Implemented result                                                                 |
+| --------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `GET /tasks?project_id=&parent_task_id=`      | Array of task views within owner scope                                             |
+| `GET /tasks/{id}`                             | Task, attempt history, projection, action eligibility                              |
+| `POST /tasks`                                 | 202, idempotent provisioning operation; admission reserves task/attempt/capacity   |
+| `POST /tasks/{id}/retry`                      | 202, handoff operation after authority/version check ([handoff](task-handoff.md))  |
+| `POST /tasks/{id}/reassign`                   | Same, with explicit target profile                                                 |
+| `POST /tasks/{id}/cancel`                     | 202, durable cancellation operation; capacity retained until confirmed termination |
+| `POST /tasks/{id}/follow-up`                  | 202, a message to the task's own session; reopens a completed coordination task    |
+| `GET /task-operations/{id}`                   | Durable operation, including step and reason                                       |
+| `GET /tasks/{id}/loops`                       | The task's [loops](loops.md) with their latest firings                             |
+| `POST /loops/{id}/pause`, `/resume`           | Pause or resume a loop ([loops](loops.md#the-owners-view-and-controls))            |
+| `POST /loops/{id}/fire`, `DELETE /loops/{id}` | Fire a loop now (idempotent `request_id`), or stop it for good                     |
+| `GET /projects/{id}/default-provider`         | Profile or null, preference version (initially 0)                                  |
+| `PUT /projects/{id}/default-provider`         | Compare-and-swap preference; null removes selection                                |
 
 Example create input:
 
