@@ -408,7 +408,10 @@ func TestExpectChangeLoopStopsAfterThreeUnchangedFirings(t *testing.T) {
 		if n <= 3 {
 			want = 2 * n
 		}
+		// Both loops wake the same supervisor. A firing that goes out alone opens a turn, and the
+		// other waits for that turn to end, as a report does, so turns are ended while waiting.
 		r.eventually("sent", func() bool {
+			r.finishTurns()
 			return r.count(`SELECT count(*) FROM task_event_deliveries d JOIN task_loop_firings f ON f.id = d.loop_firing_id
 				WHERE d.state IN ('queued', 'delivered')`) == want
 		})
