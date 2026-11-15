@@ -18,8 +18,8 @@ import (
 )
 
 // Loops (docs/specs/loops.md) are durable wake-ups that main or a supervisor arms instead of
-// polling: a loop watches a task's status, or a timer, and each firing is one message to the
-// session that armed it, delivered with child reports in the same batch.
+// polling: a loop watches a task's status, a code task's pull request, or a timer, and each firing
+// is one message to the session that armed it, delivered with child reports in the same batch.
 
 // Loop limits.
 const (
@@ -40,6 +40,7 @@ const (
 	ReasonLoopLimit         = "loop_limit"
 	ReasonLoopNotFound      = "loop_not_found"
 	ReasonLoopSubjectDenied = "loop_subject_denied"
+	ReasonLoopNeedsCodeTask = "loop_requires_code_task"
 )
 
 // LoopChannel wakes the loop runner: a subject task's status change notifies it (migration 00590).
@@ -67,6 +68,9 @@ type LoopInput struct {
 	Trigger dbstate.LoopTrigger
 	// Statuses limit a task trigger to these statuses; empty fires on any status or reason change.
 	Statuses []dbstate.TaskStatus
+	// PRConditions limit a pull_request trigger to changes after which one of them holds; empty
+	// fires on any change of the pull request's number, state or CI result.
+	PRConditions []dbstate.PRCondition
 	// AfterMinutes is a time trigger's first firing; EveryMinutes its repeat (0 fires once). With
 	// only EveryMinutes, the first firing is one interval away.
 	AfterMinutes int
@@ -118,7 +122,7 @@ func validLoop(in *LoopInput) error {
 	}
 	switch in.Trigger {
 	case dbstate.LoopTriggerTask:
-		if in.TaskID == "" || in.AfterMinutes != 0 || in.EveryMinutes != 0 {
+		if in.TaskID == "" || in.AfterMinutes != 0 || in.EveryMinutes != 0 || len(in.PRConditions) != 0 {
 			return bad
 		}
 		for _, st := range in.Statuses {
@@ -126,8 +130,17 @@ func validLoop(in *LoopInput) error {
 				return bad
 			}
 		}
+	case dbstate.LoopTriggerPullRequest:
+		if in.TaskID == "" || in.AfterMinutes != 0 || in.EveryMinutes != 0 || len(in.Statuses) != 0 {
+			return bad
+		}
+		for _, c := range in.PRConditions {
+			if !slices.Contains(dbstate.PRConditions, c) {
+				return bad
+			}
+		}
 	case dbstate.LoopTriggerTime:
-		if len(in.Statuses) != 0 || in.AfterMinutes < 0 || in.EveryMinutes < 0 ||
+		if len(in.Statuses) != 0 || len(in.PRConditions) != 0 || in.AfterMinutes < 0 || in.EveryMinutes < 0 ||
 			in.AfterMinutes > MaxLoopMinutes || in.EveryMinutes > MaxLoopMinutes ||
 			in.AfterMinutes == 0 && in.EveryMinutes == 0 {
 			return bad
@@ -159,6 +172,12 @@ func (s *Service) Arm(ctx context.Context, p Principal, in LoopInput) (dbq.TaskL
 	}
 	slices.Sort(statuses)
 	statuses = slices.Compact(statuses)
+	conditions := make([]string, len(in.PRConditions))
+	for i, c := range in.PRConditions {
+		conditions[i] = string(c)
+	}
+	slices.Sort(conditions)
+	conditions = slices.Compact(conditions)
 	var out dbq.TaskLoop
 	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
 		q := dbq.New(tx)
@@ -168,7 +187,7 @@ func (s *Service) Arm(ctx context.Context, p Principal, in LoopInput) (dbq.TaskL
 		}
 		prior, err := q.GetTaskLoopByRequest(ctx, dbq.GetTaskLoopByRequestParams{PrincipalKey: p.Key(), RequestID: in.RequestID})
 		if err == nil {
-			if !sameLoop(prior, in, statuses) {
+			if !sameLoop(prior, in, statuses, conditions) {
 				return refusal(409, ReasonPayloadConflict)
 			}
 			out = prior
@@ -187,6 +206,9 @@ func (s *Service) Arm(ctx context.Context, p Principal, in LoopInput) (dbq.TaskL
 			if _, manage := p.access(t); !manage {
 				return refusal(403, ReasonLoopSubjectDenied)
 			}
+			if in.Trigger == dbstate.LoopTriggerPullRequest && t.Mode != dbstate.TaskModeCode {
+				return refusal(422, ReasonLoopNeedsCodeTask)
+			}
 			subject = &t
 		}
 		n, err := q.CountArmedTaskLoops(ctx, recipient)
@@ -198,7 +220,7 @@ func (s *Service) Arm(ctx context.Context, p Principal, in LoopInput) (dbq.TaskL
 		}
 		params := dbq.InsertTaskLoopParams{
 			ID: uuid.NewString(), OwnerID: p.OwnerID, PrincipalKey: p.Key(), RequestID: in.RequestID,
-			RecipientKey: recipient, Trigger: in.Trigger, Statuses: statuses, Note: in.Note,
+			RecipientKey: recipient, Trigger: in.Trigger, Statuses: statuses, PrConditions: conditions, Note: in.Note,
 			MaxFirings: int32(in.MaxFirings), MinIntervalSeconds: int32(in.MinInterval.Seconds()), //nolint:gosec // bounded above
 			ExpiresAt: now.Add(time.Duration(in.ExpiresMinutes) * time.Minute),
 		}
@@ -211,6 +233,13 @@ func (s *Service) Arm(ctx context.Context, p Principal, in LoopInput) (dbq.TaskL
 			// names has none, so the first look fires: arming after the change still hears of it.
 			if len(statuses) == 0 || !wanted(statuses, subject.Status) {
 				fp := fingerprint(*subject)
+				params.Baseline = &fp
+			}
+			params.NextAttemptAt = now
+		case dbstate.LoopTriggerPullRequest:
+			// The same for a condition that already holds: green CI before the arm still fires.
+			if len(conditions) == 0 || !prHolds(conditions, *subject) {
+				fp := prFingerprint(*subject)
 				params.Baseline = &fp
 			}
 			params.NextAttemptAt = now
@@ -234,12 +263,13 @@ func (s *Service) Arm(ctx context.Context, p Principal, in LoopInput) (dbq.TaskL
 }
 
 // sameLoop reports whether a stored loop is what the request asks for.
-func sameLoop(l dbq.TaskLoop, in LoopInput, statuses []string) bool {
+func sameLoop(l dbq.TaskLoop, in LoopInput, statuses, conditions []string) bool {
 	every := 0
 	if l.EverySeconds != nil {
 		every = int(*l.EverySeconds) / 60
 	}
 	return l.Trigger == in.Trigger && deref(l.SubjectTaskID) == in.TaskID && slices.Equal(l.Statuses, statuses) &&
+		slices.Equal(l.PrConditions, conditions) &&
 		l.Note == in.Note && int(l.MaxFirings) == in.MaxFirings && every == in.EveryMinutes &&
 		time.Duration(l.MinIntervalSeconds)*time.Second == *in.MinInterval
 }
@@ -296,12 +326,73 @@ func fingerprint(t dbq.Task) string {
 	return string(t.Status) + "/" + string(*t.Reason)
 }
 
-func taskFact(t dbq.Task, was *string) string {
-	title := t.Title
-	if len(title) > maxLoopFactTitle {
-		title = title[:maxLoopFactTitle] + "…"
+// prFingerprint is what a pull_request trigger compares: the pull request the projection saw, its
+// state, and CI's result with the commit it is for.
+func prFingerprint(t dbq.Task) string {
+	if t.PrNumber == nil {
+		return "none"
 	}
-	fact := fmt.Sprintf("task %s (%q) is %s", t.ID, title, fingerprint(t))
+	return fmt.Sprintf("#%d %s ci %s@%s", *t.PrNumber, t.PrState, t.CiState, deref(t.CiHeadSha))
+}
+
+// prHolds reports whether one of the conditions holds for the task's pull request. CI counts only
+// when its result is for the pull request's head.
+func prHolds(conditions []string, t dbq.Task) bool {
+	atHead := t.PrNumber != nil && t.CiHeadSha != nil && t.PrHeadSha != nil && *t.CiHeadSha == *t.PrHeadSha
+	for _, c := range conditions {
+		switch dbstate.PRCondition(c) {
+		case dbstate.PRCISuccess:
+			if atHead && t.CiState == "success" {
+				return true
+			}
+		case dbstate.PRCIFailure:
+			if atHead && t.CiState == "failure" {
+				return true
+			}
+		case dbstate.PRMerged:
+			if t.PrState == "merged" {
+				return true
+			}
+		case dbstate.PRClosed:
+			if t.PrState == "closed" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func prFact(t dbq.Task) string {
+	if t.PrNumber == nil {
+		return fmt.Sprintf("task %s (%q) has no pull request", t.ID, shortTitle(t.Title))
+	}
+	ci := "CI " + t.CiState
+	switch {
+	case t.CiHeadSha == nil:
+	case t.PrHeadSha != nil && *t.CiHeadSha == *t.PrHeadSha:
+		ci += " at the head " + short(*t.CiHeadSha)
+	default:
+		ci += " at " + short(*t.CiHeadSha) + ", not yet at the head " + short(deref(t.PrHeadSha))
+	}
+	return fmt.Sprintf("task %s (%q) pull request #%d is %s, %s", t.ID, shortTitle(t.Title), *t.PrNumber, t.PrState, ci)
+}
+
+func short(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
+}
+
+func shortTitle(title string) string {
+	if r := []rune(title); len(r) > maxLoopFactTitle {
+		return string(r[:maxLoopFactTitle]) + "…"
+	}
+	return title
+}
+
+func taskFact(t dbq.Task, was *string) string {
+	fact := fmt.Sprintf("task %s (%q) is %s", t.ID, shortTitle(t.Title), fingerprint(t))
 	if was != nil {
 		fact += ", was " + *was
 	}
@@ -416,6 +507,22 @@ func (s *Service) evaluate(ctx context.Context, q *dbq.Queries, l dbq.TaskLoop) 
 			e.baseline = &fp
 			if wanted(l.Statuses, t.Status) {
 				e.fact = taskFact(t, l.Baseline)
+			}
+		}
+		e.next = now.Add(s.loopPoll())
+	case dbstate.LoopTriggerPullRequest:
+		t, err := q.GetTaskByID(ctx, deref(l.SubjectTaskID))
+		if errors.Is(err, pgx.ErrNoRows) {
+			e.state = dbstate.LoopEnded
+			return e, nil
+		}
+		if err != nil {
+			return e, err
+		}
+		if fp := prFingerprint(t); l.Baseline == nil || *l.Baseline != fp {
+			e.baseline = &fp
+			if len(l.PrConditions) == 0 || prHolds(l.PrConditions, t) {
+				e.fact = prFact(t)
 			}
 		}
 		e.next = now.Add(s.loopPoll())

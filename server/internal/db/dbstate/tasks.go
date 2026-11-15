@@ -174,6 +174,21 @@ type LoopTrigger string
 
 // Loop triggers.
 const (
-	LoopTriggerTask LoopTrigger = "task"
-	LoopTriggerTime LoopTrigger = "time"
+	LoopTriggerTask        LoopTrigger = "task"
+	LoopTriggerTime        LoopTrigger = "time"
+	LoopTriggerPullRequest LoopTrigger = "pull_request"
 )
+
+// PRCondition is an element of task_loops.pr_conditions: what a pull_request trigger waits for.
+type PRCondition string
+
+// Pull request conditions. CI counts only when its result is for the pull request's head.
+const (
+	PRCISuccess PRCondition = "ci_success"
+	PRCIFailure PRCondition = "ci_failure"
+	PRMerged    PRCondition = "merged"
+	PRClosed    PRCondition = "closed"
+)
+
+// PRConditions lists the pull request conditions, in the order the contract lists them.
+var PRConditions = []PRCondition{PRCISuccess, PRCIFailure, PRMerged, PRClosed}

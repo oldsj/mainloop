@@ -86,7 +86,7 @@ func (q *Queries) GetPendingLoopFiring(ctx context.Context, loopID string) (Task
 }
 
 const getTaskLoopByID = `-- name: GetTaskLoopByID :one
-SELECT id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses, every_seconds, note, max_firings, min_interval_seconds, expires_at, state, firings, baseline, fire_at, last_fired_at, created_at, updated_at, attempts, next_attempt_at, lease_owner, lease_until FROM task_loops WHERE id = $1
+SELECT id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses, every_seconds, note, max_firings, min_interval_seconds, expires_at, state, firings, baseline, fire_at, last_fired_at, created_at, updated_at, attempts, next_attempt_at, lease_owner, lease_until, pr_conditions FROM task_loops WHERE id = $1
 `
 
 func (q *Queries) GetTaskLoopByID(ctx context.Context, id string) (TaskLoop, error) {
@@ -117,12 +117,13 @@ func (q *Queries) GetTaskLoopByID(ctx context.Context, id string) (TaskLoop, err
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
+		&i.PrConditions,
 	)
 	return i, err
 }
 
 const getTaskLoopByRequest = `-- name: GetTaskLoopByRequest :one
-SELECT id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses, every_seconds, note, max_firings, min_interval_seconds, expires_at, state, firings, baseline, fire_at, last_fired_at, created_at, updated_at, attempts, next_attempt_at, lease_owner, lease_until FROM task_loops WHERE principal_key = $1 AND request_id = $2
+SELECT id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses, every_seconds, note, max_firings, min_interval_seconds, expires_at, state, firings, baseline, fire_at, last_fired_at, created_at, updated_at, attempts, next_attempt_at, lease_owner, lease_until, pr_conditions FROM task_loops WHERE principal_key = $1 AND request_id = $2
 `
 
 type GetTaskLoopByRequestParams struct {
@@ -158,12 +159,13 @@ func (q *Queries) GetTaskLoopByRequest(ctx context.Context, arg GetTaskLoopByReq
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
+		&i.PrConditions,
 	)
 	return i, err
 }
 
 const getTaskLoopForUpdate = `-- name: GetTaskLoopForUpdate :one
-SELECT id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses, every_seconds, note, max_firings, min_interval_seconds, expires_at, state, firings, baseline, fire_at, last_fired_at, created_at, updated_at, attempts, next_attempt_at, lease_owner, lease_until FROM task_loops WHERE id = $1 FOR UPDATE
+SELECT id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses, every_seconds, note, max_firings, min_interval_seconds, expires_at, state, firings, baseline, fire_at, last_fired_at, created_at, updated_at, attempts, next_attempt_at, lease_owner, lease_until, pr_conditions FROM task_loops WHERE id = $1 FOR UPDATE
 `
 
 // An evaluation holds the loop row for its whole transaction: the subject's nudge trigger waits on
@@ -196,6 +198,7 @@ func (q *Queries) GetTaskLoopForUpdate(ctx context.Context, id string) (TaskLoop
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
+		&i.PrConditions,
 	)
 	return i, err
 }
@@ -254,14 +257,15 @@ const insertTaskLoop = `-- name: InsertTaskLoop :one
 
 INSERT INTO task_loops (
     id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses,
-    every_seconds, note, max_firings, min_interval_seconds, expires_at, baseline, fire_at, next_attempt_at
+    every_seconds, note, max_firings, min_interval_seconds, expires_at, baseline, fire_at, next_attempt_at,
+    pr_conditions
 ) VALUES (
     $1, $2, $3, $4, $5,
     $6, $7, $8::text[], $9,
     $10, $11, $12, $13,
-    $14, $15, $16
+    $14, $15, $16, $17::text[]
 )
-RETURNING id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses, every_seconds, note, max_firings, min_interval_seconds, expires_at, state, firings, baseline, fire_at, last_fired_at, created_at, updated_at, attempts, next_attempt_at, lease_owner, lease_until
+RETURNING id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses, every_seconds, note, max_firings, min_interval_seconds, expires_at, state, firings, baseline, fire_at, last_fired_at, created_at, updated_at, attempts, next_attempt_at, lease_owner, lease_until, pr_conditions
 `
 
 type InsertTaskLoopParams struct {
@@ -281,6 +285,7 @@ type InsertTaskLoopParams struct {
 	Baseline           *string
 	FireAt             *time.Time
 	NextAttemptAt      time.Time
+	PrConditions       []string
 }
 
 // Loops (docs/specs/loops.md).
@@ -302,6 +307,7 @@ func (q *Queries) InsertTaskLoop(ctx context.Context, arg InsertTaskLoopParams) 
 		arg.Baseline,
 		arg.FireAt,
 		arg.NextAttemptAt,
+		arg.PrConditions,
 	)
 	var i TaskLoop
 	err := row.Scan(
@@ -329,6 +335,7 @@ func (q *Queries) InsertTaskLoop(ctx context.Context, arg InsertTaskLoopParams) 
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
+		&i.PrConditions,
 	)
 	return i, err
 }
@@ -388,7 +395,7 @@ func (q *Queries) ListLoopFirings(ctx context.Context, arg ListLoopFiringsParams
 }
 
 const listTaskLoops = `-- name: ListTaskLoops :many
-SELECT id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses, every_seconds, note, max_firings, min_interval_seconds, expires_at, state, firings, baseline, fire_at, last_fired_at, created_at, updated_at, attempts, next_attempt_at, lease_owner, lease_until FROM task_loops
+SELECT id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses, every_seconds, note, max_firings, min_interval_seconds, expires_at, state, firings, baseline, fire_at, last_fired_at, created_at, updated_at, attempts, next_attempt_at, lease_owner, lease_until, pr_conditions FROM task_loops
 WHERE owner_id = $1 AND recipient_key = $2
 ORDER BY (state = 'armed') DESC, created_at DESC, id
 LIMIT $3
@@ -435,6 +442,7 @@ func (q *Queries) ListTaskLoops(ctx context.Context, arg ListTaskLoopsParams) ([
 			&i.NextAttemptAt,
 			&i.LeaseOwner,
 			&i.LeaseUntil,
+			&i.PrConditions,
 		); err != nil {
 			return nil, err
 		}
@@ -490,7 +498,7 @@ const stopTaskLoop = `-- name: StopTaskLoop :one
 UPDATE task_loops SET state = 'stopped', updated_at = now(), lease_owner = NULL, lease_until = NULL
 WHERE id = $1 AND owner_id = $2 AND recipient_key = $3
   AND state = 'armed'
-RETURNING id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses, every_seconds, note, max_firings, min_interval_seconds, expires_at, state, firings, baseline, fire_at, last_fired_at, created_at, updated_at, attempts, next_attempt_at, lease_owner, lease_until
+RETURNING id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses, every_seconds, note, max_firings, min_interval_seconds, expires_at, state, firings, baseline, fire_at, last_fired_at, created_at, updated_at, attempts, next_attempt_at, lease_owner, lease_until, pr_conditions
 `
 
 type StopTaskLoopParams struct {
@@ -527,6 +535,7 @@ func (q *Queries) StopTaskLoop(ctx context.Context, arg StopTaskLoopParams) (Tas
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
+		&i.PrConditions,
 	)
 	return i, err
 }

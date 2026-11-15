@@ -278,3 +278,65 @@ func TestLivenessDoesNotReadASupervisorWaitingOnALoopAsStalled(t *testing.T) {
 		t.Fatalf("after stop: status = %s reason = %s, want blocked stalled", got, reason)
 	}
 }
+
+// projectPR sets what the task projection saw of a task's pull request.
+func (r *rig) projectPR(task string, number int, state, ci, ciHead, head string) {
+	r.t.Helper()
+	r.exec(`UPDATE tasks SET pr_number = $2::int, pr_url = 'https://github.com/o/p/pull/' || $2::text, pr_head_sha = $6,
+		pr_state = $3, ci_state = $4, ci_head_sha = NULLIF($5, '') WHERE id = $1`, task, number, state, ci, ciHead, head)
+}
+
+// A pull_request loop on ci_success waits out CI at an older commit and pending CI at the head,
+// then fires once CI is green at the head; the message says how the pull request stands.
+func TestPullRequestLoopFiresWhenCIIsGreenAtTheHead(t *testing.T) {
+	r := newRig(t)
+	_, supSession, child, _ := r.reportingChild()
+	loop := r.arm(r.agentOf(supSession), tasks.LoopInput{
+		RequestID: "green", Trigger: dbstate.LoopTriggerPullRequest, TaskID: child,
+		PRConditions: []dbstate.PRCondition{dbstate.PRCISuccess, dbstate.PRMerged}, Note: "merge it",
+	})
+	head := strings.Repeat("b", 40)
+	r.projectPR(child, 9, "open", "success", strings.Repeat("a", 40), head)
+	r.eventually("seen the stale CI", func() bool {
+		return strings.Contains(r.str(`SELECT baseline FROM task_loops WHERE id = $1`, loop), "aaaa")
+	})
+	r.projectPR(child, 9, "open", "pending", head, head)
+	r.eventually("seen pending CI", func() bool {
+		return strings.Contains(r.str(`SELECT baseline FROM task_loops WHERE id = $1`, loop), "pending")
+	})
+	if n := r.count(`SELECT count(*) FROM task_loop_firings WHERE loop_id = $1`, loop); n != 0 {
+		t.Fatalf("fired %d times before CI was green at the head", n)
+	}
+	r.projectPR(child, 9, "open", "success", head, head)
+	r.eventually("sent", func() bool {
+		return r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[loop %'`, supSession) == 1
+	})
+	got := r.str(`SELECT content FROM session_messages WHERE session_id = $1 AND content LIKE '[loop %'`, supSession)
+	if !strings.Contains(got, "You asked: merge it") || !strings.Contains(got, "pull request #9 is open, CI success at the head bbbbbbbbbbbb") {
+		t.Fatalf("message = %q", got)
+	}
+}
+
+// A condition that already holds when the loop is armed fires at once; a pull_request loop needs a
+// code task.
+func TestPullRequestLoopOnAConditionThatHoldsFiresAtOnce(t *testing.T) {
+	r := newRig(t)
+	_, supSession, child, _ := r.reportingChild()
+	sup := r.agentOf(supSession)
+	r.projectPR(child, 4, "merged", "success", "c", "c")
+	loop := r.arm(sup, tasks.LoopInput{
+		RequestID: "m", Trigger: dbstate.LoopTriggerPullRequest, TaskID: child,
+		PRConditions: []dbstate.PRCondition{dbstate.PRMerged}, Note: "confirm prod",
+	})
+	r.eventually("fired", func() bool {
+		return r.count(`SELECT count(*) FROM task_loop_firings WHERE loop_id = $1`, loop) == 1
+	})
+	if got := r.str(`SELECT facts[1] FROM task_loop_firings WHERE loop_id = $1`, loop); !strings.Contains(got, "pull request #4 is merged") {
+		t.Fatalf("fact = %q", got)
+	}
+	coord := r.mustCreate(sup, tasks.CreateInput{})
+	_, err := r.svc.Arm(context.Background(), r.mainPrincipal(), tasks.LoopInput{
+		RequestID: "c", Trigger: dbstate.LoopTriggerPullRequest, TaskID: coord, Note: "n",
+	})
+	wantReason(t, err, tasks.ReasonLoopNeedsCodeTask)
+}

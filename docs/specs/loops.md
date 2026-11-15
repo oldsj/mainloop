@@ -4,9 +4,9 @@ A loop is a durable wake-up that main or a supervisor arms instead of polling: w
 fires, Mainloop sends one message to the session that armed it, so that session can end its turn
 and still hear when something is worth looking at. Issue #314.
 
-Status: **implemented** for task and time triggers, armed and managed by agents through MCP. The
-pull request trigger, the quiet trigger with its no-progress stop, and the owner's view and controls
-are **proposed** (see [Not built](#not-built)).
+Status: **implemented** for task, pull request and time triggers, armed and managed by agents
+through MCP. The quiet trigger with its no-progress stop, and the owner's view and controls, are
+**proposed** (see [Not built](#not-built)).
 
 ## Why
 
@@ -24,10 +24,11 @@ message through the same sessions ledger that delivers child reports.
 - **Recipient.** The loop belongs to its recipient, the session that armed it, named by the same key
   report deliveries use: `main`, or `parent-task:<task id>` for a supervisor. A supervisor's loops
   follow its task across a [retry or reassign](task-handoff.md), and end when the task ends.
-- **Subject.** A task trigger watches a task the caller manages: any of the owner's tasks for main,
-  a supervisor's own children. Another task is 403 `loop_subject_denied`; one that does not exist,
-  404 `task_not_found`. A time trigger may name a subject too, and its messages then say how that
-  task stands.
+- **Subject.** A task or pull request trigger watches a task the caller manages: any of the owner's
+  tasks for main, a supervisor's own children. Another task is 403 `loop_subject_denied`; one that
+  does not exist, 404 `task_not_found`; a pull request trigger on a coordination task, 422
+  `loop_requires_code_task`. A time trigger may name a subject too, and its messages then say how
+  that task stands.
 - **Idempotency.** The caller's `request_id` (per binding) returns the loop it armed; the same id
   with a different request is 409 `request_payload_conflict`.
 
@@ -39,15 +40,24 @@ No [goal](goals.md) is needed: a loop on a plain task is the first slice.
   change lands on one of them (for example `completed`, `failed`, `blocked`). A loop armed on a
   status the subject is already in fires at once, so arming just after the change still hears of
   it. Without `statuses` the loop starts from the subject as it is and fires on the next change.
+- **`pull_request`.** Fires when what the [task projection](tasks.md) saw of a code task's pull
+  request changes: a pull request appears, its number or state (`open`, `closed`, `merged`)
+  changes, or CI's result or the commit it is for changes. With `pr_conditions`, only when one of
+  them holds after the change: `ci_success` and `ci_failure` (CI's result for the pull request's
+  head commit, so a result for an older commit never counts), `merged`, `closed`. As for `task`, a
+  condition that already holds when the loop is armed fires at once. The message says how the pull
+  request stands, for example `pull request #9 is open, CI success at the head <sha>`. It reads the
+  projection the task projection sweep keeps fresh, so a loop adds no GitHub reads and fires within a
+  sweep of the change; a pull request that is not a task's stays with [`watch_checks`](ci.md).
 - **`time`.** Fires after `after_minutes`, then every `every_minutes` when given; with only
   `every_minutes`, the first firing is one interval away. A one-time timer is `done` once it fires.
   A timer that was asleep (the server down) fires once on waking, not once per missed interval.
 
 **How a trigger is watched.** A loop compares stored state, not events, so nothing is lost when a
 notification is missed or the event log is pruned. A task loop keeps a baseline, the subject's
-`status` or `status/reason`, and looks again on every status or reason change of its subject (a
-database trigger makes the loop due and notifies `mainloop_task_loops`) and at least every 15
-seconds otherwise. The evaluation holds the loop row while it reads, and the subject's change waits
+`status` or `status/reason`; a pull request loop, the pull request's number, state, CI result and
+CI commit. Either looks again on every such change of its subject (a database trigger makes the
+subject's loops due and notifies `mainloop_task_loops`) and at least every 15 seconds otherwise. The evaluation holds the loop row while it reads, and the subject's change waits
 on that row, so a change is either seen by the evaluation or makes the next one due. Time loops are
 due at their next fire time. Every armed loop is looked at again at least every five minutes, which
 is when an expiry or an ended recipient is noticed.
@@ -114,10 +124,6 @@ turn (#72), a loop's usage is the sum over its firings' turns, labelled _attribu
 
 ## Not built
 
-- **`pull_request` trigger** (proposed, next): fire when a subject code task's projection changes,
-  CI settled at the pull request head, its state or merge state, from the data the task projection
-  sweep already keeps fresh, so a loop adds no GitHub reads. A pull request that is not a task's
-  stays with `watch_checks`.
 - **`quiet` trigger and the no-progress stop** (proposed): fire when the subject has not changed for
   N minutes. Arming takes `expect_change` (default false); only a loop armed with it, a repair-style
   loop, stops as `exhausted` after three delivered firings in a row with an unchanged subject, and
