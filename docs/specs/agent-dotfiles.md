@@ -1,197 +1,153 @@
 # Agent dotfiles
 
-Status: proposed. Nothing in this document is implemented; every section describes intended
-behavior for [#313](https://github.com/oldsj/mainloop/issues/313). See
-[ROADMAP.md](../../ROADMAP.md#agent-context) for how this fits the "Agent context" direction, and
-[delegation.md](delegation.md#shared-agent-guidance) for the shared guidance text this proposal
-sits next to without replacing.
+Status: the source configuration is **implemented** (owner-wide and per-project, API and UI).
+Pinning, export, delivery and layout are **proposed** for
+[#313](https://github.com/oldsj/mainloop/issues/313); each section says which. See
+[ROADMAP.md](../../ROADMAP.md#agent-context) for how this fits the "Agent context" direction.
 
-Agents in Mainloop start without the owner's standing context: no skills, no subagents, no
-owner-level instructions beyond a repository's own `AGENTS.md`. This proposes carrying that
-context in as native files from a git repository — "dotfiles" — materialized read-only into each
-agent's home directory by kagent session preparation, the same way a repository's own `AGENTS.md`
-already reaches a task workspace today. Mainloop adds no new editor, prompt layer or version
-store: edits are commits to the dotfiles repository, and both Claude and Codex load the result
-themselves.
+Agents in Mainloop start without the owner's standing context: no owner-level instructions,
+skills or subagents beyond a repository's own `AGENTS.md`. Agent dotfiles carry that context in as
+native files from one directory of a git repository, laid out read-only in each agent's own
+user-level configuration directory before its first turn. Mainloop adds no prompt layer, editor
+or version store: editing means committing to the dotfiles repository, and Claude and Codex load
+the result themselves, including after compaction.
 
-## Proposed: configuration
+Agents never get Git access to the dotfiles repository. Mainloop reads it server-side and exports
+only the configured directory at one commit, filtered, bounded and scanned.
 
-An owner-wide dotfiles source — a repository URL and a ref (branch, tag or explicit SHA) — applies
-to every project unless a project sets its own. A project-level override has the same shape
-(`repository`, `ref`) and, while set, replaces the owner-wide source for that project's sessions
-only; clearing it reverts to the owner-wide source. There is no per-task, per-session or
-per-workspace override: the same two levels used for environment selection
-([environments.md](environments.md)) and merge policy apply here.
+## Implemented: configuration
 
-Only the owner can set either level. Mainloop has one owner per installation and no separate
-admin or member role, so this needs no new authorization model beyond the one every other
-owner-level setting already uses.
+A source is `{repository, ref, path}`:
 
-An empty ref resolves to the dotfiles repository's default branch, the same convention workspace
-checkout already uses for an empty `ref` ([workspaces.md](workspaces.md)).
+- `repository`: a GitHub `owner/name` the Mainloop GitHub App can read (`contents: read`).
+- `ref`: a branch, tag or full commit SHA; empty for the repository's default branch. A full ref
+  path (`refs/...`) and anything `git check-ref-format` refuses are `422`.
+- `path`: a directory in the repository, relative, with no empty, `.` or `..` segment, no
+  backslash and no control character; empty for the root. One trailing slash is dropped.
 
-Example (portable, not a real repository): owner-wide source `example/agent-dotfiles` at ref
-`main`, with one project overriding to `example/agent-dotfiles` at ref `project-x-stable`.
+There are two levels. The owner-wide source applies to every session; a project's own source, while
+set, replaces it for that project's sessions. There is no per-task or per-session override.
 
-## Proposed: resolution
+| Route                                 | Behavior                                                                                    |
+| ------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `GET /dotfiles`                       | The owner-wide source; `repository: null` at version 0 when none was ever set.              |
+| `PUT /dotfiles`                       | Set, or clear with `repository: null`. Compare-and-swap on `expected_version`; stale `409`. |
+| `GET /projects/{project_id}/dotfiles` | The project's own source, same shape; another owner's or a missing project is `404`.        |
+| `PUT /projects/{project_id}/dotfiles` | Same rules as `PUT /dotfiles`. Clearing reverts the project to the owner-wide source.       |
 
-At session creation — every workspace and the main thread's session — Mainloop resolves the
-effective dotfiles source (the project's override if set, else the owner-wide source) to a full
-commit SHA, through the same repository-scoped GitHub App client and commits-endpoint lookup that
-already resolves a workspace's checkout ref to a SHA before creation ([workspaces.md](workspaces.md)).
-The resolved commit is recorded on the session or workspace next to its checkout commit, not
-re-resolved for the life of that session. A later change to the owner's or project's configured
-source or ref never moves an existing session; only its next session picks up the new value.
+Clearing stores no ref or path. Stale writes answer `409` with reason `stale_dotfiles_source`; a
+project that is not the owner's is `404 project_not_found`. Saving a source does not check that
+the App can read it: that is reported per session (see "Failures" below).
 
-## Proposed: manifest
+The web shows the owner-wide source under Settings → Agent dotfiles, and the project's on the
+project page, which names the owner-wide source the project falls back to when it has none. Each
+shows the current source linked to its tree on GitHub (`https://github.com/<repository>/tree/<ref
+or HEAD>/<path>`, built only from a repository that matches `owner/name`, with the ref and path
+segments URL-encoded), a form for repository, ref and directory, and a button to clear it.
 
-The workspace manifest gains a `dotfiles` field recording the resolved source: repository, the
-configured ref, and the resolved commit SHA. This follows the existing precedent of the manifest
-already recording the selected agent kind ([workspaces.md](workspaces.md)), and is shown wherever
-the manifest is shown today.
+Example (fictional): owner-wide `example/agent-dotfiles` at `main`, directory `home/.agents`; a
+project overriding with `example/agent-dotfiles` at `project-x-stable`.
 
-## Proposed: mapping table
+## Proposed: what is read from the directory
 
-`AGENTS.md` is the single source for owner-level instructions. Claude and Codex read it through
-each CLI's own native project-instruction mechanism, with no Mainloop-authored prompt layer:
+Only these paths under `path` are exported; everything else in the repository is ignored.
 
-| Source path (dotfiles repository) | Claude Code                                                                                                                           | Codex                                                                                                |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `AGENTS.md`                       | `~/.claude/CLAUDE.md`, written as a one-line `@AGENTS.md` import (the pattern this repository's own `CLAUDE.md` uses for `AGENTS.md`) | `~/.codex/AGENTS.md`, materialized directly — Codex reads `AGENTS.md` natively at its home directory |
-| `skills/<name>/...`               | `~/.claude/skills/<name>/...`                                                                                                         | Unresolved — see "Codex user-level skills" below                                                     |
-| `agents/<name>.md`                | `~/.claude/agents/<name>.md` (Claude subagents)                                                                                       | No equivalent found; not mapped                                                                      |
-| `commands/<name>.md`              | `~/.claude/commands/<name>.md`                                                                                                        | `~/.codex/prompts/<name>.md` (see caveat below)                                                      |
+| Source                             | Claude Code (`CLAUDE_CONFIG_DIR`)                     | Codex (`CODEX_HOME`)               |
+| ---------------------------------- | ----------------------------------------------------- | ---------------------------------- |
+| `AGENTS.md`                        | `AGENTS.md`, plus `CLAUDE.md` containing `@AGENTS.md` | `AGENTS.md`                        |
+| `CLAUDE.md` (optional)             | used as-is instead of the generated one               | not mapped                         |
+| `skills/<name>/**` with `SKILL.md` | `skills/<name>/`                                      | `skills/<name>/`                   |
+| `agents/<name>.md`                 | `agents/<name>.md` (subagents)                        | not mapped (Codex agents are TOML) |
+| `commands/<name>.md`               | `commands/<name>.md`                                  | not mapped (deprecated in Codex)   |
 
-Both files and directories are materialized only into the agent's home directory, never into the
-repository checkout, so a repository's own `AGENTS.md`, `.claude/`, `.codex/` or `.agents/` content
-is untouched (see "Precedence" below).
+The destinations are the CLIs' user-level directories as kagent sets them for a session
+(`CLAUDE_CONFIG_DIR=/data/claude`, `CODEX_HOME=/data/codex`), not `~/.claude` or `~/.codex`. Claude
+loads only the user setting source, which is that directory. Codex still scans `$CODEX_HOME/skills`
+as a user skills root (its current docs name `~/.agents/skills`; `$CODEX_HOME/skills` is kept for
+compatibility), which does not depend on how `HOME` is set.
 
-### Codex user-level skills
+## Proposed: pinning and export (Mainloop)
 
-Checked against public Codex CLI documentation and sources reachable from this task (web search;
-direct fetches of `developers.openai.com` pages were blocked by this workspace's network
-allowlist, so none of the following is independently verified against the primary source):
+When Mainloop creates a kagent Session — a workspace, a coordination task's session, or the main
+thread's — it picks the effective source (the project's own, else the owner-wide one; the main
+thread uses the owner-wide one), and before the first CreateSession:
 
-- Older Codex documentation and third-party guides describe a personal skills directory at
-  `~/.codex/skills/`, scanned alongside a project's own `.codex/skills/` or `.agents/skills/`.
-- Search results citing an August 2026 documentation update describe skills moving to
-  `~/.agents/skills` (personal) and `.agents/skills` (project), with `~/.codex/skills/` still
-  honored for existing installations, plus an admin-level `/etc/codex/skills` tier.
-- Custom prompts (`~/.codex/prompts/<name>.md`, flat `.md` files, no subdirectories) are
-  documented at `developers.openai.com/codex/custom-prompts` per search results, but search
-  results also describe them as deprecated in favor of skills.
+1. Resolves the ref to a full commit SHA through the repository-scoped GitHub App client, as a
+   workspace's checkout ref is resolved.
+2. Fetches that commit server-side with an installation token that never leaves the server, and
+   reads the directory at that commit.
+3. Keeps only the allowed paths, and refuses the export when it holds a symlink, a submodule or any
+   other non-regular file, more than 4000 files, a file over 2 MiB, or more than 16 MiB in all.
+4. Scans exactly the exported files for secrets (private keys, provider token formats, credentials
+   in URLs, literal credential assignments). A match, or a scan that cannot finish, refuses the
+   export. Only file paths and rule names are recorded, never matched text.
+5. Writes a deterministic tar (sorted entries, modes 0444 or 0555, no times or owners), stored once
+   per `sha256` digest.
 
-Because these sources disagree and could not be checked against the primary documentation from
-this task, **the exact current path for Codex's user-level skills directory is an open question**,
-carried into "Open questions" below rather than asserted here. Codex's custom-prompts mechanism is
-mapped above as the closest analogue to Claude's `commands/`, with the same caveat that it may be
-superseded by Codex's skills mechanism before this spec is implemented.
+The session records `{repository, ref, path, commit, digest, status, reason}`, pinned once and
+frozen: a replayed create, a replaced kagent Session or a provider switch reuses it; a fork copies
+its source session's; a task's retry or reassign is a new session and pins anew. A change to either
+source never moves a live session. The workspace manifest and the session page show the commit as
+a short SHA linked to `tree/<commit>/<path>`.
 
-Codex has no documented equivalent to Claude's subagents (`agents/`); that row is left unmapped
-rather than guessed.
+## Proposed: delivery and layout (kagent)
 
-## Proposed: read-only materialization
+CreateSession carries `dotfiles = {url, digest, repository, commit, path}`. The url is the bundle
+on Mainloop's MCP listener, authenticated by the session's existing MCP credential, which kagent's
+gateway already injects for that origin; no new grant and no new egress origin is needed. kagent
+refuses a url whose origin carries none of the session's credentials, downloads the bundle,
+verifies the digest and the same limits, and lays it out in the destinations above before the
+first turn. It executes nothing from the bundle.
 
-kagent session preparation lays the resolved dotfiles commit into the agent's home directory,
-read-only, for every session kagent prepares — including the main thread's session, which has no
-repository checkout. This runs once per session, at the same preparation step that already
-provisions the native harness, before the agent's first turn. Materialized files are not
-re-fetched or re-resolved later in the session's life (see "Resolution" above): a session keeps
-the commit it was given.
-
-## Proposed: limits
-
-- **Size and file count.** Preparation enforces a maximum total size and a maximum file count for
-  the materialized tree, both bounded well below the existing workspace resource limits. Exact
-  numbers are not chosen in this proposal (see "Open questions").
-- **Allowed paths.** Only `AGENTS.md` and the `skills/`, `agents/` and `commands/` directories (as
-  mapped above) are read from the dotfiles commit; anything else in the repository is ignored.
-  Symlinks and paths that escape the dotfiles checkout are refused rather than followed.
-- **Nothing executed.** Preparation only copies files into place. It does not run an install
-  script, a hook, or any file from the dotfiles repository as code, the same boundary the existing
-  Git read transport already keeps around repository content it serves ([git-transport.md](git-transport.md)).
-- **Secret scan, fails closed.** The resolved commit is scanned for likely secrets before
-  materialization. A detected match, or a scan that cannot complete, is treated the same way: that
-  session's dotfiles are not materialized. The scan never fails open to "materialize anyway."
-
-## Proposed: forks and snapshots
-
-A fork inherits the exact dotfiles commit recorded on its source session, not a fresh resolution
-against the currently configured source or ref — the same way a fork already carries over its
-source session's project, provider profile and Agent rather than re-deriving them
-([warm-state.md](warm-state.md)). A forked session's manifest records that inherited commit
-unchanged; nothing re-runs preparation's resolution step for it.
-
-How this interacts with kagent's `$HOME`/Data snapshot mechanics in practice is not established
-here: the fork operation itself remains largely unproven as of this writing (see
-[warm-state.md](warm-state.md)), so this is carried into "Open questions" rather than asserted as
-settled.
-
-## Proposed: precedence
-
-Within one agent's home directory, a repository's own project-level files win over the
-materialized user-level dotfiles, following each native CLI's own existing precedence — Mainloop
-adds no precedence logic of its own. Claude Code and Codex both already resolve project-level
-instructions, skills and commands ahead of user-level ones; dotfiles materialization only ever
-writes into the user-level location (`~/.claude/...`, `~/.codex/...`) and never into the
-repository checkout, so it cannot shadow or be shadowed by anything the repository itself commits
-except through each CLI's own existing merge/override behavior.
-
-## Proposed: UI
-
-The workspace page (and anywhere a session's workspace is shown) shows the dotfiles commit as a
-short SHA, linked to that commit in the dotfiles repository (`https`/`http` only, the same
-link-rendering rule already applied to the repository link — [workspaces.md](workspaces.md)).
-There is no in-app editor for dotfiles content; editing means committing to the dotfiles
-repository.
+Files are 0444 (0555 where git marked them executable, so a skill's scripts still run when the
+agent uses that skill), directories 0555. The harness rewrites its dotfiles entries from the pinned
+bundle on every start, so an agent's edits never persist; permissions alone are not the guarantee,
+since the agent runs as the same user. The agent's own compiler-selected skills win a name clash
+with a dotfiles skill. Everything lives under `/data`, so a Data snapshot carries the laid-out files
+into a fork, consistent with the fork keeping its source's commit.
 
 ## Proposed: failures
 
-| Case                                          | Behavior                                                                                                                                                       |
-| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dotfiles repository unreachable at resolution | Session creation proceeds without materialized dotfiles; the reason is recorded on the manifest so it is visible where the commit link would otherwise appear. |
-| Configured ref does not exist                 | Same as unreachable: session creation proceeds without dotfiles, with the reason recorded.                                                                     |
-| Secret scan fails or finds a match            | Materialization for that session is skipped (see "Limits" above); the reason is recorded the same way.                                                         |
+Dotfiles are context, not a precondition. None of these blocks session creation; the session runs
+without dotfiles and records the reason where the commit would show:
 
-Dotfiles are supplementary context, not a precondition for an agent to run, so none of these cases
-blocks session creation itself the way an unresolvable _checkout_ ref already does
-([workspaces.md](workspaces.md)). Whether that is the right default, versus failing the session
-the same way a bad checkout ref does, is open to revisiting once this is implemented.
+| Case                                                | `status`      | `reason`                                      |
+| --------------------------------------------------- | ------------- | --------------------------------------------- |
+| No source set                                       | `none`        |                                               |
+| App not installed on the repository, or unreachable | `unavailable` | `app_not_installed`, `repository_unavailable` |
+| Ref does not exist                                  | `unavailable` | `ref_not_found`                               |
+| Over a limit, or a non-regular file                 | `refused`     | `over_limits`, `unsupported_file`             |
+| Secret found, or scan failed                        | `refused`     | `secret_found`, `scan_failed`                 |
 
-## Proposed API contract changes
+## Precedence
 
-Described here, not yet in `api/openapi.yaml`; the contract change comes in a later
-implementation PR. Shapes follow the existing owner-settings and project-selection pattern used by
-environments ([environments.md](environments.md)):
+Dotfiles only ever write the user level; repositories keep their own files. Each CLI's own
+precedence applies, and Mainloop adds none. Checked against the CLIs' documentation, not live:
 
-- `GET /dotfiles-source` / `PUT /dotfiles-source` — read and set the owner-wide source,
-  `{repository, ref}` (`ref` omittable for the repository's default branch).
-- `GET /projects/{id}/dotfiles-source` — the project's override, or `204` when absent (same
-  convention as `GET /projects/{id}/environment`).
-- `PUT /projects/{id}/dotfiles-source` — set the project's override, same body shape.
-- `DELETE /projects/{id}/dotfiles-source` — clear the override, reverting to the owner-wide source.
-- A `dotfiles` object — `{repository, ref, resolved_commit, status}` — added to the existing
-  workspace/session read models (`GET /workspaces/{id}`, and the session read it is shown
-  alongside), next to the existing checkout fields. `status` carries the "no dotfiles this
-  session" reasons from "Failures" above when materialization did not happen.
+- Claude: user and project `CLAUDE.md` both load. On a name clash a personal skill wins over a
+  project skill, while a project subagent wins over a user one.
+- Codex: the user `AGENTS.md` comes first, then project files from the repository root to the
+  working directory. Two skills with the same name both appear.
+
+So a dotfiles skill should not reuse the name of a repository's skill.
+
+## Relation to other agent context
+
+- Dotfiles `AGENTS.md` is the owner-level instruction document the roadmap describes: owner-wide
+  communication style, evidence rules and review expectations, versioned by git.
+- Mainloop's shared agent guidance ([delegation.md](delegation.md#shared-agent-guidance)) stays: it
+  states the session's role, workspace and tools, which a dotfiles file cannot know.
+- Per-project instructions and memory stay in Mainloop ([project-context.md](project-context.md)),
+  editable from a phone and rendered into briefs. Repository facts stay in the repository's
+  `AGENTS.md`.
 
 ## Open questions
 
-Carried over from #313, plus one found while writing this:
-
-- Whether Codex reads skills from a user-level directory, and which one — see "Codex user-level
-  skills" above; not verified against primary documentation from this task.
-- How `$HOME` interacts with kagent's Data snapshots, and specifically whether a fork should keep
-  its source's dotfiles commit or re-resolve to the latest configured ref — this proposal chooses
-  "keep the source's commit" (see "Forks and snapshots"), but the underlying snapshot mechanics
-  are not yet proven.
-- Exact size and file-count limits, and the precise allowed-path list.
-- Precedence when a repository's own `AGENTS.md` or `.claude/` conflicts with dotfiles — this
-  proposal defers entirely to each native CLI's existing precedence (see "Precedence"), but that
-  has not been checked against live CLI behavior.
-- Whether this replaces the ROADMAP's proposed owner-level instruction document
-  ([ROADMAP.md](../../ROADMAP.md#agent-context)), or that document becomes one file inside
-  dotfiles.
-- Whether an unreachable repository, a missing ref, or a failed scan should block session creation
-  outright (as an unresolvable checkout ref already does) instead of the soft-skip this proposal
-  defaults to (see "Failures").
+- Whether a refused or unavailable export should block session creation instead of running
+  without dotfiles.
+- Whether to also map `agents/*.toml` to Codex custom agents.
+- Garbage collection of bundles no session references.
+- Live proof: none of the proposed behavior has run against real CLIs. It needs a main-thread and a
+  workspace session on mainloop-dev with a fictional dotfiles repository, checking that each CLI
+  loads the instructions and skills, that the files are not writable, and that the session shows
+  the commit.

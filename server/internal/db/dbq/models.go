@@ -566,6 +566,15 @@ type MessageImage struct {
 	CreatedAt time.Time
 }
 
+type OwnerDotfilesSource struct {
+	OwnerID    string
+	Repository *string
+	Ref        string
+	Path       string
+	Version    int64
+	UpdatedAt  time.Time
+}
+
 type OwnerSeen struct {
 	UserID        string
 	Since         time.Time
@@ -631,6 +640,15 @@ type Project struct {
 	CiDetectedAt            *time.Time
 	WorkspaceServiceCommand []string
 	WorkspaceServicePorts   json.RawMessage
+}
+
+type ProjectDotfilesSource struct {
+	ProjectID  string
+	Repository *string
+	Ref        string
+	Path       string
+	Version    int64
+	UpdatedAt  time.Time
 }
 
 type ProjectEnvironmentSelection struct {

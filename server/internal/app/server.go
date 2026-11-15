@@ -18,6 +18,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/ci"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/devloop"
+	"github.com/oldsj/mainloop/server/internal/dotfiles"
 	"github.com/oldsj/mainloop/server/internal/environments"
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/health"
@@ -60,6 +61,7 @@ type Server struct {
 	*schedules.SchedulesAPI
 	*merge.MergeAPI
 	*devloop.DevloopAPI
+	*dotfiles.DotfilesAPI
 
 	fallback
 
@@ -169,6 +171,7 @@ func New(d Deps) *Server {
 		SchedulesAPI:    schedules.NewAPI(d.Schedules),
 		MergeAPI:        &merge.MergeAPI{Svc: d.Merge, OwnerID: d.Config.Identity.OwnerID},
 		DevloopAPI:      devloop.NewAPI(d.Devloop),
+		DotfilesAPI:     dotfiles.NewAPI(d.Pool, d.Config.Identity.OwnerID),
 		deps:            d,
 	}
 }

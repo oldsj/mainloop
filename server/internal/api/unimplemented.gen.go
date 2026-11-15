@@ -119,6 +119,11 @@ func (Unimplemented) GetDevloopLease(context.Context, GetDevloopLeaseRequestObje
 	return nil, apierr.NotImplemented
 }
 
+// GetDotfilesSource is not implemented yet.
+func (Unimplemented) GetDotfilesSource(context.Context, GetDotfilesSourceRequestObject) (GetDotfilesSourceResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetEnvironment is not implemented yet.
 func (Unimplemented) GetEnvironment(context.Context, GetEnvironmentRequestObject) (GetEnvironmentResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -186,6 +191,11 @@ func (Unimplemented) GetProjectDetail(context.Context, GetProjectDetailRequestOb
 
 // GetProjectDevloopTarget is not implemented yet.
 func (Unimplemented) GetProjectDevloopTarget(context.Context, GetProjectDevloopTargetRequestObject) (GetProjectDevloopTargetResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// GetProjectDotfilesSource is not implemented yet.
+func (Unimplemented) GetProjectDotfilesSource(context.Context, GetProjectDotfilesSourceRequestObject) (GetProjectDotfilesSourceResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 
@@ -441,6 +451,16 @@ func (Unimplemented) SendMessage(context.Context, SendMessageRequestObject) (Sen
 
 // SendSessionMessage is not implemented yet.
 func (Unimplemented) SendSessionMessage(context.Context, SendSessionMessageRequestObject) (SendSessionMessageResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// SetDotfilesSource is not implemented yet.
+func (Unimplemented) SetDotfilesSource(context.Context, SetDotfilesSourceRequestObject) (SetDotfilesSourceResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// SetProjectDotfilesSource is not implemented yet.
+func (Unimplemented) SetProjectDotfilesSource(context.Context, SetProjectDotfilesSourceRequestObject) (SetProjectDotfilesSourceResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

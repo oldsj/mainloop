@@ -577,6 +577,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/projects/{project_id}/dotfiles': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Project Dotfiles Source
+     * @description The project's own dotfiles source, which replaces the owner-wide one for this project's sessions while `repository` is set. With none set, `repository` is `null` at version 0 and the owner-wide source applies.
+     */
+    get: operations['getProjectDotfilesSource'];
+    /**
+     * Set Project Dotfiles Source
+     * @description Set or clear (`repository: null`, reverting to the owner-wide source) the project's source, with the same compare-and-swap and field rules as `PUT /dotfiles`.
+     */
+    put: operations['setProjectDotfilesSource'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/projects/{project_id}/detail': {
     parameters: {
       query?: never;
@@ -906,6 +930,30 @@ export interface paths {
      * @description Set the default model and effort for one role and provider profile. `null` leaves that field to the provider; both `null` removes the default. The provider must be a configured profile and the effort one of its `effort_levels` (`GET /providers`); otherwise `422`. Returns every default.
      */
     put: operations['setSessionDefault'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/dotfiles': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Dotfiles Source
+     * @description The owner-wide agent dotfiles source: a GitHub repository, a ref and a directory in it whose `AGENTS.md`, skills, subagents and commands every agent session receives as native user-level files (see docs/specs/agent-dotfiles.md). A project's own source, when set, replaces it for that project. With none set, `repository` is `null` at version 0.
+     */
+    get: operations['getDotfilesSource'];
+    /**
+     * Set Dotfiles Source
+     * @description Set or clear (`repository: null`) the owner-wide source: a compare-and-swap on `version` (`expected_version` 0 when none was ever set), `409` when stale. `ref` empty means the repository's default branch; `path` empty means its root. A new value reaches sessions created after it; a running session keeps the commit it was given.
+     */
+    put: operations['setDotfilesSource'];
     post?: never;
     delete?: never;
     options?: never;
@@ -2655,6 +2703,37 @@ export interface components {
       url: string;
       /** Is Mainloop */
       is_mainloop: boolean;
+    };
+    /**
+     * DotfilesSource
+     * @description An agent dotfiles source. `repository` is a GitHub `owner/name` the Mainloop GitHub App can read, or `null` when none is set. `ref` is a branch, tag or full commit SHA, empty for the default branch. `path` is a directory in the repository, empty for its root.
+     */
+    DotfilesSource: {
+      /** Repository */
+      repository: string | null;
+      /** Ref */
+      ref: string;
+      /** Path */
+      path: string;
+      /** Version */
+      version: number;
+    };
+    /** DotfilesSourceUpdate */
+    DotfilesSourceUpdate: {
+      /** Repository */
+      repository: string | null;
+      /**
+       * Ref
+       * @default
+       */
+      ref: string;
+      /**
+       * Path
+       * @default
+       */
+      path: string;
+      /** Expected Version */
+      expected_version: number;
     };
     /** ProjectProviderUpdate */
     ProjectProviderUpdate: {
@@ -7753,6 +7832,116 @@ export interface operations {
       };
     };
   };
+  getProjectDotfilesSource: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DotfilesSource'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  setProjectDotfilesSource: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['DotfilesSourceUpdate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DotfilesSource'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
   getProjectDetail: {
     parameters: {
       query?: never;
@@ -9024,6 +9213,90 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  getDotfilesSource: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DotfilesSource'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  setDotfilesSource: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['DotfilesSourceUpdate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DotfilesSource'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
         };
       };
       /** @description Validation Error */
