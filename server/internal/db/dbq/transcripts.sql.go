@@ -8,6 +8,8 @@ package dbq
 import (
 	"context"
 	"time"
+
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
 const addTranscriptSessionBytes = `-- name: AddTranscriptSessionBytes :exec
@@ -23,6 +25,107 @@ type AddTranscriptSessionBytesParams struct {
 func (q *Queries) AddTranscriptSessionBytes(ctx context.Context, arg AddTranscriptSessionBytesParams) error {
 	_, err := q.db.Exec(ctx, addTranscriptSessionBytes, arg.Bytes, arg.KagentSessionID)
 	return err
+}
+
+const copiedTranscriptTasks = `-- name: CopiedTranscriptTasks :many
+SELECT task_id FROM transcript_tasks WHERE task_id = ANY($1::text[])
+`
+
+// Which of these tasks have a copy receipt.
+func (q *Queries) CopiedTranscriptTasks(ctx context.Context, taskIds []string) ([]string, error) {
+	rows, err := q.db.Query(ctx, copiedTranscriptTasks, taskIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var task_id string
+		if err := rows.Scan(&task_id); err != nil {
+			return nil, err
+		}
+		items = append(items, task_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countUncopiedDeliveries = `-- name: CountUncopiedDeliveries :one
+SELECT count(*) FROM deliveries d
+WHERE d.kagent_session_id = $1 AND d.task_id IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM transcript_tasks t WHERE t.task_id = d.task_id)
+`
+
+// Turns Mainloop sent into this kagent Session that have no copy: a Session that is gone with any
+// of these lost them.
+func (q *Queries) CountUncopiedDeliveries(ctx context.Context, kagentSessionID *string) (int64, error) {
+	row := q.db.QueryRow(ctx, countUncopiedDeliveries, kagentSessionID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const endTranscriptSession = `-- name: EndTranscriptSession :exec
+UPDATE transcript_sessions SET state = $2, reason = $3, updated_at = now()
+WHERE kagent_session_id = $1 AND state = 'active'
+`
+
+type EndTranscriptSessionParams struct {
+	KagentSessionID string
+	State           string
+	Reason          string
+}
+
+// The session is no longer followed: complete (reason empty) or unavailable (reason says why).
+func (q *Queries) EndTranscriptSession(ctx context.Context, arg EndTranscriptSessionParams) error {
+	_, err := q.db.Exec(ctx, endTranscriptSession, arg.KagentSessionID, arg.State, arg.Reason)
+	return err
+}
+
+const failTranscriptSessionScan = `-- name: FailTranscriptSessionScan :exec
+UPDATE transcript_sessions
+SET failures = failures + 1, updated_at = now(),
+    next_scan_at = now() + make_interval(secs => $1::float8)
+WHERE kagent_session_id = $2
+`
+
+type FailTranscriptSessionScanParams struct {
+	DelaySeconds    float64
+	KagentSessionID string
+}
+
+func (q *Queries) FailTranscriptSessionScan(ctx context.Context, arg FailTranscriptSessionScanParams) error {
+	_, err := q.db.Exec(ctx, failTranscriptSessionScan, arg.DelaySeconds, arg.KagentSessionID)
+	return err
+}
+
+const getTranscriptSession = `-- name: GetTranscriptSession :one
+SELECT kagent_session_id, session_id, owner_id, agent_namespace, agent_name, context_id, task_cursor, state, reason, stored_bytes, failures, next_scan_at, scanned_at, created_at, updated_at FROM transcript_sessions WHERE kagent_session_id = $1
+`
+
+func (q *Queries) GetTranscriptSession(ctx context.Context, kagentSessionID string) (TranscriptSession, error) {
+	row := q.db.QueryRow(ctx, getTranscriptSession, kagentSessionID)
+	var i TranscriptSession
+	err := row.Scan(
+		&i.KagentSessionID,
+		&i.SessionID,
+		&i.OwnerID,
+		&i.AgentNamespace,
+		&i.AgentName,
+		&i.ContextID,
+		&i.TaskCursor,
+		&i.State,
+		&i.Reason,
+		&i.StoredBytes,
+		&i.Failures,
+		&i.NextScanAt,
+		&i.ScannedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const insertTranscriptEntries = `-- name: InsertTranscriptEntries :exec
@@ -129,6 +232,152 @@ func (q *Queries) InsertTranscriptTask(ctx context.Context, arg InsertTranscript
 	return result.RowsAffected(), nil
 }
 
+const listDueTranscriptSessions = `-- name: ListDueTranscriptSessions :many
+SELECT kagent_session_id, session_id, owner_id, agent_namespace, agent_name, context_id, task_cursor, state, reason, stored_bytes, failures, next_scan_at, scanned_at, created_at, updated_at FROM transcript_sessions
+WHERE owner_id = $1 AND state = 'active' AND next_scan_at <= now()
+ORDER BY next_scan_at, kagent_session_id
+LIMIT $2
+`
+
+type ListDueTranscriptSessionsParams struct {
+	OwnerID     string
+	MaxSessions int32
+}
+
+func (q *Queries) ListDueTranscriptSessions(ctx context.Context, arg ListDueTranscriptSessionsParams) ([]TranscriptSession, error) {
+	rows, err := q.db.Query(ctx, listDueTranscriptSessions, arg.OwnerID, arg.MaxSessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TranscriptSession{}
+	for rows.Next() {
+		var i TranscriptSession
+		if err := rows.Scan(
+			&i.KagentSessionID,
+			&i.SessionID,
+			&i.OwnerID,
+			&i.AgentNamespace,
+			&i.AgentName,
+			&i.ContextID,
+			&i.TaskCursor,
+			&i.State,
+			&i.Reason,
+			&i.StoredBytes,
+			&i.Failures,
+			&i.NextScanAt,
+			&i.ScannedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTranscriptBindingsToAdopt = `-- name: ListTranscriptBindingsToAdopt :many
+SELECT b.session_id, b.kagent_session_id, s.user_id, b.kind, b.role,
+       coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
+       coalesce(b.kagent_agent_name, w.agent_name, '') AS resolved_agent_name
+FROM agent_bindings b
+JOIN sessions s ON s.id = b.session_id
+LEFT JOIN workspaces w ON w.id = b.session_id
+WHERE b.kagent_session_id IS NOT NULL AND s.user_id = $1
+  AND NOT EXISTS (SELECT 1 FROM transcript_sessions t WHERE t.kagent_session_id = b.kagent_session_id)
+ORDER BY b.session_id
+LIMIT $2
+`
+
+type ListTranscriptBindingsToAdoptParams struct {
+	UserID  string
+	MaxRows int32
+}
+
+type ListTranscriptBindingsToAdoptRow struct {
+	SessionID              string
+	KagentSessionID        *string
+	UserID                 string
+	Kind                   string
+	Role                   dbstate.BindingRole
+	ResolvedAgentNamespace string
+	ResolvedAgentName      string
+}
+
+// The owner's bound kagent Sessions the ingester does not follow yet, with what the sessions package
+// needs to resolve the Agent that runs each. Archived sessions are included: their last turns are
+// still copied.
+func (q *Queries) ListTranscriptBindingsToAdopt(ctx context.Context, arg ListTranscriptBindingsToAdoptParams) ([]ListTranscriptBindingsToAdoptRow, error) {
+	rows, err := q.db.Query(ctx, listTranscriptBindingsToAdopt, arg.UserID, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTranscriptBindingsToAdoptRow{}
+	for rows.Next() {
+		var i ListTranscriptBindingsToAdoptRow
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.KagentSessionID,
+			&i.UserID,
+			&i.Kind,
+			&i.Role,
+			&i.ResolvedAgentNamespace,
+			&i.ResolvedAgentName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const nudgeTranscriptSession = `-- name: NudgeTranscriptSession :exec
+UPDATE transcript_sessions SET next_scan_at = now()
+WHERE kagent_session_id = $1 AND state = 'active' AND next_scan_at > now()
+`
+
+// A turn of this kagent Session just ended: copy it on the next pass.
+func (q *Queries) NudgeTranscriptSession(ctx context.Context, kagentSessionID string) error {
+	_, err := q.db.Exec(ctx, nudgeTranscriptSession, kagentSessionID)
+	return err
+}
+
+const pruneTranscriptTasks = `-- name: PruneTranscriptTasks :execrows
+WITH old AS (
+    SELECT tt.task_id FROM transcript_tasks tt
+    WHERE tt.pruned_at IS NULL AND tt.ingested_at < $1
+    ORDER BY tt.ingested_at
+    LIMIT $2
+    FOR UPDATE SKIP LOCKED
+), gone AS (
+    DELETE FROM transcript_entries e USING old WHERE e.task_id = old.task_id
+)
+UPDATE transcript_tasks t SET pruned_at = now() FROM old WHERE t.task_id = old.task_id
+`
+
+type PruneTranscriptTasksParams struct {
+	Cutoff  time.Time
+	MaxRows int32
+}
+
+// Retention: the entries of up to max_rows tasks copied before the cutoff are deleted, and their
+// receipts kept as pruned so a task kagent still lists is not copied again.
+func (q *Queries) PruneTranscriptTasks(ctx context.Context, arg PruneTranscriptTasksParams) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneTranscriptTasks, arg.Cutoff, arg.MaxRows)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const searchTranscripts = `-- name: SearchTranscripts :many
 SELECT e.id, e.session_id, e.task_id, e.pos, e.kind, e.tool_name, e.at,
        ts_headline('english', e.text, q, 'MaxFragments=2, MaxWords=24, MinWords=8')::text AS snippet,
@@ -196,4 +445,35 @@ func (q *Queries) SearchTranscripts(ctx context.Context, arg SearchTranscriptsPa
 		return nil, err
 	}
 	return items, nil
+}
+
+const setTranscriptSessionScan = `-- name: SetTranscriptSessionScan :exec
+UPDATE transcript_sessions
+SET task_cursor = $1, scanned_at = now(), failures = 0, updated_at = now(),
+    next_scan_at = now() + make_interval(secs => $2::float8)
+WHERE kagent_session_id = $3
+`
+
+type SetTranscriptSessionScanParams struct {
+	Cursor          *string
+	RestSeconds     float64
+	KagentSessionID string
+}
+
+// A pass that read the session without failing: the cursor moves (or stays), the failure backoff
+// clears and the session rests until it is due again or a finished turn nudges it.
+func (q *Queries) SetTranscriptSessionScan(ctx context.Context, arg SetTranscriptSessionScanParams) error {
+	_, err := q.db.Exec(ctx, setTranscriptSessionScan, arg.Cursor, arg.RestSeconds, arg.KagentSessionID)
+	return err
+}
+
+const transcriptSessionBytes = `-- name: TranscriptSessionBytes :one
+SELECT stored_bytes FROM transcript_sessions WHERE kagent_session_id = $1
+`
+
+func (q *Queries) TranscriptSessionBytes(ctx context.Context, kagentSessionID string) (int64, error) {
+	row := q.db.QueryRow(ctx, transcriptSessionBytes, kagentSessionID)
+	var stored_bytes int64
+	err := row.Scan(&stored_bytes)
+	return stored_bytes, err
 }

@@ -1177,6 +1177,12 @@ func (t *turn) settle(
 		if err := t.ingestHealth(ctx, tx, task); err != nil {
 			return nil, err
 		}
+		// The turn's transcript is copied by the transcript sweep; this makes the session due now.
+		if t.ksid != "" {
+			if err := q.NudgeTranscriptSession(ctx, t.ksid); err != nil {
+				return nil, err
+			}
+		}
 		if promoted != "" {
 			if err := q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: DeliveryChannel, Payload: promoted}); err != nil {
 				return nil, err

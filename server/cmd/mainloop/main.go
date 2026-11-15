@@ -37,6 +37,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/schedules"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/tasks"
+	"github.com/oldsj/mainloop/server/internal/transcripts"
 	"github.com/oldsj/mainloop/server/internal/workspaces"
 )
 
@@ -268,6 +269,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner.AddSweep(attn.Sweep())
 	runner.AddSweep(healthSvc.RecoverSweep(svc))
 	runner.AddSweep(healthSvc.RetainSweep())
+	transcripts.NewService(cfg, pool, transcripts.FromClient(kc), svc, log).Register(runner)
 	runner.AddSweep(schedSvc.Sweep())
 	runner.AddSweep(environments.NewAPI(cfg, pool, nil).Service.FollowSweep(cfg.Identity.OwnerID))
 	if cfg.Ntfy.Enabled() {

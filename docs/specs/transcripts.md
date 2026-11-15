@@ -1,8 +1,9 @@
 # Session transcripts
 
-Status: **partly implemented** (#448). The storage and the turn normalizer exist. Ingestion, the
-read and search API, the MCP tools and the web view are still to come; until they land, nothing
-writes these tables.
+Status: **partly implemented** (#448). Storage, the turn normalizer, ingestion and retention
+exist. The read and search API, the MCP tools and the web view are still to come, and so is a copy
+taken just before Mainloop deletes a kagent Session; until that lands, a turn that finishes less
+than a sweep before its Session is deleted can be lost.
 
 Mainloop's conversation (`session_messages`) keeps each turn's user message and final reply. A
 session's transcript also keeps what the agent did on the way: its text, each tool call with its
@@ -87,11 +88,52 @@ leaves part of a credential that redaction would have caught. The limits are:
 
 Each entry records whether it was cut or withheld, and its size before either.
 
+**A budget per kagent Session.** One kagent Session stores at most 20 MiB of entry text
+(`TRANSCRIPT_SESSION_BUDGET_MIB`). Past it, entries are still recorded, with their kind, tool and
+size, but without text. The budget counts every byte ever stored for the Session; retention does
+not give it back.
+
+## Ingestion
+
+The API server follows every kagent Session bound to one of the owner's sessions, archived ones
+included. A sweep every 10 seconds reads the Sessions that are due:
+
+- **Finished turns only.** A task is copied once it is completed, failed, canceled or rejected. A
+  task that is running, or waiting for an answer or approval, is not: an answered task continues
+  the same turn.
+- **When a Session is due.** When Mainloop sees a turn it sent end, the Session is due at once.
+  Otherwise it is read again 15 minutes after its last read, which picks up turns Mainloop did not
+  send.
+- **A cursor.** Each Session keeps kagent's page token. The cursor moves past a page only once
+  every task on it, and on the pages before it, has been copied. A task that waits for input holds
+  the cursor; the finished tasks after it are still copied. Already-copied tasks are recognised by
+  their receipt, so a page read again costs no task read.
+- **Bounded passes.** One pass reads at most 20 Sessions, and copies at most 50 tasks from each.
+  A Session with more left is due again at once.
+- **No transaction across kagent reads.** kagent is read with no transaction open. Each task is
+  written in a short transaction of its own, so a pass that stops half way repeats work and loses
+  none.
+
+**When kagent no longer has a Session.** kagent answers "not found" both for a deleted Session and
+for a missing Agent, so Mainloop first checks the Agent exists. If it does, the Session is no
+longer followed:
+
+- `complete` when every turn Mainloop sent into it was copied;
+- `unavailable` otherwise, with the number of turns that were lost.
+
+**Failures.** A Session whose reads fail is read again later, waiting longer after each failure in
+a row: 30 seconds, doubling, up to an hour. After 24 failures in a row it becomes `unavailable`.
+When kagent is unreachable, or refuses Mainloop's credentials, the pass stops without counting a
+failure against any Session.
+
 ## Copying once
 
 Each copied task has a receipt (`transcript_tasks`). Copying the same task again writes nothing.
 Normalization is deterministic, so an entry's position within its task is stable.
 
 ## Retention
+
+A copied turn's entries are deleted 90 days after it was copied (`TRANSCRIPT_RETENTION_DAYS`). Its
+receipt is kept, so a turn kagent still lists is not copied again.
 
 Deleting a session, including a workspace purge, deletes its transcript.
