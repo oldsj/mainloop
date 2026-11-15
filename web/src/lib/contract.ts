@@ -31,6 +31,10 @@ export type TaskActionKind = 'retry' | 'reassign' | 'cancel';
 export type TaskAction = Schemas['TaskAction'];
 export type TaskReassign = Schemas['TaskReassign'];
 
+/** A message for a task's own native session, and what became of it. */
+export type TaskFollowUp = Schemas['TaskFollowUp'];
+export type TaskFollowUpResult = Schemas['TaskFollowUpResult'];
+
 /** The body the owner submits: retry and cancel send `TaskAction`, reassign adds a target. */
 export type TaskActionBody = TaskAction | TaskReassign;
 

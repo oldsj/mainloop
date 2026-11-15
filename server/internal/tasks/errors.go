@@ -59,4 +59,11 @@ const (
 	ReasonModelUnavailable     = "model_unavailable"
 	ReasonEffortUnavailable    = "effort_unavailable"
 	ReasonTaskNotRunning       = "task_not_running"
+	// Follow-up refusals; see [Service.FollowUp].
+	ReasonSessionGone       = "session_gone"
+	ReasonSessionArchived   = "session_archived"
+	ReasonTaskSettling      = "task_settling"
+	ReasonOperationPending  = "operation_pending"
+	ReasonFollowUpCode      = "follow_up_code_task_completed"
+	ReasonRuntimeLimitOwner = "runtime_limit_needs_owner"
 )

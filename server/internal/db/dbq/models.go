@@ -919,6 +919,7 @@ type TaskAttempt struct {
 	Effort                    *string
 	InstructionsVersion       *int32
 	MemorySeq                 *int64
+	ReopenedAt                *time.Time
 }
 
 type TaskEventDelivery struct {

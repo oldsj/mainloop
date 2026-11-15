@@ -201,7 +201,15 @@ func eligibility(t dbq.Task) map[string]api.TaskEligibility {
 		cancel = unavailable(api.TaskEligibilityReason(dbstate.ReasonCancelUnavailable))
 	}
 	handoff := unavailable(api.TaskEligibilityReason(dbstate.ReasonHandoffUnavailable))
-	return map[string]api.TaskEligibility{"cancel": cancel, "retry": handoff, "reassign": handoff}
+	// A follow-up goes to the task's own session: not before it has one, and not after an owner's
+	// cancel, a failure (retried instead) or a code task's merge (more work is a new task).
+	followUp := api.TaskEligibility{Available: true}
+	switch {
+	case t.CurrentAttemptID == nil, t.Status == dbstate.TaskQueued, t.Status == dbstate.TaskCancelled,
+		t.Status == dbstate.TaskFailed, t.Status == dbstate.TaskCompleted && t.Mode == dbstate.TaskModeCode:
+		followUp = unavailable(api.TaskEligibilityReasonFollowUpUnavailable)
+	}
+	return map[string]api.TaskEligibility{"cancel": cancel, "retry": handoff, "reassign": handoff, "follow_up": followUp}
 }
 
 // projection is what the GitHub observation last saw of the task's pull request. It is a cache:

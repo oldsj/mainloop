@@ -288,6 +288,15 @@ func (t *turn) ensureKagentSession(ctx context.Context) (string, error) {
 			}
 		}
 	}
+	if t.ksid != "" && t.d.WorkspaceID == nil && dbstate.BindingRole(t.d.BindingRole) != dbstate.RoleMain {
+		// A task's Session outlives its attempt's credential: a finished task's revoke deleted it,
+		// and a follow-up reopens the attempt on the same Session. Issue is idempotent, so this is a
+		// read when the credential is published, and republishes it under the same Secret name (which
+		// the Session's credential reference names) when it was revoked.
+		if _, err := t.mcpCredentials(ctx); err != nil {
+			return "", err
+		}
+	}
 	for replaced := false; ; replaced = true {
 		if err := t.checkSendFence(ctx); err != nil {
 			return "", err
@@ -317,6 +326,15 @@ func (t *turn) ensureKagentSession(ctx context.Context) (string, error) {
 		}
 		if t.d.WorkspaceID != nil {
 			return "", errWorkspaceSessionGone
+		}
+		if t.ksid != "" {
+			// A task's Session carries the task's native context; a fresh one would get this message
+			// without its brief or history. Fail it instead, so the task is retried, not silently reset.
+			if owned, err := t.taskOwned(ctx); err != nil {
+				return "", err
+			} else if owned {
+				return "", errTaskSessionGone
+			}
 		}
 		if replaced {
 			return "", errors.New("the replacement kagent session is already gone")
@@ -353,7 +371,19 @@ var (
 	errWorkspacePreparing = errors.New("the workspace is not prepared yet")
 	// errWorkspacePreparationFailed is final: the session must be replaced.
 	errWorkspacePreparationFailed = errors.New("workspace preparation failed; replace the session")
+	// errTaskSessionGone is final: a task's kagent Session no longer exists, and with it the task's
+	// native context. The task is retried rather than given a new, empty Session.
+	errTaskSessionGone = errors.New("the task's kagent session no longer exists, so its context is lost; retry the task")
 )
+
+// taskOwned reports whether the delivery's session belongs to a task attempt.
+func (t *turn) taskOwned(ctx context.Context) (bool, error) {
+	_, err := dbq.New(t.s.Pool).GetSessionTaskAttemptState(ctx, &t.d.SessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
 
 // createHitDeleted reports a create that kagent refused because its request id belongs to a
 // Session that has since been deleted. kagent answers FAILED_PRECONDITION for it; ALREADY_EXISTS is
@@ -548,7 +578,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 			return t.settle(ctx, dbstate.DeliveryFailed, "not sent: "+err.Error(), nil, false)
 		}
 		var cfg *kagent.ConfigError
-		if errors.As(err, &cfg) || errors.Is(err, errWorkspaceSessionGone) ||
+		if errors.As(err, &cfg) || errors.Is(err, errWorkspaceSessionGone) || errors.Is(err, errTaskSessionGone) ||
 			errors.Is(err, errWorkspacePreparationFailed) {
 			return t.settle(ctx, dbstate.DeliveryFailed,
 				"not sent: could not prepare the kagent session: "+err.Error(), nil, false)

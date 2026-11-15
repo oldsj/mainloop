@@ -132,7 +132,59 @@ func (s *Server) taskTools() []Tool {
 			}, "task_id", "request_id", "text"),
 			Handle: s.taskSteer,
 		},
+		{
+			Name: agentauth.ToolFollowUp,
+			Description: "Send a message to a managed task's own native session, which keeps the agent's context. " +
+				"A task that is running, waiting or blocked takes it as its next message and goes back to running; " +
+				"a completed coordination task reopens on the same session. Cancelled and failed tasks and completed " +
+				"code tasks are refused, as is a task whose native session is gone (use a new task). The result says " +
+				"sent or queued, and whether the task reopened. Reuse request_id to retry.",
+			InputSchema: objectSchema(map[string]any{
+				"task_id":    id,
+				"request_id": id,
+				"text":       stringSchema(1, tasks.MaxFollowUpChars),
+			}, "task_id", "request_id", "text"),
+			Handle: s.taskFollowUp,
+		},
 	}
+}
+
+func (s *Server) taskFollowUp(ctx context.Context, a agentauth.Actor, args json.RawMessage) (Result, error) {
+	var in struct {
+		TaskID    string `json:"task_id"`
+		RequestID string `json:"request_id"`
+		Text      string `json:"text"`
+	}
+	if err := decode(args, &in); err != nil {
+		return Result{}, err
+	}
+	var fu tasks.FollowUpInput
+	var err error
+	if fu.TaskID, err = text(in.TaskID, 1, 100); err != nil {
+		return Result{}, err
+	}
+	if fu.RequestID, err = text(in.RequestID, 1, 100); err != nil {
+		return Result{}, err
+	}
+	if fu.Text, err = text(in.Text, 1, tasks.MaxFollowUpChars); err != nil {
+		return Result{}, err
+	}
+	p, err := s.taskPrincipal(ctx, a)
+	if err != nil {
+		return Result{}, err
+	}
+	res, err := s.Tasks.FollowUp(ctx, p, fu)
+	if err != nil {
+		return Result{}, taskFailure(err)
+	}
+	line := fmt.Sprintf("message %s to task %s: %s", res.MessageID, res.TaskID, res.How)
+	if res.Reopened {
+		line += " (task reopened)"
+	}
+	return Result{Text: line, Structured: map[string]any{
+		"task_id": res.TaskID, "attempt_id": res.AttemptID, "session_id": res.SessionID, "message_id": res.MessageID,
+		"delivery": res.How, "reopened": res.Reopened, "version": res.Version, "text": line,
+	}}, nil
 }
 
 func (s *Server) taskSteer(ctx context.Context, a agentauth.Actor, args json.RawMessage) (Result, error) {

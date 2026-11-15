@@ -1118,6 +1118,17 @@ func (q *Queries) GetSessionScheduledExecution(ctx context.Context, sessionID *s
 	return i, err
 }
 
+const getSessionTaskAttemptState = `-- name: GetSessionTaskAttemptState :one
+SELECT state FROM task_attempts WHERE session_id = $1
+`
+
+func (q *Queries) GetSessionTaskAttemptState(ctx context.Context, sessionID *string) (dbstate.AttemptState, error) {
+	row := q.db.QueryRow(ctx, getSessionTaskAttemptState, sessionID)
+	var state dbstate.AttemptState
+	err := row.Scan(&state)
+	return state, err
+}
+
 const getStalledTurn = `-- name: GetStalledTurn :one
 SELECT id, task_id, activity_at, activity_kind, stalled_at, updated_at FROM deliveries
 WHERE session_id = $1 AND state = 'delivered' AND stalled_at IS NOT NULL

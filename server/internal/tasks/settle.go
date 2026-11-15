@@ -543,6 +543,9 @@ func (s *Service) completeMerged(ctx context.Context, id string) error {
 		if err != nil || len(rows) == 0 {
 			return nil, err
 		}
+		if busy, err := sessionBusy(ctx, q, t); err != nil || busy {
+			return nil, err
+		}
 		if err := TransitionTask(TaskState{Status: t.Status, Reason: *t.Reason}, TaskState{Status: dbstate.TaskCompleted}); err != nil {
 			return nil, err
 		}
@@ -579,6 +582,9 @@ func (s *Service) completeCoordination(ctx context.Context, id string) error {
 		if open > 0 {
 			return nil, nil
 		}
+		if busy, err := sessionBusy(ctx, q, t); err != nil || busy {
+			return nil, err
+		}
 		if err := TransitionTask(TaskState{Status: t.Status, Reason: *t.Reason}, TaskState{Status: dbstate.TaskCompleted}); err != nil {
 			return nil, err
 		}
@@ -588,4 +594,19 @@ func (s *Service) completeCoordination(ctx context.Context, id string) error {
 		}
 		return []events.Draft{s.updated(after)}, nil
 	})
+}
+
+// sessionBusy reports whether the session of the task's current attempt still has a message waiting
+// or in flight. Completion waits for it: the stop that follows would cancel a follow-up queued
+// behind the agent's last turn instead of running it.
+func sessionBusy(ctx context.Context, q *dbq.Queries, t dbq.Task) (bool, error) {
+	if t.CurrentAttemptID == nil {
+		return false, nil
+	}
+	a, err := q.GetTaskAttempt(ctx, *t.CurrentAttemptID)
+	if err != nil || a.SessionID == nil {
+		return false, err
+	}
+	n, err := q.CountSessionPendingDeliveries(ctx, *a.SessionID)
+	return n > 0, err
 }

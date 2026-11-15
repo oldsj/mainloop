@@ -4693,6 +4693,82 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/HTTPValidationError'
                   - $ref: '#/components/schemas/TaskError'
+  /tasks/{task_id}/follow-up:
+    post:
+      tags:
+        - tasks
+      summary: Follow Up Task
+      description: >-
+        Send a message to the task's own native session, so the agent keeps its context. An open
+        task with an active attempt takes it as the session's next message and moves back to
+        running. A completed coordination task reopens on the same attempt and session. Cancelled
+        and failed tasks, and completed code tasks, are refused (409). A retry with the same
+        request_id returns the first send.
+      operationId: followUpTask
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Task Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskFollowUp'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskFollowUpResult'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TaskError'
+                  - $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TaskError'
+                  - $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/TaskError'
   /tasks/{task_id}/reassign:
     post:
       tags:
@@ -8185,6 +8261,63 @@ components:
         - expected_version
         - expected_attempt_id
       title: TaskAction
+    TaskFollowUp:
+      properties:
+        request_id:
+          type: string
+          maxLength: 100
+          minLength: 1
+          title: Request Id
+        text:
+          type: string
+          maxLength: 8000
+          minLength: 1
+          title: Text
+      additionalProperties: false
+      type: object
+      required:
+        - request_id
+        - text
+      title: TaskFollowUp
+    TaskFollowUpResult:
+      properties:
+        task_id:
+          type: string
+          title: Task Id
+        attempt_id:
+          type: string
+          title: Attempt Id
+        session_id:
+          type: string
+          title: Session Id
+        message_id:
+          type: string
+          title: Message Id
+        delivery:
+          type: string
+          enum:
+            - sent
+            - queued
+          title: Delivery
+          description: sent starts the session's next turn; queued waits behind the turn that is open.
+        reopened:
+          type: boolean
+          title: Reopened
+          description: The follow-up reopened a completed task on its attempt's session.
+        version:
+          type: integer
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+        - task_id
+        - attempt_id
+        - session_id
+        - message_id
+        - delivery
+        - reopened
+        - version
+      title: TaskFollowUpResult
     TaskCheckout:
       properties:
         branch:
@@ -10070,6 +10203,7 @@ components:
                 - provisioning_unavailable
                 - handoff_unavailable
                 - cancel_unavailable
+                - follow_up_unavailable
               type: string
             - type: 'null'
           default: null
@@ -10533,6 +10667,7 @@ components:
               - retry
               - reassign
               - cancel
+              - follow_up
           title: Actions
           type: object
       required:

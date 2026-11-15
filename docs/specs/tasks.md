@@ -204,6 +204,7 @@ uses the owner REST listener.
 | `POST /tasks/{id}/retry`                 | 202, blocked handoff operation after authority/version check                       |
 | `POST /tasks/{id}/reassign`              | Same, with explicit target profile                                                 |
 | `POST /tasks/{id}/cancel`                | 202, durable cancellation operation; capacity retained until confirmed termination |
+| `POST /tasks/{id}/follow-up`             | 202, a message to the task's own session; reopens a completed coordination task    |
 | `GET /task-operations/{id}`              | Durable operation, including step and reason                                       |
 | `GET /projects/{id}/default-provider`    | Profile or null, preference version (initially 0)                                  |
 | `PUT /projects/{id}/default-provider`    | Compare-and-swap preference; null removes selection                                |
@@ -336,11 +337,14 @@ Frozen handoff operation states, not an implemented S0 handoff:
 
 Attempt states are `creating`, `active`, `draining`, `fenced`, `superseded`, `failed`,
 `cancelled`, `completed`. Allowed moves: `creating` to `active` or `draining`; `active` to
-`draining`; `draining` to `fenced`; `fenced` to `superseded`, `failed`, `cancelled` or `completed`. Capacity remains held separately until confirmed fencing/termination;
+`draining`; `draining` to `fenced`; `fenced` to `superseded`, `failed`, `cancelled` or `completed`;
+and `completed` back to `active`, only by a [follow-up](#follow-up) that reopens a completed
+coordination task. Capacity remains held separately until confirmed fencing/termination;
 reporting alone never releases it. Unknown creates/stops/publication retain their reservation.
 
-A stop request permanently closes the attempt's session to new messages, even if the session's
-activity status is `completed`. The retained attempt's `stop_state` is the send fence: it changes
+A stop request closes the attempt's session to new messages, even if the session's activity
+status is `completed`. Only a [follow-up](#follow-up) to a completed coordination task opens it
+again, after the stop is confirmed and the attempt has settled. The retained attempt's `stop_state` is the send fence: it changes
 from `none` to `requested` with the move to `draining`, and stays non-`none` through unresolved
 stops, confirmation and settlement. Recording a message checks it in the recording transaction;
 dispatching an already-recorded message checks it before native preparation. The admission
@@ -444,6 +448,58 @@ become available. The reconciler skips them, and an identical `delegate` or `POS
 the same principal and `request_id` returns the original blocked operation. Changing that
 request's payload still returns 409. Main or the owner must submit a new `request_id` to make a
 fresh attempt. The blocked operation holds no task, attempt, capacity slot or branch claim.
+
+## Follow-up
+
+**Implemented (server, MCP, web).** A follow-up is a message to a task's own native session, so
+the agent keeps its context: the herdr way of prompting the same worker again. The owner sends it
+with `POST /tasks/{id}/follow-up` (`{request_id, text}`, text 1 to 8000 characters) or the
+"Follow up" box on the task page; main (any task of its owner) and a supervisor (its direct
+children) send it with the MCP tool `follow_up(task_id, request_id, text)`. Main's message reads
+`[message from main]` and a supervisor's `[message from supervisor task <id>]`; the owner's is
+their own words. The message id derives from the caller and `request_id`, so a retry returns the
+first send and never sends twice. The result (`202`) names the attempt, session and message, says
+`delivery: sent` (the session's next turn) or `queued` (behind the turn that is open), whether the
+task `reopened`, and the task's version after it. `view.actions.follow_up` says whether a task
+takes one: not before it has an attempt, and not when it is cancelled, failed, or a completed code
+task (`follow_up_unavailable`).
+
+- **An open task with an active attempt** (`running`, `waiting/*`, `blocked/*`) gets the message
+  as an ordinary send on its session and moves back to `running`: someone answered, and a task that
+  waited on its completion now waits for the agent's next report instead. `blocked` /
+  `runtime_limit` is lifted only by the owner, whose follow-up also starts the runtime bound again
+  (main and supervisors get 409 `runtime_limit_needs_owner`).
+- **A completed coordination task** reopens on the **same attempt and native session**, in one
+  transaction with the message: task `completed` to `running` (version + 1), attempt `completed`
+  to `active` with `stop_state` back to `none`, `capacity_held` again (a child's parent must still
+  be open and under its limit), `reopened_at` set (the runtime bound counts from it), and the
+  session back to `active`. Before it sends, the delivery loop publishes the binding's MCP
+  credential again under the same Secret name the kagent Session already references, so the
+  reopened agent can call `report` and the other task tools. When the task completes again it
+  settles as before.
+- **Refused:** a cancelled or failed task (409 `task_terminal`; a failure is retried), a completed
+  code task (409 `follow_up_code_task_completed`: its branch merged, more work is a new task), a
+  completed task whose attempt is still settling (409 `task_settling`, try again), an archived
+  session (409 `session_archived`), a task with a cancel, retry or reassign in progress (409
+  `operation_pending`), and a queued task (409 `task_not_running`).
+- **The native session is checked first.** A kagent Session that no longer exists (deleted, or
+  terminal) is refused with 409 `session_gone`, not replaced by a new, empty one, since the
+  agent's context is what a follow-up is for. An asleep Session is fine: the send wakes it. If the
+  Session goes between the check and the send, the delivery fails with "the task's kagent session no
+  longer exists, so its context is lost; retry the task" (see [sessions](sessions.md)).
+- **One writer.** The follow-up takes the session's send lock, then the task and attempt locks, in
+  the order every send and stop uses. Two follow-ups at once reopen the task once; the other's
+  message is queued behind the first, or refused `operation_pending` with nothing written when it
+  lost the race for the open turn (a retry with its request id sends it). A follow-up racing a
+  cancel either lands first (the cancel then sees a new version, and the owner cancels the task as
+  it is now, which stops the follow-up's turn) or is refused once the cancel's operation exists.
+- **Completion waits for the session.** A coordination task, and a merged code task, completes only
+  when its task session has no queued or open message, so a follow-up that arrives while the agent
+  reports is never cancelled by the stop that follows completion.
+
+Not built: a follow-up to a completed code task (it needs a new branch and publication), and
+carrying context into a new Session when kagent lost the old one; both are later slices. Retry
+and reassign still answer `handoff_unavailable`.
 
 ## Holds
 
