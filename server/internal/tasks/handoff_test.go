@@ -36,10 +36,13 @@ func (r *rig) handedOff(id string) {
 // supervisor's open children end with it, and the successor's brief carries a continuation note.
 func TestRetryReplacesTheAttempt(t *testing.T) {
 	r := newRig(t)
-	r.run()
+	stop := r.run()
 	id, sup := r.supervisor()
 	child := r.mustCreate(sup, tasks.CreateInput{Brief: "look into it"})
 	oldAttempt, oldSession := r.attemptOf(id)
+	// No runner while the handoff is checked in flight: one would make the successor, and a second
+	// request on the view read before that is then stale_task_attempt, not operation_pending.
+	stop()
 	v := r.view(r.own, id)
 	if !v.Actions["retry"].Available || !v.Actions["reassign"].Available {
 		t.Fatalf("a running coordination task offers no handoff: %+v", v.Actions)
@@ -68,6 +71,7 @@ func TestRetryReplacesTheAttempt(t *testing.T) {
 		t.Fatalf("child = %s, want cancelled with its supervisor", got)
 	}
 
+	r.run()
 	r.handedOff(id)
 	newAttempt, newSession := r.attemptOf(id)
 	if newAttempt == oldAttempt || newSession == oldSession {
