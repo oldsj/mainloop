@@ -74,6 +74,11 @@ func (Unimplemented) DeleteCheckpoint(context.Context, DeleteCheckpointRequestOb
 	return nil, apierr.NotImplemented
 }
 
+// DeleteLoop is not implemented yet.
+func (Unimplemented) DeleteLoop(context.Context, DeleteLoopRequestObject) (DeleteLoopResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // DeleteSchedule is not implemented yet.
 func (Unimplemented) DeleteSchedule(context.Context, DeleteScheduleRequestObject) (DeleteScheduleResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -86,6 +91,11 @@ func (Unimplemented) DeleteWorkspace(context.Context, DeleteWorkspaceRequestObje
 
 // DismissQueueDiagnostic is not implemented yet.
 func (Unimplemented) DismissQueueDiagnostic(context.Context, DismissQueueDiagnosticRequestObject) (DismissQueueDiagnosticResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// FireLoop is not implemented yet.
+func (Unimplemented) FireLoop(context.Context, FireLoopRequestObject) (FireLoopResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 
@@ -354,6 +364,11 @@ func (Unimplemented) ListSessions(context.Context, ListSessionsRequestObject) (L
 	return nil, apierr.NotImplemented
 }
 
+// ListTaskLoops is not implemented yet.
+func (Unimplemented) ListTaskLoops(context.Context, ListTaskLoopsRequestObject) (ListTaskLoopsResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // ListTasks is not implemented yet.
 func (Unimplemented) ListTasks(context.Context, ListTasksRequestObject) (ListTasksResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -376,6 +391,11 @@ func (Unimplemented) MarkTaskSeen(context.Context, MarkTaskSeenRequestObject) (M
 
 // OrchestrationHealth is not implemented yet.
 func (Unimplemented) OrchestrationHealth(context.Context, OrchestrationHealthRequestObject) (OrchestrationHealthResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// PauseLoop is not implemented yet.
+func (Unimplemented) PauseLoop(context.Context, PauseLoopRequestObject) (PauseLoopResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 
@@ -426,6 +446,11 @@ func (Unimplemented) RespondToQueueItem(context.Context, RespondToQueueItemReque
 
 // RestartSession is not implemented yet.
 func (Unimplemented) RestartSession(context.Context, RestartSessionRequestObject) (RestartSessionResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// ResumeLoop is not implemented yet.
+func (Unimplemented) ResumeLoop(context.Context, ResumeLoopRequestObject) (ResumeLoopResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

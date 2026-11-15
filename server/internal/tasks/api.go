@@ -190,3 +190,69 @@ func action(taskID string, body api.TaskAction) ActionInput {
 		ExpectedAttemptID: deref(body.ExpectedAttemptId),
 	}
 }
+
+// loopRefusals are the statuses the loop controls declare.
+var loopRefusals = []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}
+
+// ListTaskLoops implements api.StrictServerInterface.
+func (a *TasksAPI) ListTaskLoops(ctx context.Context, req api.ListTaskLoopsRequestObject) (api.ListTaskLoopsResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	loops, err := a.Svc.TaskLoops(ctx, a.principal(), req.TaskId)
+	if err != nil {
+		return nil, taskReply(err, http.StatusNotFound)
+	}
+	return api.ListTaskLoops200JSONResponse(api.TaskLoopList{Loops: loops}), nil
+}
+
+// PauseLoop implements api.StrictServerInterface.
+func (a *TasksAPI) PauseLoop(ctx context.Context, req api.PauseLoopRequestObject) (api.PauseLoopResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	l, err := a.Svc.PauseLoop(ctx, a.principal(), req.LoopId)
+	if err != nil {
+		return nil, taskReply(err, loopRefusals...)
+	}
+	return api.PauseLoop200JSONResponse(l), nil
+}
+
+// ResumeLoop implements api.StrictServerInterface.
+func (a *TasksAPI) ResumeLoop(ctx context.Context, req api.ResumeLoopRequestObject) (api.ResumeLoopResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	l, err := a.Svc.ResumeLoop(ctx, a.principal(), req.LoopId)
+	if err != nil {
+		return nil, taskReply(err, loopRefusals...)
+	}
+	return api.ResumeLoop200JSONResponse(l), nil
+}
+
+// DeleteLoop implements api.StrictServerInterface.
+func (a *TasksAPI) DeleteLoop(ctx context.Context, req api.DeleteLoopRequestObject) (api.DeleteLoopResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	l, err := a.Svc.DeleteLoop(ctx, a.principal(), req.LoopId)
+	if err != nil {
+		return nil, taskReply(err, loopRefusals...)
+	}
+	return api.DeleteLoop200JSONResponse(l), nil
+}
+
+// FireLoop implements api.StrictServerInterface.
+func (a *TasksAPI) FireLoop(ctx context.Context, req api.FireLoopRequestObject) (api.FireLoopResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	if req.Body == nil {
+		return nil, apierr.Invalid("Request body is required")
+	}
+	l, err := a.Svc.FireLoop(ctx, a.principal(), req.LoopId, req.Body.RequestId)
+	if err != nil {
+		return nil, taskReply(err, loopRefusals...)
+	}
+	return api.FireLoop200JSONResponse(l), nil
+}

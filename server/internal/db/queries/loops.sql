@@ -25,21 +25,58 @@ SELECT * FROM task_loops WHERE id = $1;
 -- name: GetTaskLoopForUpdate :one
 SELECT * FROM task_loops WHERE id = $1 FOR UPDATE;
 
--- Arming takes this lock first, so the count below holds for the insert that follows it.
+-- Arming takes this lock first, so the count below holds for the insert that follows it. A paused
+-- loop counts: it is still live.
 -- name: CountArmedTaskLoops :one
-SELECT count(*) FROM task_loops WHERE recipient_key = $1 AND state = 'armed';
+SELECT count(*) FROM task_loops WHERE recipient_key = $1 AND state IN ('armed', 'paused');
 
--- A recipient's loops, armed ones first, then the latest that ended.
+-- A recipient's loops, live ones (armed or paused) first, then the latest that ended.
 -- name: ListTaskLoops :many
 SELECT * FROM task_loops
 WHERE owner_id = sqlc.arg(owner_id) AND recipient_key = sqlc.arg(recipient_key)
-ORDER BY (state = 'armed') DESC, created_at DESC, id
+ORDER BY (state IN ('armed', 'paused')) DESC, created_at DESC, id
+LIMIT sqlc.arg(max_rows);
+
+-- The loops on a task's page: those watching it and those its supervisor armed, live ones first.
+-- name: ListLoopsOfTask :many
+SELECT * FROM task_loops
+WHERE owner_id = sqlc.arg(owner_id)
+  AND (subject_task_id = sqlc.arg(task_id)::text OR recipient_key = 'parent-task:' || sqlc.arg(task_id)::text)
+ORDER BY (state IN ('armed', 'paused')) DESC, created_at DESC, id
 LIMIT sqlc.arg(max_rows);
 
 -- name: StopTaskLoop :one
 UPDATE task_loops SET state = 'stopped', updated_at = now(), lease_owner = NULL, lease_until = NULL
 WHERE id = sqlc.arg(id) AND owner_id = sqlc.arg(owner_id) AND recipient_key = sqlc.arg(recipient_key)
-  AND state = 'armed'
+  AND state IN ('armed', 'paused')
+RETURNING *;
+
+-- The owner's controls. Each releases a lease the runner holds: its fenced write then finds nothing.
+-- name: OwnerStopTaskLoop :one
+UPDATE task_loops SET state = 'stopped', updated_at = now(), lease_owner = NULL, lease_until = NULL
+WHERE id = sqlc.arg(id) AND owner_id = sqlc.arg(owner_id) AND state IN ('armed', 'paused')
+RETURNING *;
+
+-- name: PauseTaskLoop :one
+UPDATE task_loops SET state = 'paused', updated_at = now(), next_attempt_at = now(), lease_owner = NULL, lease_until = NULL
+WHERE id = sqlc.arg(id) AND owner_id = sqlc.arg(owner_id) AND state = 'armed'
+RETURNING *;
+
+-- A resumed loop looks at once. A time loop whose timer passed while paused fires once, as one that
+-- was asleep; a quiet loop's period starts again.
+-- name: ResumeTaskLoop :one
+UPDATE task_loops
+SET state = 'armed', updated_at = now(), next_attempt_at = now(), lease_owner = NULL, lease_until = NULL,
+    quiet_since = CASE WHEN trigger = 'quiet' THEN now() ELSE quiet_since END
+WHERE id = sqlc.arg(id) AND owner_id = sqlc.arg(owner_id) AND state = 'paused'
+RETURNING *;
+
+-- An owner's "fire now", recorded with its request id. The caller holds the row.
+-- name: SetTaskLoopFiredNow :one
+UPDATE task_loops
+SET firings = sqlc.arg(firings), last_fired_at = sqlc.narg(last_fired_at), state = sqlc.arg(state),
+    fire_request_id = sqlc.arg(fire_request_id), updated_at = now()
+WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- An evaluation's record, fenced on the claim, which it releases. The caller holds the row
@@ -78,6 +115,16 @@ INSERT INTO task_event_deliveries (id, loop_firing_id, recipient_key) VALUES ($1
 -- name: GetLoopFiring :one
 SELECT * FROM task_loop_firings WHERE id = $1;
 
+-- The latest firings of each of these loops, newest first.
+-- name: ListLatestLoopFirings :many
+SELECT f.*, d.state AS delivery_state
+FROM unnest(sqlc.arg(loop_ids)::text[]) AS l(id)
+CROSS JOIN LATERAL (
+    SELECT * FROM task_loop_firings WHERE loop_id = l.id ORDER BY number DESC LIMIT sqlc.arg(per_loop)::int
+) f
+JOIN task_event_deliveries d ON d.loop_firing_id = f.id
+ORDER BY f.loop_id, f.number DESC;
+
 -- The latest firings of a loop, newest first.
 -- name: ListLoopFirings :many
 SELECT f.*, d.state AS delivery_state FROM task_loop_firings f
@@ -86,13 +133,13 @@ WHERE f.loop_id = sqlc.arg(loop_id)
 ORDER BY f.number DESC
 LIMIT sqlc.arg(max_rows);
 
--- Whether a task's supervisor is waiting on a loop: one is armed for it, or a firing to it is still
--- on its way. Its quiet is not a stall (internal/tasks/liveness.go).
+-- Whether a task's supervisor is waiting on a loop: one is live (armed, or paused by the owner) for
+-- it, or a firing to it is still on its way. Its quiet is not a stall (internal/tasks/liveness.go).
 -- name: TaskAwaitsLoop :one
 SELECT (
     EXISTS (
         SELECT 1 FROM task_loops
-        WHERE recipient_key = 'parent-task:' || sqlc.arg(task_id)::text AND state = 'armed'
+        WHERE recipient_key = 'parent-task:' || sqlc.arg(task_id)::text AND state IN ('armed', 'paused')
           AND expires_at > sqlc.arg(now)::timestamptz
     )
     OR EXISTS (

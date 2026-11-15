@@ -52,7 +52,8 @@ const LoopChannel = "mainloop_task_loops"
 
 // LoopTable is the table of loops the runner evaluates.
 func LoopTable() reconcile.Table {
-	return reconcile.NewTable("task_loops", string(dbstate.LoopArmed))
+	// A paused loop is claimed too, to notice its expiry or an ended recipient.
+	return reconcile.NewTable("task_loops", string(dbstate.LoopArmed), string(dbstate.LoopPaused))
 }
 
 // LoopLoop evaluates armed loops: it fires a task loop when its subject's status changes, a pull
@@ -483,6 +484,8 @@ type loopEval struct {
 	quietSince *time.Time
 	next       time.Time
 	fact       string
+	// immediate is the owner's "fire now": it does not wait for the minimum interval.
+	immediate bool
 	// subject is the subject as this evaluation read it, for the no-progress stop.
 	subject *dbq.Task
 	// The no-progress stop's record (see fire).
@@ -508,7 +511,7 @@ func (s *Service) handleLoop(ctx context.Context, c reconcile.Claim) (reconcile.
 		if err != nil {
 			return err
 		}
-		if l.State != dbstate.LoopArmed {
+		if l.State != dbstate.LoopArmed && l.State != dbstate.LoopPaused {
 			// Stopped since the claim: the stop released the lease.
 			return reconcile.ErrLeaseLost
 		}
@@ -564,6 +567,13 @@ func (s *Service) evaluate(ctx context.Context, q *dbq.Queries, l dbq.TaskLoop) 
 	}
 	if !now.Before(l.ExpiresAt) {
 		e.state = dbstate.LoopExpired
+		return e, nil
+	}
+	if l.State == dbstate.LoopPaused {
+		// Not evaluated for its trigger until resumed.
+		if l.ExpiresAt.Before(e.next) {
+			e.next = l.ExpiresAt
+		}
 		return e, nil
 	}
 	switch l.Trigger {
@@ -692,7 +702,7 @@ func (s *Service) fire(ctx context.Context, q *dbq.Queries, l dbq.TaskLoop, e *l
 	}
 	now := s.now()
 	notBefore := now
-	if l.LastFiredAt != nil {
+	if l.LastFiredAt != nil && !e.immediate {
 		if at := l.LastFiredAt.Add(time.Duration(l.MinIntervalSeconds) * time.Second); at.After(notBefore) {
 			notBefore = at
 		}

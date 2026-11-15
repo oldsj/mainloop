@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/app/apicheck"
 	"github.com/oldsj/mainloop/server/internal/app/apptest"
@@ -20,6 +22,7 @@ import (
 type rest struct {
 	t       *testing.T
 	handler http.Handler
+	pool    *pgxpool.Pool
 }
 
 func newRest(t *testing.T) *rest {
@@ -38,7 +41,7 @@ func newRest(t *testing.T) *rest {
 		t.Fatal(err)
 	}
 	d.SelectEnvironment(t, "local-dev-user", "p1")
-	return &rest{t: t, handler: apicheck.Wrap(t, h)}
+	return &rest{t: t, handler: apicheck.Wrap(t, h), pool: d.Pool}
 }
 
 func (r *rest) do(method, path string, body any, want int) map[string]any {
