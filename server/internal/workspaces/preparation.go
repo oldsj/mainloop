@@ -51,8 +51,9 @@ const (
 //
 // Re-read 2026-11-11 at oldsj/kagent 7988e65b, the merge of #87 (the preparation port): unchanged
 // from the 0.4 line's (b785c99d, a1164013). Re-read 2026-11-13 at 92061451, the merge of #107 (the
-// workspace service): unchanged, since go/api/workspace did not change.
-const setupDigestsSource = "92061451411ad848c79ab52de6e955d8c4a487d7"
+// workspace service): unchanged, since go/api/workspace did not change. Re-read 2026-11-15 at
+// 050aaad8, the merge of #111 (agent dotfiles): unchanged, for the same reason.
+const setupDigestsSource = "050aaad8a14e7080badf8cc89b22bcd2faff0943"
 
 var setupDigests = map[string]string{
 	profileSupervisor: "c9b2c5bf815f6b0dd45ee11f02e343ab6a25d4ce39c93663e6feb25281cb87f6",

@@ -14,6 +14,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/dotfiles"
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/gittransport"
 	"github.com/oldsj/mainloop/server/internal/kagent"
@@ -389,6 +390,10 @@ func (s *Service) doCreate(ctx context.Context, w wsRow) result {
 		return result{err: err}
 	}
 	req.Credentials = creds
+	mcpOrigin := ""
+	if len(creds) > 0 {
+		mcpOrigin = s.Config.MCPOrigin()
+	}
 	ref, err := s.gitReadForCreate(ctx, w)
 	if err != nil {
 		return result{err: err}
@@ -406,9 +411,11 @@ func (s *Service) doCreate(ctx context.Context, w wsRow) result {
 	// The dotfiles are pinned to the workspace's request before it is sent, so a retry sends the
 	// same ones.
 	if s.Dotfiles != nil {
-		if _, err := s.Dotfiles.Pin(ctx, w.ID, w.RequestID); err != nil {
+		p, err := s.Dotfiles.Pin(ctx, w.ID, w.RequestID, mcpOrigin)
+		if err != nil {
 			return result{err: err}
 		}
+		req.Dotfiles = p.Request()
 	}
 	sess, err := s.Kagent.CreateSession(ctx, req)
 	if err != nil {
@@ -471,6 +478,9 @@ func (s *Service) doDelete(ctx context.Context, w wsRow) result {
 			return result{err: &transient{err}}
 		}
 		req.Credentials = s.Credentials.ReplayCredentials(w.ID, s.Config.MCPOrigin(), b.Role, b.MCPGrantKind)
+		if req.Dotfiles, err = dotfiles.Sent(ctx, q, w.RequestID); err != nil {
+			return result{err: &transient{err}}
+		}
 		ref, err := gitReadForReplay(w)
 		if err != nil {
 			return result{err: &transient{err}}

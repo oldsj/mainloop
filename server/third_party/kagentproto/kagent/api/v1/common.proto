@@ -38,6 +38,26 @@ message PageResponse {
   string next_page_token = 1;
 }
 
+// Dotfiles names a bundle of agent user-level files: owner instructions
+// (AGENTS.md, CLAUDE.md), skills, subagents and commands. The bundle is an
+// uncompressed tar of regular files, fetched with an HTTP GET from url through
+// the egress gateway, which injects the Session credential bound to url's
+// origin. The runtime verifies digest, lays the files out read-only in the
+// CLI's user configuration directory before the first turn, and lays them out
+// again at every start of the runtime. It executes nothing from the bundle.
+message Dotfiles {
+  string url = 1 [(buf.validate.field).string = {
+    max_len: 2048
+    pattern: "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._~/%:-]*$"
+  }];
+  // sha256 of the bundle bytes, "sha256:<hex>".
+  string digest = 2 [(buf.validate.field).string = {pattern: "^sha256:[a-f0-9]{64}$"}];
+  // Provenance for audit only; the runtime does not interpret it.
+  string repository = 3 [(buf.validate.field).string = {max_len: 140}];
+  string commit = 4 [(buf.validate.field).string = {pattern: "^(?:$|[a-f0-9]{40})$"}];
+  string path = 5 [(buf.validate.field).string = {max_len: 255}];
+}
+
 // Workspace asks the runtime to check out a Git repository before the first turn.
 // The repository host must be one of the Agent's Git origins; the runtime never
 // receives credentials, since the egress gateway injects them.

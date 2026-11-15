@@ -53,11 +53,15 @@ func (e *env) createRequested(sessionID string) bool {
 
 // failedCreateThenCancelAndArchive is the reviewer's probe: the create keeps failing, the owner
 // cancels the session and archives it. It returns the session id and the request id of the create.
-func (e *env) failedCreateThenCancelAndArchive(k *flaky) (sessionID, requestID string) {
+// Each before runs on the new session before its delivery starts.
+func (e *env) failedCreateThenCancelAndArchive(k *flaky, before ...func(sessionID string)) (sessionID, requestID string) {
 	e.t.Helper()
 	ctx := context.Background()
 	k.down.Store(true)
 	sessionID = e.newSession("do it")
+	for _, f := range before {
+		f(sessionID)
+	}
 	e.run()
 	deadline := time.Now().Add(15 * time.Second)
 	for !e.createRequested(sessionID) || k.creates.Load() < 1 {

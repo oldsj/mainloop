@@ -231,6 +231,91 @@ func (x *PageResponse) GetNextPageToken() string {
 	return ""
 }
 
+// Dotfiles names a bundle of agent user-level files: owner instructions
+// (AGENTS.md, CLAUDE.md), skills, subagents and commands. The bundle is an
+// uncompressed tar of regular files, fetched with an HTTP GET from url through
+// the egress gateway, which injects the Session credential bound to url's
+// origin. The runtime verifies digest, lays the files out read-only in the
+// CLI's user configuration directory before the first turn, and lays them out
+// again at every start of the runtime. It executes nothing from the bundle.
+type Dotfiles struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Url   string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
+	// sha256 of the bundle bytes, "sha256:<hex>".
+	Digest string `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	// Provenance for audit only; the runtime does not interpret it.
+	Repository    string `protobuf:"bytes,3,opt,name=repository,proto3" json:"repository,omitempty"`
+	Commit        string `protobuf:"bytes,4,opt,name=commit,proto3" json:"commit,omitempty"`
+	Path          string `protobuf:"bytes,5,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Dotfiles) Reset() {
+	*x = Dotfiles{}
+	mi := &file_kagent_api_v1_common_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Dotfiles) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Dotfiles) ProtoMessage() {}
+
+func (x *Dotfiles) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1_common_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Dotfiles.ProtoReflect.Descriptor instead.
+func (*Dotfiles) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1_common_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *Dotfiles) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *Dotfiles) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *Dotfiles) GetRepository() string {
+	if x != nil {
+		return x.Repository
+	}
+	return ""
+}
+
+func (x *Dotfiles) GetCommit() string {
+	if x != nil {
+		return x.Commit
+	}
+	return ""
+}
+
+func (x *Dotfiles) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
 // Workspace asks the runtime to check out a Git repository before the first turn.
 // The repository host must be one of the Agent's Git origins; the runtime never
 // receives credentials, since the egress gateway injects them.
@@ -257,7 +342,7 @@ type Workspace struct {
 
 func (x *Workspace) Reset() {
 	*x = Workspace{}
-	mi := &file_kagent_api_v1_common_proto_msgTypes[4]
+	mi := &file_kagent_api_v1_common_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -269,7 +354,7 @@ func (x *Workspace) String() string {
 func (*Workspace) ProtoMessage() {}
 
 func (x *Workspace) ProtoReflect() protoreflect.Message {
-	mi := &file_kagent_api_v1_common_proto_msgTypes[4]
+	mi := &file_kagent_api_v1_common_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -282,7 +367,7 @@ func (x *Workspace) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Workspace.ProtoReflect.Descriptor instead.
 func (*Workspace) Descriptor() ([]byte, []int) {
-	return file_kagent_api_v1_common_proto_rawDescGZIP(), []int{4}
+	return file_kagent_api_v1_common_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Workspace) GetRepo() string {
@@ -339,6 +424,14 @@ const file_kagent_api_v1_common_proto_rawDesc = "" +
 	"page_token\x18\x02 \x01(\tR\tpageToken\"6\n" +
 	"\fPageResponse\x12&\n" +
 	"\x0fnext_page_token\x18\x01 \x01(\tR\rnextPageToken\"\x96\x02\n" +
+	"\bDotfiles\x12W\n" +
+	"\x03url\x18\x01 \x01(\tBE\xbaHBr@\x18\x80\x102;^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._~/%:-]*$R\x03url\x124\n" +
+	"\x06digest\x18\x02 \x01(\tB\x1c\xbaH\x19r\x172\x15^sha256:[a-f0-9]{64}$R\x06digest\x12(\n" +
+	"\n" +
+	"repository\x18\x03 \x01(\tB\b\xbaH\x05r\x03\x18\x8c\x01R\n" +
+	"repository\x123\n" +
+	"\x06commit\x18\x04 \x01(\tB\x1b\xbaH\x18r\x162\x14^(?:$|[a-f0-9]{40})$R\x06commit\x12\x1c\n" +
+	"\x04path\x18\x05 \x01(\tB\b\xbaH\x05r\x03\x18\xff\x01R\x04path\"\x96\x02\n" +
 	"\tWorkspace\x12!\n" +
 	"\x04repo\x18\x01 \x01(\tB\r\xbaH\n" +
 	"r\b\x10\x01\x18\x80\x10\x88\x01\x01R\x04repo\x12@\n" +
@@ -360,17 +453,18 @@ func file_kagent_api_v1_common_proto_rawDescGZIP() []byte {
 	return file_kagent_api_v1_common_proto_rawDescData
 }
 
-var file_kagent_api_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_kagent_api_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_kagent_api_v1_common_proto_goTypes = []any{
 	(*StructuredObject)(nil),  // 0: kagent.api.v1.StructuredObject
 	(*ResourceReference)(nil), // 1: kagent.api.v1.ResourceReference
 	(*PageRequest)(nil),       // 2: kagent.api.v1.PageRequest
 	(*PageResponse)(nil),      // 3: kagent.api.v1.PageResponse
-	(*Workspace)(nil),         // 4: kagent.api.v1.Workspace
-	(*structpb.Struct)(nil),   // 5: google.protobuf.Struct
+	(*Dotfiles)(nil),          // 4: kagent.api.v1.Dotfiles
+	(*Workspace)(nil),         // 5: kagent.api.v1.Workspace
+	(*structpb.Struct)(nil),   // 6: google.protobuf.Struct
 }
 var file_kagent_api_v1_common_proto_depIdxs = []int32{
-	5, // 0: kagent.api.v1.StructuredObject.value:type_name -> google.protobuf.Struct
+	6, // 0: kagent.api.v1.StructuredObject.value:type_name -> google.protobuf.Struct
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
@@ -389,7 +483,7 @@ func file_kagent_api_v1_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kagent_api_v1_common_proto_rawDesc), len(file_kagent_api_v1_common_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

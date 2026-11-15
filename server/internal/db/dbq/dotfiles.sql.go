@@ -26,7 +26,8 @@ type CopyForkDotfilesParams struct {
 	SourceSessionID string
 }
 
-// A fork is given the files its source's Session was laid out with: its latest pin.
+// A fork is given the files its source's Session was laid out with: its latest pin. kagent forks
+// the Session, so no create sends them and the url stays NULL.
 func (q *Queries) CopyForkDotfiles(ctx context.Context, arg CopyForkDotfilesParams) error {
 	_, err := q.db.Exec(ctx, copyForkDotfiles, arg.RequestID, arg.SessionID, arg.SourceSessionID)
 	return err
@@ -88,7 +89,7 @@ func (q *Queries) GetOwnerDotfilesSource(ctx context.Context, ownerID string) (O
 }
 
 const getPinnedDotfiles = `-- name: GetPinnedDotfiles :one
-SELECT request_id, session_id, repository, ref, path, commit, digest, status, reason, created_at FROM session_dotfiles WHERE request_id = $1
+SELECT request_id, session_id, repository, ref, path, commit, digest, status, reason, created_at, url FROM session_dotfiles WHERE request_id = $1
 `
 
 func (q *Queries) GetPinnedDotfiles(ctx context.Context, requestID string) (SessionDotfile, error) {
@@ -105,6 +106,7 @@ func (q *Queries) GetPinnedDotfiles(ctx context.Context, requestID string) (Sess
 		&i.Status,
 		&i.Reason,
 		&i.CreatedAt,
+		&i.Url,
 	)
 	return i, err
 }
@@ -223,8 +225,8 @@ func (q *Queries) InsertOwnerDotfilesSource(ctx context.Context, arg InsertOwner
 }
 
 const insertPinnedDotfiles = `-- name: InsertPinnedDotfiles :exec
-INSERT INTO session_dotfiles (request_id, session_id, repository, ref, path, commit, digest, status, reason)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO session_dotfiles (request_id, session_id, repository, ref, path, commit, digest, status, reason, url)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (request_id) DO NOTHING
 `
 
@@ -238,6 +240,7 @@ type InsertPinnedDotfilesParams struct {
 	Digest     *string
 	Status     string
 	Reason     string
+	Url        *string
 }
 
 // The first pin of a request wins; a concurrent pin of the same request changes nothing.
@@ -252,6 +255,7 @@ func (q *Queries) InsertPinnedDotfiles(ctx context.Context, arg InsertPinnedDotf
 		arg.Digest,
 		arg.Status,
 		arg.Reason,
+		arg.Url,
 	)
 	return err
 }
@@ -290,7 +294,7 @@ func (q *Queries) InsertProjectDotfilesSource(ctx context.Context, arg InsertPro
 }
 
 const latestSessionDotfiles = `-- name: LatestSessionDotfiles :one
-SELECT request_id, session_id, repository, ref, path, commit, digest, status, reason, created_at FROM session_dotfiles WHERE session_id = $1 ORDER BY created_at DESC, request_id LIMIT 1
+SELECT request_id, session_id, repository, ref, path, commit, digest, status, reason, created_at, url FROM session_dotfiles WHERE session_id = $1 ORDER BY created_at DESC, request_id LIMIT 1
 `
 
 func (q *Queries) LatestSessionDotfiles(ctx context.Context, sessionID string) (SessionDotfile, error) {
@@ -307,8 +311,26 @@ func (q *Queries) LatestSessionDotfiles(ctx context.Context, sessionID string) (
 		&i.Status,
 		&i.Reason,
 		&i.CreatedAt,
+		&i.Url,
 	)
 	return i, err
+}
+
+const sessionPinnedToDigest = `-- name: SessionPinnedToDigest :one
+SELECT EXISTS (SELECT 1 FROM session_dotfiles WHERE session_id = $1 AND digest = $2)
+`
+
+type SessionPinnedToDigestParams struct {
+	SessionID string
+	Digest    *string
+}
+
+// Whether the session was pinned to the bundle, by any of its native Sessions or its fork source.
+func (q *Queries) SessionPinnedToDigest(ctx context.Context, arg SessionPinnedToDigestParams) (bool, error) {
+	row := q.db.QueryRow(ctx, sessionPinnedToDigest, arg.SessionID, arg.Digest)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const updateOwnerDotfilesSource = `-- name: UpdateOwnerDotfilesSource :one

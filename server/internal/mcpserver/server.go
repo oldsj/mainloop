@@ -1,5 +1,6 @@
 // Package mcpserver is Mainloop's MCP listener. Agents call it with a bearer token; it serves
-// stateless Streamable HTTP with JSON responses on two paths: /mcp and /mcp/merge-approval.
+// stateless Streamable HTTP with JSON responses on two paths: /mcp and /mcp/merge-approval. The
+// same bearer also downloads the session's agent dotfiles bundle from /dotfiles/{digest}.
 //
 // Every request is authenticated first. The server the MCP SDK then uses is built for that one
 // request and carries only the tools the actor may use, so discovery and invocation read the same
@@ -24,6 +25,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/ci"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/devloop"
+	"github.com/oldsj/mainloop/server/internal/dotfiles"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/issues"
 	"github.com/oldsj/mainloop/server/internal/merge"
@@ -83,7 +85,8 @@ func (s *Server) tools() map[string]Tool {
 	return all
 }
 
-// Handler is the whole listener: health, the two MCP paths, and the Host guard. It fails if the
+// Handler is the whole listener: health, the two MCP paths, the agent dotfiles download, and the
+// Host guard. It fails if the
 // policy table names a tool the registry does not implement, so a divergence between the two
 // stops the server at startup instead of panicking a later call.
 func (s *Server) Handler() (http.Handler, error) {
@@ -98,6 +101,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	})
 	mux.Handle(PathOrdinary, s.endpoint(SurfaceOrdinary, tools))
 	mux.Handle(PathApproval, s.endpoint(agentauth.SurfaceApproval, tools))
+	mux.Handle("GET "+dotfiles.BundlePath+"{digest}", http.HandlerFunc(s.dotfilesBundle))
 	return httpx.Chain(mux, httpx.Standard(s.Log, s.AllowedHosts, s.Dev, "/health")), nil
 }
 
@@ -149,25 +153,8 @@ func (s *Server) endpoint(surface agentauth.Surface, tools map[string]Tool) http
 	})
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Agents are not browsers and send no Origin; a request that carries one is a web page
-		// calling in, which no origin is allowed to do.
-		if r.Header.Get("Origin") != "" {
-			httpx.WriteError(w, http.StatusForbidden, "Forbidden")
-			return
-		}
-		token, err := agentauth.BearerToken(r.Header.Get("Authorization"))
-		if err != nil {
-			unauthorized(w)
-			return
-		}
-		actor, err := s.Auth.Authenticate(r.Context(), token)
-		if errors.Is(err, agentauth.ErrUnauthorized) {
-			unauthorized(w)
-			return
-		}
-		if err != nil {
-			s.Log.ErrorContext(r.Context(), "mcp authentication failed", "error", err)
-			httpx.WriteError(w, http.StatusInternalServerError, "Internal Server Error")
+		actor, ok := s.authenticate(w, r)
+		if !ok {
 			return
 		}
 		if len(s.Policy.Tools(actor, surface)) == 0 {
@@ -177,6 +164,32 @@ func (s *Server) endpoint(surface agentauth.Surface, tools map[string]Tool) http
 		st := &requestState{actor: actor, surface: surface}
 		sdk.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), stateKey{}, st)))
 	})
+}
+
+// authenticate is the actor of r's bearer token. When there is none it has written the refusal.
+func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (agentauth.Actor, bool) {
+	// Agents are not browsers and send no Origin; a request that carries one is a web page
+	// calling in, which no origin is allowed to do.
+	if r.Header.Get("Origin") != "" {
+		httpx.WriteError(w, http.StatusForbidden, "Forbidden")
+		return agentauth.Actor{}, false
+	}
+	token, err := agentauth.BearerToken(r.Header.Get("Authorization"))
+	if err != nil {
+		unauthorized(w)
+		return agentauth.Actor{}, false
+	}
+	actor, err := s.Auth.Authenticate(r.Context(), token)
+	if errors.Is(err, agentauth.ErrUnauthorized) {
+		unauthorized(w)
+		return agentauth.Actor{}, false
+	}
+	if err != nil {
+		s.Log.ErrorContext(r.Context(), "mcp authentication failed", "error", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "Internal Server Error")
+		return agentauth.Actor{}, false
+	}
+	return actor, true
 }
 
 func unauthorized(w http.ResponseWriter) {

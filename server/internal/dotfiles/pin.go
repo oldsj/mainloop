@@ -4,11 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
+
+// BundlePath is where Mainloop's MCP listener serves a bundle, by digest.
+const BundlePath = "/dotfiles/"
 
 // Pinned is the dotfiles one native Session was created with: the source that applied, the commit
 // its ref named then, and the bundle it was given. Status says whether there is a bundle; Reason
@@ -21,23 +26,45 @@ type Pinned struct {
 	Digest     string
 	Status     string
 	Reason     string
+	// URL is where the create sent the bundle to be fetched from; empty when it sent none.
+	URL string
+}
+
+// Request is the dotfiles the create sends to kagent, or nil when it sends none.
+func (p Pinned) Request() *kagentapi.Dotfiles {
+	if p.URL == "" {
+		return nil
+	}
+	return &kagentapi.Dotfiles{Url: p.URL, Digest: p.Digest, Repository: p.Repository, Commit: p.Commit, Path: p.Path}
+}
+
+// Sent returns the dotfiles create request requestID sent, for a replay of it: kagent refuses a
+// replay whose dotfiles differ. Nil when the request has no pin, or its pin sent none.
+func Sent(ctx context.Context, q *dbq.Queries, requestID string) (*kagentapi.Dotfiles, error) {
+	p, _, err := pinned(ctx, q, requestID)
+	if err != nil {
+		return nil, fmt.Errorf("dotfiles: read the pin: %w", err)
+	}
+	return p.Request(), nil
 }
 
 // Pin returns the dotfiles of the native Session that create request requestID makes for
 // sessionID, choosing them on first use: the project's source when it has one, else the owner's;
-// the commit its ref names now; and that commit's export.
+// the commit its ref names now; and that commit's export. mcpOrigin is the origin of the MCP
+// credential the create carries, which authorizes the runtime's download of the bundle from
+// Mainloop's MCP listener; empty when the create carries none, and then it sends no dotfiles.
 //
 // It is called before the create is sent, outside any transaction. GitHub is read first and the
 // pin is written after, keyed by the request: a retried or replayed create gets the pin its first
 // attempt recorded, and two concurrent pins of one request settle on whichever was written first.
 // Only a database failure is an error; a source that cannot be read gives a pin without a bundle,
 // and the Session runs without dotfiles.
-func (e *Exports) Pin(ctx context.Context, sessionID, requestID string) (Pinned, error) {
+func (e *Exports) Pin(ctx context.Context, sessionID, requestID, mcpOrigin string) (Pinned, error) {
 	if requestID == "" {
 		return Pinned{}, errors.New("dotfiles: pin needs a create request id")
 	}
 	q := dbq.New(e.Pool)
-	if p, ok, err := e.pinned(ctx, q, requestID); err != nil || ok {
+	if p, ok, err := pinned(ctx, q, requestID); err != nil || ok {
 		return p, err
 	}
 	src, err := e.effectiveSource(ctx, q, sessionID)
@@ -48,14 +75,26 @@ func (e *Exports) Pin(ctx context.Context, sessionID, requestID string) (Pinned,
 	if err != nil {
 		return Pinned{}, err
 	}
+	return Record(ctx, q, sessionID, requestID, mcpOrigin, p)
+}
+
+// Record writes p as the pin of create request requestID unless the request has one, and returns
+// the pin the request holds. A ready pin is sent at its url on mcpOrigin, or not at all without
+// one. p's bundle must already be stored.
+func Record(ctx context.Context, q *dbq.Queries, sessionID, requestID, mcpOrigin string, p Pinned) (Pinned, error) {
+	p.URL = ""
+	if p.Status == StatusReady && mcpOrigin != "" {
+		p.URL = strings.TrimRight(mcpOrigin, "/") + BundlePath + p.Digest
+	}
 	if err := q.InsertPinnedDotfiles(ctx, dbq.InsertPinnedDotfilesParams{
 		RequestID: requestID, SessionID: sessionID,
 		Repository: p.Repository, Ref: p.Ref, Path: p.Path,
 		Commit: optional(p.Commit), Digest: optional(p.Digest), Status: p.Status, Reason: p.Reason,
+		Url: optional(p.URL),
 	}); err != nil {
 		return Pinned{}, fmt.Errorf("dotfiles: record the pin: %w", err)
 	}
-	p, ok, err := e.pinned(ctx, q, requestID)
+	p, ok, err := pinned(ctx, q, requestID)
 	if err == nil && !ok {
 		err = errors.New("dotfiles: the pin was not recorded")
 	}
@@ -121,7 +160,7 @@ func (e *Exports) effectiveSource(ctx context.Context, q *dbq.Queries, sessionID
 	return Source{Repository: *row.Repository, Ref: row.Ref, Path: row.Path}, nil
 }
 
-func (e *Exports) pinned(ctx context.Context, q *dbq.Queries, requestID string) (Pinned, bool, error) {
+func pinned(ctx context.Context, q *dbq.Queries, requestID string) (Pinned, bool, error) {
 	row, err := q.GetPinnedDotfiles(ctx, requestID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Pinned{}, false, nil
@@ -139,6 +178,9 @@ func fromRow(row dbq.SessionDotfile) Pinned {
 	}
 	if row.Digest != nil {
 		p.Digest = *row.Digest
+	}
+	if row.Url != nil {
+		p.URL = *row.Url
 	}
 	return p
 }

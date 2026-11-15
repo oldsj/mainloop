@@ -10,6 +10,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/dotfiles"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
@@ -70,12 +71,18 @@ func (s *Service) resolveCreate(ctx context.Context, q *dbq.Queries, r dbq.ListU
 	} else if n == 0 {
 		return nil // settled, or a message is open now; the next pass looks again
 	}
+	dots, err := dotfiles.Sent(ctx, q, r.CreateRequestID)
+	if err != nil {
+		return err
+	}
 	sess, err := s.Kagent.CreateSession(ctx, &kagentapi.CreateSessionRequest{
 		Agent:     &kagentapi.ResourceReference{Namespace: *r.AgentNamespace, Name: *r.AgentName},
 		RequestId: r.CreateRequestID,
 		Name:      "Mainloop session",
-		// The credentials the original create carried: kagent refuses a replay that differs.
+		// The credentials and dotfiles the original create carried: kagent refuses a replay that
+		// differs.
 		Credentials: s.Credentials.ReplayCredentialsFor(r.SessionID, derefStr(r.CredentialIdentity), s.MCPOrigin, dbstate.BindingRole(r.Role), r.MCPGrantKind),
+		Dotfiles:    dots,
 	})
 	var se *kagent.SessionError
 	switch {

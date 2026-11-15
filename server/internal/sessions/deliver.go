@@ -416,10 +416,13 @@ func (t *turn) createKagentSession(ctx context.Context) (*kagentapi.Session, err
 		return nil, err
 	}
 	// The dotfiles are pinned to this request before it is sent, so a retry sends the same ones.
+	var dots *kagentapi.Dotfiles
 	if t.s.Dotfiles != nil {
-		if _, err := t.s.Dotfiles.Pin(ctx, t.d.SessionID, reqID); err != nil {
+		p, err := t.s.Dotfiles.Pin(ctx, t.d.SessionID, reqID, mcpOriginOf(creds, t.s.MCPOrigin))
+		if err != nil {
 			return nil, err
 		}
+		dots = p.Request()
 	}
 	// Record the request before the call: from now on the binding may own a Session whose id is not
 	// stored, which the orphan sweep must not delete.
@@ -438,6 +441,7 @@ func (t *turn) createKagentSession(ctx context.Context) (*kagentapi.Session, err
 		RequestId:   reqID,
 		Name:        name,
 		Credentials: creds,
+		Dotfiles:    dots,
 	})
 	if err != nil {
 		// A create kagent refused before reserving anything leaves the first-use pin unproven, so
@@ -1315,6 +1319,15 @@ func replyText(task *a2a.Task) string {
 // mcpCredentials publishes the MCP credential of the delivery's binding when its role and grant
 // call for one (the main thread; workspace sessions get theirs from the workspace service). A
 // binding with none, or a process with no credential service, creates a Session without MCP.
+// mcpOriginOf is origin when creds carry the MCP credential, which authorizes the runtime's
+// download of the dotfiles bundle, and empty otherwise.
+func mcpOriginOf(creds []*kagentapi.SessionCredential, origin string) string {
+	if len(creds) == 0 {
+		return ""
+	}
+	return origin
+}
+
 func (t *turn) mcpCredentials(ctx context.Context) ([]*kagentapi.SessionCredential, error) {
 	if !agentauth.ValidPair(dbstate.BindingRole(t.d.BindingRole), dbstate.MCPGrantKind(t.d.BindingGrant)) {
 		return nil, nil

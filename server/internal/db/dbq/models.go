@@ -867,6 +867,7 @@ type SessionDotfile struct {
 	Status     string
 	Reason     string
 	CreatedAt  time.Time
+	Url        *string
 }
 
 type SessionMessage struct {

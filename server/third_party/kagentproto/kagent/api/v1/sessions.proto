@@ -77,6 +77,9 @@ message Session {
   // Output only. Set on a fork created with a fresh conversation: its restored
   // data keeps the workspace, but the runtime discards native conversation state.
   bool fresh_conversation = 22;
+  // The agent dotfiles bundle the Session was created with. A fork has none:
+  // its restored data already holds the files its source laid out.
+  Dotfiles dotfiles = 23;
 }
 
 // RuntimeAssociation is a bounded observation of the runtime Actor that serves
@@ -153,6 +156,10 @@ message CreateSessionRequest {
   // The harness, its CLI and helpers come from the operator's runtime payload.
   // Selection requires the controller's session policy to allow its registry.
   DevelopmentEnvironment development_environment = 8;
+  // Optional agent dotfiles bundle to lay out read-only in the CLI's user
+  // configuration directory. The url's origin must be the origin of one of
+  // credentials, whose header authorizes the download.
+  Dotfiles dotfiles = 9;
 }
 
 // DevelopmentEnvironment selects the image a composed Session runs in.

@@ -1010,12 +1010,13 @@ func (s *Server) ForcedDeletes() []string {
 }
 
 // sameContract reports whether a replayed create matches the request that made the Session for the
-// same request id: the Agent, the workspace, the environment and the credentials all have to match,
-// as in kagent.
+// same request id: the Agent, the workspace, the environment, the dotfiles and the credentials all
+// have to match, as in kagent.
 func sameContract(prev, m *api.CreateSessionRequest) bool {
 	return proto.Equal(prev.GetAgent(), m.GetAgent()) &&
 		proto.Equal(prev.GetWorkspace(), m.GetWorkspace()) &&
 		proto.Equal(prev.GetDevelopmentEnvironment(), m.GetDevelopmentEnvironment()) &&
+		proto.Equal(prev.GetDotfiles(), m.GetDotfiles()) &&
 		slices.EqualFunc(prev.GetCredentials(), m.GetCredentials(), func(a, b *api.SessionCredential) bool { return proto.Equal(a, b) })
 }
 

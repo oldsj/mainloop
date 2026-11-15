@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/devloop/devlooptest"
@@ -69,7 +70,12 @@ func (env *pinEnv) setOwner(t *testing.T, repo, ref, path string) {
 
 func (env *pinEnv) pin(t *testing.T, session, request string) dotfiles.Pinned {
 	t.Helper()
-	p, err := env.e.Pin(context.Background(), session, request)
+	return env.pinFrom(t, session, request, "")
+}
+
+func (env *pinEnv) pinFrom(t *testing.T, session, request, mcpOrigin string) dotfiles.Pinned {
+	t.Helper()
+	p, err := env.e.Pin(context.Background(), session, request, mcpOrigin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,5 +193,50 @@ func TestForkCopiesTheSourcePin(t *testing.T) {
 	}
 	if env.refs.calls != 1 {
 		t.Fatalf("a fork resolved the ref again (%d calls)", env.refs.calls)
+	}
+}
+
+// A create that carries an MCP credential sends the bundle's url on that credential's origin, and a
+// replay of the request reads back exactly what the first attempt sent.
+func TestAPinRecordsTheDeliveryItsCreateSends(t *testing.T) {
+	env := newPinEnv(t)
+	ctx := context.Background()
+	env.setOwner(t, "example/dotfiles", "main", "home/.agents")
+
+	p := env.pinFrom(t, "main", "req-1", "http://mainloop-mcp.example.svc:8001/")
+	want := "http://mainloop-mcp.example.svc:8001/dotfiles/" + p.Digest
+	if p.URL != want {
+		t.Fatalf("url = %q, want %q", p.URL, want)
+	}
+	r := p.Request()
+	if r.GetUrl() != want || r.GetDigest() != p.Digest || r.GetCommit() != env.refs.sha ||
+		r.GetRepository() != "example/dotfiles" || r.GetPath() != "home/.agents" {
+		t.Fatalf("request = %v", r)
+	}
+	sent, err := dotfiles.Sent(ctx, env.q, "req-1")
+	if err != nil || !proto.Equal(sent, r) {
+		t.Fatalf("sent = %v, %v; want %v", sent, err, r)
+	}
+
+	// The first pin wins: a retry from a path with no credential still sends what was recorded.
+	if again := env.pinFrom(t, "main", "req-1", ""); again.URL != want {
+		t.Fatalf("retry url = %q", again.URL)
+	}
+	// Without a credential the create sends none, and so does its replay.
+	if p := env.pinFrom(t, "main", "req-2", ""); p.URL != "" || p.Request() != nil {
+		t.Fatalf("pin without a credential = %+v", p)
+	}
+	for _, id := range []string{"req-2", "never-pinned"} {
+		if sent, err := dotfiles.Sent(ctx, env.q, id); err != nil || sent != nil {
+			t.Fatalf("sent for %s = %v, %v", id, sent, err)
+		}
+	}
+}
+
+// A bundle that is not ready is never sent, even with a credential.
+func TestAPinWithoutABundleSendsNone(t *testing.T) {
+	env := newPinEnv(t)
+	if p := env.pinFrom(t, "main", "req-1", "http://mainloop-mcp.example.svc:8001"); p.URL != "" || p.Request() != nil {
+		t.Fatalf("pin with no source = %+v", p)
 	}
 }
