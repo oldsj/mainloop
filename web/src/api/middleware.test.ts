@@ -80,6 +80,15 @@ describe('error mapping', () => {
     expect(error).toMatchObject({ status: 409, reason: 'stale_task_version' });
   });
 
+  it('uses TaskApiError on loop routes', async () => {
+    const { client } = setup(() => json(409, { detail: { reason: 'loop_state_conflict' } }));
+    const error = await client
+      .POST('/loops/{loop_id}/pause', { params: { path: { loop_id: 'l1' } } })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TaskApiError);
+    expect(error).toMatchObject({ status: 409, reason: 'loop_state_conflict' });
+  });
+
   it('uses SendError when a message send is refused', async () => {
     const { client } = setup(() => json(503, { detail: 'Session is not running' }));
     const error = await client

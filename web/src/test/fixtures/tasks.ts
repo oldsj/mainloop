@@ -4,8 +4,10 @@
  * in a test that happens to read the missing field. IDs and times are invented.
  */
 import type {
+  LoopFiring,
   ProviderProfile,
   Task,
+  TaskLoop,
   TaskAttempt,
   TaskOperation,
   TaskProjection,
@@ -266,3 +268,44 @@ export const CODEX_PROFILE = profile({
   effort_levels: ['minimal', 'low', 'medium', 'high'],
   default_effort: 'medium'
 });
+
+/** A live time loop that the supervisor on task-1 armed, with one delivered firing. */
+export function loop(overrides: Partial<TaskLoop> = {}): TaskLoop {
+  return {
+    id: 'loop-1',
+    state: 'armed',
+    trigger: 'time',
+    task_id: 'task-1',
+    recipient: 'supervisor',
+    recipient_task_id: 'task-1',
+    note: 'Check the deploy.',
+    statuses: [],
+    pr_conditions: [],
+    every_minutes: 30,
+    quiet_minutes: null,
+    expect_change: false,
+    stop_reason: null,
+    firings: 1,
+    max_firings: 20,
+    min_interval_seconds: 60,
+    next_fire_at: '2026-01-01T12:30:00Z',
+    last_fired_at: '2026-01-01T12:00:00Z',
+    expires_at: '2026-01-08T12:00:00Z',
+    created_at: '2026-01-01T11:30:00Z',
+    updated_at: '2026-01-01T12:00:00Z',
+    recent_firings: [firing()],
+    ...overrides
+  };
+}
+
+export function firing(overrides: Partial<LoopFiring> = {}): LoopFiring {
+  return {
+    number: 1,
+    facts: ['30 minutes passed.'],
+    folded: 0,
+    delivery_state: 'delivered',
+    stops_loop: null,
+    created_at: '2026-01-01T12:00:00Z',
+    ...overrides
+  };
+}
