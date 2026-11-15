@@ -45,7 +45,8 @@ export function SessionRow({ session, workspace, providers, taskTitle }: Session
     <Link
       to="/sessions/$id"
       params={{ id: session.id }}
-      search={(prev) => ({ ...prev, tab: undefined })}
+      // Another session opens on its conversation, not at the open transcript's place.
+      search={(prev) => ({ ...prev, tab: undefined, transcript: undefined, entry: undefined })}
       className="group gap-xs border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground aria-[current=page]:bg-accent aria-[current=page]:text-accent-foreground p-md min-h-control flex flex-col border"
     >
       <div className="gap-sm flex items-center justify-between">

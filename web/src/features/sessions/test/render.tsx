@@ -6,16 +6,25 @@ import {
   createRouter,
   Outlet,
   RouterProvider,
-  useParams
+  useParams,
+  useSearch
 } from '@tanstack/react-router';
 import { render } from '@testing-library/react';
 import { NewAgentPage } from '../NewAgentPage';
 import { SessionPage } from '../SessionPage';
+import { sessionSearch, TranscriptSearchPage, transcriptSearch } from '@/features/transcripts';
 
 function SessionRoute() {
   const { id } = useParams({ strict: false });
+  const search = sessionSearch.parse(useSearch({ strict: false }));
   // Keyed as the app's route is, so moving to another session starts a fresh page.
-  return <SessionPage key={id} id={id ?? ''} />;
+  return (
+    <SessionPage key={id} id={id ?? ''} transcript={search.transcript === 1} entry={search.entry} />
+  );
+}
+
+function SearchRoute() {
+  return <TranscriptSearchPage search={transcriptSearch.parse(useSearch({ strict: false }))} />;
 }
 
 function Stub({ label }: { label: string }) {
@@ -40,6 +49,7 @@ export function renderSessions(initialPath: string) {
       }),
       createRoute({ getParentRoute: () => root, path: '/agents', component: NewAgentPage }),
       createRoute({ getParentRoute: () => root, path: '/sessions/$id', component: SessionRoute }),
+      createRoute({ getParentRoute: () => root, path: '/transcripts', component: SearchRoute }),
       createRoute({
         getParentRoute: () => root,
         path: '/tasks/$id',

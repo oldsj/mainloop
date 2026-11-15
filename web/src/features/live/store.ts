@@ -76,11 +76,13 @@ export interface Command {
 
 export type Frame = { k: string; seq?: number; ts?: number } & Record<string, unknown>;
 
-/** One message of Mainloop's record of the conversation, which outlives the runner process. */
-export interface HistoryMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
+/**
+ * One item of Mainloop's record of the session, which outlives the runner process: a message, or a
+ * tool call with its result (`result` is null while none is stored).
+ */
+export type HistoryMessage =
+  | { role: 'user' | 'assistant'; content: string }
+  | { role: 'tool'; name: string; input: unknown; result: string | null; error: boolean };
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -210,7 +212,7 @@ export class LiveModel {
    * above the live entries, up to the turn the live backlog starts with.
    */
   setHistory(messages: readonly HistoryMessage[]) {
-    this.history = messages.filter((m) => m.content.trim());
+    this.history = messages.filter((m) => m.role === 'tool' || m.content.trim());
     this.placeHistory();
   }
 
@@ -236,8 +238,21 @@ export class LiveModel {
     };
     if (past.length) add({ t: 'sys', text: "Earlier in this session, from Mainloop's record" });
     for (const m of past) {
-      if (m.role === 'user') add({ t: 'user', text: m.content, queued: false, origin: 'history' });
-      else add({ t: 'text', text: m.content });
+      if (m.role !== 'tool') {
+        if (m.role === 'user')
+          add({ t: 'user', text: m.content, queued: false, origin: 'history' });
+        else add({ t: 'text', text: m.content });
+      } else {
+        const out = m.result === null ? [] : linesOf(m.result).filter((l, k) => k || l.trim());
+        // A call with no stored result is not running: its turn ended, or the result was capped away.
+        const status: ToolStatus = m.error ? 'err' : 'ok';
+        // Arguments cut short are no longer JSON; they show as text.
+        const arg = typeof m.input === 'string' ? m.input.slice(0, 160) : argOf(m.name, m.input);
+        add({ t: 'tool', name: m.name, arg, out, status });
+        if (/^(Edit|MultiEdit|Write)$/.test(m.name) && isObj(m.input)) {
+          add({ t: 'diff', ...diffOf(m.name, m.input) });
+        }
+      }
     }
     if (past.length && live.length) add({ t: 'sys', text: 'Live' });
     this.state.entries = [...placed, ...live];

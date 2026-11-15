@@ -170,6 +170,35 @@ dispatch authority. Runtime `ready` alone does not prove preparation; saved rece
 not identify an earlier runtime admission failure's cause. The `web/` client has the generated types
 only; no screen shows the observation yet.
 
+### The transcript
+
+Every session page has a **Transcript** button in its header (**Conversation** goes back). It shows
+the session's [transcript](transcripts.md) in place of the conversation or the live view, at
+`/sessions/{id}?transcript=1`; the live view detaches meanwhile, so reading the transcript never
+keeps the session awake. It opens at the end and shows earlier entries with **Show earlier**. A
+search hit opens it at that entry (`&entry=<id>`), marked, with **Show earlier** and **Show later**
+around it.
+
+- **Rows.** Prompts, replies (as Markdown), and each tool call on one line: its name, its argument as
+  the live view shows it, and the first line of its result after `⎿`. Tapping a call opens its full
+  arguments and result. Thinking is collapsed under **✻ Thinking**; status lines are small and muted.
+  An entry cut when stored says how much was kept.
+- **The turn not stored yet.** After the stored entries, under "Not stored yet", come the turns kagent
+  has not finished or Mainloop has not copied. The view reads the transcript again every 15 s while
+  there are any.
+- **Gaps.** A kagent Session that could not be copied is noted with its reason, and a live tail
+  kagent could not serve says so.
+- **Searching.** A search field above it opens the search page for this session.
+
+### Searching transcripts
+
+`/transcripts` searches every stored transcript of the owner's sessions. The command palette lists
+it as **Search transcripts**. The query is in the URL (`?q=`), so Back returns to it. Each hit shows
+its session's title, when it happened, what kind of entry it is (with the tool's name) and a snippet
+with the matching words marked; the snippet is text, never markup. A hit opens its session's
+transcript at that entry. A search from a session's transcript is limited to that session
+(`session_id`), with **Search everything** to widen it.
+
 ### Live sessions (SDK runner)
 
 A cancelled session never shows the live view, whatever `NativeSessionInfo.live` says: it has no
@@ -255,15 +284,18 @@ and then behaves as asleep, so it attaches by itself only after something else w
 A permission prompt the runner holds live is lost if the session sleeps, so the view does not
 detach while one is unanswered, hidden or not (the phone dropping the socket still can). A drop while the session is awake
 re-attaches with backoff (at least 1.5 s after an attached socket drops, so a suspend can show first)
-and immediately when the page becomes visible again. The transcript is seeded from Mainloop's
-conversation (`GET /sessions/{id}/conversation`), which survives sleep: it is shown above the live
-entries under "Earlier in this session, from Mainloop's record", and stops before the last copy of
-the user message the runner's `hello` backlog starts with, so a turn is not shown twice. Every attach
-rebuilds the live part from the backlog, which is in the runner's memory and starts empty after a
-sleep or a replayed answer; the record is read again on each `hello` and each sleep. The record holds
-the messages and replies of turns Mainloop sent (A2A turns), which since the composer sends through
-Mainloop includes every message sent from the live view; tool calls from earlier runner processes
-are not shown. After five
+and immediately when the page becomes visible again. The view is seeded from the session's
+[transcript](transcripts.md): the last 300 stored entries (`GET /sessions/{id}/transcript?latest=true`)
+and its live tail, which survive sleep. They are shown above the live entries under "Earlier in this
+session, from Mainloop's record": the messages, the replies, and each tool call with its result, as
+the live view draws them (edits as diffs); thinking and status lines are left out, as the live view
+leaves them out. The record stops before the last copy of the user message the runner's `hello`
+backlog starts with, so a turn is not shown twice. Every attach rebuilds the live part from the
+backlog, which is in the runner's memory and starts empty after a sleep or a replayed answer; the
+record is read again on each `hello` and each sleep. The transcript holds every turn kagent ran as an
+A2A turn, which since the composer sends through Mainloop includes every message sent from the live
+view, so tool calls from earlier runner processes now show after a sleep. A tool call whose result
+was not stored shows with no output. After five
 failed attaches in a row with no `hello` (about 15 s, longer than a wake's 503s normally last) the
 view says the live channel is unavailable, keeps retrying every 8 s, and offers Retry now and Use the
 chat view (the regular session view, until the page is reopened).

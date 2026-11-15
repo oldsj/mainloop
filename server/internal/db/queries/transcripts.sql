@@ -135,6 +135,24 @@ WHERE session_id = $1 AND id > sqlc.arg(after_id)
 ORDER BY id
 LIMIT sqlc.arg(max_rows);
 
+-- name: ListTranscriptEntriesBefore :many
+-- A session's stored entries before an id (the last ones when null), newest first, of the given
+-- kinds (all when null).
+SELECT id, task_id, pos, kind, tool_name, tool_call_id, is_error, text, truncated, orig_bytes, at
+FROM transcript_entries
+WHERE session_id = $1 AND (sqlc.narg(before_id)::bigint IS NULL OR id < sqlc.narg(before_id)::bigint)
+  AND (sqlc.narg(kinds)::text[] IS NULL OR kind = ANY(sqlc.narg(kinds)::text[]))
+ORDER BY id DESC
+LIMIT sqlc.arg(max_rows);
+
+-- name: TranscriptEntriesBeyond :one
+-- Whether a session has stored entries of the given kinds before lo and after hi.
+SELECT
+  EXISTS (SELECT 1 FROM transcript_entries e WHERE e.session_id = $1 AND e.id < sqlc.arg(lo)::bigint
+          AND (sqlc.narg(kinds)::text[] IS NULL OR e.kind = ANY(sqlc.narg(kinds)::text[]))) AS earlier,
+  EXISTS (SELECT 1 FROM transcript_entries e WHERE e.session_id = $1 AND e.id > sqlc.arg(hi)::bigint
+          AND (sqlc.narg(kinds)::text[] IS NULL OR e.kind = ANY(sqlc.narg(kinds)::text[]))) AS later;
+
 -- name: ListTranscriptSources :many
 SELECT * FROM transcript_sessions WHERE session_id = $1 ORDER BY created_at DESC, kagent_session_id LIMIT 50;
 

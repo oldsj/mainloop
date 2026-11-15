@@ -448,6 +448,75 @@ func (q *Queries) ListTranscriptEntries(ctx context.Context, arg ListTranscriptE
 	return items, nil
 }
 
+const listTranscriptEntriesBefore = `-- name: ListTranscriptEntriesBefore :many
+SELECT id, task_id, pos, kind, tool_name, tool_call_id, is_error, text, truncated, orig_bytes, at
+FROM transcript_entries
+WHERE session_id = $1 AND ($2::bigint IS NULL OR id < $2::bigint)
+  AND ($3::text[] IS NULL OR kind = ANY($3::text[]))
+ORDER BY id DESC
+LIMIT $4
+`
+
+type ListTranscriptEntriesBeforeParams struct {
+	SessionID string
+	BeforeID  *int64
+	Kinds     []string
+	MaxRows   int32
+}
+
+type ListTranscriptEntriesBeforeRow struct {
+	ID         int64
+	TaskID     string
+	Pos        int32
+	Kind       string
+	ToolName   string
+	ToolCallID string
+	IsError    bool
+	Text       string
+	Truncated  bool
+	OrigBytes  int32
+	At         *time.Time
+}
+
+// A session's stored entries before an id (the last ones when null), newest first, of the given
+// kinds (all when null).
+func (q *Queries) ListTranscriptEntriesBefore(ctx context.Context, arg ListTranscriptEntriesBeforeParams) ([]ListTranscriptEntriesBeforeRow, error) {
+	rows, err := q.db.Query(ctx, listTranscriptEntriesBefore,
+		arg.SessionID,
+		arg.BeforeID,
+		arg.Kinds,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTranscriptEntriesBeforeRow{}
+	for rows.Next() {
+		var i ListTranscriptEntriesBeforeRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.Pos,
+			&i.Kind,
+			&i.ToolName,
+			&i.ToolCallID,
+			&i.IsError,
+			&i.Text,
+			&i.Truncated,
+			&i.OrigBytes,
+			&i.At,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTranscriptSources = `-- name: ListTranscriptSources :many
 SELECT kagent_session_id, session_id, owner_id, agent_namespace, agent_name, context_id, task_cursor, state, reason, stored_bytes, failures, next_scan_at, scanned_at, created_at, updated_at FROM transcript_sessions WHERE session_id = $1 ORDER BY created_at DESC, kagent_session_id LIMIT 50
 `
@@ -625,6 +694,39 @@ type SetTranscriptSessionScanParams struct {
 func (q *Queries) SetTranscriptSessionScan(ctx context.Context, arg SetTranscriptSessionScanParams) error {
 	_, err := q.db.Exec(ctx, setTranscriptSessionScan, arg.Cursor, arg.RestSeconds, arg.KagentSessionID)
 	return err
+}
+
+const transcriptEntriesBeyond = `-- name: TranscriptEntriesBeyond :one
+SELECT
+  EXISTS (SELECT 1 FROM transcript_entries e WHERE e.session_id = $1 AND e.id < $2::bigint
+          AND ($3::text[] IS NULL OR e.kind = ANY($3::text[]))) AS earlier,
+  EXISTS (SELECT 1 FROM transcript_entries e WHERE e.session_id = $1 AND e.id > $4::bigint
+          AND ($3::text[] IS NULL OR e.kind = ANY($3::text[]))) AS later
+`
+
+type TranscriptEntriesBeyondParams struct {
+	SessionID string
+	Lo        int64
+	Kinds     []string
+	Hi        int64
+}
+
+type TranscriptEntriesBeyondRow struct {
+	Earlier bool
+	Later   bool
+}
+
+// Whether a session has stored entries of the given kinds before lo and after hi.
+func (q *Queries) TranscriptEntriesBeyond(ctx context.Context, arg TranscriptEntriesBeyondParams) (TranscriptEntriesBeyondRow, error) {
+	row := q.db.QueryRow(ctx, transcriptEntriesBeyond,
+		arg.SessionID,
+		arg.Lo,
+		arg.Kinds,
+		arg.Hi,
+	)
+	var i TranscriptEntriesBeyondRow
+	err := row.Scan(&i.Earlier, &i.Later)
+	return i, err
 }
 
 const transcriptSessionBytes = `-- name: TranscriptSessionBytes :one

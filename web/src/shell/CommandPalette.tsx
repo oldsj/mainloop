@@ -82,6 +82,9 @@ function PaletteBody({ lastVisit, close }: { lastVisit: number | null; close: ()
       case 'schedules':
         void navigate({ to: '/schedules', search: {} });
         break;
+      case 'transcripts':
+        void navigate({ to: '/transcripts', search: {} });
+        break;
       case 'theme':
         setTheme(action.theme);
         break;

@@ -12,7 +12,8 @@ export type PaletteAction =
   | { do: 'settings' }
   | { do: 'schedules' }
   | { do: 'theme'; theme: ThemeId }
-  | { do: 'ask'; text: string };
+  | { do: 'ask'; text: string }
+  | { do: 'transcripts' };
 
 export interface PaletteItem {
   /** Unique in the list. */
@@ -53,6 +54,12 @@ const PAGES: PaletteItem[] = [
     action: { do: 'open', target: { to: 'health' } }
   },
   { id: 'page:schedules', label: 'Scheduled runs', kind: 'Page', action: { do: 'schedules' } },
+  {
+    id: 'page:transcripts',
+    label: 'Search transcripts',
+    kind: 'Page',
+    action: { do: 'transcripts' }
+  },
   { id: 'page:settings', label: 'Settings', kind: 'Page', action: { do: 'settings' } },
   {
     id: 'page:import',

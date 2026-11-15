@@ -33,6 +33,10 @@ export const keys = {
     get('/sessions/{session_id}', { path: { session_id: sessionId } }),
   sessionConversation: (sessionId: string) =>
     get('/sessions/{session_id}/conversation', { path: { session_id: sessionId } }),
+  /** A session's transcript: every page of it, in every view. */
+  sessionTranscript: (sessionId: string) =>
+    get('/sessions/{session_id}/transcript', { path: { session_id: sessionId } }),
+  transcriptSearch: () => get('/transcripts/search'),
   sessionNative: (sessionId: string) =>
     get('/sessions/{session_id}/native', { path: { session_id: sessionId } }),
   sessionHitl: (sessionId: string) =>
