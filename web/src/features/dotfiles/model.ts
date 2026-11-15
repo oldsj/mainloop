@@ -65,3 +65,72 @@ export function pinUrl(pin: SessionDotfiles): string | null {
   if (!pin.commit) return null;
   return sourceUrl({ repository: pin.repository, ref: pin.commit, path: pin.path, version: 0 });
 }
+
+/** A session's dotfiles now: what its native Session holds, the source's commit and its refresh. */
+export type SessionDotfilesInfo = components['schemas']['SessionDotfilesInfo'];
+
+const REFRESH_REASONS: Record<string, string> = {
+  not_deliverable: 'the session cannot download dotfiles from Mainloop',
+  session_gone: 'its native session no longer runs',
+  unsupported: 'kagent cannot update a running session yet'
+};
+
+/** What the dotfiles hint says, or null when the session has nothing to show. */
+export interface DotfilesHint {
+  /** The change: from the held commit to the source's, or the source's alone. */
+  text: string;
+  /** GitHub's comparison of the two commits, when both are in one repository. */
+  compareUrl: string | null;
+  /** A refresh that did not finish: still pending, or failed with the reason. */
+  problem: { pending: boolean; text: string } | null;
+}
+
+function short(commit: string): string {
+  return commit.slice(0, 7);
+}
+
+/**
+ * The hint for a session whose dotfiles a refresh would change. A failed refresh shows only while
+ * it targeted the source's current commit; an older failure says nothing about a refresh now.
+ */
+export function dotfilesHint(info: SessionDotfilesInfo): DotfilesHint | null {
+  if (!info.refreshable) return null;
+  const refresh = info.refresh;
+  const pending = refresh?.state === 'pending';
+  if (!info.behind && !pending) return null;
+  const source = info.source;
+  const current = info.current;
+  let text = 'dotfiles changed';
+  let compareUrl: string | null = null;
+  if (source?.commit) {
+    const to = `${source.repository} @ ${short(source.commit)}${source.path ? `, ${source.path}/` : ''}`;
+    if (
+      current?.commit &&
+      current.repository === source.repository &&
+      current.path === source.path
+    ) {
+      text = `dotfiles changed: ${short(current.commit)} → ${short(source.commit)}`;
+      if (REPOSITORY.test(source.repository) && current.commit !== source.commit) {
+        compareUrl = `https://github.com/${source.repository}/compare/${current.commit}...${source.commit}`;
+      }
+    } else if (current?.commit) {
+      text = `dotfiles changed: ${pinText(current)} → ${to}`;
+    } else {
+      text = `dotfiles available: ${to}`;
+    }
+  }
+  let problem: DotfilesHint['problem'] = null;
+  if (pending) {
+    problem = { pending: true, text: 'refresh not confirmed yet' };
+  } else if (
+    refresh?.state === 'failed' &&
+    (!refresh.dotfiles?.commit || refresh.dotfiles.commit === source?.commit)
+  ) {
+    const why =
+      refresh.reason === 'no_bundle' && refresh.dotfiles
+        ? pinText(refresh.dotfiles)
+        : (REFRESH_REASONS[refresh.reason] ?? refresh.reason);
+    problem = { pending: false, text: `last refresh failed: ${why}` };
+  }
+  return { text, compareUrl, problem };
+}

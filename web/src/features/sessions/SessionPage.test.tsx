@@ -6,6 +6,7 @@ import { connection } from '@/api';
 import { API_URL } from '@/api/config';
 import { createFakeHITL } from '@/features/hitl/handlers';
 import { hitlView } from '@/test/fixtures/hitl';
+import { dotfilesHandlers } from '@/test/msw/handlers';
 import { server } from '@/test/msw/server';
 import { workspaceFixture } from '@/test/fixtures';
 import { attempt, view } from '@/test/fixtures/tasks';
@@ -482,6 +483,50 @@ describe('identity strip', () => {
     );
     expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     expect(link).toHaveAttribute('title', digest);
+  });
+
+  it('shows that the source moved on and refreshes the session to it', async () => {
+    const held = 'a1b2c3d'.padEnd(40, '0');
+    const now = 'e4f5a6b'.padEnd(40, '0');
+    server.use(
+      ...serveSession(session({ id: 's1' }), native({ session_id: 's1' })),
+      ...dotfilesHandlers({
+        sessions: {
+          s1: {
+            current: {
+              status: 'ready',
+              reason: '',
+              repository: 'example/dotfiles',
+              ref: 'main',
+              path: '',
+              commit: held,
+              digest: `sha256:${'ab'.repeat(32)}`
+            },
+            source: {
+              repository: 'example/dotfiles',
+              ref: 'main',
+              path: '',
+              commit: now,
+              reason: ''
+            },
+            behind: true,
+            refreshable: true,
+            refresh: null
+          }
+        }
+      })
+    );
+    const user = userEvent.setup();
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+
+    expect(await screen.findByTestId('dotfiles-change')).toHaveTextContent(
+      'dotfiles changed: a1b2c3d → e4f5a6b'
+    );
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByTestId('dotfiles-done')).toHaveTextContent(
+      'dotfiles refreshed to e4f5a6b; the next turn reads them'
+    );
   });
 
   it('says why a session has no dotfiles', async () => {

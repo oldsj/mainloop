@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { DotfilesRefresh } from '@/features/dotfiles/DotfilesRefresh';
 import { HITLCard } from '@/features/hitl';
 import { useSessionRequests } from '@/features/hitl/session-requests';
 import { LiveSession, liveForced, type LiveBar, type LiveProvider } from '@/features/live';
@@ -82,6 +83,7 @@ export function ChatPage({
         provider={provider}
         live={bar}
         loops={{ live: liveLoops, list: <MainLoops offline={offline} /> }}
+        dotfiles={sessionId ? <DotfilesRefresh sessionId={sessionId} /> : null}
       />
     ) : null;
 

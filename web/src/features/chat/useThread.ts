@@ -4,6 +4,7 @@ import { $api, fetchClient, keys, SendError } from '@/api';
 import type { Message, NativeDelivery } from '@/lib/contract';
 import { deliveryNotices } from '@/lib/delivery';
 import { createSendGuard, retryMessage } from '@/lib/messageSend';
+import { uuidV4 } from '@/lib/uuid';
 import { clearDraft, NEW_CONVERSATION, sessionDraftKey } from './drafts';
 import type { PendingImage } from './imageLimits';
 import { refusalCode, sendRefusalNotice } from './mainProvider';
@@ -25,15 +26,6 @@ const LOST_REPLY_UNCONFIRMED =
   ' Mainloop could not confirm whether it was recorded. Check the conversation before you send it again.';
 
 const isClientError = (status: number) => status >= 400 && status < 500;
-
-/** A version 4 UUID. getRandomValues also works on the local HTTP preview, where randomUUID does not. */
-export function newRequestId(): string {
-  const b = crypto.getRandomValues(new Uint8Array(16));
-  b[6] = ((b[6] ?? 0) & 0x0f) | 0x40;
-  b[8] = ((b[8] ?? 0) & 0x3f) | 0x80;
-  const h = Array.from(b, (byte) => byte.toString(16).padStart(2, '0')).join('');
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
-}
 
 /** The server's reason in an error body (`{"detail": "..."}`), when it has one. */
 function errorDetail(error: unknown): string | null {
@@ -473,7 +465,7 @@ export function useThread(source: ThreadSource) {
   const restart = useCallback(() => {
     if (!threadSessionId) return;
     setRestartError(null);
-    restartRequest.current ??= newRequestId();
+    restartRequest.current ??= uuidV4();
     restartSession.mutate(
       {
         params: { path: { session_id: threadSessionId } },
