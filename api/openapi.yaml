@@ -7202,6 +7202,11 @@ components:
           title: Live
           description: Whether the session's Agent runs the Agent SDK runner, so GET /sessions/{session_id}/live serves a live WebSocket view of it.
           default: false
+        dotfiles:
+          anyOf:
+            - $ref: '#/components/schemas/SessionDotfiles'
+            - type: 'null'
+          description: The agent dotfiles chosen for the session's newest native Session. Absent or null when none were recorded (a Session created before Mainloop recorded them, or a server with no GitHub App).
       type: object
       required:
         - session_id
@@ -8618,6 +8623,67 @@ components:
         - effort
       title: SessionModelEffort
       description: A session's model and reasoning-effort override state, after a write.
+    SessionDotfiles:
+      properties:
+        status:
+          type: string
+          enum:
+            - ready
+            - none
+            - unavailable
+            - refused
+          title: Status
+          description: |-
+            `ready`: the source's directory at `commit` was exported; `digest` names the bundle.
+            `none`: no source applies to the session. `unavailable`: the source could not be read
+            when the Session was created (see `reason`). `refused`: the commit's directory cannot be
+            exported (see `reason`).
+        reason:
+          type: string
+          maxLength: 64
+          title: Reason
+          description: Why there is no bundle, empty when `status` is `ready` or `none`. One of `app_not_installed`, `ref_not_found`, `repository_unavailable`, `over_limits`, `unsupported_file`, `nothing_to_export` or `secret_found`.
+        repository:
+          type: string
+          maxLength: 140
+          title: Repository
+          description: The source's repository, "owner/name"; empty when `status` is `none`.
+        ref:
+          type: string
+          maxLength: 255
+          title: Ref
+          description: The configured branch, tag or commit; empty means the default branch.
+        path:
+          type: string
+          maxLength: 255
+          title: Path
+          description: The configured directory; empty means the repository root.
+        commit:
+          anyOf:
+            - type: string
+              pattern: ^[0-9a-f]{40}$
+            - type: 'null'
+          title: Commit
+          description: The commit `ref` named when the Session was created.
+        digest:
+          anyOf:
+            - type: string
+              pattern: ^sha256:[0-9a-f]{64}$
+            - type: 'null'
+          title: Digest
+          description: The SHA-256 of the exported bundle, when `status` is `ready`.
+      additionalProperties: false
+      type: object
+      required:
+        - status
+        - reason
+        - repository
+        - ref
+        - path
+        - commit
+        - digest
+      title: SessionDotfiles
+      description: The agent dotfiles a native Session was created with, pinned when the create was first sent; a fork has its source's.
     SessionStatus:
       type: string
       enum:

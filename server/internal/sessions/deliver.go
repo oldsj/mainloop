@@ -415,6 +415,12 @@ func (t *turn) createKagentSession(ctx context.Context) (*kagentapi.Session, err
 	if err != nil {
 		return nil, err
 	}
+	// The dotfiles are pinned to this request before it is sent, so a retry sends the same ones.
+	if t.s.Dotfiles != nil {
+		if _, err := t.s.Dotfiles.Pin(ctx, t.d.SessionID, reqID); err != nil {
+			return nil, err
+		}
+	}
 	// Record the request before the call: from now on the binding may own a Session whose id is not
 	// stored, which the orphan sweep must not delete.
 	id, owner, attempts := t.fence()

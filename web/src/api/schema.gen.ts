@@ -2669,6 +2669,8 @@ export interface components {
        * @default false
        */
       live: boolean;
+      /** @description The agent dotfiles chosen for the session's newest native Session. Absent or null when none were recorded (a Session created before Mainloop recorded them, or a server with no GitHub App). */
+      dotfiles?: components['schemas']['SessionDotfiles'] | null;
     };
     /**
      * Project
@@ -3595,6 +3597,51 @@ export interface components {
       model: string | null;
       /** Effort */
       effort: components['schemas']['EffortLevel'] | null;
+    };
+    /**
+     * SessionDotfiles
+     * @description The agent dotfiles a native Session was created with, pinned when the create was first sent; a fork has its source's.
+     */
+    SessionDotfiles: {
+      /**
+       * Status
+       * @description `ready`: the source's directory at `commit` was exported; `digest` names the bundle.
+       *     `none`: no source applies to the session. `unavailable`: the source could not be read
+       *     when the Session was created (see `reason`). `refused`: the commit's directory cannot be
+       *     exported (see `reason`).
+       * @enum {string}
+       */
+      status: 'ready' | 'none' | 'unavailable' | 'refused';
+      /**
+       * Reason
+       * @description Why there is no bundle, empty when `status` is `ready` or `none`. One of `app_not_installed`, `ref_not_found`, `repository_unavailable`, `over_limits`, `unsupported_file`, `nothing_to_export` or `secret_found`.
+       */
+      reason: string;
+      /**
+       * Repository
+       * @description The source's repository, "owner/name"; empty when `status` is `none`.
+       */
+      repository: string;
+      /**
+       * Ref
+       * @description The configured branch, tag or commit; empty means the default branch.
+       */
+      ref: string;
+      /**
+       * Path
+       * @description The configured directory; empty means the repository root.
+       */
+      path: string;
+      /**
+       * Commit
+       * @description The commit `ref` named when the Session was created.
+       */
+      commit: string | null;
+      /**
+       * Digest
+       * @description The SHA-256 of the exported bundle, when `status` is `ready`.
+       */
+      digest: string | null;
     };
     /**
      * SessionStatus

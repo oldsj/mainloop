@@ -24,10 +24,17 @@ import (
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/dotfiles"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
+
+// DotfilesPinner chooses, once per create request, the agent dotfiles a native Session is created
+// with (see [dotfiles.Exports.Pin]).
+type DotfilesPinner interface {
+	Pin(ctx context.Context, sessionID, requestID string) (dotfiles.Pinned, error)
+}
 
 // Kagent is the part of the kagent client the lifecycle uses. *kagent.Client satisfies it.
 type Kagent interface {
@@ -72,6 +79,9 @@ type Service struct {
 	// Refs resolves a checkout ref to a commit SHA for workspaces that kagent prepares. Nil keeps
 	// the ref as given.
 	Refs RefResolver
+	// Dotfiles pins the agent dotfiles of a workspace's native Session before it is created. Nil
+	// pins none.
+	Dotfiles DotfilesPinner
 	// Now is the clock for retry-window decisions; nil means time.Now.
 	Now func() time.Time
 	// PollEvery is how often a waiting request re-reads its operation; zero means 50ms.
@@ -85,6 +95,9 @@ type RefResolver interface {
 
 // WithRefs resolves the checkout ref of a workspace with a development environment to a commit SHA.
 func WithRefs(r RefResolver) Option { return func(s *Service) { s.Refs = r } }
+
+// WithDotfiles pins each workspace Session's agent dotfiles before it is created.
+func WithDotfiles(p DotfilesPinner) Option { return func(s *Service) { s.Dotfiles = p } }
 
 // ProjectImporter is the one way a project is created: [projects.Service.Import].
 type ProjectImporter interface {

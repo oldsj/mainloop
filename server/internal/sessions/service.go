@@ -44,6 +44,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/dotfiles"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/progress"
 	"github.com/oldsj/mainloop/server/internal/providers"
@@ -136,6 +137,12 @@ func checkTaskSendFence(ctx context.Context, q *dbq.Queries, sessionID string) e
 // reason is the text of an error that wraps sentinel, without the sentinel.
 func reason(err, sentinel error) string {
 	return strings.TrimPrefix(err.Error(), sentinel.Error()+": ")
+}
+
+// DotfilesPinner chooses, once per create request, the agent dotfiles a native Session is created
+// with (see [dotfiles.Exports.Pin]).
+type DotfilesPinner interface {
+	Pin(ctx context.Context, sessionID, requestID string) (dotfiles.Pinned, error)
 }
 
 // Kagent is the part of the kagent client the sessions use.
@@ -294,6 +301,8 @@ type Service struct {
 	Credentials *agentauth.Credentials
 	// MCPOrigin is where those credentials are valid: the MCP Service's in-cluster URL.
 	MCPOrigin string
+	// Dotfiles pins the agent dotfiles of each native Session before it is created. Nil pins none.
+	Dotfiles DotfilesPinner
 	// Health, when set, stores a finished turn's health observations in the transaction that ends it.
 	// The health recovery sweep collects whatever this misses, so nil only costs a later read.
 	Health HealthSink
@@ -784,8 +793,8 @@ func LockSend(ctx context.Context, tx pgx.Tx, sessionID string) error {
 // health stores a finished turn's observations in the transaction that ends it; waker readies a
 // workspace session's runtime before each send. A test with none of these passes nil.
 func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, reg *providers.Registry, creds *agentauth.Credentials,
-	health HealthSink, waker Waker, prog *progress.Tracker, log *slog.Logger) *Service {
-	return &Service{
+	health HealthSink, waker Waker, prog *progress.Tracker, log *slog.Logger, opts ...ServiceOption) *Service {
+	s := &Service{
 		Pool: pool, Kagent: k, OwnerID: cfg.Identity.OwnerID, Log: log,
 		Providers: reg, Credentials: creds, Health: health, Waker: waker, Progress: prog, ActorAtespace: cfg.Kagent.ActorAtespace,
 		Agent:          kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainAgent},
@@ -794,4 +803,14 @@ func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, reg *providers
 		Opts:           OptionsFrom(cfg.Sessions),
 		MCPOrigin:      cfg.MCPOrigin(),
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
+
+// ServiceOption sets an optional collaborator of a [Service] at construction.
+type ServiceOption func(*Service)
+
+// WithDotfiles pins each native Session's agent dotfiles before it is created.
+func WithDotfiles(p DotfilesPinner) ServiceOption { return func(s *Service) { s.Dotfiles = p } }

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { pinText, pinUrl, type SessionDotfiles } from '@/features/dotfiles/model';
 import { ShortId } from '@/features/workspaces/ShortId';
 import { agentLabel } from '@/lib/agentLabel';
 import type { Session } from '@/lib/contract';
@@ -100,6 +101,11 @@ export function IdentityStrip({ session }: { session: Session }) {
               {info.topic}
             </Field>
           ) : null}
+          {info.dotfiles ? (
+            <Field label="dotfiles" testId="id-dotfiles">
+              <DotfilesPin pin={info.dotfiles} />
+            </Field>
+          ) : null}
         </dl>
       ) : null}
 
@@ -134,6 +140,26 @@ export function IdentityStrip({ session }: { session: Session }) {
         </p>
       ) : null}
     </section>
+  );
+}
+
+/** The pinned dotfiles, linked to the commit's directory when there is one; the digest on hover. */
+function DotfilesPin({ pin }: { pin: SessionDotfiles }) {
+  const text = pinText(pin);
+  const url = pinUrl(pin);
+  const title = pin.digest ?? undefined;
+  return url ? (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={title}
+      className="hover:text-accent-foreground underline"
+    >
+      {text}
+    </a>
+  ) : (
+    <span title={title}>{text}</span>
   );
 }
 

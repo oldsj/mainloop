@@ -16,6 +16,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/dotfiles"
 )
 
 // deliveriesShown is how many recent deliveries GET /main-thread lists.
@@ -289,6 +290,11 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row nativeBind
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
+	if pin, ok, err := dotfiles.Latest(ctx, q, row.SessionID); err != nil {
+		return nil, err
+	} else if ok {
+		n.Dotfiles = dotfilesView(pin)
+	}
 	restartable, err := a.Svc.isRestartable(ctx, row.SessionID)
 	if err != nil {
 		return nil, err
@@ -308,6 +314,21 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row nativeBind
 		n.Note = &note
 	}
 	return n, nil
+}
+
+// dotfilesView is the API shape of a session's dotfiles pin.
+func dotfilesView(p dotfiles.Pinned) *api.SessionDotfiles {
+	v := &api.SessionDotfiles{
+		Status: api.SessionDotfilesStatus(p.Status), Reason: p.Reason,
+		Repository: p.Repository, Ref: p.Ref, Path: p.Path,
+	}
+	if p.Commit != "" {
+		v.Commit = &p.Commit
+	}
+	if p.Digest != "" {
+		v.Digest = &p.Digest
+	}
+	return v
 }
 
 // lastAttempted is the state of the newest delivery that is not itself still queued, or "" when

@@ -29,3 +29,44 @@ UPDATE project_dotfiles_sources
 SET repository = $2, ref = $3, path = $4, version = version + 1, updated_at = now()
 WHERE project_id = $1 AND version = sqlc.arg(expected_version)
 RETURNING *;
+
+-- name: GetDotfilesExport :one
+SELECT * FROM dotfiles_exports WHERE repository = $1 AND commit = $2 AND path = $3;
+
+-- A concurrent export of the same commit wrote the same row; the second write changes nothing.
+-- name: InsertDotfilesExport :exec
+INSERT INTO dotfiles_exports (repository, commit, path, status, reason, digest, findings)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (repository, commit, path) DO NOTHING;
+
+-- name: InsertDotfilesBundle :exec
+INSERT INTO dotfiles_bundles (digest, content) VALUES ($1, $2)
+ON CONFLICT (digest) DO NOTHING;
+
+-- name: GetDotfilesBundle :one
+SELECT content FROM dotfiles_bundles WHERE digest = $1;
+
+-- name: GetSessionDotfilesSourceInputs :one
+SELECT s.user_id, s.project_id FROM sessions s WHERE s.id = $1;
+
+-- name: GetPinnedDotfiles :one
+SELECT * FROM session_dotfiles WHERE request_id = $1;
+
+-- The first pin of a request wins; a concurrent pin of the same request changes nothing.
+-- name: InsertPinnedDotfiles :exec
+INSERT INTO session_dotfiles (request_id, session_id, repository, ref, path, commit, digest, status, reason)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+ON CONFLICT (request_id) DO NOTHING;
+
+-- name: LatestSessionDotfiles :one
+SELECT * FROM session_dotfiles WHERE session_id = $1 ORDER BY created_at DESC, request_id LIMIT 1;
+
+-- A fork is given the files its source's Session was laid out with: its latest pin.
+-- name: CopyForkDotfiles :exec
+INSERT INTO session_dotfiles (request_id, session_id, repository, ref, path, commit, digest, status, reason)
+SELECT sqlc.arg(request_id), sqlc.arg(session_id), d.repository, d.ref, d.path, d.commit, d.digest, d.status, d.reason
+FROM session_dotfiles d
+WHERE d.session_id = sqlc.arg(source_session_id)
+ORDER BY d.created_at DESC, d.request_id
+LIMIT 1
+ON CONFLICT (request_id) DO NOTHING;

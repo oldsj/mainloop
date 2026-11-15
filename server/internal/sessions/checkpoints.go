@@ -682,6 +682,13 @@ func (s *Service) commitFork(ctx context.Context, r dbq.CheckpointFork, forked *
 		}); err != nil {
 			return fmt.Errorf("create forked binding: %w", err)
 		}
+		// The forked Session starts from the source's data, dotfiles laid out included, so it records
+		// the source's pin rather than choosing again.
+		if err := q.CopyForkDotfiles(ctx, dbq.CopyForkDotfilesParams{
+			RequestID: "fork:" + r.ID, SessionID: newID, SourceSessionID: r.SourceSessionID,
+		}); err != nil {
+			return fmt.Errorf("copy the agent dotfiles pin: %w", err)
+		}
 		if hasWorkspace {
 			agentNamespace, agentName := srcWorkspace.AgentNamespace, srcWorkspace.AgentName
 			if v := ref.GetNamespace(); v != "" {

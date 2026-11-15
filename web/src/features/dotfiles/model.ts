@@ -36,3 +36,32 @@ export function sourceUrl(source: z.output<typeof dotfilesSourceSchema>): string
   const path = source.path.split('/').filter(Boolean).map(encodeURIComponent).join('/');
   return path ? `${base}/tree/${ref}/${path}` : `${base}/tree/${ref}`;
 }
+
+/** The dotfiles a session's native Session was created with. */
+export type SessionDotfiles = components['schemas']['SessionDotfiles'];
+
+const REASONS: Record<string, string> = {
+  app_not_installed: 'the GitHub App cannot read the repository',
+  ref_not_found: 'the ref was not found',
+  repository_unavailable: 'GitHub could not be read',
+  over_limits: 'over the size limits',
+  unsupported_file: 'holds a symlink or another unsupported file',
+  nothing_to_export: 'no AGENTS.md, CLAUDE.md, skills, agents or commands there',
+  secret_found: 'a possible secret was found'
+};
+
+/** One line for a session's pinned dotfiles: the repository and the short commit, or why none. */
+export function pinText(pin: SessionDotfiles): string {
+  if (pin.status === 'none') return 'none';
+  const at = pin.commit ? ` @ ${pin.commit.slice(0, 7)}` : '';
+  const where = `${pin.repository}${at}${pin.path ? `, ${pin.path}/` : ''}`;
+  if (pin.status === 'ready') return where;
+  const why = REASONS[pin.reason] ?? pin.reason;
+  return pin.status === 'refused' ? `${where}: refused, ${why}` : `${where}: not read, ${why}`;
+}
+
+/** The pinned commit's directory on GitHub, or null without a commit. */
+export function pinUrl(pin: SessionDotfiles): string | null {
+  if (!pin.commit) return null;
+  return sourceUrl({ repository: pin.repository, ref: pin.commit, path: pin.path, version: 0 });
+}
