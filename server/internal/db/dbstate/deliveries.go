@@ -44,6 +44,17 @@ const (
 	RestartDone      RestartState = "done"
 )
 
+// DotfilesRefreshState is session_dotfiles_refreshes.state: pending until kagent holds the pinned
+// dotfiles (applied) or the refresh cannot apply (failed).
+type DotfilesRefreshState string
+
+// Dotfiles refresh states.
+const (
+	DotfilesRefreshPending DotfilesRefreshState = "pending"
+	DotfilesRefreshApplied DotfilesRefreshState = "applied"
+	DotfilesRefreshFailed  DotfilesRefreshState = "failed"
+)
+
 // ActivityKind is deliveries.activity_kind: what the last task event the delivery loop saw left the
 // turn doing. It decides how long the turn may stay quiet before it reads as stalled.
 type ActivityKind string

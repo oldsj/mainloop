@@ -48,6 +48,9 @@ const (
 	// SessionServiceUpdateSessionNameProcedure is the fully-qualified name of the SessionService's
 	// UpdateSessionName RPC.
 	SessionServiceUpdateSessionNameProcedure = "/kagent.api.v1.SessionService/UpdateSessionName"
+	// SessionServiceUpdateSessionDotfilesProcedure is the fully-qualified name of the SessionService's
+	// UpdateSessionDotfiles RPC.
+	SessionServiceUpdateSessionDotfilesProcedure = "/kagent.api.v1.SessionService/UpdateSessionDotfiles"
 	// SessionServiceRevertSessionProcedure is the fully-qualified name of the SessionService's
 	// RevertSession RPC.
 	SessionServiceRevertSessionProcedure = "/kagent.api.v1.SessionService/RevertSession"
@@ -77,6 +80,14 @@ type SessionServiceClient interface {
 	PrepareSessionWorkspace(context.Context, *connect.Request[v1.PrepareSessionWorkspaceRequest]) (*connect.Response[v1.PrepareSessionWorkspaceResponse], error)
 	ListSessions(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error)
 	UpdateSessionName(context.Context, *connect.Request[v1.UpdateSessionNameRequest]) (*connect.Response[v1.UpdateSessionNameResponse], error)
+	// UpdateSessionDotfiles replaces the agent dotfiles a Session lays out. The
+	// runtime picks the new bundle up at the start of its next turn, never
+	// mid-turn, and restarts a long-lived CLI process so it reads them, resuming
+	// the conversation. A Session whose digest is not previous_digest fails with
+	// FAILED_PRECONDITION, unless it already holds exactly these dotfiles, which
+	// succeeds without a change; so a retry is safe and a stale one cannot undo
+	// a newer update.
+	UpdateSessionDotfiles(context.Context, *connect.Request[v1.UpdateSessionDotfilesRequest]) (*connect.Response[v1.UpdateSessionDotfilesResponse], error)
 	// Restores a crashed runtime to its last snapshot without replaying its turn.
 	RevertSession(context.Context, *connect.Request[v1.RevertSessionRequest]) (*connect.Response[v1.RevertSessionResponse], error)
 	DeleteSession(context.Context, *connect.Request[v1.DeleteSessionRequest]) (*connect.Response[v1.DeleteSessionResponse], error)
@@ -126,6 +137,12 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("UpdateSessionName")),
 			connect.WithClientOptions(opts...),
 		),
+		updateSessionDotfiles: connect.NewClient[v1.UpdateSessionDotfilesRequest, v1.UpdateSessionDotfilesResponse](
+			httpClient,
+			baseURL+SessionServiceUpdateSessionDotfilesProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("UpdateSessionDotfiles")),
+			connect.WithClientOptions(opts...),
+		),
 		revertSession: connect.NewClient[v1.RevertSessionRequest, v1.RevertSessionResponse](
 			httpClient,
 			baseURL+SessionServiceRevertSessionProcedure,
@@ -166,6 +183,7 @@ type sessionServiceClient struct {
 	prepareSessionWorkspace *connect.Client[v1.PrepareSessionWorkspaceRequest, v1.PrepareSessionWorkspaceResponse]
 	listSessions            *connect.Client[v1.ListSessionsRequest, v1.ListSessionsResponse]
 	updateSessionName       *connect.Client[v1.UpdateSessionNameRequest, v1.UpdateSessionNameResponse]
+	updateSessionDotfiles   *connect.Client[v1.UpdateSessionDotfilesRequest, v1.UpdateSessionDotfilesResponse]
 	revertSession           *connect.Client[v1.RevertSessionRequest, v1.RevertSessionResponse]
 	deleteSession           *connect.Client[v1.DeleteSessionRequest, v1.DeleteSessionResponse]
 	createSessionShare      *connect.Client[v1.CreateSessionShareRequest, v1.CreateSessionShareResponse]
@@ -196,6 +214,11 @@ func (c *sessionServiceClient) ListSessions(ctx context.Context, req *connect.Re
 // UpdateSessionName calls kagent.api.v1.SessionService.UpdateSessionName.
 func (c *sessionServiceClient) UpdateSessionName(ctx context.Context, req *connect.Request[v1.UpdateSessionNameRequest]) (*connect.Response[v1.UpdateSessionNameResponse], error) {
 	return c.updateSessionName.CallUnary(ctx, req)
+}
+
+// UpdateSessionDotfiles calls kagent.api.v1.SessionService.UpdateSessionDotfiles.
+func (c *sessionServiceClient) UpdateSessionDotfiles(ctx context.Context, req *connect.Request[v1.UpdateSessionDotfilesRequest]) (*connect.Response[v1.UpdateSessionDotfilesResponse], error) {
+	return c.updateSessionDotfiles.CallUnary(ctx, req)
 }
 
 // RevertSession calls kagent.api.v1.SessionService.RevertSession.
@@ -235,6 +258,14 @@ type SessionServiceHandler interface {
 	PrepareSessionWorkspace(context.Context, *connect.Request[v1.PrepareSessionWorkspaceRequest]) (*connect.Response[v1.PrepareSessionWorkspaceResponse], error)
 	ListSessions(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error)
 	UpdateSessionName(context.Context, *connect.Request[v1.UpdateSessionNameRequest]) (*connect.Response[v1.UpdateSessionNameResponse], error)
+	// UpdateSessionDotfiles replaces the agent dotfiles a Session lays out. The
+	// runtime picks the new bundle up at the start of its next turn, never
+	// mid-turn, and restarts a long-lived CLI process so it reads them, resuming
+	// the conversation. A Session whose digest is not previous_digest fails with
+	// FAILED_PRECONDITION, unless it already holds exactly these dotfiles, which
+	// succeeds without a change; so a retry is safe and a stale one cannot undo
+	// a newer update.
+	UpdateSessionDotfiles(context.Context, *connect.Request[v1.UpdateSessionDotfilesRequest]) (*connect.Response[v1.UpdateSessionDotfilesResponse], error)
 	// Restores a crashed runtime to its last snapshot without replaying its turn.
 	RevertSession(context.Context, *connect.Request[v1.RevertSessionRequest]) (*connect.Response[v1.RevertSessionResponse], error)
 	DeleteSession(context.Context, *connect.Request[v1.DeleteSessionRequest]) (*connect.Response[v1.DeleteSessionResponse], error)
@@ -280,6 +311,12 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("UpdateSessionName")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceUpdateSessionDotfilesHandler := connect.NewUnaryHandler(
+		SessionServiceUpdateSessionDotfilesProcedure,
+		svc.UpdateSessionDotfiles,
+		connect.WithSchema(sessionServiceMethods.ByName("UpdateSessionDotfiles")),
+		connect.WithHandlerOptions(opts...),
+	)
 	sessionServiceRevertSessionHandler := connect.NewUnaryHandler(
 		SessionServiceRevertSessionProcedure,
 		svc.RevertSession,
@@ -322,6 +359,8 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceListSessionsHandler.ServeHTTP(w, r)
 		case SessionServiceUpdateSessionNameProcedure:
 			sessionServiceUpdateSessionNameHandler.ServeHTTP(w, r)
+		case SessionServiceUpdateSessionDotfilesProcedure:
+			sessionServiceUpdateSessionDotfilesHandler.ServeHTTP(w, r)
 		case SessionServiceRevertSessionProcedure:
 			sessionServiceRevertSessionHandler.ServeHTTP(w, r)
 		case SessionServiceDeleteSessionProcedure:
@@ -359,6 +398,10 @@ func (UnimplementedSessionServiceHandler) ListSessions(context.Context, *connect
 
 func (UnimplementedSessionServiceHandler) UpdateSessionName(context.Context, *connect.Request[v1.UpdateSessionNameRequest]) (*connect.Response[v1.UpdateSessionNameResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kagent.api.v1.SessionService.UpdateSessionName is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) UpdateSessionDotfiles(context.Context, *connect.Request[v1.UpdateSessionDotfilesRequest]) (*connect.Response[v1.UpdateSessionDotfilesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kagent.api.v1.SessionService.UpdateSessionDotfiles is not implemented"))
 }
 
 func (UnimplementedSessionServiceHandler) RevertSession(context.Context, *connect.Request[v1.RevertSessionRequest]) (*connect.Response[v1.RevertSessionResponse], error) {

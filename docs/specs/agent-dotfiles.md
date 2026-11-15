@@ -1,9 +1,10 @@
 # Agent dotfiles
 
-Status: the source configuration; pinning, export and recording per Session; and delivery to
-kagent with the read-only layout are **implemented** for
-[#313](https://github.com/oldsj/mainloop/issues/313), tested with fakes and not yet proven live.
-Refreshing a running Session to a newer commit is **proposed**. Each section says which. See
+Status: the source configuration; pinning, export and recording per Session; delivery to kagent
+with the read-only layout; and the explicit refresh of a running Session with its "dotfiles
+changed" hint are **implemented** for [#313](https://github.com/oldsj/mainloop/issues/313), tested
+with fakes and not yet proven live. The web control for the refresh and following the source
+automatically are **proposed**. Each section says which. See
 [ROADMAP.md](../../ROADMAP.md#agent-context) for how this fits the "Agent context" direction.
 
 Agents in Mainloop start without the owner's standing context: no owner-level instructions,
@@ -120,8 +121,8 @@ A create whose pin is `ready` and that carries the session's MCP credential send
 `dotfiles = {url, digest, repository, commit, path}` on its kagent CreateSession. The url is
 `<MCP origin>/dotfiles/<digest>`, on the origin of that credential, so kagent's gateway injects the
 credential when the runtime downloads it; no new grant and no new egress origin is needed. The url
-is recorded with the pin, so a retried or replayed create, which kagent refuses if its dotfiles
-differ, sends the same. A create without an MCP credential (a session whose grant is `none`, or a
+is recorded with the pin, so a retried or replayed create sends the same. kagent does not compare
+dotfiles when it matches a replay with its first request, since a refresh can change them. A create without an MCP credential (a session whose grant is `none`, or a
 server without Kubernetes) sends no dotfiles; its pin is still recorded and shown.
 
 Mainloop's MCP listener serves `GET /dotfiles/{digest}` with the bundle (`application/x-tar`,
@@ -132,7 +133,8 @@ its fork source's, nothing else.
 kagent refuses a url whose origin carries none of the session's credentials, downloads the bundle
 (no redirects), verifies the digest and the same limits, and lays it out in the destinations above
 before the first turn of each runtime process. It executes nothing from the bundle. A download or
-layout failure is logged and the turn runs without dotfiles; the next turn retries.
+layout failure is logged and the turn runs without new dotfiles, keeping any already laid out; the
+next turn retries.
 
 Files are 0444 (0555 where git marked them executable, so a skill's scripts still run when the
 agent uses that skill), directories 0555. The harness rewrites its dotfiles entries from the pinned
@@ -144,15 +146,59 @@ consistent with the fork keeping its source's commit. The Claude SDK runner lays
 before its bridge starts. Mainloop starts it with the managed profile (`CLAUDE_CONFIG_DIR` under
 `/data`), which reads them.
 
-## Proposed: refresh
+## Implemented: refresh
 
 A native Session keeps the commit it was created with. Task and agent sessions are short-lived, so
 a source change reaches their next session. The main thread keeps one native Session until a
-provider switch or a restart, so it can run on an old commit for a long time. Proposed: an explicit
-refresh of a running Session to the source's current commit (a new pin under a new request,
-delivered through kagent, re-laid out and the CLI restarted with its conversation resumed), and a
-"dotfiles changed" hint when the pinned commit is behind the source's ref. Whether the main thread
-follows the source automatically is undecided.
+provider switch or a restart, so without a refresh it can run on an old commit for a long time.
+
+`GET /sessions/{session_id}/dotfiles` shows:
+
+- `current`: the pin the native Session holds, from its create or its latest applied refresh.
+- `source`: the source that applies now, and the commit its ref names. The ref is read from
+  GitHub at most once a minute per source, never while a session is shown elsewhere.
+- `behind`: whether a refresh would give the Session other files. It is true when the source
+  resolved and `current` is from another commit, repository or directory, or there is no
+  `current`. A ref that changed but names the same commit is not behind.
+- `refreshable`: whether a refresh applies to the session.
+- `refresh`: the session's latest refresh.
+
+`POST /sessions/{session_id}/dotfiles/refresh {request_id}` refreshes the main thread or a
+standalone native session to the source's current commit. A workspace session keeps the
+dotfiles it was created with (its next task gets the current ones). An ended or archived
+session, one with no native Session running, and a main thread switching provider are a `409`.
+
+The refresh follows the reconciler rule:
+
+1. Under the session's send lock, it writes a durable intent (`session_dotfiles_refreshes`), keyed
+   by `request_id`, naming the native Session it updates. At most one refresh per session is
+   pending; another request while one is pending continues that one.
+2. With no transaction open, it pins the source as a create does, under the request
+   `refresh:<request_id>`: the commit the ref names now, that commit's export, and the url on the
+   MCP origin.
+3. It reads the Session from kagent. A Session that already holds these dotfiles is done. Otherwise
+   it calls kagent's `UpdateSessionDotfiles`, a compare-and-swap on the digest it just read, so a
+   Session created before kagent stored dotfiles is refreshed too, and one whose dotfiles changed
+   in between is read again.
+4. The refresh is `applied`, or `failed` with a reason:
+   - `no_bundle`: the pin's own `status` and `reason` say why.
+   - `not_deliverable`: no MCP credential to download with, or kagent refused the url.
+   - `session_gone`
+   - `unsupported`: a kagent without `UpdateSessionDotfiles`.
+
+   A failed refresh leaves `current` as it was. An attempt kagent did not answer stays `pending`
+   and is a `502`. Repeating the request continues it, and so does a sweep that picks up refreshes
+   left alone for a minute.
+
+kagent lays the new bundle out before the Session's next turn, never during one. The Claude SDK
+runner's bridge outlives turns, so kagent stops it between turns when it is idle, and its next start
+resumes the conversation. Codex and the Claude process driver start their CLI per turn. A pending or
+failed refresh's bundle can be downloaded by the session (it is pinned to it), but the session only
+shows it once applied. A fork records its source's latest applied pin.
+
+Proposed: following the source automatically, if chosen, is a setting that calls the same refresh
+between turns when `behind`; it needs no other mechanism. The web shows the hint and the Refresh
+control in a follow-up.
 
 ## Implemented: failures
 
@@ -196,9 +242,11 @@ So a dotfiles skill should not reuse the name of a repository's skill.
   without dotfiles.
 - Whether to also map `agents/*.toml` to Codex custom agents.
 - Garbage collection of bundles no session references.
-- Whether the main thread follows its source automatically (see "Proposed: refresh").
+- Whether the main thread follows its source automatically (see "Implemented: refresh").
 - Live proof: nothing here has run against GitHub, kagent or real CLIs; the export is tested with a
   local git repository, delivery and layout with fakes. It needs a main-thread and a workspace
   session on mainloop-dev with a fictional dotfiles repository, checking that each runtime fetches
   the bundle through the gateway, that each CLI loads the instructions and skills, that the files
-  are not writable and are restored after a restart, and that the session shows the commit.
+  are not writable and are restored after a restart, and that the session shows the commit; then a
+  commit to the fictional repository, a refresh of the main thread, and its next turn reading the
+  new `AGENTS.md` with the conversation intact.

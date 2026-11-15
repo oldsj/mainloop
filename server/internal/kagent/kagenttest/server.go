@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -124,15 +125,19 @@ type Server struct {
 	scripts  [][]Step
 	agents   map[string]*api.Agent
 	sessions map[string]*api.Session
-	order    []string
-	byReq    map[string]string                    // create request id -> session id
-	first    map[string]*api.CreateSessionRequest // create request id -> the request that made its Session
-	tasks    map[a2a.TaskID]*a2a.Task
-	taskSeq  int
-	sessSeq  int
-	creates  []*api.CreateSessionRequest
-	sched    scheduleStore
-	cp       checkpointStore
+
+	dotfileUpdates []*api.UpdateSessionDotfilesRequest
+	// origins are each Session's credential origins, which a dotfiles url must be on.
+	origins map[string][]string
+	order   []string
+	byReq   map[string]string                    // create request id -> session id
+	first   map[string]*api.CreateSessionRequest // create request id -> the request that made its Session
+	tasks   map[a2a.TaskID]*a2a.Task
+	taskSeq int
+	sessSeq int
+	creates []*api.CreateSessionRequest
+	sched   scheduleStore
+	cp      checkpointStore
 
 	// The Tamper hooks edit a reply, to test the client's checks that a reply belongs to its request.
 	// Set them before the first request.
@@ -185,6 +190,7 @@ func New() *Server {
 		faults:   map[string][]Fault{},
 		agents:   map[string]*api.Agent{},
 		sessions: map[string]*api.Session{},
+		origins:  map[string][]string{},
 		byReq:    map[string]string{},
 		first:    map[string]*api.CreateSessionRequest{},
 		tasks:    map[a2a.TaskID]*a2a.Task{},
@@ -198,6 +204,8 @@ func New() *Server {
 	handle(kagent.ProcGetSession, connect.NewUnaryHandler(kagent.ProcGetSession, s.getSession))
 	handle(kagent.ProcListSessions, connect.NewUnaryHandler(kagent.ProcListSessions, s.listSessions))
 	handle(kagent.ProcDeleteSession, connect.NewUnaryHandler(kagent.ProcDeleteSession, s.deleteSession))
+	handle(kagent.ProcUpdateSessionDotfiles,
+		connect.NewUnaryHandler(kagent.ProcUpdateSessionDotfiles, s.updateDotfiles))
 	handle(kagent.ProcGetAgent, connect.NewUnaryHandler(kagent.ProcGetAgent, s.getAgent))
 	s.registerSchedules(handle)
 	s.registerCheckpoints(handle)
@@ -435,10 +443,14 @@ func (s *Server) createSession(
 		Id: id, ContextId: id, Creator: "mainloop", Name: m.GetName(),
 		Agent: provenance(m.GetAgent()), Workspace: proto.CloneOf(m.GetWorkspace()),
 		DevelopmentEnvironment: proto.CloneOf(m.GetDevelopmentEnvironment()),
+		Dotfiles:               proto.CloneOf(m.GetDotfiles()),
 		State:                  api.RuntimeState_RUNTIME_STATE_READY,
 		CreatedAt:              timestamppb.Now(), UpdatedAt: timestamppb.Now(),
 	}
 	s.sessions[id] = sess
+	for _, c := range m.GetCredentials() {
+		s.origins[id] = append(s.origins[id], c.GetOrigin())
+	}
 	s.order = append(s.order, id)
 	s.byReq[m.GetRequestId()] = id
 	s.first[m.GetRequestId()] = proto.CloneOf(m)
@@ -463,6 +475,44 @@ func (s *Server) getSession(
 		return nil, err
 	}
 	return connect.NewResponse(&api.GetSessionResponse{Session: s.out(kagent.ProcGetSession, sess)}), nil
+}
+
+// updateDotfiles is kagent's compare-and-swap on the digest (oldsj/kagent#112): unchanged when the
+// Session holds exactly these dotfiles, applied at previous_digest, FailedPrecondition otherwise. A
+// url whose origin carries none of the Session's credentials is refused, as kagent refuses it.
+func (s *Server) updateDotfiles(
+	_ context.Context, req *connect.Request[api.UpdateSessionDotfilesRequest],
+) (*connect.Response[api.UpdateSessionDotfilesResponse], error) {
+	m := req.Msg
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dotfileUpdates = append(s.dotfileUpdates, proto.CloneOf(m))
+	sess, err := s.lookup(m.GetSessionId())
+	if err != nil {
+		return nil, err
+	}
+	if proto.Equal(sess.GetDotfiles(), m.GetDotfiles()) {
+		return connect.NewResponse(&api.UpdateSessionDotfilesResponse{Session: s.out(kagent.ProcUpdateSessionDotfiles, sess)}), nil
+	}
+	if sess.GetDotfiles().GetDigest() != m.GetPreviousDigest() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %q does not hold dotfiles %q", sess.GetId(), m.GetPreviousDigest()))
+	}
+	u, err := url.Parse(m.GetDotfiles().GetUrl())
+	if err != nil || !slices.Contains(s.origins[sess.GetId()], u.Scheme+"://"+u.Host) {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("dotfiles url origin carries none of the session's credentials"))
+	}
+	sess.Dotfiles = proto.CloneOf(m.GetDotfiles())
+	sess.UpdatedAt = timestamppb.Now()
+	return connect.NewResponse(&api.UpdateSessionDotfilesResponse{Session: s.out(kagent.ProcUpdateSessionDotfiles, sess)}), nil
+}
+
+// DotfileUpdates returns the UpdateSessionDotfiles requests received, in order.
+func (s *Server) DotfileUpdates() []*api.UpdateSessionDotfilesRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.dotfileUpdates)
 }
 
 func (s *Server) listSessions(
@@ -1010,13 +1060,12 @@ func (s *Server) ForcedDeletes() []string {
 }
 
 // sameContract reports whether a replayed create matches the request that made the Session for the
-// same request id: the Agent, the workspace, the environment, the dotfiles and the credentials all
-// have to match, as in kagent.
+// same request id: the Agent, the workspace, the environment and the credentials all have to match,
+// as in kagent. Dotfiles can be updated, so they are not compared (oldsj/kagent#112).
 func sameContract(prev, m *api.CreateSessionRequest) bool {
 	return proto.Equal(prev.GetAgent(), m.GetAgent()) &&
 		proto.Equal(prev.GetWorkspace(), m.GetWorkspace()) &&
 		proto.Equal(prev.GetDevelopmentEnvironment(), m.GetDevelopmentEnvironment()) &&
-		proto.Equal(prev.GetDotfiles(), m.GetDotfiles()) &&
 		slices.EqualFunc(prev.GetCredentials(), m.GetCredentials(), func(a, b *api.SessionCredential) bool { return proto.Equal(a, b) })
 }
 

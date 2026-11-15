@@ -145,6 +145,9 @@ type DotfilesPinner interface {
 	// mcpOrigin is the origin of the MCP credential the create carries, or empty when it carries
 	// none; the pin's Request is what the create sends.
 	Pin(ctx context.Context, sessionID, requestID, mcpOrigin string) (dotfiles.Pinned, error)
+	// Head is the session's source now and the commit its ref names, for the "dotfiles changed"
+	// hint; it may reuse a recent resolve.
+	Head(ctx context.Context, sessionID string) (dotfiles.Head, error)
 }
 
 // Kagent is the part of the kagent client the sessions use.
@@ -155,6 +158,7 @@ type Kagent interface {
 	ObserveSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	DeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	ForceDeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
+	UpdateSessionDotfiles(ctx context.Context, id string, dotfiles *kagentapi.Dotfiles, previousDigest string) (*kagentapi.Session, error)
 	GetAgent(ctx context.Context, ref kagent.AgentRef) (*kagentapi.Agent, error)
 	SendMessage(ctx context.Context, agent kagent.AgentRef, p kagent.SendParams) iter.Seq2[a2a.Event, error]
 	GetTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)

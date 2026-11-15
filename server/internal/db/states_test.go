@@ -84,6 +84,8 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"push_notifications", "kind", strs(string(dbstate.PushAttention), string(dbstate.PushTask))},
 		{"session_defaults", "role", strs(string(dbstate.DefaultRoleMain), string(dbstate.DefaultRoleWorker))},
 		{"session_restarts", "state", strs(string(dbstate.RestartRequested), string(dbstate.RestartDone))},
+		{"session_dotfiles_refreshes", "state", strs(
+			string(dbstate.DotfilesRefreshPending), string(dbstate.DotfilesRefreshApplied), string(dbstate.DotfilesRefreshFailed))},
 		{"deliveries", "activity_kind", strs(
 			string(dbstate.ActivityEvent), string(dbstate.ActivityTool), string(dbstate.ActivityParked))},
 		{"tasks", "mode", strs(string(dbstate.TaskModeCode), string(dbstate.TaskModeCoordination))},

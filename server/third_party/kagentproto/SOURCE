@@ -1,8 +1,8 @@
 repo: oldsj/kagent (branch mainloop-substrate-1-0)
-commit: 050aaad8a14e7080badf8cc89b22bcd2faff0943
+commit: 5d0a6c75d3aca207d117493f0e3d0e82ec84b1b9
 paths: proto/kagent/api/v1/{common.proto,runtime.proto,sessions.proto,agents.proto,scheduled_runs.proto,checkpoints.proto}
 notes: |
-  The six files are the fork's at the commit above, the merge of #111, with no overlay: through #63
+  The six files are the fork's at the commit above, the merge of #112, with no overlay: through #63
   (per-Session Git workspace: CreateSessionRequest.workspace = 6, Session.workspace = 16, message
   Workspace in common.proto) and #66 (per-Session credentials: CreateSessionRequest.credentials = 7,
   Session.credentials = 17, SessionCredential, SecretKeyReference), #73 (runtime composition:
@@ -12,7 +12,8 @@ notes: |
   Session.fresh_conversation = 22, ForkSessionRequest.fresh_conversation = 3) and #87 (workspace
   preparation: rpc PrepareSessionWorkspace, its request and response, WorkspacePreparationReceipt,
   Session.workspace_preparation = 21) #107 (workspace service: Workspace.service_command = 5) and #111 (agent dotfiles:
-  CreateSessionRequest.dotfiles = 9, Session.dotfiles = 23, message Dotfiles in common.proto).
+  CreateSessionRequest.dotfiles = 9, Session.dotfiles = 23, message Dotfiles in common.proto) and
+  #112 (rpc UpdateSessionDotfiles, its request and response).
   The field numbers are the 0.4 line's, which the overlay
   that carried them until #87 used too.
 

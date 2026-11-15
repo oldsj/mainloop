@@ -1376,6 +1376,61 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/sessions/{session_id}/dotfiles': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Session Dotfiles
+     * @description The agent dotfiles the session's native Session holds, the source they come from as it is
+     *     now, and the session's latest refresh. ``behind`` is true when the source's ref names another
+     *     commit than the one held (or the source moved to another repository or directory), so a
+     *     refresh would give the Session other files. The ref is read from GitHub at most once a
+     *     minute per source. See docs/specs/agent-dotfiles.md.
+     */
+    get: operations['getSessionDotfiles'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/sessions/{session_id}/dotfiles/refresh': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Refresh Session Dotfiles
+     * @description Give the session's running native Session the agent dotfiles of its source's current commit,
+     *     keeping the conversation. The new files are laid out before the Session's next turn, never
+     *     during one; a CLI that outlives turns is restarted between them and resumes the
+     *     conversation. The main thread and standalone native sessions can be refreshed; a workspace
+     *     session, an ended or archived one, one without a native Session yet and a main thread
+     *     switching provider cannot (409).
+     *
+     *     ``request_id`` is the idempotency key: repeating it returns the refresh's recorded outcome,
+     *     or continues one that was interrupted. One refresh per session is pending at a time; a new
+     *     request while one is pending returns that one. ``state`` is ``applied`` once kagent holds
+     *     the dotfiles, or ``failed`` with a ``reason``. An attempt kagent did not answer is 502 and
+     *     stays ``pending``; repeating the request, or a background sweep, continues it.
+     */
+    post: operations['refreshSessionDotfiles'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/sessions/{session_id}/checkpoints': {
     parameters: {
       query?: never;
@@ -3620,7 +3675,7 @@ export interface components {
     };
     /**
      * SessionDotfiles
-     * @description The agent dotfiles a native Session was created with, pinned when the create was first sent; a fork has its source's.
+     * @description The agent dotfiles a native Session holds, pinned when its create was first sent or by its latest applied refresh; a fork has its source's.
      */
     SessionDotfiles: {
       /**
@@ -3654,7 +3709,7 @@ export interface components {
       path: string;
       /**
        * Commit
-       * @description The commit `ref` named when the Session was created.
+       * @description The commit `ref` named when the dotfiles were pinned.
        */
       commit: string | null;
       /**
@@ -4116,6 +4171,58 @@ export interface components {
     SessionStopTurnResponse: {
       /** @enum {string} */
       status: 'stopped' | 'finished' | 'no_open_turn';
+    };
+    SessionDotfilesRefreshRequest: {
+      /**
+       * Format: uuid
+       * @description Idempotency key chosen by the caller; repeat it to retry the same refresh.
+       */
+      request_id: string;
+    };
+    /** @description One refresh of a session's agent dotfiles. */
+    SessionDotfilesRefresh: {
+      /** @description The refresh's request id. */
+      id: string;
+      /**
+       * @description `pending` until kagent holds the dotfiles (`applied`) or the refresh cannot apply
+       *     (`failed`).
+       * @enum {string}
+       */
+      state: 'pending' | 'applied' | 'failed';
+      /**
+       * @description Why it failed, empty otherwise. `no_bundle`: the source gave no bundle (see the pin's
+       *     `status` and `reason`). `not_deliverable`: the Session cannot download a bundle from
+       *     Mainloop (no MCP credential). `session_gone`: the native Session it targeted no longer
+       *     runs. `unsupported`: kagent cannot update a Session's dotfiles.
+       * @enum {string}
+       */
+      reason: '' | 'no_bundle' | 'not_deliverable' | 'session_gone' | 'unsupported';
+      /** @description The dotfiles the refresh pinned; null until it has pinned them. */
+      dotfiles: components['schemas']['SessionDotfiles'] | null;
+      /** Format: date-time */
+      created_at: string;
+    };
+    /** @description A session's dotfiles source as it is now, and the commit its ref names. */
+    DotfilesHead: {
+      repository: string;
+      ref: string;
+      path: string;
+      /** @description The commit `ref` names now; null when it could not be resolved (see `reason`). */
+      commit: string | null;
+      /** @description Why `commit` is null; one of `app_not_installed`, `ref_not_found` or `repository_unavailable`. */
+      reason: string;
+    };
+    SessionDotfilesInfo: {
+      /** @description The dotfiles the session's native Session holds; null when none were recorded. */
+      current: components['schemas']['SessionDotfiles'] | null;
+      /** @description The source that applies to the session now; null when none does. */
+      source: components['schemas']['DotfilesHead'] | null;
+      /** @description Whether a refresh would give the Session other dotfiles than `current`. */
+      behind: boolean;
+      /** @description Whether POST /sessions/{session_id}/dotfiles/refresh applies to the session. */
+      refreshable: boolean;
+      /** @description The session's latest refresh, if any. */
+      refresh: components['schemas']['SessionDotfilesRefresh'] | null;
     };
     SessionRestartRequest: {
       /**
@@ -11046,6 +11153,128 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['SessionRestartResponse'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Request Entity Too Large */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  getSessionDotfiles: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SessionDotfilesInfo'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  refreshSessionDotfiles: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SessionDotfilesRefreshRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SessionDotfilesRefresh'];
         };
       };
       401: components['responses']['Unauthorized'];

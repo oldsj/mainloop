@@ -4269,6 +4269,123 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+  /sessions/{session_id}/dotfiles:
+    get:
+      tags:
+        - sessions
+      summary: Get Session Dotfiles
+      description: |-
+        The agent dotfiles the session's native Session holds, the source they come from as it is
+        now, and the session's latest refresh. ``behind`` is true when the source's ref names another
+        commit than the one held (or the source moved to another repository or directory), so a
+        refresh would give the Session other files. The ref is read from GitHub at most once a
+        minute per source. See docs/specs/agent-dotfiles.md.
+      operationId: getSessionDotfiles
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDotfilesInfo'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+  /sessions/{session_id}/dotfiles/refresh:
+    post:
+      tags:
+        - sessions
+      summary: Refresh Session Dotfiles
+      description: |-
+        Give the session's running native Session the agent dotfiles of its source's current commit,
+        keeping the conversation. The new files are laid out before the Session's next turn, never
+        during one; a CLI that outlives turns is restarted between them and resumes the
+        conversation. The main thread and standalone native sessions can be refreshed; a workspace
+        session, an ended or archived one, one without a native Session yet and a main thread
+        switching provider cannot (409).
+
+        ``request_id`` is the idempotency key: repeating it returns the refresh's recorded outcome,
+        or continues one that was interrupted. One refresh per session is pending at a time; a new
+        request while one is pending returns that one. ``state`` is ``applied`` once kagent holds
+        the dotfiles, or ``failed`` with a ``reason``. An attempt kagent did not answer is 502 and
+        stays ``pending``; repeating the request, or a background sweep, continues it.
+      operationId: refreshSessionDotfiles
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionDotfilesRefreshRequest'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDotfilesRefresh'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
   /sessions/{session_id}/checkpoints:
     get:
       tags:
@@ -8686,7 +8803,7 @@ components:
               pattern: ^[0-9a-f]{40}$
             - type: 'null'
           title: Commit
-          description: The commit `ref` named when the Session was created.
+          description: The commit `ref` named when the dotfiles were pinned.
         digest:
           anyOf:
             - type: string
@@ -8705,7 +8822,7 @@ components:
         - commit
         - digest
       title: SessionDotfiles
-      description: The agent dotfiles a native Session was created with, pinned when the create was first sent; a fork has its source's.
+      description: The agent dotfiles a native Session holds, pinned when its create was first sent or by its latest applied refresh; a fork has its source's.
     SessionStatus:
       type: string
       enum:
@@ -9675,6 +9792,122 @@ components:
             - no_open_turn
       required:
         - status
+      additionalProperties: false
+    SessionDotfilesRefreshRequest:
+      type: object
+      properties:
+        request_id:
+          type: string
+          format: uuid
+          description: Idempotency key chosen by the caller; repeat it to retry the same refresh.
+      required:
+        - request_id
+      additionalProperties: false
+    SessionDotfilesRefresh:
+      type: object
+      description: One refresh of a session's agent dotfiles.
+      properties:
+        id:
+          type: string
+          maxLength: 64
+          description: The refresh's request id.
+        state:
+          type: string
+          enum:
+            - pending
+            - applied
+            - failed
+          description: |-
+            `pending` until kagent holds the dotfiles (`applied`) or the refresh cannot apply
+            (`failed`).
+        reason:
+          type: string
+          enum:
+            - ''
+            - no_bundle
+            - not_deliverable
+            - session_gone
+            - unsupported
+          description: |-
+            Why it failed, empty otherwise. `no_bundle`: the source gave no bundle (see the pin's
+            `status` and `reason`). `not_deliverable`: the Session cannot download a bundle from
+            Mainloop (no MCP credential). `session_gone`: the native Session it targeted no longer
+            runs. `unsupported`: kagent cannot update a Session's dotfiles.
+        dotfiles:
+          anyOf:
+            - $ref: '#/components/schemas/SessionDotfiles'
+            - type: 'null'
+          description: The dotfiles the refresh pinned; null until it has pinned them.
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - state
+        - reason
+        - dotfiles
+        - created_at
+      additionalProperties: false
+    DotfilesHead:
+      type: object
+      description: A session's dotfiles source as it is now, and the commit its ref names.
+      properties:
+        repository:
+          type: string
+          maxLength: 140
+        ref:
+          type: string
+          maxLength: 255
+        path:
+          type: string
+          maxLength: 255
+        commit:
+          anyOf:
+            - type: string
+              pattern: ^[0-9a-f]{40}$
+            - type: 'null'
+          description: The commit `ref` names now; null when it could not be resolved (see `reason`).
+        reason:
+          type: string
+          maxLength: 64
+          description: Why `commit` is null; one of `app_not_installed`, `ref_not_found` or `repository_unavailable`.
+      required:
+        - repository
+        - ref
+        - path
+        - commit
+        - reason
+      additionalProperties: false
+    SessionDotfilesInfo:
+      type: object
+      properties:
+        current:
+          anyOf:
+            - $ref: '#/components/schemas/SessionDotfiles'
+            - type: 'null'
+          description: The dotfiles the session's native Session holds; null when none were recorded.
+        source:
+          anyOf:
+            - $ref: '#/components/schemas/DotfilesHead'
+            - type: 'null'
+          description: The source that applies to the session now; null when none does.
+        behind:
+          type: boolean
+          description: Whether a refresh would give the Session other dotfiles than `current`.
+        refreshable:
+          type: boolean
+          description: Whether POST /sessions/{session_id}/dotfiles/refresh applies to the session.
+        refresh:
+          anyOf:
+            - $ref: '#/components/schemas/SessionDotfilesRefresh'
+            - type: 'null'
+          description: The session's latest refresh, if any.
+      required:
+        - current
+        - source
+        - behind
+        - refreshable
+        - refresh
       additionalProperties: false
     SessionRestartRequest:
       type: object
