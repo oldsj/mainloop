@@ -79,8 +79,8 @@ func (s *Service) resolveCreate(ctx context.Context, q *dbq.Queries, r dbq.ListU
 		Agent:     &kagentapi.ResourceReference{Namespace: *r.AgentNamespace, Name: *r.AgentName},
 		RequestId: r.CreateRequestID,
 		Name:      "Mainloop session",
-		// The credentials and dotfiles the original create carried: kagent refuses a replay that
-		// differs.
+		// The credentials and dotfiles the original create carried: kagent refuses a replay whose
+		// credentials differ, and the dotfiles are the ones the pin recorded for the request.
 		Credentials: s.Credentials.ReplayCredentialsFor(r.SessionID, derefStr(r.CredentialIdentity), s.MCPOrigin, dbstate.BindingRole(r.Role), r.MCPGrantKind),
 		Dotfiles:    dots,
 	})

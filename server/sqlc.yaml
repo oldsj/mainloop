@@ -62,6 +62,9 @@ sql:
           - column: session_restarts.state
             go_type:
               { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: RestartState }
+          - column: session_dotfiles_refreshes.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: DotfilesRefreshState }
           - column: hitl_requests.kind
             go_type:
               { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: HITLKind }

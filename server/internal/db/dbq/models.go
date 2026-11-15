@@ -870,6 +870,18 @@ type SessionDotfile struct {
 	Url        *string
 }
 
+type SessionDotfilesRefresh struct {
+	ID              string
+	SessionID       string
+	KagentSessionID string
+	State           dbstate.DotfilesRefreshState
+	Reason          string
+	Detail          *string
+	Attempts        int32
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
 type SessionMessage struct {
 	ID        string
 	SessionID string

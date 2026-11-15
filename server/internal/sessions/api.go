@@ -682,6 +682,66 @@ func (a *SessionsAPI) RestartSession(ctx context.Context, r api.RestartSessionRe
 	}), nil
 }
 
+// GetSessionDotfiles implements api.StrictServerInterface.
+func (a *SessionsAPI) GetSessionDotfiles(ctx context.Context, r api.GetSessionDotfilesRequestObject) (api.GetSessionDotfilesResponseObject, error) {
+	info, err := a.Svc.SessionDotfiles(ctx, r.SessionId)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, apierr.NotFound("Session not found")
+	case err != nil:
+		return nil, err
+	}
+	out := api.SessionDotfilesInfo{Behind: info.Behind, Refreshable: info.Refreshable}
+	if info.Current != nil {
+		out.Current = dotfilesView(*info.Current)
+	}
+	if h := info.Source; h != nil {
+		out.Source = &api.DotfilesHead{Repository: h.Repository, Ref: h.Ref, Path: h.Path, Reason: h.Reason}
+		if h.Commit != "" {
+			out.Source.Commit = &h.Commit
+		}
+	}
+	if info.Refresh != nil {
+		v := refreshView(*info.Refresh)
+		out.Refresh = &v
+	}
+	return api.GetSessionDotfiles200JSONResponse(out), nil
+}
+
+// RefreshSessionDotfiles implements api.StrictServerInterface.
+func (a *SessionsAPI) RefreshSessionDotfiles(ctx context.Context, r api.RefreshSessionDotfilesRequestObject) (api.RefreshSessionDotfilesResponseObject, error) {
+	if r.Body == nil {
+		return nil, apierr.Invalid("the body is required")
+	}
+	res, err := a.Svc.RefreshDotfiles(ctx, r.SessionId, r.Body.RequestId.String())
+	var kerr *KagentError
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, apierr.NotFound("Session not found")
+	case errors.Is(err, ErrConflict):
+		return nil, conflictResponse(err)
+	case errors.Is(err, ErrInvalid):
+		return nil, apierr.Invalid(reason(err, ErrInvalid))
+	case errors.As(err, &kerr):
+		return nil, apierr.BadGateway("Could not refresh the session's dotfiles: " + safeDetail(kerr.Err.Error()))
+	case err != nil:
+		return nil, err
+	}
+	return api.RefreshSessionDotfiles200JSONResponse(refreshView(res)), nil
+}
+
+// refreshView is the API shape of a dotfiles refresh.
+func refreshView(r DotfilesRefresh) api.SessionDotfilesRefresh {
+	v := api.SessionDotfilesRefresh{
+		Id: r.ID, State: api.SessionDotfilesRefreshState(r.State), Reason: api.SessionDotfilesRefreshReason(r.Reason),
+		CreatedAt: r.CreatedAt,
+	}
+	if r.Dotfiles != nil {
+		v.Dotfiles = dotfilesView(*r.Dotfiles)
+	}
+	return v
+}
+
 // CancelSession implements api.StrictServerInterface.
 func (a *SessionsAPI) CancelSession(ctx context.Context, r api.CancelSessionRequestObject) (api.CancelSessionResponseObject, error) {
 	res, err := a.Svc.Cancel(ctx, r.SessionId)

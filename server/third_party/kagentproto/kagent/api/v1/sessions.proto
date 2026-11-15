@@ -26,6 +26,14 @@ service SessionService {
   rpc PrepareSessionWorkspace(PrepareSessionWorkspaceRequest) returns (PrepareSessionWorkspaceResponse);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc UpdateSessionName(UpdateSessionNameRequest) returns (UpdateSessionNameResponse);
+  // UpdateSessionDotfiles replaces the agent dotfiles a Session lays out. The
+  // runtime picks the new bundle up at the start of its next turn, never
+  // mid-turn, and restarts a long-lived CLI process so it reads them, resuming
+  // the conversation. A Session whose digest is not previous_digest fails with
+  // FAILED_PRECONDITION, unless it already holds exactly these dotfiles, which
+  // succeeds without a change; so a retry is safe and a stale one cannot undo
+  // a newer update.
+  rpc UpdateSessionDotfiles(UpdateSessionDotfilesRequest) returns (UpdateSessionDotfilesResponse);
   // Restores a crashed runtime to its last snapshot without replaying its turn.
   rpc RevertSession(RevertSessionRequest) returns (RevertSessionResponse);
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
@@ -233,6 +241,19 @@ message UpdateSessionNameRequest {
 }
 
 message UpdateSessionNameResponse {
+  Session session = 1;
+}
+
+message UpdateSessionDotfilesRequest {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+  // Validated as on CreateSession: the url's origin must carry one of the
+  // Session's credentials, so a fork, which has none, is refused.
+  Dotfiles dotfiles = 2 [(buf.validate.field).required = true];
+  // The digest the caller last saw on the Session; empty when it had none.
+  string previous_digest = 3 [(buf.validate.field).string.pattern = "^(?:$|sha256:[a-f0-9]{64})$"];
+}
+
+message UpdateSessionDotfilesResponse {
   Session session = 1;
 }
 

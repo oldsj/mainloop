@@ -8,13 +8,17 @@ package dbq
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
 const copyForkDotfiles = `-- name: CopyForkDotfiles :exec
 INSERT INTO session_dotfiles (request_id, session_id, repository, ref, path, commit, digest, status, reason)
 SELECT $1, $2, d.repository, d.ref, d.path, d.commit, d.digest, d.status, d.reason
 FROM session_dotfiles d
-WHERE d.session_id = $3
+WHERE d.session_id = $3 AND NOT EXISTS (
+    SELECT 1 FROM session_dotfiles_refreshes r WHERE d.request_id = 'refresh:' || r.id AND r.state <> 'applied'
+)
 ORDER BY d.created_at DESC, d.request_id
 LIMIT 1
 ON CONFLICT (request_id) DO NOTHING
@@ -70,6 +74,27 @@ func (q *Queries) GetDotfilesExport(ctx context.Context, arg GetDotfilesExportPa
 	return i, err
 }
 
+const getDotfilesRefresh = `-- name: GetDotfilesRefresh :one
+SELECT id, session_id, kagent_session_id, state, reason, detail, attempts, created_at, updated_at FROM session_dotfiles_refreshes WHERE id = $1
+`
+
+func (q *Queries) GetDotfilesRefresh(ctx context.Context, id string) (SessionDotfilesRefresh, error) {
+	row := q.db.QueryRow(ctx, getDotfilesRefresh, id)
+	var i SessionDotfilesRefresh
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.KagentSessionID,
+		&i.State,
+		&i.Reason,
+		&i.Detail,
+		&i.Attempts,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getOwnerDotfilesSource = `-- name: GetOwnerDotfilesSource :one
 SELECT owner_id, repository, ref, path, version, updated_at FROM owner_dotfiles_sources WHERE owner_id = $1
 `
@@ -83,6 +108,27 @@ func (q *Queries) GetOwnerDotfilesSource(ctx context.Context, ownerID string) (O
 		&i.Ref,
 		&i.Path,
 		&i.Version,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPendingDotfilesRefresh = `-- name: GetPendingDotfilesRefresh :one
+SELECT id, session_id, kagent_session_id, state, reason, detail, attempts, created_at, updated_at FROM session_dotfiles_refreshes WHERE session_id = $1 AND state = 'pending'
+`
+
+func (q *Queries) GetPendingDotfilesRefresh(ctx context.Context, sessionID string) (SessionDotfilesRefresh, error) {
+	row := q.db.QueryRow(ctx, getPendingDotfilesRefresh, sessionID)
+	var i SessionDotfilesRefresh
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.KagentSessionID,
+		&i.State,
+		&i.Reason,
+		&i.Detail,
+		&i.Attempts,
+		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
@@ -190,6 +236,35 @@ func (q *Queries) InsertDotfilesExport(ctx context.Context, arg InsertDotfilesEx
 	return err
 }
 
+const insertDotfilesRefresh = `-- name: InsertDotfilesRefresh :one
+INSERT INTO session_dotfiles_refreshes (id, session_id, kagent_session_id)
+VALUES ($1, $2, $3)
+RETURNING id, session_id, kagent_session_id, state, reason, detail, attempts, created_at, updated_at
+`
+
+type InsertDotfilesRefreshParams struct {
+	ID              string
+	SessionID       string
+	KagentSessionID string
+}
+
+func (q *Queries) InsertDotfilesRefresh(ctx context.Context, arg InsertDotfilesRefreshParams) (SessionDotfilesRefresh, error) {
+	row := q.db.QueryRow(ctx, insertDotfilesRefresh, arg.ID, arg.SessionID, arg.KagentSessionID)
+	var i SessionDotfilesRefresh
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.KagentSessionID,
+		&i.State,
+		&i.Reason,
+		&i.Detail,
+		&i.Attempts,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const insertOwnerDotfilesSource = `-- name: InsertOwnerDotfilesSource :one
 INSERT INTO owner_dotfiles_sources (owner_id, repository, ref, path, version)
 VALUES ($1, $2, $3, $4, 1)
@@ -293,10 +368,37 @@ func (q *Queries) InsertProjectDotfilesSource(ctx context.Context, arg InsertPro
 	return i, err
 }
 
-const latestSessionDotfiles = `-- name: LatestSessionDotfiles :one
-SELECT request_id, session_id, repository, ref, path, commit, digest, status, reason, created_at, url FROM session_dotfiles WHERE session_id = $1 ORDER BY created_at DESC, request_id LIMIT 1
+const latestDotfilesRefresh = `-- name: LatestDotfilesRefresh :one
+SELECT id, session_id, kagent_session_id, state, reason, detail, attempts, created_at, updated_at FROM session_dotfiles_refreshes WHERE session_id = $1 ORDER BY created_at DESC, id LIMIT 1
 `
 
+func (q *Queries) LatestDotfilesRefresh(ctx context.Context, sessionID string) (SessionDotfilesRefresh, error) {
+	row := q.db.QueryRow(ctx, latestDotfilesRefresh, sessionID)
+	var i SessionDotfilesRefresh
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.KagentSessionID,
+		&i.State,
+		&i.Reason,
+		&i.Detail,
+		&i.Attempts,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const latestSessionDotfiles = `-- name: LatestSessionDotfiles :one
+SELECT d.request_id, d.session_id, d.repository, d.ref, d.path, d.commit, d.digest, d.status, d.reason, d.created_at, d.url FROM session_dotfiles d
+WHERE d.session_id = $1 AND NOT EXISTS (
+    SELECT 1 FROM session_dotfiles_refreshes r WHERE d.request_id = 'refresh:' || r.id AND r.state <> 'applied'
+)
+ORDER BY d.created_at DESC, d.request_id LIMIT 1
+`
+
+// The pin of the session's newest native Session, or of its newest applied refresh: a refresh that
+// is pending or failed has not changed what the Session holds.
 func (q *Queries) LatestSessionDotfiles(ctx context.Context, sessionID string) (SessionDotfile, error) {
 	row := q.db.QueryRow(ctx, latestSessionDotfiles, sessionID)
 	var i SessionDotfile
@@ -316,6 +418,67 @@ func (q *Queries) LatestSessionDotfiles(ctx context.Context, sessionID string) (
 	return i, err
 }
 
+const listDueDotfilesRefreshes = `-- name: ListDueDotfilesRefreshes :many
+SELECT id, session_id, kagent_session_id, state, reason, detail, attempts, created_at, updated_at FROM session_dotfiles_refreshes
+WHERE state = 'pending' AND updated_at < now() - make_interval(secs => $1::float8)
+ORDER BY created_at, id
+LIMIT $2
+`
+
+type ListDueDotfilesRefreshesParams struct {
+	IdleSeconds float64
+	LimitCount  int32
+}
+
+// Pending refreshes nobody has touched for a while: a request that was cut off, or an attempt
+// kagent did not answer.
+func (q *Queries) ListDueDotfilesRefreshes(ctx context.Context, arg ListDueDotfilesRefreshesParams) ([]SessionDotfilesRefresh, error) {
+	rows, err := q.db.Query(ctx, listDueDotfilesRefreshes, arg.IdleSeconds, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SessionDotfilesRefresh{}
+	for rows.Next() {
+		var i SessionDotfilesRefresh
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.KagentSessionID,
+			&i.State,
+			&i.Reason,
+			&i.Detail,
+			&i.Attempts,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const noteDotfilesRefreshAttempt = `-- name: NoteDotfilesRefreshAttempt :exec
+UPDATE session_dotfiles_refreshes SET attempts = attempts + 1, detail = $1, updated_at = now()
+WHERE id = $2 AND state = 'pending'
+`
+
+type NoteDotfilesRefreshAttemptParams struct {
+	Detail *string
+	ID     string
+}
+
+// Records one attempt kagent did not answer. updated_at moves, so the resume sweep waits before it
+// looks again.
+func (q *Queries) NoteDotfilesRefreshAttempt(ctx context.Context, arg NoteDotfilesRefreshAttemptParams) error {
+	_, err := q.db.Exec(ctx, noteDotfilesRefreshAttempt, arg.Detail, arg.ID)
+	return err
+}
+
 const sessionPinnedToDigest = `-- name: SessionPinnedToDigest :one
 SELECT EXISTS (SELECT 1 FROM session_dotfiles WHERE session_id = $1 AND digest = $2)
 `
@@ -331,6 +494,36 @@ func (q *Queries) SessionPinnedToDigest(ctx context.Context, arg SessionPinnedTo
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const settleDotfilesRefresh = `-- name: SettleDotfilesRefresh :one
+UPDATE session_dotfiles_refreshes SET state = $1, reason = $2, detail = NULL, updated_at = now()
+WHERE id = $3 AND state = 'pending'
+RETURNING id, session_id, kagent_session_id, state, reason, detail, attempts, created_at, updated_at
+`
+
+type SettleDotfilesRefreshParams struct {
+	State  dbstate.DotfilesRefreshState
+	Reason string
+	ID     string
+}
+
+// Settles a pending refresh; no row back when another caller settled it first.
+func (q *Queries) SettleDotfilesRefresh(ctx context.Context, arg SettleDotfilesRefreshParams) (SessionDotfilesRefresh, error) {
+	row := q.db.QueryRow(ctx, settleDotfilesRefresh, arg.State, arg.Reason, arg.ID)
+	var i SessionDotfilesRefresh
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.KagentSessionID,
+		&i.State,
+		&i.Reason,
+		&i.Detail,
+		&i.Attempts,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updateOwnerDotfilesSource = `-- name: UpdateOwnerDotfilesSource :one

@@ -175,6 +175,26 @@ func (c *Client) ForceDeleteSession(ctx context.Context, id string) (*api.Sessio
 	return c.deleteSession(ctx, id, true)
 }
 
+// UpdateSessionDotfiles replaces a Session's agent dotfiles, laid out at its next turn. It is a
+// compare-and-swap on the digest: it applies when the Session holds previousDigest (empty for none),
+// returns the Session unchanged when it already holds exactly these dotfiles, and is refused with
+// FailedPrecondition otherwise, so a repeat is safe and a stale one changes nothing.
+func (c *Client) UpdateSessionDotfiles(
+	ctx context.Context, id string, dotfiles *api.Dotfiles, previousDigest string,
+) (*api.Session, error) {
+	const op = "SessionService UpdateSessionDotfiles"
+	if id == "" {
+		return nil, emptyArg(op, "session id")
+	}
+	resp, err := unary(ctx, c, op, c.sessionCl.UpdateSessionDotfiles, &api.UpdateSessionDotfilesRequest{
+		SessionId: id, Dotfiles: dotfiles, PreviousDigest: previousDigest,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return sessionOf(op, id, resp.GetSession())
+}
+
 func (c *Client) deleteSession(ctx context.Context, id string, force bool) (*api.Session, error) {
 	const op = "SessionService DeleteSession"
 	resp, err := unary(ctx, c, op, c.sessionCl.DeleteSession, &api.DeleteSessionRequest{SessionId: id, Force: force})

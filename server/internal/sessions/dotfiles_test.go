@@ -171,8 +171,7 @@ func TestTheMainThreadIsCreatedWithItsDotfiles(t *testing.T) {
 	}
 }
 
-// A create whose reply was lost is replayed with the dotfiles it was sent with: kagent refuses a
-// replay that differs, and the fake does too.
+// A create whose reply was lost is replayed with the dotfiles it was sent with.
 func TestACreateReplaySendsTheSameDotfiles(t *testing.T) {
 	e, k := newFlakyEnv(t)
 	e.withCredentials()

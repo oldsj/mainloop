@@ -259,6 +259,11 @@ func (Unimplemented) GetSessionConversation(context.Context, GetSessionConversat
 	return nil, apierr.NotImplemented
 }
 
+// GetSessionDotfiles is not implemented yet.
+func (Unimplemented) GetSessionDotfiles(context.Context, GetSessionDotfilesRequestObject) (GetSessionDotfilesResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetSessionLive is not implemented yet.
 func (Unimplemented) GetSessionLive(context.Context, GetSessionLiveRequestObject) (GetSessionLiveResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -421,6 +426,11 @@ func (Unimplemented) RecordVisit(context.Context, RecordVisitRequestObject) (Rec
 
 // RefreshEnvironment is not implemented yet.
 func (Unimplemented) RefreshEnvironment(context.Context, RefreshEnvironmentRequestObject) (RefreshEnvironmentResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// RefreshSessionDotfiles is not implemented yet.
+func (Unimplemented) RefreshSessionDotfiles(context.Context, RefreshSessionDotfilesRequestObject) (RefreshSessionDotfilesResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

@@ -70,6 +70,8 @@ type Exports struct {
 	// Zero means 10 seconds.
 	ReadTimeout time.Duration
 	Log         *slog.Logger
+
+	heads headCache
 }
 
 // Resolve returns the commit src's ref names now. A ref that cannot be resolved is an

@@ -261,6 +261,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner.AddSweep(svc.CancelSweep())
 	runner.AddSweep(svc.PromoteStrandedQueuedSweep())
 	runner.AddSweep(svc.RestartSweep())
+	runner.AddSweep(svc.DotfilesRefreshSweep())
 	runner.AddSweep(svc.StallSweep())
 	runner.AddSweep(svc.CheckpointSweep())
 	runner.AddSweep(svc.ForkSweep())

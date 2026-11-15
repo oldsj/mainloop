@@ -58,8 +58,14 @@ INSERT INTO session_dotfiles (request_id, session_id, repository, ref, path, com
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (request_id) DO NOTHING;
 
+-- The pin of the session's newest native Session, or of its newest applied refresh: a refresh that
+-- is pending or failed has not changed what the Session holds.
 -- name: LatestSessionDotfiles :one
-SELECT * FROM session_dotfiles WHERE session_id = $1 ORDER BY created_at DESC, request_id LIMIT 1;
+SELECT d.* FROM session_dotfiles d
+WHERE d.session_id = $1 AND NOT EXISTS (
+    SELECT 1 FROM session_dotfiles_refreshes r WHERE d.request_id = 'refresh:' || r.id AND r.state <> 'applied'
+)
+ORDER BY d.created_at DESC, d.request_id LIMIT 1;
 
 -- A fork is given the files its source's Session was laid out with: its latest pin. kagent forks
 -- the Session, so no create sends them and the url stays NULL.
@@ -67,7 +73,9 @@ SELECT * FROM session_dotfiles WHERE session_id = $1 ORDER BY created_at DESC, r
 INSERT INTO session_dotfiles (request_id, session_id, repository, ref, path, commit, digest, status, reason)
 SELECT sqlc.arg(request_id), sqlc.arg(session_id), d.repository, d.ref, d.path, d.commit, d.digest, d.status, d.reason
 FROM session_dotfiles d
-WHERE d.session_id = sqlc.arg(source_session_id)
+WHERE d.session_id = sqlc.arg(source_session_id) AND NOT EXISTS (
+    SELECT 1 FROM session_dotfiles_refreshes r WHERE d.request_id = 'refresh:' || r.id AND r.state <> 'applied'
+)
 ORDER BY d.created_at DESC, d.request_id
 LIMIT 1
 ON CONFLICT (request_id) DO NOTHING;
@@ -75,3 +83,37 @@ ON CONFLICT (request_id) DO NOTHING;
 -- Whether the session was pinned to the bundle, by any of its native Sessions or its fork source.
 -- name: SessionPinnedToDigest :one
 SELECT EXISTS (SELECT 1 FROM session_dotfiles WHERE session_id = $1 AND digest = $2);
+
+-- name: GetDotfilesRefresh :one
+SELECT * FROM session_dotfiles_refreshes WHERE id = $1;
+
+-- name: GetPendingDotfilesRefresh :one
+SELECT * FROM session_dotfiles_refreshes WHERE session_id = $1 AND state = 'pending';
+
+-- name: LatestDotfilesRefresh :one
+SELECT * FROM session_dotfiles_refreshes WHERE session_id = $1 ORDER BY created_at DESC, id LIMIT 1;
+
+-- name: InsertDotfilesRefresh :one
+INSERT INTO session_dotfiles_refreshes (id, session_id, kagent_session_id)
+VALUES ($1, $2, $3)
+RETURNING *;
+
+-- Records one attempt kagent did not answer. updated_at moves, so the resume sweep waits before it
+-- looks again.
+-- name: NoteDotfilesRefreshAttempt :exec
+UPDATE session_dotfiles_refreshes SET attempts = attempts + 1, detail = sqlc.narg(detail), updated_at = now()
+WHERE id = sqlc.arg(id) AND state = 'pending';
+
+-- Settles a pending refresh; no row back when another caller settled it first.
+-- name: SettleDotfilesRefresh :one
+UPDATE session_dotfiles_refreshes SET state = sqlc.arg(state), reason = sqlc.arg(reason), detail = NULL, updated_at = now()
+WHERE id = sqlc.arg(id) AND state = 'pending'
+RETURNING *;
+
+-- Pending refreshes nobody has touched for a while: a request that was cut off, or an attempt
+-- kagent did not answer.
+-- name: ListDueDotfilesRefreshes :many
+SELECT * FROM session_dotfiles_refreshes
+WHERE state = 'pending' AND updated_at < now() - make_interval(secs => sqlc.arg(idle_seconds)::float8)
+ORDER BY created_at, id
+LIMIT sqlc.arg(limit_count);

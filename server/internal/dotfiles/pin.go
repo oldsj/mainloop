@@ -38,8 +38,8 @@ func (p Pinned) Request() *kagentapi.Dotfiles {
 	return &kagentapi.Dotfiles{Url: p.URL, Digest: p.Digest, Repository: p.Repository, Commit: p.Commit, Path: p.Path}
 }
 
-// Sent returns the dotfiles create request requestID sent, for a replay of it: kagent refuses a
-// replay whose dotfiles differ. Nil when the request has no pin, or its pin sent none.
+// Sent returns the dotfiles create request requestID sent, for a replay of it, which sends the
+// same. Nil when the request has no pin, or its pin sent none.
 func Sent(ctx context.Context, q *dbq.Queries, requestID string) (*kagentapi.Dotfiles, error) {
 	p, _, err := pinned(ctx, q, requestID)
 	if err != nil {
@@ -101,7 +101,13 @@ func Record(ctx context.Context, q *dbq.Queries, sessionID, requestID, mcpOrigin
 	return p, err
 }
 
-// Latest returns the pin of sessionID's most recent native Session, if it has one.
+// Recorded returns the pin of request requestID, if it has one.
+func Recorded(ctx context.Context, q *dbq.Queries, requestID string) (Pinned, bool, error) {
+	return pinned(ctx, q, requestID)
+}
+
+// Latest returns the pin sessionID's native Session holds, if one was recorded: its create's, or its
+// latest applied refresh's when that is newer.
 func Latest(ctx context.Context, q *dbq.Queries, sessionID string) (Pinned, bool, error) {
 	row, err := q.LatestSessionDotfiles(ctx, sessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
