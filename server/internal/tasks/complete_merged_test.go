@@ -43,6 +43,8 @@ func (r *rig) reportedCode(branch string) (id, attempt, binding string) {
 	if _, err := r.svc.Report(context.Background(), kid, report(kid, "done", dbstate.OutcomeCompleted)); err != nil {
 		r.t.Fatal(err)
 	}
+	// The turn that reported ends; completion waits for the session's last turn.
+	r.finishTurns()
 	r.obs.set(mergedPR(7, branch), nil)
 	r.project()
 	return id, attempt, binding

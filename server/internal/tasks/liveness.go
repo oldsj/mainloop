@@ -333,9 +333,14 @@ func (s *Service) awaitsCI(ctx context.Context, sessionID string, now time.Time)
 
 // overRuntime reports whether the attempt has run past the runtime bound. It needs nothing from
 // kagent, so it is judged on every path of [Service.checkLiveness], including the ones that could
-// not read the session.
+// not read the session. The bound counts from the attempt's start: its creation, or the follow-up
+// that last reopened it or lifted its runtime_limit block.
 func (s *Service) overRuntime(a dbq.TaskAttempt, now time.Time) bool {
-	return now.Sub(a.CreatedAt) > s.maxRuntime()
+	start := a.CreatedAt
+	if a.ReopenedAt != nil && a.ReopenedAt.After(start) {
+		start = *a.ReopenedAt
+	}
+	return now.Sub(start) > s.maxRuntime()
 }
 
 // checkUnobservedLiveness judges an attempt with no kagent session yet: there is nothing to read,

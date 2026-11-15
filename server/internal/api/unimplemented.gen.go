@@ -89,6 +89,11 @@ func (Unimplemented) DismissQueueDiagnostic(context.Context, DismissQueueDiagnos
 	return nil, apierr.NotImplemented
 }
 
+// FollowUpTask is not implemented yet.
+func (Unimplemented) FollowUpTask(context.Context, FollowUpTaskRequestObject) (FollowUpTaskResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // ForkCheckpoint is not implemented yet.
 func (Unimplemented) ForkCheckpoint(context.Context, ForkCheckpointRequestObject) (ForkCheckpointResponseObject, error) {
 	return nil, apierr.NotImplemented

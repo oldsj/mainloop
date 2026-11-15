@@ -1481,6 +1481,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/tasks/{task_id}/follow-up': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Follow Up Task
+     * @description Send a message to the task's own native session, so the agent keeps its context. An open task with an active attempt takes it as the session's next message and moves back to running. A completed coordination task reopens on the same attempt and session. Cancelled and failed tasks, and completed code tasks, are refused (409). A retry with the same request_id returns the first send.
+     */
+    post: operations['followUpTask'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/tasks/{task_id}/reassign': {
     parameters: {
       query?: never;
@@ -3464,6 +3484,37 @@ export interface components {
       /** Expected Attempt Id */
       expected_attempt_id: string | null;
     };
+    /** TaskFollowUp */
+    TaskFollowUp: {
+      /** Request Id */
+      request_id: string;
+      /** Text */
+      text: string;
+    };
+    /** TaskFollowUpResult */
+    TaskFollowUpResult: {
+      /** Task Id */
+      task_id: string;
+      /** Attempt Id */
+      attempt_id: string;
+      /** Session Id */
+      session_id: string;
+      /** Message Id */
+      message_id: string;
+      /**
+       * Delivery
+       * @description sent starts the session's next turn; queued waits behind the turn that is open.
+       * @enum {string}
+       */
+      delivery: 'sent' | 'queued';
+      /**
+       * Reopened
+       * @description The follow-up reopened a completed task on its attempt's session.
+       */
+      reopened: boolean;
+      /** Version */
+      version: number;
+    };
     /** TaskCheckout */
     TaskCheckout: {
       /** Branch */
@@ -4450,6 +4501,7 @@ export interface components {
             | 'provisioning_unavailable'
             | 'handoff_unavailable'
             | 'cancel_unavailable'
+            | 'follow_up_unavailable'
           )
         | null;
     };
@@ -11200,6 +11252,93 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['TaskOperation'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Request Entity Too Large */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['TaskError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  followUpTask: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        task_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['TaskFollowUp'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskFollowUpResult'];
         };
       };
       401: components['responses']['Unauthorized'];

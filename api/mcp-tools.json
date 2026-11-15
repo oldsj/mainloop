@@ -661,6 +661,32 @@
       }
     },
     {
+      "name": "follow_up",
+      "description": "Send a message to a managed task's own native session, which keeps the agent's context. A task that is running, waiting or blocked takes it as its next message and goes back to running; a completed coordination task reopens on the same session. Cancelled and failed tasks and completed code tasks are refused, as is a task whose native session is gone (use a new task). The result says sent or queued, and whether the task reopened. Reuse request_id to retry.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "task_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["task_id", "request_id", "text"],
+        "type": "object"
+      }
+    },
+    {
       "name": "report",
       "description": "Record progress or an explicit result claim with durable parent notification. For a blocker requiring an owner decision, use outcome=blocked and owner_action to state the specific question or choice. Routine results are stored for task reads and Activity.",
       "input_schema": {
@@ -906,6 +932,7 @@
         "check_status",
         "decide",
         "delegate",
+        "follow_up",
         "forget",
         "get_issue",
         "get_verification",
@@ -944,6 +971,7 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "follow_up",
         "forget",
         "get_issue",
         "get_verification",
@@ -978,6 +1006,7 @@
         "check_status",
         "decide",
         "delegate",
+        "follow_up",
         "forget",
         "get_issue",
         "get_pull_request_merge_status",
@@ -1019,6 +1048,7 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "follow_up",
         "forget",
         "get_issue",
         "get_pull_request_merge_status",
@@ -1054,6 +1084,7 @@
       "devloop_enabled": false,
       "ordinary": [
         "delegate",
+        "follow_up",
         "forget",
         "project_context",
         "remember",
@@ -1076,6 +1107,7 @@
       "devloop_enabled": true,
       "ordinary": [
         "delegate",
+        "follow_up",
         "forget",
         "project_context",
         "remember",
@@ -1098,6 +1130,7 @@
       "devloop_enabled": false,
       "ordinary": [
         "delegate",
+        "follow_up",
         "forget",
         "project_context",
         "remember",
@@ -1120,6 +1153,7 @@
       "devloop_enabled": true,
       "ordinary": [
         "delegate",
+        "follow_up",
         "forget",
         "project_context",
         "remember",
@@ -1143,6 +1177,7 @@
       "ordinary": [
         "check_status",
         "delegate",
+        "follow_up",
         "forget",
         "get_issue",
         "get_verification",
@@ -1175,6 +1210,7 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "follow_up",
         "forget",
         "get_issue",
         "get_verification",
@@ -1203,6 +1239,7 @@
       "ordinary": [
         "check_status",
         "delegate",
+        "follow_up",
         "forget",
         "get_issue",
         "get_pull_request_merge_status",
@@ -1238,6 +1275,7 @@
         "dev_lease_release",
         "dev_status",
         "dev_sync",
+        "follow_up",
         "forget",
         "get_issue",
         "get_pull_request_merge_status",

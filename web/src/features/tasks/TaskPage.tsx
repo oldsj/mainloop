@@ -28,6 +28,7 @@ import {
   useTaskList
 } from './queries';
 import { PendingApprovals, TaskFacts, TaskHistory } from './TaskDetail';
+import { FollowUp } from './FollowUp';
 import { TaskActions } from './TaskActions';
 
 /**
@@ -169,6 +170,7 @@ export function TaskPage({ id }: { id: string }) {
         offline={offline}
         onAsk={ask}
       />
+      <FollowUp view={view} offline={offline} />
       {view.task.owner_decision ? (
         <details className="border-border-subtle border-t">
           <summary className="p-md text-muted-foreground min-h-control cursor-pointer text-sm font-medium">

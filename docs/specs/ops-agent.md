@@ -56,13 +56,14 @@ Permission mode: the ops Harness starts Sessions in Claude's `auto` mode
 (`KAGENT_CLAUDE_PERMISSION_MODE=auto`). An action the classifier holds surfaces as an approval
 request. The live view can still switch the mode for each Session.
 
-## Known gap: no follow-up after the report
+## Follow-up after the report
 
-An ops request is a one-shot task. The coordination attempt closes when the agent reports, so a
-follow-up message to its session returns 409 ("This task attempt has stopped"), and the task offers
-no retry or reassign (`handoff_unavailable`). A follow-up question means a new ops task, which
-starts without the earlier context. An ops conversation probably wants a session that stays open
-across reports, not a task. That isn't designed yet.
+An ops request is a coordination task. Once the agent reports and the task completes, the owner
+(the task page's "Follow up" box) or main (`follow_up`) can send it another message: the task
+reopens on the same native session, with the earlier conversation intact (see
+[tasks](tasks.md#follow-up)). A task whose kagent Session is gone is refused rather than given a
+fresh Session without the context. Retry and reassign are still unavailable
+(`handoff_unavailable`).
 
 ## Not yet built (slice 2, designed)
 

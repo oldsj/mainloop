@@ -169,6 +169,21 @@ func (a *TasksAPI) ReassignTask(ctx context.Context, req api.ReassignTaskRequest
 	return api.ReassignTask202JSONResponse(op), nil
 }
 
+// FollowUpTask implements api.StrictServerInterface.
+func (a *TasksAPI) FollowUpTask(ctx context.Context, req api.FollowUpTaskRequestObject) (api.FollowUpTaskResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	if req.Body == nil {
+		return nil, apierr.Invalid("Request body is required")
+	}
+	res, err := a.Svc.FollowUp(ctx, a.principal(), FollowUpInput{TaskID: req.TaskId, RequestID: req.Body.RequestId, Text: req.Body.Text})
+	if err != nil {
+		return nil, taskReply(err, actionRefusals...)
+	}
+	return api.FollowUpTask202JSONResponse(res.API()), nil
+}
+
 func action(taskID string, body api.TaskAction) ActionInput {
 	return ActionInput{
 		RequestID: body.RequestId, TaskID: taskID, ExpectedVersion: body.ExpectedVersion,

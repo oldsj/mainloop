@@ -57,6 +57,9 @@ RETURNING session_id, model_override, effort_override;
 -- name: LockSessionTaskAttempt :one
 SELECT stop_state FROM task_attempts WHERE session_id = $1 FOR SHARE;
 
+-- name: GetSessionTaskAttemptState :one
+SELECT state FROM task_attempts WHERE session_id = $1;
+
 -- name: GetTopicName :one
 SELECT name FROM topics WHERE id = $1;
 

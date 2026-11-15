@@ -35,6 +35,9 @@ type SessionRuntime interface {
 	SendToAs(ctx context.Context, source sessions.Source, sessionID, messageID, text string) (sessions.Sent, error)
 	SendAs(ctx context.Context, source sessions.Source, messageID, conversationID, text string) (sessions.Sent, error)
 	SendToWith(ctx context.Context, source sessions.Source, sessionID, messageID, text string, o sessions.SendOptions) (sessions.Sent, error)
+	// SendInTx records a message inside the caller's transaction; a follow-up commits it with the
+	// task's reopening.
+	SendInTx(ctx context.Context, tx pgx.Tx, source sessions.Source, sessionID, messageID, text string, o sessions.SendOptions) (sessions.Sent, error)
 	EnsureMain(ctx context.Context) (sessions.Main, error)
 	// HasOpen reports whether the session has an open turn.
 	HasOpen(ctx context.Context, sessionID string) (bool, error)

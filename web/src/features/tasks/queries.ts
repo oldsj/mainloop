@@ -5,7 +5,7 @@
 import { useEffect } from 'react';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { $api, fetchClient, keys } from '@/api';
-import type { TaskOperation } from '@/lib/contract';
+import type { TaskFollowUp, TaskFollowUpResult, TaskOperation } from '@/lib/contract';
 import type { ActionIntent } from '@/lib/taskActions';
 import { visiblePolling } from '@/lib/visiblePolling';
 import {
@@ -138,6 +138,22 @@ export async function sendTaskAction(intent: ActionIntent): Promise<TaskOperatio
       return operationOf(data);
     }
   }
+}
+
+/**
+ * Sends a follow-up to the task's own session. The caller keeps the request ID until the server
+ * answers, so a resend after a lost reply finds the first send instead of sending twice.
+ */
+export async function sendFollowUp(
+  taskId: string,
+  body: TaskFollowUp
+): Promise<TaskFollowUpResult> {
+  const { data } = await fetchClient.POST('/tasks/{task_id}/follow-up', {
+    params: { path: { task_id: taskId } },
+    body
+  });
+  if (data === undefined) throw new Error('Mainloop returned no result.');
+  return data;
 }
 
 /**

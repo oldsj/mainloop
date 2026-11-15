@@ -686,3 +686,43 @@ UPDATE task_attempts SET memory_seq = coalesce(memory_seq, (
     SELECT coalesce(max(greatest(m.activated_seq, coalesce(m.ended_seq, 0))), 0)::bigint
     FROM project_memory_entries m WHERE m.project_id = sqlc.arg(project_id)))
 WHERE task_attempts.id = sqlc.arg(id) RETURNING memory_seq;
+
+-- name: ReopenAttempt :one
+-- A follow-up reopens a completed attempt on its own native session. Only an attempt whose stop was
+-- confirmed and that was settled as completed reopens; the stop fence, liveness clocks and capacity
+-- start again as for a new attempt. The caller holds the task lock and the session's send lock.
+UPDATE task_attempts
+SET state = 'active', capacity_held = true, stop_state = 'none', stop_requested_at = NULL,
+    resolve_attempts = 0, resolve_after = NULL, progress_marker = NULL, progress_at = NULL,
+    liveness_failing_since = NULL, reopened_at = now(), updated_at = now(),
+    evidence_refs = CASE WHEN cardinality(evidence_refs) < 64 THEN array_append(evidence_refs, sqlc.arg(evidence_ref)::text)
+                         ELSE evidence_refs END
+WHERE id = sqlc.arg(id) AND state = 'completed' AND stop_state = 'confirmed'
+  AND superseded_at IS NULL AND archived_at IS NULL AND native_deleted_at IS NULL
+RETURNING *;
+
+-- name: ReopenTask :one
+-- A follow-up moves a completed task back to running. Only the follow-up path calls it; the task
+-- state machine never leaves a final status otherwise.
+UPDATE tasks
+SET status = 'running', reason = NULL, decision_attempt_id = NULL, decision_report_id = NULL,
+    decision_action = NULL, version = version + 1, updated_at = now()
+WHERE id = $1 AND version = $2 AND status = 'completed'
+RETURNING *;
+
+-- name: ReopenTaskSession :execrows
+-- The session of a reopened attempt takes messages again. An archived session never reopens: its
+-- kagent Session is deleted.
+UPDATE sessions SET status = 'active', completed_at = NULL
+WHERE id = $1 AND status = 'completed' AND archived_at IS NULL;
+
+-- name: CountSessionPendingDeliveries :one
+-- Messages of a session that are waiting or in flight. A task does not complete while its session
+-- still has one: a follow-up queued behind the agent's last turn must run, not be cancelled by the
+-- stop that follows completion.
+SELECT count(*) FROM deliveries
+WHERE session_id = $1 AND state IN ('queued', 'recorded', 'sending', 'delivered', 'uncertain');
+
+-- name: RestartAttemptRuntime :exec
+-- The owner's follow-up to a task blocked on its runtime bound starts the bound again.
+UPDATE task_attempts SET reopened_at = now(), updated_at = now() WHERE id = $1;

@@ -579,6 +579,10 @@ func promoteNextQueued(ctx context.Context, q *dbq.Queries, sessionID string, ho
 }
 
 // busyOrErr maps the database's one-open-turn index to ErrBusy.
+// AsBusy is ErrBusy for an error that a transaction around [Service.SendInTx] returned because a
+// concurrent send recorded the session's open turn first, and err otherwise.
+func AsBusy(err error) error { return busyOrErr(err) }
+
 func busyOrErr(err error) error {
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) && pg.Code == "23505" && pg.ConstraintName == "deliveries_one_open" {
@@ -708,52 +712,71 @@ func (s *Service) SendToAs(ctx context.Context, source Source, sessionID, messag
 
 // SendToWith is SendToAs with the send's options.
 func (s *Service) SendToWith(ctx context.Context, source Source, sessionID, messageID, text string, o SendOptions) (Sent, error) {
-	text, err := checkTextOrImages(messageID, text, 0)
-	if err != nil {
-		return Sent{}, err
-	}
-	var r recorded
-	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
-		// The lock cancel also takes, before the status is read: no message is recorded after a
-		// cancel commits. Stop and archive take no lock; the open-turn index and the status check
-		// already keep them consistent with a send.
-		if err := db.XactLock(ctx, tx, "mainloop:send:"+sessionID); err != nil {
-			return err
-		}
-		q := dbq.New(tx)
-		b, err := q.GetOwnedSessionBinding(ctx, dbq.GetOwnedSessionBindingParams{ID: sessionID, UserID: s.OwnerID})
-		if errors.Is(err, pgx.ErrNoRows) {
-			// Either not the owner's, or a session without a native binding.
-			if sess, serr := q.GetSession(ctx, sessionID); serr == nil && sess.UserID == s.OwnerID {
-				return conflict("Session has no native agent binding")
-			}
-			return ErrNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("get binding: %w", err)
-		}
-		if endedStatus(b.SessionStatus) {
-			return conflict("This session is %s; start a new one.", b.SessionStatus)
-		}
-		if b.ArchivedAt != nil {
-			return conflict("This session is archived; start a new one.")
-		}
-		if b.WorkspaceAgentName != nil && b.KagentSessionID == nil {
-			return conflict("The workspace is not ready yet; try again when it is.")
-		}
-		steer := o.Steer && !slashCommand(text)
-		if steer {
-			ref, aerr := s.bindingAgentOf(b)
-			steer = aerr == nil && s.IsSteerAgent(ref.Name)
-		}
-		var rerr error
-		r, rerr = s.record(ctx, tx, source, sessionID, messageID, text, steer)
-		return rerr
+	var out Sent
+	err := db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+		var err error
+		out, err = s.SendInTx(ctx, tx, source, sessionID, messageID, text, o)
+		return err
 	})
 	if err = busyOrErr(err); err != nil {
 		return Sent{}, err
 	}
+	return out, nil
+}
+
+// SendInTx is SendToWith inside the caller's transaction, for a caller that must commit its own
+// writes and the message together (a task follow-up reopens its task in the same transaction). It
+// takes the session's send lock first; the caller must not hold a lock that a send-lock holder
+// waits for (the task or its attempt) before calling it. The returned error is not yet mapped to
+// ErrBusy: a duplicate open turn aborts the transaction, and the caller's commit reports it.
+func (s *Service) SendInTx(ctx context.Context, tx pgx.Tx, source Source, sessionID, messageID, text string, o SendOptions) (Sent, error) {
+	text, err := checkTextOrImages(messageID, text, 0)
+	if err != nil {
+		return Sent{}, err
+	}
+	// The lock cancel also takes, before the status is read: no message is recorded after a
+	// cancel commits. Stop and archive take no lock; the open-turn index and the status check
+	// already keep them consistent with a send.
+	if err := LockSend(ctx, tx, sessionID); err != nil {
+		return Sent{}, err
+	}
+	q := dbq.New(tx)
+	b, err := q.GetOwnedSessionBinding(ctx, dbq.GetOwnedSessionBindingParams{ID: sessionID, UserID: s.OwnerID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Either not the owner's, or a session without a native binding.
+		if sess, serr := q.GetSession(ctx, sessionID); serr == nil && sess.UserID == s.OwnerID {
+			return Sent{}, conflict("Session has no native agent binding")
+		}
+		return Sent{}, ErrNotFound
+	}
+	if err != nil {
+		return Sent{}, fmt.Errorf("get binding: %w", err)
+	}
+	if endedStatus(b.SessionStatus) {
+		return Sent{}, conflict("This session is %s; start a new one.", b.SessionStatus)
+	}
+	if b.ArchivedAt != nil {
+		return Sent{}, conflict("This session is archived; start a new one.")
+	}
+	if b.WorkspaceAgentName != nil && b.KagentSessionID == nil {
+		return Sent{}, conflict("The workspace is not ready yet; try again when it is.")
+	}
+	steer := o.Steer && !slashCommand(text)
+	if steer {
+		ref, aerr := s.bindingAgentOf(b)
+		steer = aerr == nil && s.IsSteerAgent(ref.Name)
+	}
+	r, err := s.record(ctx, tx, source, sessionID, messageID, text, steer)
+	if err != nil {
+		return Sent{}, err
+	}
 	return Sent{ConversationID: sessionID, MessageID: messageID, Queued: r.queued, Steered: r.steered}, nil
+}
+
+// LockSend takes the session's send lock in tx: the lock every send, cancel and task follow-up
+// takes before it reads the session's state. It is reentrant within one transaction.
+func LockSend(ctx context.Context, tx pgx.Tx, sessionID string) error {
+	return db.XactLock(ctx, tx, "mainloop:send:"+sessionID)
 }
 
 // NewService builds the service from settings. k may be nil in a test that talks to no kagent. reg
