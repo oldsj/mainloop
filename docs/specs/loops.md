@@ -5,9 +5,8 @@ fires, Mainloop sends one message to the session that armed it, so that session 
 and still hear when something is worth looking at. Issue #314.
 
 Status: **implemented** for task, pull request, quiet and time triggers and the no-progress stop,
-armed and managed by agents through MCP, and for the owner's REST routes to list and control a
-task's loops. The task page section that uses those routes is **proposed** (see
-[Not built](#not-built)).
+armed and managed by agents through MCP, and for the owner's view: REST routes to list and control
+a task's loops, and the task page's **Loops** section that uses them.
 
 ## Why
 
@@ -138,6 +137,15 @@ A control the loop's state does not allow (pausing a loop that is not armed, res
 not paused, firing or deleting one that ended) is 409 `loop_state_conflict`; another owner's or an
 unknown loop is 404 `loop_not_found`.
 
+The task page has a **Loops** section, left out while the task has none. Each loop shows what it
+waits for, whom it wakes (this task, its supervisor, or main), its firings against its limit, its
+next fire time, whether it expects change, its note, and its latest firings with their facts and
+delivery state, behind **Latest firings**. A loop stopped for no progress says so. A live loop has
+**Pause** or **Resume**, **Fire now** and **Delete**; delete asks for a second click. Fire now keeps
+its `request_id` until Mainloop answers, so firing again after a lost reply does not fire twice. A
+refusal says why in words, and the list is read again after every control and every 15 seconds
+while the page is open; no event frame carries loop changes.
+
 ## States and limits
 
 `armed` and `paused` (by the owner) are the live states. The final states: `done` (a one-time timer fired), `exhausted` (its
@@ -179,9 +187,6 @@ turn (#72), a loop's usage is the sum over its firings' turns, labelled _attribu
 
 ## Not built
 
-- **The task page section** (proposed, next): the task page lists the task's loops with the routes
-  above, with pause, resume, fire now and delete. It refetches on a timer and after each control;
-  no `loop:updated` event frame is planned unless the page needs one.
 - **Main's loops without a task** (a time loop main armed with no `task_id`) appear on no task
   page; `loop_list` is their only listing.
 - **Other sources**: delivery stalls, attention items, and deploy or production health (which

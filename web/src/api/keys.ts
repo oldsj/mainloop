@@ -51,6 +51,8 @@ export const keys = {
   /** Task lists, in every scope. */
   tasks: () => get('/tasks'),
   task: (taskId: string) => get('/tasks/{task_id}', { path: { task_id: taskId } }),
+  /** The loops on a task's page. */
+  taskLoops: (taskId: string) => get('/tasks/{task_id}/loops', { path: { task_id: taskId } }),
   providers: () => get('/providers'),
 
   /** Scheduled runs: the deployment-wide list, and one schedule with its executions. */

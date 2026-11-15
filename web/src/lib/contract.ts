@@ -24,6 +24,8 @@ export type TaskArtifact = Schemas['TaskArtifact'];
 export type TaskReportRecord = Schemas['TaskReport'];
 export type TaskEligibility = Schemas['TaskEligibility'];
 export type TaskView = Schemas['TaskView'];
+export type TaskLoop = Schemas['TaskLoop'];
+export type LoopFiring = Schemas['LoopFiring'];
 export type TaskUpdatedEvent = Schemas['TaskUpdated'];
 
 /** The three owner actions. The schema has no enum for them: the route names are the source. */
