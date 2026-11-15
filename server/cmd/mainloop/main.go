@@ -229,7 +229,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	handler, err := app.New(app.Deps{
 		Config: cfg, Log: log, DB: pool, Pool: pool, Hub: hub, Live: live,
 		Providers: reg, Projects: projectSvc, Tasks: taskSvc, Workspaces: wsSvc, Sessions: svc, Preview: previews, LiveRelay: liveRelay,
-		HITL: hitlSvc, Attention: attn, Health: healthSvc, Schedules: schedSvc, Merge: mergeSvc,
+		HITL: hitlSvc, Attention: attn, Health: healthSvc, Schedules: schedSvc, Merge: mergeSvc, Transcripts: transcriptSvc,
 		Devloop: &devloop.LeaseService{Pool: pool}, DevloopTargets: &devloop.TargetService{Pool: pool}, CI: ciSvc,
 		Auth: authn,
 	}).Handler()

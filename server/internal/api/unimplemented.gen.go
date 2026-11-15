@@ -274,6 +274,11 @@ func (Unimplemented) GetSessionNative(context.Context, GetSessionNativeRequestOb
 	return nil, apierr.NotImplemented
 }
 
+// GetSessionTranscript is not implemented yet.
+func (Unimplemented) GetSessionTranscript(context.Context, GetSessionTranscriptRequestObject) (GetSessionTranscriptResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetTask is not implemented yet.
 func (Unimplemented) GetTask(context.Context, GetTaskRequestObject) (GetTaskResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -476,6 +481,11 @@ func (Unimplemented) RetryTask(context.Context, RetryTaskRequestObject) (RetryTa
 
 // RevokeEnvironmentFromProject is not implemented yet.
 func (Unimplemented) RevokeEnvironmentFromProject(context.Context, RevokeEnvironmentFromProjectRequestObject) (RevokeEnvironmentFromProjectResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// SearchTranscripts is not implemented yet.
+func (Unimplemented) SearchTranscripts(context.Context, SearchTranscriptsRequestObject) (SearchTranscriptsResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

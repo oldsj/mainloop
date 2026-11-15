@@ -30,14 +30,18 @@ WHERE kagent_session_id = sqlc.arg(kagent_session_id);
 -- name: SearchTranscripts :many
 -- The owner's entries that match a web-search style query, best first. The vector is built from the
 -- stored text, which was redacted before it was written.
-SELECT e.id, e.session_id, e.task_id, e.pos, e.kind, e.tool_name, e.at,
-       ts_headline('english', e.text, q, 'MaxFragments=2, MaxWords=24, MinWords=8')::text AS snippet,
+-- Matches are marked with U+0002 and U+0003, not HTML: the text is not escaped, and the API splits
+-- the snippet at the marks.
+SELECT e.id, e.session_id, s.title AS session_title, e.task_id, e.pos, e.kind, e.tool_name, e.at,
+       ts_headline('english', e.text, q,
+           'MaxFragments=2, MaxWords=24, MinWords=8, FragmentDelimiter=" … ", StartSel=' || chr(2) || ', StopSel=' || chr(3))::text AS snippet,
        ts_rank(e.tsv, q)::real AS rank
 FROM transcript_entries e
 JOIN sessions s ON s.id = e.session_id,
      websearch_to_tsquery('english', sqlc.arg(query)::text) AS q
 WHERE s.user_id = sqlc.arg(owner_id) AND e.tsv @@ q
   AND (sqlc.narg(session_id)::text IS NULL OR e.session_id = sqlc.narg(session_id))
+  AND (sqlc.narg(project_id)::text IS NULL OR s.project_id = sqlc.narg(project_id))
 ORDER BY rank DESC, e.id DESC
 LIMIT sqlc.arg(max_results);
 
@@ -116,3 +120,17 @@ UPDATE transcript_tasks t SET pruned_at = now() FROM old WHERE t.task_id = old.t
 
 -- name: GetTranscriptSession :one
 SELECT * FROM transcript_sessions WHERE kagent_session_id = $1;
+
+-- name: TranscriptSessionOwned :one
+SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1 AND user_id = $2);
+
+-- name: ListTranscriptEntries :many
+-- A session's stored entries after an id, in the order they were copied.
+SELECT id, task_id, pos, kind, tool_name, tool_call_id, is_error, text, truncated, orig_bytes, at
+FROM transcript_entries
+WHERE session_id = $1 AND id > sqlc.arg(after_id)
+ORDER BY id
+LIMIT sqlc.arg(max_rows);
+
+-- name: ListTranscriptSources :many
+SELECT * FROM transcript_sessions WHERE session_id = $1 ORDER BY created_at DESC, kagent_session_id LIMIT 50;

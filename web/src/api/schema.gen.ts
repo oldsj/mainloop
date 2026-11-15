@@ -1197,6 +1197,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/sessions/{session_id}/transcript': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Session Transcript
+     * @description A session's stored transcript entries in the order they were copied, after an entry id, with how far copying has got. Once the page reaches the last stored entry, the response also carries a live tail: the turns kagent has not finished or Mainloop has not copied yet, read through kagent's control plane, redacted and capped the same way, and not stored.
+     */
+    get: operations['getSessionTranscript'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/sessions/{session_id}/hitl': {
     parameters: {
       query?: never;
@@ -1831,6 +1851,26 @@ export interface paths {
     put?: never;
     /** Refresh Workspace */
     post: operations['refreshWorkspace'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/transcripts/search': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Search Transcripts
+     * @description Full-text search over the owner's stored transcript entries, best match first. Credentials were redacted before entries were stored and indexed, so they are never found.
+     */
+    get: operations['searchTranscripts'];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -5848,6 +5888,84 @@ export interface components {
       | components['schemas']['HealthTurnEvent']
       | components['schemas']['HealthToolEvent']
       | components['schemas']['HealthUsageEvent'];
+    /**
+     * @description What a transcript entry records (docs/specs/transcripts.md).
+     * @enum {string}
+     */
+    TranscriptEntryKind:
+      | 'user'
+      | 'assistant'
+      | 'thinking'
+      | 'tool_call'
+      | 'tool_result'
+      | 'status'
+      | 'ask'
+      | 'other';
+    TranscriptEntry: {
+      /** @description The stored entry's id, the `after` cursor; null for a live entry. */
+      id: number | null;
+      /** @description The A2A task (one turn) the entry belongs to. */
+      task_id: string;
+      /** @description The entry's position within its task. */
+      pos: number;
+      kind: components['schemas']['TranscriptEntryKind'];
+      tool_name: string;
+      tool_call_id: string;
+      is_error: boolean;
+      /** @description Redacted, and cut to the entry's size limit; empty past the session's budget. */
+      text: string;
+      /** @description The text was cut, withheld, or dropped past the budget. */
+      truncated: boolean;
+      /** @description The text's size before it was cut or withheld. */
+      orig_bytes: number;
+      at: string | null;
+      /** @description Read from kagent for this response and not stored. */
+      live: boolean;
+    };
+    /** @description One kagent Session the session's transcript is copied from. */
+    TranscriptSource: {
+      /** @enum {string} */
+      state: 'active' | 'complete' | 'unavailable';
+      /** @description Why an unavailable source stopped being copied. */
+      reason: string;
+      scanned_at: string | null;
+      /** Format: int64 */
+      stored_bytes: number;
+      /** Format: date-time */
+      created_at: string;
+    };
+    SessionTranscript: {
+      entries: components['schemas']['TranscriptEntry'][];
+      /** @description Stored entries follow the last one returned. */
+      has_more: boolean;
+      /** @description The kagent Sessions copied from, newest first. */
+      sources: components['schemas']['TranscriptSource'][];
+      /** @description The live tail, empty unless the page reached the last stored entry. */
+      live: components['schemas']['TranscriptEntry'][];
+      /** @description Why the live tail could not be read. */
+      live_error: string | null;
+    };
+    TranscriptSnippetPart: {
+      text: string;
+      match: boolean;
+    };
+    TranscriptSearchHit: {
+      /** Format: int64 */
+      entry_id: number;
+      session_id: string;
+      session_title: string;
+      task_id: string;
+      pos: number;
+      kind: components['schemas']['TranscriptEntryKind'];
+      tool_name: string;
+      at: string | null;
+      rank: number;
+      /** @description The matching passage as plain text, split into matched and unmatched parts. */
+      snippet: components['schemas']['TranscriptSnippetPart'][];
+    };
+    TranscriptSearchResults: {
+      hits: components['schemas']['TranscriptSearchHit'][];
+    };
     /** @description Display context from the owned binding; empty when the session is unknown. */
     HITLContext: {
       session_id?: string;
@@ -10690,6 +10808,62 @@ export interface operations {
       };
     };
   };
+  getSessionTranscript: {
+    parameters: {
+      query?: {
+        /** @description Return entries after this entry id; 0 starts from the beginning. */
+        after?: number;
+        limit?: number;
+        /** @description Read the live tail from kagent when the page reaches the end. */
+        live?: boolean;
+      };
+      header?: never;
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SessionTranscript'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
   listSessionHITL: {
     parameters: {
       query?: never;
@@ -13054,6 +13228,60 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  searchTranscripts: {
+    parameters: {
+      query: {
+        /** @description A web-search style query (quoted phrases, `or`, `-word`). */
+        q: string;
+        project_id?: string;
+        session_id?: string;
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TranscriptSearchResults'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
         };
       };
     };

@@ -1,7 +1,7 @@
 # Session transcripts
 
 Status: **partly implemented** (#448). Storage, the turn normalizer, ingestion, the copy before a
-delete and retention exist. The read and search API, the MCP tools and the web view are still to
+delete, retention, and the read and search API exist. The MCP tools and the web view are still to
 come.
 
 Mainloop's conversation (`session_messages`) keeps each turn's user message and final reply. A
@@ -139,6 +139,46 @@ failure against any Session.
 
 Each copied task has a receipt (`transcript_tasks`). Copying the same task again writes nothing.
 Normalization is deterministic, so an entry's position within its task is stable.
+
+## Reading
+
+`GET /sessions/{id}/transcript` returns a page of the session's stored entries:
+
+- **Order and paging.** Entries come in the order they were copied, which is the order their turns
+  finished. Each stored entry has an `id`. Pass the last one as `after` to read the next page. A
+  page holds up to `limit` entries: 200 by default, at most 500. `has_more` says whether more
+  stored entries follow.
+- **Sources.** `sources` lists the kagent Sessions the transcript is copied from, newest first. Each
+  shows whether it is still followed (`active`), finished (`complete`) or `unavailable`, with the
+  reason.
+- **The live tail.** When the page reaches the last stored entry, `live` holds the turns not yet
+  copied: running, waiting for an answer, or finished since the last sweep. They are read from
+  kagent's control plane for this response only, without waking the agent. They are redacted and
+  capped exactly as a copy would be, and are not stored. They have no `id` and carry
+  `live: true`.
+- **Tail bounds.** The tail covers the two newest followed kagent Sessions and the three newest
+  uncopied turns, read within 5 seconds. A turn that a sweep has fallen far behind on may be
+  missing from it until the sweep catches up.
+- **When kagent can't be read.** The stored page is returned whole, and `live_error` says the tail
+  could not be read. kagent's own error is logged, not returned.
+- **Skipping the tail.** Pass `live=false` to read stored entries only.
+
+Only the owner's sessions can be read; any other session is 404.
+
+## Search
+
+`GET /transcripts/search?q=` searches the owner's stored entries, best match first:
+
+- **The query.** `q` takes web-search syntax: quoted phrases, `or`, and `-word`. It is matched
+  against the entry text and the tool name, with English stemming.
+- **Filters.** `project_id` and `session_id` narrow the search. `limit` is 20 by default, at most 100.
+- **What a hit holds.** The entry's id, session (with its title), task, position, kind, tool and
+  time, plus a snippet.
+- **The snippet.** It is plain text split into parts, each marked as matching or not. It is never
+  markup, so tag-like text in an entry cannot be rendered as HTML. The text-search parser drops
+  tag-like tokens from the snippet.
+
+Live tails are not searched.
 
 ## Retention
 
