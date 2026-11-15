@@ -55,6 +55,12 @@ type Service struct {
 	// Liveness reads whether an active attempt's kagent session is still alive. Without one the
 	// liveness sweep does nothing.
 	Liveness LivenessObserver
+	// Branches reads the task branch's head on origin for a code task's handoff.
+	Branches BranchReader
+	// CodeHandoff is whether a code task can be retried or reassigned: Mainloop has a GitHub App
+	// to read the branch head with. It is set from configuration, so a process that only takes
+	// requests (the MCP listener) answers as the one that drives them.
+	CodeHandoff bool
 	// Limits are the capacity and timing settings of the loops.
 	Limits Limits
 	Log    *slog.Logger
@@ -577,9 +583,10 @@ func (s *Service) Cancel(ctx context.Context, p Principal, in ActionInput) (api.
 	return s.act(ctx, p, dbstate.TaskOpCancel, in)
 }
 
-// Retry replaces a coordination task's attempt with a new one on the same provider, in a new native
-// session whose brief carries the task's brief and a continuation note. A failed task reopens for
-// it. A code task's retry is recorded blocked with reason handoff_unavailable. See [Service.handoff].
+// Retry replaces a task's attempt with a new one on the same provider, in a new native session
+// whose brief carries the task's brief and a continuation note; a code task's successor works on
+// the branch from its head on origin. A failed task reopens for it. Without [Service.CodeHandoff] a
+// code task's retry is recorded blocked with reason handoff_unavailable. See [Service.handoff].
 func (s *Service) Retry(ctx context.Context, p Principal, in ActionInput) (api.TaskOperation, error) {
 	return s.act(ctx, p, dbstate.TaskOpRetry, in)
 }
@@ -957,7 +964,7 @@ func (s *Service) load(ctx context.Context, q *dbq.Queries, tasks []dbq.Task) ([
 	if err != nil {
 		return nil, err
 	}
-	return buildViews(tasks, attempts, ops, arts, reports)
+	return buildViews(tasks, attempts, ops, arts, reports, s.CodeHandoff)
 }
 
 // Operation returns an operation the principal may see: one on a task it can read, or one it
@@ -1003,6 +1010,11 @@ func WithRuntimes(ws WorkspaceRuntime, sess SessionRuntime) Option {
 // WithObserver sets the reader of a task's pull request and CI. Without one nothing is projected.
 func WithObserver(o Observer) Option { return func(s *Service) { s.Observer = o } }
 
+// WithBranches sets the reader of a code task's branch head on origin, and turns code handoff on.
+func WithBranches(b BranchReader) Option {
+	return func(s *Service) { s.Branches, s.CodeHandoff = b, true }
+}
+
 // WithStopObserver sets the confirmation of a stop kagent did not confirm. Without one the service has
 // no kagent client, and an unconfirmed stop is taken as stopped.
 func WithStopObserver(o StopObserver) Option { return func(s *Service) { s.StopObserver = o } }
@@ -1017,7 +1029,7 @@ func WithLivenessObserver(o LivenessObserver) Option { return func(s *Service) {
 func NewService(cfg *config.Config, pool *pgxpool.Pool, reg Resolver, log *slog.Logger, opts ...Option) *Service {
 	s := &Service{
 		Pool: pool, Providers: reg, Log: log, DefaultProfile: cfg.Tasks.DefaultProviderProfileID,
-		MergeTools: bool(cfg.MergeToolsEnabled),
+		MergeTools: bool(cfg.MergeToolsEnabled), CodeHandoff: cfg.GitHub.AppID != "",
 		Limits: Limits{
 			MaxChildrenPerParent: cfg.Tasks.MaxChildrenPerParent, MaxChildrenGlobal: cfg.Tasks.MaxChildrenGlobal,
 			ProvisionWindow: cfg.Tasks.ProvisionWindow.Duration(), Interval: cfg.Tasks.ReconcileInterval.Duration(),

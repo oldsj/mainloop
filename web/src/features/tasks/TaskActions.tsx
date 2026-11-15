@@ -151,8 +151,8 @@ export function TaskActions({
 
   const retry = gate('retry');
   const cancel = gate('cancel');
-  // A code task's retry and reassign wait for the branch handoff. While the server reports it unavailable, the
-  // owner sees no control for them and no note about why: a control that cannot work is not shown,
+  // A code task's retry and reassign need a GitHub App to read the branch. While the server reports them
+  // unavailable, the owner sees no control for them and no note about why: a control that cannot work is not shown,
   // and how the server is built is not the owner's concern.
   const retryHidden = view.actions.retry?.reason === 'handoff_unavailable';
   const reassignHidden = view.actions.reassign?.reason === 'handoff_unavailable';

@@ -19,12 +19,11 @@ import (
 // maxContinuationReport bounds the predecessor's report quoted in a successor's brief, in runes.
 const maxContinuationReport = 4000
 
-// handoff shapes a retry or reassign, under the task lock. A code task's is recorded blocked with
-// reason handoff_unavailable: its successor would need the branch's pushed head, which is not
-// built yet. A coordination task's moves the task to waiting/handoff and, when its attempt is
-// still running, drains that attempt in this transaction, so the old agent loses MCP before the
-// request returns. The operation then stops it, fences it and makes the successor; see
-// [Service.driveHandoff].
+// handoff shapes a retry or reassign, under the task lock. It moves the task to waiting/handoff
+// and, when its attempt is still running, drains that attempt in this transaction, so the old agent
+// loses MCP before the request returns. The operation then stops it, fences it and makes the
+// successor; see [Service.driveHandoff]. Without [Service.CodeHandoff] a code task's is recorded
+// blocked with reason handoff_unavailable: nothing could read where its successor starts.
 func (s *Service) handoff(ctx context.Context, q *dbq.Queries, p Principal, t dbq.Task, kind dbstate.TaskOpKind, in ActionInput, op *dbq.InsertTaskOperationParams) (dbq.Task, []events.Draft, error) {
 	if t.Status == dbstate.TaskCancelled || t.Status == dbstate.TaskCompleted {
 		return t, nil, refusal(409, ReasonTaskTerminal)
@@ -34,7 +33,7 @@ func (s *Service) handoff(ctx context.Context, q *dbq.Queries, p Principal, t db
 			return t, nil, err
 		}
 	}
-	if t.Mode == dbstate.TaskModeCode {
+	if t.Mode == dbstate.TaskModeCode && !s.CodeHandoff {
 		if TaskFinal(t.Status) {
 			return t, nil, refusal(409, ReasonTaskTerminal)
 		}
@@ -133,6 +132,7 @@ func (s *Service) checkTarget(t dbq.Task, target string) error {
 // driveHandoff runs a retry or reassign: stop the source attempt and wait for the observer to
 // confirm it, then fence it and make the successor in one transaction, then provision the successor
 // and send it its brief, as a create does. A source that had already ended skips to the successor.
+// A code task's successor first reads the task branch's head on origin (checkpoint_required).
 func (s *Service) driveHandoff(ctx context.Context, c reconcile.Claim, op dbq.TaskOperation) (reconcile.Outcome, error) {
 	if op.SourceAttemptID == nil {
 		return reconcile.Done(string(dbstate.TaskOpBlocked)), nil
@@ -156,6 +156,8 @@ func (s *Service) driveHandoff(ctx context.Context, c reconcile.Claim, op dbq.Ta
 		_, err = s.fence(ctx, src, func(q *dbq.Queries) ([]events.Draft, error) {
 			return s.successor(ctx, q, c, op)
 		})
+	case dbstate.TaskOpCheckpointRequired:
+		return s.checkpoint(ctx, c, op)
 	case dbstate.TaskOpTargetCreating:
 		return s.createRuntime(ctx, c, op)
 	case dbstate.TaskOpTargetReady:
@@ -175,7 +177,8 @@ func (s *Service) driveHandoff(ctx context.Context, c reconcile.Claim, op dbq.Ta
 
 // successor makes the attempt that replaces the operation's source, in the caller's transaction:
 // it links the source to it (a fenced source becomes superseded), makes it the task's current
-// attempt and moves the operation to target_creating. A task that ended or moved to another attempt
+// attempt and moves the operation to target_creating, or checkpoint_required for a code task. The
+// source's writer claim on the branch was released by its fence, so a code successor takes it. A task that ended or moved to another attempt
 // meanwhile (a cancel won) blocks the operation instead, and its own settlement ends the source.
 func (s *Service) successor(ctx context.Context, q *dbq.Queries, c reconcile.Claim, op dbq.TaskOperation) ([]events.Draft, error) {
 	t, err := q.GetTaskByIDForUpdate(ctx, *op.TaskID)
@@ -236,7 +239,11 @@ func (s *Service) successor(ctx context.Context, q *dbq.Queries, c reconcile.Cla
 	if err != nil {
 		return nil, err
 	}
-	return []events.Draft{s.updated(after)}, advance(ctx, q, c, op, dbstate.TaskOpTargetCreating, nil, &att.ID)
+	next := dbstate.TaskOpTargetCreating
+	if t.Mode == dbstate.TaskModeCode {
+		next = dbstate.TaskOpCheckpointRequired
+	}
+	return []events.Draft{s.updated(after)}, advance(ctx, q, c, op, next, nil, &att.ID)
 }
 
 // reassignTarget reads the provider a reassign names from its recorded request.
@@ -254,9 +261,10 @@ func reassignTarget(op dbq.TaskOperation) (string, error) {
 }
 
 // continuation is the part of a successor's brief that says what came before: which attempt it
-// replaces, why, and that attempt's last report. It reads only rows that no longer change once the
-// predecessor is fenced, so a resend of the brief carries the same text.
-func continuation(ctx context.Context, q *dbq.Queries, a dbq.TaskAttempt) (string, error) {
+// replaces, why, where a code successor's workspace starts, and that attempt's last report. It
+// reads only rows that no longer change once the successor's workspace is made, so a resend of the
+// brief carries the same text.
+func continuation(ctx context.Context, q *dbq.Queries, a dbq.TaskAttempt, t dbq.Task) (string, error) {
 	if a.PredecessorID == nil {
 		return "", nil
 	}
@@ -273,8 +281,15 @@ func continuation(ctx context.Context, q *dbq.Queries, a dbq.TaskAttempt) (strin
 	}
 	fmt.Fprintf(&b, "Attempt %d was stopped and you are attempt %d, in a new session: you do not have its context. "+
 		"It may have done part of the work, so check what exists before redoing it.", prev.Number, a.Number)
-	if prev.Role == dbstate.AttemptSupervisor {
+	if t.Mode == dbstate.TaskModeCoordination && prev.Role == dbstate.AttemptSupervisor {
 		b.WriteString(" Child tasks it had open were cancelled with it; `task_list` shows them.")
+	}
+	if t.Mode == dbstate.TaskModeCode {
+		note, err := codeStart(ctx, q, a, prev, t)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString("\n\n" + note)
 	}
 	rep, err := q.LatestAttemptReport(ctx, prev.ID)
 	switch {
@@ -290,4 +305,30 @@ func continuation(ctx context.Context, q *dbq.Queries, a dbq.TaskAttempt) (strin
 		fmt.Fprintf(&b, "\n\nIts last report (%s):\n%s", rep.Outcome, summary)
 	}
 	return b.String(), nil
+}
+
+// codeStart says where a code successor's workspace starts: the head of the task branch on origin,
+// with what the predecessor pushed, or the base when the branch was never pushed.
+func codeStart(ctx context.Context, q *dbq.Queries, a, prev dbq.TaskAttempt, t dbq.Task) (string, error) {
+	ref, err := q.GetHandoffCheckpoint(ctx, &a.ID)
+	if err != nil {
+		return "", err
+	}
+	branch, sha := "", ""
+	if t.CheckoutBranch != nil {
+		branch = *t.CheckoutBranch
+	}
+	if a.InitialRef != nil {
+		sha = *a.InitialRef
+	}
+	if ref != nil && *ref == "refs/heads/"+branch {
+		return fmt.Sprintf("Your workspace starts at %s, the head of branch `%s` on origin: it has what attempt %d pushed, "+
+			"and nothing it did not push. If the branch has a pull request, keep working on that one.", sha, branch, prev.Number), nil
+	}
+	base := "the repository's default branch"
+	if ref != nil && *ref != defaultBranchRef {
+		base = "`" + *ref + "`"
+	}
+	return fmt.Sprintf("Attempt %d never pushed branch `%s`, so none of its work is in your workspace: it starts at %s, "+
+		"the head of %s. Push your work to `%s` as usual.", prev.Number, branch, sha, base, branch), nil
 }

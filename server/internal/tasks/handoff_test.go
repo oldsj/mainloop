@@ -95,7 +95,12 @@ func TestRetryReplacesTheAttempt(t *testing.T) {
 		}
 	}
 
-	// The successor works like any attempt: it reports and the task completes.
+	// The successor works like any attempt: it reports and the task completes. The cancelled child
+	// gives its slot up once its own cancel settles; until then the supervisor has a live child.
+	r.eventually("child settled", func() bool {
+		r.sweep(r.svc.SettleSweep())
+		return r.count(`SELECT count(*) FROM task_attempts WHERE task_id = $1 AND capacity_held`, child) == 0
+	})
 	next := r.agent(dbstate.RoleSupervisor, newSession)
 	if _, err := r.svc.Report(context.Background(), next, report(next, "done", dbstate.OutcomeCompleted)); err != nil {
 		t.Fatal(err)

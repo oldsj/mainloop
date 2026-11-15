@@ -511,8 +511,9 @@ func TestActionsRefuseStaleViews(t *testing.T) {
 	}
 }
 
-// A code task's retry and reassign wait for the branch handoff: the operation is recorded blocked.
-func TestCodeRetryAndReassignAreBlocked(t *testing.T) {
+// Without a GitHub App nothing can read where a code successor would start, so a code task's retry
+// and reassign are recorded blocked with reason handoff_unavailable.
+func TestCodeRetryWithoutGitHubIsBlocked(t *testing.T) {
 	e := newEnv(t)
 	id := e.codeTask()
 	for _, kind := range []string{"retry", "reassign"} {

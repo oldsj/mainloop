@@ -33,6 +33,8 @@ type fakeWorkspaces struct {
 	// made and removed are the workspace ids created and deleted.
 	made, removed []string
 	requests      []string
+	// refs is the checkout ref of each workspace made, in order.
+	refs []string
 	// crash makes the next creates write their rows and then fail, as a process dying before it
 	// could record the answer would.
 	crash int
@@ -111,6 +113,11 @@ func (f *fakeWorkspaces) CreateWithRequestID(ctx context.Context, requestID stri
 		return api.WorkspaceLifecycle{}, err
 	}
 	f.made = append(f.made, id)
+	ref := ""
+	if body.Ref != nil {
+		ref = *body.Ref
+	}
+	f.refs = append(f.refs, ref)
 	if f.crash > 0 {
 		f.crash--
 		return api.WorkspaceLifecycle{}, errors.New("connection lost")
