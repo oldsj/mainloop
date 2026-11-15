@@ -35,6 +35,8 @@ export interface MainThreadHeaderProps {
   live?: { status: LiveStatus; controls: ReactNode };
   /** Main's loops with their controls, shown in the details; the count of live ones is in the row. */
   loops?: { live: number; list: ReactNode };
+  /** The "dotfiles changed" hint and its Refresh, shown under the row; it renders nothing otherwise. */
+  dotfiles?: ReactNode;
 }
 
 /** The main provider's status row: the confirmed provider, the status, retry/restart and any notice. The choice itself is in the session controls by the composer. */
@@ -119,7 +121,8 @@ export function MainThreadHeader({
   renderIdentity,
   provider,
   live,
-  loops
+  loops,
+  dotfiles
 }: MainThreadHeaderProps) {
   const [open, setOpen] = useState(false);
   const { native } = info;
@@ -204,6 +207,8 @@ export function MainThreadHeader({
       {provider && providerInline ? (
         <ProviderRow info={info} offline={offline} provider={provider} />
       ) : null}
+
+      {dotfiles}
 
       {open ? (
         <div id="main-thread-details" className="border-border-subtle border-t">

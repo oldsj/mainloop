@@ -2,9 +2,9 @@
 
 Status: the source configuration; pinning, export and recording per Session; delivery to kagent
 with the read-only layout; and the explicit refresh of a running Session with its "dotfiles
-changed" hint are **implemented** for [#313](https://github.com/oldsj/mainloop/issues/313), tested
-with fakes and not yet proven live. The web control for the refresh and following the source
-automatically are **proposed**. Each section says which. See
+changed" hint, in the API and the web, are **implemented** for
+[#313](https://github.com/oldsj/mainloop/issues/313), tested with fakes and not yet proven live.
+Following the source automatically is **proposed**. Each section says which. See
 [ROADMAP.md](../../ROADMAP.md#agent-context) for how this fits the "Agent context" direction.
 
 Agents in Mainloop start without the owner's standing context: no owner-level instructions,
@@ -196,9 +196,25 @@ resumes the conversation. Codex and the Claude process driver start their CLI pe
 failed refresh's bundle can be downloaded by the session (it is pinned to it), but the session only
 shows it once applied. A fork records its source's latest applied pin.
 
+The web shows the hint under the main thread's header and under a session page's header, live
+or not, only while the session is `refreshable` and `behind` or its latest refresh is pending:
+
+- `dotfiles changed: <held commit> → <source commit>`, with a `diff` link to GitHub's comparison of
+  the two when both are in one repository. A session that holds another repository or directory
+  names both in full; one created without dotfiles reads `dotfiles available: <source>`.
+- A Refresh button. Each refresh the owner asks for has one request id, kept until the server
+  answers: retrying after a `502` or a lost reply repeats it, so the server continues the same
+  refresh. A pending refresh reads `refresh not confirmed yet` and offers Retry refresh.
+- A failed refresh of the source's current commit gives its reason (for `no_bundle`, the pin's own
+  `status` and `reason`). An older failure is not shown.
+- An applied refresh reads `dotfiles refreshed to <commit>; the next turn reads them`. A `409`
+  shows the server's reason; other errors add "Try again."
+
+The page reads `GET /sessions/{session_id}/dotfiles` once a minute while it is visible, and every
+ten seconds while a refresh is pending.
+
 Proposed: following the source automatically, if chosen, is a setting that calls the same refresh
-between turns when `behind`; it needs no other mechanism. The web shows the hint and the Refresh
-control in a follow-up.
+between turns when `behind`; it needs no other mechanism.
 
 ## Implemented: failures
 

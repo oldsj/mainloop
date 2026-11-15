@@ -169,6 +169,15 @@ export const baseHandlers = [
  */
 export const testChat = createChatBackend({});
 
+/** A session with no dotfiles recorded, no source and nothing to refresh. */
+export const noSessionDotfiles: Schemas['SessionDotfilesInfo'] = {
+  current: null,
+  source: null,
+  behind: false,
+  refreshable: false,
+  refresh: null
+};
+
 /**
  * `GET` and `PUT /dotfiles` and `/projects/{id}/dotfiles`, kept in memory with the server's
  * compare-and-swap: a stale `expected_version` is `409`, clearing drops ref and path.
@@ -177,11 +186,14 @@ export function dotfilesHandlers(
   initial: {
     owner?: Schemas['DotfilesSource'];
     projects?: Record<string, Schemas['DotfilesSource']>;
+    /** Per session id; any other session has `noSessionDotfiles`. */
+    sessions?: Record<string, Schemas['SessionDotfilesInfo']>;
   } = {}
 ) {
   const none: Schemas['DotfilesSource'] = { repository: null, ref: '', path: '', version: 0 };
   let owner = initial.owner ?? none;
   const projects = new Map(Object.entries(initial.projects ?? {}));
+  const sessions = new Map(Object.entries(initial.sessions ?? {}));
   const write = (current: Schemas['DotfilesSource'], body: Schemas['DotfilesSourceUpdate']) => {
     if (body.expected_version !== current.version) return null;
     const set = body.repository !== null;
@@ -214,6 +226,37 @@ export function dotfilesHandlers(
       if (!next) return stale();
       projects.set(id, next);
       return HttpResponse.json(next);
+    }),
+    http.get(url('/sessions/:session_id/dotfiles'), ({ params }) =>
+      HttpResponse.json(sessions.get(String(params.session_id)) ?? noSessionDotfiles)
+    ),
+    // A refresh applies the source's commit, as the server does once kagent holds it.
+    http.post(url('/sessions/:session_id/dotfiles/refresh'), async ({ params, request }) => {
+      const id = String(params.session_id);
+      const info = sessions.get(id) ?? noSessionDotfiles;
+      const source = info.source;
+      if (!info.refreshable || !source?.commit) {
+        return HttpResponse.json({ detail: 'Nothing to refresh' }, { status: 409 });
+      }
+      const body = (await request.json()) as Schemas['SessionDotfilesRefreshRequest'];
+      const pin: Schemas['SessionDotfiles'] = {
+        status: 'ready',
+        reason: '',
+        repository: source.repository,
+        ref: source.ref,
+        path: source.path,
+        commit: source.commit,
+        digest: `sha256:${'0'.repeat(64)}`
+      };
+      const refresh: Schemas['SessionDotfilesRefresh'] = {
+        id: body.request_id,
+        state: 'applied',
+        reason: '',
+        dotfiles: pin,
+        created_at: new Date().toISOString()
+      };
+      sessions.set(id, { ...info, current: pin, behind: false, refresh });
+      return HttpResponse.json(refresh);
     })
   ];
 }

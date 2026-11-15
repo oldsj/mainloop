@@ -7,7 +7,7 @@ import { API_URL } from '@/api/config';
 import { createSseApplier } from '@/api/invalidation';
 import { keys } from '@/api';
 import type { RefusalCode } from '@/api/errors';
-import { sessionDefaultsHandlers } from '@/test/msw/handlers';
+import { dotfilesHandlers, sessionDefaultsHandlers } from '@/test/msw/handlers';
 import { server } from '@/test/msw/server';
 import { createFakeRunner } from '@/features/live/fakeRunner';
 import { SessionChatSlot } from '@/features/sessions/SessionChatSlot';
@@ -106,6 +106,49 @@ describe('loading', () => {
     expect(await screen.findByText('build it')).toBeInTheDocument();
     expect(screen.getByText('On it.')).toBeInTheDocument();
     expect(screen.getByTestId('session-controls')).toHaveTextContent('Claude · sonnet-5-5');
+  });
+
+  it('shows in the header that the dotfiles changed, and refreshes the main session', async () => {
+    const held = 'a1b2c3d'.padEnd(40, '0');
+    const now = 'e4f5a6b'.padEnd(40, '0');
+    server.use(
+      ...dotfilesHandlers({
+        sessions: {
+          [MAIN_SESSION_ID]: {
+            current: {
+              status: 'ready',
+              reason: '',
+              repository: 'example/dotfiles',
+              ref: 'main',
+              path: '',
+              commit: held,
+              digest: `sha256:${'ab'.repeat(32)}`
+            },
+            source: {
+              repository: 'example/dotfiles',
+              ref: 'main',
+              path: '',
+              commit: now,
+              reason: ''
+            },
+            behind: true,
+            refreshable: true,
+            refresh: null
+          }
+        }
+      })
+    );
+    const user = userEvent.setup();
+    setup(existing());
+
+    const header = await screen.findByTestId('main-thread-header');
+    expect(await within(header).findByTestId('dotfiles-change')).toHaveTextContent(
+      'dotfiles changed: a1b2c3d → e4f5a6b'
+    );
+    await user.click(within(header).getByRole('button', { name: 'Refresh' }));
+    expect(await within(header).findByTestId('dotfiles-done')).toHaveTextContent(
+      'dotfiles refreshed to e4f5a6b; the next turn reads them'
+    );
   });
 
   it('offers a reload when the thread cannot be read', async () => {

@@ -16,6 +16,7 @@ import { SessionRequests } from '@/features/chat/SessionRequests';
 import { useSessionRequests } from '@/features/hitl/session-requests';
 import { runNotes, useRunDefaults } from '@/features/chat/runDefaults';
 import { LiveSession, liveForced, type LiveNotes } from '@/features/live';
+import { DotfilesRefresh } from '@/features/dotfiles/DotfilesRefresh';
 import { IdentityStrip } from './IdentityStrip';
 import {
   actionFailure,
@@ -243,6 +244,11 @@ export function SessionPage({ id }: { id: string }) {
           <p className="text-muted-foreground text-sm break-words">{session.description}</p>
         ) : null}
       </header>
+
+      {/* Shown live and not: only a session whose source moved on and that a refresh applies to. */}
+      <PanelBoundary name="Dotfiles">
+        <DotfilesRefresh sessionId={session.id} />
+      </PanelBoundary>
 
       {live ? (
         <PanelBoundary name="Live session">
