@@ -47,6 +47,8 @@ tags:
     description: The agent dotfiles source, owner-wide and per project.
   - name: devloop
     description: The one live-sync lease on the shared mainloop-dev instance.
+  - name: transcripts
+    description: Stored session transcripts and their search.
 paths:
   /activity:
     get:
@@ -3797,6 +3799,78 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /sessions/{session_id}/transcript:
+    get:
+      tags:
+        - transcripts
+      summary: Get Session Transcript
+      description: >-
+        A session's stored transcript entries in the order they were copied, after an entry id, with
+        how far copying has got. Once the page reaches the last stored entry, the response also
+        carries a live tail: the turns kagent has not finished or Mainloop has not copied yet, read
+        through kagent's control plane, redacted and capped the same way, and not stored.
+      operationId: getSessionTranscript
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+        - name: after
+          in: query
+          required: false
+          description: Return entries after this entry id; 0 starts from the beginning.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            default: 0
+            title: After
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 200
+            title: Limit
+        - name: live
+          in: query
+          required: false
+          description: Read the live tail from kagent when the page reaches the end.
+          schema:
+            type: boolean
+            default: true
+            title: Live
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTranscript'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /sessions/{session_id}/hitl:
     get:
       tags:
@@ -5785,6 +5859,73 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+  /transcripts/search:
+    get:
+      tags:
+        - transcripts
+      summary: Search Transcripts
+      description: >-
+        Full-text search over the owner's stored transcript entries, best match first. Credentials
+        were redacted before entries were stored and indexed, so they are never found.
+      operationId: searchTranscripts
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: A web-search style query (quoted phrases, `or`, `-word`).
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+            title: Q
+        - name: project_id
+          in: query
+          required: false
+          schema:
+            type: string
+            title: Project Id
+        - name: session_id
+          in: query
+          required: false
+          schema:
+            type: string
+            title: Session Id
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+            title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscriptSearchResults'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   securitySchemes:
     pocketId:
@@ -12943,6 +13084,207 @@ components:
         - $ref: '#/components/schemas/HealthTurnEvent'
         - $ref: '#/components/schemas/HealthToolEvent'
         - $ref: '#/components/schemas/HealthUsageEvent'
+    TranscriptEntryKind:
+      type: string
+      enum:
+        - user
+        - assistant
+        - thinking
+        - tool_call
+        - tool_result
+        - status
+        - ask
+        - other
+      description: What a transcript entry records (docs/specs/transcripts.md).
+    TranscriptEntry:
+      type: object
+      properties:
+        id:
+          anyOf:
+            - type: integer
+              format: int64
+            - type: 'null'
+          description: The stored entry's id, the `after` cursor; null for a live entry.
+        task_id:
+          type: string
+          description: The A2A task (one turn) the entry belongs to.
+        pos:
+          type: integer
+          minimum: 0
+          description: The entry's position within its task.
+        kind:
+          $ref: '#/components/schemas/TranscriptEntryKind'
+        tool_name:
+          type: string
+        tool_call_id:
+          type: string
+        is_error:
+          type: boolean
+        text:
+          type: string
+          description: Redacted, and cut to the entry's size limit; empty past the session's budget.
+        truncated:
+          type: boolean
+          description: The text was cut, withheld, or dropped past the budget.
+        orig_bytes:
+          type: integer
+          minimum: 0
+          description: The text's size before it was cut or withheld.
+        at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        live:
+          type: boolean
+          description: Read from kagent for this response and not stored.
+      required:
+        - id
+        - task_id
+        - pos
+        - kind
+        - tool_name
+        - tool_call_id
+        - is_error
+        - text
+        - truncated
+        - orig_bytes
+        - at
+        - live
+      additionalProperties: false
+    TranscriptSource:
+      type: object
+      description: One kagent Session the session's transcript is copied from.
+      properties:
+        state:
+          type: string
+          enum:
+            - active
+            - complete
+            - unavailable
+        reason:
+          type: string
+          description: Why an unavailable source stopped being copied.
+        scanned_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        stored_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - state
+        - reason
+        - scanned_at
+        - stored_bytes
+        - created_at
+      additionalProperties: false
+    SessionTranscript:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/TranscriptEntry'
+          maxItems: 500
+        has_more:
+          type: boolean
+          description: Stored entries follow the last one returned.
+        sources:
+          type: array
+          description: The kagent Sessions copied from, newest first.
+          items:
+            $ref: '#/components/schemas/TranscriptSource'
+          maxItems: 50
+        live:
+          type: array
+          description: The live tail, empty unless the page reached the last stored entry.
+          items:
+            $ref: '#/components/schemas/TranscriptEntry'
+          maxItems: 500
+        live_error:
+          anyOf:
+            - type: string
+            - type: 'null'
+          description: Why the live tail could not be read.
+      required:
+        - entries
+        - has_more
+        - sources
+        - live
+        - live_error
+      additionalProperties: false
+    TranscriptSnippetPart:
+      type: object
+      properties:
+        text:
+          type: string
+        match:
+          type: boolean
+      required:
+        - text
+        - match
+      additionalProperties: false
+    TranscriptSearchHit:
+      type: object
+      properties:
+        entry_id:
+          type: integer
+          format: int64
+        session_id:
+          type: string
+        session_title:
+          type: string
+        task_id:
+          type: string
+        pos:
+          type: integer
+          minimum: 0
+        kind:
+          $ref: '#/components/schemas/TranscriptEntryKind'
+        tool_name:
+          type: string
+        at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        rank:
+          type: number
+        snippet:
+          type: array
+          description: The matching passage as plain text, split into matched and unmatched parts.
+          items:
+            $ref: '#/components/schemas/TranscriptSnippetPart'
+          maxItems: 64
+      required:
+        - entry_id
+        - session_id
+        - session_title
+        - task_id
+        - pos
+        - kind
+        - tool_name
+        - at
+        - rank
+        - snippet
+      additionalProperties: false
+    TranscriptSearchResults:
+      type: object
+      properties:
+        hits:
+          type: array
+          items:
+            $ref: '#/components/schemas/TranscriptSearchHit'
+          maxItems: 100
+      required:
+        - hits
+      additionalProperties: false
     HITLContext:
       type: object
       properties:

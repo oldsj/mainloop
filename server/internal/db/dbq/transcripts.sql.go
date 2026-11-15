@@ -339,6 +339,107 @@ func (q *Queries) ListTranscriptBindingsToAdopt(ctx context.Context, arg ListTra
 	return items, nil
 }
 
+const listTranscriptEntries = `-- name: ListTranscriptEntries :many
+SELECT id, task_id, pos, kind, tool_name, tool_call_id, is_error, text, truncated, orig_bytes, at
+FROM transcript_entries
+WHERE session_id = $1 AND id > $2
+ORDER BY id
+LIMIT $3
+`
+
+type ListTranscriptEntriesParams struct {
+	SessionID string
+	AfterID   int64
+	MaxRows   int32
+}
+
+type ListTranscriptEntriesRow struct {
+	ID         int64
+	TaskID     string
+	Pos        int32
+	Kind       string
+	ToolName   string
+	ToolCallID string
+	IsError    bool
+	Text       string
+	Truncated  bool
+	OrigBytes  int32
+	At         *time.Time
+}
+
+// A session's stored entries after an id, in the order they were copied.
+func (q *Queries) ListTranscriptEntries(ctx context.Context, arg ListTranscriptEntriesParams) ([]ListTranscriptEntriesRow, error) {
+	rows, err := q.db.Query(ctx, listTranscriptEntries, arg.SessionID, arg.AfterID, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTranscriptEntriesRow{}
+	for rows.Next() {
+		var i ListTranscriptEntriesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.Pos,
+			&i.Kind,
+			&i.ToolName,
+			&i.ToolCallID,
+			&i.IsError,
+			&i.Text,
+			&i.Truncated,
+			&i.OrigBytes,
+			&i.At,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTranscriptSources = `-- name: ListTranscriptSources :many
+SELECT kagent_session_id, session_id, owner_id, agent_namespace, agent_name, context_id, task_cursor, state, reason, stored_bytes, failures, next_scan_at, scanned_at, created_at, updated_at FROM transcript_sessions WHERE session_id = $1 ORDER BY created_at DESC, kagent_session_id LIMIT 50
+`
+
+func (q *Queries) ListTranscriptSources(ctx context.Context, sessionID string) ([]TranscriptSession, error) {
+	rows, err := q.db.Query(ctx, listTranscriptSources, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TranscriptSession{}
+	for rows.Next() {
+		var i TranscriptSession
+		if err := rows.Scan(
+			&i.KagentSessionID,
+			&i.SessionID,
+			&i.OwnerID,
+			&i.AgentNamespace,
+			&i.AgentName,
+			&i.ContextID,
+			&i.TaskCursor,
+			&i.State,
+			&i.Reason,
+			&i.StoredBytes,
+			&i.Failures,
+			&i.NextScanAt,
+			&i.ScannedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const nudgeTranscriptSession = `-- name: NudgeTranscriptSession :exec
 UPDATE transcript_sessions SET next_scan_at = now()
 WHERE kagent_session_id = $1 AND state = 'active' AND next_scan_at > now()
@@ -379,44 +480,51 @@ func (q *Queries) PruneTranscriptTasks(ctx context.Context, arg PruneTranscriptT
 }
 
 const searchTranscripts = `-- name: SearchTranscripts :many
-SELECT e.id, e.session_id, e.task_id, e.pos, e.kind, e.tool_name, e.at,
-       ts_headline('english', e.text, q, 'MaxFragments=2, MaxWords=24, MinWords=8')::text AS snippet,
+SELECT e.id, e.session_id, s.title AS session_title, e.task_id, e.pos, e.kind, e.tool_name, e.at,
+       ts_headline('english', e.text, q,
+           'MaxFragments=2, MaxWords=24, MinWords=8, FragmentDelimiter=" … ", StartSel=' || chr(2) || ', StopSel=' || chr(3))::text AS snippet,
        ts_rank(e.tsv, q)::real AS rank
 FROM transcript_entries e
 JOIN sessions s ON s.id = e.session_id,
      websearch_to_tsquery('english', $1::text) AS q
 WHERE s.user_id = $2 AND e.tsv @@ q
   AND ($3::text IS NULL OR e.session_id = $3)
+  AND ($4::text IS NULL OR s.project_id = $4)
 ORDER BY rank DESC, e.id DESC
-LIMIT $4
+LIMIT $5
 `
 
 type SearchTranscriptsParams struct {
 	Query      string
 	OwnerID    string
 	SessionID  *string
+	ProjectID  *string
 	MaxResults int32
 }
 
 type SearchTranscriptsRow struct {
-	ID        int64
-	SessionID string
-	TaskID    string
-	Pos       int32
-	Kind      string
-	ToolName  string
-	At        *time.Time
-	Snippet   string
-	Rank      float32
+	ID           int64
+	SessionID    string
+	SessionTitle string
+	TaskID       string
+	Pos          int32
+	Kind         string
+	ToolName     string
+	At           *time.Time
+	Snippet      string
+	Rank         float32
 }
 
 // The owner's entries that match a web-search style query, best first. The vector is built from the
 // stored text, which was redacted before it was written.
+// Matches are marked with U+0002 and U+0003, not HTML: the text is not escaped, and the API splits
+// the snippet at the marks.
 func (q *Queries) SearchTranscripts(ctx context.Context, arg SearchTranscriptsParams) ([]SearchTranscriptsRow, error) {
 	rows, err := q.db.Query(ctx, searchTranscripts,
 		arg.Query,
 		arg.OwnerID,
 		arg.SessionID,
+		arg.ProjectID,
 		arg.MaxResults,
 	)
 	if err != nil {
@@ -429,6 +537,7 @@ func (q *Queries) SearchTranscripts(ctx context.Context, arg SearchTranscriptsPa
 		if err := rows.Scan(
 			&i.ID,
 			&i.SessionID,
+			&i.SessionTitle,
 			&i.TaskID,
 			&i.Pos,
 			&i.Kind,
@@ -476,4 +585,20 @@ func (q *Queries) TranscriptSessionBytes(ctx context.Context, kagentSessionID st
 	var stored_bytes int64
 	err := row.Scan(&stored_bytes)
 	return stored_bytes, err
+}
+
+const transcriptSessionOwned = `-- name: TranscriptSessionOwned :one
+SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1 AND user_id = $2)
+`
+
+type TranscriptSessionOwnedParams struct {
+	ID     string
+	UserID string
+}
+
+func (q *Queries) TranscriptSessionOwned(ctx context.Context, arg TranscriptSessionOwnedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, transcriptSessionOwned, arg.ID, arg.UserID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }

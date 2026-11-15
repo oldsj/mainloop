@@ -19,6 +19,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/schedules"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/tasks"
+	"github.com/oldsj/mainloop/server/internal/transcripts"
 )
 
 type options struct {
@@ -68,6 +69,8 @@ func Deps(t testing.TB, cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool
 		Attention: attn,
 		Health:    healthSvc,
 		Schedules: schedules.NewService(cfg, pool, nil, reg, log),
+		// No kagent: a transcript read serves stored entries; the live tail needs a followed session.
+		Transcripts: transcripts.NewService(cfg, pool, nil, sessSvc, log),
 	}
 	if pool != nil {
 		var topts []tasks.Option

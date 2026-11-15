@@ -31,6 +31,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/schedules"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/tasks"
+	"github.com/oldsj/mainloop/server/internal/transcripts"
 	"github.com/oldsj/mainloop/server/internal/workspaces"
 )
 
@@ -62,6 +63,7 @@ type Server struct {
 	*merge.MergeAPI
 	*devloop.DevloopAPI
 	*dotfiles.DotfilesAPI
+	*transcripts.TranscriptsAPI
 
 	fallback
 
@@ -85,7 +87,7 @@ type Deps struct {
 	Registry environments.RegistryClient
 
 	// Everything below is built by the caller with the services' own constructors, once per process.
-	// Providers, Projects, Sessions, HITL, Attention, Health and Schedules are required; New does not
+	// Providers, Projects, Sessions, HITL, Attention, Health, Schedules and Transcripts are required; New does not
 	// build a stand-in for a missing one.
 
 	// Providers is the provider registry behind the provider routes and task profiles.
@@ -111,6 +113,8 @@ type Deps struct {
 	Health *health.Service
 	// Schedules serves scheduled runs; its routes answer 503 when it has no kagent client.
 	Schedules *schedules.Service
+	// Transcripts serves stored session transcripts and their search.
+	Transcripts *transcripts.Service
 	// Merge serves the owner's read of a merge proposal's details. Nil answers that route with 503.
 	Merge *merge.Service
 	// Devloop serves the owner's view of the mainloop-dev lease. Nil answers those routes with 501
@@ -137,6 +141,7 @@ func (d Deps) missing() error {
 	}{
 		{"Providers", d.Providers == nil}, {"Projects", d.Projects == nil}, {"Sessions", d.Sessions == nil},
 		{"HITL", d.HITL == nil}, {"Attention", d.Attention == nil}, {"Health", d.Health == nil}, {"Schedules", d.Schedules == nil},
+		{"Transcripts", d.Transcripts == nil},
 	} {
 		if r.absent {
 			names = append(names, r.name)
@@ -172,6 +177,7 @@ func New(d Deps) *Server {
 		MergeAPI:        &merge.MergeAPI{Svc: d.Merge, OwnerID: d.Config.Identity.OwnerID},
 		DevloopAPI:      devloop.NewAPI(d.Devloop),
 		DotfilesAPI:     dotfiles.NewAPI(d.Pool, d.Config.Identity.OwnerID),
+		TranscriptsAPI:  transcripts.NewAPI(d.Transcripts),
 		deps:            d,
 	}
 }
