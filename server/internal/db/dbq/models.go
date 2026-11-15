@@ -924,7 +924,7 @@ type TaskAttempt struct {
 
 type TaskEventDelivery struct {
 	ID              string
-	ReportID        string
+	ReportID        *string
 	RecipientKey    string
 	TargetAttemptID *string
 	DeliveryID      *string
@@ -935,6 +935,44 @@ type TaskEventDelivery struct {
 	LeaseOwner      *string
 	LeaseUntil      *time.Time
 	UpdatedAt       time.Time
+	LoopFiringID    *string
+}
+
+type TaskLoop struct {
+	ID                 string
+	OwnerID            string
+	PrincipalKey       string
+	RequestID          string
+	RecipientKey       string
+	SubjectTaskID      *string
+	Trigger            dbstate.LoopTrigger
+	Statuses           []string
+	EverySeconds       *int32
+	Note               string
+	MaxFirings         int32
+	MinIntervalSeconds int32
+	ExpiresAt          time.Time
+	State              dbstate.LoopState
+	Firings            int32
+	Baseline           *string
+	FireAt             *time.Time
+	LastFiredAt        *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	Attempts           int32
+	NextAttemptAt      time.Time
+	LeaseOwner         *string
+	LeaseUntil         *time.Time
+}
+
+type TaskLoopFiring struct {
+	ID        string
+	LoopID    string
+	Number    int32
+	Facts     []string
+	Folded    int32
+	NotBefore time.Time
+	CreatedAt time.Time
 }
 
 type TaskOperation struct {

@@ -153,3 +153,27 @@ const (
 	TaskDeliveryUncertain TaskDeliveryState = "uncertain"
 	TaskDeliveryCancelled TaskDeliveryState = "cancelled"
 )
+
+// LoopState is task_loops.state. Armed is the only live state; the rest are final: done (a one-time
+// timer fired), exhausted (max firings made), expired, stopped (by its recipient or the owner) and
+// ended (its recipient's task ended, or its subject is gone).
+type LoopState string
+
+// Loop states.
+const (
+	LoopArmed     LoopState = "armed"
+	LoopDone      LoopState = "done"
+	LoopExhausted LoopState = "exhausted"
+	LoopExpired   LoopState = "expired"
+	LoopStopped   LoopState = "stopped"
+	LoopEnded     LoopState = "ended"
+)
+
+// LoopTrigger is task_loops.trigger: what makes a loop fire.
+type LoopTrigger string
+
+// Loop triggers.
+const (
+	LoopTriggerTask LoopTrigger = "task"
+	LoopTriggerTime LoopTrigger = "time"
+)

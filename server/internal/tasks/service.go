@@ -104,6 +104,9 @@ type Limits struct {
 	// MaxHandoffs caps the retries and reassigns that main and supervisors may make of one task; the
 	// owner's own are not capped. Zero is no cap.
 	MaxHandoffs int
+	// LoopPoll is how often a task loop looks at its subject when no status change wakes it. Zero
+	// takes the default.
+	LoopPoll time.Duration
 }
 
 func (s *Service) log() *slog.Logger {
@@ -849,7 +852,7 @@ func (s *Service) applyReport(ctx context.Context, q *dbq.Queries, t dbq.Task, i
 	}
 	for _, r := range recipients {
 		id := uuid.NewString()
-		if err := q.InsertTaskEventDelivery(ctx, dbq.InsertTaskEventDeliveryParams{ID: id, ReportID: reportID, RecipientKey: r}); err != nil {
+		if err := q.InsertTaskEventDelivery(ctx, dbq.InsertTaskEventDeliveryParams{ID: id, ReportID: &reportID, RecipientKey: r}); err != nil {
 			return t, report, err
 		}
 		if err := s.notify(ctx, q, EventChannel, id); err != nil {

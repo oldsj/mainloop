@@ -23,8 +23,8 @@ import (
 // read mainloop-dev: each still inserts a devloop_operations row in Mainloop's own database, so
 // they are write cases too.
 var readOnlyTools = []string{
-	"check_status", "get_issue", "get_pull_request_merge_status", "list_dependabot_alerts", "task_get", "task_history",
-	"project_context", "task_list", "topics", "whoami",
+	"check_status", "get_issue", "get_pull_request_merge_status", "list_dependabot_alerts", "loop_list", "task_get",
+	"task_history", "project_context", "task_list", "topics", "whoami",
 }
 
 // A writeCase calls one write tool with arguments valid enough to reach its write. prepare runs
@@ -174,6 +174,16 @@ var writeCases = []writeCase{
 			made := setupCall(t, h, a, "delegate", map[string]any{"request_id": "live", "title": "Plan", "brief": "b", "mode": "coordination"})
 			id, _ := made["task_id"].(string)
 			return map[string]any{"request_id": "dead", "task_id": id, "text": "and the staging cluster?"}
+		}},
+	{tool: "loop_arm", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
+			return map[string]any{"request_id": "dead", "trigger": "time", "after_minutes": 30, "note": "look at prod"}
+		}},
+	{tool: "loop_stop", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(t *testing.T, h *harness, _ *prHarness, a authtest.Seeded) map[string]any {
+			made := setupCall(t, h, a, "loop_arm", map[string]any{"request_id": "live", "trigger": "time", "after_minutes": 30, "note": "n"})
+			id, _ := made["id"].(string)
+			return map[string]any{"loop_id": id}
 		}},
 	{tool: "report", role: dbstate.RoleSupervisor, grant: dbstate.GrantCoordination,
 		prepare: func(t *testing.T, h *harness, _ *prHarness, a authtest.Seeded) map[string]any {

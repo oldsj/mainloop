@@ -59,6 +59,7 @@ func (s *Service) Register(r *reconcile.Runner) {
 	}
 	r.Add(s.OpLoop())
 	r.Add(s.DeliveryLoop())
+	r.Add(s.LoopLoop())
 	r.AddSweep(s.SettleSweep())
 	r.AddSweep(s.CompleteSweep())
 	r.AddSweep(s.BriefSweep())

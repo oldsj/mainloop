@@ -187,6 +187,12 @@ sql:
                 import: github.com/oldsj/mainloop/server/internal/db/dbstate,
                 type: TaskDeliveryState
               }
+          - column: task_loops.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: LoopState }
+          - column: task_loops.trigger
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: LoopTrigger }
           - column: git_enrollments.state
             go_type:
               {

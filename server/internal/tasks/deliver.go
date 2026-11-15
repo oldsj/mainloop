@@ -117,32 +117,76 @@ func (s *Service) prepareBatch(ctx context.Context, c reconcile.Claim, d dbq.Tas
 	return d, err
 }
 
-// batchText is the message for a ledger message id: the text of each report it carries, oldest
-// first. It is read from the rows, not from the claim, so whichever claimer sends the message
-// sends the same text.
-func (s *Service) batchText(ctx context.Context, mid string, own dbq.TaskReport, ownTask dbq.Task, ownAttempt int32) (string, error) {
+// batchText is the message for a ledger message id: the text of each report and loop firing it
+// carries, oldest first. It is read from rows that do not change once they have a message id, not
+// from the claim, so whichever claimer sends the message sends the same text.
+func (s *Service) batchText(ctx context.Context, mid string) (string, error) {
 	q := dbq.New(s.Pool)
-	rs, err := q.ListTaskEventBatch(ctx, &mid)
+	ds, err := q.ListTaskEventBatch(ctx, &mid)
 	if err != nil {
 		return "", err
 	}
-	if len(rs) <= 1 {
-		return reportText(own, ownTask, ownAttempt), nil
+	parts := make([]string, 0, len(ds)+1)
+	reports := 0
+	for _, d := range ds {
+		var text string
+		if d.ReportID != nil {
+			reports++
+			text, err = s.reportItemText(ctx, q, *d.ReportID)
+		} else {
+			text, err = s.firingText(ctx, q, deref(d.LoopFiringID))
+		}
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, text)
 	}
-	parts := make([]string, 0, len(rs)+1)
-	parts = append(parts, fmt.Sprintf("[%d reports]", len(rs)))
-	for _, r := range rs {
-		t, err := q.GetTaskByID(ctx, r.TaskID)
-		if err != nil {
-			return "", err
-		}
-		a, err := q.GetTaskAttempt(ctx, r.AttemptID)
-		if err != nil {
-			return "", err
-		}
-		parts = append(parts, reportText(r, t, a.Number))
+	switch {
+	case len(parts) == 1:
+		return parts[0], nil
+	case reports == len(parts):
+		parts = append([]string{fmt.Sprintf("[%d reports]", len(parts))}, parts...)
+	default:
+		parts = append([]string{fmt.Sprintf("[%d updates]", len(parts))}, parts...)
 	}
 	return strings.Join(parts, "\n\n"), nil
+}
+
+func (s *Service) reportItemText(ctx context.Context, q *dbq.Queries, reportID string) (string, error) {
+	r, err := q.GetTaskReport(ctx, reportID)
+	if err != nil {
+		return "", err
+	}
+	t, err := q.GetTaskByID(ctx, r.TaskID)
+	if err != nil {
+		return "", err
+	}
+	a, err := q.GetTaskAttempt(ctx, r.AttemptID)
+	if err != nil {
+		return "", err
+	}
+	return reportText(r, t, a.Number), nil
+}
+
+// readyAt is when a pending delivery may first be sent: a report after the batch window, a loop
+// firing after the window and its minimum interval.
+func (s *Service) readyAt(ctx context.Context, q *dbq.Queries, d dbq.TaskEventDelivery) (time.Time, error) {
+	if d.ReportID != nil {
+		r, err := q.GetTaskReport(ctx, *d.ReportID)
+		if err != nil {
+			return time.Time{}, err
+		}
+		return r.CreatedAt.Add(s.Limits.ReportBatchWindow), nil
+	}
+	f, err := q.GetLoopFiring(ctx, deref(d.LoopFiringID))
+	if err != nil {
+		return time.Time{}, err
+	}
+	at := f.CreatedAt.Add(s.Limits.ReportBatchWindow)
+	if f.NotBefore.After(at) {
+		at = f.NotBefore
+	}
+	return at, nil
 }
 
 // target resolves where a delivery goes. A parent whose attempt is no longer the active current one
@@ -183,18 +227,6 @@ func (s *Service) target(ctx context.Context, key string) (attemptID *string, se
 // never sends the report twice.
 func (s *Service) sendReport(ctx context.Context, c reconcile.Claim, d dbq.TaskEventDelivery) (reconcile.Outcome, error) {
 	q := dbq.New(s.Pool)
-	r, err := q.GetTaskReport(ctx, d.ReportID)
-	if err != nil {
-		return reconcile.Outcome{}, err
-	}
-	t, err := q.GetTaskByID(ctx, r.TaskID)
-	if err != nil {
-		return reconcile.Outcome{}, err
-	}
-	a, err := q.GetTaskAttempt(ctx, r.AttemptID)
-	if err != nil {
-		return reconcile.Outcome{}, err
-	}
 	attemptID, sessionID, ended, err := s.target(ctx, d.RecipientKey)
 	if err != nil {
 		return reconcile.Outcome{}, err
@@ -208,8 +240,13 @@ func (s *Service) sendReport(ctx context.Context, c reconcile.Claim, d dbq.TaskE
 		}
 		// A report waits while its recipient has an open turn, and for the batch window after it was
 		// made, so the reports that pile up meanwhile go out as one message: one turn, not one each.
-		// It is never steered in; it waits for the turn to end.
-		if wait := s.Limits.ReportBatchWindow - s.now().Sub(r.CreatedAt); wait > 0 {
+		// It is never steered in; it waits for the turn to end. A loop firing waits the same way,
+		// and for its minimum interval.
+		ready, err := s.readyAt(ctx, q, d)
+		if err != nil {
+			return reconcile.Outcome{}, err
+		}
+		if wait := ready.Sub(s.now()); wait > 0 {
 			return reconcile.RetryAfter(wait), nil
 		}
 		busy, err := s.Sessions.HasOpen(ctx, sessionID)
@@ -242,7 +279,7 @@ func (s *Service) sendReport(ctx context.Context, c reconcile.Claim, d dbq.TaskE
 		if ended {
 			return s.setDelivery(ctx, c, dbstate.TaskDeliveryCancelled)
 		}
-		text, err := s.batchText(ctx, mid, r, t, a.Number)
+		text, err := s.batchText(ctx, mid)
 		if err != nil {
 			return reconcile.Outcome{}, err
 		}
@@ -332,9 +369,14 @@ func (s *Service) giveUp(ctx context.Context, c reconcile.Claim, d dbq.TaskEvent
 	if row.Detail != nil {
 		detail = *row.Detail
 	}
+	if d.ReportID == nil {
+		// A loop firing has no task to block: the delivery ends uncertain, which the loop's
+		// firings show.
+		return s.setDelivery(ctx, c, dbstate.TaskDeliveryUncertain)
+	}
 	note := fmt.Sprintf("native-delivery-failed:%s: %s", row.ID, detail)
 	err := s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
-		r, err := q.GetTaskReport(ctx, d.ReportID)
+		r, err := q.GetTaskReport(ctx, *d.ReportID)
 		if err != nil {
 			return nil, err
 		}
