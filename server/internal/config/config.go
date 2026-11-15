@@ -16,21 +16,22 @@ import (
 
 // Config holds every setting. Secret values use the Secret type and never print.
 type Config struct {
-	DB         Database
-	Identity   Identity
-	GitHub     GitHub
-	Kagent     Kagent
-	Tasks      Tasks
-	Workspaces Workspaces
-	Main       MainThread
-	Git        Git
-	Preview    Preview
-	Health     Health
-	Events     Events
-	Sessions   Sessions
-	Server     Server
-	Ntfy       Ntfy
-	Auth       Auth
+	DB          Database
+	Identity    Identity
+	GitHub      GitHub
+	Kagent      Kagent
+	Tasks       Tasks
+	Workspaces  Workspaces
+	Main        MainThread
+	Git         Git
+	Preview     Preview
+	Health      Health
+	Transcripts Transcripts
+	Events      Events
+	Sessions    Sessions
+	Server      Server
+	Ntfy        Ntfy
+	Auth        Auth
 
 	// EnvironmentRegistryAllowlist limits OCI registries for development environments.
 	EnvironmentRegistryAllowlist RegistryAllowlist `env:"ENVIRONMENT_REGISTRY_ALLOWLIST" envDefault:"[\"ghcr.io\"]"`
@@ -200,6 +201,15 @@ type Preview struct {
 	RouterCA       string  `env:"SUBSTRATE_ROUTER_CA" envDefault:"/run/substrate-router/ca/trust-bundle.pem"`
 	BaseURL        string  `env:"SUBSTRATE_PREVIEW_BASE_URL" envDefault:"http://localhost:8001"`
 	ConnectTimeout Seconds `env:"SUBSTRATE_PREVIEW_CONNECT_TIMEOUT_SECONDS" envDefault:"5"`
+}
+
+// Transcripts bounds stored session transcripts (docs/specs/transcripts.md).
+type Transcripts struct {
+	// RetentionDays is how long a copied turn's entries are kept.
+	RetentionDays int `env:"TRANSCRIPT_RETENTION_DAYS" envDefault:"90"`
+	// SessionBudgetMiB bounds the entry text stored for one kagent Session; past it, entries are
+	// stored as stubs without text.
+	SessionBudgetMiB int `env:"TRANSCRIPT_SESSION_BUDGET_MIB" envDefault:"20"`
 }
 
 // Health sets orchestration-health retention.
@@ -480,6 +490,12 @@ func (c *Config) validate() error {
 	}
 	if c.Health.SummaryRetentionDays < c.Health.EventRetentionDays {
 		fail("health summary retention must cover event retention")
+	}
+	if c.Transcripts.RetentionDays < 1 || c.Transcripts.RetentionDays > 3650 {
+		fail("TRANSCRIPT_RETENTION_DAYS must be between 1 and 3650")
+	}
+	if c.Transcripts.SessionBudgetMiB < 1 || c.Transcripts.SessionBudgetMiB > 1024 {
+		fail("TRANSCRIPT_SESSION_BUDGET_MIB must be between 1 and 1024")
 	}
 	if c.Events.RetentionHours < 1 || c.Events.RetentionHours > 720 {
 		fail("MAINLOOP_EVENTS_RETENTION_HOURS must be between 1 and 720")

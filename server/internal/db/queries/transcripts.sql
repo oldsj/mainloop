@@ -40,3 +40,79 @@ WHERE s.user_id = sqlc.arg(owner_id) AND e.tsv @@ q
   AND (sqlc.narg(session_id)::text IS NULL OR e.session_id = sqlc.narg(session_id))
 ORDER BY rank DESC, e.id DESC
 LIMIT sqlc.arg(max_results);
+
+-- name: ListTranscriptBindingsToAdopt :many
+-- The owner's bound kagent Sessions the ingester does not follow yet, with what the sessions package
+-- needs to resolve the Agent that runs each. Archived sessions are included: their last turns are
+-- still copied.
+SELECT b.session_id, b.kagent_session_id, s.user_id, b.kind, b.role,
+       coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
+       coalesce(b.kagent_agent_name, w.agent_name, '') AS resolved_agent_name
+FROM agent_bindings b
+JOIN sessions s ON s.id = b.session_id
+LEFT JOIN workspaces w ON w.id = b.session_id
+WHERE b.kagent_session_id IS NOT NULL AND s.user_id = $1
+  AND NOT EXISTS (SELECT 1 FROM transcript_sessions t WHERE t.kagent_session_id = b.kagent_session_id)
+ORDER BY b.session_id
+LIMIT sqlc.arg(max_rows);
+
+-- name: ListDueTranscriptSessions :many
+SELECT * FROM transcript_sessions
+WHERE owner_id = $1 AND state = 'active' AND next_scan_at <= now()
+ORDER BY next_scan_at, kagent_session_id
+LIMIT sqlc.arg(max_sessions);
+
+-- name: SetTranscriptSessionScan :exec
+-- A pass that read the session without failing: the cursor moves (or stays), the failure backoff
+-- clears and the session rests until it is due again or a finished turn nudges it.
+UPDATE transcript_sessions
+SET task_cursor = sqlc.narg(cursor), scanned_at = now(), failures = 0, updated_at = now(),
+    next_scan_at = now() + make_interval(secs => sqlc.arg(rest_seconds)::float8)
+WHERE kagent_session_id = sqlc.arg(kagent_session_id);
+
+-- name: FailTranscriptSessionScan :exec
+UPDATE transcript_sessions
+SET failures = failures + 1, updated_at = now(),
+    next_scan_at = now() + make_interval(secs => sqlc.arg(delay_seconds)::float8)
+WHERE kagent_session_id = sqlc.arg(kagent_session_id);
+
+-- name: EndTranscriptSession :exec
+-- The session is no longer followed: complete (reason empty) or unavailable (reason says why).
+UPDATE transcript_sessions SET state = $2, reason = $3, updated_at = now()
+WHERE kagent_session_id = $1 AND state = 'active';
+
+-- name: NudgeTranscriptSession :exec
+-- A turn of this kagent Session just ended: copy it on the next pass.
+UPDATE transcript_sessions SET next_scan_at = now()
+WHERE kagent_session_id = $1 AND state = 'active' AND next_scan_at > now();
+
+-- name: CopiedTranscriptTasks :many
+-- Which of these tasks have a copy receipt.
+SELECT task_id FROM transcript_tasks WHERE task_id = ANY(sqlc.arg(task_ids)::text[]);
+
+-- name: CountUncopiedDeliveries :one
+-- Turns Mainloop sent into this kagent Session that have no copy: a Session that is gone with any
+-- of these lost them.
+SELECT count(*) FROM deliveries d
+WHERE d.kagent_session_id = $1 AND d.task_id IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM transcript_tasks t WHERE t.task_id = d.task_id);
+
+-- name: TranscriptSessionBytes :one
+SELECT stored_bytes FROM transcript_sessions WHERE kagent_session_id = $1;
+
+-- name: PruneTranscriptTasks :execrows
+-- Retention: the entries of up to max_rows tasks copied before the cutoff are deleted, and their
+-- receipts kept as pruned so a task kagent still lists is not copied again.
+WITH old AS (
+    SELECT tt.task_id FROM transcript_tasks tt
+    WHERE tt.pruned_at IS NULL AND tt.ingested_at < sqlc.arg(cutoff)
+    ORDER BY tt.ingested_at
+    LIMIT sqlc.arg(max_rows)
+    FOR UPDATE SKIP LOCKED
+), gone AS (
+    DELETE FROM transcript_entries e USING old WHERE e.task_id = old.task_id
+)
+UPDATE transcript_tasks t SET pruned_at = now() FROM old WHERE t.task_id = old.task_id;
+
+-- name: GetTranscriptSession :one
+SELECT * FROM transcript_sessions WHERE kagent_session_id = $1;

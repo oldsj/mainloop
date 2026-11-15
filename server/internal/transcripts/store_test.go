@@ -17,7 +17,7 @@ func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }
 const (
 	owner   = "owner-1"
 	session = "sess-1"
-	kagent  = "ks-1"
+	ksID    = "ks-1"
 )
 
 func setup(t *testing.T) (*testdb.DB, *dbq.Queries) {
@@ -30,7 +30,7 @@ func setup(t *testing.T) (*testdb.DB, *dbq.Queries) {
 	}
 	q := dbq.New(d.Pool)
 	if err := q.InsertTranscriptSession(ctx, dbq.InsertTranscriptSessionParams{
-		KagentSessionID: kagent, SessionID: session, OwnerID: owner, AgentNamespace: "agents", AgentName: "claude",
+		KagentSessionID: ksID, SessionID: session, OwnerID: owner, AgentNamespace: "agents", AgentName: "claude",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func secretTurn() *a2a.Task {
 func save(t *testing.T, q *dbq.Queries, task *a2a.Task) bool {
 	t.Helper()
 	ok, err := Save(context.Background(), q, Copy{
-		KagentSessionID: kagent, SessionID: session, TaskID: string(task.ID), TaskState: string(task.Status.State),
+		KagentSessionID: ksID, SessionID: session, TaskID: string(task.ID), TaskState: string(task.Status.State),
 		Entries: Normalize(task, DefaultLimits),
 	})
 	if err != nil {
