@@ -14,6 +14,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/devloop"
+	"github.com/oldsj/mainloop/server/internal/github/githubtest"
 	"github.com/oldsj/mainloop/server/internal/mcpserver"
 )
 
@@ -212,6 +213,17 @@ var writeCases = []writeCase{
 			p.consent(t, a.SessionID, proposal, "dead")
 			return map[string]any{"proposal_id": proposal, "request_id": "dead"}
 		}},
+	{tool: "create_issue", prs: true, role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
+			return map[string]any{"project_id": "p1", "title": "Flaky", "body": "It flakes.", "request_id": "dead"}
+		}},
+	{tool: "comment_issue", prs: true, role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(_ *testing.T, _ *harness, p *prHarness, _ authtest.Seeded) map[string]any {
+			p.fake.Update("o", "n", func(r *githubtest.Repository) {
+				r.IssueList = append(r.IssueList, githubtest.Issue{Number: 5, Title: "Bug"})
+			})
+			return map[string]any{"project_id": "p1", "issue_number": 5, "body": "Found it.", "request_id": "dead"}
+		}},
 	{tool: "watch_checks", prs: true,
 		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
 			return map[string]any{"project_id": "p1", "pr_number": 1, "request_id": "dead"}
@@ -310,7 +322,11 @@ func TestEveryWriteToolIsRefusedAfterItsCredentialIsRevoked(t *testing.T) {
 			case w.prs:
 				p = newPRHarness(t)
 				h = p.harness
-				a = p.seedAgent(t, nil)
+				a = p.seedAgent(t, func(a *authtest.Agent) {
+					if w.role != "" {
+						a.Role, a.Grant = w.role, w.grant
+					}
+				})
 			case w.devloop:
 				h = newDevloopHarness(t)
 				a = seedDevloopAgent(t, h)

@@ -215,6 +215,75 @@
       }
     },
     {
+      "name": "create_issue",
+      "description": "File a GitHub issue in a project's repository through Mainloop's GitHub App; returns its number and URL. Labels must already exist in the repository. Supply a stable request_id: a retry with it never files twice. If the issue already exists, add to it with comment_issue instead.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 60000,
+            "type": "string"
+          },
+          "labels": {
+            "items": {
+              "maxLength": 50,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 10,
+            "type": "array"
+          },
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["project_id", "title", "body", "request_id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "comment_issue",
+      "description": "Add a comment to an existing GitHub issue (not a pull request) in a project's repository; returns the comment's URL. Supply a stable request_id: a retry with it never comments twice.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 60000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "issue_number": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["project_id", "issue_number", "body", "request_id"],
+        "type": "object"
+      }
+    },
+    {
       "name": "list_dependabot_alerts",
       "description": "List open Dependabot security alerts for the bound project's repository.",
       "input_schema": {
@@ -1187,6 +1256,8 @@
       "devloop_enabled": false,
       "ordinary": [
         "check_status",
+        "comment_issue",
+        "create_issue",
         "decide",
         "delegate",
         "follow_up",
@@ -1227,6 +1298,8 @@
       "devloop_enabled": true,
       "ordinary": [
         "check_status",
+        "comment_issue",
+        "create_issue",
         "decide",
         "delegate",
         "dev_lease_acquire",
@@ -1271,6 +1344,8 @@
       "devloop_enabled": false,
       "ordinary": [
         "check_status",
+        "comment_issue",
+        "create_issue",
         "decide",
         "delegate",
         "follow_up",
@@ -1314,6 +1389,8 @@
       "devloop_enabled": true,
       "ordinary": [
         "check_status",
+        "comment_issue",
+        "create_issue",
         "decide",
         "delegate",
         "dev_lease_acquire",
@@ -1360,9 +1437,12 @@
       "merge_tools_enabled": false,
       "devloop_enabled": false,
       "ordinary": [
+        "comment_issue",
+        "create_issue",
         "delegate",
         "follow_up",
         "forget",
+        "get_issue",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -1388,9 +1468,12 @@
       "merge_tools_enabled": false,
       "devloop_enabled": true,
       "ordinary": [
+        "comment_issue",
+        "create_issue",
         "delegate",
         "follow_up",
         "forget",
+        "get_issue",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -1416,9 +1499,12 @@
       "merge_tools_enabled": true,
       "devloop_enabled": false,
       "ordinary": [
+        "comment_issue",
+        "create_issue",
         "delegate",
         "follow_up",
         "forget",
+        "get_issue",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -1444,9 +1530,12 @@
       "merge_tools_enabled": true,
       "devloop_enabled": true,
       "ordinary": [
+        "comment_issue",
+        "create_issue",
         "delegate",
         "follow_up",
         "forget",
+        "get_issue",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -1622,7 +1711,10 @@
       "merge_tools_enabled": false,
       "devloop_enabled": false,
       "ordinary": [
+        "comment_issue",
+        "create_issue",
         "forget",
+        "get_issue",
         "project_context",
         "remember",
         "report",
@@ -1641,7 +1733,10 @@
       "merge_tools_enabled": false,
       "devloop_enabled": true,
       "ordinary": [
+        "comment_issue",
+        "create_issue",
         "forget",
+        "get_issue",
         "project_context",
         "remember",
         "report",
@@ -1660,7 +1755,10 @@
       "merge_tools_enabled": true,
       "devloop_enabled": false,
       "ordinary": [
+        "comment_issue",
+        "create_issue",
         "forget",
+        "get_issue",
         "project_context",
         "remember",
         "report",
@@ -1679,7 +1777,10 @@
       "merge_tools_enabled": true,
       "devloop_enabled": true,
       "ordinary": [
+        "comment_issue",
+        "create_issue",
         "forget",
+        "get_issue",
         "project_context",
         "remember",
         "report",

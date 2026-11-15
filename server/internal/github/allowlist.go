@@ -78,10 +78,24 @@ type rule struct {
 	kind    kind
 	// needs are the installation permissions the call requires; the scoped token must cover them.
 	needs Permissions
+	// alt, when set, is another permission set GitHub accepts for the same call: the token must
+	// cover needs or alt.
+	alt Permissions
 }
 
 func newRule(method, pattern string, k kind, needs Permissions) rule {
 	return rule{method: method, pattern: strings.Split(strings.Trim(pattern, "/"), "/"), kind: k, needs: needs}
+}
+
+// or adds the alternative permission set GitHub also accepts for the call.
+func (r rule) or(alt Permissions) rule {
+	r.alt = alt
+	return r
+}
+
+// allows reports whether p covers the rule's permissions, or its alternative.
+func (r rule) allows(p Permissions) bool {
+	return p.covers(r.needs) || (r.alt != nil && p.covers(r.alt))
 }
 
 // rules is the whole of what Mainloop may ask GitHub. Add an entry here, with the least
@@ -95,11 +109,12 @@ var rules = []rule{
 	// Pull requests and merges (pulls.go). The merge call is the only write that changes a branch.
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/pulls/*", kindRepo, Permissions{"pull_requests": Read}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/pulls/*/files", kindRepo, Permissions{"pull_requests": Read}),
-	// Review feedback (feedback.go). GitHub serves a pull request's conversation comments to Pull
-	// requests read as well as Issues read.
+	// Review feedback (feedback.go). GitHub serves conversation comments to Pull requests read (a
+	// pull request's) as well as Issues read (an issue's, for the issue writes in issues.go).
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/pulls/*/reviews", kindRepo, Permissions{"pull_requests": Read}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/pulls/*/comments", kindRepo, Permissions{"pull_requests": Read}),
-	newRule(http.MethodGet, "/repos/{owner}/{repo}/issues/*/comments", kindRepo, Permissions{"pull_requests": Read}),
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/issues/*/comments", kindRepo, Permissions{"pull_requests": Read}).
+		or(Permissions{"issues": Read}),
 	// Creation also needs Contents read: GitHub checks the head branch with the same token.
 	newRule(http.MethodPost, "/repos/{owner}/{repo}/pulls", kindRepo, Permissions{"pull_requests": Write, "contents": Read}),
 	newRule(http.MethodPut, "/repos/{owner}/{repo}/pulls/*/merge", kindRepo,
@@ -119,6 +134,12 @@ var rules = []rule{
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/commits/**", kindRepo, Permissions{"contents": Read}),
 	// Issue and Dependabot alert reads (issues.go, dependabot.go).
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/issues/*", kindRepo, Permissions{"issues": Read}),
+	// Issue writes (issues.go): the listings find a write whose answer was lost, and the labels
+	// check that a new issue names only labels the repository has.
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/issues", kindRepo, Permissions{"issues": Read}),
+	newRule(http.MethodGet, "/repos/{owner}/{repo}/labels", kindRepo, Permissions{"issues": Read}),
+	newRule(http.MethodPost, "/repos/{owner}/{repo}/issues", kindRepo, Permissions{"issues": Write}),
+	newRule(http.MethodPost, "/repos/{owner}/{repo}/issues/*/comments", kindRepo, Permissions{"issues": Write}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/dependabot/alerts", kindRepo, Permissions{"vulnerability_alerts": Read}),
 }
 
@@ -233,7 +254,7 @@ func (a *Allowlist) match(req *http.Request) (rule, error) {
 				return rule{}, a.deny(req, "outside the token's repository")
 			}
 		}
-		if r.kind == kindRepo && !a.Scope.Permissions.covers(r.needs) {
+		if r.kind == kindRepo && !r.allows(a.Scope.Permissions) {
 			return rule{}, a.deny(req, "outside the token's permissions")
 		}
 		return r, nil

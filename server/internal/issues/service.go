@@ -1,13 +1,17 @@
-// Package issues serves the read-only GitHub issue and Dependabot-alert tools over the
-// project's bound repository. Unlike prs and merge, it writes nothing: a read that fails is simply
-// retried by the caller, so there is no durable intent row or reconcile loop here.
+// Package issues serves the GitHub issue and Dependabot-alert tools over the project's bound
+// repository. The reads (this file) write nothing: a read that fails is simply retried by the
+// caller. The writes (writes.go) follow the pull-request pattern: a call writes an intent row
+// first, and a reconcile loop posts at most once and looks a lost answer up by a marker in the
+// body, never resending.
 package issues
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,10 +20,16 @@ import (
 	"github.com/oldsj/mainloop/server/internal/github"
 )
 
-// GitHub is the part of the GitHub App the issue and alert reads use.
+// GitHub is the part of the GitHub App the issue and alert tools use.
 type GitHub interface {
 	GetIssue(ctx context.Context, repo github.Repo, number int) (*github.Issue, error)
 	ListDependabotAlerts(ctx context.Context, repo github.Repo) ([]github.DependabotAlert, error)
+	RepoDetail(ctx context.Context, repo github.Repo) (*github.RepoDetail, error)
+	LabelNames(ctx context.Context, repo github.Repo) ([]string, error)
+	CreateIssue(ctx context.Context, repo github.Repo, title, body string, labels []string) (*github.IssueWrite, error)
+	CommentIssue(ctx context.Context, repo github.Repo, number int, body string) (*github.IssueWrite, error)
+	IssuesCreatedSince(ctx context.Context, repo github.Repo, since time.Time) ([]github.IssueWrite, error)
+	IssueCommentsSince(ctx context.Context, repo github.Repo, number int, since time.Time) ([]github.IssueWrite, error)
 }
 
 // ErrNotFound means the project is not the owner's.
@@ -30,15 +40,39 @@ type Refusal struct{ Code, Message string }
 
 func (r *Refusal) Error() string { return r.Code + ": " + r.Message }
 
-// Service reads issues and Dependabot alerts.
+// Service reads issues and Dependabot alerts, and files issues and comments.
 type Service struct {
 	Pool   *pgxpool.Pool
 	GitHub GitHub
+	Log    *slog.Logger
+
+	// Settle is how long a write call waits for the loop to settle its row before it returns the
+	// state it has. A zero Settle returns at once; [NewService] sets [DefaultSettle].
+	Settle time.Duration
+	// Window is how long a write whose POST may have run keeps looking for it before it concludes
+	// none was made (default 10m).
+	Window time.Duration
+	// Recheck and Ceiling pace the lookups of an unresolved write (defaults 2s and 30s).
+	Recheck, Ceiling time.Duration
+	Lease            time.Duration
+	Now              func() time.Time
 }
 
-// NewService builds the service the MCP tools use.
-func NewService(pool *pgxpool.Pool, gh GitHub) *Service {
-	return &Service{Pool: pool, GitHub: gh}
+// DefaultSettle is how long a write call waits for the loop before it answers with the state it
+// has.
+const DefaultSettle = 20 * time.Second
+
+// NewService builds the service the processes run: the MCP process's tools and the API process's
+// write loop.
+func NewService(pool *pgxpool.Pool, gh GitHub, log *slog.Logger) *Service {
+	return &Service{Pool: pool, GitHub: gh, Log: log, Settle: DefaultSettle}
+}
+
+func (s *Service) log() *slog.Logger {
+	if s.Log != nil {
+		return s.Log
+	}
+	return slog.Default()
 }
 
 func repoOf(fullName string) (github.Repo, bool) {

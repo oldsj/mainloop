@@ -253,14 +253,17 @@ repository and refuses cross-repository use before HTTP. JWTs, keys, tokens and 
 upstream failures are never logged or returned.
 
 Configure the App with Checks read, Commit statuses read, Contents read/write,
-Pull requests read/write, Administration read, Workflows read/write, and Metadata read.
+Pull requests read/write, Issues read/write, Dependabot alerts read, Administration read,
+Workflows read/write, and Metadata read (see [production deployment](../production-rollout.md#github-app-permissions)).
 Tokens request Metadata read for repository lookup and branch rules, Contents read for branches
 and commits, Administration read for classic protection, Checks read
 for runs/suites, Commit statuses read for status contexts, Pull requests read for PRs,
 files, reviews and comments, Pull requests write with Contents read for PR creation (GitHub checks
 the head branch with the same token and answers a private repository with 422 `head invalid`, not
-403, when Contents is missing), Pull requests write for review-comment reactions, and
-Contents write for squash merge. Current API callers do not need Workflows write;
+403, when Contents is missing), Pull requests write for review-comment reactions,
+Contents write for squash merge, Issues read for issues, labels and issue comments, Issues write to
+file an issue or comment ([issue writes](issue-writes.md)), and Dependabot alerts read for
+`list_dependabot_alerts`. Current API callers do not need Workflows write;
 that registration permission is not included in their tokens.
 
 Merge evidence repository reads, including the final refresh, request Contents write

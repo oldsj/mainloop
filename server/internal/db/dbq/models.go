@@ -482,6 +482,34 @@ type HitlSession struct {
 	GoneAt          *time.Time
 }
 
+type IssueWrite struct {
+	ID             string
+	IdempotencyKey string
+	OwnerID        string
+	ProjectID      string
+	SessionID      *string
+	RequestID      string
+	PayloadHash    string
+	Kind           dbstate.IssueWriteKind
+	RepoID         int64
+	RepoFullName   string
+	Title          string
+	Labels         []string
+	Body           string
+	IssueNumber    *int64
+	CommentID      *int64
+	Url            *string
+	State          dbstate.IssueWriteState
+	Detail         *string
+	Attempts       int32
+	Rechecks       int32
+	NextAttemptAt  time.Time
+	LeaseOwner     *string
+	LeaseUntil     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 type KagentAgent struct {
 	Namespace string
 	Name      string

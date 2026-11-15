@@ -3,8 +3,11 @@ package mcpserver_test
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -15,6 +18,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/github/githubtest"
 	"github.com/oldsj/mainloop/server/internal/issues"
 	"github.com/oldsj/mainloop/server/internal/mcpserver"
+	"github.com/oldsj/mainloop/server/internal/reconcile"
 )
 
 const checkRunsHeadSHA = "1111111111111111111111111111111111111111"
@@ -56,10 +60,35 @@ func newIssuesHarness(t *testing.T) *issuesHarness {
 	h := &issuesHarness{fake: fake}
 	h.harness = buildHarness(t, false, false, func(srv *mcpserver.Server, pool *pgxpool.Pool) {
 		h.pool = pool
-		srv.Issues = issues.NewService(pool, app)
+		log := slog.New(slog.NewTextHandler(io.Discard, nil))
+		srv.Issues = &issues.Service{
+			Pool: pool, GitHub: app, Log: log, Settle: 5 * time.Second, Window: time.Minute,
+			Recheck: 10 * time.Millisecond, Ceiling: 20 * time.Millisecond, Lease: time.Minute, Now: time.Now,
+		}
 		srv.CI = ci.NewService(pool, app)
+		r := reconcile.NewRunner(pool, log, nil)
+		l := srv.Issues.Loop()
+		l.Interval = 10 * time.Millisecond
+		r.Add(l)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { defer close(done); _ = r.Run(ctx) }()
+		t.Cleanup(func() { cancel(); <-done })
 	})
 	return h
+}
+
+// seedAs seeds an agent of role and grant bound to p1 (the main thread is bound to no project).
+func (h *issuesHarness) seedAs(t *testing.T, role dbstate.BindingRole, grant dbstate.MCPGrantKind, parent string) authtest.Seeded {
+	t.Helper()
+	h.seedAgent(t)
+	s := h.env.Seed(t, authtest.Agent{Role: role, Grant: grant, Parent: parent})
+	if role != dbstate.RoleMain {
+		if _, err := h.pool.Exec(context.Background(), `UPDATE sessions SET project_id = 'p1' WHERE id = $1`, s.SessionID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return s
 }
 
 func (h *issuesHarness) seedAgent(t *testing.T) authtest.Seeded {
@@ -261,5 +290,84 @@ func TestGetVerificationResolvesTheProjectsModeForTheAgent(t *testing.T) {
 	_, r = h.call(ordinary, a.Token, "get_verification", map[string]any{"project_id": "p1"})
 	if sc := r.Result.StructuredContent; sc["effective_mode"] != "ci" || sc["source"] != "owner" || !strings.Contains(r.text(), "watch_checks") {
 		t.Errorf("owner mode = %v", sc)
+	}
+}
+
+func TestCreateAndCommentIssueFromACoordinationTask(t *testing.T) {
+	h := newIssuesHarness(t)
+	main := h.seedAs(t, dbstate.RoleMain, dbstate.GrantCoordination, "")
+	sup := h.seedAs(t, dbstate.RoleSupervisor, dbstate.GrantCoordination, main.SessionID)
+	h.fake.Update("o", "n", func(r *githubtest.Repository) { r.Labels = []string{"bug"} })
+
+	_, r := h.call(ordinary, sup.Token, "create_issue", map[string]any{
+		"project_id": "p1", "title": "Flaky test", "body": "It flakes.", "labels": []string{"Bug"}, "request_id": "r1",
+	})
+	sc := r.Result.StructuredContent
+	if r.Result.IsError || sc["state"] != "created" || sc["kind"] != "issue" || sc["repository"] != "o/n" || sc["issue_number"] == nil ||
+		!strings.HasPrefix(fmt.Sprint(sc["url"]), "https://github.com/o/n/issues/") {
+		t.Fatalf("create_issue = %v %q", sc, r.text())
+	}
+	// A retry with the same request_id answers the same issue and files nothing.
+	_, again := h.call(ordinary, sup.Token, "create_issue", map[string]any{
+		"project_id": "p1", "title": "Flaky test", "body": "It flakes.", "labels": []string{"Bug"}, "request_id": "r1",
+	})
+	if again.Result.StructuredContent["url"] != sc["url"] || h.fake.Count("POST", "/repos/o/n/issues") != 1 {
+		t.Fatalf("replay = %v, posts %d", again.Result.StructuredContent, h.fake.Count("POST", "/repos/o/n/issues"))
+	}
+	_, conflict := h.call(ordinary, sup.Token, "create_issue", map[string]any{"project_id": "p1", "title": "Other", "body": "", "request_id": "r1"})
+	if conflict.text() != "[request_payload_conflict] this request_id was used with other arguments" {
+		t.Errorf("conflict = %q", conflict.text())
+	}
+	_, unknown := h.call(ordinary, sup.Token, "create_issue", map[string]any{"project_id": "p1", "title": "T", "body": "", "labels": []string{"nope"}, "request_id": "r2"})
+	if !unknown.Result.IsError || !strings.HasPrefix(unknown.text(), "[unknown_label]") {
+		t.Errorf("unknown label = %q", unknown.text())
+	}
+
+	_, c := h.call(ordinary, sup.Token, "comment_issue", map[string]any{"project_id": "p1", "issue_number": 5, "body": "Root cause: a race.", "request_id": "c1"})
+	if c.Result.IsError || c.Result.StructuredContent["state"] != "created" || c.Result.StructuredContent["comment_id"] == nil ||
+		!strings.Contains(fmt.Sprint(c.Result.StructuredContent["url"]), "/issues/5#issuecomment-") {
+		t.Fatalf("comment_issue = %v %q", c.Result.StructuredContent, c.text())
+	}
+	// A pull request's number is not an issue to comment on.
+	_, pr := h.call(ordinary, sup.Token, "comment_issue", map[string]any{"project_id": "p1", "issue_number": 42, "body": "x", "request_id": "c2"})
+	if !pr.Result.IsError || !strings.HasPrefix(pr.text(), "[not_found]") {
+		t.Errorf("comment on a pull request = %q", pr.text())
+	}
+}
+
+func TestIssueWritesFollowTheGrantAndProject(t *testing.T) {
+	h := newIssuesHarness(t)
+	main := h.seedAs(t, dbstate.RoleMain, dbstate.GrantCoordination, "")
+	ws := h.seedAgent(t)
+	sup := h.seedAs(t, dbstate.RoleSupervisor, dbstate.GrantCoordination, main.SessionID)
+	if _, err := h.pool.Exec(context.Background(), `INSERT INTO projects (id, user_id, owner, name, full_name, html_url, default_branch)
+		VALUES ('p2', 'owner', 'o', 'm', 'o/m', 'https://x', 'main'), ('foreign', 'someone', 'o', 'f', 'o/f', 'https://x', 'main')`); err != nil {
+		t.Fatal(err)
+	}
+	h.fake.AddRepo(githubtest.Repository{Owner: "o", Name: "m", ID: 8})
+	args := func(project, req string) map[string]any {
+		return map[string]any{"project_id": project, "title": "T", "body": "B", "request_id": req}
+	}
+
+	// A code task does not hold the writes.
+	if _, r := h.call(ordinary, ws.Token, "create_issue", args("p1", "w1")); r.Error == nil && !r.Result.IsError {
+		t.Errorf("workspace agent create_issue = %q", r.text())
+	}
+	if n := h.fake.Count("POST", "/repos/o/n/issues"); n != 0 {
+		t.Errorf("posts = %d", n)
+	}
+	// A coordination task writes to its own project only.
+	if _, r := h.call(ordinary, sup.Token, "create_issue", args("p2", "s1")); !r.Result.IsError || !strings.HasPrefix(r.text(), "[forbidden]") {
+		t.Errorf("supervisor in another project = %q", r.text())
+	}
+	// The main thread may name any of its owner's projects, and no one else's.
+	if _, r := h.call(ordinary, main.Token, "create_issue", args("p2", "m1")); r.Result.IsError || r.Result.StructuredContent["repository"] != "o/m" {
+		t.Errorf("main in p2 = %q", r.text())
+	}
+	if _, r := h.call(ordinary, main.Token, "create_issue", args("foreign", "m2")); !r.Result.IsError || !strings.HasPrefix(r.text(), "[not_found]") {
+		t.Errorf("main in a foreign project = %q", r.text())
+	}
+	if _, r := h.call(ordinary, main.Token, "get_issue", map[string]any{"project_id": "p1", "issue_number": 5}); r.Result.IsError {
+		t.Errorf("main get_issue = %q", r.text())
 	}
 }

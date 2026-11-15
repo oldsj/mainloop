@@ -165,12 +165,14 @@ base64 of its unencrypted RSA PEM (at least 2048 bits), in the server's environm
 (in the cluster, the `mainloop-secrets` Secret). Leading and trailing ASCII whitespace is ignored for both values;
 interior whitespace is rejected. Mainloop discovers installations and mints short-lived tokens for
 one repository and the requested operation's permissions. There is no PAT
-or anonymous fallback. App permissions, cache behavior and the issue-helper
-limitation are in [Pull requests](docs/specs/pull-requests.md). The `get_issue`,
-`list_dependabot_alerts` and `check_status` read-only tools, and `watch_checks` (which waits for CI
-without holding the agent's turn and messages the session when CI settles), reuse the same App
-credential; see [GitHub issue and Dependabot alert reads](docs/specs/github-reads.md) and
-[CI checks](docs/specs/ci.md).
+or anonymous fallback. App permissions and cache behavior are in
+[Pull requests](docs/specs/pull-requests.md) and [production deployment](docs/production-rollout.md#github-app-permissions).
+The `get_issue`, `list_dependabot_alerts` and `check_status` read-only tools, `create_issue` and
+`comment_issue` (the main thread and coordination tasks file issues and comments), and
+`watch_checks` (which waits for CI without holding the agent's turn and messages the session when
+CI settles), reuse the same App credential; see
+[GitHub issue and Dependabot alert reads](docs/specs/github-reads.md),
+[GitHub issue writes](docs/specs/issue-writes.md) and [CI checks](docs/specs/ci.md).
 
 ## Production Deployment
 
@@ -237,6 +239,7 @@ mainloop/
 - [Sessions](docs/specs/sessions.md) - Background work and status
 - [Layout](docs/specs/layout.md) - Mobile and desktop views
 - [GitHub issue, Dependabot alert and check-run reads](docs/specs/github-reads.md) - Read-only issue/alert/check-run tools
+- [GitHub issue writes](docs/specs/issue-writes.md) - Filing issues and comments through the GitHub App
 
 **Guides**:
 

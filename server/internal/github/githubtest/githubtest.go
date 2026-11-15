@@ -163,6 +163,8 @@ type Repository struct {
 	MergeStatus int
 	// IssueList are the repository's issues, read by number (issues.go in the parent package).
 	IssueList []Issue
+	// Labels are the repository's label names.
+	Labels []string
 	// DependabotAlerts are the repository's open Dependabot alerts.
 	DependabotAlerts []DependabotAlert
 }
@@ -477,8 +479,12 @@ func need(method string, segs []string) map[string]string {
 		return read("contents")
 	case method == http.MethodGet && len(rest) == 3 && rest[0] == "rules" && rest[1] == "branches":
 		return read("metadata")
-	case method == http.MethodGet && len(rest) == 2 && rest[0] == "issues":
+	case method == http.MethodGet && len(rest) == 2 && rest[0] == "issues",
+		method == http.MethodGet && len(rest) == 1 && (rest[0] == "issues" || rest[0] == "labels"):
 		return read("issues")
+	case method == http.MethodPost && len(rest) == 1 && rest[0] == "issues",
+		method == http.MethodPost && len(rest) == 3 && rest[0] == "issues" && rest[2] == "comments":
+		return map[string]string{"issues": "write"}
 	case method == http.MethodGet && len(rest) == 2 && rest[0] == "dependabot" && rest[1] == "alerts":
 		return read("vulnerability_alerts")
 	}
@@ -521,6 +527,10 @@ func (s *Server) tokenHas(r *http.Request, name string) bool {
 
 func (s *Server) repoCall(w http.ResponseWriter, r *http.Request, segs []string) {
 	needs := need(r.Method, segs)
+	if r.Method == http.MethodGet && len(segs) == 6 && segs[3] == "issues" && segs[5] == "comments" && !s.isPull(segs) {
+		// Comments on anything but a pull request need Issues read; a pull request's take either.
+		needs = map[string]string{"issues": "read"}
+	}
 	if needs == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
 		return
@@ -575,13 +585,49 @@ func (s *Server) repoCall(w http.ResponseWriter, r *http.Request, segs []string)
 		s.ruleCall(w, r, repo)
 	case rest[0] == "compare" && len(rest) == 2:
 		s.compareCall(w, r, repo, rest[1])
+	case rest[0] == "issues" && len(rest) == 3 && rest[2] == "comments" && r.Method == http.MethodPost:
+		s.createCommentCall(w, r, repo, rest[1])
+	case rest[0] == "issues" && len(rest) == 3 && rest[2] == "comments" && s.isIssue(segs):
+		s.issueCommentsCall(w, r, repo, rest[1])
 	case rest[0] == "issues" && len(rest) == 3 && rest[2] == "comments":
 		s.feedbackCall(w, r, repo, rest[1], FeedbackComment)
+	case rest[0] == "issues" && len(rest) == 1 && r.Method == http.MethodPost:
+		s.createIssueCall(w, r, repo)
+	case rest[0] == "issues" && len(rest) == 1:
+		s.issueListCall(w, r, repo)
+	case rest[0] == "labels" && len(rest) == 1:
+		s.labelsCall(w, r, repo)
 	case rest[0] == "issues" && len(rest) == 2:
 		s.issueCall(w, repo, rest[1])
 	case rest[0] == "dependabot" && len(rest) == 2 && rest[1] == "alerts":
 		s.dependabotCall(w, r, repo)
 	}
+}
+
+// isIssue reports whether segs (/repos/{owner}/{repo}/issues/{n}/...) names an issue of the fake
+// that is not a pull request.
+func (s *Server) isIssue(segs []string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	repo := s.repos[lower(segs[1], segs[2])]
+	if repo == nil {
+		return false
+	}
+	_, ok := issueIndex(repo, segs[4])
+	return ok
+}
+
+// isPull reports whether segs (/repos/{owner}/{repo}/issues/{n}/...) names a pull request of the
+// fake.
+func (s *Server) isPull(segs []string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	repo := s.repos[lower(segs[1], segs[2])]
+	if repo == nil {
+		return false
+	}
+	_, ok := s.find(repo, segs[4])
+	return ok
 }
 
 func page(r *http.Request, total int) (from, to, pageNo, last int) {

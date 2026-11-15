@@ -34,6 +34,28 @@ The chart needs these objects in the release namespace. Any deployment can provi
 | NetworkPolicy peer        | gateway pods to backend `:8000`                                                                       | Added as its own policy, since the production values replace the default ingress list. The gateway's labels belong to the cluster                                                                                                                                                                                    |
 | Images                    | `ghcr.io/oldsj/mainloop-backend`, `ghcr.io/oldsj/mainloop-frontend`                                   | Pinned by digest in each published chart version ([below](#production-changes-are-gitops-only))                                                                                                                                                                                                                      |
 
+### GitHub App permissions
+
+The App named by `github-app-id` needs these repository permissions, and an installation on each
+project's repository:
+
+| Permission        | Access      | Used for                                                                            |
+| ----------------- | ----------- | ----------------------------------------------------------------------------------- |
+| Metadata          | Read        | Repository lookup, branch rules                                                     |
+| Contents          | Read, write | Branches and commits; squash merge                                                  |
+| Pull requests     | Read, write | Pull requests, reviews and comments; opening a pull request                         |
+| Issues            | Read, write | `get_issue`; filing an issue and commenting with `create_issue` and `comment_issue` |
+| Checks            | Read        | Check runs and suites                                                               |
+| Commit statuses   | Read        | Status contexts                                                                     |
+| Dependabot alerts | Read        | `list_dependabot_alerts`                                                            |
+| Administration    | Read        | Classic branch protection                                                           |
+| Workflows         | Read, write | Registration only; no current call's token asks for it                              |
+
+Each call's token asks only for what that call needs ([pull requests](specs/pull-requests.md)). A
+permission the App lacks makes only the calls that need it fail: without Issues write, `create_issue`
+and `comment_issue` fail and the rest work. Adding a permission to an existing
+App needs the owner of each installation to accept it on GitHub before tokens carry it.
+
 The frontend image bakes the API URL at build time (`VITE_API_URL`); the runtime `ORIGIN` does not change it. Build it for the deployment's API domain.
 
 Cross-namespace pieces are owned by the cluster repository, not this chart: the kagent Agents named in `mainloop-config`, the Role granting `mainloop-backend` namespace-wide Secret `get/create/delete` in `kagent`, the MCP `RemoteMCPServer` (source in `k8s/integrations/kagent/`, alongside that Role; the chart does not render it), policies that let the backend reach kagent `:8083` and the Substrate router's CONNECT-over-TLS port `:8444`, and the backend's SPIFFE ID (`spiffe://cluster.local/ns/mainloop/sa/mainloop-backend`) in the router's `atenetRouter.ingressAllowedSPIFFEIDs`. Mainloop creates runtime-owned `mainloop-mcp-<binding-id>` Secrets labeled `mainloop.dev/actor-egress=true` and `mainloop.dev/purpose=mcp`. RBAC cannot constrain dynamic creates by name or label; admission policy can restrict writes, while prefix-scoped reads require a separate broker or authorization boundary.

@@ -17,6 +17,8 @@ const (
 	ToolPendingDone               = "pending_done"
 	ToolOpenPullRequest           = "open_pull_request"
 	ToolGetIssue                  = "get_issue"
+	ToolCreateIssue               = "create_issue"
+	ToolCommentIssue              = "comment_issue"
 	ToolListDependabotAlerts      = "list_dependabot_alerts"
 	ToolCheckStatus               = "check_status"
 	ToolWatchChecks               = "watch_checks"
@@ -52,7 +54,7 @@ const (
 var AllTools = []string{
 	ToolWhoami, ToolTopics, ToolTopicOpen, ToolNote, ToolDecide, ToolPendingAdd, ToolPendingDone,
 	ToolOpenPullRequest,
-	ToolGetIssue, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
+	ToolGetIssue, ToolCreateIssue, ToolCommentIssue, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
 	ToolProjectContext, ToolRemember, ToolForget,
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolDelegate, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign,
 	ToolTaskHold, ToolSteer, ToolFollowUp, ToolReport, ToolLoopArm, ToolLoopList, ToolLoopStop,
@@ -133,6 +135,10 @@ var (
 	// its bound project, it can also read that project's issues, alerts and CI results.
 	issueTools = []string{ToolGetIssue, ToolListDependabotAlerts}
 	checkTools = []string{ToolCheckStatus, ToolWatchChecks, ToolGetVerification}
+	// issueWriteTools file issues and comments. The coordination grant holds them (the main thread,
+	// and coordination supervisors and children), with get_issue so a comment can follow a read;
+	// code tasks report what they find instead.
+	issueWriteTools = []string{ToolGetIssue, ToolCreateIssue, ToolCommentIssue}
 )
 
 // Tools returns the tool names the actor may use on the surface, in [AllTools] order.
@@ -199,6 +205,9 @@ func (p Policy) actorTools(a Actor) []string {
 	if slices.Contains(tools, ToolOpenPullRequest) {
 		tools = append(tools, issueTools...)
 		tools = append(tools, checkTools...)
+	}
+	if len(tools) > 0 && a.Grant == dbstate.GrantCoordination {
+		tools = append(tools, issueWriteTools...)
 	}
 	if p.MergeTools && slices.Contains(tools, ToolOpenPullRequest) {
 		tools = append(tools, mergeTools...)
