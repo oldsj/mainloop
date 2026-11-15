@@ -479,18 +479,18 @@ func newRig(t *testing.T) *rig {
 		MaxChildrenPerParent: 3, MaxChildrenGlobal: 6, ProvisionWindow: 30 * time.Second,
 		Interval: 10 * time.Millisecond, ProjectionEvery: time.Second, SettleIdle: time.Nanosecond,
 		ResolveBackoff: reconcile.Backoff{Base: 20 * time.Millisecond, Max: 20 * time.Millisecond},
-		StallTimeout:   45 * time.Minute, MaxRuntime: 6 * time.Hour,
+		StallTimeout:   45 * time.Minute, MaxRuntime: 6 * time.Hour, LoopPoll: 20 * time.Millisecond,
 	}
 	e.svc.Log = slog.Default()
 	return r
 }
 
-// run starts a runner with the operation and delivery loops and stops it with the returned func.
+// run starts a runner with the operation, delivery and loop loops and stops it with the returned func.
 // Each call is a new runner with its own lease owner, so a second call models a restarted process.
 func (r *rig) run() (stop func()) {
 	r.t.Helper()
 	rn := reconcile.NewRunner(r.pool, slog.Default(), nil)
-	for _, l := range []reconcile.Loop{r.svc.OpLoop(), r.svc.DeliveryLoop()} {
+	for _, l := range []reconcile.Loop{r.svc.OpLoop(), r.svc.DeliveryLoop(), r.svc.LoopLoop()} {
 		l.Interval = 10 * time.Millisecond
 		// A short lease, so a runner stopped between claim and handler does not leave a row leased
 		// past the wait of the test that restarts it.

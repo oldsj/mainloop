@@ -390,15 +390,21 @@ WHERE id IN (
     SELECT o.id FROM task_event_deliveries o
     WHERE o.recipient_key = sqlc.arg(recipient_key) AND o.state = 'pending' AND o.delivery_id IS NULL
       AND o.id <> sqlc.arg(leader_id)
+      -- A loop firing still inside its minimum interval waits for its own turn.
+      AND (o.loop_firing_id IS NULL OR EXISTS (
+          SELECT 1 FROM task_loop_firings f WHERE f.id = o.loop_firing_id AND f.not_before <= now()
+      ))
     FOR UPDATE SKIP LOCKED
 )
 RETURNING *;
 
--- The reports one message carries, oldest first.
+-- The reports and loop firings one message carries, oldest first.
 -- name: ListTaskEventBatch :many
-SELECT r.* FROM task_event_deliveries d JOIN task_reports r ON r.id = d.report_id
+SELECT d.* FROM task_event_deliveries d
+LEFT JOIN task_reports r ON r.id = d.report_id
+LEFT JOIN task_loop_firings f ON f.id = d.loop_firing_id
 WHERE d.delivery_id = $1
-ORDER BY r.created_at, r.id;
+ORDER BY coalesce(r.created_at, f.created_at), d.id;
 
 -- A message the ledger gave up on is recorded again under a new id.
 -- name: ResendTaskEventDelivery :one

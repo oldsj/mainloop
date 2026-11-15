@@ -830,6 +830,152 @@
       }
     },
     {
+      "name": "loop_arm",
+      "description": "Arm a loop: a durable wake-up that sends you a message when something happens, so you can end your turn instead of polling. trigger=task fires when a task you manage changes status or reason (statuses limits it to those statuses; a task already in one fires at once). trigger=time fires after after_minutes, then every every_minutes if given. note is what the message reminds you to do. A firing waits for your turn to end and comes with your children's reports as one message; what happens meanwhile folds into it. Limits: max_firings (default 20), min_interval_seconds between firings (default 60), expires_minutes (default 1440, at most 10080), at most 20 armed loops. A supervisor's loops end with its task. Reuse request_id to retry.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "after_minutes": {
+            "anyOf": [
+              {
+                "maximum": 10080,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "every_minutes": {
+            "anyOf": [
+              {
+                "maximum": 10080,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "expires_minutes": {
+            "anyOf": [
+              {
+                "maximum": 10080,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "max_firings": {
+            "anyOf": [
+              {
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "min_interval_seconds": {
+            "anyOf": [
+              {
+                "maximum": 86400,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "note": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "statuses": {
+            "default": [],
+            "items": {
+              "enum": [
+                "queued",
+                "running",
+                "waiting",
+                "blocked",
+                "completed",
+                "failed",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            "maxItems": 7,
+            "type": "array"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "trigger": {
+            "enum": ["task", "time"],
+            "type": "string"
+          }
+        },
+        "required": ["request_id", "trigger", "note"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "loop_list",
+      "description": "List your loops, armed ones first, with each loop's firing count and next timer.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "loop_stop",
+      "description": "Stop one of your armed loops. A firing it already made is still delivered.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "loop_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["loop_id"],
+        "type": "object"
+      }
+    },
+    {
       "name": "prepare_pull_request_merge",
       "description": "Prepare immutable PR merge facts and required route; creates no approval card. Workspace sessions give project_id and expected_sha; the main thread may give repository instead and omit expected_sha.",
       "input_schema": {
@@ -1022,6 +1168,9 @@
         "get_issue",
         "get_verification",
         "list_dependabot_alerts",
+        "loop_arm",
+        "loop_list",
+        "loop_stop",
         "note",
         "open_pull_request",
         "pending_add",
@@ -1063,6 +1212,9 @@
         "get_issue",
         "get_verification",
         "list_dependabot_alerts",
+        "loop_arm",
+        "loop_list",
+        "loop_stop",
         "note",
         "open_pull_request",
         "pending_add",
@@ -1101,6 +1253,9 @@
         "get_pull_request_merge_status",
         "get_verification",
         "list_dependabot_alerts",
+        "loop_arm",
+        "loop_list",
+        "loop_stop",
         "merge_pull_request",
         "note",
         "open_pull_request",
@@ -1145,6 +1300,9 @@
         "get_pull_request_merge_status",
         "get_verification",
         "list_dependabot_alerts",
+        "loop_arm",
+        "loop_list",
+        "loop_stop",
         "merge_pull_request",
         "note",
         "open_pull_request",
@@ -1179,6 +1337,9 @@
         "delegate",
         "follow_up",
         "forget",
+        "loop_arm",
+        "loop_list",
+        "loop_stop",
         "project_context",
         "remember",
         "report",
@@ -1204,6 +1365,9 @@
         "delegate",
         "follow_up",
         "forget",
+        "loop_arm",
+        "loop_list",
+        "loop_stop",
         "project_context",
         "remember",
         "report",
@@ -1229,6 +1393,9 @@
         "delegate",
         "follow_up",
         "forget",
+        "loop_arm",
+        "loop_list",
+        "loop_stop",
         "project_context",
         "remember",
         "report",
@@ -1254,6 +1421,9 @@
         "delegate",
         "follow_up",
         "forget",
+        "loop_arm",
+        "loop_list",
+        "loop_stop",
         "project_context",
         "remember",
         "report",
@@ -1283,6 +1453,9 @@
         "get_issue",
         "get_verification",
         "list_dependabot_alerts",
+        "loop_arm",
+        "loop_list",
+        "loop_stop",
         "open_pull_request",
         "project_context",
         "remember",
@@ -1318,6 +1491,9 @@
         "get_issue",
         "get_verification",
         "list_dependabot_alerts",
+        "loop_arm",
+        "loop_list",
+        "loop_stop",
         "open_pull_request",
         "project_context",
         "remember",
@@ -1350,6 +1526,9 @@
         "get_pull_request_merge_status",
         "get_verification",
         "list_dependabot_alerts",
+        "loop_arm",
+        "loop_list",
+        "loop_stop",
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",
@@ -1388,6 +1567,9 @@
         "get_pull_request_merge_status",
         "get_verification",
         "list_dependabot_alerts",
+        "loop_arm",
+        "loop_list",
+        "loop_stop",
         "merge_pull_request",
         "open_pull_request",
         "prepare_pull_request_merge",

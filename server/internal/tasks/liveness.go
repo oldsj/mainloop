@@ -314,6 +314,12 @@ func (s *Service) checkLiveness(ctx context.Context, a dbq.TaskAttempt) error {
 			return err
 		}
 		if !waiting {
+			// A supervisor that armed a loop ended its turn to wait for it, as for a check watch.
+			if waiting, err = dbq.New(s.Pool).TaskAwaitsLoop(ctx, dbq.TaskAwaitsLoopParams{TaskID: a.TaskID, Now: now}); err != nil {
+				return err
+			}
+		}
+		if !waiting {
 			return s.blockAttempt(ctx, a, dbstate.ReasonStalled)
 		}
 	}

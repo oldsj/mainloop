@@ -35,6 +35,9 @@ const (
 	ToolSteer                     = "steer"
 	ToolFollowUp                  = "follow_up"
 	ToolReport                    = "report"
+	ToolLoopArm                   = "loop_arm"
+	ToolLoopList                  = "loop_list"
+	ToolLoopStop                  = "loop_stop"
 	ToolPreparePullRequestMerge   = "prepare_pull_request_merge"
 	ToolMergePullRequest          = "merge_pull_request"
 	ToolMergePullRequestApproval  = "merge_pull_request_with_approval"
@@ -52,7 +55,7 @@ var AllTools = []string{
 	ToolGetIssue, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
 	ToolProjectContext, ToolRemember, ToolForget,
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolDelegate, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign,
-	ToolTaskHold, ToolSteer, ToolFollowUp, ToolReport,
+	ToolTaskHold, ToolSteer, ToolFollowUp, ToolReport, ToolLoopArm, ToolLoopList, ToolLoopStop,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
 	ToolDevLeaseAcquire, ToolDevLeaseRelease, ToolDevSync, ToolDevStatus,
@@ -115,6 +118,8 @@ type Policy struct {
 var (
 	taskRead       = []string{ToolTaskGet, ToolTaskList, ToolTaskHistory}
 	taskManagement = []string{ToolDelegate, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign, ToolSteer, ToolFollowUp}
+	// loopTools are main's and supervisors' wake-ups: what fires is a message to them.
+	loopTools = []string{ToolLoopArm, ToolLoopList, ToolLoopStop}
 	workspaceTools = []string{ToolWhoami, ToolOpenPullRequest}
 	mergeTools     = []string{
 		ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
@@ -169,6 +174,7 @@ func (p Policy) actorTools(a Actor) []string {
 			ToolPendingAdd, ToolPendingDone, ToolOpenPullRequest)
 		tools = append(tools, taskRead...)
 		tools = append(tools, taskManagement...)
+		tools = append(tools, loopTools...)
 		// Only the main thread holds a task: it is the owner's view that a hold changes.
 		tools = append(tools, ToolTaskHold)
 	case (a.Role == dbstate.RoleSupervisor && a.Depth == 1) || (a.Role == dbstate.RoleChild && a.Depth == 2):
@@ -176,6 +182,7 @@ func (p Policy) actorTools(a Actor) []string {
 		tools = append(tools, taskRead...)
 		if a.Role == dbstate.RoleSupervisor {
 			tools = append(tools, taskManagement...)
+			tools = append(tools, loopTools...)
 		}
 		if a.Grant == dbstate.GrantWorkspace {
 			tools = append(tools, workspaceTools...)

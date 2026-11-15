@@ -1,191 +1,134 @@
 # Loops
 
-Status: **Proposed.** Nothing on this page is implemented. It is issue #314, built on
-[goals](goals.md) (issue #263), [AGENTS.md](../../AGENTS.md)'s reconciler rule, and the existing
-event and delivery machinery this page names throughout rather than duplicates.
+A loop is a durable wake-up that main or a supervisor arms instead of polling: when its trigger
+fires, Mainloop sends one message to the session that armed it, so that session can end its turn
+and still hear when something is worth looking at. Issue #314.
 
-## Why (Proposed)
+Status: **implemented** for task and time triggers, armed and managed by agents through MCP. The
+pull request trigger, the quiet trigger with its no-progress stop, and the owner's view and controls
+are **proposed** (see [Not built](#not-built)).
 
-The owner today babysits running work by hand: watching CI, confirming production stayed healthy,
-noticing a task gone silent, waiting out a checkpoint window. Each of those checks needs a person
-or an outside session to wake up, look, and act or go back to waiting, even though Mainloop already
-owns all of that state. A loop is a durable, owner-visible wake-up rule that fires a single bounded
-turn of the owning supervisor's own session instead.
+## Why
 
-## Loop definition (Proposed)
+Supervisors and main otherwise babysit work by hand: waiting for a child to finish, re-checking CI,
+looking at production again later. A turn that sleeps or polls for that holds a session, and its
+`/tmp` and processes do not survive a workspace suspend (see [delegation](delegation.md), "Shared
+agent guidance"). An ended turn with an armed loop does: the loop is a row, and its firing is a
+message through the same sessions ledger that delivers child reports.
 
-A loop has:
+## Who arms a loop, and who it wakes
 
-- **Owner.** A goal or a task — any task a supervisor could otherwise poll by hand, not only a
-  goal's root. The loops issue's own example, "merge #312 when green, then confirm prod," is a loop
-  on a single task with no goal involved.
-- **Trigger.** One event trigger or one time trigger (see "Triggers" below). A loop has exactly one
-  trigger; a supervisor that wants to wake on several conditions arms several loops.
-- **State.** `armed` (watching), `paused` (owner-suspended, not watching), `firing` (a firing is in
-  flight), `exhausted` (a guardrail stopped it; see "Guardrails"), `deleted` (terminal).
-- **Limits.** Maximum firings, minimum interval between firings, and a budget. A loop owned by a
-  goal inherits the goal's own quota/wall-clock limits as an upper bound in addition to its own; a
-  loop on a plain task sets its own.
+- **Callers.** Main and supervisors, through the MCP tools `loop_arm`, `loop_list` and `loop_stop`.
+  Children do not arm loops (they have `watch_checks` for their own pull request), and a completed
+  task's attempt cannot. Refused: 403 `task_management_denied`.
+- **Recipient.** The loop belongs to its recipient, the session that armed it, named by the same key
+  report deliveries use: `main`, or `parent-task:<task id>` for a supervisor. A supervisor's loops
+  follow its task across a [retry or reassign](task-handoff.md), and end when the task ends.
+- **Subject.** A task trigger watches a task the caller manages: any of the owner's tasks for main,
+  a supervisor's own children. Another task is 403 `loop_subject_denied`; one that does not exist,
+  404 `task_not_found`. A time trigger may name a subject too, and its messages then say how that
+  task stands.
+- **Idempotency.** The caller's `request_id` (per binding) returns the loop it armed; the same id
+  with a different request is 409 `request_payload_conflict`.
 
-## Triggers (Proposed)
+No [goal](goals.md) is needed: a loop on a plain task is the first slice.
 
-**Event triggers**, from sources Mainloop already observes — a loop adds no new observation, only a
-new reader of an existing one:
+## Triggers
 
-- a check run finished, from the existing task-projection CI observation sweep (see
-  [tasks](tasks.md), "Go status (G8b)" and [pull-requests](pull-requests.md));
-- a pull request changed state or merged, from the same task-projection sweep's PR observation;
-- a task or attempt changed state, from the existing `task:updated` event (see [events](events.md));
-- a delivery stalled, from the existing stalled-turn signal (see
-  [orchestration-health](orchestration-health.md), "Stalled turns");
-- an attention item opened, from the existing `attention_items` / `inbox:updated` projection (see
-  [inbox](inbox.md)).
+- **`task`.** Fires when the subject's status or reason changes. With `statuses`, only when the
+  change lands on one of them (for example `completed`, `failed`, `blocked`). A loop armed on a
+  status the subject is already in fires at once, so arming just after the change still hears of
+  it. Without `statuses` the loop starts from the subject as it is and fires on the next change.
+- **`time`.** Fires after `after_minutes`, then every `every_minutes` when given; with only
+  `every_minutes`, the first firing is one interval away. A one-time timer is `done` once it fires.
+  A timer that was asleep (the server down) fires once on waking, not once per missed interval.
 
-A deploy or production health-check change, named in the issue as a future source, is not yet
-observed by Mainloop at all (see [devloop](devloop.md), which only reaches a shared dev staging
-target). A loop cannot fire on it until that observation exists; see [goals](goals.md)'s first-slice
-proposal and "Open questions" below.
+**How a trigger is watched.** A loop compares stored state, not events, so nothing is lost when a
+notification is missed or the event log is pruned. A task loop keeps a baseline, the subject's
+`status` or `status/reason`, and looks again on every status or reason change of its subject (a
+database trigger makes the loop due and notifies `mainloop_task_loops`) and at least every 15
+seconds otherwise. The evaluation holds the loop row while it reads, and the subject's change waits
+on that row, so a change is either seen by the evaluation or makes the next one due. Time loops are
+due at their next fire time. Every armed loop is looked at again at least every five minutes, which
+is when an expiry or an ended recipient is noticed.
 
-**Time triggers**: fire after a fixed delay, or on "no change for N minutes" — a stall-style
-trigger in the same spirit as task liveness's own stall clock
-(`progress_marker` / `progress_at`, see [tasks](tasks.md), "Liveness bounds"), but scoped to
-whatever the loop's own owner considers a change: a task's version/report, or a goal's progress
-rollup.
+## One firing is one message
 
-## One firing (Proposed)
+A firing is a `task_loop_firings` row with its own `task_event_deliveries` row, delivered by the
+report delivery loop exactly as a child's report is (see [delegation](delegation.md), "Notifications"):
 
-A firing delivers exactly one bounded message to the owning supervisor's native session: what
-fired (the trigger's kind and its minimal identifying facts — a check run's name and conclusion, a
-PR's number and new state, a task's id and new status) plus the current state, read fresh at firing
-time rather than cached when the loop was armed. The supervisor acts on it, then re-arms a next
-trigger or lets the loop end, the same way a task already ends a turn after reporting rather than
-polling for its next instruction. A firing is never a replay: it carries no prior turn's history,
-the same way a task notification today carries one new fact rather than a transcript (see
-[tasks](tasks.md), "Notifications and recovery").
+- It waits while the recipient has an open turn and for the report batch window, then every report
+  and firing pending for that recipient goes out as **one** message, in one turn. A message that
+  carries both starts `[N updates]`. A firing is never steered into a running turn. A suspended
+  session is reached through the sessions ledger like any report.
+- It also waits for the loop's minimum interval after the firing before it.
+- **Coalescing.** A loop has at most one firing waiting to be sent. Further occurrences fold into
+  it: its facts are kept in order, at most 10, with the latest always last and a count of the ones
+  folded in beyond that. Once the firing has a message id its facts are frozen, so a resend after a
+  crash is the same text; a later occurrence starts the next firing.
+- The message names the loop, its firing number and limit, the caller's own `note` ("You asked:
+  …"), and the facts, for example `task <id> ("<title>") is blocked/owner_decision, was running`. It
+  says so when it is the loop's last firing or a one-time timer's.
+- Delivery follows the report rules: idempotent message ids derived from the delivery, the ledger
+  read before any resend, up to three sends. A firing the ledger could not deliver ends
+  `uncertain`; there is no task to block for it. A firing to a recipient whose task ended is
+  cancelled.
 
-## Durability under the reconciler rule (Proposed)
+## States and limits
 
-A loop firing follows [AGENTS.md](../../AGENTS.md)'s reconciler rule exactly: a durable intent row
-per loop, in an explicit state (`pending`, `delivering`, `delivered`, `failed`), with an idempotency
-key per firing — the loop's id plus the trigger occurrence's own identity (the event's id for an
-event trigger, the scheduled fire time for a time trigger). The intent row commits before any
-native send is attempted, the same ordering [tasks](tasks.md) already uses for a report's delivery
-intent. An uncertain firing is reconciled by checking the existing delivery ledger (the same way a
-task report's delivery is checked, see [tasks](tasks.md), "Go status (G8b)") before any retry, never
-by resending blindly. A firing must never happen twice: once its intent row reaches `delivered`, no
-later pass can re-fire the same occurrence key.
+`armed` is the only live state. The final states: `done` (a one-time timer fired), `exhausted` (its
+last firing made), `expired`, `stopped` (by `loop_stop`) and `ended` (its supervisor's task ended).
+A firing already made when a loop stops or ends is still delivered, unless its recipient ended.
 
-## Busy or suspended supervisor (Proposed)
+| Limit                  | Default | Range                    |
+| ---------------------- | ------- | ------------------------ |
+| `max_firings`          | 20      | 1 to 100                 |
+| `min_interval_seconds` | 60      | 0 to 86400               |
+| `expires_minutes`      | 1440    | 1 to 10080               |
+| armed loops per caller | 20      | 409 `loop_limit` past it |
 
-**Recommended: coalesce.** Queuing risks piling up several "what fired" messages that each claimed
-to be the current state at the time they were queued, which stops being true the moment a later one
-supersedes it — exactly what "never a replay" rules out. Skipping loses a real signal outright,
-which defeats the point of a loop that exists so the owner does not have to notice something
-happened. Coalescing keeps the single-bounded-message property: while a turn is already in flight,
-or the session is suspended, further firings for the same loop update one pending firing in place
-rather than queuing a second message, and the pending firing is delivered once, carrying the latest
-state, as soon as the session is ready. This reuses the exact mechanism tasks already use for a busy
-session: a report delivered to a session with one open turn is admitted at once as a queued
-sessions-ledger delivery behind whatever else is already queued there (see [tasks](tasks.md), "Go
-status (G8b)"), and a HITL response wakes a suspended session through the same
-`sessions.Service.ReadySession` path before sending (see [inbox](inbox.md)). A loop needs no new
-delivery primitive, only a new source feeding the existing one, collapsed to at most one pending
-message per loop.
+Each firing counts once against `max_firings`; occurrences folded into a firing do not count. The
+loop becomes `exhausted` when it makes its last firing.
 
-## Guardrails (Proposed)
+**Liveness.** A supervisor with an armed loop, or a firing to it on its way, ended its turn to wait:
+the liveness sweep does not block it as `stalled` (as for [`watch_checks`](ci.md)). The loop's
+expiry bounds that wait, and the runtime bound still holds.
 
-- **Max firings.** A lifetime count per loop; reaching it moves the loop to `exhausted`.
-- **Minimum interval.** A debounce so a burst of the same event (several check runs finishing
-  within seconds) produces one firing, not several, by folding firings that would otherwise occur
-  inside the interval into the same coalesced pending firing described above.
-- **Budget.** Inherited from the owning goal's own quota limit when the owner is a goal; a
-  standalone budget on a loop that owns a plain task.
-- **No-progress stop.** If a run of consecutive firings produces no change in the owner's observed
-  state (the same fingerprint idea task liveness already uses to detect a wedged turn, see
-  [tasks](tasks.md), "Liveness bounds"), the loop stops itself (`exhausted`) and raises an attention
-  item — the same `owner_decision` item [goals](goals.md) raises when a goal's repairs stop
-  converging, reused here for a loop on a plain task too, since the condition is identical: nothing
-  automatic is left to try.
+## Usage
 
-## Owner controls (Proposed)
+Mainloop does not record turn usage yet ([orchestration-health](orchestration-health.md)), so no
+token budget is enforced; a loop's cost is bounded by its firings, minimum interval and expiry. Each
+firing's delivery row names the ledger message that opened its turn, so once usage is recorded per
+turn (#72), a loop's usage is the sum over its firings' turns, labelled _attributed_.
 
-- **Pause.** Moves the loop to `paused`; no firing is evaluated or delivered while paused. A
-  firing already in flight when pause is requested still settles.
-- **Fire now.** A manual firing, taking the same durable intent/idempotency path as any other
-  firing (a synthetic occurrence key), bypassing the minimum interval once but still counting
-  against max firings.
-- **Delete.** Terminal (`deleted`); no further firing is evaluated. An in-flight firing still
-  settles through the reconciler; it is simply never retried or re-armed afterward.
+## Relation to other wake-ups
 
-## Agents end turns instead of polling (Proposed)
+- **`watch_checks`** ([ci](ci.md)) stays as it is: a worker's own one-shot wake on live CI and
+  reviews for its pull request. Loops follow its pattern (an intent row on `internal/reconcile`, a
+  message id that dedups a resend) and its liveness exemption.
+- **Holds** ([tasks](tasks.md#holds)) are main's way to set a task aside from the owner's views
+  until a time; a hold's end message is not a loop.
+- **[Scheduled runs](scheduled-runs.md)** are kagent cron schedules that each start a **new**
+  session. A loop wakes the **existing** session that armed it, with its identity and history, and
+  never creates a kagent Session.
 
-A native turn that would otherwise sleep or poll for a condition should instead end its turn — after
-reporting progress or taking no action — and arm the loop that will wake it when the condition is
-worth looking at again, rather than looping inside the sandbox. This is the same discipline the
-shared agent guidance already gives every task today: committed work and `/data` survive a pause,
-but other writes, `/tmp` and processes may be reset (see [delegation](delegation.md), "Shared agent
-guidance"). An ended turn with an armed loop survives a workspace suspend; a sleeping turn does not.
+## Not built
 
-## Relation to scheduled runs (Proposed)
-
-[Scheduled runs](scheduled-runs.md) are cron schedules kagent owns and fires: each execution starts
-a **new** kagent Session, with its own conversation identity, turned into a new Mainloop session (or
-one inbox item on failure). A loop does the opposite: it wakes an **existing** supervisor's current
-native session and attempt, with the same identity, history and tools it already has. A loop never
-creates a kagent Session, never calls `CreateScheduledRun`, and is not a row in the schedules
-registry.
-
-What a loop does reuse from the existing machinery:
-
-- the sessions-ledger delivery and wake path (`sessions.Service.ReadySession`, queued admission
-  behind an open turn) that reports and HITL responses already use to reach a busy or suspended
-  session (see [tasks](tasks.md) and [inbox](inbox.md));
-- the `server/internal/reconcile` intent-row/lease/idempotency framework already used by the HITL
-  dispatcher and the event retention sweep (see [events](events.md), "Background work");
-- the existing event sources named under "Triggers" above — no new observation code, only a new
-  reader.
-
-What it does not reuse: kagent's cron registry, its own idempotency key shape, or its
-adoption/executions-cursor machinery (see [scheduled-runs](scheduled-runs.md)) — none of that is
-about waking a session that already exists.
-
-## Proposed API shape in prose
-
-- **`Loop`** fields: `id`; `owner_type` (`goal` or `task`); `owner_task_id`; `trigger`, a typed
-  union — `{kind: event, source, filter}` (naming one of the event sources above and any narrowing
-  filter, such as one PR number), `{kind: time, after_seconds}`, or `{kind: stall,
-no_change_minutes}`; `state` (`armed`, `paused`, `firing`, `exhausted`, `deleted`); `limits`
-  (`max_firings`, `min_interval_seconds`, `budget`); `next_fire_at` (time triggers) or
-  `watched_event` (event triggers); and a bounded list of recent firings, each with its trigger
-  facts, delivered-at time, and one-line outcome.
-- **`POST /tasks/{id}/loops`** (or `/goals/{id}/loops`): creates a loop on that owner, idempotent by
-  `request_id` the same way task creation already is.
-- **`GET /tasks/{id}/loops`** / **`GET /goals/{id}/loops`**: the owner's armed, paused and recently
-  exhausted loops.
-- **`GET /loops/{id}`**: one loop's full detail and firing history.
-- **`POST /loops/{id}/pause`**, **`/resume`**, **`/fire-now`**, **`DELETE /loops/{id}`**: owner
-  actions, each carrying the loop's expected version the way a task action already carries the
-  task's (see [tasks](tasks.md), "Admission and integration ports").
-
-The OpenAPI change implementing this shape is a later PR; this page fixes the shape in prose first.
-
-## Open questions
-
-- Which event source comes first to build: check runs, PR state and task state are already
-  observed and are the cheapest to wire; delivery-stall and attention-opened need their existing
-  sweeps to be read by a new consumer; deploy/production health has no observation at all yet (see
-  [goals](goals.md), "Open questions").
-- Can a loop fire on a plain task with no goal at all, with the same guardrails as a goal-owned
-  loop, or does a standalone loop need its own, simpler guardrail set?
-- Is coalescing into one pending firing always the right default, or should some event sources (for
-  example, a merge outcome) always get their own firing even while one is already pending?
-- Does a coalesced or skipped occurrence count against `max_firings`, or only a firing that actually
-  reaches the session?
-- Usage accounting per firing (issue #314's own open question, #72): how is a firing's own token/compute
-  cost attributed, given the same usage-accounting gaps [orchestration-health](orchestration-health.md)
-  already documents for a turn?
-- Does the event stream need a new `loop:updated` frame (see [events](events.md)), or can a loop's
-  state changes ride the existing `task:updated` / `schedule:updated` frames since a loop is always
-  read through its owning task or goal?
-- Can the owning supervisor itself arm or re-arm a loop through an MCP tool, or is arming an
-  owner-only REST action for the first slice?
+- **`pull_request` trigger** (proposed, next): fire when a subject code task's projection changes,
+  CI settled at the pull request head, its state or merge state, from the data the task projection
+  sweep already keeps fresh, so a loop adds no GitHub reads. A pull request that is not a task's
+  stays with `watch_checks`.
+- **`quiet` trigger and the no-progress stop** (proposed): fire when the subject has not changed for
+  N minutes. Arming takes `expect_change` (default false); only a loop armed with it, a repair-style
+  loop, stops as `exhausted` after three delivered firings in a row with an unchanged subject, and
+  raises an `owner_decision` attention item. A plain periodic check-in, such as "check prod every
+  30 minutes", is never stopped for seeing no change.
+- **Owner view and controls** (proposed): the task page lists a task's loops, armed ones first, with
+  the next fire time or what each waits on and its last firings, and offers pause, resume, fire now
+  and delete through REST routes. A paused loop is not evaluated; fire now takes the same firing path
+  once, ignoring the minimum interval and counting against `max_firings`. A `loop:updated` event
+  frame lands with that view if the task page needs one.
+- **Other sources**: delivery stalls, attention items, and deploy or production health (which
+  Mainloop does not observe yet).
+- **Goals** ([goals](goals.md)): a goal's supervisor arms loops like any supervisor; a goal-level
+  budget is not built.

@@ -938,7 +938,7 @@ func (q *Queries) GetTaskCurrentAttempt(ctx context.Context, id string) (*string
 
 const getTaskEventDelivery = `-- name: GetTaskEventDelivery :one
 
-SELECT id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at FROM task_event_deliveries WHERE id = $1
+SELECT id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at, loop_firing_id FROM task_event_deliveries WHERE id = $1
 `
 
 // Event deliveries.
@@ -958,6 +958,7 @@ func (q *Queries) GetTaskEventDelivery(ctx context.Context, id string) (TaskEven
 		&i.LeaseOwner,
 		&i.LeaseUntil,
 		&i.UpdatedAt,
+		&i.LoopFiringID,
 	)
 	return i, err
 }
@@ -1453,7 +1454,7 @@ INSERT INTO task_event_deliveries (id, report_id, recipient_key) VALUES ($1, $2,
 
 type InsertTaskEventDeliveryParams struct {
 	ID           string
-	ReportID     string
+	ReportID     *string
 	RecipientKey string
 }
 
@@ -1597,9 +1598,13 @@ WHERE id IN (
     SELECT o.id FROM task_event_deliveries o
     WHERE o.recipient_key = $3 AND o.state = 'pending' AND o.delivery_id IS NULL
       AND o.id <> $4
+      -- A loop firing still inside its minimum interval waits for its own turn.
+      AND (o.loop_firing_id IS NULL OR EXISTS (
+          SELECT 1 FROM task_loop_firings f WHERE f.id = o.loop_firing_id AND f.not_before <= now()
+      ))
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at
+RETURNING id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at, loop_firing_id
 `
 
 type JoinTaskEventBatchParams struct {
@@ -1640,6 +1645,7 @@ func (q *Queries) JoinTaskEventBatch(ctx context.Context, arg JoinTaskEventBatch
 			&i.LeaseOwner,
 			&i.LeaseUntil,
 			&i.UpdatedAt,
+			&i.LoopFiringID,
 		); err != nil {
 			return nil, err
 		}
@@ -2562,33 +2568,37 @@ func (q *Queries) ListTaskAttempts(ctx context.Context, taskIds []string) ([]Tas
 }
 
 const listTaskEventBatch = `-- name: ListTaskEventBatch :many
-SELECT r.id, r.task_id, r.attempt_id, r.request_id, r.request_digest, r.summary, r.outcome, r.owner_action, r.evidence_refs, r.task_version, r.created_at FROM task_event_deliveries d JOIN task_reports r ON r.id = d.report_id
+SELECT d.id, d.report_id, d.recipient_key, d.target_attempt_id, d.delivery_id, d.state, d.sends, d.attempts, d.next_attempt_at, d.lease_owner, d.lease_until, d.updated_at, d.loop_firing_id FROM task_event_deliveries d
+LEFT JOIN task_reports r ON r.id = d.report_id
+LEFT JOIN task_loop_firings f ON f.id = d.loop_firing_id
 WHERE d.delivery_id = $1
-ORDER BY r.created_at, r.id
+ORDER BY coalesce(r.created_at, f.created_at), d.id
 `
 
-// The reports one message carries, oldest first.
-func (q *Queries) ListTaskEventBatch(ctx context.Context, deliveryID *string) ([]TaskReport, error) {
+// The reports and loop firings one message carries, oldest first.
+func (q *Queries) ListTaskEventBatch(ctx context.Context, deliveryID *string) ([]TaskEventDelivery, error) {
 	rows, err := q.db.Query(ctx, listTaskEventBatch, deliveryID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []TaskReport{}
+	items := []TaskEventDelivery{}
 	for rows.Next() {
-		var i TaskReport
+		var i TaskEventDelivery
 		if err := rows.Scan(
 			&i.ID,
-			&i.TaskID,
-			&i.AttemptID,
-			&i.RequestID,
-			&i.RequestDigest,
-			&i.Summary,
-			&i.Outcome,
-			&i.OwnerAction,
-			&i.EvidenceRefs,
-			&i.TaskVersion,
-			&i.CreatedAt,
+			&i.ReportID,
+			&i.RecipientKey,
+			&i.TargetAttemptID,
+			&i.DeliveryID,
+			&i.State,
+			&i.Sends,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.LeaseOwner,
+			&i.LeaseUntil,
+			&i.UpdatedAt,
+			&i.LoopFiringID,
 		); err != nil {
 			return nil, err
 		}
@@ -2601,10 +2611,10 @@ func (q *Queries) ListTaskEventBatch(ctx context.Context, deliveryID *string) ([
 }
 
 const listTaskEventDeliveries = `-- name: ListTaskEventDeliveries :many
-SELECT id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at FROM task_event_deliveries WHERE report_id = $1 ORDER BY recipient_key
+SELECT id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at, loop_firing_id FROM task_event_deliveries WHERE report_id = $1 ORDER BY recipient_key
 `
 
-func (q *Queries) ListTaskEventDeliveries(ctx context.Context, reportID string) ([]TaskEventDelivery, error) {
+func (q *Queries) ListTaskEventDeliveries(ctx context.Context, reportID *string) ([]TaskEventDelivery, error) {
 	rows, err := q.db.Query(ctx, listTaskEventDeliveries, reportID)
 	if err != nil {
 		return nil, err
@@ -2626,6 +2636,7 @@ func (q *Queries) ListTaskEventDeliveries(ctx context.Context, reportID string) 
 			&i.LeaseOwner,
 			&i.LeaseUntil,
 			&i.UpdatedAt,
+			&i.LoopFiringID,
 		); err != nil {
 			return nil, err
 		}
@@ -3276,7 +3287,7 @@ SET target_attempt_id = $1, delivery_id = $2,
     sends = sends + 1, updated_at = now()
 WHERE id = $3 AND lease_owner = $4 AND attempts = $5
   AND delivery_id IS NULL
-RETURNING id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at
+RETURNING id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at, loop_firing_id
 `
 
 type PrepareTaskEventDeliveryParams struct {
@@ -3311,6 +3322,7 @@ func (q *Queries) PrepareTaskEventDelivery(ctx context.Context, arg PrepareTaskE
 		&i.LeaseOwner,
 		&i.LeaseUntil,
 		&i.UpdatedAt,
+		&i.LoopFiringID,
 	)
 	return i, err
 }
@@ -3594,7 +3606,7 @@ UPDATE task_event_deliveries
 SET delivery_id = $1, state = 'pending', sends = sends + 1, updated_at = now(),
     lease_owner = NULL, lease_until = NULL
 WHERE id = $2 AND lease_owner = $3 AND attempts = $4
-RETURNING id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at
+RETURNING id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at, loop_firing_id
 `
 
 type ResendTaskEventDeliveryParams struct {
@@ -3626,6 +3638,7 @@ func (q *Queries) ResendTaskEventDelivery(ctx context.Context, arg ResendTaskEve
 		&i.LeaseOwner,
 		&i.LeaseUntil,
 		&i.UpdatedAt,
+		&i.LoopFiringID,
 	)
 	return i, err
 }
@@ -3929,7 +3942,7 @@ const setTaskEventDeliveryState = `-- name: SetTaskEventDeliveryState :one
 UPDATE task_event_deliveries
 SET state = $1, updated_at = now(), lease_owner = NULL, lease_until = NULL
 WHERE id = $2 AND lease_owner = $3 AND attempts = $4
-RETURNING id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at
+RETURNING id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at, loop_firing_id
 `
 
 type SetTaskEventDeliveryStateParams struct {
@@ -3960,6 +3973,7 @@ func (q *Queries) SetTaskEventDeliveryState(ctx context.Context, arg SetTaskEven
 		&i.LeaseOwner,
 		&i.LeaseUntil,
 		&i.UpdatedAt,
+		&i.LoopFiringID,
 	)
 	return i, err
 }

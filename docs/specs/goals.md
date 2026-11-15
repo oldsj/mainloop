@@ -221,7 +221,8 @@ summary>`."
 
 This depends on, and builds nothing new beyond:
 
-- [loops](loops.md)'s durable firing and idempotency mechanism (not yet built);
+- [loops](loops.md)'s durable firing and idempotency mechanism (built for task and time triggers;
+  the pull request trigger is next);
 - the existing task-projection CI/PR observation sweep, already implemented (see [tasks](tasks.md),
   "Go status (G8b)");
 - the existing sessions-ledger delivery and wake path that already carries reports and HITL
