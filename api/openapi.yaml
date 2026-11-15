@@ -43,6 +43,8 @@ tags:
     description: Task reads, task operations and task actions.
   - name: schedules
     description: Scheduled agent runs proxied from kagent; schedules, triggers and executions.
+  - name: dotfiles
+    description: The agent dotfiles source, owner-wide and per project.
   - name: devloop
     description: The one live-sync lease on the shared mainloop-dev instance.
 paths:
@@ -1650,6 +1652,104 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/HTTPValidationError'
                   - $ref: '#/components/schemas/HTTPError'
+  /projects/{project_id}/dotfiles:
+    get:
+      tags:
+        - dotfiles
+      summary: Get Project Dotfiles Source
+      description: >-
+        The project's own dotfiles source, which replaces the owner-wide one for this project's
+        sessions while `repository` is set. With none set, `repository` is `null` at version 0
+        and the owner-wide source applies.
+      operationId: getProjectDotfilesSource
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DotfilesSource'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TaskError'
+                  - $ref: '#/components/schemas/HTTPError'
+    put:
+      tags:
+        - dotfiles
+      summary: Set Project Dotfiles Source
+      description: >-
+        Set or clear (`repository: null`, reverting to the owner-wide source) the project's
+        source, with the same compare-and-swap and field rules as `PUT /dotfiles`.
+      operationId: setProjectDotfilesSource
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DotfilesSourceUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DotfilesSource'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TaskError'
+                  - $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
   /projects/{project_id}/detail:
     get:
       tags:
@@ -2742,6 +2842,77 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
+  /dotfiles:
+    get:
+      tags:
+        - dotfiles
+      summary: Get Dotfiles Source
+      description: >-
+        The owner-wide agent dotfiles source: a GitHub repository, a ref and a directory in it
+        whose `AGENTS.md`, skills, subagents and commands every agent session receives as native
+        user-level files (see docs/specs/agent-dotfiles.md). A project's own source, when set,
+        replaces it for that project. With none set, `repository` is `null` at version 0.
+      operationId: getDotfilesSource
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DotfilesSource'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+    put:
+      tags:
+        - dotfiles
+      summary: Set Dotfiles Source
+      description: >-
+        Set or clear (`repository: null`) the owner-wide source: a compare-and-swap on `version`
+        (`expected_version` 0 when none was ever set), `409` when stale. `ref` empty means the
+        repository's default branch; `path` empty means its root. A new value reaches sessions
+        created after it; a running session keeps the commit it was given.
+      operationId: setDotfilesSource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DotfilesSourceUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DotfilesSource'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
         '422':
           description: Validation Error
           content:
@@ -6972,6 +7143,66 @@ components:
         - is_mainloop
       title: ProjectPRSummary
       description: Summary of a PR for a project.
+    DotfilesSource:
+      additionalProperties: false
+      description: >-
+        An agent dotfiles source. `repository` is a GitHub `owner/name` the Mainloop GitHub App
+        can read, or `null` when none is set. `ref` is a branch, tag or full commit SHA, empty for
+        the default branch. `path` is a directory in the repository, empty for its root.
+      properties:
+        repository:
+          anyOf:
+            - type: string
+              pattern: ^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$
+            - type: 'null'
+          title: Repository
+        ref:
+          type: string
+          maxLength: 255
+          title: Ref
+        path:
+          type: string
+          maxLength: 255
+          title: Path
+        version:
+          type: integer
+          minimum: 0
+          title: Version
+      required:
+        - repository
+        - ref
+        - path
+        - version
+      title: DotfilesSource
+      type: object
+    DotfilesSourceUpdate:
+      additionalProperties: false
+      properties:
+        repository:
+          anyOf:
+            - type: string
+              pattern: ^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$
+            - type: 'null'
+          title: Repository
+        ref:
+          type: string
+          maxLength: 255
+          default: ''
+          title: Ref
+        path:
+          type: string
+          maxLength: 255
+          default: ''
+          title: Path
+        expected_version:
+          type: integer
+          minimum: 0
+          title: Expected Version
+      required:
+        - repository
+        - expected_version
+      title: DotfilesSourceUpdate
+      type: object
     ProjectProviderUpdate:
       properties:
         profile_id:

@@ -52,7 +52,7 @@ Status: **implemented** (guidance v5, `server/internal/agentcontext`); wording i
 
 A change of substance to the wording bumps the version in the code and its heading; the main binding records the version it was given, so a bump reaches a running main on its next message. Not measured: whether agents follow it.
 
-Not implemented yet: agent dotfiles ([docs/specs/agent-dotfiles.md](agent-dotfiles.md)), a proposed way to carry owner-level instructions and skills as native files materialized into an agent's home directory instead of rendered guidance text.
+Agent dotfiles ([docs/specs/agent-dotfiles.md](agent-dotfiles.md)) carry owner-level instructions and skills as native user-level files rather than rendered guidance text. Their source can be configured; delivery to sessions is not implemented yet.
 
 `task_retry` and `task_reassign` are served to main and supervisors for the tasks they manage ([task-handoff](task-handoff.md)): the task gets a new attempt in a new session with a continuation brief, and a code task's successor starts from the task branch's head on origin (or its base, when the branch was never pushed). Without a GitHub App a code task's request is recorded blocked (`handoff_unavailable`). Main and supervisors may hand one task off `TASK_MAX_HANDOFFS` times (default 3); after that `handoff_limit` leaves it to the owner. No provider fallback is inferred. Legacy session tools `status`, `read`, `cancel` and `clear`, and topic/kind delegation arguments, are removed.
 

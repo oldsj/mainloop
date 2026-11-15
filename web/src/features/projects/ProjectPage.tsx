@@ -6,6 +6,7 @@ import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { SkeletonHeader, SkeletonRows } from '@/components/shared/skeleton';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { EnvironmentSection } from '@/features/environments/EnvironmentSection';
+import { ProjectDotfilesSection } from '@/features/dotfiles/DotfilesSection';
 import { SessionRow } from '@/features/sessions/SessionRow';
 import { relativeTime, workspaceFor } from '@/features/sessions/model';
 import {
@@ -342,6 +343,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
             <VerificationSection projectId={id} />
             <EnvironmentSection projectId={id} />
             <WorkspaceServiceSection projectId={id} />
+            <ProjectDotfilesSection projectId={id} />
           </div>
         </div>
       </section>

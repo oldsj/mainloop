@@ -156,6 +156,7 @@ export const baseHandlers = [
   http.get(url('/orchestration-health'), () => HttpResponse.json(orchestrationHealth)),
   http.get(url('/providers'), () => HttpResponse.json(providers)),
   ...sessionDefaultsHandlers(),
+  ...dotfilesHandlers(),
   ...testSeen.handlers
 ];
 
@@ -164,6 +165,55 @@ export const baseHandlers = [
  * after each case, so state from one test cannot reach the next.
  */
 export const testChat = createChatBackend({});
+
+/**
+ * `GET` and `PUT /dotfiles` and `/projects/{id}/dotfiles`, kept in memory with the server's
+ * compare-and-swap: a stale `expected_version` is `409`, clearing drops ref and path.
+ */
+export function dotfilesHandlers(
+  initial: {
+    owner?: Schemas['DotfilesSource'];
+    projects?: Record<string, Schemas['DotfilesSource']>;
+  } = {}
+) {
+  const none: Schemas['DotfilesSource'] = { repository: null, ref: '', path: '', version: 0 };
+  let owner = initial.owner ?? none;
+  const projects = new Map(Object.entries(initial.projects ?? {}));
+  const write = (current: Schemas['DotfilesSource'], body: Schemas['DotfilesSourceUpdate']) => {
+    if (body.expected_version !== current.version) return null;
+    const set = body.repository !== null;
+    return {
+      repository: body.repository,
+      ref: set ? (body.ref ?? '') : '',
+      path: set ? (body.path ?? '').replace(/\/$/, '') : '',
+      version: current.version + 1
+    };
+  };
+  const stale = () =>
+    HttpResponse.json({ detail: { reason: 'stale_dotfiles_source' } }, { status: 409 });
+  return [
+    http.get(url('/dotfiles'), () => HttpResponse.json(owner)),
+    http.put(url('/dotfiles'), async ({ request }) => {
+      const next = write(owner, (await request.json()) as Schemas['DotfilesSourceUpdate']);
+      if (!next) return stale();
+      owner = next;
+      return HttpResponse.json(owner);
+    }),
+    http.get(url('/projects/:project_id/dotfiles'), ({ params }) =>
+      HttpResponse.json(projects.get(String(params.project_id)) ?? none)
+    ),
+    http.put(url('/projects/:project_id/dotfiles'), async ({ params, request }) => {
+      const id = String(params.project_id);
+      const next = write(
+        projects.get(id) ?? none,
+        (await request.json()) as Schemas['DotfilesSourceUpdate']
+      );
+      if (!next) return stale();
+      projects.set(id, next);
+      return HttpResponse.json(next);
+    })
+  ];
+}
 
 /** Default responses for the test suite. Feature slices add their own next to this file. */
 export const handlers = [...baseHandlers, ...testChat.handlers];

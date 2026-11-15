@@ -3,6 +3,7 @@ import { PAGE } from '@/components/shared/measure';
 import { PageHeader } from '@/components/shared/page-header';
 import { API_SAME_ORIGIN, SIGN_OUT_PATH } from '@/api/signin';
 import { ThemeSelector } from '@/shell/ThemeSelector';
+import { OwnerDotfilesSection } from '@/features/dotfiles/DotfilesSection';
 import { ImportProjectSection } from './ImportProjectSection';
 import { SessionDefaultsSection } from './SessionDefaultsSection';
 
@@ -12,6 +13,7 @@ export function SettingsPage() {
     <div className={cn(PAGE, 'gap-lg')} data-testid="settings-page">
       <PageHeader title="Settings" />
       <SessionDefaultsSection />
+      <OwnerDotfilesSection />
       <ImportProjectSection />
       <section aria-labelledby="appearance-heading" className="gap-sm flex flex-col">
         <h2 id="appearance-heading" className="text-base font-semibold">
