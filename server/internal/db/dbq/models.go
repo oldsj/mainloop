@@ -1135,6 +1135,52 @@ type TopicRecord struct {
 	CreatedAt   time.Time
 }
 
+type TranscriptEntry struct {
+	ID         int64
+	TaskID     string
+	SessionID  string
+	Pos        int32
+	Kind       string
+	ToolName   string
+	ToolCallID string
+	IsError    bool
+	Text       string
+	Truncated  bool
+	OrigBytes  int32
+	At         *time.Time
+	Tsv        interface{}
+}
+
+type TranscriptSession struct {
+	KagentSessionID string
+	SessionID       string
+	OwnerID         string
+	AgentNamespace  string
+	AgentName       string
+	ContextID       string
+	TaskCursor      *string
+	State           string
+	Reason          string
+	StoredBytes     int64
+	Failures        int32
+	NextScanAt      time.Time
+	ScannedAt       *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+type TranscriptTask struct {
+	TaskID          string
+	KagentSessionID string
+	SessionID       string
+	TaskState       string
+	Entries         int32
+	Bytes           int64
+	TaskAt          *time.Time
+	IngestedAt      time.Time
+	PrunedAt        *time.Time
+}
+
 type Workspace struct {
 	ID                 string
 	UserID             string
