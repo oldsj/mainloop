@@ -509,6 +509,139 @@
       }
     },
     {
+      "name": "task_transcript",
+      "description": "Read what a task's agent did: its messages, tool calls and tool results, oldest first, redacted, from its latest attempt's session (or attempt_id's). Reading costs the agent no turn. Entries show a 2 KiB preview; pass entry_id to read one entry whole. Page with after=next_after. At the end, live entries are the turn still running, not yet stored.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "attempt_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "entry_id": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "user",
+                    "assistant",
+                    "thinking",
+                    "tool_call",
+                    "tool_result",
+                    "status",
+                    "ask",
+                    "other"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["task_id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "transcript_search",
+      "description": "Full-text search over the stored transcripts of the tasks you can read (web-search syntax: quoted phrases, or, -word), best match first. Each hit names its task and entry; read around it with task_transcript(task_id, after=entry_id-1).",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "q": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": ["q"],
+        "type": "object"
+      }
+    },
+    {
       "name": "delegate",
       "description": "Create a durable task and scoped attempt. Reuse request_id for lost or uncertain responses. After a confirmed terminal blocked create, use a NEW request_id for a new create; reusing the old id returns the blocked operation. Role and tool guidance prefixes the brief. Choosing model and effort: match the tier to the task's scope, risk and reversibility, not habit. Mechanical or bounded, easily-reversible work takes the cheapest model and lowest effort likely to succeed; design, debugging, security-sensitive review, or anything hard to undo takes the strongest model and highest effort the profile offers. When re-delegating a failed attempt, prefer a higher tier over repeating the same one. Read the resolved provider profile's own models and effort_levels (see the providers list) rather than assuming any provider's names; leaving both unset keeps the profile's defaults.",
       "input_schema": {
@@ -1282,8 +1415,10 @@
         "task_list",
         "task_reassign",
         "task_retry",
+        "task_transcript",
         "topic_open",
         "topics",
+        "transcript_search",
         "watch_checks",
         "whoami"
       ],
@@ -1328,8 +1463,10 @@
         "task_list",
         "task_reassign",
         "task_retry",
+        "task_transcript",
         "topic_open",
         "topics",
+        "transcript_search",
         "watch_checks",
         "whoami"
       ],
@@ -1373,8 +1510,10 @@
         "task_list",
         "task_reassign",
         "task_retry",
+        "task_transcript",
         "topic_open",
         "topics",
+        "transcript_search",
         "watch_checks",
         "whoami"
       ],
@@ -1422,8 +1561,10 @@
         "task_list",
         "task_reassign",
         "task_retry",
+        "task_transcript",
         "topic_open",
         "topics",
+        "transcript_search",
         "watch_checks",
         "whoami"
       ],
@@ -1456,6 +1597,8 @@
         "task_list",
         "task_reassign",
         "task_retry",
+        "task_transcript",
+        "transcript_search",
         "whoami"
       ],
       "approval": []
@@ -1487,6 +1630,8 @@
         "task_list",
         "task_reassign",
         "task_retry",
+        "task_transcript",
+        "transcript_search",
         "whoami"
       ],
       "approval": []
@@ -1518,6 +1663,8 @@
         "task_list",
         "task_reassign",
         "task_retry",
+        "task_transcript",
+        "transcript_search",
         "whoami"
       ],
       "approval": []
@@ -1549,6 +1696,8 @@
         "task_list",
         "task_reassign",
         "task_retry",
+        "task_transcript",
+        "transcript_search",
         "whoami"
       ],
       "approval": []
@@ -1582,6 +1731,8 @@
         "task_list",
         "task_reassign",
         "task_retry",
+        "task_transcript",
+        "transcript_search",
         "watch_checks",
         "whoami"
       ],
@@ -1620,6 +1771,8 @@
         "task_list",
         "task_reassign",
         "task_retry",
+        "task_transcript",
+        "transcript_search",
         "watch_checks",
         "whoami"
       ],
@@ -1657,6 +1810,8 @@
         "task_list",
         "task_reassign",
         "task_retry",
+        "task_transcript",
+        "transcript_search",
         "watch_checks",
         "whoami"
       ],
@@ -1698,6 +1853,8 @@
         "task_list",
         "task_reassign",
         "task_retry",
+        "task_transcript",
+        "transcript_search",
         "watch_checks",
         "whoami"
       ],
@@ -1721,6 +1878,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_transcript",
+        "transcript_search",
         "whoami"
       ],
       "approval": []
@@ -1743,6 +1902,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_transcript",
+        "transcript_search",
         "whoami"
       ],
       "approval": []
@@ -1765,6 +1926,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_transcript",
+        "transcript_search",
         "whoami"
       ],
       "approval": []
@@ -1787,6 +1950,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_transcript",
+        "transcript_search",
         "whoami"
       ],
       "approval": []
@@ -1811,6 +1976,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_transcript",
+        "transcript_search",
         "watch_checks",
         "whoami"
       ],
@@ -1840,6 +2007,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_transcript",
+        "transcript_search",
         "watch_checks",
         "whoami"
       ],
@@ -1868,6 +2037,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_transcript",
+        "transcript_search",
         "watch_checks",
         "whoami"
       ],
@@ -1900,6 +2071,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_transcript",
+        "transcript_search",
         "watch_checks",
         "whoami"
       ],

@@ -25,7 +25,7 @@ import (
 // they are write cases too.
 var readOnlyTools = []string{
 	"check_status", "get_issue", "get_pull_request_merge_status", "list_dependabot_alerts", "loop_list", "task_get",
-	"task_history", "project_context", "task_list", "topics", "whoami",
+	"task_history", "task_transcript", "transcript_search", "project_context", "task_list", "topics", "whoami",
 }
 
 // A writeCase calls one write tool with arguments valid enough to reach its write. prepare runs

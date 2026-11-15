@@ -29,6 +29,8 @@ const (
 	ToolTaskGet                   = "task_get"
 	ToolTaskList                  = "task_list"
 	ToolTaskHistory               = "task_history"
+	ToolTaskTranscript            = "task_transcript"
+	ToolTranscriptSearch          = "transcript_search"
 	ToolDelegate                  = "delegate"
 	ToolTaskCancel                = "task_cancel"
 	ToolTaskRetry                 = "task_retry"
@@ -56,7 +58,7 @@ var AllTools = []string{
 	ToolOpenPullRequest,
 	ToolGetIssue, ToolCreateIssue, ToolCommentIssue, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
 	ToolProjectContext, ToolRemember, ToolForget,
-	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolDelegate, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign,
+	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolTaskTranscript, ToolTranscriptSearch, ToolDelegate, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign,
 	ToolTaskHold, ToolSteer, ToolFollowUp, ToolReport, ToolLoopArm, ToolLoopList, ToolLoopStop,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
@@ -118,10 +120,10 @@ type Policy struct {
 }
 
 var (
-	taskRead       = []string{ToolTaskGet, ToolTaskList, ToolTaskHistory}
+	taskRead       = []string{ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolTaskTranscript, ToolTranscriptSearch}
 	taskManagement = []string{ToolDelegate, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign, ToolSteer, ToolFollowUp}
 	// loopTools are main's and supervisors' wake-ups: what fires is a message to them.
-	loopTools = []string{ToolLoopArm, ToolLoopList, ToolLoopStop}
+	loopTools      = []string{ToolLoopArm, ToolLoopList, ToolLoopStop}
 	workspaceTools = []string{ToolWhoami, ToolOpenPullRequest}
 	mergeTools     = []string{
 		ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,

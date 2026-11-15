@@ -32,6 +32,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/prs"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/topics"
+	"github.com/oldsj/mainloop/server/internal/transcripts"
 )
 
 // Paths of the two MCP endpoints.
@@ -48,6 +49,9 @@ type Server struct {
 	Topics  *topics.Service
 	// Tasks serves the task tools. With none, those tools answer that tasks are unavailable.
 	Tasks *tasks.Service
+	// Transcripts serves the transcript tools, inside the task tools' authority. With none, they
+	// answer that transcripts are unavailable.
+	Transcripts *transcripts.Service
 	// PRs and Merge serve the pull-request and merge tools. With none, those tools answer that
 	// they are unavailable.
 	PRs   *prs.Service
@@ -77,7 +81,7 @@ type Server struct {
 // later adds its function here and nothing else changes.
 func (s *Server) tools() map[string]Tool {
 	all := map[string]Tool{}
-	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.loopTools(), s.pullRequestTools(), s.issueTools(), s.checkTools(), s.devLoopTools(), s.projectTools()} {
+	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.transcriptTools(), s.loopTools(), s.pullRequestTools(), s.issueTools(), s.checkTools(), s.devLoopTools(), s.projectTools()} {
 		for _, t := range domain {
 			all[t.Name] = t
 		}

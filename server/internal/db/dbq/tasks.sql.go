@@ -2494,6 +2494,37 @@ func (q *Queries) ListTaskArtifacts(ctx context.Context, taskIds []string) ([]Ta
 	return items, nil
 }
 
+const listTaskAttemptSessions = `-- name: ListTaskAttemptSessions :many
+SELECT DISTINCT session_id::text AS session_id, task_id FROM task_attempts
+WHERE task_id = ANY($1::text[]) AND session_id IS NOT NULL
+`
+
+type ListTaskAttemptSessionsRow struct {
+	SessionID string
+	TaskID    string
+}
+
+// The sessions the given tasks' attempts ran in, with their task.
+func (q *Queries) ListTaskAttemptSessions(ctx context.Context, taskIds []string) ([]ListTaskAttemptSessionsRow, error) {
+	rows, err := q.db.Query(ctx, listTaskAttemptSessions, taskIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTaskAttemptSessionsRow{}
+	for rows.Next() {
+		var i ListTaskAttemptSessionsRow
+		if err := rows.Scan(&i.SessionID, &i.TaskID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTaskAttempts = `-- name: ListTaskAttempts :many
 SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since, model, effort, instructions_version, memory_seq, reopened_at FROM task_attempts WHERE task_id = ANY($1::text[]) ORDER BY task_id, number
 `

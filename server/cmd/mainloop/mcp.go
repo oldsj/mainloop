@@ -20,6 +20,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/topics"
+	"github.com/oldsj/mainloop/server/internal/transcripts"
 )
 
 // serveMCP runs the MCP listener. It reads the database and never touches Kubernetes: the API
@@ -61,6 +62,7 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		DevTargets:   &devloop.TargetService{Pool: pool},
 		Auth:         &agentauth.Authenticator{Q: q, Depth: taskSvc.AuthDepth},
 		Tasks:        taskSvc,
+		Transcripts:  transcripts.NewService(cfg, pool, transcripts.FromClient(kc), nil, log), // reads only; serve-api ingests
 		Policy:       agentauth.Policy{MergeTools: bool(cfg.MergeToolsEnabled), DevLoop: bool(cfg.DevloopEnabled)},
 		Queries:      q,
 		Topics:       topics.NewService(pool),

@@ -42,6 +42,7 @@ JOIN sessions s ON s.id = e.session_id,
 WHERE s.user_id = sqlc.arg(owner_id) AND e.tsv @@ q
   AND (sqlc.narg(session_id)::text IS NULL OR e.session_id = sqlc.narg(session_id))
   AND (sqlc.narg(project_id)::text IS NULL OR s.project_id = sqlc.narg(project_id))
+  AND (sqlc.narg(session_ids)::text[] IS NULL OR e.session_id = ANY(sqlc.narg(session_ids)::text[]))
 ORDER BY rank DESC, e.id DESC
 LIMIT sqlc.arg(max_results);
 
@@ -125,12 +126,18 @@ SELECT * FROM transcript_sessions WHERE kagent_session_id = $1;
 SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1 AND user_id = $2);
 
 -- name: ListTranscriptEntries :many
--- A session's stored entries after an id, in the order they were copied.
+-- A session's stored entries after an id, in the order they were copied, of the given kinds (all
+-- when null).
 SELECT id, task_id, pos, kind, tool_name, tool_call_id, is_error, text, truncated, orig_bytes, at
 FROM transcript_entries
 WHERE session_id = $1 AND id > sqlc.arg(after_id)
+  AND (sqlc.narg(kinds)::text[] IS NULL OR kind = ANY(sqlc.narg(kinds)::text[]))
 ORDER BY id
 LIMIT sqlc.arg(max_rows);
 
 -- name: ListTranscriptSources :many
 SELECT * FROM transcript_sessions WHERE session_id = $1 ORDER BY created_at DESC, kagent_session_id LIMIT 50;
+
+-- name: GetTranscriptEntry :one
+SELECT id, session_id, task_id, pos, kind, tool_name, tool_call_id, is_error, text, truncated, orig_bytes, at
+FROM transcript_entries WHERE id = $1;
