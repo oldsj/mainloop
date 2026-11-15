@@ -57,3 +57,16 @@ func Save(ctx context.Context, q *dbq.Queries, c Copy) (bool, error) {
 	}
 	return true, nil
 }
+
+// State is transcript_sessions.state.
+type State string
+
+// Transcript session states.
+const (
+	// StateActive follows the kagent Session.
+	StateActive State = "active"
+	// StateComplete is a kagent Session that is gone, with every turn it had copied.
+	StateComplete State = "complete"
+	// StateUnavailable is a kagent Session that became unreadable before every turn was copied.
+	StateUnavailable State = "unavailable"
+)
