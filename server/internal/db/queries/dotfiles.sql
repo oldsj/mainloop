@@ -54,14 +54,15 @@ SELECT * FROM session_dotfiles WHERE request_id = $1;
 
 -- The first pin of a request wins; a concurrent pin of the same request changes nothing.
 -- name: InsertPinnedDotfiles :exec
-INSERT INTO session_dotfiles (request_id, session_id, repository, ref, path, commit, digest, status, reason)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO session_dotfiles (request_id, session_id, repository, ref, path, commit, digest, status, reason, url)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (request_id) DO NOTHING;
 
 -- name: LatestSessionDotfiles :one
 SELECT * FROM session_dotfiles WHERE session_id = $1 ORDER BY created_at DESC, request_id LIMIT 1;
 
--- A fork is given the files its source's Session was laid out with: its latest pin.
+-- A fork is given the files its source's Session was laid out with: its latest pin. kagent forks
+-- the Session, so no create sends them and the url stays NULL.
 -- name: CopyForkDotfiles :exec
 INSERT INTO session_dotfiles (request_id, session_id, repository, ref, path, commit, digest, status, reason)
 SELECT sqlc.arg(request_id), sqlc.arg(session_id), d.repository, d.ref, d.path, d.commit, d.digest, d.status, d.reason
@@ -70,3 +71,7 @@ WHERE d.session_id = sqlc.arg(source_session_id)
 ORDER BY d.created_at DESC, d.request_id
 LIMIT 1
 ON CONFLICT (request_id) DO NOTHING;
+
+-- Whether the session was pinned to the bundle, by any of its native Sessions or its fork source.
+-- name: SessionPinnedToDigest :one
+SELECT EXISTS (SELECT 1 FROM session_dotfiles WHERE session_id = $1 AND digest = $2);

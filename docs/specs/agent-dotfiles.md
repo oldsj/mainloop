@@ -1,9 +1,9 @@
 # Agent dotfiles
 
-Status: the source configuration, and pinning, export and recording per Session, are
-**implemented**. Delivery to the agent and the read-only layout are **proposed** for
-[#313](https://github.com/oldsj/mainloop/issues/313): today a Session records the dotfiles chosen
-for it, but kagent does not receive or lay them out yet. Each section says which. See
+Status: the source configuration; pinning, export and recording per Session; and delivery to
+kagent with the read-only layout are **implemented** for
+[#313](https://github.com/oldsj/mainloop/issues/313), tested with fakes and not yet proven live.
+Refreshing a running Session to a newer commit is **proposed**. Each section says which. See
 [ROADMAP.md](../../ROADMAP.md#agent-context) for how this fits the "Agent context" direction.
 
 Agents in Mainloop start without the owner's standing context: no owner-level instructions,
@@ -53,7 +53,7 @@ project overriding with `example/agent-dotfiles` at `project-x-stable`.
 
 Implemented: only these paths under `path` are exported; everything else in the repository is
 ignored. A `skills/<name>/` directory without a `SKILL.md` at its root is not a skill and is
-ignored whole. Proposed: the destinations, which kagent lays out (see "Delivery and layout").
+ignored whole. The destinations are where kagent lays them out (see "Delivery and layout").
 
 | Source                             | Claude Code (`CLAUDE_CONFIG_DIR`)                     | Codex (`CODEX_HOME`)               |
 | ---------------------------------- | ----------------------------------------------------- | ---------------------------------- |
@@ -114,21 +114,45 @@ with the digest on hover, or the reason there is none. `GET /sessions/{session_i
 as `dotfiles` (absent for a Session created before pins were recorded, or on a server without a
 GitHub App).
 
-## Proposed: delivery and layout (kagent)
+## Implemented: delivery and layout
 
-CreateSession carries `dotfiles = {url, digest, repository, commit, path}`. The url is the bundle
-on Mainloop's MCP listener, authenticated by the session's existing MCP credential, which kagent's
-gateway already injects for that origin; no new grant and no new egress origin is needed. kagent
-refuses a url whose origin carries none of the session's credentials, downloads the bundle,
-verifies the digest and the same limits, and lays it out in the destinations above before the
-first turn. It executes nothing from the bundle.
+A create whose pin is `ready` and that carries the session's MCP credential sends
+`dotfiles = {url, digest, repository, commit, path}` on its kagent CreateSession. The url is
+`<MCP origin>/dotfiles/<digest>`, on the origin of that credential, so kagent's gateway injects the
+credential when the runtime downloads it; no new grant and no new egress origin is needed. The url
+is recorded with the pin, so a retried or replayed create, which kagent refuses if its dotfiles
+differ, sends the same. A create without an MCP credential (a session whose grant is `none`, or a
+server without Kubernetes) sends no dotfiles; its pin is still recorded and shown.
+
+Mainloop's MCP listener serves `GET /dotfiles/{digest}` with the bundle (`application/x-tar`,
+`no-store`). It authenticates the bearer as the MCP paths do, and answers `404` for any digest the
+caller's session was never pinned to, whether or not it exists: a session gets its own bundle and
+its fork source's, nothing else.
+
+kagent refuses a url whose origin carries none of the session's credentials, downloads the bundle
+(no redirects), verifies the digest and the same limits, and lays it out in the destinations above
+before the first turn of each runtime process. It executes nothing from the bundle. A download or
+layout failure is logged and the turn runs without dotfiles; the next turn retries.
 
 Files are 0444 (0555 where git marked them executable, so a skill's scripts still run when the
 agent uses that skill), directories 0555. The harness rewrites its dotfiles entries from the pinned
-bundle on every start, so an agent's edits never persist; permissions alone are not the guarantee,
-since the agent runs as the same user. The agent's own compiler-selected skills win a name clash
-with a dotfiles skill. Everything lives under `/data`, so a Data snapshot carries the laid-out files
-into a fork, consistent with the fork keeping its source's commit.
+bundle on every start, and again before any turn that finds one missing, so an agent's edits never
+persist; permissions alone are not the guarantee, since the agent runs as the same user. The
+agent's own compiler-selected skills win a name clash with a dotfiles skill. Everything lives under
+`/data`, so a Data snapshot carries the bundle into a fork, which lays it out again; this is
+consistent with the fork keeping its source's commit. The Claude SDK runner lays the files out
+before its bridge starts. Mainloop starts it with the managed profile (`CLAUDE_CONFIG_DIR` under
+`/data`), which reads them.
+
+## Proposed: refresh
+
+A native Session keeps the commit it was created with. Task and agent sessions are short-lived, so
+a source change reaches their next session. The main thread keeps one native Session until a
+provider switch or a restart, so it can run on an old commit for a long time. Proposed: an explicit
+refresh of a running Session to the source's current commit (a new pin under a new request,
+delivered through kagent, re-laid out and the CLI restarted with its conversation resumed), and a
+"dotfiles changed" hint when the pinned commit is behind the source's ref. Whether the main thread
+follows the source automatically is undecided.
 
 ## Implemented: failures
 
@@ -172,8 +196,9 @@ So a dotfiles skill should not reuse the name of a repository's skill.
   without dotfiles.
 - Whether to also map `agents/*.toml` to Codex custom agents.
 - Garbage collection of bundles no session references.
-- Live proof: nothing here has run against GitHub or real CLIs; the export is tested with a local
-  git repository and fakes. It needs a main-thread and a
-  workspace session on mainloop-dev with a fictional dotfiles repository, checking that each CLI
-  loads the instructions and skills, that the files are not writable, and that the session shows
-  the commit.
+- Whether the main thread follows its source automatically (see "Proposed: refresh").
+- Live proof: nothing here has run against GitHub, kagent or real CLIs; the export is tested with a
+  local git repository, delivery and layout with fakes. It needs a main-thread and a workspace
+  session on mainloop-dev with a fictional dotfiles repository, checking that each runtime fetches
+  the bundle through the gateway, that each CLI loads the instructions and skills, that the files
+  are not writable and are restored after a restart, and that the session shows the commit.

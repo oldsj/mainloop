@@ -142,7 +142,9 @@ func reason(err, sentinel error) string {
 // DotfilesPinner chooses, once per create request, the agent dotfiles a native Session is created
 // with (see [dotfiles.Exports.Pin]).
 type DotfilesPinner interface {
-	Pin(ctx context.Context, sessionID, requestID string) (dotfiles.Pinned, error)
+	// mcpOrigin is the origin of the MCP credential the create carries, or empty when it carries
+	// none; the pin's Request is what the create sends.
+	Pin(ctx context.Context, sessionID, requestID, mcpOrigin string) (dotfiles.Pinned, error)
 }
 
 // Kagent is the part of the kagent client the sessions use.

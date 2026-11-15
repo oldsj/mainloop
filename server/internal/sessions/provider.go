@@ -14,6 +14,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/dotfiles"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
@@ -426,7 +427,11 @@ func (s *Service) confirmAbandonable(ctx context.Context, b dbq.GetMainBindingRo
 	unconfirmed := conflictCode(codeUnconfirmed, "The pending target could not be confirmed absent or failed; repeat the same selection.")
 	var se *kagent.SessionError
 	if b.KagentSessionID == nil {
-		sess, err := s.Kagent.CreateSession(ctx, s.createRequest(b))
+		req, err := s.createRequest(ctx, b)
+		if err != nil {
+			return nil, err
+		}
+		sess, err := s.Kagent.CreateSession(ctx, req)
 		switch {
 		case errors.As(err, &se) && createProvenAbsent(se):
 			return nil, nil
@@ -468,15 +473,21 @@ func (s *Service) confirmAbandonable(ctx context.Context, b dbq.GetMainBindingRo
 }
 
 // createRequest is the frozen create contract of the binding's current identity. The credential
-// reference is a function of the binding, so a replay carries the original's.
-func (s *Service) createRequest(b dbq.GetMainBindingRow) *kagentapi.CreateSessionRequest {
+// reference is a function of the binding, so a replay carries the original's; the dotfiles are the
+// ones its pin recorded, none before the first attempt pins them.
+func (s *Service) createRequest(ctx context.Context, b dbq.GetMainBindingRow) (*kagentapi.CreateSessionRequest, error) {
 	agent := s.agentOf(b)
+	dots, err := dotfiles.Sent(ctx, dbq.New(s.Pool), derefStr(b.KagentRequestID))
+	if err != nil {
+		return nil, err
+	}
 	return &kagentapi.CreateSessionRequest{
 		Agent:       &kagentapi.ResourceReference{Namespace: agent.Namespace, Name: agent.Name},
 		RequestId:   derefStr(b.KagentRequestID),
 		Name:        "Mainloop main thread",
 		Credentials: s.Credentials.ReplayCredentialsFor(b.SessionID, derefStr(b.CredentialIdentity), s.MCPOrigin, b.Role, b.MCPGrantKind),
-	}
+		Dotfiles:    dots,
+	}, nil
 }
 
 // prepare creates (or finds) the pending target's Session and waits for it to be ready. It sends no
@@ -499,16 +510,21 @@ func (s *Service) prepare(ctx context.Context, b dbq.GetMainBindingRow) error {
 	var sess *kagentapi.Session
 	var se *kagent.SessionError
 	if ksid == "" {
-		req := s.createRequest(b)
+		req, err := s.createRequest(ctx, b)
+		if err != nil {
+			return fmt.Errorf("read the create request: %w", err)
+		}
 		creds, err := s.Credentials.SessionCredentialsFor(ctx, b.SessionID, derefStr(b.CredentialIdentity), s.MCPOrigin)
 		if err != nil {
 			return fail("the MCP credential could not be published: "+err.Error(), false)
 		}
 		req.Credentials = creds
 		if s.Dotfiles != nil {
-			if _, err := s.Dotfiles.Pin(ctx, b.SessionID, requestID); err != nil {
+			p, err := s.Dotfiles.Pin(ctx, b.SessionID, requestID, mcpOriginOf(creds, s.MCPOrigin))
+			if err != nil {
 				return fmt.Errorf("pin the agent dotfiles: %w", err)
 			}
+			req.Dotfiles = p.Request()
 		}
 		created, err := s.Kagent.CreateSession(ctx, req)
 		switch {
