@@ -13,6 +13,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/dotfiles"
 	"github.com/oldsj/mainloop/server/internal/projectcontext"
 	"github.com/oldsj/mainloop/server/internal/testdb"
+	"github.com/oldsj/mainloop/server/internal/transcripts"
 )
 
 // The Go constants and the CHECK constraints must name exactly the same values. TestStateChecks
@@ -211,6 +212,12 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"dotfiles_exports", "status", strs(dotfiles.StatusReady, dotfiles.StatusRefused)},
 		{"session_dotfiles", "status", strs(
 			dotfiles.StatusReady, dotfiles.StatusNone, dotfiles.StatusUnavailable, dotfiles.StatusRefused)},
+		{"transcript_sessions", "state", strs(
+			string(transcripts.StateActive), string(transcripts.StateComplete), string(transcripts.StateUnavailable))},
+		{"transcript_entries", "kind", strs(
+			string(transcripts.KindUser), string(transcripts.KindAssistant), string(transcripts.KindThinking),
+			string(transcripts.KindToolCall), string(transcripts.KindToolResult), string(transcripts.KindStatus),
+			string(transcripts.KindAsk), string(transcripts.KindOther))},
 		{"sessions", "agent_cancel_outcome", strs(
 			string(api.SessionCancelResponseAgentStopped), string(api.SessionCancelResponseAgentNotRunning),
 			string(api.SessionCancelResponseAgentUnknown))},
