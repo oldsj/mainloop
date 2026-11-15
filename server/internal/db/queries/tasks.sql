@@ -57,6 +57,11 @@ SELECT * FROM task_attempts WHERE id = $1;
 -- name: ListTaskAttempts :many
 SELECT * FROM task_attempts WHERE task_id = ANY(sqlc.arg(task_ids)::text[]) ORDER BY task_id, number;
 
+-- name: ListTaskAttemptSessions :many
+-- The sessions the given tasks' attempts ran in, with their task.
+SELECT DISTINCT session_id::text AS session_id, task_id FROM task_attempts
+WHERE task_id = ANY(sqlc.arg(task_ids)::text[]) AND session_id IS NOT NULL;
+
 -- name: SetAttemptResult :exec
 UPDATE task_attempts SET result_ref = $2, updated_at = now() WHERE id = $1;
 

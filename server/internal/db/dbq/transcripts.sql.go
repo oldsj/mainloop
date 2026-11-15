@@ -101,6 +101,46 @@ func (q *Queries) FailTranscriptSessionScan(ctx context.Context, arg FailTranscr
 	return err
 }
 
+const getTranscriptEntry = `-- name: GetTranscriptEntry :one
+SELECT id, session_id, task_id, pos, kind, tool_name, tool_call_id, is_error, text, truncated, orig_bytes, at
+FROM transcript_entries WHERE id = $1
+`
+
+type GetTranscriptEntryRow struct {
+	ID         int64
+	SessionID  string
+	TaskID     string
+	Pos        int32
+	Kind       string
+	ToolName   string
+	ToolCallID string
+	IsError    bool
+	Text       string
+	Truncated  bool
+	OrigBytes  int32
+	At         *time.Time
+}
+
+func (q *Queries) GetTranscriptEntry(ctx context.Context, id int64) (GetTranscriptEntryRow, error) {
+	row := q.db.QueryRow(ctx, getTranscriptEntry, id)
+	var i GetTranscriptEntryRow
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.TaskID,
+		&i.Pos,
+		&i.Kind,
+		&i.ToolName,
+		&i.ToolCallID,
+		&i.IsError,
+		&i.Text,
+		&i.Truncated,
+		&i.OrigBytes,
+		&i.At,
+	)
+	return i, err
+}
+
 const getTranscriptSession = `-- name: GetTranscriptSession :one
 SELECT kagent_session_id, session_id, owner_id, agent_namespace, agent_name, context_id, task_cursor, state, reason, stored_bytes, failures, next_scan_at, scanned_at, created_at, updated_at FROM transcript_sessions WHERE kagent_session_id = $1
 `
@@ -343,13 +383,15 @@ const listTranscriptEntries = `-- name: ListTranscriptEntries :many
 SELECT id, task_id, pos, kind, tool_name, tool_call_id, is_error, text, truncated, orig_bytes, at
 FROM transcript_entries
 WHERE session_id = $1 AND id > $2
+  AND ($3::text[] IS NULL OR kind = ANY($3::text[]))
 ORDER BY id
-LIMIT $3
+LIMIT $4
 `
 
 type ListTranscriptEntriesParams struct {
 	SessionID string
 	AfterID   int64
+	Kinds     []string
 	MaxRows   int32
 }
 
@@ -367,9 +409,15 @@ type ListTranscriptEntriesRow struct {
 	At         *time.Time
 }
 
-// A session's stored entries after an id, in the order they were copied.
+// A session's stored entries after an id, in the order they were copied, of the given kinds (all
+// when null).
 func (q *Queries) ListTranscriptEntries(ctx context.Context, arg ListTranscriptEntriesParams) ([]ListTranscriptEntriesRow, error) {
-	rows, err := q.db.Query(ctx, listTranscriptEntries, arg.SessionID, arg.AfterID, arg.MaxRows)
+	rows, err := q.db.Query(ctx, listTranscriptEntries,
+		arg.SessionID,
+		arg.AfterID,
+		arg.Kinds,
+		arg.MaxRows,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -490,8 +538,9 @@ JOIN sessions s ON s.id = e.session_id,
 WHERE s.user_id = $2 AND e.tsv @@ q
   AND ($3::text IS NULL OR e.session_id = $3)
   AND ($4::text IS NULL OR s.project_id = $4)
+  AND ($5::text[] IS NULL OR e.session_id = ANY($5::text[]))
 ORDER BY rank DESC, e.id DESC
-LIMIT $5
+LIMIT $6
 `
 
 type SearchTranscriptsParams struct {
@@ -499,6 +548,7 @@ type SearchTranscriptsParams struct {
 	OwnerID    string
 	SessionID  *string
 	ProjectID  *string
+	SessionIds []string
 	MaxResults int32
 }
 
@@ -525,6 +575,7 @@ func (q *Queries) SearchTranscripts(ctx context.Context, arg SearchTranscriptsPa
 		arg.OwnerID,
 		arg.SessionID,
 		arg.ProjectID,
+		arg.SessionIds,
 		arg.MaxResults,
 	)
 	if err != nil {

@@ -943,6 +943,35 @@ func (s *Service) List(ctx context.Context, p Principal, projectID, parentID str
 	return views, nil
 }
 
+// VisibleSessions maps the session of every attempt of every task the principal may read to its
+// task. It is List's authority without loading the views: transcript search uses it to stay inside
+// what the principal could read task by task.
+func (s *Service) VisibleSessions(ctx context.Context, p Principal) (map[string]string, error) {
+	q := dbq.New(s.Pool)
+	all, err := q.ListTasks(ctx, dbq.ListTasksParams{OwnerID: p.OwnerID})
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(all))
+	for _, t := range all {
+		if read, _ := p.access(t); read {
+			ids = append(ids, t.ID)
+		}
+	}
+	out := map[string]string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := q.ListTaskAttemptSessions(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.SessionID] = r.TaskID
+	}
+	return out, nil
+}
+
 func (s *Service) load(ctx context.Context, q *dbq.Queries, tasks []dbq.Task) ([]api.TaskView, error) {
 	if len(tasks) == 0 {
 		return []api.TaskView{}, nil

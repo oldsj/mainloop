@@ -3,10 +3,12 @@ package transcripts
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
@@ -33,6 +35,8 @@ const (
 
 // ReadRequest asks for one page of a session's transcript.
 type ReadRequest struct {
+	// Owner is whose session it must be; empty is the service's owner.
+	Owner     string
 	SessionID string
 	// After is the last entry id the reader has; 0 starts from the beginning.
 	After int64
@@ -40,6 +44,8 @@ type ReadRequest struct {
 	Limit int
 	// Live asks for the live tail when the page reaches the last stored entry.
 	Live bool
+	// Kinds keeps only entries of these kinds, stored and live; empty keeps all.
+	Kinds []Kind
 }
 
 // Read returns a page of a session's stored entries, the kagent Sessions they are copied from, and,
@@ -48,7 +54,7 @@ type ReadRequest struct {
 func (s *Service) Read(ctx context.Context, r ReadRequest) (api.SessionTranscript, error) {
 	out := api.SessionTranscript{Entries: []api.TranscriptEntry{}, Sources: []api.TranscriptSource{}, Live: []api.TranscriptEntry{}}
 	q := dbq.New(s.Pool)
-	owned, err := q.TranscriptSessionOwned(ctx, dbq.TranscriptSessionOwnedParams{ID: r.SessionID, UserID: s.OwnerID})
+	owned, err := q.TranscriptSessionOwned(ctx, dbq.TranscriptSessionOwnedParams{ID: r.SessionID, UserID: s.owner(r.Owner)})
 	if err != nil {
 		return out, err
 	}
@@ -60,8 +66,12 @@ func (s *Service) Read(ctx context.Context, r ReadRequest) (api.SessionTranscrip
 		limit = DefaultReadLimit
 	}
 	limit = min(limit, MaxReadLimit)
+	var kinds []string
+	for _, k := range r.Kinds {
+		kinds = append(kinds, string(k))
+	}
 	rows, err := q.ListTranscriptEntries(ctx, dbq.ListTranscriptEntriesParams{
-		SessionID: r.SessionID, AfterID: max(r.After, 0), MaxRows: int32(limit + 1), //nolint:gosec // bounded above
+		SessionID: r.SessionID, AfterID: max(r.After, 0), Kinds: kinds, MaxRows: int32(limit + 1), //nolint:gosec // bounded above
 	})
 	if err != nil {
 		return out, err
@@ -97,9 +107,58 @@ func (s *Service) Read(ctx context.Context, r ReadRequest) (api.SessionTranscrip
 			msg := liveUnreadable
 			out.LiveError = &msg
 		}
-		out.Live = live
+		out.Live = keepKinds(live, r.Kinds)
 	}
 	return out, nil
+}
+
+func keepKinds(entries []api.TranscriptEntry, kinds []Kind) []api.TranscriptEntry {
+	if len(kinds) == 0 {
+		return entries
+	}
+	kept := entries[:0]
+	for _, e := range entries {
+		for _, k := range kinds {
+			if string(e.Kind) == string(k) {
+				kept = append(kept, e)
+				break
+			}
+		}
+	}
+	return kept
+}
+
+func (s *Service) owner(o string) string {
+	if o != "" {
+		return o
+	}
+	return s.OwnerID
+}
+
+// Entry returns one stored entry whole, if it belongs to one of sessionIDs and owner (empty: the
+// service's owner) has it.
+func (s *Service) Entry(ctx context.Context, owner string, id int64, sessionIDs []string) (api.TranscriptEntry, string, error) {
+	q := dbq.New(s.Pool)
+	e, err := q.GetTranscriptEntry(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !slices.Contains(sessionIDs, e.SessionID)) {
+		return api.TranscriptEntry{}, "", ErrNotFound
+	}
+	if err != nil {
+		return api.TranscriptEntry{}, "", err
+	}
+	owned, err := q.TranscriptSessionOwned(ctx, dbq.TranscriptSessionOwnedParams{ID: e.SessionID, UserID: s.owner(owner)})
+	if err != nil {
+		return api.TranscriptEntry{}, "", err
+	}
+	if !owned {
+		return api.TranscriptEntry{}, "", ErrNotFound
+	}
+	eid := e.ID
+	return api.TranscriptEntry{
+		Id: &eid, TaskId: e.TaskID, Pos: int(e.Pos), Kind: api.TranscriptEntryKind(e.Kind),
+		ToolName: e.ToolName, ToolCallId: e.ToolCallID, IsError: e.IsError, Text: e.Text,
+		Truncated: e.Truncated, OrigBytes: int(e.OrigBytes), At: e.At,
+	}, e.SessionID, nil
 }
 
 // liveTail reads the turns of the newest active sources that have no copy yet: running, waiting, or
@@ -196,9 +255,13 @@ const (
 
 // SearchRequest is a full-text query over the owner's stored entries.
 type SearchRequest struct {
+	// Owner is whose entries are searched; empty is the service's owner.
+	Owner                string
 	Query                string
 	ProjectID, SessionID *string
-	Limit                int
+	// SessionIDs, when not nil, limits the search to these sessions; empty finds nothing.
+	SessionIDs []string
+	Limit      int
 }
 
 // Search returns the owner's best-matching stored entries.
@@ -209,8 +272,11 @@ func (s *Service) Search(ctx context.Context, r SearchRequest) (api.TranscriptSe
 		limit = DefaultSearchLimit
 	}
 	limit = min(limit, MaxSearchLimit)
+	if r.SessionIDs != nil && len(r.SessionIDs) == 0 {
+		return out, nil
+	}
 	rows, err := dbq.New(s.Pool).SearchTranscripts(ctx, dbq.SearchTranscriptsParams{
-		Query: r.Query, OwnerID: s.OwnerID, SessionID: r.SessionID, ProjectID: r.ProjectID,
+		Query: r.Query, OwnerID: s.owner(r.Owner), SessionID: r.SessionID, ProjectID: r.ProjectID, SessionIds: r.SessionIDs,
 		MaxResults: int32(limit), //nolint:gosec // bounded above
 	})
 	if err != nil {

@@ -1,7 +1,7 @@
 # Session transcripts
 
 Status: **partly implemented** (#448). Storage, the turn normalizer, ingestion, the copy before a
-delete, retention, and the read and search API exist. The MCP tools and the web view are still to
+delete, retention, the read and search API, and the MCP tools exist. The web view is still to
 come.
 
 Mainloop's conversation (`session_messages`) keeps each turn's user message and final reply. A
@@ -179,6 +179,33 @@ Only the owner's sessions can be read; any other session is 404.
   tag-like tokens from the snippet.
 
 Live tails are not searched.
+
+## MCP tools
+
+Two read-only tools give agents the same transcripts. Neither sends anything to any agent, so
+reading a child's transcript costs the child no turn. Both are available to every actor that has
+`task_get`, and both answer only within that actor's task authority (see
+[delegation](delegation.md)).
+
+**`task_transcript(task_id, attempt_id?, after?, limit?, kinds?, entry_id?)`** reads a task's
+transcript:
+
+- **Which session.** By default, the session of the task's latest attempt that has one;
+  `attempt_id` picks another attempt.
+- **Paging.** Entries are paged like the API: 50 by default, at most 200. `next_after` is the
+  `after` for the next page.
+- **Filtering.** `kinds` keeps only some entry kinds.
+- **Previews.** Each entry shows a preview of at most 2 KiB, with `cut` set when it was shortened.
+- **Size of a result.** A result holds at most 64 KiB of entry text. Past that it stops early,
+  with `has_more` set.
+- **The live tail.** It is included as in the API, when the page reaches the end.
+- **One entry whole.** `entry_id` returns that single entry in full, if it belongs to one of the
+  task's attempts.
+
+**`transcript_search(q, task_id?, limit?)`** runs the same full-text search, limited to the sessions
+of the tasks the actor can read. `task_id` narrows it to one of them. Each hit names its task and
+entry, so the caller can read around a hit with `task_transcript(task_id, after=entry_id-1)`. In the
+text result, matches are marked `[[like this]]`.
 
 ## Retention
 
