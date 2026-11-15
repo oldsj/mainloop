@@ -1,4 +1,5 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, type QueryKey } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { keys, TaskApiError } from '@/api';
 import { StatusBadge } from '@/components/shared/status-badge';
@@ -12,6 +13,7 @@ import {
   loopStateLabel,
   loopTrigger,
   sendLoopControl,
+  useMainLoops,
   useTaskLoops,
   type LoopControl
 } from './loops';
@@ -43,16 +45,95 @@ export function TaskLoops({ taskId, offline }: { taskId: string; offline: boolea
           Could not refresh the loops. Showing the last known state.
         </p>
       ) : null}
-      <ul className="gap-md flex flex-col">
-        {loops.data.map((loop) => (
-          <LoopItem key={loop.id} loop={loop} taskId={taskId} offline={offline} />
-        ))}
-      </ul>
+      <LoopList
+        loops={loops.data}
+        queryKey={keys.taskLoops(taskId)}
+        pageTaskId={taskId}
+        offline={offline}
+      />
     </section>
   );
 }
 
-function LoopItem({ loop, taskId, offline }: { loop: TaskLoop; taskId: string; offline: boolean }) {
+/**
+ * Main's loops, with or without a task, for the main thread's view: main arms the most loops, and
+ * one with no task appears on no task page. Nothing is drawn while main has none.
+ */
+export function MainLoops({ offline }: { offline: boolean }) {
+  const loops = useMainLoops();
+  if (loops.data === undefined || loops.data.length === 0) {
+    return loops.isError ? (
+      <p role="status" className="px-md py-xs text-muted-foreground text-xs">
+        Main's loops could not be loaded.
+      </p>
+    ) : null;
+  }
+  return (
+    <section aria-labelledby="main-loops-heading" data-testid="main-loops" className={PANEL}>
+      <h2 id="main-loops-heading" className={HEADING}>
+        Main's loops
+      </h2>
+      {loops.isError ? (
+        <p role="status" className="text-muted-foreground text-xs">
+          Could not refresh the loops. Showing the last known state.
+        </p>
+      ) : null}
+      <LoopList
+        loops={loops.data}
+        queryKey={keys.mainLoops()}
+        pageTaskId={null}
+        offline={offline}
+      />
+    </section>
+  );
+}
+
+/** How many of main's loops are live, for the main thread's header. */
+export function useLiveMainLoopCount(): number {
+  return (useMainLoops().data ?? []).filter(loopLive).length;
+}
+
+/**
+ * Loops with the owner's controls. `pageTaskId` is the task whose page this is, or null on the
+ * main thread, where a loop's task is linked instead.
+ */
+function LoopList({
+  loops,
+  queryKey,
+  pageTaskId,
+  offline
+}: {
+  loops: TaskLoop[];
+  queryKey: QueryKey;
+  pageTaskId: string | null;
+  offline: boolean;
+}) {
+  return (
+    <ul className="gap-md flex flex-col">
+      {loops.map((loop) => (
+        <LoopItem
+          key={loop.id}
+          loop={loop}
+          queryKey={queryKey}
+          pageTaskId={pageTaskId}
+          offline={offline}
+        />
+      ))}
+    </ul>
+  );
+}
+
+function LoopItem({
+  loop,
+  queryKey,
+  pageTaskId,
+  offline
+}: {
+  loop: TaskLoop;
+  queryKey: QueryKey;
+  pageTaskId: string | null;
+  offline: boolean;
+}) {
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState<LoopControl | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +150,7 @@ function LoopItem({ loop, taskId, offline }: { loop: TaskLoop; taskId: string; o
     try {
       const updated = await sendLoopControl(loop.id, kind, requestId);
       if (kind === 'fire') setFireId(null);
-      queryClient.setQueryData<TaskLoop[]>(keys.taskLoops(taskId), (list) =>
+      queryClient.setQueryData<TaskLoop[]>(queryKey, (list) =>
         list?.map((l) => (l.id === updated.id ? updated : l))
       );
     } catch (e) {
@@ -87,16 +168,18 @@ function LoopItem({ loop, taskId, offline }: { loop: TaskLoop; taskId: string; o
     } finally {
       setBusy(null);
       setConfirmDelete(false);
-      void queryClient.invalidateQueries({ queryKey: keys.taskLoops(taskId) });
+      void queryClient.invalidateQueries({ queryKey });
     }
   }
 
   const facts = [
-    loop.recipient === 'main'
-      ? 'wakes main'
-      : loop.recipient_task_id === taskId
-        ? 'wakes this task'
-        : 'wakes its supervisor',
+    pageTaskId === null
+      ? null
+      : loop.recipient === 'main'
+        ? 'wakes main'
+        : loop.recipient_task_id === pageTaskId
+          ? 'wakes this task'
+          : 'wakes its supervisor',
     `${loop.firings} of ${loop.max_firings} firings`,
     loop.next_fire_at ? `next ${messageTime(loop.next_fire_at)}` : null,
     loop.expect_change ? 'expects change' : null,
@@ -107,13 +190,23 @@ function LoopItem({ loop, taskId, offline }: { loop: TaskLoop; taskId: string; o
   return (
     <li className="gap-xs flex flex-col text-sm" data-testid="task-loop">
       <div className="gap-sm flex flex-wrap items-center">
-        <p className="font-medium break-words">{loopTrigger(loop, taskId)}</p>
+        <p className="font-medium break-words">{loopTrigger(loop, pageTaskId)}</p>
         <StatusBadge
           label={loopStateLabel(loop)}
           tone={loop.state === 'armed' ? 'active' : loop.stop_reason ? 'attention' : 'muted'}
         />
       </div>
-      <p className="text-muted-foreground text-xs">{facts.join(' · ')}</p>
+      <p className="text-muted-foreground text-xs">
+        {facts.join(' · ')}
+        {pageTaskId === null && loop.task_id ? (
+          <>
+            {' · '}
+            <Link to="/tasks/$id" params={{ id: loop.task_id }} className="underline">
+              open its task
+            </Link>
+          </>
+        ) : null}
+      </p>
       <p className="break-words whitespace-pre-wrap">{loop.note}</p>
       {loop.stop_reason === 'no_progress' ? (
         <p className="text-muted-foreground text-xs">

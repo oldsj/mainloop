@@ -209,6 +209,7 @@ uses the owner REST listener.
 | `POST /tasks/{id}/follow-up`                  | 202, a message to the task's own session; reopens a completed coordination task    |
 | `GET /task-operations/{id}`                   | Durable operation, including step and reason                                       |
 | `GET /tasks/{id}/loops`                       | The task's [loops](loops.md) with their latest firings                             |
+| `GET /main-thread/loops`                      | Main's [loops](loops.md), with or without a task, with their latest firings        |
 | `POST /loops/{id}/pause`, `/resume`           | Pause or resume a loop ([loops](loops.md#the-owners-view-and-controls))            |
 | `POST /loops/{id}/fire`, `DELETE /loops/{id}` | Fire a loop now (idempotent `request_id`), or stop it for good                     |
 | `GET /projects/{id}/default-provider`         | Profile or null, preference version (initially 0)                                  |

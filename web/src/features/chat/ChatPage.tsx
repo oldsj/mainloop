@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { HITLCard } from '@/features/hitl';
 import { useSessionRequests } from '@/features/hitl/session-requests';
 import { LiveSession, liveForced, type LiveBar, type LiveProvider } from '@/features/live';
+import { MainLoops, useLiveMainLoopCount } from '@/features/tasks/TaskLoops';
 import { PanelBoundary } from '@/shell/PanelBoundary';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { mainInputLock } from './mainProvider';
@@ -69,6 +70,7 @@ export function ChatPage({
 
   // One row above the conversation. The live view draws it in place of its own, with its status and
   // controls, so the thread and the live channel never show two rows that can disagree.
+  const liveLoops = useLiveMainLoopCount();
   const header = (bar?: LiveBar) =>
     info ? (
       <MainThreadHeader
@@ -79,6 +81,7 @@ export function ChatPage({
         renderIdentity={renderIdentity}
         provider={provider}
         live={bar}
+        loops={{ live: liveLoops, list: <MainLoops offline={offline} /> }}
       />
     ) : null;
 

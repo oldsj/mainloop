@@ -6,7 +6,8 @@ and still hear when something is worth looking at. Issue #314.
 
 Status: **implemented** for task, pull request, quiet and time triggers and the no-progress stop,
 armed and managed by agents through MCP, and for the owner's view: REST routes to list and control
-a task's loops, and the task page's **Loops** section that uses them.
+a task's loops and main's loops, the task page's **Loops** section, and main's loops on the main
+thread.
 
 ## Why
 
@@ -112,7 +113,8 @@ still bound it.
 
 ## The owner's view and controls
 
-Main and supervisors arm loops; the owner sees and steers them from the task they concern.
+Main and supervisors arm loops; the owner sees and steers them from the task they concern, and
+main's from the main thread.
 
 - **`GET /tasks/{task_id}/loops`** lists the loops watching the task and the loops its supervisor
   armed, live ones first, then the latest that ended (at most 50). Each carries its trigger and
@@ -120,6 +122,8 @@ Main and supervisors arm loops; the owner sees and steers them from the task the
   limit, its next fire time (a live time loop's timer, or when a live quiet loop fires if its task
   stays unchanged; null for a loop that waits on a change), its `stop_reason`, and its latest five
   firings with their facts and delivery state.
+- **`GET /main-thread/loops`** lists the loops main armed, with or without a task, in the same order
+  and shape. A loop of main's on a task is in both lists.
 - **`POST /loops/{loop_id}/pause`** pauses an armed loop: its trigger is not evaluated until it is
   resumed. Its expiry and an ended recipient still end it, and a supervisor waiting on a paused loop
   is still waiting, not stalled.
@@ -145,6 +149,11 @@ delivery state, behind **Latest firings**. A loop stopped for no progress says s
 its `request_id` until Mainloop answers, so firing again after a lost reply does not fire twice. A
 refusal says why in words, and the list is read again after every control and every 15 seconds
 while the page is open; no event frame carries loop changes.
+
+The main thread's row shows how many of main's loops are live (**2 loops**), in the chat view and
+the live view alike; it opens **Session info**, which lists main's loops under **Main's loops** with
+the same controls and refresh. A loop on a task links to it (**open its task**); every loop there
+wakes main, so whom it wakes is not repeated.
 
 ## States and limits
 
@@ -187,8 +196,6 @@ turn (#72), a loop's usage is the sum over its firings' turns, labelled _attribu
 
 ## Not built
 
-- **Main's loops without a task** (a time loop main armed with no `task_id`) appear on no task
-  page; `loop_list` is their only listing.
 - **Other sources**: delivery stalls, attention items, and deploy or production health (which
   Mainloop does not observe yet).
 - **Goals** ([goals](goals.md)): a goal's supervisor arms loops like any supervisor; a goal-level

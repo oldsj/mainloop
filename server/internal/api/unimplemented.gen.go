@@ -319,6 +319,11 @@ func (Unimplemented) ListEnvironments(context.Context, ListEnvironmentsRequestOb
 	return nil, apierr.NotImplemented
 }
 
+// ListMainLoops is not implemented yet.
+func (Unimplemented) ListMainLoops(context.Context, ListMainLoopsRequestObject) (ListMainLoopsResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // ListProjectInstructionVersions is not implemented yet.
 func (Unimplemented) ListProjectInstructionVersions(context.Context, ListProjectInstructionVersionsRequestObject) (ListProjectInstructionVersionsResponseObject, error) {
 	return nil, apierr.NotImplemented

@@ -20,6 +20,8 @@ export const keys = {
   attention: () => get('/attention'),
   activity: () => get('/activity'),
   mainThread: () => get('/main-thread'),
+  /** Main's loops, on the main thread's view. */
+  mainLoops: () => get('/main-thread/loops'),
   /** One conversation, or all of them when no id is given. */
   conversation: (conversationId?: string) =>
     conversationId

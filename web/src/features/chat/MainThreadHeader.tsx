@@ -33,6 +33,8 @@ export interface MainThreadHeaderProps {
    * control sits in this row, so the live view draws no row of its own.
    */
   live?: { status: LiveStatus; controls: ReactNode };
+  /** Main's loops with their controls, shown in the details; the count of live ones is in the row. */
+  loops?: { live: number; list: ReactNode };
 }
 
 /** The main provider's status row: the confirmed provider, the status, retry/restart and any notice. The choice itself is in the session controls by the composer. */
@@ -116,7 +118,8 @@ export function MainThreadHeader({
   stopping = false,
   renderIdentity,
   provider,
-  live
+  live,
+  loops
 }: MainThreadHeaderProps) {
   const [open, setOpen] = useState(false);
   const { native } = info;
@@ -143,12 +146,29 @@ export function MainThreadHeader({
       status={barStatus(status, live?.status ?? null)}
       statusTestId="mt-state"
       lead={
-        pending > 0 ? (
-          <>
-            <span aria-hidden="true">·</span>
-            <span data-testid="mt-pending">{pending} pending</span>
-          </>
-        ) : null
+        <>
+          {pending > 0 ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <span data-testid="mt-pending">{pending} pending</span>
+            </>
+          ) : null}
+          {loops && loops.live > 0 ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <button
+                type="button"
+                className="hover:text-foreground min-h-control underline"
+                aria-expanded={open}
+                aria-controls="main-thread-details"
+                onClick={() => setOpen(true)}
+                data-testid="mt-loops"
+              >
+                {loops.live === 1 ? '1 loop' : `${loops.live} loops`}
+              </button>
+            </>
+          ) : null}
+        </>
       }
       trail={
         <>
@@ -210,6 +230,7 @@ export function MainThreadHeader({
               <span>none yet</span>
             )}
           </div>
+          {loops?.list}
         </div>
       ) : null}
     </SessionBar>

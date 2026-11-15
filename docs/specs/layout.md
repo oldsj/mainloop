@@ -42,7 +42,7 @@ the loading message. Retrying requests the details for the current project.
 
 ## Mobile
 
-- There is no header. The page starts at the top of the screen, so on the main chat the one row above the thread is the session row (status, pending count, Session info).
+- There is no header. The page starts at the top of the screen, so on the main chat the one row above the thread is the session row (status, pending count, live loop count, Session info).
 - A bottom tab bar has three tabs with plain labels: **Chat**, **Needs you** and **Sessions**.
   - **Chat** opens the main chat.
   - **Needs you** opens the answer view (`/inbox`). It shows the Needs-you count as a red badge, and its accessible name includes the count ("Needs you, 3").

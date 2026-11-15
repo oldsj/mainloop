@@ -4839,6 +4839,28 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/HTTPValidationError'
                   - $ref: '#/components/schemas/TaskError'
+  /main-thread/loops:
+    get:
+      tags:
+        - tasks
+      summary: List Main Loops
+      operationId: listMainLoops
+      description: The loops main armed, with or without a task, live ones (armed or paused) first, then the latest that ended, each with its latest firings. The main thread's view lists them with the same controls as the task page.
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskLoopList'
   /tasks/{task_id}/loops:
     get:
       tags:

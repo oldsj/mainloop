@@ -28,6 +28,19 @@ describe('MainThreadHeader', () => {
     expect(screen.queryByTestId('mt-model')).toBeNull();
   });
 
+  it("counts main's live loops in the row and opens their list in the details", async () => {
+    view(mainThreadFixture(), { loops: { live: 2, list: <p>the loop list</p> } });
+    expect(screen.queryByText('the loop list')).toBeNull();
+    await userEvent.click(screen.getByTestId('mt-loops'));
+    expect(screen.getByTestId('mt-loops')).toHaveTextContent('2 loops');
+    expect(screen.getByText('the loop list')).toBeInTheDocument();
+  });
+
+  it('shows no loop count while main has no live loop', () => {
+    view(mainThreadFixture(), { loops: { live: 0, list: null } });
+    expect(screen.queryByTestId('mt-loops')).toBeNull();
+  });
+
   it('sums pending over topics', () => {
     view(
       mainThreadFixture({

@@ -206,6 +206,18 @@ func (a *TasksAPI) ListTaskLoops(ctx context.Context, req api.ListTaskLoopsReque
 	return api.ListTaskLoops200JSONResponse(api.TaskLoopList{Loops: loops}), nil
 }
 
+// ListMainLoops implements api.StrictServerInterface.
+func (a *TasksAPI) ListMainLoops(ctx context.Context, _ api.ListMainLoopsRequestObject) (api.ListMainLoopsResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	loops, err := a.Svc.MainLoops(ctx, a.principal())
+	if err != nil {
+		return nil, taskReply(err)
+	}
+	return api.ListMainLoops200JSONResponse(api.TaskLoopList{Loops: loops}), nil
+}
+
 // PauseLoop implements api.StrictServerInterface.
 func (a *TasksAPI) PauseLoop(ctx context.Context, req api.PauseLoopRequestObject) (api.PauseLoopResponseObject, error) {
 	if a.Svc == nil {
