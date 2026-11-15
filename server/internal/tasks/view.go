@@ -191,9 +191,10 @@ func toReport(r dbq.TaskReport) api.TaskReport {
 }
 
 // eligibility is what the owner may ask for next. Cancel is available until the task is final.
-// Retry and reassign are offered on a coordination task with an attempt that is running, waiting,
-// blocked or failed, and not already in a handoff; a code task's wait for the branch handoff.
-func eligibility(t dbq.Task) map[string]api.TaskEligibility {
+// Retry and reassign are offered on a task with an attempt that is running, waiting, blocked or
+// failed, and not already in a handoff; for a code task, only when Mainloop can read its branch
+// head on origin (codeHandoff).
+func eligibility(t dbq.Task, codeHandoff bool) map[string]api.TaskEligibility {
 	unavailable := func(r api.TaskEligibilityReason) api.TaskEligibility {
 		return api.TaskEligibility{Reason: &r}
 	}
@@ -202,7 +203,7 @@ func eligibility(t dbq.Task) map[string]api.TaskEligibility {
 		cancel = unavailable(api.TaskEligibilityReason(dbstate.ReasonCancelUnavailable))
 	}
 	handoff := unavailable(api.TaskEligibilityReason(dbstate.ReasonHandoffUnavailable))
-	if t.Mode == dbstate.TaskModeCoordination && t.CurrentAttemptID != nil &&
+	if (t.Mode == dbstate.TaskModeCoordination || codeHandoff) && t.CurrentAttemptID != nil &&
 		(t.Reason == nil || *t.Reason != dbstate.ReasonHandoff) {
 		switch t.Status {
 		case dbstate.TaskRunning, dbstate.TaskWaiting, dbstate.TaskBlocked, dbstate.TaskFailed:
@@ -250,7 +251,7 @@ func projection(t dbq.Task) api.TaskProjection {
 }
 
 // buildViews turns loaded rows into views, one per task, in the order of tasks.
-func buildViews(tasks []dbq.Task, attempts []dbq.TaskAttempt, ops []dbq.TaskOperation, arts []dbq.TaskArtifact, reports []dbq.TaskReport) ([]api.TaskView, error) {
+func buildViews(tasks []dbq.Task, attempts []dbq.TaskAttempt, ops []dbq.TaskOperation, arts []dbq.TaskArtifact, reports []dbq.TaskReport, codeHandoff bool) ([]api.TaskView, error) {
 	byID := make(map[string]*api.TaskView, len(tasks))
 	views := make([]api.TaskView, len(tasks))
 	for i, t := range tasks {
@@ -259,7 +260,7 @@ func buildViews(tasks []dbq.Task, attempts []dbq.TaskAttempt, ops []dbq.TaskOper
 			return nil, err
 		}
 		views[i] = api.TaskView{
-			Actions: eligibility(t), Artifacts: []api.TaskArtifact{}, Attempts: []api.TaskAttempt{},
+			Actions: eligibility(t, codeHandoff), Artifacts: []api.TaskArtifact{}, Attempts: []api.TaskAttempt{},
 			Operations: []api.TaskOperation{}, Projection: projection(t), Reports: []api.TaskReport{}, Task: task,
 		}
 		byID[t.ID] = &views[i]

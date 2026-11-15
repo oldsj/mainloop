@@ -192,6 +192,11 @@ SET session_id = $2, binding_id = $2, workspace_id = $2,
 WHERE id = $1 AND state = 'creating' AND (session_id IS NULL OR session_id = $2)
 RETURNING *;
 
+-- name: SetAttemptInitialRef :execrows
+-- Records where a successor's workspace starts, once.
+UPDATE task_attempts SET initial_ref = $2, updated_at = now()
+WHERE id = $1 AND initial_ref IS NULL AND state = 'creating';
+
 -- name: SetAttemptBrief :exec
 UPDATE task_attempts SET brief_delivery_id = $2, updated_at = now() WHERE id = $1;
 
@@ -326,12 +331,26 @@ UPDATE task_operations
 SET state = sqlc.arg(state), last_confirmed_step = sqlc.arg(step), reason = sqlc.narg(reason),
     attempt_id = coalesce(sqlc.narg(attempt_id), attempt_id),
     target_attempt_id = coalesce(sqlc.narg(target_attempt_id), target_attempt_id),
+    checkpoint_ref = coalesce(sqlc.narg(checkpoint_ref), checkpoint_ref),
     lease_owner = NULL, lease_until = NULL, next_attempt_at = now(), updated_at = now()
 WHERE id = sqlc.arg(id) AND lease_owner = sqlc.arg(lease_owner) AND attempts = sqlc.arg(attempts)
 RETURNING *;
 
+-- name: GetHandoffCheckpoint :one
+-- The ref a code task's handoff read for its successor: refs/heads/<branch> when the task branch
+-- was on origin, otherwise the task's base ref.
+SELECT checkpoint_ref FROM task_operations
+WHERE target_attempt_id = $1 AND kind IN ('retry', 'reassign') AND checkpoint_ref IS NOT NULL
+ORDER BY created_at DESC, id DESC
+LIMIT 1;
+
 -- name: SetTaskOperationSource :exec
 UPDATE task_operations SET source_attempt_id = $2, updated_at = now() WHERE id = $1;
+
+-- name: CancelPendingForTask :one
+SELECT EXISTS (
+    SELECT 1 FROM task_operations WHERE task_id = $1 AND kind = 'cancel' AND state NOT IN ('completed', 'blocked')
+);
 
 -- name: OpenOperationsForTask :one
 SELECT count(*) FROM task_operations WHERE task_id = $1 AND state NOT IN ('completed', 'blocked');
@@ -409,14 +428,21 @@ ORDER BY t.projected_at NULLS FIRST, t.id
 LIMIT $1;
 
 -- name: GetAttemptCreatedPR :one
--- The newest pull request the attempt itself opened through Mainloop. The attempt's binding id is
--- the session id recorded on the creation row, so a later attempt (a new binding) never matches an
--- earlier attempt's PR. Owner, project and head branch must also be the task's, as on main.
+-- The newest pull request the attempt opened through Mainloop, or an attempt it continues (a retry
+-- or reassign's successor works on the same branch). Each attempt's binding id is the session id
+-- recorded on the creation row, so another task's attempt never matches. Owner, project and head
+-- branch must also be the task's, as on main.
+WITH RECURSIVE chain AS (
+    SELECT id, predecessor_id, binding_id, task_id FROM task_attempts WHERE task_attempts.id = $1
+    UNION ALL
+    SELECT p.id, p.predecessor_id, p.binding_id, p.task_id
+    FROM task_attempts p JOIN chain ON p.id = chain.predecessor_id
+)
 SELECT c.pr_number
 FROM pr_creations c
-JOIN task_attempts a ON a.binding_id = c.session_id
+JOIN chain a ON a.binding_id = c.session_id
 JOIN tasks t ON t.id = a.task_id
-WHERE a.id = $1 AND c.state = 'created' AND c.pr_number > 0
+WHERE c.state = 'created' AND c.pr_number > 0
   AND c.owner_id = t.owner_id AND c.project_id = t.project_id AND c.head = t.checkout_branch
 ORDER BY c.created_at DESC, c.id DESC
 LIMIT 1;

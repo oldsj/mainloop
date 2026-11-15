@@ -4845,7 +4845,7 @@ paths:
       tags:
         - tasks
       summary: Retry Task
-      description: Replace a coordination task's attempt with a new one on the same provider, in a new native session briefed with the task's brief and a continuation note (docs/specs/task-handoff.md). A failed task reopens. A code task's retry is recorded blocked with reason handoff_unavailable.
+      description: Replace a task's attempt with a new one on the same provider, in a new native session briefed with the task's brief and a continuation note (docs/specs/task-handoff.md). A failed task reopens. A code task's successor works on the task branch from its head on origin, or from the base when the branch was never pushed; without a GitHub App a code task's retry is recorded blocked with reason handoff_unavailable.
       operationId: retryTask
       parameters:
         - name: task_id

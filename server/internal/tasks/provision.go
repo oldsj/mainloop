@@ -67,12 +67,13 @@ func (s *Service) Register(r *reconcile.Runner) {
 	r.AddSweep(s.HoldSweep())
 }
 
-// OpTable is the table of operations the loop drives. A code task's retry or reassign is recorded
-// blocked and never reaches it.
+// OpTable is the table of operations the loop drives. A code task's retry or reassign without
+// [Service.CodeHandoff] is recorded blocked and never reaches it.
 func OpTable() reconcile.Table {
 	return reconcile.NewTable("task_operations",
 		string(dbstate.TaskOpRequested), string(dbstate.TaskOpDraining), string(dbstate.TaskOpSourceFencing),
-		string(dbstate.TaskOpSourceFenced), string(dbstate.TaskOpTargetCreating), string(dbstate.TaskOpTargetReady))
+		string(dbstate.TaskOpSourceFenced), string(dbstate.TaskOpCheckpointRequired),
+		string(dbstate.TaskOpTargetCreating), string(dbstate.TaskOpTargetReady))
 }
 
 // OpLoop drives create, cancel and handoff operations: provisioning of a new attempt, the drain,
@@ -98,6 +99,11 @@ func (s *Service) notify(ctx context.Context, q *dbq.Queries, channel, payload s
 // claim: a claim that lost its lease rolls the whole transaction back. The lease is released and
 // the next step is due at once.
 func advance(ctx context.Context, q *dbq.Queries, c reconcile.Claim, op dbq.TaskOperation, to dbstate.TaskOpState, reason *dbstate.TaskReason, attempt *string) error {
+	return advanceWith(ctx, q, c, op, to, reason, attempt, nil)
+}
+
+// advanceWith is advance that also records the operation's checkpoint ref.
+func advanceWith(ctx context.Context, q *dbq.Queries, c reconcile.Claim, op dbq.TaskOperation, to dbstate.TaskOpState, reason *dbstate.TaskReason, attempt, checkpoint *string) error {
 	if err := TransitionOperation(op.Kind, op.State, op.LastConfirmedStep, to); err != nil {
 		return err
 	}
@@ -106,7 +112,7 @@ func advance(ctx context.Context, q *dbq.Queries, c reconcile.Claim, op dbq.Task
 		step = op.LastConfirmedStep
 	}
 	_, err := q.AdvanceTaskOperation(ctx, dbq.AdvanceTaskOperationParams{
-		State: to, Step: step, Reason: reason, AttemptID: attempt, TargetAttemptID: attempt,
+		State: to, Step: step, Reason: reason, AttemptID: attempt, TargetAttemptID: attempt, CheckpointRef: checkpoint,
 		ID: c.ID, LeaseOwner: &c.Owner, Attempts: int32(c.Attempts), //nolint:gosec // a small counter
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -249,8 +255,9 @@ func (s *Service) beginCreate(ctx context.Context, c reconcile.Claim, op dbq.Tas
 
 // insertAttempt records a new attempt of the task t, which the caller holds locked, on the task's
 // assigned profile: its writer claim (code) or its session and binding (coordination). predecessor
-// is the attempt a retry or reassign replaces. It returns errWriterHeld when another attempt holds
-// the task branch.
+// is the attempt a retry or reassign replaces; a code successor starts with no initial ref, which
+// the handoff records once it has read the branch head. It returns errWriterHeld when another
+// attempt holds the task branch.
 func (s *Service) insertAttempt(ctx context.Context, q *dbq.Queries, t dbq.Task, predecessor *string) (dbq.TaskAttempt, error) {
 	shape := shapeOf(t)
 	prof, err := s.Providers.Resolve(t.AssignedProfileID, agentKey(shape, t.Mode), false)
@@ -281,7 +288,9 @@ func (s *Service) insertAttempt(ctx context.Context, q *dbq.Queries, t dbq.Task,
 			return dbq.TaskAttempt{}, err
 		}
 		repo = strings.ToLower(full)
-		a.InitialRef = t.CheckoutRef
+		if predecessor == nil {
+			a.InitialRef = t.CheckoutRef
+		}
 		a.WorkspaceRequestID = ptr(workspaceRequestID(a.ID))
 	} else {
 		id := uuid.NewString()
@@ -377,6 +386,9 @@ func (s *Service) createRuntime(ctx context.Context, c reconcile.Claim, op dbq.T
 		return s.stepAside(ctx, c, op)
 	}
 	if t.Mode == dbstate.TaskModeCode {
+		if a.InitialRef == nil {
+			return reconcile.Outcome{}, errors.New("tasks: code attempt has no initial ref")
+		}
 		if a.WorkspaceID == nil {
 			out, done, err := s.makeWorkspace(ctx, c, op, t, a)
 			if err != nil || !done {
@@ -473,8 +485,10 @@ func (s *Service) makeWorkspace(ctx context.Context, c reconcile.Claim, op dbq.T
 			err = errors.Join(err, q.FinishAttemptWorkspaceCreate(finishCtx, a.ID))
 		}()
 		req := api.CreateWorkspaceRequest{ProjectId: t.ProjectID, Branch: t.CheckoutBranch, AgentKind: &a.ProfileID}
-		if t.CheckoutRef != nil && *t.CheckoutRef != "" {
-			req.Ref = t.CheckoutRef
+		// A first attempt starts from the task's checkout ref; a retry or reassign's successor from
+		// the commit its handoff read (see [Service.checkpoint]).
+		if a.InitialRef != nil && *a.InitialRef != "" {
+			req.Ref = a.InitialRef
 		}
 		if t.CheckoutDepth != nil {
 			d := int(*t.CheckoutDepth)

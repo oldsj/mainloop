@@ -6,9 +6,11 @@ session with a fresh binding and credential, on the same task: same id, brief, p
 parent. To continue with the agent's context instead, send a [follow-up](tasks.md#follow-up), which
 goes to the task's own session.
 
-Status: **implemented for coordination tasks.** A code task's retry and reassign are still recorded
-`blocked` with reason `handoff_unavailable` (see [Not built](#not-built)). No provider fallback is
-inferred: Mainloop never retries or reassigns on its own initiative.
+Status: **implemented** for coordination and code tasks. A code task's successor continues on the
+task branch from its head on origin. That needs a GitHub App; without one a code task's retry and
+reassign are recorded `blocked` with reason `handoff_unavailable` and the view reports both
+unavailable. No provider fallback is inferred: Mainloop never retries or reassigns on its own
+initiative.
 
 ## Who may ask, and when
 
@@ -16,8 +18,8 @@ inferred: Mainloop never retries or reassigns on its own initiative.
   **Retry** and **Reassign**), main and a supervisor for the tasks they manage (MCP `task_retry`,
   `task_reassign`). Each request carries the task version and current attempt the caller saw, and a
   request id; the same request id with the same payload returns the stored operation.
-- **Tasks.** A coordination task with a current attempt whose status is `running`, `waiting`,
-  `blocked` or `failed`, and that is not already in a handoff. The task view offers `retry` and
+- **Tasks.** A task with a current attempt whose status is `running`, `waiting`, `blocked` or
+  `failed`, and that is not already in a handoff (a code task only with a GitHub App). The task view offers `retry` and
   `reassign` exactly then. Refusals (409): `task_terminal` (cancelled or completed: a completed task
   takes a follow-up instead), `task_not_running` (no attempt yet), `operation_pending` (a cancel,
   retry or reassign is in progress), `task_settling` (a failed task whose attempt is still being
@@ -48,15 +50,33 @@ the `task-operations` loop. Every step is idempotent on stored state, so a crash
    successor attempt is inserted with `predecessor_id` set, taking the slot back; the old attempt
    becomes `superseded` with `successor_id` and `superseded_at` (an attempt that had already
    ended keeps its final state and gets the same links); the task's current attempt becomes the
-   successor. A reassign first sets the task's `assigned_profile_id` to the target
-   (`selection_source` `explicit`) and clears its model and effort, which were checked against the
-   old provider. Then `target_creating`. A failed child whose parent has no free slot waits for
-   one within `TASK_PROVISION_WINDOW_SECONDS`, then the task fails again.
-4. **Provision** (`target_creating`, `target_ready`). As a create: the successor gets its session
-   and binding, becomes `active`, the task `running`, and its first brief is delivered once. The
-   operation `completed`.
+   successor. A code task's branch writer claim is released by the fence and taken by the
+   successor in the same transaction. A reassign first sets the task's `assigned_profile_id` to the
+   target (`selection_source` `explicit`) and clears its model and effort, which were checked
+   against the old provider. Then `target_creating`, or `checkpoint_required` for a code task. A
+   failed child whose parent has no free slot waits for one within
+   `TASK_PROVISION_WINDOW_SECONDS`, then the task fails again.
+4. **Branch head** (code tasks, `checkpoint_required`). Mainloop reads the task branch on origin
+   through the GitHub App. Nothing can move it now: pushgate refuses to release a writer claim
+   while one of its pushes is unresolved, so the fence settled every push of the old attempt, and
+   the successor holds the claim but has no workspace yet. When the branch is there, the
+   successor starts at its head (`checkpoint_ref` `refs/heads/<branch>`). When it was never pushed,
+   the successor starts from the task's base ref, or the default branch (`HEAD`) when it has none,
+   resolved to its commit. The commit is recorded as the successor's `initial_ref` and the ref
+   read as the operation's `checkpoint_ref`, in one transaction, before any workspace call. A read
+   that fails is tried again; once `TASK_PROVISION_WINDOW_SECONDS` have passed since the successor
+   was made, the successor is aborted and the task fails (`provisioning_unavailable`). A branch
+   that cannot be found is never taken as never pushed unless the base can be read: lost access
+   to the repository fails the task rather than starting it over from the base. A cancel recorded
+   during the read wins before any workspace is made. Then `target_creating`.
+5. **Provision** (`target_creating`, `target_ready`). As a create: the successor gets its session
+   and binding (for a code task, a workspace on the task branch at `initial_ref`), becomes
+   `active`, the task `running`, and its first brief is delivered once. The operation
+   `completed`.
 
-A superseded attempt never reopens: a later follow-up goes to the successor.
+A superseded attempt never reopens: a later follow-up goes to the successor. A code task's
+projection keeps the pull request an earlier attempt of the chain opened through Mainloop, since
+the successor works on the same branch.
 
 **One writer.** Concurrent retries and reassigns of a task carry the same version; the first takes
 the task lock and moves the version, and the rest are refused. A cancel during a handoff wins
@@ -71,18 +91,17 @@ brief, project instructions and memory, shared guidance), with a **Continuation*
 brief. It says whether the task was retried or reassigned (and from which provider), which attempt
 number was stopped, that the new session does not have its context and the old attempt may have done
 part of the work, that a supervisor's open children were cancelled, and quotes the old attempt's
-last report (outcome and summary, at most 4000 characters) or says it made none. It reads only rows
-that do not change once the old attempt is fenced, so a resend of the brief is the same text.
+last report (outcome and summary, at most 4000 characters) or says it made none. A code task's note
+also says where the workspace starts: at the branch head, with what the old attempt pushed and
+nothing it did not (and to keep working on the branch's pull request), or at the base commit
+because the branch was never pushed. It reads only rows that do not change once the successor's
+workspace is made, so a resend of the brief is the same text.
 
-Not carried: the old session's transcript, pending approvals, and its holds.
+Not carried: the old session's transcript, pending approvals, its holds, and a code attempt's
+unpushed work (its workspace is not read).
 
 ## Not built
 
-- **Code tasks.** Their successor must start from the task branch's pushed head, read from the
-  remote before the workspace is created, or from the base with the continuation note when the
-  branch was never pushed. Until then a code task's retry and reassign record a `blocked`
-  operation with reason `handoff_unavailable`, the view reports both unavailable, and the task page
-  does not show them.
 - **Automatic recovery.** Mainloop does not retry or reassign a stuck task on its own before asking
   the owner; see [inbox](inbox.md#reconciliation-and-merge-attention-a1) for the Problems
   classification a stuck task gets meanwhile.

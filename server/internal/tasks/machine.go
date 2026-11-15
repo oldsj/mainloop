@@ -165,12 +165,15 @@ var opEdges = map[dbstate.TaskOpKind]map[dbstate.TaskOpState][]dbstate.TaskOpSta
 
 // handoffEdges are the moves of a retry or reassign. With an attempt still running it drains and
 // stops it, then fences it and makes the successor in one step, so the task never holds neither. An
-// attempt that had already ended (a failed task) goes straight to the successor.
+// attempt that had already ended (a failed task) goes straight to the successor. A code task's
+// successor then waits in checkpoint_required until the branch head on origin is read and recorded
+// as where its workspace starts.
 var handoffEdges = map[dbstate.TaskOpState][]dbstate.TaskOpState{
-	dbstate.TaskOpRequested:      {dbstate.TaskOpDraining, dbstate.TaskOpTargetCreating},
-	dbstate.TaskOpDraining:       {dbstate.TaskOpSourceFencing},
-	dbstate.TaskOpSourceFencing:  {dbstate.TaskOpTargetCreating},
-	dbstate.TaskOpTargetCreating: {dbstate.TaskOpTargetReady},
+	dbstate.TaskOpRequested:          {dbstate.TaskOpDraining, dbstate.TaskOpTargetCreating, dbstate.TaskOpCheckpointRequired},
+	dbstate.TaskOpDraining:           {dbstate.TaskOpSourceFencing},
+	dbstate.TaskOpSourceFencing:      {dbstate.TaskOpTargetCreating, dbstate.TaskOpCheckpointRequired},
+	dbstate.TaskOpCheckpointRequired: {dbstate.TaskOpTargetCreating},
+	dbstate.TaskOpTargetCreating:     {dbstate.TaskOpTargetReady},
 	dbstate.TaskOpTargetReady:    {dbstate.TaskOpCompleted},
 }
 

@@ -72,7 +72,7 @@ func attemptBrief(ctx context.Context, q *dbq.Queries, a dbq.TaskAttempt, t dbq.
 		}
 	}
 	brief := t.Brief
-	if note, err := continuation(ctx, q, a); err != nil {
+	if note, err := continuation(ctx, q, a, t); err != nil {
 		return "", err
 	} else if note != "" {
 		brief += "\n\n" + note
