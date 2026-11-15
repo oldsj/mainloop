@@ -40,6 +40,35 @@ func TestReadPagesStoredEntries(t *testing.T) {
 	if len(rest.Entries) != 2 || rest.HasMore || *rest.Entries[0].Id <= *first.Entries[3].Id {
 		t.Fatalf("second page: %+v", rest)
 	}
+	if first.HasEarlier || !rest.HasEarlier {
+		t.Fatalf("has_earlier: first %v, rest %v", first.HasEarlier, rest.HasEarlier)
+	}
+	all := append(first.Entries, rest.Entries...)
+
+	// Backward: the last entries, then the ones before them, still oldest first.
+	latest, err := e.svc.Read(ctx, ReadRequest{SessionID: session, Latest: true, Limit: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(latest.Entries) != 4 || *latest.Entries[0].Id != *all[2].Id || *latest.Entries[3].Id != *all[5].Id ||
+		!latest.HasEarlier || latest.HasMore {
+		t.Fatalf("latest: %+v", latest)
+	}
+	before, err := e.svc.Read(ctx, ReadRequest{SessionID: session, Before: *latest.Entries[0].Id, Limit: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.Entries) != 2 || *before.Entries[0].Id != *all[0].Id || *before.Entries[1].Id != *all[1].Id ||
+		before.HasEarlier || !before.HasMore {
+		t.Fatalf("before: %+v", before)
+	}
+	empty, err := e.svc.Read(ctx, ReadRequest{SessionID: session, Before: *all[0].Id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty.Entries) != 0 || empty.HasEarlier || !empty.HasMore {
+		t.Fatalf("before the first: %+v", empty)
+	}
 }
 
 func TestReadOwnerScoped(t *testing.T) {

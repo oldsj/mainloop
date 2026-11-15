@@ -56,7 +56,7 @@ describe('what the palette lists', () => {
 
   it('starts with the pages, then the tree’s rows, then the themes', () => {
     expect(items.map((item) => item.kind)).toEqual([
-      ...Array.from({ length: 7 }, () => 'Page'),
+      ...Array.from({ length: 8 }, () => 'Page'),
       'Needs you',
       'Task',
       'Project',
@@ -132,5 +132,14 @@ describe('how a query narrows the list', () => {
     const many = Array.from({ length: 200 }, (_, index) => task(`t${index}`, `Task ${index}`));
     expect(filterItems(paletteItems(many), '')).toHaveLength(PALETTE_LIMIT);
     expect(filterItems(paletteItems(many), 'task')).toHaveLength(PALETTE_LIMIT);
+  });
+});
+
+describe('transcript search', () => {
+  it('is a page the palette jumps to', () => {
+    expect(filterItems(paletteItems([]), 'transcripts')[0]).toMatchObject({
+      label: 'Search transcripts',
+      action: { do: 'transcripts' }
+    });
   });
 });

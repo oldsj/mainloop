@@ -26,6 +26,18 @@ func (a *TranscriptsAPI) GetSessionTranscript(ctx context.Context, r api.GetSess
 		}
 		req.After = *p
 	}
+	if p := r.Params.Before; p != nil {
+		if *p < 1 {
+			return nil, apierr.Invalid("before must be positive")
+		}
+		req.Before = *p
+	}
+	if p := r.Params.Latest; p != nil {
+		req.Latest = *p
+	}
+	if n := btoi(req.After > 0) + btoi(req.Before > 0) + btoi(req.Latest); n > 1 {
+		return nil, apierr.Invalid("after, before and latest exclude each other")
+	}
 	if p := r.Params.Limit; p != nil {
 		if *p < 1 || *p > MaxReadLimit {
 			return nil, apierr.Invalid("limit must be between 1 and 500")
@@ -43,6 +55,13 @@ func (a *TranscriptsAPI) GetSessionTranscript(ctx context.Context, r api.GetSess
 		return nil, err
 	}
 	return api.GetSessionTranscript200JSONResponse(out), nil
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // SearchTranscripts implements api.StrictServerInterface.

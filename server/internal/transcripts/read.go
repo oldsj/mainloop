@@ -3,6 +3,7 @@ package transcripts
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -40,6 +41,10 @@ type ReadRequest struct {
 	SessionID string
 	// After is the last entry id the reader has; 0 starts from the beginning.
 	After int64
+	// Before, when set, ends the page just before this entry id instead.
+	Before int64
+	// Latest, instead, returns the last entries.
+	Latest bool
 	// Limit is the most stored entries returned: 1 to MaxReadLimit, 0 for the default.
 	Limit int
 	// Live asks for the live tail when the page reaches the last stored entry.
@@ -70,14 +75,9 @@ func (s *Service) Read(ctx context.Context, r ReadRequest) (api.SessionTranscrip
 	for _, k := range r.Kinds {
 		kinds = append(kinds, string(k))
 	}
-	rows, err := q.ListTranscriptEntries(ctx, dbq.ListTranscriptEntriesParams{
-		SessionID: r.SessionID, AfterID: max(r.After, 0), Kinds: kinds, MaxRows: int32(limit + 1), //nolint:gosec // bounded above
-	})
+	rows, err := page(ctx, q, r, kinds, limit, &out)
 	if err != nil {
 		return out, err
-	}
-	if len(rows) > limit {
-		rows, out.HasMore = rows[:limit], true
 	}
 	for _, e := range rows {
 		id := e.ID
@@ -110,6 +110,48 @@ func (s *Service) Read(ctx context.Context, r ReadRequest) (api.SessionTranscrip
 		out.Live = keepKinds(live, r.Kinds)
 	}
 	return out, nil
+}
+
+// page reads one page of stored entries, oldest first, and sets out's HasEarlier and HasMore: whether
+// entries lie beyond it on either side.
+func page(ctx context.Context, q *dbq.Queries, r ReadRequest, kinds []string, limit int, out *api.SessionTranscript) ([]dbq.ListTranscriptEntriesRow, error) {
+	n := int32(limit) //nolint:gosec // bounded by MaxReadLimit
+	var rows []dbq.ListTranscriptEntriesRow
+	// lo and hi bound the page; an empty page sits where it would have been.
+	var lo, hi int64
+	if r.Before > 0 || r.Latest {
+		var before *int64
+		if r.Before > 0 {
+			before = &r.Before
+		}
+		back, err := q.ListTranscriptEntriesBefore(ctx, dbq.ListTranscriptEntriesBeforeParams{SessionID: r.SessionID, BeforeID: before, Kinds: kinds, MaxRows: n})
+		if err != nil {
+			return nil, err
+		}
+		for i := len(back) - 1; i >= 0; i-- {
+			rows = append(rows, dbq.ListTranscriptEntriesRow(back[i]))
+		}
+		lo, hi = 0, math.MaxInt64
+		if before != nil {
+			lo, hi = *before, *before-1
+		}
+	} else {
+		var err error
+		rows, err = q.ListTranscriptEntries(ctx, dbq.ListTranscriptEntriesParams{SessionID: r.SessionID, AfterID: max(r.After, 0), Kinds: kinds, MaxRows: n})
+		if err != nil {
+			return nil, err
+		}
+		lo, hi = max(r.After, 0)+1, max(r.After, 0)
+	}
+	if len(rows) > 0 {
+		lo, hi = rows[0].ID, rows[len(rows)-1].ID
+	}
+	beyond, err := q.TranscriptEntriesBeyond(ctx, dbq.TranscriptEntriesBeyondParams{SessionID: r.SessionID, Lo: lo, Hi: hi, Kinds: kinds})
+	if err != nil {
+		return nil, err
+	}
+	out.HasEarlier, out.HasMore = beyond.Earlier, beyond.Later
+	return rows, nil
 }
 
 func keepKinds(entries []api.TranscriptEntry, kinds []Kind) []api.TranscriptEntry {

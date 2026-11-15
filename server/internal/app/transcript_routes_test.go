@@ -87,6 +87,15 @@ func TestTranscriptRoutes(t *testing.T) {
 	if r := send(h, "GET", "/sessions/session-1/transcript?limit=501", "", nil); r.status != 422 {
 		t.Fatalf("limit past the bound: %d", r.status)
 	}
+	if r := send(h, "GET", "/sessions/session-1/transcript?after=1&latest=true", "", nil); r.status != 422 {
+		t.Fatalf("after with latest: %d", r.status)
+	}
+	r = send(h, "GET", "/sessions/session-1/transcript?latest=true&limit=1", "", nil)
+	var last api.SessionTranscript
+	strict(t, r.body, &last)
+	if r.status != 200 || len(last.Entries) != 1 || !last.HasEarlier || last.HasMore || *last.Entries[0].Id != *tr.Entries[1].Id {
+		t.Fatalf("latest: %d %s", r.status, r.body)
+	}
 
 	r = send(h, "GET", "/transcripts/search?q=rollout&project_id=project-1", "", nil)
 	if r.status != 200 {

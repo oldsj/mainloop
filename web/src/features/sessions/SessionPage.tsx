@@ -17,6 +17,7 @@ import { useSessionRequests } from '@/features/hitl/session-requests';
 import { runNotes, useRunDefaults } from '@/features/chat/runDefaults';
 import { LiveSession, liveForced, type LiveNotes } from '@/features/live';
 import { DotfilesRefresh } from '@/features/dotfiles/DotfilesRefresh';
+import { TranscriptView } from '@/features/transcripts';
 import { IdentityStrip } from './IdentityStrip';
 import {
   actionFailure,
@@ -106,11 +107,39 @@ function useVisibleMaxHeight(ref: RefObject<HTMLElement | null>, ready: boolean)
 }
 
 /**
+ * Switches the page between the session's conversation and its transcript. A link, so the view is
+ * the URL's and Back returns to the other one.
+ */
+function ViewToggle({ id, transcript }: { id: string; transcript: boolean }) {
+  return (
+    <Button asChild variant="ghost" size="sm" className="flex-none">
+      <Link
+        to="/sessions/$id"
+        params={{ id }}
+        search={transcript ? {} : { transcript: 1 }}
+        data-testid="session-view-toggle"
+      >
+        {transcript ? 'Conversation' : 'Transcript'}
+      </Link>
+    </Button>
+  );
+}
+
+/**
  * One session: its status, identity, actions, workspace and the chat slot. The session comes from
  * attention when it is listed there, and from a direct read otherwise, so a session that is not
  * in the list still opens. Each action re-reads the session once it settles (see `useSessionActions`).
+ * With `transcript`, the transcript takes the conversation's place, opening at `entry` when given.
  */
-export function SessionPage({ id }: { id: string }) {
+export function SessionPage({
+  id,
+  transcript = false,
+  entry
+}: {
+  id: string;
+  transcript?: boolean;
+  entry?: number;
+}) {
   const navigate = useNavigate();
   const offline = useConnection().status === 'offline';
   const attention = useAttention();
@@ -173,6 +202,8 @@ export function SessionPage({ id }: { id: string }) {
   // for ever, so it gets the regular view, with its record and the Clear action.
   const cancelled = session.status === 'cancelled';
   const live = !archived && !cancelled && (native.data?.live === true || liveForced()) && !chatView;
+  // The header is one row live and on the transcript, so a phone keeps the screen for the log.
+  const compact = live || transcript;
 
   function runStop() {
     setNotice(null);
@@ -216,10 +247,9 @@ export function SessionPage({ id }: { id: string }) {
       className="flex h-full min-h-0 flex-col"
       style={visibleMaxHeight === null ? undefined : { maxHeight: `${visibleMaxHeight}px` }}
     >
-      {/* Live, the header is one row, so a phone keeps the screen for the transcript. */}
       <header
         className={
-          live
+          compact
             ? 'gap-sm border-border-subtle px-sm py-xs flex items-center border-b'
             : 'gap-sm border-border-subtle p-md flex flex-col border-b'
         }
@@ -232,15 +262,23 @@ export function SessionPage({ id }: { id: string }) {
               tone={sessionTone(session)}
             />
           </span>
+          {compact ? null : (
+            <span className="ml-auto">
+              <ViewToggle id={session.id} transcript={transcript} />
+            </span>
+          )}
         </div>
         <h1
           className={
-            live ? 'min-w-0 truncate text-sm font-medium' : 'text-lg font-medium break-words'
+            compact
+              ? 'min-w-0 flex-1 truncate text-sm font-medium'
+              : 'text-lg font-medium break-words'
           }
         >
           {session.title}
         </h1>
-        {session.description && !live ? (
+        {compact ? <ViewToggle id={session.id} transcript={transcript} /> : null}
+        {session.description && !compact ? (
           <p className="text-muted-foreground text-sm break-words">{session.description}</p>
         ) : null}
       </header>
@@ -250,7 +288,11 @@ export function SessionPage({ id }: { id: string }) {
         <DotfilesRefresh sessionId={session.id} />
       </PanelBoundary>
 
-      {live ? (
+      {transcript ? (
+        <PanelBoundary name="Transcript">
+          <TranscriptView sessionId={session.id} entry={entry} />
+        </PanelBoundary>
+      ) : live ? (
         <PanelBoundary name="Live session">
           <LiveWithRequests
             sessionId={session.id}

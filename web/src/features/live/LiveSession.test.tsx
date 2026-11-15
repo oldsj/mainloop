@@ -773,7 +773,7 @@ describe('live session', () => {
     });
   });
 
-  it('reads asleep from the runtime association and the record from the conversation', async () => {
+  it('reads asleep from the runtime association and the record from the transcript', async () => {
     let active: boolean | undefined = false;
     server.use(
       http.get(`${API_URL}/sessions/:id/native`, () =>
@@ -791,18 +791,50 @@ describe('live session', () => {
                 }
         })
       ),
-      http.get(`${API_URL}/sessions/:id/conversation`, () =>
-        HttpResponse.json({
-          session: { id: 's1' },
-          messages: [{ id: 'm1', conversation_id: 'c', role: 'user', content: 'hi' }]
-        })
-      )
+      http.get(`${API_URL}/sessions/:id/transcript`, ({ request }) => {
+        // The last entries, stored and live: the view shows the end of the session.
+        const url = new URL(request.url);
+        if (url.searchParams.get('latest') !== 'true')
+          return HttpResponse.json({}, { status: 500 });
+        const entry = (id: number | null, pos: number, kind: string, text: string, more = {}) => ({
+          id,
+          task_id: 't1',
+          pos,
+          kind,
+          tool_name: '',
+          tool_call_id: '',
+          is_error: false,
+          text,
+          truncated: false,
+          orig_bytes: text.length,
+          at: null,
+          live: id === null,
+          ...more
+        });
+        return HttpResponse.json({
+          entries: [
+            entry(1, 0, 'user', 'hi'),
+            entry(2, 1, 'thinking', 'hmm'),
+            entry(3, 2, 'tool_call', '{"command":"ls"}', { tool_name: 'Bash', tool_call_id: 'c1' }),
+            entry(4, 3, 'tool_result', 'a.go\nb.go', { tool_name: 'Bash', tool_call_id: 'c1' })
+          ],
+          has_more: false,
+          has_earlier: false,
+          sources: [],
+          live: [entry(null, 4, 'assistant', 'Two files.')],
+          live_error: null
+        });
+      })
     );
     expect(await liveDeps.awake('s1')).toBe(false);
     active = true;
     expect(await liveDeps.awake('s1')).toBe(true);
     active = undefined;
     expect(await liveDeps.awake('s1')).toBeNull();
-    expect(await liveDeps.history('s1')).toEqual([{ role: 'user', content: 'hi' }]);
+    expect(await liveDeps.history('s1')).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'tool', name: 'Bash', input: { command: 'ls' }, result: 'a.go\nb.go', error: false },
+      { role: 'assistant', content: 'Two files.' }
+    ]);
   });
 });

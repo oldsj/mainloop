@@ -1206,7 +1206,7 @@ export interface paths {
     };
     /**
      * Get Session Transcript
-     * @description A session's stored transcript entries in the order they were copied, after an entry id, with how far copying has got. Once the page reaches the last stored entry, the response also carries a live tail: the turns kagent has not finished or Mainloop has not copied yet, read through kagent's control plane, redacted and capped the same way, and not stored.
+     * @description A session's stored transcript entries in the order they were copied, with how far copying has got. A page starts after an entry id (`after`), ends before one (`before`), or is the last entries (`latest`); entries are always oldest first. Once the page reaches the last stored entry, the response also carries a live tail: the turns kagent has not finished or Mainloop has not copied yet, read through kagent's control plane, redacted and capped the same way, and not stored.
      */
     get: operations['getSessionTranscript'];
     put?: never;
@@ -5938,6 +5938,8 @@ export interface components {
       entries: components['schemas']['TranscriptEntry'][];
       /** @description Stored entries follow the last one returned. */
       has_more: boolean;
+      /** @description Stored entries come before the first one returned. */
+      has_earlier: boolean;
       /** @description The kagent Sessions copied from, newest first. */
       sources: components['schemas']['TranscriptSource'][];
       /** @description The live tail, empty unless the page reached the last stored entry. */
@@ -10813,6 +10815,10 @@ export interface operations {
       query?: {
         /** @description Return entries after this entry id; 0 starts from the beginning. */
         after?: number;
+        /** @description Return the entries just before this entry id. Not with `after` or `latest`. */
+        before?: number;
+        /** @description Return the last entries. Not with `after` or `before`. */
+        latest?: boolean;
         limit?: number;
         /** @description Read the live tail from kagent when the page reaches the end. */
         live?: boolean;

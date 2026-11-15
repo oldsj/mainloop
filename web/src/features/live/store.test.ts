@@ -38,3 +38,41 @@ describe('model and effort acks', () => {
     expect(sysLines(m)).toEqual(['Set model to opus', 'Set effort to default']);
   });
 });
+
+describe('history', () => {
+  it('places tool calls from the record as the live view shows them, edits as diffs', () => {
+    const m = new LiveModel();
+    m.setHistory([
+      { role: 'user', content: 'fix it' },
+      {
+        role: 'tool',
+        name: 'Bash',
+        input: { command: 'go test ./...' },
+        result: '\nFAIL x\nok y',
+        error: true
+      },
+      {
+        role: 'tool',
+        name: 'Edit',
+        input: { file_path: '/data/workspace/a.go', old_string: 'a', new_string: 'b' },
+        result: 'ok',
+        error: false
+      },
+      { role: 'tool', name: 'Read', input: 'cut {"file_pa', result: null, error: false },
+      { role: 'assistant', content: 'Fixed.' }
+    ]);
+    const kinds = m.state.entries.map((e) => e.t);
+    expect(kinds).toEqual(['sys', 'user', 'tool', 'tool', 'diff', 'tool', 'text']);
+    const tools = m.state.entries.filter((e) => e.t === 'tool');
+    expect(tools[0]).toMatchObject({
+      name: 'Bash',
+      arg: 'go test ./...',
+      out: ['FAIL x', 'ok y'],
+      status: 'err'
+    });
+    expect(tools[1]).toMatchObject({ name: 'Edit', arg: 'a.go', status: 'ok' });
+    // A call whose arguments were cut, with no result stored.
+    expect(tools[2]).toMatchObject({ name: 'Read', arg: 'cut {"file_pa', out: [], status: 'ok' });
+    expect(m.state.entries[4]).toMatchObject({ t: 'diff', verb: 'Update', file: 'a.go' });
+  });
+});

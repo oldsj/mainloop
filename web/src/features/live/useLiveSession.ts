@@ -3,6 +3,7 @@ import { API_URL } from '@/api/config';
 import { fetchClient } from '@/api/client';
 import { errorDetail } from '@/api/errors';
 import type { components } from '@/api/schema.gen';
+import { toHistory } from '@/features/transcripts/model';
 import { initialState, LiveModel, type Frame, type HistoryMessage, type LiveState } from './store';
 
 export const LIVE_SUBPROTOCOL = 'kagent.sdk-runner.v1';
@@ -56,7 +57,10 @@ export type SendStatus = 'ok' | 'queued' | 'steered';
 export interface LiveDeps {
   /** Whether the session's actor runs: true, false (asleep), or null when kagent does not say. */
   awake: (sessionId: string) => Promise<boolean | null>;
-  /** Mainloop's record of the conversation, which survives the actor sleeping. */
+  /**
+   * Mainloop's record of the session, which survives the actor sleeping: the last turns of its
+   * transcript, messages and tool calls, with the turns not copied yet read through kagent.
+   */
   history: (sessionId: string) => Promise<HistoryMessage[]>;
   /**
    * Records a message under `messageId`, which makes a retry safe. During a turn it steers that turn,
@@ -87,10 +91,10 @@ export const liveDeps: LiveDeps = {
   },
   history: async (sessionId) => {
     try {
-      const { data } = await fetchClient.GET('/sessions/{session_id}/conversation', {
-        params: { path: { session_id: sessionId } }
+      const { data } = await fetchClient.GET('/sessions/{session_id}/transcript', {
+        params: { path: { session_id: sessionId }, query: { latest: true, limit: HISTORY_ENTRIES } }
       });
-      return (data?.messages ?? []).map((m) => ({ role: m.role, content: m.content }));
+      return data ? toHistory([...data.entries, ...data.live]) : [];
     } catch {
       return [];
     }
@@ -124,6 +128,9 @@ export const liveDeps: LiveDeps = {
     if (!data) throw failed(error, `the ${what} was not set`);
   }
 };
+
+/** The transcript entries the view is seeded with: the last ones, about the last few turns. */
+const HISTORY_ENTRIES = 300;
 
 /** Attempts at recording a message, the same message id each time, before the view says it failed. */
 const SAY_ATTEMPTS = 3;
@@ -184,7 +191,7 @@ export interface LiveSession {
  *
  * Every attach starts with `hello`, whose backlog rebuilds the live part of the view, so a reconnect
  * never replays or doubles an event. The backlog lives in the runner process and starts empty after a
- * sleep, so the view is seeded from Mainloop's record of the conversation, above the backlog.
+ * sleep, so the view is seeded from the session's transcript, above the backlog.
  */
 export function useLiveSession(sessionId: string, deps: LiveDeps = liveDeps): LiveSession {
   const model = useRef(new LiveModel());

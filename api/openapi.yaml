@@ -3805,10 +3805,12 @@ paths:
         - transcripts
       summary: Get Session Transcript
       description: >-
-        A session's stored transcript entries in the order they were copied, after an entry id, with
-        how far copying has got. Once the page reaches the last stored entry, the response also
-        carries a live tail: the turns kagent has not finished or Mainloop has not copied yet, read
-        through kagent's control plane, redacted and capped the same way, and not stored.
+        A session's stored transcript entries in the order they were copied, with how far copying
+        has got. A page starts after an entry id (`after`), ends before one (`before`), or is the
+        last entries (`latest`); entries are always oldest first. Once the page reaches the last
+        stored entry, the response also carries a live tail: the turns kagent has not finished or
+        Mainloop has not copied yet, read through kagent's control plane, redacted and capped the
+        same way, and not stored.
       operationId: getSessionTranscript
       parameters:
         - name: session_id
@@ -3827,6 +3829,23 @@ paths:
             minimum: 0
             default: 0
             title: After
+        - name: before
+          in: query
+          required: false
+          description: Return the entries just before this entry id. Not with `after` or `latest`.
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+            title: Before
+        - name: latest
+          in: query
+          required: false
+          description: Return the last entries. Not with `after` or `before`.
+          schema:
+            type: boolean
+            default: false
+            title: Latest
         - name: limit
           in: query
           required: false
@@ -13195,6 +13214,9 @@ components:
         has_more:
           type: boolean
           description: Stored entries follow the last one returned.
+        has_earlier:
+          type: boolean
+          description: Stored entries come before the first one returned.
         sources:
           type: array
           description: The kagent Sessions copied from, newest first.
@@ -13215,6 +13237,7 @@ components:
       required:
         - entries
         - has_more
+        - has_earlier
         - sources
         - live
         - live_error

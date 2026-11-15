@@ -1,8 +1,9 @@
 # Session transcripts
 
-Status: **partly implemented** (#448). Storage, the turn normalizer, ingestion, the copy before a
-delete, retention, the read and search API, and the MCP tools exist. The web view is still to
-come.
+Status: **implemented** (#448): storage, the turn normalizer, ingestion, the copy before a delete,
+retention, the read and search API, the MCP tools, and the web view
+([sessions](sessions.md#the-transcript)). Tested against fixtures and the fake kagent; not measured
+against a live kagent.
 
 Mainloop's conversation (`session_messages`) keeps each turn's user message and final reply. A
 session's transcript also keeps what the agent did on the way: its text, each tool call with its
@@ -147,7 +148,10 @@ Normalization is deterministic, so an entry's position within its task is stable
 - **Order and paging.** Entries come in the order they were copied, which is the order their turns
   finished. Each stored entry has an `id`. Pass the last one as `after` to read the next page. A
   page holds up to `limit` entries: 200 by default, at most 500. `has_more` says whether more
-  stored entries follow.
+  stored entries follow, and `has_earlier` whether some come before.
+- **Reading backward.** `latest=true` returns the last entries, and `before=<id>` the entries just
+  before that one. Either way the page is still oldest first. `after`, `before` and `latest` exclude
+  each other (422).
 - **Sources.** `sources` lists the kagent Sessions the transcript is copied from, newest first. Each
   shows whether it is still followed (`active`), finished (`complete`) or `unavailable`, with the
   reason.
