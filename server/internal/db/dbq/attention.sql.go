@@ -355,6 +355,42 @@ func (q *Queries) ListSessionsNeedingOwner(ctx context.Context, ownerID string) 
 	return items, nil
 }
 
+const openLoopNoProgressAttention = `-- name: OpenLoopNoProgressAttention :many
+INSERT INTO attention_items AS a (id, owner_id, kind, source_kind, source_id, task_id, title, needed, href)
+SELECT 'attn_loop_' || l.id, l.owner_id, 'owner_decision', 'loop_no_progress', l.id, t.id, t.title,
+       'A loop watching this task stopped: three checks in a row found it unchanged. Steer, retry or cancel the task.',
+       '/tasks/' || t.id
+FROM task_loops l
+JOIN tasks t ON t.id = l.subject_task_id
+WHERE l.owner_id = $1 AND l.stop_reason = 'no_progress'
+  AND t.version = l.stopped_version AND t.status NOT IN ('completed', 'failed', 'cancelled')
+ON CONFLICT (source_kind, source_id) DO NOTHING
+RETURNING a.id
+`
+
+// One item per loop that stopped for no progress (docs/specs/loops.md, "The no-progress stop"):
+// its subject did not change across three firings of a loop armed with expect_change. It is open
+// while the subject is still unfinished and unchanged since the stop.
+func (q *Queries) OpenLoopNoProgressAttention(ctx context.Context, ownerID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, openLoopNoProgressAttention, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const openMergeProposalAttention = `-- name: OpenMergeProposalAttention :many
 INSERT INTO attention_items AS a (id, owner_id, kind, source_kind, source_id, session_id, title, needed, href, reason_code, detail)
 SELECT DISTINCT ON (p.id) 'attn_merge_' || p.id, p.owner_id, 'approval', 'merge_proposal', p.id, r.session_id,
@@ -659,6 +695,37 @@ RETURNING a.id
 // row does not wait for a session that is gone.
 func (q *Queries) ResolveFinishedSessionAttention(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, resolveFinishedSessionAttention, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const resolveLoopNoProgressAttention = `-- name: ResolveLoopNoProgressAttention :many
+UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at = now()
+WHERE a.owner_id = $1 AND a.source_kind = 'loop_no_progress' AND a.state = 'open'
+  AND NOT EXISTS (
+      SELECT 1 FROM task_loops l JOIN tasks t ON t.id = l.subject_task_id
+      WHERE l.id = a.source_id AND l.stop_reason = 'no_progress'
+        AND t.version = l.stopped_version AND t.status NOT IN ('completed', 'failed', 'cancelled'))
+RETURNING a.id
+`
+
+// A no-progress item resolves once its task changed or finished: the negation of the open condition.
+func (q *Queries) ResolveLoopNoProgressAttention(ctx context.Context, ownerID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, resolveLoopNoProgressAttention, ownerID)
 	if err != nil {
 		return nil, err
 	}

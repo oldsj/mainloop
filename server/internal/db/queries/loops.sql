@@ -4,12 +4,13 @@
 INSERT INTO task_loops (
     id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses,
     every_seconds, note, max_firings, min_interval_seconds, expires_at, baseline, fire_at, next_attempt_at,
-    pr_conditions
+    pr_conditions, quiet_seconds, quiet_since, expect_change, progress_mark
 ) VALUES (
     sqlc.arg(id), sqlc.arg(owner_id), sqlc.arg(principal_key), sqlc.arg(request_id), sqlc.arg(recipient_key),
     sqlc.narg(subject_task_id), sqlc.arg(trigger), sqlc.arg(statuses)::text[], sqlc.narg(every_seconds),
     sqlc.arg(note), sqlc.arg(max_firings), sqlc.arg(min_interval_seconds), sqlc.arg(expires_at),
-    sqlc.narg(baseline), sqlc.narg(fire_at), sqlc.arg(next_attempt_at), sqlc.arg(pr_conditions)::text[]
+    sqlc.narg(baseline), sqlc.narg(fire_at), sqlc.arg(next_attempt_at), sqlc.arg(pr_conditions)::text[],
+    sqlc.narg(quiet_seconds), sqlc.narg(quiet_since), sqlc.arg(expect_change), sqlc.narg(progress_mark)
 )
 RETURNING *;
 
@@ -46,7 +47,9 @@ RETURNING *;
 -- name: SetTaskLoopEvaluation :execrows
 UPDATE task_loops
 SET state = sqlc.arg(state), baseline = sqlc.narg(baseline), fire_at = sqlc.narg(fire_at),
-    firings = sqlc.arg(firings), last_fired_at = sqlc.narg(last_fired_at), updated_at = now(),
+    firings = sqlc.arg(firings), last_fired_at = sqlc.narg(last_fired_at), quiet_since = sqlc.narg(quiet_since),
+    progress_mark = sqlc.narg(progress_mark), unchanged_firings = sqlc.arg(unchanged_firings),
+    stop_reason = sqlc.narg(stop_reason), stopped_version = sqlc.narg(stopped_version), updated_at = now(),
     next_attempt_at = sqlc.arg(next_attempt_at), lease_owner = NULL, lease_until = NULL
 WHERE id = sqlc.arg(id) AND lease_owner = sqlc.arg(lease_owner) AND attempts = sqlc.arg(attempts);
 
@@ -65,8 +68,8 @@ FOR UPDATE OF d, f;
 UPDATE task_loop_firings SET facts = sqlc.arg(facts)::text[], folded = sqlc.arg(folded) WHERE id = sqlc.arg(id);
 
 -- name: InsertLoopFiring :one
-INSERT INTO task_loop_firings (id, loop_id, number, facts, not_before)
-VALUES (sqlc.arg(id), sqlc.arg(loop_id), sqlc.arg(number), sqlc.arg(facts)::text[], sqlc.arg(not_before))
+INSERT INTO task_loop_firings (id, loop_id, number, facts, not_before, stops_loop)
+VALUES (sqlc.arg(id), sqlc.arg(loop_id), sqlc.arg(number), sqlc.arg(facts)::text[], sqlc.arg(not_before), sqlc.narg(stops_loop))
 RETURNING *;
 
 -- name: InsertLoopFiringDelivery :exec

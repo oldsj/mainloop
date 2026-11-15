@@ -364,3 +364,28 @@ WHERE a.owner_id = $1 AND a.source_kind = 'project_memory' AND a.state = 'open'
       SELECT 1 FROM project_memory_entries m JOIN projects p ON p.id = m.project_id
       WHERE m.project_id = a.source_id AND p.user_id = a.owner_id AND m.state = 'proposed')
 RETURNING a.id;
+
+-- One item per loop that stopped for no progress (docs/specs/loops.md, "The no-progress stop"):
+-- its subject did not change across three firings of a loop armed with expect_change. It is open
+-- while the subject is still unfinished and unchanged since the stop.
+-- name: OpenLoopNoProgressAttention :many
+INSERT INTO attention_items AS a (id, owner_id, kind, source_kind, source_id, task_id, title, needed, href)
+SELECT 'attn_loop_' || l.id, l.owner_id, 'owner_decision', 'loop_no_progress', l.id, t.id, t.title,
+       'A loop watching this task stopped: three checks in a row found it unchanged. Steer, retry or cancel the task.',
+       '/tasks/' || t.id
+FROM task_loops l
+JOIN tasks t ON t.id = l.subject_task_id
+WHERE l.owner_id = $1 AND l.stop_reason = 'no_progress'
+  AND t.version = l.stopped_version AND t.status NOT IN ('completed', 'failed', 'cancelled')
+ON CONFLICT (source_kind, source_id) DO NOTHING
+RETURNING a.id;
+
+-- A no-progress item resolves once its task changed or finished: the negation of the open condition.
+-- name: ResolveLoopNoProgressAttention :many
+UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at = now()
+WHERE a.owner_id = $1 AND a.source_kind = 'loop_no_progress' AND a.state = 'open'
+  AND NOT EXISTS (
+      SELECT 1 FROM task_loops l JOIN tasks t ON t.id = l.subject_task_id
+      WHERE l.id = a.source_id AND l.stop_reason = 'no_progress'
+        AND t.version = l.stopped_version AND t.status NOT IN ('completed', 'failed', 'cancelled'))
+RETURNING a.id;

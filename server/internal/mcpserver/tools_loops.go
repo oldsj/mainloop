@@ -36,15 +36,19 @@ func (s *Server) loopTools() []Tool {
 				"turn instead of polling. trigger=task fires when a task you manage changes status or reason (statuses limits " +
 				"it to those statuses; a task already in one fires at once). trigger=pull_request fires when a code task's pull " +
 				"request changes: opened, its state, or CI's result (pr_conditions ci_success, ci_failure, merged, closed limits " +
-				"it; CI counts at the pull request's head; a condition that already holds fires at once). trigger=time fires " +
-				"after after_minutes, then every " +
-				"every_minutes if given. note is what the message reminds you to do. A firing waits for your turn to end and comes " +
+				"it; CI counts at the pull request's head; a condition that already holds fires at once). trigger=quiet fires " +
+				"when a task you manage has not changed for quiet_minutes (no status, report, pull request or turn activity), " +
+				"then again after each further quiet period. trigger=time fires after after_minutes, then every " +
+				"every_minutes if given; with task_id its message says how that task stands. expect_change=true (quiet, or " +
+				"time with task_id) is for a loop waiting on progress, such as a repair: three firings in a row that find the " +
+				"task unchanged stop the loop and ask the owner. Leave it false for a periodic check-in that may well see no " +
+				"change. note is what the message reminds you to do. A firing waits for your turn to end and comes " +
 				"with your children's reports as one message; what happens meanwhile folds into it. Limits: max_firings " +
 				"(default 20), min_interval_seconds between firings (default 60), expires_minutes (default 1440, at most 10080), " +
 				"at most 20 armed loops. A supervisor's loops end with its task. Reuse request_id to retry.",
 			InputSchema: objectSchema(map[string]any{
 				"request_id": id,
-				"trigger":    map[string]any{"type": "string", "enum": []any{"task", "pull_request", "time"}},
+				"trigger":    map[string]any{"type": "string", "enum": []any{"task", "pull_request", "quiet", "time"}},
 				"task_id":    optional(id),
 				"statuses": map[string]any{
 					"type": "array", "maxItems": len(statuses), "default": []any{},
@@ -54,6 +58,8 @@ func (s *Server) loopTools() []Tool {
 					"type": "array", "maxItems": len(conditions), "default": []any{},
 					"items": map[string]any{"type": "string", "enum": conditions},
 				},
+				"quiet_minutes":        optional(minutes),
+				"expect_change":        map[string]any{"type": "boolean", "default": false},
 				"after_minutes":        optional(minutes),
 				"every_minutes":        optional(minutes),
 				"note":                 stringSchema(1, tasks.MaxLoopNote),
@@ -87,6 +93,8 @@ func (s *Server) loopArm(ctx context.Context, a agentauth.Actor, args json.RawMe
 		PRConditions   []string `json:"pr_conditions"`
 		AfterMinutes   *int     `json:"after_minutes"`
 		EveryMinutes   *int     `json:"every_minutes"`
+		QuietMinutes   *int     `json:"quiet_minutes"`
+		ExpectChange   bool     `json:"expect_change"`
 		Note           string   `json:"note"`
 		MaxFirings     *int     `json:"max_firings"`
 		MinInterval    *int     `json:"min_interval_seconds"`
@@ -130,6 +138,10 @@ func (s *Server) loopArm(ctx context.Context, a agentauth.Actor, args json.RawMe
 	if li.EveryMinutes, err = positive(in.EveryMinutes); err != nil {
 		return Result{}, err
 	}
+	if li.QuietMinutes, err = positive(in.QuietMinutes); err != nil {
+		return Result{}, err
+	}
+	li.ExpectChange = in.ExpectChange
 	if li.MaxFirings, err = positive(in.MaxFirings); err != nil {
 		return Result{}, err
 	}
@@ -211,6 +223,10 @@ func loopView(l dbq.TaskLoop) map[string]any {
 		"statuses": l.Statuses, "pr_conditions": l.PrConditions, "note": l.Note, "firings": l.Firings, "max_firings": l.MaxFirings,
 		"min_interval_seconds": l.MinIntervalSeconds, "expires_at": l.ExpiresAt.UTC().Format(time.RFC3339),
 		"created_at": l.CreatedAt.UTC().Format(time.RFC3339), "every_minutes": nil, "next_fire_at": nil,
+		"quiet_minutes": nil, "expect_change": l.ExpectChange, "stop_reason": l.StopReason,
+	}
+	if l.QuietSeconds != nil {
+		m["quiet_minutes"] = *l.QuietSeconds / 60
 	}
 	if l.EverySeconds != nil {
 		m["every_minutes"] = *l.EverySeconds / 60
@@ -229,6 +245,8 @@ func loopLine(l dbq.TaskLoop) string {
 		if len(l.Statuses) > 0 {
 			what += " reaching " + strings.Join(l.Statuses, "/")
 		}
+	case dbstate.LoopTriggerQuiet:
+		what = fmt.Sprintf("task %s quiet for %d minutes", *l.SubjectTaskID, *l.QuietSeconds/60)
 	case dbstate.LoopTriggerPullRequest:
 		what = "pull request of task " + *l.SubjectTaskID
 		if len(l.PrConditions) > 0 {
@@ -238,6 +256,9 @@ func loopLine(l dbq.TaskLoop) string {
 	line := fmt.Sprintf("loop %s (%s) is %s: %d of %d firings", l.ID, what, l.State, l.Firings, l.MaxFirings)
 	if l.FireAt != nil && l.State == dbstate.LoopArmed {
 		line += ", next at " + l.FireAt.UTC().Format(time.RFC3339)
+	}
+	if l.StopReason != nil {
+		line += ", stopped for " + *l.StopReason
 	}
 	return line
 }

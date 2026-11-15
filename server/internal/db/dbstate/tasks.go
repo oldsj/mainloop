@@ -177,7 +177,12 @@ const (
 	LoopTriggerTask        LoopTrigger = "task"
 	LoopTriggerTime        LoopTrigger = "time"
 	LoopTriggerPullRequest LoopTrigger = "pull_request"
+	LoopTriggerQuiet       LoopTrigger = "quiet"
 )
+
+// LoopStopNoProgress is task_loops.stop_reason and task_loop_firings.stops_loop: a loop armed with
+// expect_change stopped because three firings in a row found its subject unchanged.
+const LoopStopNoProgress = "no_progress"
 
 // PRCondition is an element of task_loops.pr_conditions: what a pull_request trigger waits for.
 type PRCondition string
