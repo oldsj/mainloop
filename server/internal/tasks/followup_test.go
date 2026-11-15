@@ -136,6 +136,38 @@ func TestFollowUpToAnOpenTaskSendsAndResumesIt(t *testing.T) {
 	}
 }
 
+// A question the agent put to the owner stays the owner's: main's follow-up reaches the agent but
+// leaves the task blocked on the owner, and the owner's own follow-up answers it.
+func TestFollowUpLeavesTheOwnersQuestionToTheOwner(t *testing.T) {
+	r := newRig(t)
+	_, _, child, kid := r.reportingChild()
+	_, session := r.attemptOf(child)
+	in := report(kid, "ask", dbstate.OutcomeBlocked)
+	in.OwnerAction = "Pick a region"
+	if _, err := r.svc.Report(context.Background(), kid, in); err != nil {
+		t.Fatal(err)
+	}
+	r.drainTurns()
+	decision := func() int {
+		return r.count(`SELECT count(*) FROM tasks WHERE id = $1 AND status = 'blocked' AND reason = 'owner_decision'
+			AND decision_action = 'Pick a region'`, child)
+	}
+
+	res := followUp(t, r, r.mainPrincipal(), child, "m")
+	if res.How != "sent" || decision() != 1 {
+		t.Fatalf("main's follow-up = %+v; the owner's question must stay open", res)
+	}
+	r.drainTurns()
+	followUp(t, r, r.own, child, "o")
+	if r.taskStatus(child) != "running" || decision() != 0 ||
+		r.count(`SELECT count(*) FROM tasks WHERE id = $1 AND decision_action IS NULL`, child) != 1 {
+		t.Fatal("the owner's follow-up did not answer the question")
+	}
+	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content IN ('[message from main]' || chr(10) || 'and the staging cluster?', 'and the staging cluster?')`, session); n != 2 {
+		t.Fatalf("follow-ups delivered = %d, want 2", n)
+	}
+}
+
 // The runtime bound is the owner's to lift: main is refused, the owner's follow-up restarts it.
 func TestFollowUpToARuntimeLimitedTaskNeedsTheOwner(t *testing.T) {
 	r := newRig(t)
