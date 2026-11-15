@@ -228,6 +228,24 @@ func TestIngestCursorHeldByUnfinishedTask(t *testing.T) {
 	}
 }
 
+// A waiting task holds the cursor, so a scan stopped by the page bound would read the same pages
+// again; it rests instead of being due again at once.
+func TestIngestHeldCursorAtThePageBoundRests(t *testing.T) {
+	e := newIngest(t, Options{PageSize: 1, MaxPages: 2},
+		a2a.TaskStateInputRequired, a2a.TaskStateCompleted, a2a.TaskStateCompleted)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := e.svc.Flush(ctx, ksID); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.copied(t); len(got) != 1 || !got["t1"] {
+		t.Fatalf("copied %v", got)
+	}
+	if ts := e.session(t); !ts.NextScanAt.After(time.Now().Add(time.Minute)) {
+		t.Fatalf("due again at once: %v", ts.NextScanAt)
+	}
+}
+
 func TestIngestCopiesPerScanBound(t *testing.T) {
 	e := newIngest(t, Options{CopiesPerScan: 2}, a2a.TaskStateCompleted, a2a.TaskStateCompleted, a2a.TaskStateCompleted)
 	e.ingest(t)
@@ -307,13 +325,26 @@ func TestIngestGivesUpAfterMaxFailures(t *testing.T) {
 	}
 }
 
-func TestFlushAdoptsAndCopies(t *testing.T) {
-	e := newIngest(t, Options{}, a2a.TaskStateCompleted)
+func TestFlushAdoptsAndCopiesPastThePassBounds(t *testing.T) {
+	// Three pages of two, at most two copies a scan: a sweep pass would stop after the first page.
+	e := newIngest(t, Options{PageSize: 2, CopiesPerScan: 2},
+		a2a.TaskStateCompleted, a2a.TaskStateCompleted, a2a.TaskStateWorking,
+		a2a.TaskStateCompleted, a2a.TaskStateCompleted, a2a.TaskStateCompleted)
 	if err := e.svc.Flush(context.Background(), ksID); err != nil {
 		t.Fatal(err)
 	}
-	if !e.copied(t)["t0"] {
-		t.Fatal("not copied")
+	if got := e.copied(t); len(got) != 5 || got["t2"] {
+		t.Fatalf("copied %v", got)
+	}
+}
+
+func TestFlushIgnoresAnUnboundSession(t *testing.T) {
+	e := newIngest(t, Options{}, a2a.TaskStateCompleted)
+	if err := e.svc.Flush(context.Background(), "not-bound"); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.k.tokens) != 0 {
+		t.Fatal("read kagent for a session nothing binds")
 	}
 }
 

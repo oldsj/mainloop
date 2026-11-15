@@ -158,7 +158,7 @@ func (s *Service) Ingest(ctx context.Context) error {
 		return fmt.Errorf("transcripts: list due sessions: %w", err)
 	}
 	for _, ts := range due {
-		err := s.scan(ctx, ts)
+		_, err := s.scan(ctx, ts)
 		if err == nil {
 			continue
 		}
@@ -175,21 +175,32 @@ func (s *Service) Ingest(ctx context.Context) error {
 	return nil
 }
 
-// Flush copies what a kagent Session has finished now, outside the sweep. It is for a caller about to
-// delete the Session, which makes kagent's record of it unreadable. It never blocks for longer than
-// ctx allows; whatever it does not copy, the sweep would have had no chance to copy either.
+// Flush copies every turn a kagent Session has finished, now, outside the sweep and past the sweep's
+// per-pass bounds. It is for a caller about to delete the Session, which makes kagent's record of it
+// unreadable. It stops when ctx does. A Session no binding names is not followed, and Flush does
+// nothing for it.
 func (s *Service) Flush(ctx context.Context, kagentSessionID string) error {
-	ts, err := dbq.New(s.Pool).GetTranscriptSession(ctx, kagentSessionID)
+	q := dbq.New(s.Pool)
+	ts, err := q.GetTranscriptSession(ctx, kagentSessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if err := s.adopt(ctx); err != nil {
 			return err
 		}
-		ts, err = dbq.New(s.Pool).GetTranscriptSession(ctx, kagentSessionID)
+		ts, err = q.GetTranscriptSession(ctx, kagentSessionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
 	}
-	if err != nil || ts.State != string(StateActive) {
-		return err
+	for err == nil && ts.State == string(StateActive) {
+		var more bool
+		if more, err = s.scan(ctx, ts); err != nil || !more {
+			break
+		}
+		if err = ctx.Err(); err == nil {
+			ts, err = q.GetTranscriptSession(ctx, kagentSessionID)
+		}
 	}
-	return s.scan(ctx, ts)
+	return err
 }
 
 // adopt follows the owner's bound kagent Sessions it does not follow yet. A binding whose Agent cannot
@@ -222,7 +233,9 @@ func (s *Service) adopt(ctx context.Context) error {
 // waiting task continues the same turn when it is answered) and holds the cursor on its page, so
 // every pass looks at it again; the pages after it are still read and their finished tasks copied.
 // Pages whose tasks were all copied before cost a listing and no task read.
-func (s *Service) scan(ctx context.Context, ts dbq.TranscriptSession) error {
+//
+// more reports that the scan stopped at a bound with work possibly left.
+func (s *Service) scan(ctx context.Context, ts dbq.TranscriptSession) (more bool, err error) {
 	o := s.opts()
 	q := dbq.New(s.Pool)
 	agent := kagent.AgentRef{Namespace: ts.AgentNamespace, Name: ts.AgentName}
@@ -232,7 +245,7 @@ func (s *Service) scan(ctx context.Context, ts dbq.TranscriptSession) error {
 	}
 	stored, err := q.TranscriptSessionBytes(ctx, ts.KagentSessionID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	cursor, held, rest := ts.TaskCursor, false, o.Rest
 	copies := o.CopiesPerScan
@@ -246,21 +259,21 @@ func (s *Service) scan(ctx context.Context, ts dbq.TranscriptSession) error {
 				// kagent no longer takes the cursor. Start over: copied tasks are skipped by receipt.
 				s.log().WarnContext(ctx, "transcripts: task cursor rejected; reading from the start",
 					"kagent_session_id", ts.KagentSessionID)
-				return q.SetTranscriptSessionScan(ctx, dbq.SetTranscriptSessionScanParams{
+				return true, q.SetTranscriptSessionScan(ctx, dbq.SetTranscriptSessionScanParams{
 					KagentSessionID: ts.KagentSessionID, RestSeconds: 0,
 				})
 			}
 			if s.retireGone(ctx, ts, agent, err) {
-				return nil
+				return false, nil
 			}
-			return err
+			return false, err
 		}
 		pending, err := s.copyPage(ctx, ts, agent, tasks, &stored, &copies)
 		if err != nil {
 			if s.retireGone(ctx, ts, agent, err) {
-				return nil
+				return false, nil
 			}
-			return err
+			return false, err
 		}
 		held = held || pending
 		// The cursor passes a page only once nothing on it or before it is left to copy and a page
@@ -269,19 +282,27 @@ func (s *Service) scan(ctx context.Context, ts dbq.TranscriptSession) error {
 			cursor = &next
 		}
 		if copies <= 0 {
-			rest = 0 // more may be waiting: due again at once
+			rest, more = 0, true // more may be waiting: due again at once
 			break
 		}
 		if next == "" || ctx.Err() != nil {
 			break
 		}
 		if page >= o.MaxPages {
-			rest = 0 // pages are left: due again at once
+			// Pages are left. With the cursor moved, the next scan starts past what this one read:
+			// due again at once. A held cursor would make it read the same pages again, so the pages
+			// past the bound wait until the held task finishes.
+			if !held {
+				rest, more = 0, true
+			} else {
+				s.log().WarnContext(ctx, "transcripts: a waiting task holds the cursor; later pages wait for it",
+					"kagent_session_id", ts.KagentSessionID, "pages", o.MaxPages)
+			}
 			break
 		}
 		token = next
 	}
-	return q.SetTranscriptSessionScan(ctx, dbq.SetTranscriptSessionScanParams{
+	return more, q.SetTranscriptSessionScan(ctx, dbq.SetTranscriptSessionScanParams{
 		KagentSessionID: ts.KagentSessionID, Cursor: cursor, RestSeconds: rest.Seconds(),
 	})
 }

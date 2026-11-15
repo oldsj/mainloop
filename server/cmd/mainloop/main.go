@@ -188,10 +188,15 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		sessOpts = append(sessOpts, sessions.WithDotfiles(exports))
 	}
 	ledger := sessions.NewLedger(cfg, pool)
-	wsSvc := workspaces.New(cfg, pool, kc, reg, creds, ledger, projectSvc, log, wsOpts...)
+	// Every path that deletes a kagent Session copies its finished turns first. The ingester learns
+	// which Agent runs a session from the sessions service, built below.
+	transcriptSvc := transcripts.NewService(cfg, pool, transcripts.FromClient(kc), nil, log)
+	kcDel := transcripts.NewFlushingKagent(kc, transcriptSvc)
+	wsSvc := workspaces.New(cfg, pool, kcDel, reg, creds, ledger, projectSvc, log, wsOpts...)
 	healthSvc := health.NewService(cfg, pool, kc, log)
 	live := progress.New(hub)
-	svc := sessions.NewService(cfg, pool, kc, reg, creds, healthSvc, wsSvc, live, log, sessOpts...)
+	svc := sessions.NewService(cfg, pool, kcDel, reg, creds, healthSvc, wsSvc, live, log, sessOpts...)
+	transcriptSvc.Agents = svc
 	hitlSvc := hitl.NewService(cfg, pool, hitl.FromClient(kc), svc, svc, svc, log)
 	schedSvc := schedules.NewService(cfg, pool, kc, reg, log)
 	previews, err := preview.New(cfg, pool, wsSvc, kc, log)
@@ -201,7 +206,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	liveRelay := preview.NewLive(previews, svc, []byte(cfg.Identity.AgentTokenKey.Reveal()), cfg.FrontendOrigin(), cfg.IsDev(), log)
 	taskOpts := []tasks.Option{
 		tasks.WithRuntimes(wsSvc, svc),
-		tasks.WithStopObserver(&tasks.KagentStops{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc, Liveness: kc, Deleter: kc}),
+		tasks.WithStopObserver(&tasks.KagentStops{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc, Liveness: kc, Deleter: kcDel}),
 		tasks.WithLivenessObserver(&tasks.KagentLiveness{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc, Activity: ledger}),
 	}
 	if gh != nil {
@@ -269,7 +274,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner.AddSweep(attn.Sweep())
 	runner.AddSweep(healthSvc.RecoverSweep(svc))
 	runner.AddSweep(healthSvc.RetainSweep())
-	transcripts.NewService(cfg, pool, transcripts.FromClient(kc), svc, log).Register(runner)
+	transcriptSvc.Register(runner)
 	runner.AddSweep(schedSvc.Sweep())
 	runner.AddSweep(environments.NewAPI(cfg, pool, nil).Service.FollowSweep(cfg.Identity.OwnerID))
 	if cfg.Ntfy.Enabled() {
