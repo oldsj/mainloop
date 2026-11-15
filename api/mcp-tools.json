@@ -831,7 +831,7 @@
     },
     {
       "name": "loop_arm",
-      "description": "Arm a loop: a durable wake-up that sends you a message when something happens, so you can end your turn instead of polling. trigger=task fires when a task you manage changes status or reason (statuses limits it to those statuses; a task already in one fires at once). trigger=pull_request fires when a code task's pull request changes: opened, its state, or CI's result (pr_conditions ci_success, ci_failure, merged, closed limits it; CI counts at the pull request's head; a condition that already holds fires at once). trigger=time fires after after_minutes, then every every_minutes if given. note is what the message reminds you to do. A firing waits for your turn to end and comes with your children's reports as one message; what happens meanwhile folds into it. Limits: max_firings (default 20), min_interval_seconds between firings (default 60), expires_minutes (default 1440, at most 10080), at most 20 armed loops. A supervisor's loops end with its task. Reuse request_id to retry.",
+      "description": "Arm a loop: a durable wake-up that sends you a message when something happens, so you can end your turn instead of polling. trigger=task fires when a task you manage changes status or reason (statuses limits it to those statuses; a task already in one fires at once). trigger=pull_request fires when a code task's pull request changes: opened, its state, or CI's result (pr_conditions ci_success, ci_failure, merged, closed limits it; CI counts at the pull request's head; a condition that already holds fires at once). trigger=quiet fires when a task you manage has not changed for quiet_minutes (no status, report, pull request or turn activity), then again after each further quiet period. trigger=time fires after after_minutes, then every every_minutes if given; with task_id its message says how that task stands. expect_change=true (quiet, or time with task_id) is for a loop waiting on progress, such as a repair: three firings in a row that find the task unchanged stop the loop and ask the owner. Leave it false for a periodic check-in that may well see no change. note is what the message reminds you to do. A firing waits for your turn to end and comes with your children's reports as one message; what happens meanwhile folds into it. Limits: max_firings (default 20), min_interval_seconds between firings (default 60), expires_minutes (default 1440, at most 10080), at most 20 armed loops. A supervisor's loops end with its task. Reuse request_id to retry.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -860,6 +860,10 @@
               }
             ],
             "default": null
+          },
+          "expect_change": {
+            "default": false,
+            "type": "boolean"
           },
           "expires_minutes": {
             "anyOf": [
@@ -914,6 +918,19 @@
             "maxItems": 4,
             "type": "array"
           },
+          "quiet_minutes": {
+            "anyOf": [
+              {
+                "maximum": 10080,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "request_id": {
             "maxLength": 100,
             "minLength": 1,
@@ -950,7 +967,7 @@
             "default": null
           },
           "trigger": {
-            "enum": ["task", "pull_request", "time"],
+            "enum": ["task", "pull_request", "quiet", "time"],
             "type": "string"
           }
         },

@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/tasks"
@@ -233,8 +234,16 @@ func TestArmingRules(t *testing.T) {
 	wantReason(t, err, tasks.ReasonLoopSubjectDenied)
 	_, err = r.svc.Arm(ctx, kid, tasks.LoopInput{RequestID: "kid", Trigger: dbstate.LoopTriggerTime, AfterMinutes: 1, Note: "n"})
 	wantReason(t, err, tasks.ReasonManagementDenied)
-	_, err = r.svc.Arm(ctx, sup, tasks.LoopInput{RequestID: "bad", Trigger: dbstate.LoopTriggerTask, Note: "n"})
-	wantReason(t, err, tasks.ReasonInvalidRequest)
+	for _, bad := range []tasks.LoopInput{
+		{RequestID: "bad", Trigger: dbstate.LoopTriggerTask, Note: "n"},
+		{RequestID: "bad", Trigger: dbstate.LoopTriggerQuiet, TaskID: child, Note: "n"},
+		{RequestID: "bad", Trigger: dbstate.LoopTriggerTask, TaskID: child, ExpectChange: true, Note: "n"},
+		{RequestID: "bad", Trigger: dbstate.LoopTriggerTime, EveryMinutes: 30, ExpectChange: true, Note: "n"},
+		{RequestID: "bad", Trigger: dbstate.LoopTriggerTime, EveryMinutes: 30, QuietMinutes: 5, Note: "n"},
+	} {
+		_, err = r.svc.Arm(ctx, sup, bad)
+		wantReason(t, err, tasks.ReasonInvalidRequest)
+	}
 	for i := 1; i < tasks.MaxArmedLoops; i++ {
 		r.arm(sup, tasks.LoopInput{RequestID: uuid.NewString(), Trigger: dbstate.LoopTriggerTime, AfterMinutes: 60, Note: "n"})
 	}
@@ -339,4 +348,124 @@ func TestPullRequestLoopOnAConditionThatHoldsFiresAtOnce(t *testing.T) {
 		RequestID: "c", Trigger: dbstate.LoopTriggerPullRequest, TaskID: coord, Note: "n",
 	})
 	wantReason(t, err, tasks.ReasonLoopNeedsCodeTask)
+}
+
+// quietFor makes a subject's quiet loops due as if it had been quiet for their whole period.
+func (r *rig) quietFor(task string) {
+	r.t.Helper()
+	r.exec(`UPDATE task_loops SET quiet_since = now() - make_interval(secs => quiet_seconds + 60), next_attempt_at = now()
+		WHERE subject_task_id = $1 AND trigger = 'quiet' AND state = 'armed'`, task)
+}
+
+// A quiet loop fires once its subject has gone a whole period without changing; a change, such as
+// activity in the current attempt's turn, starts the period again.
+func TestQuietLoopFiresWhenTheTaskStaysUnchanged(t *testing.T) {
+	r := newRig(t)
+	_, supSession, child, _ := r.reportingChild()
+	loop := r.arm(r.agentOf(supSession), tasks.LoopInput{
+		RequestID: "quiet", Trigger: dbstate.LoopTriggerQuiet, TaskID: child, QuietMinutes: 30, Note: "nudge it",
+	})
+	r.exec(`UPDATE task_attempts SET progress_marker = 'turn-moved' WHERE id = (SELECT current_attempt_id FROM tasks WHERE id = $1)`, child)
+	r.eventually("seen the activity", func() bool {
+		return strings.HasSuffix(r.str(`SELECT baseline FROM task_loops WHERE id = $1`, loop), "|turn-moved")
+	})
+	if n := r.count(`SELECT count(*) FROM task_loops WHERE id = $1 AND quiet_since > now() - interval '1 minute'`, loop); n != 1 {
+		t.Fatal("a change did not start the quiet period again")
+	}
+	r.quietFor(child)
+	r.eventually("sent", func() bool {
+		return r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[loop %'`, supSession) == 1
+	})
+	got := r.str(`SELECT content FROM session_messages WHERE session_id = $1 AND content LIKE '[loop %'`, supSession)
+	if !strings.Contains(got, "You asked: nudge it") || !strings.Contains(got, "has not changed for 31m0s: it is running") {
+		t.Fatalf("message = %q", got)
+	}
+	if got := r.loopState(loop); got != "armed" {
+		t.Fatalf("state = %s, want armed", got)
+	}
+}
+
+// A loop armed with expect_change stops after three firings in a row find its subject unchanged,
+// says so in its last message and asks the owner; the item resolves once the task moves. A loop on
+// the same task without expect_change, a periodic check-in, keeps firing.
+func TestExpectChangeLoopStopsAfterThreeUnchangedFirings(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	_, supSession, child, _ := r.reportingChild()
+	sup := r.agentOf(supSession)
+	zero := time.Duration(0)
+	repair := r.arm(sup, tasks.LoopInput{
+		RequestID: "repair", Trigger: dbstate.LoopTriggerQuiet, TaskID: child, QuietMinutes: 10, ExpectChange: true,
+		MinInterval: &zero, Note: "check the fix landed",
+	})
+	checkIn := r.arm(sup, tasks.LoopInput{
+		RequestID: "check-in", Trigger: dbstate.LoopTriggerQuiet, TaskID: child, QuietMinutes: 10, MinInterval: &zero,
+		Note: "look in",
+	})
+	for n := 1; n <= 4; n++ {
+		r.quietFor(child)
+		want := 2*n - 1
+		if n <= 3 {
+			want = 2 * n
+		}
+		r.eventually("sent", func() bool {
+			return r.count(`SELECT count(*) FROM task_event_deliveries d JOIN task_loop_firings f ON f.id = d.loop_firing_id
+				WHERE d.state IN ('queued', 'delivered')`) == want
+		})
+		r.finishTurns()
+	}
+	if got := r.loopState(repair); got != "exhausted" {
+		t.Fatalf("repair loop = %s, want exhausted", got)
+	}
+	if got := r.str(`SELECT stop_reason FROM task_loops WHERE id = $1`, repair); got != "no_progress" {
+		t.Fatalf("stop_reason = %q", got)
+	}
+	if got := r.loopState(checkIn); got != "armed" {
+		t.Fatalf("check-in loop = %s, want armed", got)
+	}
+	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '%This loop stopped: 3 firings in a row found the task unchanged%'`, supSession); n != 1 {
+		t.Fatalf("stop messages = %d", n)
+	}
+
+	q := dbq.New(r.pool)
+	if ids, err := q.OpenLoopNoProgressAttention(ctx, r.own.OwnerID); err != nil || len(ids) != 1 {
+		t.Fatalf("opened = %v, %v", ids, err)
+	}
+	if got := r.str(`SELECT kind || ' ' || task_id FROM attention_items WHERE source_kind = 'loop_no_progress' AND source_id = $1`, repair); got != "owner_decision "+child {
+		t.Fatalf("item = %q", got)
+	}
+	r.exec(`UPDATE tasks SET version = version + 1 WHERE id = $1`, child)
+	if ids, err := q.ResolveLoopNoProgressAttention(ctx, r.own.OwnerID); err != nil || len(ids) != 1 {
+		t.Fatalf("resolved = %v, %v", ids, err)
+	}
+	if ids, err := q.OpenLoopNoProgressAttention(ctx, r.own.OwnerID); err != nil || len(ids) != 0 {
+		t.Fatalf("reopened = %v, %v", ids, err)
+	}
+}
+
+// A change between firings resets the no-progress count.
+func TestProgressBetweenFiringsKeepsAnExpectChangeLoopArmed(t *testing.T) {
+	r := newRig(t)
+	_, supSession, child, _ := r.reportingChild()
+	zero := time.Duration(0)
+	loop := r.arm(r.agentOf(supSession), tasks.LoopInput{
+		RequestID: "repair", Trigger: dbstate.LoopTriggerTime, TaskID: child, EveryMinutes: 30, ExpectChange: true,
+		MinInterval: &zero, Note: "check the fix landed",
+	})
+	for n := 1; n <= 4; n++ {
+		if n == 3 {
+			r.exec(`UPDATE task_attempts SET progress_marker = 'moved' WHERE id = (SELECT current_attempt_id FROM tasks WHERE id = $1)`, child)
+		}
+		r.exec(`UPDATE task_loops SET fire_at = now(), next_attempt_at = now() WHERE id = $1`, loop)
+		r.eventually("sent", func() bool {
+			return r.count(`SELECT count(*) FROM task_event_deliveries WHERE loop_firing_id IS NOT NULL AND state IN ('queued', 'delivered')`) == n
+		})
+		r.finishTurns()
+	}
+	if got := r.loopState(loop); got != "armed" {
+		t.Fatalf("state = %s, want armed", got)
+	}
+	if n := r.count(`SELECT unchanged_firings FROM task_loops WHERE id = $1`, loop); n != 1 {
+		t.Fatalf("unchanged_firings = %d, want 1", n)
+	}
 }

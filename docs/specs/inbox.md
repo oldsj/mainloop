@@ -331,5 +331,10 @@ Implemented in the Go server with scratch PostgreSQL and fake-runtime tests; no 
   number and head reads `merged` or `closed`, with no GitHub call of its own. The head must match
   too, so a stale snapshot from before the pull request was pushed to and reopened cannot resolve a
   later, unrelated proposal for the same PR.
+- A [loop](loops.md) armed with `expect_change` that stopped for no progress opens one
+  `owner_decision` item (`source_kind = loop_no_progress`, `attn_loop_<loop id>`, no `reason_code`)
+  on the task it watched, linking to `/tasks/<id>`: three checks in a row found the task unchanged,
+  so the owner decides whether to steer, retry or cancel it. The item resolves once the task
+  changes (a new version) or finishes, and is never reopened for the same loop.
 - Both lifecycles write only on a changed need or association. Repeated unchanged sweeps create no
   duplicate rows, change no item timestamps, and publish no extra `inbox:updated` events.

@@ -964,6 +964,13 @@ type TaskLoop struct {
 	LeaseOwner         *string
 	LeaseUntil         *time.Time
 	PrConditions       []string
+	QuietSeconds       *int32
+	QuietSince         *time.Time
+	ExpectChange       bool
+	ProgressMark       *string
+	UnchangedFirings   int32
+	StopReason         *string
+	StoppedVersion     *int32
 }
 
 type TaskLoopFiring struct {
@@ -974,6 +981,7 @@ type TaskLoopFiring struct {
 	Folded    int32
 	NotBefore time.Time
 	CreatedAt time.Time
+	StopsLoop *string
 }
 
 type TaskOperation struct {

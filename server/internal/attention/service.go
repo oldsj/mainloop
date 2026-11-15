@@ -105,12 +105,12 @@ func (s *Service) Sweep() reconcile.Sweep {
 	return reconcile.Sweep{Name: "attention", Every: every, Run: s.SyncTasks}
 }
 
-// SyncTasks opens items for owner decisions, reconciliation needs, merge proposals, stalled turns
-// and project memory proposals, and resolves the items whose need has ended: a decision that
-// cleared, a question of a finished task, an item of a finished or archived session, an item whose
-// task has finished or whose attempt was replaced, archived or deleted, a project with no memory
-// proposal left. It publishes one inbox:updated when it changed an item, or when the unread
-// count differs from the one the owner's newest inbox:updated carried, since a session, task or
+// SyncTasks opens items for owner decisions, reconciliation needs, merge proposals, stalled turns,
+// project memory proposals and loops stopped for no progress, and resolves the items whose need
+// has ended: a decision that cleared, a question of a finished task, an item of a finished or
+// archived session, an item whose task has finished or whose attempt was replaced, archived or
+// deleted, a project with no memory proposal left, a stopped loop's task that changed or finished.
+// It publishes one inbox:updated when it changed an item, or when the unread count differs from the one the owner's newest inbox:updated carried, since a session, task or
 // response that ends hides or shows items without any write here. That event is read from the
 // events table in the same transaction, never remembered by the process, so a restart, a second
 // replica or a duplicate pass publishes neither too little nor too much. Two sweeps that race in
@@ -125,6 +125,7 @@ func (s *Service) SyncTasks(ctx context.Context) error {
 			q.OpenMergeProposalAttention, q.ResolveMergeProposalAttention,
 			q.OpenStalledTurnAttention, q.ResolveStalledTurnAttention,
 			q.OpenProjectMemoryAttention, q.ResolveProjectMemoryAttention,
+			q.OpenLoopNoProgressAttention, q.ResolveLoopNoProgressAttention,
 			q.ResolveFinishedSessionAttention, q.ResolveAttentionHiddenForGood,
 		} {
 			ids, err := step(ctx, s.OwnerID)

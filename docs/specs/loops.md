@@ -4,9 +4,9 @@ A loop is a durable wake-up that main or a supervisor arms instead of polling: w
 fires, Mainloop sends one message to the session that armed it, so that session can end its turn
 and still hear when something is worth looking at. Issue #314.
 
-Status: **implemented** for task, pull request and time triggers, armed and managed by agents
-through MCP. The quiet trigger with its no-progress stop, and the owner's view and controls, are
-**proposed** (see [Not built](#not-built)).
+Status: **implemented** for task, pull request, quiet and time triggers and the no-progress stop,
+armed and managed by agents through MCP. The owner's view and controls are **proposed** (see
+[Not built](#not-built)).
 
 ## Why
 
@@ -49,16 +49,25 @@ No [goal](goals.md) is needed: a loop on a plain task is the first slice.
   request stands, for example `pull request #9 is open, CI success at the head <sha>`. It reads the
   projection the task projection sweep keeps fresh, so a loop adds no GitHub reads and fires within a
   sweep of the change; a pull request that is not a task's stays with [`watch_checks`](ci.md).
+- **`quiet`.** Fires when the subject has gone `quiet_minutes` without changing, then again after
+  each further quiet period while it stays unchanged. A change is a new version of the task (its
+  status, a report, an operation, its pull request) or new activity in its current attempt's turn,
+  as the [liveness sweep](tasks.md) records it. A change starts the period again. The message says
+  how long the task has been unchanged and how it stands. A task that finishes ends the loop.
 - **`time`.** Fires after `after_minutes`, then every `every_minutes` when given; with only
   `every_minutes`, the first firing is one interval away. A one-time timer is `done` once it fires.
   A timer that was asleep (the server down) fires once on waking, not once per missed interval.
+  With `task_id`, each message says how that task stands.
 
 **How a trigger is watched.** A loop compares stored state, not events, so nothing is lost when a
 notification is missed or the event log is pruned. A task loop keeps a baseline, the subject's
 `status` or `status/reason`; a pull request loop, the pull request's number, state, CI result and
 CI commit. Either looks again on every such change of its subject (a database trigger makes the
-subject's loops due and notifies `mainloop_task_loops`) and at least every 15 seconds otherwise. The evaluation holds the loop row while it reads, and the subject's change waits
-on that row, so a change is either seen by the evaluation or makes the next one due. Time loops are
+subject's loops due and notifies `mainloop_task_loops`) and at least every 15 seconds otherwise. A
+quiet loop keeps the subject's version and its attempt's activity marker, with when it last saw
+them change, and looks every 15 seconds. The evaluation holds the loop row while it reads, and the
+subject's change waits on that row, so a change is either seen by the evaluation or makes the next
+one due. Time loops are
 due at their next fire time. Every armed loop is looked at again at least every five minutes, which
 is when an expiry or an ended recipient is noticed.
 
@@ -84,10 +93,28 @@ report delivery loop exactly as a child's report is (see [delegation](delegation
   `uncertain`; there is no task to block for it. A firing to a recipient whose task ended is
   cancelled.
 
+## The no-progress stop
+
+A loop can wait for progress that may never come: a supervisor checking every 30 minutes whether a
+child's repair landed, or a quiet loop on a child that has stopped moving. Arming with
+`expect_change: true` says the loop expects its subject to change between firings. Each firing
+compares the subject (its version and activity marker, as for `quiet`) with what the previous firing
+found, or the arm for the first. After **three firings in a row** that find it unchanged, the third
+firing's message says the loop stopped, and the loop ends `exhausted` with `stop_reason =
+no_progress`. The attention sweep then asks the owner to decide about the task (see
+[inbox](inbox.md)). Any change between firings resets the count. An occurrence folded into a waiting
+firing is not a firing and does not count.
+
+`expect_change` defaults to false, and only a `quiet` loop or a `time` loop with `task_id` takes
+it (otherwise 422 `invalid_request`). A plain periodic check-in, such as "check prod every 30
+minutes", leaves it false and is never stopped for seeing no change; `max_firings` and the expiry
+still bound it.
+
 ## States and limits
 
 `armed` is the only live state. The final states: `done` (a one-time timer fired), `exhausted` (its
-last firing made), `expired`, `stopped` (by `loop_stop`) and `ended` (its supervisor's task ended).
+last firing made, or stopped for no progress), `expired`, `stopped` (by `loop_stop`) and `ended`
+(its supervisor's task ended, or a quiet loop's task finished).
 A firing already made when a loop stops or ends is still delivered, unless its recipient ended.
 
 | Limit                  | Default | Range                    |
@@ -124,11 +151,6 @@ turn (#72), a loop's usage is the sum over its firings' turns, labelled _attribu
 
 ## Not built
 
-- **`quiet` trigger and the no-progress stop** (proposed): fire when the subject has not changed for
-  N minutes. Arming takes `expect_change` (default false); only a loop armed with it, a repair-style
-  loop, stops as `exhausted` after three delivered firings in a row with an unchanged subject, and
-  raises an `owner_decision` attention item. A plain periodic check-in, such as "check prod every
-  30 minutes", is never stopped for seeing no change.
 - **Owner view and controls** (proposed): the task page lists a task's loops, armed ones first, with
   the next fire time or what each waits on and its last firings, and offers pause, resume, fire now
   and delete through REST routes. A paused loop is not evaluated; fire now takes the same firing path

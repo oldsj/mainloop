@@ -18,8 +18,9 @@ import (
 )
 
 // Loops (docs/specs/loops.md) are durable wake-ups that main or a supervisor arms instead of
-// polling: a loop watches a task's status, a code task's pull request, or a timer, and each firing
-// is one message to the session that armed it, delivered with child reports in the same batch.
+// polling: a loop watches a task's status, a code task's pull request, a task gone quiet, or a
+// timer, and each firing is one message to the session that armed it, delivered with child reports
+// in the same batch. A loop armed with expect_change stops when its firings find no progress.
 
 // Loop limits.
 const (
@@ -37,6 +38,9 @@ const (
 	maxListedLoops          = 50
 	defaultLoopPoll         = 15 * time.Second
 	loopMaxWait             = 5 * time.Minute
+	// noProgressFirings is how many firings in a row may find an expect_change loop's subject
+	// unchanged: the last of them stops the loop.
+	noProgressFirings = 3
 	ReasonLoopLimit         = "loop_limit"
 	ReasonLoopNotFound      = "loop_not_found"
 	ReasonLoopSubjectDenied = "loop_subject_denied"
@@ -51,8 +55,10 @@ func LoopTable() reconcile.Table {
 	return reconcile.NewTable("task_loops", string(dbstate.LoopArmed))
 }
 
-// LoopLoop evaluates armed loops: it fires a task loop when its subject's status changes and a time
-// loop when its timer is due, and ends loops that expired or whose recipient ended.
+// LoopLoop evaluates armed loops: it fires a task loop when its subject's status changes, a pull
+// request loop when its pull request or CI changes, a quiet loop when its subject has not changed
+// for a while and a time loop when its timer is due, and ends loops that expired or whose recipient
+// ended.
 func (s *Service) LoopLoop() reconcile.Loop {
 	return reconcile.Loop{
 		Name: "task-loops", Table: LoopTable(), Handle: s.handleLoop,
@@ -63,7 +69,7 @@ func (s *Service) LoopLoop() reconcile.Loop {
 // LoopInput arms a loop.
 type LoopInput struct {
 	RequestID string
-	// TaskID is the subject: required for a task trigger, optional for a time trigger.
+	// TaskID is the subject: required but for a time trigger, where it is optional.
 	TaskID  string
 	Trigger dbstate.LoopTrigger
 	// Statuses limit a task trigger to these statuses; empty fires on any status or reason change.
@@ -75,6 +81,12 @@ type LoopInput struct {
 	// only EveryMinutes, the first firing is one interval away.
 	AfterMinutes int
 	EveryMinutes int
+	// QuietMinutes is how long a quiet trigger's subject must stay unchanged for it to fire.
+	QuietMinutes int
+	// ExpectChange says the loop is waiting for its subject to make progress (a repair, a retry):
+	// three firings in a row that find it unchanged stop the loop and ask the owner. Only for a
+	// time trigger with a subject, or a quiet trigger. A periodic check-in leaves it false.
+	ExpectChange bool
 	Note         string
 	// Zero takes the default.
 	MaxFirings     int
@@ -120,6 +132,12 @@ func validLoop(in *LoopInput) error {
 	if in.ExpiresMinutes < 1 || in.ExpiresMinutes > int(MaxLoopExpiry.Minutes()) {
 		return bad
 	}
+	if in.QuietMinutes != 0 && in.Trigger != dbstate.LoopTriggerQuiet {
+		return bad
+	}
+	if in.ExpectChange && (in.TaskID == "" || in.Trigger != dbstate.LoopTriggerTime && in.Trigger != dbstate.LoopTriggerQuiet) {
+		return bad
+	}
 	switch in.Trigger {
 	case dbstate.LoopTriggerTask:
 		if in.TaskID == "" || in.AfterMinutes != 0 || in.EveryMinutes != 0 || len(in.PRConditions) != 0 {
@@ -138,6 +156,11 @@ func validLoop(in *LoopInput) error {
 			if !slices.Contains(dbstate.PRConditions, c) {
 				return bad
 			}
+		}
+	case dbstate.LoopTriggerQuiet:
+		if in.TaskID == "" || in.AfterMinutes != 0 || in.EveryMinutes != 0 || len(in.Statuses) != 0 ||
+			len(in.PRConditions) != 0 || in.QuietMinutes < 1 || in.QuietMinutes > MaxLoopMinutes {
+			return bad
 		}
 	case dbstate.LoopTriggerTime:
 		if len(in.Statuses) != 0 || len(in.PRConditions) != 0 || in.AfterMinutes < 0 || in.EveryMinutes < 0 ||
@@ -221,11 +244,21 @@ func (s *Service) Arm(ctx context.Context, p Principal, in LoopInput) (dbq.TaskL
 		params := dbq.InsertTaskLoopParams{
 			ID: uuid.NewString(), OwnerID: p.OwnerID, PrincipalKey: p.Key(), RequestID: in.RequestID,
 			RecipientKey: recipient, Trigger: in.Trigger, Statuses: statuses, PrConditions: conditions, Note: in.Note,
+			ExpectChange: in.ExpectChange,
 			MaxFirings: int32(in.MaxFirings), MinIntervalSeconds: int32(in.MinInterval.Seconds()), //nolint:gosec // bounded above
 			ExpiresAt: now.Add(time.Duration(in.ExpiresMinutes) * time.Minute),
 		}
 		if subject != nil {
 			params.SubjectTaskID = &subject.ID
+		}
+		var mark string
+		if in.ExpectChange || in.Trigger == dbstate.LoopTriggerQuiet {
+			if mark, err = progressMark(ctx, q, *subject); err != nil {
+				return err
+			}
+		}
+		if in.ExpectChange {
+			params.ProgressMark = &mark
 		}
 		switch in.Trigger {
 		case dbstate.LoopTriggerTask:
@@ -242,6 +275,12 @@ func (s *Service) Arm(ctx context.Context, p Principal, in LoopInput) (dbq.TaskL
 				fp := prFingerprint(*subject)
 				params.Baseline = &fp
 			}
+			params.NextAttemptAt = now
+		case dbstate.LoopTriggerQuiet:
+			quiet := int32(in.QuietMinutes * 60) //nolint:gosec // bounded above
+			params.QuietSeconds = &quiet
+			params.Baseline = &mark
+			params.QuietSince = &now
 			params.NextAttemptAt = now
 		case dbstate.LoopTriggerTime:
 			after := in.AfterMinutes
@@ -269,7 +308,8 @@ func sameLoop(l dbq.TaskLoop, in LoopInput, statuses, conditions []string) bool 
 		every = int(*l.EverySeconds) / 60
 	}
 	return l.Trigger == in.Trigger && deref(l.SubjectTaskID) == in.TaskID && slices.Equal(l.Statuses, statuses) &&
-		slices.Equal(l.PrConditions, conditions) &&
+		slices.Equal(l.PrConditions, conditions) && quietMinutes(l) == in.QuietMinutes &&
+		l.ExpectChange == in.ExpectChange &&
 		l.Note == in.Note && int(l.MaxFirings) == in.MaxFirings && every == in.EveryMinutes &&
 		time.Duration(l.MinIntervalSeconds)*time.Second == *in.MinInterval
 }
@@ -312,6 +352,29 @@ func (s *Service) StopLoop(ctx context.Context, p Principal, loopID string) (dbq
 		return err
 	})
 	return l, err
+}
+
+// quietMinutes is a quiet loop's quiet period; 0 for the other triggers.
+func quietMinutes(l dbq.TaskLoop) int {
+	if l.QuietSeconds == nil {
+		return 0
+	}
+	return int(*l.QuietSeconds) / 60
+}
+
+// progressMark is what a quiet trigger and the no-progress stop compare: the subject's version,
+// which moves with its status, reports, operations and pull request, and the activity fingerprint
+// the liveness sweep keeps of its current attempt's turn, which moves while the turn works.
+func progressMark(ctx context.Context, q *dbq.Queries, t dbq.Task) (string, error) {
+	marker := ""
+	if t.CurrentAttemptID != nil {
+		a, err := q.GetTaskAttempt(ctx, *t.CurrentAttemptID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return "", err
+		}
+		marker = deref(a.ProgressMarker)
+	}
+	return fmt.Sprintf("v%d|%s", t.Version, marker), nil
 }
 
 func wanted(statuses []string, st dbstate.TaskStatus) bool {
@@ -412,13 +475,21 @@ func appendFact(facts []string, fact string) ([]string, int) {
 
 // loopEval is one evaluation's change to its loop.
 type loopEval struct {
-	state    dbstate.LoopState
-	baseline *string
-	fireAt   *time.Time
-	firings  int32
-	lastAt   *time.Time
-	next     time.Time
-	fact     string
+	state      dbstate.LoopState
+	baseline   *string
+	fireAt     *time.Time
+	firings    int32
+	lastAt     *time.Time
+	quietSince *time.Time
+	next       time.Time
+	fact       string
+	// subject is the subject as this evaluation read it, for the no-progress stop.
+	subject *dbq.Task
+	// The no-progress stop's record (see fire).
+	progressMark   *string
+	unchanged      int32
+	stopReason     *string
+	stoppedVersion *int32
 }
 
 func (s *Service) loopPoll() time.Duration {
@@ -453,7 +524,8 @@ func (s *Service) handleLoop(ctx context.Context, c reconcile.Claim) (reconcile.
 		n, err := q.SetTaskLoopEvaluation(ctx, dbq.SetTaskLoopEvaluationParams{
 			ID: l.ID, LeaseOwner: &c.Owner, Attempts: int32(c.Attempts), //nolint:gosec // a small counter
 			State: e.state, Baseline: e.baseline, FireAt: e.fireAt, Firings: e.firings, LastFiredAt: e.lastAt,
-			NextAttemptAt: e.next,
+			QuietSince: e.quietSince, ProgressMark: e.progressMark, UnchangedFirings: e.unchanged,
+			StopReason: e.stopReason, StoppedVersion: e.stoppedVersion, NextAttemptAt: e.next,
 		})
 		if err != nil {
 			return err
@@ -477,7 +549,8 @@ func (s *Service) evaluate(ctx context.Context, q *dbq.Queries, l dbq.TaskLoop) 
 	now := s.now()
 	e := loopEval{
 		state: l.State, baseline: l.Baseline, fireAt: l.FireAt, firings: l.Firings, lastAt: l.LastFiredAt,
-		next: now.Add(loopMaxWait),
+		quietSince: l.QuietSince, progressMark: l.ProgressMark, unchanged: l.UnchangedFirings,
+		stopReason: l.StopReason, stoppedVersion: l.StoppedVersion, next: now.Add(loopMaxWait),
 	}
 	if parentID, ok := strings.CutPrefix(l.RecipientKey, "parent-task:"); ok {
 		p, err := q.GetTaskByID(ctx, parentID)
@@ -526,6 +599,45 @@ func (s *Service) evaluate(ctx context.Context, q *dbq.Queries, l dbq.TaskLoop) 
 			}
 		}
 		e.next = now.Add(s.loopPoll())
+	case dbstate.LoopTriggerQuiet:
+		t, err := q.GetTaskByID(ctx, deref(l.SubjectTaskID))
+		if errors.Is(err, pgx.ErrNoRows) {
+			e.state = dbstate.LoopEnded
+			return e, nil
+		}
+		if err != nil {
+			return e, err
+		}
+		if TaskFinal(t.Status) {
+			// A finished task stays quiet for good; the loop has nothing left to watch.
+			e.state = dbstate.LoopEnded
+			return e, nil
+		}
+		e.subject = &t
+		mark, err := progressMark(ctx, q, t)
+		if err != nil {
+			return e, err
+		}
+		quiet := time.Duration(quietMinutes(l)) * time.Minute
+		since := now
+		if l.QuietSince != nil {
+			since = *l.QuietSince
+		}
+		switch {
+		case l.Baseline == nil || *l.Baseline != mark:
+			// It moved: the quiet period starts again.
+			e.baseline, since = &mark, now
+		case !now.Before(since.Add(quiet)):
+			e.fact = fmt.Sprintf("task %s (%q) has not changed for %s: it is %s", t.ID, shortTitle(t.Title),
+				now.Sub(since).Round(time.Minute), fingerprint(t))
+			// Quiet for another whole period before the next firing.
+			since = now
+		}
+		e.quietSince = &since
+		e.next = now.Add(s.loopPoll())
+		if at := since.Add(quiet); at.Before(e.next) {
+			e.next = at
+		}
 	case dbstate.LoopTriggerTime:
 		if l.FireAt != nil && !now.Before(*l.FireAt) {
 			e.fact = "timer fired at " + now.UTC().Format(time.RFC3339)
@@ -536,6 +648,7 @@ func (s *Service) evaluate(ctx context.Context, q *dbq.Queries, l dbq.TaskLoop) 
 				}
 				if err == nil {
 					e.fact += "; " + taskFact(t, nil)
+					e.subject = &t
 				}
 			}
 			if l.EverySeconds == nil {
@@ -584,8 +697,28 @@ func (s *Service) fire(ctx context.Context, q *dbq.Queries, l dbq.TaskLoop, e *l
 			notBefore = at
 		}
 	}
+	var stops *string
+	if l.ExpectChange && e.subject != nil {
+		// The no-progress stop: each firing compares the subject with what the previous one (or
+		// the arm) found. A folded occurrence is not a firing and does not count.
+		mark, err := progressMark(ctx, q, *e.subject)
+		if err != nil {
+			return err
+		}
+		if l.ProgressMark != nil && *l.ProgressMark == mark {
+			e.unchanged = l.UnchangedFirings + 1
+		} else {
+			e.unchanged = 0
+		}
+		e.progressMark = &mark
+		if e.unchanged >= noProgressFirings {
+			reason, version := dbstate.LoopStopNoProgress, e.subject.Version
+			stops, e.stopReason, e.stoppedVersion = &reason, &reason, &version
+		}
+	}
 	f, err := q.InsertLoopFiring(ctx, dbq.InsertLoopFiringParams{
 		ID: uuid.NewString(), LoopID: l.ID, Number: l.Firings + 1, Facts: []string{e.fact}, NotBefore: notBefore,
+		StopsLoop: stops,
 	})
 	if err != nil {
 		return err
@@ -599,7 +732,7 @@ func (s *Service) fire(ctx context.Context, q *dbq.Queries, l dbq.TaskLoop, e *l
 	}
 	e.firings = f.Number
 	e.lastAt = &notBefore
-	if e.firings >= l.MaxFirings {
+	if e.firings >= l.MaxFirings || stops != nil {
 		e.state = dbstate.LoopExhausted
 	}
 	return nil
@@ -625,6 +758,9 @@ func (s *Service) firingText(ctx context.Context, q *dbq.Queries, firingID strin
 		fmt.Fprintf(&b, "\n(%d more occurrences folded in)", f.Folded)
 	}
 	switch {
+	case f.StopsLoop != nil:
+		fmt.Fprintf(&b, "\nThis loop stopped: %d firings in a row found the task unchanged (expect_change). The owner "+
+			"was asked to decide. Arm a new loop if you still need one.", noProgressFirings)
 	case f.Number >= l.MaxFirings:
 		b.WriteString("\nThis was the loop's last firing (max_firings).")
 	case l.Trigger == dbstate.LoopTriggerTime && l.EverySeconds == nil:
