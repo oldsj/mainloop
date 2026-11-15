@@ -25,23 +25,34 @@ func (s *Server) loopTools() []Tool {
 	} {
 		statuses = append(statuses, string(st))
 	}
+	conditions := make([]any, 0, len(dbstate.PRConditions))
+	for _, c := range dbstate.PRConditions {
+		conditions = append(conditions, string(c))
+	}
 	return []Tool{
 		{
 			Name: agentauth.ToolLoopArm,
 			Description: "Arm a loop: a durable wake-up that sends you a message when something happens, so you can end your " +
 				"turn instead of polling. trigger=task fires when a task you manage changes status or reason (statuses limits " +
-				"it to those statuses; a task already in one fires at once). trigger=time fires after after_minutes, then every " +
+				"it to those statuses; a task already in one fires at once). trigger=pull_request fires when a code task's pull " +
+				"request changes: opened, its state, or CI's result (pr_conditions ci_success, ci_failure, merged, closed limits " +
+				"it; CI counts at the pull request's head; a condition that already holds fires at once). trigger=time fires " +
+				"after after_minutes, then every " +
 				"every_minutes if given. note is what the message reminds you to do. A firing waits for your turn to end and comes " +
 				"with your children's reports as one message; what happens meanwhile folds into it. Limits: max_firings " +
 				"(default 20), min_interval_seconds between firings (default 60), expires_minutes (default 1440, at most 10080), " +
 				"at most 20 armed loops. A supervisor's loops end with its task. Reuse request_id to retry.",
 			InputSchema: objectSchema(map[string]any{
 				"request_id": id,
-				"trigger":    map[string]any{"type": "string", "enum": []any{"task", "time"}},
+				"trigger":    map[string]any{"type": "string", "enum": []any{"task", "pull_request", "time"}},
 				"task_id":    optional(id),
 				"statuses": map[string]any{
 					"type": "array", "maxItems": len(statuses), "default": []any{},
 					"items": map[string]any{"type": "string", "enum": statuses},
+				},
+				"pr_conditions": map[string]any{
+					"type": "array", "maxItems": len(conditions), "default": []any{},
+					"items": map[string]any{"type": "string", "enum": conditions},
 				},
 				"after_minutes":        optional(minutes),
 				"every_minutes":        optional(minutes),
@@ -73,6 +84,7 @@ func (s *Server) loopArm(ctx context.Context, a agentauth.Actor, args json.RawMe
 		Trigger        string   `json:"trigger"`
 		TaskID         *string  `json:"task_id"`
 		Statuses       []string `json:"statuses"`
+		PRConditions   []string `json:"pr_conditions"`
 		AfterMinutes   *int     `json:"after_minutes"`
 		EveryMinutes   *int     `json:"every_minutes"`
 		Note           string   `json:"note"`
@@ -99,6 +111,9 @@ func (s *Server) loopArm(ctx context.Context, a agentauth.Actor, args json.RawMe
 	}
 	for _, st := range in.Statuses {
 		li.Statuses = append(li.Statuses, dbstate.TaskStatus(st))
+	}
+	for _, c := range in.PRConditions {
+		li.PRConditions = append(li.PRConditions, dbstate.PRCondition(c))
 	}
 	positive := func(p *int) (int, error) {
 		if p == nil {
@@ -193,7 +208,7 @@ func (s *Server) loopStop(ctx context.Context, a agentauth.Actor, args json.RawM
 func loopView(l dbq.TaskLoop) map[string]any {
 	m := map[string]any{
 		"id": l.ID, "state": string(l.State), "trigger": string(l.Trigger), "task_id": l.SubjectTaskID,
-		"statuses": l.Statuses, "note": l.Note, "firings": l.Firings, "max_firings": l.MaxFirings,
+		"statuses": l.Statuses, "pr_conditions": l.PrConditions, "note": l.Note, "firings": l.Firings, "max_firings": l.MaxFirings,
 		"min_interval_seconds": l.MinIntervalSeconds, "expires_at": l.ExpiresAt.UTC().Format(time.RFC3339),
 		"created_at": l.CreatedAt.UTC().Format(time.RFC3339), "every_minutes": nil, "next_fire_at": nil,
 	}
@@ -208,10 +223,16 @@ func loopView(l dbq.TaskLoop) map[string]any {
 
 func loopLine(l dbq.TaskLoop) string {
 	what := "timer"
-	if l.Trigger == dbstate.LoopTriggerTask {
+	switch l.Trigger {
+	case dbstate.LoopTriggerTask:
 		what = "task " + *l.SubjectTaskID
 		if len(l.Statuses) > 0 {
 			what += " reaching " + strings.Join(l.Statuses, "/")
+		}
+	case dbstate.LoopTriggerPullRequest:
+		what = "pull request of task " + *l.SubjectTaskID
+		if len(l.PrConditions) > 0 {
+			what += " on " + strings.Join(l.PrConditions, "/")
 		}
 	}
 	line := fmt.Sprintf("loop %s (%s) is %s: %d of %d firings", l.ID, what, l.State, l.Firings, l.MaxFirings)

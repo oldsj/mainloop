@@ -831,7 +831,7 @@
     },
     {
       "name": "loop_arm",
-      "description": "Arm a loop: a durable wake-up that sends you a message when something happens, so you can end your turn instead of polling. trigger=task fires when a task you manage changes status or reason (statuses limits it to those statuses; a task already in one fires at once). trigger=time fires after after_minutes, then every every_minutes if given. note is what the message reminds you to do. A firing waits for your turn to end and comes with your children's reports as one message; what happens meanwhile folds into it. Limits: max_firings (default 20), min_interval_seconds between firings (default 60), expires_minutes (default 1440, at most 10080), at most 20 armed loops. A supervisor's loops end with its task. Reuse request_id to retry.",
+      "description": "Arm a loop: a durable wake-up that sends you a message when something happens, so you can end your turn instead of polling. trigger=task fires when a task you manage changes status or reason (statuses limits it to those statuses; a task already in one fires at once). trigger=pull_request fires when a code task's pull request changes: opened, its state, or CI's result (pr_conditions ci_success, ci_failure, merged, closed limits it; CI counts at the pull request's head; a condition that already holds fires at once). trigger=time fires after after_minutes, then every every_minutes if given. note is what the message reminds you to do. A firing waits for your turn to end and comes with your children's reports as one message; what happens meanwhile folds into it. Limits: max_firings (default 20), min_interval_seconds between firings (default 60), expires_minutes (default 1440, at most 10080), at most 20 armed loops. A supervisor's loops end with its task. Reuse request_id to retry.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -905,6 +905,15 @@
             "minLength": 1,
             "type": "string"
           },
+          "pr_conditions": {
+            "default": [],
+            "items": {
+              "enum": ["ci_success", "ci_failure", "merged", "closed"],
+              "type": "string"
+            },
+            "maxItems": 4,
+            "type": "array"
+          },
           "request_id": {
             "maxLength": 100,
             "minLength": 1,
@@ -941,7 +950,7 @@
             "default": null
           },
           "trigger": {
-            "enum": ["task", "time"],
+            "enum": ["task", "pull_request", "time"],
             "type": "string"
           }
         },

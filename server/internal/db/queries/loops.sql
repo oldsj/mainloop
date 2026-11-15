@@ -3,12 +3,13 @@
 -- name: InsertTaskLoop :one
 INSERT INTO task_loops (
     id, owner_id, principal_key, request_id, recipient_key, subject_task_id, trigger, statuses,
-    every_seconds, note, max_firings, min_interval_seconds, expires_at, baseline, fire_at, next_attempt_at
+    every_seconds, note, max_firings, min_interval_seconds, expires_at, baseline, fire_at, next_attempt_at,
+    pr_conditions
 ) VALUES (
     sqlc.arg(id), sqlc.arg(owner_id), sqlc.arg(principal_key), sqlc.arg(request_id), sqlc.arg(recipient_key),
     sqlc.narg(subject_task_id), sqlc.arg(trigger), sqlc.arg(statuses)::text[], sqlc.narg(every_seconds),
     sqlc.arg(note), sqlc.arg(max_firings), sqlc.arg(min_interval_seconds), sqlc.arg(expires_at),
-    sqlc.narg(baseline), sqlc.narg(fire_at), sqlc.arg(next_attempt_at)
+    sqlc.narg(baseline), sqlc.narg(fire_at), sqlc.arg(next_attempt_at), sqlc.arg(pr_conditions)::text[]
 )
 RETURNING *;
 

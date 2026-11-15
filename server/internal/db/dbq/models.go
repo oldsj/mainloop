@@ -963,6 +963,7 @@ type TaskLoop struct {
 	NextAttemptAt      time.Time
 	LeaseOwner         *string
 	LeaseUntil         *time.Time
+	PrConditions       []string
 }
 
 type TaskLoopFiring struct {
