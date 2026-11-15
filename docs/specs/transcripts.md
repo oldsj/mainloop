@@ -1,9 +1,8 @@
 # Session transcripts
 
-Status: **partly implemented** (#448). Storage, the turn normalizer, ingestion and retention
-exist. The read and search API, the MCP tools and the web view are still to come, and so is a copy
-taken just before Mainloop deletes a kagent Session; until that lands, a turn that finishes less
-than a sweep before its Session is deleted can be lost.
+Status: **partly implemented** (#448). Storage, the turn normalizer, ingestion, the copy before a
+delete and retention exist. The read and search API, the MCP tools and the web view are still to
+come.
 
 Mainloop's conversation (`session_messages`) keeps each turn's user message and final reply. A
 session's transcript also keeps what the agent did on the way: its text, each tool call with its
@@ -113,6 +112,16 @@ included. A sweep every 10 seconds reads the Sessions that are due:
 - **No transaction across kagent reads.** kagent is read with no transaction open. Each task is
   written in a short transaction of its own, so a pass that stops half way repeats work and loses
   none.
+
+**Before a delete.** Every path by which Mainloop deletes a kagent Session first copies the
+Session's finished turns: deleting a workspace, a stop forced on an attempt, restarting a session,
+and a replayed create. This copy is not held to a sweep pass's limits and runs for at most 20
+seconds. It never stops the delete. If it fails or runs out of time, the failure is logged, the
+delete goes ahead, and the turns it did not copy are lost. A turn that is still running or waiting
+when its Session is deleted is not copied.
+
+**Pages past a waiting task.** A scan reads at most 200 pages. When a waiting task holds the
+cursor, the pages past that bound are read once the task finishes.
 
 **When kagent no longer has a Session.** kagent answers "not found" both for a deleted Session and
 for a missing Agent, so Mainloop first checks the Agent exists. If it does, the Session is no
