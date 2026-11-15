@@ -23,6 +23,7 @@ type env struct {
 	t    *testing.T
 	pool *pgxpool.Pool
 	fake *githubtest.Server
+	app  *github.App
 	svc  *issues.Service
 }
 
@@ -58,7 +59,7 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, pool: d.Pool, fake: fake, svc: issues.NewService(d.Pool, app)}
+	e := &env{t: t, pool: d.Pool, fake: fake, app: app, svc: issues.NewService(d.Pool, app, nil)}
 	e.exec(`INSERT INTO projects (id, user_id, owner, name, full_name, html_url) VALUES ('p1', $1, 'o', 'n', 'o/n', 'https://x')`, owner)
 	e.exec(`INSERT INTO projects (id, user_id, owner, name, full_name, html_url) VALUES ('foreign', 'someone', 'o', 'n2', 'o/n2', 'https://x')`)
 	return e

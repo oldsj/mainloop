@@ -252,9 +252,9 @@ func TestDiscoveryFollowsThePerActorTable(t *testing.T) {
 	sup := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleSupervisor, Grant: dbstate.GrantCoordination, Parent: main.SessionID})
 
 	// With the merge tools off, only open_pull_request (and the issue/alert reads it carries with
-	// it) is listed of the pull request tools.
+	// it) is listed of the pull request tools. The coordination grant adds the issue writes.
 	want := []string{
-		"check_status", "decide", "delegate", "follow_up", "forget", "get_issue", "get_verification", "list_dependabot_alerts", "loop_arm", "loop_list", "loop_stop", "note", "open_pull_request",
+		"check_status", "comment_issue", "create_issue", "decide", "delegate", "follow_up", "forget", "get_issue", "get_verification", "list_dependabot_alerts", "loop_arm", "loop_list", "loop_stop", "note", "open_pull_request",
 		"pending_add", "pending_done", "project_context", "remember", "steer", "task_cancel", "task_get", "task_history", "task_hold", "task_list", "task_reassign", "task_retry", "topic_open", "topics", "watch_checks", "whoami",
 	}
 	if got := h.list(t, mcpserver.PathOrdinary, main.Token); !slices.Equal(got, want) {
@@ -263,7 +263,7 @@ func TestDiscoveryFollowsThePerActorTable(t *testing.T) {
 	if got := h.list(t, mcpserver.PathOrdinary, ws.Token); !slices.Equal(got, []string{"check_status", "forget", "get_issue", "get_verification", "list_dependabot_alerts", "open_pull_request", "project_context", "remember", "watch_checks", "whoami"}) {
 		t.Errorf("workspace agent lists %v", got)
 	}
-	if got := h.list(t, mcpserver.PathOrdinary, sup.Token); !slices.Equal(got, []string{"delegate", "follow_up", "forget", "loop_arm", "loop_list", "loop_stop", "project_context", "remember", "report", "steer", "task_cancel", "task_get", "task_history", "task_list", "task_reassign", "task_retry", "whoami"}) {
+	if got := h.list(t, mcpserver.PathOrdinary, sup.Token); !slices.Equal(got, []string{"comment_issue", "create_issue", "delegate", "follow_up", "forget", "get_issue", "loop_arm", "loop_list", "loop_stop", "project_context", "remember", "report", "steer", "task_cancel", "task_get", "task_history", "task_list", "task_reassign", "task_retry", "whoami"}) {
 		t.Errorf("supervisor lists %v", got)
 	}
 

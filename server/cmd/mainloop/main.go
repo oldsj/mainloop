@@ -202,6 +202,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	// The CI service serves the verification routes and runs the watch loop; watch_checks rows are
 	// written by the MCP process. Nil without a GitHub App.
 	ciSvc := newCIService(pool, gh)
+	issuesSvc := newIssuesService(pool, gh, log)
 	if ciSvc != nil {
 		ciSvc.Sender = svc
 	}
@@ -278,6 +279,9 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	if ciSvc != nil {
 		runner.Add(ciSvc.WatchLoop())
+	}
+	if issuesSvc != nil {
+		runner.Add(issuesSvc.Loop())
 	}
 	if prSvc != nil {
 		runner.Add(prSvc.Loop())

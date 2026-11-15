@@ -83,6 +83,15 @@ sql:
                 import: github.com/oldsj/mainloop/server/internal/db/dbstate,
                 type: PRCreationState
               }
+          - column: issue_writes.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: IssueWriteState
+              }
+          - column: issue_writes.kind
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: IssueWriteKind }
           - column: merge_candidates.state
             go_type:
               { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: MergeState }

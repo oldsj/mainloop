@@ -150,6 +150,10 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"pr_creations", "state", strs(
 			string(dbstate.PRPending), string(dbstate.PRDispatching), string(dbstate.PRUncertain),
 			string(dbstate.PRCreated), string(dbstate.PRRefused))},
+		{"issue_writes", "state", strs(
+			string(dbstate.IssueWritePending), string(dbstate.IssueWriteDispatching), string(dbstate.IssueWriteUncertain),
+			string(dbstate.IssueWriteCreated), string(dbstate.IssueWriteRefused))},
+		{"issue_writes", "kind", strs(string(dbstate.IssueWriteIssue), string(dbstate.IssueWriteComment))},
 		{"merge_candidates", "route", strs(string(dbstate.RouteAuto), string(dbstate.RouteApproval))},
 		{"merge_candidates", "state", strs(
 			string(dbstate.MergePrepared), string(dbstate.MergeEvaluating), string(dbstate.MergeMerging),

@@ -45,7 +45,7 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 	prSvc, mergeSvc := newPullRequestServices(cfg, pool, gh, kc, log)
-	issuesSvc := newIssuesService(pool, gh)
+	issuesSvc := newIssuesService(pool, gh, log)
 	q := dbq.New(pool)
 	// The lease is DB-only and the operations service here carries no Kubernetes client or GitHub
 	// seeder: this process only inserts and polls devloop_operations rows (see

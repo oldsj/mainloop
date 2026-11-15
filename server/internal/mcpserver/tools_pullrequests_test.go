@@ -21,6 +21,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/github/githubtest"
+	"github.com/oldsj/mainloop/server/internal/issues"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/mcpserver"
 	"github.com/oldsj/mainloop/server/internal/merge"
@@ -67,6 +68,7 @@ func newPRHarness(t *testing.T) *prHarness {
 		h.pool = pool
 		srv.CI = ci.NewService(pool, app)
 		srv.PRs = &prs.Service{Pool: pool, GitHub: app, Log: log, Settle: 5 * time.Second, Recheck: 10 * time.Millisecond, Ceiling: 20 * time.Millisecond}
+		srv.Issues = issues.NewService(pool, app, log)
 		srv.Merge = &merge.Service{
 			Pool: pool, GitHub: app, Log: log, Configs: cfgs, Runtime: staticRuntime{}, Settle: 5 * time.Second, Poll: 20 * time.Millisecond,
 			Recheck: 10 * time.Millisecond, Ceiling: 20 * time.Millisecond,

@@ -195,3 +195,22 @@ func TestAllowlistRefusesMintsBeforeTheInstallationIsBound(t *testing.T) {
 		}
 	}
 }
+
+// Issue comments are served to either Pull requests read or Issues read: a token holding only
+// Issues read lists them, and a token holding neither does not.
+func TestAllowlistAcceptsEitherPermissionForIssueComments(t *testing.T) {
+	const comments = "https://api.github.com/repos/oldsj/mainloop/issues/5/comments"
+	a, next := newAllowlist(t, github.Permissions{"issues": github.Read})
+	if err := do(t, a, "GET", comments, ""); err != nil || next.n.Load() != 1 {
+		t.Fatalf("issues read = %v, forwarded %d", err, next.n.Load())
+	}
+	a, next = newAllowlist(t, github.Permissions{"metadata": github.Read})
+	if err := do(t, a, "GET", comments, ""); err == nil || next.n.Load() != 0 {
+		t.Fatalf("metadata only = %v, forwarded %d", err, next.n.Load())
+	}
+	// Writing an issue needs Issues write; Pull requests write does not stand in for it.
+	a, next = newAllowlist(t, github.Permissions{"pull_requests": github.Write})
+	if err := do(t, a, "POST", "https://api.github.com/repos/oldsj/mainloop/issues", `{"title":"x"}`); err == nil || next.n.Load() != 0 {
+		t.Fatalf("pull_requests write creating an issue = %v, forwarded %d", err, next.n.Load())
+	}
+}

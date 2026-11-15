@@ -27,9 +27,12 @@ available`, the same pattern `PRs` and `Merge` use.
 
 Both tools take `project_id` and are visible on the same actors, at the same depths, as
 `open_pull_request`: wherever an actor can open a pull request on its bound project, it can also
-read that project's issues and alerts, with no separate feature flag.
+read that project's issues and alerts, with no separate feature flag. The coordination grant also
+holds `get_issue`, alongside the [issue writes](issue-writes.md), so a supervisor can read an
+issue before commenting on it; the main thread may read an issue in any of its owner's projects.
 `projectAuthority` (shared with the pull-request tools) fails closed when the actor's session
-project does not equal the `project_id` argument, before any GitHub read; the service then
+project does not equal the `project_id` argument, before any GitHub read (the main thread excepted
+for `get_issue`); the service then
 re-resolves the project from PostgreSQL by owner and id and derives the repository from its stored
 `full_name`, so a project id belonging to another owner is `not_found`, not a cross-repository
 read. Neither tool accepts a repository, owner, URL or token argument.
@@ -73,8 +76,7 @@ range the advisory matched (`vulnerable_version_range`) and, when known, the fir
 
 ## Scope
 
-These two tools read only. They do not create, close, comment on or label an issue, do not
-dismiss or act on an alert, and do not grant a sandbox direct GitHub API access or install `gh`.
-Issue creation and writing are a known
-separate gap, tracked elsewhere. The default tests use a fake GitHub HTTP transport
+These two tools read only. They do not close or label an issue, do not dismiss or act on an alert,
+and do not grant a sandbox direct GitHub API access or install `gh`. Filing an issue and commenting
+on one are [issue writes](issue-writes.md). The default tests use a fake GitHub HTTP transport
 (`server/internal/github/githubtest`) and scratch PostgreSQL; they are not live GitHub proof.

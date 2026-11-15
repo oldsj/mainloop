@@ -47,3 +47,25 @@ const (
 	ToolMerge         MergeTool = "merge"
 	ToolApprovedMerge MergeTool = "approved_merge"
 )
+
+// IssueWriteState is issue_writes.state. Pending, dispatching and uncertain are the states a loop
+// works on; created and refused are final.
+type IssueWriteState string
+
+// Issue write states.
+const (
+	IssueWritePending     IssueWriteState = "pending"
+	IssueWriteDispatching IssueWriteState = "dispatching"
+	IssueWriteUncertain   IssueWriteState = "uncertain"
+	IssueWriteCreated     IssueWriteState = "created"
+	IssueWriteRefused     IssueWriteState = "refused"
+)
+
+// IssueWriteKind is issue_writes.kind.
+type IssueWriteKind string
+
+// Issue write kinds.
+const (
+	IssueWriteIssue   IssueWriteKind = "issue"
+	IssueWriteComment IssueWriteKind = "comment"
+)
