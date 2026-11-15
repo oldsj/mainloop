@@ -66,4 +66,7 @@ const (
 	ReasonOperationPending  = "operation_pending"
 	ReasonFollowUpCode      = "follow_up_code_task_completed"
 	ReasonRuntimeLimitOwner = "runtime_limit_needs_owner"
+	// ReasonHandoffLimit refuses a retry or reassign from main or a supervisor once the task has had
+	// Limits.MaxHandoffs of them. The owner decides what happens next and is never limited.
+	ReasonHandoffLimit = "handoff_limit"
 )

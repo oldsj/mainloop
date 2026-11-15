@@ -95,6 +95,9 @@ type Limits struct {
 	// ReportBatchWindow is how long a report waits after it is made before it is sent, so reports
 	// made together reach their recipient as one message. Zero sends at once.
 	ReportBatchWindow time.Duration
+	// MaxHandoffs caps the retries and reassigns that main and supervisors may make of one task; the
+	// owner's own are not capped. Zero is no cap.
+	MaxHandoffs int
 }
 
 func (s *Service) log() *slog.Logger {
@@ -574,13 +577,14 @@ func (s *Service) Cancel(ctx context.Context, p Principal, in ActionInput) (api.
 	return s.act(ctx, p, dbstate.TaskOpCancel, in)
 }
 
-// Retry records a retry that waits for handoff, which is not available yet: the operation is
-// blocked with reason handoff_unavailable.
+// Retry replaces a coordination task's attempt with a new one on the same provider, in a new native
+// session whose brief carries the task's brief and a continuation note. A failed task reopens for
+// it. A code task's retry is recorded blocked with reason handoff_unavailable. See [Service.handoff].
 func (s *Service) Retry(ctx context.Context, p Principal, in ActionInput) (api.TaskOperation, error) {
 	return s.act(ctx, p, dbstate.TaskOpRetry, in)
 }
 
-// Reassign is like [Service.Retry] but names the provider the task would move to.
+// Reassign is like [Service.Retry] but moves the task to the named provider.
 func (s *Service) Reassign(ctx context.Context, p Principal, in ActionInput) (api.TaskOperation, error) {
 	return s.act(ctx, p, dbstate.TaskOpReassign, in)
 }
@@ -611,11 +615,12 @@ func (s *Service) act(ctx context.Context, p Principal, kind dbstate.TaskOpKind,
 			State: dbstate.TaskOpRequested, LastConfirmedStep: dbstate.TaskOpRequested, AttemptID: t.CurrentAttemptID,
 		}
 		var after dbq.Task
+		var drafts []events.Draft
 		switch kind {
 		case dbstate.TaskOpCancel:
 			after, err = s.cancel(ctx, q, t, &newOp)
 		default:
-			after, err = s.handoff(q, ctx, t, kind, in, &newOp)
+			after, drafts, err = s.handoff(ctx, q, p, t, kind, in, &newOp)
 		}
 		if err != nil {
 			return nil, err
@@ -627,9 +632,9 @@ func (s *Service) act(ctx context.Context, p Principal, kind dbstate.TaskOpKind,
 			return nil, err
 		}
 		if after.Version == t.Version {
-			return nil, nil
+			return drafts, nil
 		}
-		return []events.Draft{s.updated(after)}, nil
+		return append(drafts, s.updated(after)), nil
 	})
 	if err != nil {
 		return api.TaskOperation{}, err
@@ -666,36 +671,6 @@ func (s *Service) cancel(ctx context.Context, q *dbq.Queries, t dbq.Task, op *db
 	}
 	op.State, op.LastConfirmedStep = dbstate.TaskOpCompleted, dbstate.TaskOpCompleted
 	return after, nil
-}
-
-// handoff shapes a retry or reassign operation. Handoff is never installed, so every request on
-// an open task, of either mode, ends in the same blocked operation with reason
-// handoff_unavailable; only a task that has ended and a reassign target that could never be used
-// are refused.
-func (s *Service) handoff(q *dbq.Queries, ctx context.Context, t dbq.Task, kind dbstate.TaskOpKind, in ActionInput, op *dbq.InsertTaskOperationParams) (dbq.Task, error) {
-	if TaskFinal(t.Status) {
-		return t, refusal(409, ReasonTaskTerminal)
-	}
-	if kind == dbstate.TaskOpReassign {
-		role := providers.RoleSupervisor
-		if t.ParentTaskID != nil {
-			role = roleChild
-		}
-		if _, err := s.Providers.Resolve(in.TargetProfileID, role, true); err != nil {
-			switch {
-			case errors.Is(err, providers.ErrUnknown):
-				return t, refusal(422, ReasonProviderUnknown)
-			case errors.Is(err, providers.ErrNoRole):
-				return t, refusal(422, ReasonProviderRole)
-			case errors.Is(err, providers.ErrDisabled):
-				return t, refusal(422, ReasonProviderDisabled)
-			}
-			return t, err
-		}
-	}
-	reason := dbstate.ReasonHandoffUnavailable
-	op.State, op.Reason, op.SourceAttemptID = dbstate.TaskOpBlocked, &reason, t.CurrentAttemptID
-	return q.TouchTask(ctx, dbq.TouchTaskParams{ID: t.ID, Version: t.Version})
 }
 
 // ReportInput is a report from the attempt that does the work.
@@ -1049,7 +1024,7 @@ func NewService(cfg *config.Config, pool *pgxpool.Pool, reg Resolver, log *slog.
 			ProjectionEvery: cfg.Tasks.ProjectionEvery.Duration(),
 			StallTimeout:    cfg.Tasks.StallTimeout.Duration(), MaxRuntime: cfg.Tasks.MaxRuntime.Duration(),
 			ForceSuspendAfter: cfg.Tasks.ForceSuspendAfter.Duration(), ForceDeleteAfter: cfg.Tasks.ForceDeleteAfter.Duration(),
-			ReportBatchWindow: defaultReportBatchWindow,
+			ReportBatchWindow: defaultReportBatchWindow, MaxHandoffs: cfg.Tasks.MaxHandoffs,
 		},
 	}
 	for _, o := range opts {

@@ -163,15 +163,15 @@ var opEdges = map[dbstate.TaskOpKind]map[dbstate.TaskOpState][]dbstate.TaskOpSta
 	dbstate.TaskOpReassign: handoffEdges,
 }
 
+// handoffEdges are the moves of a retry or reassign. With an attempt still running it drains and
+// stops it, then fences it and makes the successor in one step, so the task never holds neither. An
+// attempt that had already ended (a failed task) goes straight to the successor.
 var handoffEdges = map[dbstate.TaskOpState][]dbstate.TaskOpState{
-	dbstate.TaskOpRequested:          {dbstate.TaskOpDraining},
-	dbstate.TaskOpDraining:           {dbstate.TaskOpCheckpointRequired},
-	dbstate.TaskOpCheckpointRequired: {dbstate.TaskOpCheckpointVerified},
-	dbstate.TaskOpCheckpointVerified: {dbstate.TaskOpSourceFencing},
-	dbstate.TaskOpSourceFencing:      {dbstate.TaskOpSourceFenced},
-	dbstate.TaskOpSourceFenced:       {dbstate.TaskOpTargetCreating},
-	dbstate.TaskOpTargetCreating:     {dbstate.TaskOpTargetReady},
-	dbstate.TaskOpTargetReady:        {dbstate.TaskOpCompleted},
+	dbstate.TaskOpRequested:      {dbstate.TaskOpDraining, dbstate.TaskOpTargetCreating},
+	dbstate.TaskOpDraining:       {dbstate.TaskOpSourceFencing},
+	dbstate.TaskOpSourceFencing:  {dbstate.TaskOpTargetCreating},
+	dbstate.TaskOpTargetCreating: {dbstate.TaskOpTargetReady},
+	dbstate.TaskOpTargetReady:    {dbstate.TaskOpCompleted},
 }
 
 // TransitionOperation checks an operation move. last is the last step the operation confirmed:

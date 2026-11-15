@@ -169,14 +169,11 @@ var forward = map[dbstate.TaskOpKind]map[dbstate.TaskOpState][]dbstate.TaskOpSta
 		dbstate.TaskOpSourceFenced:  {dbstate.TaskOpCompleted},
 	},
 	dbstate.TaskOpRetry: {
-		dbstate.TaskOpRequested:          {dbstate.TaskOpDraining},
-		dbstate.TaskOpDraining:           {dbstate.TaskOpCheckpointRequired},
-		dbstate.TaskOpCheckpointRequired: {dbstate.TaskOpCheckpointVerified},
-		dbstate.TaskOpCheckpointVerified: {dbstate.TaskOpSourceFencing},
-		dbstate.TaskOpSourceFencing:      {dbstate.TaskOpSourceFenced},
-		dbstate.TaskOpSourceFenced:       {dbstate.TaskOpTargetCreating},
-		dbstate.TaskOpTargetCreating:     {dbstate.TaskOpTargetReady},
-		dbstate.TaskOpTargetReady:        {dbstate.TaskOpCompleted},
+		dbstate.TaskOpRequested:      {dbstate.TaskOpDraining, dbstate.TaskOpTargetCreating},
+		dbstate.TaskOpDraining:       {dbstate.TaskOpSourceFencing},
+		dbstate.TaskOpSourceFencing:  {dbstate.TaskOpTargetCreating},
+		dbstate.TaskOpTargetCreating: {dbstate.TaskOpTargetReady},
+		dbstate.TaskOpTargetReady:    {dbstate.TaskOpCompleted},
 	},
 }
 

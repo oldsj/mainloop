@@ -1,113 +1,89 @@
 # Task handoff
 
-Status: partial S3 coordinator source candidate, uninstalled. Offline fake and
-PostgreSQL regression evidence is not live runtime proof. Receipt storage and
-schema upgrade have offline qualification; cleanup remains uninstalled. Live retry/reassign
-remain unavailable until runtime fencing, preview closure and exact readiness are
-qualified. No automatic provider fallback occurs.
+A retry or reassign replaces a task's attempt with a new one. A retry keeps the task's provider;
+a reassign moves the task to the provider it names. Either way the successor is a fresh native
+session with a fresh binding and credential, on the same task: same id, brief, project, topic and
+parent. To continue with the agent's context instead, send a [follow-up](tasks.md#follow-up), which
+goes to the task's own session.
 
-Automatic recovery of a stuck runtime (retrying or reassigning a `blocked` attempt on Mainloop's
-own initiative, before asking the owner) depends on this handoff stack and is deferred until it is
-installed; see [inbox](inbox.md#reconciliation-and-merge-attention-a1) for the Problems
-classification this leaves a `task_reconciliation` item in meanwhile.
+Status: **implemented for coordination tasks.** A code task's retry and reassign are still recorded
+`blocked` with reason `handoff_unavailable` (see [Not built](#not-built)). No provider fallback is
+inferred: Mainloop never retries or reassigns on its own initiative.
 
-A retry keeps the selected provider; explicit reassignment chooses the target.
-Both create a fresh attempt, native history and grant, preserving the task,
-feature branch, environment and caller instructions. Request IDs bind to the
-canonical digest and current version/attempt. Replays reconcile the original
-operation rather than starting another writer.
+## Who may ask, and when
 
-A completed owner cancellation remains terminal across dispatcher checkpoints
-and coordinator restarts, including a fenced source or a rejected no-start with
-no current attempt. Successor enrollment revalidates task status and version in
-the admission transaction. Stale handoff/error records preserve the terminal task
-projection; they cannot create a new attempt, claim, grant or first brief.
+- **Callers.** The owner (`POST /tasks/{id}/retry`, `POST /tasks/{id}/reassign`, the task page's
+  **Retry** and **Reassign**), main and a supervisor for the tasks they manage (MCP `task_retry`,
+  `task_reassign`). Each request carries the task version and current attempt the caller saw, and a
+  request id; the same request id with the same payload returns the stored operation.
+- **Tasks.** A coordination task with a current attempt whose status is `running`, `waiting`,
+  `blocked` or `failed`, and that is not already in a handoff. The task view offers `retry` and
+  `reassign` exactly then. Refusals (409): `task_terminal` (cancelled or completed: a completed task
+  takes a follow-up instead), `task_not_running` (no attempt yet), `operation_pending` (a cancel,
+  retry or reassign is in progress), `task_settling` (a failed task whose attempt is still being
+  stopped), `parent_not_active` and `child_capacity`/`global_capacity` (a failed child whose parent
+  ended or has no free slot), `stale_task_version`/`stale_task_attempt`. A reassign target that can
+  never run the task is 422 `provider_unknown`, `provider_role_unavailable` or `provider_disabled`.
+- **Limit.** Main and supervisors may retry or reassign one task `TASK_MAX_HANDOFFS` times
+  (default 3, at least 1), counted as successor attempts the task has had. Past that they get 409
+  `handoff_limit` (detail: `handoffs`, `limit`), so an agent cannot loop a failing task forever;
+  the owner decides what happens next, and the owner's own retries are never limited.
 
-Any source that could have edited files must commit and push before handoff.
-Trusted evidence must verify the exact project repository, feature branch and
-exact remote committed-tree SHA. Actor clean-status assertions and provider
-notes remain untrusted; this does not attest to hidden or ignored files. Unknown Git, native or
-merge dispatch prevents transfer. A definite failed no-start may use its trusted
-initial ref after that ref is resolved and verified; this exception is pending
-integration and is not inferred from session absence.
+## What happens
 
-A confirmed native FAILED receipt for the first brief blocks the current task for
-reconciliation and drains its attempt only while that brief is the session's sole delivery.
-Receipt/outcome and sole-delivery qualification are revalidated under the authority locks that
-order submissions. Transport/preparation/configuration errors, later-turn failures and old
-failures with any recovery delivery remain diagnostics without draining or revoking authority.
-For a qualifying bootstrap failure the writer claim and capacity remain held: a failed turn
-is not the trusted no-start rejection above, and does not qualify a handoff, release a branch
-or authorize automatic retry. The owner can cancel through S1's existing API/MCP
-confirmed-disposal path. Failure detail is retained in the native delivery and the attempt's
-owner-readable audit evidence; the task page renders the existing generic reconciliation reason.
+The request and every later step are one task operation (`kind` `retry` or `reassign`), driven by
+the `task-operations` loop. Every step is idempotent on stored state, so a crash anywhere resumes.
 
-Source credentials must be revoked and the exact runtime confirmed quiescent,
-including previews and supervisor children, before generation CAS releases the
-claim. Suspension and timeouts are insufficient. Live handoff requires qualified
-runtime evidence; offline fake evidence cannot qualify a live writer. Every
-source submit/resume/recreate/preview path remains governed by S1 lifecycle.
+1. **Request.** Under the task lock, in the request's transaction:
+   - A running attempt is moved to `draining` (stop requested), so the old agent loses MCP before
+     the request returns. A supervisor's open children are cancelled with it, as for a cancel.
+     The task moves to `waiting` / `handoff`. The operation is recorded `draining`.
+   - A failed task whose attempt has already ended reopens to `waiting` / `handoff`. The operation
+     is recorded `requested`.
+2. **Stop** (`draining`). The old session is ended `cancelled`, and the operation waits for the stop
+   observer to confirm the runtime stopped, exactly as a [cancel](tasks.md) does, with the same
+   forced suspend and delete graces and the same `unresolved` bound. Then `source_fencing`.
+3. **Fence and successor** (`source_fencing`, or `requested` for a failed task), in one transaction:
+   the old attempt's credentials are revoked and its capacity slot released (`fenced`); the
+   successor attempt is inserted with `predecessor_id` set, taking the slot back; the old attempt
+   becomes `superseded` with `successor_id` and `superseded_at` (an attempt that had already
+   ended keeps its final state and gets the same links); the task's current attempt becomes the
+   successor. A reassign first sets the task's `assigned_profile_id` to the target
+   (`selection_source` `explicit`) and clears its model and effort, which were checked against the
+   old provider. Then `target_creating`. A failed child whose parent has no free slot waits for
+   one within `TASK_PROVISION_WINDOW_SECONDS`, then the task fails again.
+4. **Provision** (`target_creating`, `target_ready`). As a create: the successor gets its session
+   and binding, becomes `active`, the task `running`, and its first brief is delivered once. The
+   operation `completed`.
 
-The successor must use S1 provisioning, a new identity and grant, and the verified
-remote SHA. Confirm actual checkout and environment before writable admission or
-first brief. S1 active admission follows read-only checkout verification; fresh
-grants require a scoped confirmation, then one first brief is recorded in the
-existing ledger. Ordinary native actions remain gated while admission is pending.
-Lost create replies reconcile the original identity. Explicit
-source restoration requires confirmed target absence/fencing and fresh grants.
+A superseded attempt never reopens: a later follow-up goes to the successor.
 
-Continuation artifacts are deterministic and bounded. Optional provider notes
-are labelled unverified. Native transcripts, pending HITL and old approval
-receipts are not transferred. Publication linkage and consent belong to the
-current attempt. Task operations expose confirmed steps and lineage separately
-from task status.
+**One writer.** Concurrent retries and reassigns of a task carry the same version; the first takes
+the task lock and moves the version, and the rest are refused. A cancel during a handoff wins
+whatever step the handoff reached: before the successor exists, the handoff finds the task ended and
+blocks; after, the cancel stops the successor. Either way the task ends `cancelled` with no attempt
+left running.
 
-Superseded sessions archive after 21 days and delete after two calendar months
-from supersession, configurable through trusted settings. Validation uses the
-earliest clamped boundary across the Gregorian 400-year cycle. Calendar arithmetic
-clamps to the destination month's final day. Holds prevent cleanup; cleanup
-failure retains pending state. The existing dispatcher owns reconciliation and
-audit tombstones survive deletion. The full typed receipt uses an immutable
-artifact and bounded attempt evidence reference, committed atomically with the
-deletion timestamp. Before cleanup, a rolled-back storage probe validates the
-actual schema, model and artifact readback; unsupported storage invokes no
-cleanup. Existing schemas receive an idempotent typed-kind upgrade. These have
-offline PostgreSQL evidence; cleanup remains unset until its runtime adapter is
-qualified. Dispatcher hookup and qualified cleanup adapters are pending serialized
-integration; there is no new scheduler. Explicit source-restoration orchestration
-is still pending: a failed or absent target currently holds its claim and the
-revoked predecessor remains fenced.
+## The successor's brief
 
-The continuation brief preserves the authoritative original owner instructions
-exactly once within 16 KiB UTF-8. Additional manifest context remains durable.
-Native `task_get`, `task_history` and `task_list` now return a narrow stored
-projection: task facts, sanitized attempt/operation lineage, current-attempt
-report claims, and only the current attempt's linked manifest, checkpoint and
-manifest-selected predecessor reports. Current reports are selected by their
-persisted task/attempt identity and also require a matching canonical digest.
-Both artifact links must agree with the same persisted handoff operation and
-current attempt. Identity, canonical SHA256, report digest, repository, checkout,
-provider and accepted environment mismatches fail closed. Tasks without a current
-linked continuation return no continuation artifacts or predecessor reports. Owner REST
-history retains its existing authorized view.
+The successor's first message is the task's brief as a create's would be (role guidance, the
+brief, project instructions and memory, shared guidance), with a **Continuation** section after the
+brief. It says whether the task was retried or reassigned (and from which provider), which attempt
+number was stopped, that the new session does not have its context and the old attempt may have done
+part of the work, that a supervisor's open children were cancelled, and quotes the old attempt's
+last report (outcome and summary, at most 4000 characters) or says it made none. It reads only rows
+that do not change once the old attempt is fenced, so a resend of the brief is the same text.
 
-The reader preserves active/current binding, ancestry and writer-generation
-authorization. Children read themselves; supervisors read themselves and direct
-children in their project/tree; the main thread retains owner-scoped task
-visibility with the same narrow artifact projection. No operation request,
-private adapter/retention evidence, native transcript or pending HITL/approval
-receipt is exposed by alternate reads. Report summaries and evidence references
-remain unverified claims; references are never dereferenced and convey no consent.
-The manifest's labelled provider note is read without enumerating other artifacts.
+Not carried: the old session's transcript, pending approvals, and its holds.
 
-Standing inputs tell supervisors and children to call `whoami`, then `task_get`
-with its returned task ID. These reads add no native call or model turn. Creating
-successors cannot authenticate; active successors with fresh grants can read their
-linked context while the existing pending-brief action gates remain enforced.
-Delegated native processes still skip standing installation in
-`native_sessions._with_standing`. A qualified Claude append-system-prompt or Codex
-developer-instruction/MCP setup must install discovery outside the unchanged
-owner brief, without an extra turn. Reader and standing-input regression evidence
-does not establish native consumption, bootstrap, handoff or retention readiness;
-the checkpoint, preparation, fencing, credential and cleanup adapters remain
-uninstalled.
+## Not built
+
+- **Code tasks.** Their successor must start from the task branch's pushed head, read from the
+  remote before the workspace is created, or from the base with the continuation note when the
+  branch was never pushed. Until then a code task's retry and reassign record a `blocked`
+  operation with reason `handoff_unavailable`, the view reports both unavailable, and the task page
+  does not show them.
+- **Automatic recovery.** Mainloop does not retry or reassign a stuck task on its own before asking
+  the owner; see [inbox](inbox.md#reconciliation-and-merge-attention-a1) for the Problems
+  classification a stuck task gets meanwhile.
+- **Retention.** Superseded sessions are not archived or deleted on a schedule.

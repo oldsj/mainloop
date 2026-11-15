@@ -143,6 +143,26 @@ var writeCases = []writeCase{
 			}
 			return map[string]any{"request_id": "dead", "task_id": id, "expected_version": version, "expected_attempt_id": nil}
 		}},
+	{tool: "task_retry", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(t *testing.T, h *harness, _ *prHarness, a authtest.Seeded) map[string]any {
+			made := setupCall(t, h, a, "delegate", map[string]any{"request_id": "live", "title": "Plan", "brief": "b", "mode": "coordination"})
+			id, _ := made["task_id"].(string)
+			var version int64
+			if err := h.env.Pool.QueryRow(context.Background(), `SELECT version FROM tasks WHERE id = $1`, id).Scan(&version); err != nil {
+				t.Fatal(err)
+			}
+			return map[string]any{"request_id": "dead", "task_id": id, "expected_version": version, "expected_attempt_id": nil}
+		}},
+	{tool: "task_reassign", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(t *testing.T, h *harness, _ *prHarness, a authtest.Seeded) map[string]any {
+			made := setupCall(t, h, a, "delegate", map[string]any{"request_id": "live", "title": "Plan", "brief": "b", "mode": "coordination"})
+			id, _ := made["task_id"].(string)
+			var version int64
+			if err := h.env.Pool.QueryRow(context.Background(), `SELECT version FROM tasks WHERE id = $1`, id).Scan(&version); err != nil {
+				t.Fatal(err)
+			}
+			return map[string]any{"request_id": "dead", "task_id": id, "expected_version": version, "expected_attempt_id": nil, "target_profile_id": "codex"}
+		}},
 	{tool: "steer", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
 		prepare: func(t *testing.T, h *harness, _ *prHarness, a authtest.Seeded) map[string]any {
 			made := setupCall(t, h, a, "delegate", map[string]any{"request_id": "live", "title": "Plan", "brief": "b", "mode": "coordination"})

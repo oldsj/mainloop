@@ -466,6 +466,18 @@ func (q *Queries) CountSessionPendingDeliveries(ctx context.Context, sessionID s
 	return count, err
 }
 
+const countTaskHandoffs = `-- name: CountTaskHandoffs :one
+SELECT count(*) FROM task_attempts WHERE task_id = $1 AND predecessor_id IS NOT NULL
+`
+
+// Retries and reassigns that made a successor attempt.
+func (q *Queries) CountTaskHandoffs(ctx context.Context, taskID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countTaskHandoffs, taskID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deferAttemptResolve = `-- name: DeferAttemptResolve :one
 UPDATE task_attempts
 SET resolve_attempts = resolve_attempts + 1, resolve_after = now() + make_interval(secs => $1::float8),
@@ -1286,9 +1298,9 @@ const insertTaskAttempt = `-- name: InsertTaskAttempt :one
 INSERT INTO task_attempts (
     id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name,
     role, depth, writer_generation, initial_ref, session_id, binding_id, workspace_id, workspace_request_id,
-    model, effort
+    model, effort, predecessor_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
 )
 RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since, model, effort, instructions_version, memory_seq, reopened_at
 `
@@ -1312,6 +1324,7 @@ type InsertTaskAttemptParams struct {
 	WorkspaceRequestID    *string
 	Model                 *string
 	Effort                *string
+	PredecessorID         *string
 }
 
 // Provisioning and settlement. The attempt, the task's pointer to it and the writer claim change
@@ -1338,6 +1351,7 @@ func (q *Queries) InsertTaskAttempt(ctx context.Context, arg InsertTaskAttemptPa
 		arg.WorkspaceRequestID,
 		arg.Model,
 		arg.Effort,
+		arg.PredecessorID,
 	)
 	var i TaskAttempt
 	err := row.Scan(
@@ -1596,6 +1610,29 @@ func (q *Queries) JoinTaskEventBatch(ctx context.Context, arg JoinTaskEventBatch
 		return nil, err
 	}
 	return items, nil
+}
+
+const latestAttemptReport = `-- name: LatestAttemptReport :one
+SELECT id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at FROM task_reports WHERE attempt_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1
+`
+
+func (q *Queries) LatestAttemptReport(ctx context.Context, attemptID string) (TaskReport, error) {
+	row := q.db.QueryRow(ctx, latestAttemptReport, attemptID)
+	var i TaskReport
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.AttemptID,
+		&i.RequestID,
+		&i.RequestDigest,
+		&i.Summary,
+		&i.Outcome,
+		&i.OwnerAction,
+		&i.EvidenceRefs,
+		&i.TaskVersion,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const listActiveAttemptsForLiveness = `-- name: ListActiveAttemptsForLiveness :many
@@ -3372,6 +3409,69 @@ func (q *Queries) ReopenAttempt(ctx context.Context, arg ReopenAttemptParams) (T
 	return i, err
 }
 
+const reopenFailedTask = `-- name: ReopenFailedTask :one
+UPDATE tasks
+SET status = 'waiting', reason = 'handoff', decision_attempt_id = NULL, decision_report_id = NULL,
+    decision_action = NULL, version = version + 1, updated_at = now()
+WHERE id = $1 AND version = $2 AND status = 'failed'
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason
+`
+
+type ReopenFailedTaskParams struct {
+	ID      string
+	Version int32
+}
+
+// A retry or reassign of a failed task reopens it, waiting on the handoff. Only that path calls it;
+// the task state machine never leaves a final status otherwise.
+func (q *Queries) ReopenFailedTask(ctx context.Context, arg ReopenFailedTaskParams) (Task, error) {
+	row := q.db.QueryRow(ctx, reopenFailedTask, arg.ID, arg.Version)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.ProjectID,
+		&i.TopicID,
+		&i.ParentTaskID,
+		&i.RootTaskID,
+		&i.CreatorBindingID,
+		&i.Title,
+		&i.Brief,
+		&i.Mode,
+		&i.AssignedProfileID,
+		&i.SelectionSource,
+		&i.ProviderConstraint,
+		&i.AcceptedEnvironment,
+		&i.Status,
+		&i.Reason,
+		&i.DecisionAttemptID,
+		&i.DecisionReportID,
+		&i.DecisionAction,
+		&i.CurrentAttemptID,
+		&i.Version,
+		&i.CheckoutBranch,
+		&i.CheckoutRef,
+		&i.CheckoutDepth,
+		&i.PrNumber,
+		&i.PrUrl,
+		&i.PrHeadSha,
+		&i.PrRepository,
+		&i.PrDescription,
+		&i.PrState,
+		&i.CiState,
+		&i.CiHeadSha,
+		&i.ProjectedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.MergeProposalID,
+		&i.Model,
+		&i.Effort,
+		&i.HeldUntil,
+		&i.HeldReason,
+	)
+	return i, err
+}
+
 const reopenTask = `-- name: ReopenTask :one
 UPDATE tasks
 SET status = 'running', reason = NULL, decision_attempt_id = NULL, decision_report_id = NULL,
@@ -3968,6 +4068,69 @@ func (q *Queries) SetTaskOperationTask(ctx context.Context, arg SetTaskOperation
 	return i, err
 }
 
+const setTaskProfile = `-- name: SetTaskProfile :one
+UPDATE tasks
+SET assigned_profile_id = $2, selection_source = 'explicit', model = NULL, effort = NULL, updated_at = now()
+WHERE id = $1
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason
+`
+
+type SetTaskProfileParams struct {
+	ID                string
+	AssignedProfileID string
+}
+
+// A reassign moves the task to its new provider. The model and effort were checked against the old
+// provider, so they go back to the new provider's defaults. The caller bumps the version in the same
+// transaction.
+func (q *Queries) SetTaskProfile(ctx context.Context, arg SetTaskProfileParams) (Task, error) {
+	row := q.db.QueryRow(ctx, setTaskProfile, arg.ID, arg.AssignedProfileID)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.ProjectID,
+		&i.TopicID,
+		&i.ParentTaskID,
+		&i.RootTaskID,
+		&i.CreatorBindingID,
+		&i.Title,
+		&i.Brief,
+		&i.Mode,
+		&i.AssignedProfileID,
+		&i.SelectionSource,
+		&i.ProviderConstraint,
+		&i.AcceptedEnvironment,
+		&i.Status,
+		&i.Reason,
+		&i.DecisionAttemptID,
+		&i.DecisionReportID,
+		&i.DecisionAction,
+		&i.CurrentAttemptID,
+		&i.Version,
+		&i.CheckoutBranch,
+		&i.CheckoutRef,
+		&i.CheckoutDepth,
+		&i.PrNumber,
+		&i.PrUrl,
+		&i.PrHeadSha,
+		&i.PrRepository,
+		&i.PrDescription,
+		&i.PrState,
+		&i.CiState,
+		&i.CiHeadSha,
+		&i.ProjectedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.MergeProposalID,
+		&i.Model,
+		&i.Effort,
+		&i.HeldUntil,
+		&i.HeldReason,
+	)
+	return i, err
+}
+
 const setTaskProjection = `-- name: SetTaskProjection :one
 UPDATE tasks
 SET pr_number = $2, pr_url = $3, pr_head_sha = $4, pr_state = $5, ci_state = $6, ci_head_sha = $7,
@@ -4045,6 +4208,79 @@ func (q *Queries) SetTaskProjection(ctx context.Context, arg SetTaskProjectionPa
 		&i.Effort,
 		&i.HeldUntil,
 		&i.HeldReason,
+	)
+	return i, err
+}
+
+const supersedeAttempt = `-- name: SupersedeAttempt :one
+UPDATE task_attempts
+SET successor_id = $1, superseded_at = now(), updated_at = now(),
+    state = CASE WHEN state = 'fenced' THEN 'superseded' ELSE state END
+WHERE id = $2 AND successor_id IS NULL
+  AND state IN ('fenced', 'failed', 'cancelled', 'completed')
+RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since, model, effort, instructions_version, memory_seq, reopened_at
+`
+
+type SupersedeAttemptParams struct {
+	SuccessorID *string
+	ID          string
+}
+
+// A retry or reassign links the attempt it replaces to the successor, in the transaction that makes
+// the successor. A fenced attempt (stopped for the handoff) becomes superseded; one that had already
+// ended keeps its final state. Either way a follow-up never reopens it again.
+func (q *Queries) SupersedeAttempt(ctx context.Context, arg SupersedeAttemptParams) (TaskAttempt, error) {
+	row := q.db.QueryRow(ctx, supersedeAttempt, arg.SuccessorID, arg.ID)
+	var i TaskAttempt
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.Number,
+		&i.ProfileID,
+		&i.NativeProvider,
+		&i.ConfigurationRevision,
+		&i.AgentNamespace,
+		&i.AgentName,
+		&i.Role,
+		&i.Depth,
+		&i.State,
+		&i.CapacityHeld,
+		&i.SessionID,
+		&i.BindingID,
+		&i.WorkspaceID,
+		&i.WorkspaceRequestID,
+		&i.WorkspaceCreatesInflight,
+		&i.WorkspaceCleanupConfirmed,
+		&i.WorkspaceCleanupAttempts,
+		&i.WorkspaceCleanupAfter,
+		&i.WriterGeneration,
+		&i.BriefDeliveryID,
+		&i.PredecessorID,
+		&i.SuccessorID,
+		&i.EvidenceRefs,
+		&i.ResultRef,
+		&i.Environment,
+		&i.InitialRef,
+		&i.CheckpointRef,
+		&i.ManifestRef,
+		&i.SupersededAt,
+		&i.ArchivedAt,
+		&i.NativeDeletedAt,
+		&i.RetentionHold,
+		&i.StopState,
+		&i.ResolveAttempts,
+		&i.ResolveAfter,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ProgressMarker,
+		&i.ProgressAt,
+		&i.StopRequestedAt,
+		&i.LivenessFailingSince,
+		&i.Model,
+		&i.Effort,
+		&i.InstructionsVersion,
+		&i.MemorySeq,
+		&i.ReopenedAt,
 	)
 	return i, err
 }

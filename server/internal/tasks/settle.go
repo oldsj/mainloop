@@ -72,27 +72,9 @@ func (s *Service) drain(ctx context.Context, attemptID, evidence string, extra f
 		if err != nil {
 			return nil, err
 		}
-		// A supervisor that stops takes its open children with it now, not when its own stop is
-		// confirmed: they must not keep working while that stays unresolved.
 		var drafts []events.Draft
-		if a.Role == dbstate.AttemptSupervisor {
-			if drafts, err = s.cancelOpenChildren(ctx, q, t); err != nil {
-				return nil, err
-			}
-		}
-		if out, err = q.GetTaskAttempt(ctx, attemptID); err != nil {
+		if out, drafts, err = s.drainLocked(ctx, q, t, attemptID, evidence); err != nil {
 			return nil, err
-		}
-		if out.State == dbstate.AttemptCreating || out.State == dbstate.AttemptActive {
-			args := dbq.MoveAttemptParams{
-				ID: out.ID, FromState: out.State, ToState: dbstate.AttemptDraining, CapacityHeld: true,
-			}
-			if evidence != "" {
-				args.EvidenceRef = &evidence
-			}
-			if out, err = q.MoveAttempt(ctx, args); err != nil {
-				return nil, err
-			}
 		}
 		if extra != nil {
 			return drafts, extra(q, t)
@@ -100,6 +82,38 @@ func (s *Service) drain(ctx context.Context, attemptID, evidence string, extra f
 		return drafts, nil
 	})
 	return out, err
+}
+
+// drainLocked is [Service.drain] in the caller's transaction, which holds the lock of the attempt's
+// task t.
+func (s *Service) drainLocked(ctx context.Context, q *dbq.Queries, t dbq.Task, attemptID, evidence string) (dbq.TaskAttempt, []events.Draft, error) {
+	out, err := q.GetTaskAttempt(ctx, attemptID)
+	if err != nil {
+		return out, nil, err
+	}
+	// A supervisor that stops takes its open children with it now, not when its own stop is
+	// confirmed: they must not keep working while that stays unresolved.
+	var drafts []events.Draft
+	if out.Role == dbstate.AttemptSupervisor {
+		if drafts, err = s.cancelOpenChildren(ctx, q, t); err != nil {
+			return out, nil, err
+		}
+		if out, err = q.GetTaskAttempt(ctx, attemptID); err != nil {
+			return out, nil, err
+		}
+	}
+	if out.State == dbstate.AttemptCreating || out.State == dbstate.AttemptActive {
+		args := dbq.MoveAttemptParams{
+			ID: out.ID, FromState: out.State, ToState: dbstate.AttemptDraining, CapacityHeld: true,
+		}
+		if evidence != "" {
+			args.EvidenceRef = &evidence
+		}
+		if out, err = q.MoveAttempt(ctx, args); err != nil {
+			return out, nil, err
+		}
+	}
+	return out, drafts, nil
 }
 
 // cancelOpenChildren cancels the child tasks of a supervisor's task that have not ended, in id order,
@@ -236,8 +250,9 @@ var errStopUnconfirmed = errors.New("tasks: the attempt's stop is not confirmed"
 
 // fence revokes the attempt's credentials, releases its writer claim and its capacity slot, and
 // moves it draining → fenced in one transaction. It refuses an attempt whose stop is not confirmed,
-// because the agent may still be writing. extra runs in the same transaction.
-func (s *Service) fence(ctx context.Context, attemptID string, extra func(q *dbq.Queries) error) (dbq.TaskAttempt, error) {
+// because the agent may still be writing. extra runs in the same transaction, and its events are
+// published with it.
+func (s *Service) fence(ctx context.Context, attemptID string, extra func(q *dbq.Queries) ([]events.Draft, error)) (dbq.TaskAttempt, error) {
 	var out dbq.TaskAttempt
 	err := s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
 		a, err := q.GetTaskAttempt(ctx, attemptID)
@@ -273,7 +288,7 @@ func (s *Service) fence(ctx context.Context, attemptID string, extra func(q *dbq
 			}
 		}
 		if extra != nil {
-			return nil, extra(q)
+			return extra(q)
 		}
 		return nil, nil
 	})
@@ -440,31 +455,17 @@ func (s *Service) driveCancel(ctx context.Context, c reconcile.Claim, op dbq.Tas
 	src := *op.SourceAttemptID
 	switch op.State {
 	case dbstate.TaskOpDraining:
-		a, err := s.drain(ctx, src, "", nil)
-		if err != nil {
-			return reconcile.Outcome{}, err
-		}
-		if a.State == dbstate.AttemptDraining {
-			// This is a real cancel: the task is not final yet (it only becomes cancelled when this
-			// operation finishes it below), so the session ends cancelled too, not by the task's status.
-			if err := s.stop(ctx, a, dbstate.SessionCancelled); err != nil {
+		// The cancel waits for the observer to confirm the stop; the attempt keeps its claim and slot.
+		if wait, err := s.stopSource(ctx, src); err != nil || wait > 0 {
+			if err != nil {
 				return reconcile.Outcome{}, err
 			}
-			if a, err = dbq.New(s.Pool).GetTaskAttempt(ctx, src); err != nil {
-				return reconcile.Outcome{}, err
-			}
-			// The cancel waits for the observer to confirm the stop; the attempt keeps its claim and slot.
-			if wait, err := s.resolveStop(ctx, a); err != nil || wait > 0 {
-				if err != nil {
-					return reconcile.Outcome{}, err
-				}
-				return reconcile.RetryAfter(wait), nil
-			}
+			return reconcile.RetryAfter(wait), nil
 		}
 		return s.moveOp(ctx, c, op, dbstate.TaskOpSourceFencing)
 	case dbstate.TaskOpSourceFencing:
-		_, err := s.fence(ctx, src, func(q *dbq.Queries) error {
-			return advance(ctx, q, c, op, dbstate.TaskOpSourceFenced, nil, nil)
+		_, err := s.fence(ctx, src, func(q *dbq.Queries) ([]events.Draft, error) {
+			return nil, advance(ctx, q, c, op, dbstate.TaskOpSourceFenced, nil, nil)
 		})
 		if err != nil {
 			return reconcile.Outcome{}, err
@@ -480,6 +481,25 @@ func (s *Service) driveCancel(ctx context.Context, c reconcile.Claim, op dbq.Tas
 		return reconcile.Recorded(), nil
 	}
 	return reconcile.Done(string(dbstate.TaskOpBlocked)), nil
+}
+
+// stopSource drains an operation's source attempt, ends its session cancelled and asks the observer
+// whether its runtime has stopped. A wait above zero means the stop is not confirmed yet: look again
+// then. The attempt keeps its writer claim and capacity slot until it is fenced.
+func (s *Service) stopSource(ctx context.Context, src string) (time.Duration, error) {
+	a, err := s.drain(ctx, src, "", nil)
+	if err != nil || a.State != dbstate.AttemptDraining {
+		return 0, err
+	}
+	// The task is not final (a cancel finishes it only after the fence, and a handoff keeps it open),
+	// so the session ends cancelled, not by the task's status.
+	if err := s.stop(ctx, a, dbstate.SessionCancelled); err != nil {
+		return 0, err
+	}
+	if a, err = dbq.New(s.Pool).GetTaskAttempt(ctx, src); err != nil {
+		return 0, err
+	}
+	return s.resolveStop(ctx, a)
 }
 
 func (s *Service) moveOp(ctx context.Context, c reconcile.Claim, op dbq.TaskOperation, to dbstate.TaskOpState) (reconcile.Outcome, error) {

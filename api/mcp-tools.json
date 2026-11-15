@@ -602,6 +602,91 @@
       }
     },
     {
+      "name": "task_retry",
+      "description": "Retry a managed coordination task using its current version/attempt: Mainloop stops its attempt and starts a new one on the same provider, in a new session briefed with the task's brief and the old attempt's last report. Works on a running, waiting, blocked or failed task; a supervisor's open children are cancelled with it. To keep the agent's context, use follow_up instead. Main and supervisors may retry or reassign a task a limited number of times (handoff_limit); then the owner decides. Reuse request_id to retry the call.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_attempt_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "task_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["request_id", "expected_version", "expected_attempt_id", "task_id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_reassign",
+      "description": "Like task_retry, but the new attempt runs on another provider profile (target_profile_id), which becomes the task's provider.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_attempt_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "target_profile_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "task_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "expected_version",
+          "expected_attempt_id",
+          "task_id",
+          "target_profile_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "task_hold",
       "description": "Put a task on hold: it leaves the owner's Working and Needs you views until the hold ends, then Mainloop sends you one message to look at it again. Give minutes (1 to 10080) or until (RFC 3339, within 7 days), and a short reason; clear: true ends a hold now. The task keeps running. A hold ends early, with no message from this tool, when the task fails, blocks or ends or anything needs the owner about it; a task in one of those states cannot be held.",
       "input_schema": {
@@ -949,6 +1034,8 @@
         "task_history",
         "task_hold",
         "task_list",
+        "task_reassign",
+        "task_retry",
         "topic_open",
         "topics",
         "watch_checks",
@@ -988,6 +1075,8 @@
         "task_history",
         "task_hold",
         "task_list",
+        "task_reassign",
+        "task_retry",
         "topic_open",
         "topics",
         "watch_checks",
@@ -1026,6 +1115,8 @@
         "task_history",
         "task_hold",
         "task_list",
+        "task_reassign",
+        "task_retry",
         "topic_open",
         "topics",
         "watch_checks",
@@ -1068,6 +1159,8 @@
         "task_history",
         "task_hold",
         "task_list",
+        "task_reassign",
+        "task_retry",
         "topic_open",
         "topics",
         "watch_checks",
@@ -1094,6 +1187,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_reassign",
+        "task_retry",
         "whoami"
       ],
       "approval": []
@@ -1117,6 +1212,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_reassign",
+        "task_retry",
         "whoami"
       ],
       "approval": []
@@ -1140,6 +1237,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_reassign",
+        "task_retry",
         "whoami"
       ],
       "approval": []
@@ -1163,6 +1262,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_reassign",
+        "task_retry",
         "whoami"
       ],
       "approval": []
@@ -1191,6 +1292,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_reassign",
+        "task_retry",
         "watch_checks",
         "whoami"
       ],
@@ -1224,6 +1327,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_reassign",
+        "task_retry",
         "watch_checks",
         "whoami"
       ],
@@ -1256,6 +1361,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_reassign",
+        "task_retry",
         "watch_checks",
         "whoami"
       ],
@@ -1292,6 +1399,8 @@
         "task_get",
         "task_history",
         "task_list",
+        "task_reassign",
+        "task_retry",
         "watch_checks",
         "whoami"
       ],

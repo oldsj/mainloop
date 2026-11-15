@@ -511,7 +511,8 @@ func TestActionsRefuseStaleViews(t *testing.T) {
 	}
 }
 
-func TestRetryAndReassignAreBlocked(t *testing.T) {
+// A code task's retry and reassign wait for the branch handoff: the operation is recorded blocked.
+func TestCodeRetryAndReassignAreBlocked(t *testing.T) {
 	e := newEnv(t)
 	id := e.codeTask()
 	for _, kind := range []string{"retry", "reassign"} {
@@ -544,10 +545,8 @@ func TestRetryAndReassignAreBlocked(t *testing.T) {
 	_, err = e.svc.Retry(context.Background(), e.own, in)
 	wantRefusal(t, err, 409, tasks.ReasonPayloadConflict)
 
-	coord := e.mustCreate(e.own, tasks.CreateInput{})
-	cop, err := e.svc.Retry(context.Background(), e.own, action(coord, e.view(e.own, coord), "r"))
-	if err != nil || cop.State != "blocked" || cop.Reason == nil || *cop.Reason != "handoff_unavailable" {
-		t.Fatalf("coordination retry = %+v, %v", cop, err)
+	if a := e.view(e.own, id).Actions; a["retry"].Available || a["reassign"].Available {
+		t.Fatalf("a code task offers a handoff: %+v", a)
 	}
 
 	e.setStatus(id, "failed", "")
