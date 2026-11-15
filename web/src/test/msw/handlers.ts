@@ -147,6 +147,7 @@ export const baseHandlers = [
   http.get(url('/tasks'), () => HttpResponse.json(tasks)),
   // A task with no loops, unless a test serves its own.
   http.get(url('/tasks/:task_id/loops'), () => HttpResponse.json({ loops: [] })),
+  http.get(url('/main-thread/loops'), () => HttpResponse.json({ loops: [] })),
   // The explorer reads schedules on every shell, so an empty page is the default. It issues no
   // page token, so it refuses one, as kagent refuses any token it did not issue.
   http.get(url('/schedules'), ({ request }) =>

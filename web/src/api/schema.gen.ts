@@ -1557,6 +1557,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/main-thread/loops': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Main Loops
+     * @description The loops main armed, with or without a task, live ones (armed or paused) first, then the latest that ended, each with its latest firings. The main thread's view lists them with the same controls as the task page.
+     */
+    get: operations['listMainLoops'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/tasks/{task_id}/loops': {
     parameters: {
       query?: never;
@@ -11752,6 +11772,36 @@ export interface operations {
             | components['schemas']['TaskError'];
         };
       };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  listMainLoops: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskLoopList'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
       /** @description Service Unavailable */
       503: {
         headers: {

@@ -8,6 +8,7 @@ import type { TaskLoop } from '@/lib/contract';
 import { firing, loop, view } from '@/test/fixtures/tasks';
 import { server } from '@/test/msw/server';
 import { serveTaskPage, taskScreen } from './test/handlers';
+import { MainLoops } from './TaskLoops';
 import { renderTasks } from './test/render';
 
 afterEach(async () => {
@@ -170,5 +171,60 @@ describe('task page loops', () => {
     // The refusal re-reads the loops, which now show it stopped and without controls.
     await waitFor(async () => expect(await loopItem()).toHaveTextContent('Stopped'));
     expect(within(await loopItem()).queryByRole('button', { name: 'Fire now' })).toBeNull();
+  });
+});
+
+describe("main's loops", () => {
+  it('lists them with their controls, links a loop to its task, and controls one by id', async () => {
+    let loops: TaskLoop[] = [
+      loop({ id: 'main-1', recipient: 'main', recipient_task_id: null, task_id: null }),
+      loop({
+        id: 'main-2',
+        recipient: 'main',
+        recipient_task_id: null,
+        trigger: 'task',
+        statuses: ['completed'],
+        every_minutes: null,
+        next_fire_at: null,
+        recent_firings: []
+      })
+    ];
+    const paused: string[] = [];
+    server.use(
+      http.get(url('/main-thread/loops'), () => HttpResponse.json({ loops })),
+      http.post(url('/loops/:loop_id/pause'), ({ params }) => {
+        paused.push(String(params.loop_id));
+        loops = loops.map((l) => (l.id === params.loop_id ? { ...l, state: 'paused' } : l));
+        return HttpResponse.json(loops.find((l) => l.id === params.loop_id));
+      })
+    );
+    renderTasks('/', () => <MainLoops offline={false} />);
+
+    const section = await screen.findByTestId('main-loops');
+    const [timed, watching] = within(section).getAllByTestId('task-loop');
+    if (!timed || !watching) throw new Error('expected two loops');
+    expect(timed).toHaveTextContent('Every 30 minutes');
+    expect(timed).not.toHaveTextContent('wakes');
+    expect(within(timed).queryByRole('link')).toBeNull();
+    expect(watching).toHaveTextContent('When its task is completed');
+    expect(within(watching).getByRole('link', { name: 'open its task' })).toHaveAttribute(
+      'href',
+      '/tasks/task-1'
+    );
+
+    await userEvent.setup().click(within(timed).getByRole('button', { name: 'Pause' }));
+    await within(section).findByRole('button', { name: 'Resume' });
+    expect(paused).toEqual(['main-1']);
+  });
+
+  it('draws nothing while main has none', async () => {
+    renderTasks('/', () => (
+      <>
+        <p>home</p>
+        <MainLoops offline={false} />
+      </>
+    ));
+    await screen.findByText('home');
+    await waitFor(() => expect(screen.queryByTestId('main-loops')).toBeNull());
   });
 });

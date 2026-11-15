@@ -24,6 +24,19 @@ export function useTaskLoops(taskId: string) {
   });
 }
 
+/** Main's loops, with or without a task, for the main thread's view. */
+export function useMainLoops() {
+  return useQuery({
+    queryKey: keys.mainLoops(),
+    queryFn: async ({ signal }) => {
+      const { data } = await fetchClient.GET('/main-thread/loops', { signal });
+      if (data === undefined) throw new Error('Mainloop returned no loops.');
+      return data.loops;
+    },
+    refetchInterval: LOOP_REFRESH_MS
+  });
+}
+
 export type LoopControl = 'pause' | 'resume' | 'fire' | 'delete';
 
 /**
@@ -70,9 +83,10 @@ const PR_CONDITIONS: Record<TaskLoop['pr_conditions'][number], string> = {
   closed: 'closed'
 };
 
-/** What the loop waits for, as one phrase. `taskId` is the page's task. */
-export function loopTrigger(loop: TaskLoop, taskId: string): string {
-  const subject = loop.task_id === taskId ? 'this task' : 'a watched task';
+/** What the loop waits for, as one phrase. `pageTaskId` is the page's task; null on main's view. */
+export function loopTrigger(loop: TaskLoop, pageTaskId: string | null): string {
+  const subject =
+    pageTaskId === null ? 'its task' : loop.task_id === pageTaskId ? 'this task' : 'a watched task';
   switch (loop.trigger) {
     case 'task':
       return loop.statuses.length > 0

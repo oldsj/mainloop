@@ -24,12 +24,33 @@ func TestRESTLoopControls(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Main's time loop with no task, and a supervisor's loop: the main thread lists only main's two.
+	if _, err := r.pool.Exec(context.Background(), `INSERT INTO task_loops (id, owner_id, principal_key, request_id, recipient_key,
+		trigger, note, max_firings, min_interval_seconds, expires_at, next_attempt_at, fire_at)
+		VALUES ('loop-2', 'local-dev-user', 'main:t', 'r2', 'main', 'time', 'check in', 20, 60, now() + interval '1 day',
+		        now() + interval '1 hour', now() + interval '1 hour'),
+		       ('loop-3', 'local-dev-user', 'task:t', 'r3', 'parent-task:'||$1, 'time', 'mine', 20, 60, now() + interval '1 day',
+		        now() + interval '1 hour', now() + interval '1 hour')`, id); err != nil {
+		t.Fatal(err)
+	}
+	mainLoops := r.do("GET", "/main-thread/loops", nil, 200)["loops"].([]any)
+	var mainIDs []string
+	for _, l := range mainLoops {
+		mainIDs = append(mainIDs, l.(map[string]any)["id"].(string))
+	}
+	if strings.Join(mainIDs, ",") != "loop-2,loop-1" {
+		t.Fatalf("main's loops = %v", mainIDs)
+	}
+	if l := mainLoops[0].(map[string]any); l["task_id"] != nil || l["next_fire_at"] == nil || l["recipient"] != "main" {
+		t.Fatalf("main's time loop = %v", l)
+	}
+
 	list := r.do("GET", "/tasks/"+id+"/loops", nil, 200)
 	loops := list["loops"].([]any)
-	if len(loops) != 1 {
+	if len(loops) != 2 {
 		t.Fatalf("loops = %v", loops)
 	}
-	if l := loops[0].(map[string]any); l["state"] != "armed" || l["recipient"] != "main" || l["task_id"] != id ||
+	if l := loops[1].(map[string]any); l["state"] != "armed" || l["recipient"] != "main" || l["task_id"] != id ||
 		len(l["recent_firings"].([]any)) != 0 {
 		t.Fatalf("loop = %v", l)
 	}

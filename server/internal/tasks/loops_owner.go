@@ -40,6 +40,17 @@ func (s *Service) TaskLoops(ctx context.Context, p Principal, taskID string) ([]
 	return s.loopViews(ctx, q, loops)
 }
 
+// MainLoops lists the loops main armed, with or without a task, live ones first, each with its
+// latest firings: the main thread's view of them.
+func (s *Service) MainLoops(ctx context.Context, p Principal) ([]api.TaskLoop, error) {
+	q := dbq.New(s.Pool)
+	loops, err := q.ListTaskLoops(ctx, dbq.ListTaskLoopsParams{OwnerID: p.OwnerID, RecipientKey: "main", MaxRows: maxListedLoops})
+	if err != nil {
+		return nil, err
+	}
+	return s.loopViews(ctx, q, loops)
+}
+
 func (s *Service) loopViews(ctx context.Context, q *dbq.Queries, loops []dbq.TaskLoop) ([]api.TaskLoop, error) {
 	ids := make([]string, len(loops))
 	for i, l := range loops {
