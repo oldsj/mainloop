@@ -226,6 +226,11 @@ func (s *Service) prepareFollowUp(ctx context.Context, q *dbq.Queries, p Princip
 	if t.Status == dbstate.TaskQueued {
 		return t, false, refusal(409, ReasonTaskNotRunning)
 	}
+	if t.Status == dbstate.TaskBlocked && t.Reason != nil && *t.Reason == dbstate.ReasonOwnerDecision && p.Role != "" {
+		// The question is the owner's: main's or a supervisor's message goes to the agent, and the
+		// task stays blocked on the owner until the owner answers or the agent reports again.
+		return t, false, nil
+	}
 	if t.Status == dbstate.TaskBlocked && t.Reason != nil && *t.Reason == dbstate.ReasonRuntimeLimit {
 		// The runtime bound is the owner's to lift: their follow-up starts it again.
 		if p.Role != "" {
