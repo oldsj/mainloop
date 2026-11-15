@@ -403,6 +403,13 @@ func (s *Service) doCreate(ctx context.Context, w wsRow) result {
 	if ref != nil {
 		req.Credentials = append(req.Credentials, ref)
 	}
+	// The dotfiles are pinned to the workspace's request before it is sent, so a retry sends the
+	// same ones.
+	if s.Dotfiles != nil {
+		if _, err := s.Dotfiles.Pin(ctx, w.ID, w.RequestID); err != nil {
+			return result{err: err}
+		}
+	}
 	sess, err := s.Kagent.CreateSession(ctx, req)
 	if err != nil {
 		return result{err: err}

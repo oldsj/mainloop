@@ -7,7 +7,67 @@ package dbq
 
 import (
 	"context"
+	"encoding/json"
 )
+
+const copyForkDotfiles = `-- name: CopyForkDotfiles :exec
+INSERT INTO session_dotfiles (request_id, session_id, repository, ref, path, commit, digest, status, reason)
+SELECT $1, $2, d.repository, d.ref, d.path, d.commit, d.digest, d.status, d.reason
+FROM session_dotfiles d
+WHERE d.session_id = $3
+ORDER BY d.created_at DESC, d.request_id
+LIMIT 1
+ON CONFLICT (request_id) DO NOTHING
+`
+
+type CopyForkDotfilesParams struct {
+	RequestID       string
+	SessionID       string
+	SourceSessionID string
+}
+
+// A fork is given the files its source's Session was laid out with: its latest pin.
+func (q *Queries) CopyForkDotfiles(ctx context.Context, arg CopyForkDotfilesParams) error {
+	_, err := q.db.Exec(ctx, copyForkDotfiles, arg.RequestID, arg.SessionID, arg.SourceSessionID)
+	return err
+}
+
+const getDotfilesBundle = `-- name: GetDotfilesBundle :one
+SELECT content FROM dotfiles_bundles WHERE digest = $1
+`
+
+func (q *Queries) GetDotfilesBundle(ctx context.Context, digest string) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getDotfilesBundle, digest)
+	var content []byte
+	err := row.Scan(&content)
+	return content, err
+}
+
+const getDotfilesExport = `-- name: GetDotfilesExport :one
+SELECT repository, commit, path, status, reason, digest, findings, created_at FROM dotfiles_exports WHERE repository = $1 AND commit = $2 AND path = $3
+`
+
+type GetDotfilesExportParams struct {
+	Repository string
+	Commit     string
+	Path       string
+}
+
+func (q *Queries) GetDotfilesExport(ctx context.Context, arg GetDotfilesExportParams) (DotfilesExport, error) {
+	row := q.db.QueryRow(ctx, getDotfilesExport, arg.Repository, arg.Commit, arg.Path)
+	var i DotfilesExport
+	err := row.Scan(
+		&i.Repository,
+		&i.Commit,
+		&i.Path,
+		&i.Status,
+		&i.Reason,
+		&i.Digest,
+		&i.Findings,
+		&i.CreatedAt,
+	)
+	return i, err
+}
 
 const getOwnerDotfilesSource = `-- name: GetOwnerDotfilesSource :one
 SELECT owner_id, repository, ref, path, version, updated_at FROM owner_dotfiles_sources WHERE owner_id = $1
@@ -23,6 +83,28 @@ func (q *Queries) GetOwnerDotfilesSource(ctx context.Context, ownerID string) (O
 		&i.Path,
 		&i.Version,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPinnedDotfiles = `-- name: GetPinnedDotfiles :one
+SELECT request_id, session_id, repository, ref, path, commit, digest, status, reason, created_at FROM session_dotfiles WHERE request_id = $1
+`
+
+func (q *Queries) GetPinnedDotfiles(ctx context.Context, requestID string) (SessionDotfile, error) {
+	row := q.db.QueryRow(ctx, getPinnedDotfiles, requestID)
+	var i SessionDotfile
+	err := row.Scan(
+		&i.RequestID,
+		&i.SessionID,
+		&i.Repository,
+		&i.Ref,
+		&i.Path,
+		&i.Commit,
+		&i.Digest,
+		&i.Status,
+		&i.Reason,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -43,6 +125,67 @@ func (q *Queries) GetProjectDotfilesSource(ctx context.Context, projectID string
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getSessionDotfilesSourceInputs = `-- name: GetSessionDotfilesSourceInputs :one
+SELECT s.user_id, s.project_id FROM sessions s WHERE s.id = $1
+`
+
+type GetSessionDotfilesSourceInputsRow struct {
+	UserID    string
+	ProjectID *string
+}
+
+func (q *Queries) GetSessionDotfilesSourceInputs(ctx context.Context, id string) (GetSessionDotfilesSourceInputsRow, error) {
+	row := q.db.QueryRow(ctx, getSessionDotfilesSourceInputs, id)
+	var i GetSessionDotfilesSourceInputsRow
+	err := row.Scan(&i.UserID, &i.ProjectID)
+	return i, err
+}
+
+const insertDotfilesBundle = `-- name: InsertDotfilesBundle :exec
+INSERT INTO dotfiles_bundles (digest, content) VALUES ($1, $2)
+ON CONFLICT (digest) DO NOTHING
+`
+
+type InsertDotfilesBundleParams struct {
+	Digest  string
+	Content []byte
+}
+
+func (q *Queries) InsertDotfilesBundle(ctx context.Context, arg InsertDotfilesBundleParams) error {
+	_, err := q.db.Exec(ctx, insertDotfilesBundle, arg.Digest, arg.Content)
+	return err
+}
+
+const insertDotfilesExport = `-- name: InsertDotfilesExport :exec
+INSERT INTO dotfiles_exports (repository, commit, path, status, reason, digest, findings)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (repository, commit, path) DO NOTHING
+`
+
+type InsertDotfilesExportParams struct {
+	Repository string
+	Commit     string
+	Path       string
+	Status     string
+	Reason     string
+	Digest     *string
+	Findings   json.RawMessage
+}
+
+// A concurrent export of the same commit wrote the same row; the second write changes nothing.
+func (q *Queries) InsertDotfilesExport(ctx context.Context, arg InsertDotfilesExportParams) error {
+	_, err := q.db.Exec(ctx, insertDotfilesExport,
+		arg.Repository,
+		arg.Commit,
+		arg.Path,
+		arg.Status,
+		arg.Reason,
+		arg.Digest,
+		arg.Findings,
+	)
+	return err
 }
 
 const insertOwnerDotfilesSource = `-- name: InsertOwnerDotfilesSource :one
@@ -79,6 +222,40 @@ func (q *Queries) InsertOwnerDotfilesSource(ctx context.Context, arg InsertOwner
 	return i, err
 }
 
+const insertPinnedDotfiles = `-- name: InsertPinnedDotfiles :exec
+INSERT INTO session_dotfiles (request_id, session_id, repository, ref, path, commit, digest, status, reason)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+ON CONFLICT (request_id) DO NOTHING
+`
+
+type InsertPinnedDotfilesParams struct {
+	RequestID  string
+	SessionID  string
+	Repository string
+	Ref        string
+	Path       string
+	Commit     *string
+	Digest     *string
+	Status     string
+	Reason     string
+}
+
+// The first pin of a request wins; a concurrent pin of the same request changes nothing.
+func (q *Queries) InsertPinnedDotfiles(ctx context.Context, arg InsertPinnedDotfilesParams) error {
+	_, err := q.db.Exec(ctx, insertPinnedDotfiles,
+		arg.RequestID,
+		arg.SessionID,
+		arg.Repository,
+		arg.Ref,
+		arg.Path,
+		arg.Commit,
+		arg.Digest,
+		arg.Status,
+		arg.Reason,
+	)
+	return err
+}
+
 const insertProjectDotfilesSource = `-- name: InsertProjectDotfilesSource :one
 INSERT INTO project_dotfiles_sources (project_id, repository, ref, path, version)
 VALUES ($1, $2, $3, $4, 1)
@@ -108,6 +285,28 @@ func (q *Queries) InsertProjectDotfilesSource(ctx context.Context, arg InsertPro
 		&i.Path,
 		&i.Version,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const latestSessionDotfiles = `-- name: LatestSessionDotfiles :one
+SELECT request_id, session_id, repository, ref, path, commit, digest, status, reason, created_at FROM session_dotfiles WHERE session_id = $1 ORDER BY created_at DESC, request_id LIMIT 1
+`
+
+func (q *Queries) LatestSessionDotfiles(ctx context.Context, sessionID string) (SessionDotfile, error) {
+	row := q.db.QueryRow(ctx, latestSessionDotfiles, sessionID)
+	var i SessionDotfile
+	err := row.Scan(
+		&i.RequestID,
+		&i.SessionID,
+		&i.Repository,
+		&i.Ref,
+		&i.Path,
+		&i.Commit,
+		&i.Digest,
+		&i.Status,
+		&i.Reason,
+		&i.CreatedAt,
 	)
 	return i, err
 }

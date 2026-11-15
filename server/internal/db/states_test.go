@@ -10,6 +10,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/dotfiles"
 	"github.com/oldsj/mainloop/server/internal/projectcontext"
 	"github.com/oldsj/mainloop/server/internal/testdb"
 )
@@ -207,6 +208,9 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"session_messages", "role", strs(string(api.MessageRoleUser), string(api.MessageRoleAssistant))},
 		{"deliveries", "source", strs(string(api.MessageSourceUser), string(api.MessageSourceMainloop))},
 		{"delivery_steers", "source", strs(string(api.MessageSourceUser), string(api.MessageSourceMainloop))},
+		{"dotfiles_exports", "status", strs(dotfiles.StatusReady, dotfiles.StatusRefused)},
+		{"session_dotfiles", "status", strs(
+			dotfiles.StatusReady, dotfiles.StatusNone, dotfiles.StatusUnavailable, dotfiles.StatusRefused)},
 		{"sessions", "agent_cancel_outcome", strs(
 			string(api.SessionCancelResponseAgentStopped), string(api.SessionCancelResponseAgentNotRunning),
 			string(api.SessionCancelResponseAgentUnknown))},

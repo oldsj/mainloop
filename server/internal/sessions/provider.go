@@ -505,6 +505,11 @@ func (s *Service) prepare(ctx context.Context, b dbq.GetMainBindingRow) error {
 			return fail("the MCP credential could not be published: "+err.Error(), false)
 		}
 		req.Credentials = creds
+		if s.Dotfiles != nil {
+			if _, err := s.Dotfiles.Pin(ctx, b.SessionID, requestID); err != nil {
+				return fmt.Errorf("pin the agent dotfiles: %w", err)
+			}
+		}
 		created, err := s.Kagent.CreateSession(ctx, req)
 		switch {
 		case errors.As(err, &se) && createHitDeleted(se):

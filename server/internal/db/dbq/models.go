@@ -253,6 +253,23 @@ type DevloopTarget struct {
 	VclusterServer    *string
 }
 
+type DotfilesBundle struct {
+	Digest    string
+	Content   []byte
+	CreatedAt time.Time
+}
+
+type DotfilesExport struct {
+	Repository string
+	Commit     string
+	Path       string
+	Status     string
+	Reason     string
+	Digest     *string
+	Findings   json.RawMessage
+	CreatedAt  time.Time
+}
+
 type EnvironmentGrant struct {
 	EnvironmentID string
 	ProjectID     string
@@ -837,6 +854,19 @@ type SessionDefault struct {
 	Model     *string
 	Effort    *string
 	UpdatedAt time.Time
+}
+
+type SessionDotfile struct {
+	RequestID  string
+	SessionID  string
+	Repository string
+	Ref        string
+	Path       string
+	Commit     *string
+	Digest     *string
+	Status     string
+	Reason     string
+	CreatedAt  time.Time
 }
 
 type SessionMessage struct {

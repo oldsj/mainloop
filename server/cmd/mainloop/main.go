@@ -173,15 +173,24 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	projectSvc := projects.NewService(cfg, pool, remote, gate, attn.NeedsOwner, log)
 	wsOpts := workspaceOptions(cfg, gate, gitReadFor(cfg, pool, creds, log))
+	var sessOpts []sessions.ServiceOption
 	if gh != nil {
 		// A workspace kagent prepares starts from one exact commit, so its base ref is resolved here.
 		wsOpts = append(wsOpts, workspaces.WithRefs(gh))
+		// Agent dotfiles are read server-side through the App and pinned to each Session; agents
+		// get only the exported bundle, never access to the repository.
+		exports, err := newDotfilesExports(cfg, pool, gh, log)
+		if err != nil {
+			return err
+		}
+		wsOpts = append(wsOpts, workspaces.WithDotfiles(exports))
+		sessOpts = append(sessOpts, sessions.WithDotfiles(exports))
 	}
 	ledger := sessions.NewLedger(cfg, pool)
 	wsSvc := workspaces.New(cfg, pool, kc, reg, creds, ledger, projectSvc, log, wsOpts...)
 	healthSvc := health.NewService(cfg, pool, kc, log)
 	live := progress.New(hub)
-	svc := sessions.NewService(cfg, pool, kc, reg, creds, healthSvc, wsSvc, live, log)
+	svc := sessions.NewService(cfg, pool, kc, reg, creds, healthSvc, wsSvc, live, log, sessOpts...)
 	hitlSvc := hitl.NewService(cfg, pool, hitl.FromClient(kc), svc, svc, svc, log)
 	schedSvc := schedules.NewService(cfg, pool, kc, reg, log)
 	previews, err := preview.New(cfg, pool, wsSvc, kc, log)

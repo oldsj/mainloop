@@ -1,8 +1,9 @@
 # Agent dotfiles
 
-Status: the source configuration is **implemented** (owner-wide and per-project, API and UI).
-Pinning, export, delivery and layout are **proposed** for
-[#313](https://github.com/oldsj/mainloop/issues/313); each section says which. See
+Status: the source configuration, and pinning, export and recording per Session, are
+**implemented**. Delivery to the agent and the read-only layout are **proposed** for
+[#313](https://github.com/oldsj/mainloop/issues/313): today a Session records the dotfiles chosen
+for it, but kagent does not receive or lay them out yet. Each section says which. See
 [ROADMAP.md](../../ROADMAP.md#agent-context) for how this fits the "Agent context" direction.
 
 Agents in Mainloop start without the owner's standing context: no owner-level instructions,
@@ -48,9 +49,11 @@ segments URL-encoded), a form for repository, ref and directory, and a button to
 Example (fictional): owner-wide `example/agent-dotfiles` at `main`, directory `home/.agents`; a
 project overriding with `example/agent-dotfiles` at `project-x-stable`.
 
-## Proposed: what is read from the directory
+## What is read from the directory
 
-Only these paths under `path` are exported; everything else in the repository is ignored.
+Implemented: only these paths under `path` are exported; everything else in the repository is
+ignored. A `skills/<name>/` directory without a `SKILL.md` at its root is not a skill and is
+ignored whole. Proposed: the destinations, which kagent lays out (see "Delivery and layout").
 
 | Source                             | Claude Code (`CLAUDE_CONFIG_DIR`)                     | Codex (`CODEX_HOME`)               |
 | ---------------------------------- | ----------------------------------------------------- | ---------------------------------- |
@@ -66,29 +69,50 @@ loads only the user setting source, which is that directory. Codex still scans `
 as a user skills root (its current docs name `~/.agents/skills`; `$CODEX_HOME/skills` is kept for
 compatibility), which does not depend on how `HOME` is set.
 
-## Proposed: pinning and export (Mainloop)
+## Implemented: pinning, export and recording (Mainloop)
 
-When Mainloop creates a kagent Session — a workspace, a coordination task's session, or the main
-thread's — it picks the effective source (the project's own, else the owner-wide one; the main
-thread uses the owner-wide one), and before the first CreateSession:
+Before Mainloop sends a kagent CreateSession for a workspace (a code or coordination task's
+session), a native agent session, or the main thread, it pins the dotfiles of that create request.
+The effective source is the session's project's own source when that names a repository, else the
+owner-wide one; the main thread has no project, so it uses the owner-wide one. Then, with no
+transaction open:
 
-1. Resolves the ref to a full commit SHA through the repository-scoped GitHub App client, as a
-   workspace's checkout ref is resolved.
-2. Fetches that commit server-side with an installation token that never leaves the server, and
-   reads the directory at that commit.
-3. Keeps only the allowed paths, and refuses the export when it holds a symlink, a submodule or any
-   other non-regular file, more than 4000 files, a file over 2 MiB, or more than 16 MiB in all.
-4. Scans exactly the exported files for secrets (private keys, provider token formats, credentials
-   in URLs, literal credential assignments). A match, or a scan that cannot finish, refuses the
-   export. Only file paths and rule names are recorded, never matched text.
-5. Writes a deterministic tar (sorted entries, modes 0444 or 0555, no times or owners), stored once
-   per `sha256` digest.
+1. The ref is resolved to a full commit SHA through the GitHub App (an empty ref is the default
+   branch).
+2. Unless that commit's directory was exported before, the commit is fetched server-side through
+   the App's git upstream (the installation token never leaves the server) and archived.
+3. Only the allowed paths are kept. The export is refused when one of them is a symlink or any
+   other non-regular file, or past the limits: more than 4000 files, a file over 2 MiB, or more
+   than 16 MiB in all. Submodules are not part of a git archive. A directory with none of the
+   allowed files is refused as `nothing_to_export`.
+4. Exactly the exported files are scanned for secrets: private keys; GitHub, AWS, Slack,
+   Anthropic, OpenAI, Google and Stripe key formats; JWTs; credentials in URLs; and a literal
+   assigned to a credential-named variable or key (`export X_TOKEN=...`, `"client_secret": "..."`;
+   `$VAR` and `${VAR}` references are not literals). Any match refuses the export. Only the file
+   path and rule name are stored, never the matched text.
+5. The kept files are written as a deterministic tar (entries sorted by path, mode 0444, or 0555
+   where git marked the file executable, no owner, every time the Unix epoch) and stored once by
+   its `sha256:` digest.
 
-The session records `{repository, ref, path, commit, digest, status, reason}`, pinned once and
-frozen: a replayed create, a replaced kagent Session or a provider switch reuses it; a fork copies
-its source session's; a task's retry or reassign is a new session and pins anew. A change to either
-source never moves a live session. The workspace manifest and the session page show the commit as
-a short SHA linked to `tree/<commit>/<path>`.
+A commit's directory always exports the same way, so a ready or refused export is kept per
+`(repository, commit, path)` and not read again; an unavailable read is not kept. Each GitHub read
+is bounded to 10 seconds, so a pin fits inside the delivery lease it runs under.
+
+The pin `{repository, ref, path, commit, digest, status, reason}` is recorded per create request,
+first write wins. A retried or replayed create therefore sends what its first attempt chose, while
+a new native Session of the same Mainloop session (a provider switch, a replacement) pins again. A
+fork records its source session's newest pin, since it starts from that Session's data. A task's
+retry or reassign is a new session and pins anew. A change to either source never moves a live
+Session.
+
+A database failure while pinning holds the create and the reconciler retries it; nothing else
+does.
+
+The session page's identity strip shows the newest pin under "details", as
+`<repository> @ <short commit>, <path>/` linked to `https://github.com/<repository>/tree/<commit>/<path>`
+with the digest on hover, or the reason there is none. `GET /sessions/{session_id}/native` carries it
+as `dotfiles` (absent for a Session created before pins were recorded, or on a server without a
+GitHub App).
 
 ## Proposed: delivery and layout (kagent)
 
@@ -106,7 +130,7 @@ since the agent runs as the same user. The agent's own compiler-selected skills 
 with a dotfiles skill. Everything lives under `/data`, so a Data snapshot carries the laid-out files
 into a fork, consistent with the fork keeping its source's commit.
 
-## Proposed: failures
+## Implemented: failures
 
 Dotfiles are context, not a precondition. None of these blocks session creation; the session runs
 without dotfiles and records the reason where the commit would show:
@@ -117,7 +141,8 @@ without dotfiles and records the reason where the commit would show:
 | App not installed on the repository, or unreachable | `unavailable` | `app_not_installed`, `repository_unavailable` |
 | Ref does not exist                                  | `unavailable` | `ref_not_found`                               |
 | Over a limit, or a non-regular file                 | `refused`     | `over_limits`, `unsupported_file`             |
-| Secret found, or scan failed                        | `refused`     | `secret_found`, `scan_failed`                 |
+| None of the allowed files in the directory          | `refused`     | `nothing_to_export`                           |
+| Secret found                                        | `refused`     | `secret_found`                                |
 
 ## Precedence
 
@@ -147,7 +172,8 @@ So a dotfiles skill should not reuse the name of a repository's skill.
   without dotfiles.
 - Whether to also map `agents/*.toml` to Codex custom agents.
 - Garbage collection of bundles no session references.
-- Live proof: none of the proposed behavior has run against real CLIs. It needs a main-thread and a
+- Live proof: nothing here has run against GitHub or real CLIs; the export is tested with a local
+  git repository and fakes. It needs a main-thread and a
   workspace session on mainloop-dev with a fictional dotfiles repository, checking that each CLI
   loads the instructions and skills, that the files are not writable, and that the session shows
   the commit.

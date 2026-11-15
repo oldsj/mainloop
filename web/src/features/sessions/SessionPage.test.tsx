@@ -449,6 +449,69 @@ describe('identity strip', () => {
     expect(screen.getByTestId('id-turns')).toHaveTextContent('4');
   });
 
+  it('shows the pinned dotfiles commit, linked, with the digest on hover', async () => {
+    const commit = 'a1b2c3d'.padEnd(40, '0');
+    const digest = `sha256:${'ab'.repeat(32)}`;
+    server.use(
+      ...serveSession(
+        session({ id: 's1' }),
+        native({
+          session_id: 's1',
+          dotfiles: {
+            status: 'ready',
+            reason: '',
+            repository: 'example/dotfiles',
+            ref: 'main',
+            path: 'home/.agents',
+            commit,
+            digest
+          }
+        })
+      )
+    );
+    const user = userEvent.setup();
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    await user.click(await screen.findByTestId('identity-toggle'));
+
+    const link = within(screen.getByTestId('id-dotfiles')).getByRole('link');
+    expect(link).toHaveTextContent('example/dotfiles @ a1b2c3d, home/.agents/');
+    expect(link).toHaveAttribute(
+      'href',
+      `https://github.com/example/dotfiles/tree/${commit}/home/.agents`
+    );
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(link).toHaveAttribute('title', digest);
+  });
+
+  it('says why a session has no dotfiles', async () => {
+    server.use(
+      ...serveSession(
+        session({ id: 's1' }),
+        native({
+          session_id: 's1',
+          dotfiles: {
+            status: 'refused',
+            reason: 'secret_found',
+            repository: 'example/dotfiles',
+            ref: '',
+            path: '',
+            commit: 'f'.repeat(40),
+            digest: null
+          }
+        })
+      )
+    );
+    const user = userEvent.setup();
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    await user.click(await screen.findByTestId('identity-toggle'));
+
+    expect(screen.getByTestId('id-dotfiles')).toHaveTextContent(
+      'example/dotfiles @ fffffff: refused, a possible secret was found'
+    );
+  });
+
   it('shows a failed last delivery as a problem, never as ready', async () => {
     server.use(
       ...serveSession(
