@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fieldText, runDefaults, runNotes, sourceWords } from './runDefaults';
+import { fieldText, runDefaults, runNotes, runRecorded, sourceWords } from './runDefaults';
 
 const workerOpus = [
   { role: 'worker' as const, provider: 'claude', model: 'claude-opus-5', effort: 'high' as const }
@@ -99,5 +99,22 @@ describe('how the composer says it', () => {
     );
     expect(fieldText({ value: 'high', source: 'role' }, 'worker')).toBe('high (worker default)');
     expect(fieldText({ value: null, source: 'provider' }, 'worker')).toBe('default');
+  });
+});
+
+describe('what the chip falls back on while the runner is silent', () => {
+  it('gives the recorded values, and nothing for a part that is the provider’s', () => {
+    expect(
+      runRecorded({
+        model: { value: 'claude-opus-5-5', source: 'session' },
+        effort: { value: 'high', source: 'role' }
+      })
+    ).toEqual({ model: 'claude-opus-5-5', effort: 'high' });
+    expect(
+      runRecorded({
+        model: { value: null, source: 'provider' },
+        effort: { value: null, source: 'provider' }
+      })
+    ).toEqual({});
   });
 });

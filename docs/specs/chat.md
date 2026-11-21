@@ -104,6 +104,11 @@ default for its role and provider, or the provider. The composer names it, per f
   choice reads `(this session)`. The provider's own is not noted: a chip with no note is the
   provider's. When the model and the effort come from different places, each part that is not the
   provider's carries its own note: `opus-5-5 (this session) · high (worker default)`.
+  The model and effort are the runner's own word while the view is attached. While the session is
+  asleep or has ended the runner says nothing, so the chip shows what Mainloop has on record (the
+  session's own choice, else the owner's default); a part that is the provider's own, which
+  Mainloop is not told, is left out. The chip never shows a placeholder: with nothing to name it
+  reads **Model and effort**.
 - **Chat view:** the line under the box reads `model: claude-opus-5 (main default) · effort: default`.
   A session's own choice is shown bare, a role default with whose it is, and the provider's as
   `default`, since nothing is sent for it.
