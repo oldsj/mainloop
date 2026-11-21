@@ -47,8 +47,28 @@ describe('workGroup', () => {
   });
 
   it('puts failed and blocked tasks in Blocked or failed', () => {
-    expect(workGroup(view({ status: 'failed' }), LAST_VISIT)).toBe('blocked');
-    expect(workGroup(view({ status: 'blocked' }), LAST_VISIT)).toBe('blocked');
+    expect(workGroup(view({ status: 'failed' }), LAST_VISIT, NOW)).toBe('blocked');
+    expect(workGroup(view({ status: 'blocked' }), LAST_VISIT, NOW)).toBe('blocked');
+  });
+
+  it('gives a failed task that asks nothing no group once it is over seven days old', () => {
+    // Given a failed task that can still be retried.
+    const DAY = 24 * 60 * MIN;
+    const failedAt = (daysAgo: number) =>
+      view({ status: 'failed', updated_at: new Date(NOW - daysAgo * DAY).toISOString() });
+
+    // Then it counts for seven days, and not after.
+    expect(workGroup(failedAt(7), LAST_VISIT, NOW)).toBe('blocked');
+    expect(workGroup(failedAt(8), LAST_VISIT, NOW)).toBeNull();
+    // A blocked task is still alive, however long it has waited.
+    const blocked = view({ status: 'blocked', updated_at: new Date(NOW - 30 * DAY).toISOString() });
+    expect(workGroup(blocked, LAST_VISIT, NOW)).toBe('blocked');
+  });
+
+  it('keeps an old failed task that asks the owner something in Needs you', () => {
+    const old = new Date(NOW - 30 * 24 * 60 * MIN).toISOString();
+    const asking = view({ status: 'failed', reason: 'owner_decision', updated_at: old });
+    expect(workGroup(asking, LAST_VISIT, NOW)).toBe('needs-you');
   });
 
   it('gives a failed task with nothing left to do no group at all', () => {

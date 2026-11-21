@@ -16,6 +16,9 @@ import type {
 
 export const NOW = Date.parse('2026-01-01T12:00:00Z');
 
+/** A timestamp for a rendered test, where the app reads the real clock: this instant. */
+export const justNow = () => new Date().toISOString();
+
 export function task(overrides: Partial<Task> = {}): Task {
   return {
     id: 'task-1',

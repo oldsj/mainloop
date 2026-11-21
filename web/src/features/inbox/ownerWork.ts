@@ -3,8 +3,9 @@
  * counts it: the tree's groups, the status bar, the Inbox badge and the Inbox's own two views.
  *
  * `/attention` lists the owner's open actions. A task can also need a decision that `/attention`
- * does not list (a failed task that can be retried, a pull request waiting to be merged), so those
- * tasks follow the listed items. Pure, so the rule tests without a QueryClient.
+ * does not list (a task that failed in the last seven days and can be retried, a pull request
+ * waiting to be merged), so those tasks follow the listed items. Pure, so the rule tests without a
+ * QueryClient.
  */
 import { isHeld, workGroup } from '@/features/home/model';
 import { useTaskList } from '@/features/tasks/queries';
@@ -42,7 +43,7 @@ export function ownerWork(
   );
   for (const view of newestFirst) {
     if (named.has(view.task.id)) continue;
-    const group = workGroup(view, null);
+    const group = workGroup(view, null, now);
     // A task the main thread set aside is out of the owner's way until its time passes.
     if ((group === 'needs-you' || group === 'blocked') && !isHeld(view, now)) needsTasks.push(view);
     if (group === 'problem') problemTasks.push(view);

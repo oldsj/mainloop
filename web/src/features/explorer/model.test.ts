@@ -8,7 +8,7 @@ import {
 import { keepValid, projectRowSchema } from '@/features/projects/model';
 import { project } from '@/features/projects/test/fixtures';
 import { schedule } from '@/features/schedules/test/fixtures';
-import { projection, view } from '@/test/fixtures/tasks';
+import { NOW, projection, view } from '@/test/fixtures/tasks';
 import {
   askPrefill,
   briefSnippet,
@@ -146,8 +146,31 @@ describe('failed tasks', () => {
       { id: 'actionable', status: 'failed' },
       { actions: { ...NO_ACTIONS, cancel: { available: true, reason: null } } }
     );
-    const nodes = buildExplorer(source({ tasks: [actionable] }));
+    const nodes = buildExplorer(source({ tasks: [actionable], now: NOW }));
     expect(needsCount(nodes)).toBe(1);
+  });
+
+  it('drops a failure nobody retried from Needs you after seven days, and keeps it under its project', () => {
+    // Given a failed task that can still be retried and last changed a month ago.
+    const stale = view(
+      {
+        id: 'stale',
+        status: 'failed',
+        project_id: 'p1',
+        updated_at: new Date(NOW - 33 * 24 * 60 * 60 * 1000).toISOString()
+      },
+      { actions: { ...NO_ACTIONS, retry: { available: true, reason: null } } }
+    );
+    const repo = { ...project({ id: 'p1' }) };
+
+    // When the tree is built.
+    const nodes = buildExplorer(source({ tasks: [stale], projects: [repo], now: NOW }));
+
+    // Then it does not need the owner, is not "finished recently", and is still listed in its project.
+    expect(needsCount(nodes)).toBe(0);
+    expect(nodes.find((node) => node.id === 'finished')?.children).toHaveLength(0);
+    const projects = nodes.find((node) => node.id === 'projects');
+    expect(projects?.children[0]?.children.map((node) => node.label)).toEqual([stale.task.title]);
   });
 
   it('lists a failed task with nothing left to do under Finished recently, within the window', () => {

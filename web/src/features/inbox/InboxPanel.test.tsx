@@ -9,7 +9,7 @@ import { createFakeHITL } from '@/features/hitl/handlers';
 import { forgetAnswered } from '@/features/hitl/hitl-client';
 import { server } from '@/test/msw/server';
 import { hitlView } from '@/test/fixtures/hitl';
-import { view } from '@/test/fixtures/tasks';
+import { justNow, view } from '@/test/fixtures/tasks';
 import { tasksList } from '@/features/tasks/test/handlers';
 import {
   activityRow,
@@ -227,7 +227,9 @@ describe('tasks that need a decision without an item of their own', () => {
     server.use(
       attentionRead(() => HttpResponse.json(attentionSnapshot([question]))),
       tasksList(() =>
-        HttpResponse.json([view({ id: 'task-f', title: 'Fix CI flake', status: 'failed' })])
+        HttpResponse.json([
+          view({ id: 'task-f', title: 'Fix CI flake', status: 'failed', updated_at: justNow() })
+        ])
       )
     );
     renderInbox();
@@ -247,7 +249,9 @@ describe('tasks that need a decision without an item of their own', () => {
     server.use(
       attentionRead(() => HttpResponse.json(attentionSnapshot([]))),
       tasksList(() =>
-        HttpResponse.json([view({ id: 'task-f', title: 'Fix CI flake', status: 'failed' })])
+        HttpResponse.json([
+          view({ id: 'task-f', title: 'Fix CI flake', status: 'failed', updated_at: justNow() })
+        ])
       )
     );
     renderInbox();

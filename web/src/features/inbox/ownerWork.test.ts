@@ -47,6 +47,28 @@ describe('owner work', () => {
     expect(needsTotal(ownerWork([], [held], NOW + 120_000))).toBe(1);
   });
 
+  it('leaves out a failure nobody retried once it is over seven days old', () => {
+    // Given two failed tasks that can still be retried, one from yesterday and one from last month.
+    const DAY = 24 * 60 * 60 * 1000;
+    const recent = view({
+      id: 'recent',
+      status: 'failed',
+      updated_at: new Date(NOW - DAY).toISOString()
+    });
+    const stale = view({
+      id: 'stale',
+      status: 'failed',
+      updated_at: new Date(NOW - 33 * DAY).toISOString()
+    });
+
+    // When the owner's work is listed.
+    const work = ownerWork([], [stale, recent], NOW);
+
+    // Then only yesterday's failure needs them.
+    expect(work.needsTasks.map((task) => task.task.id)).toEqual(['recent']);
+    expect(needsTotal(work)).toBe(1);
+  });
+
   it('leaves out work that is running, finished, or failed with nothing left to do', () => {
     const none = { available: false, reason: 'cancel_unavailable' } as const;
     const tasks = [
