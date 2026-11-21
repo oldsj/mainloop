@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection } from '@/api';
+import { backendUnreachable } from '@/test/offline';
 import { API_URL } from '@/api/config';
 import { createFakeHITL } from '@/features/hitl/handlers';
 import { hitlView } from '@/test/fixtures/hitl';
@@ -359,7 +360,7 @@ describe('cancel', () => {
   });
 
   it('is disabled while the backend is unreachable', async () => {
-    connection.reportFailure();
+    await backendUnreachable();
     server.use(
       ...serveSession(
         session({ id: 's1', status: 'active' }),

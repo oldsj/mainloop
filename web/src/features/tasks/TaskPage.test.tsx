@@ -4,6 +4,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection } from '@/api';
+import { backendUnreachable } from '@/test/offline';
 import { createSseApplier } from '@/api/invalidation';
 import { server } from '@/test/msw/server';
 import type { TaskView } from '@/lib/contract';
@@ -993,8 +994,8 @@ describe('owner actions', () => {
     renderTasks('/tasks/task-1');
     expect(await screen.findByTestId('task-action-retry')).toBeEnabled();
 
-    // Nothing is probed here: the store is only told the connection failed, and it is never restarted.
-    act(() => connection.reportFailure());
+    // The probe finds the backend gone. The store is never restarted, so it stays offline.
+    await act(() => backendUnreachable());
 
     expect(await screen.findAllByText('Mainloop is offline.')).not.toHaveLength(0);
     expect(screen.getByTestId('task-action-retry')).toBeDisabled();
