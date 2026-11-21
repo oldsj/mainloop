@@ -19,7 +19,7 @@ import {
 } from '@/lib/taskState';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { isTaskView, readableView } from './cache';
-import { taskLoadFailure, type LoadFailure } from './model';
+import { publicationAsk, taskLoadFailure, type LoadFailure } from './model';
 import {
   sendTaskAction,
   UnreadablePayloadError,
@@ -163,6 +163,7 @@ export function TaskPage({ id }: { id: string }) {
       {view.task.owner_decision ? (
         <OwnerAskBanner action={view.task.owner_decision.action} />
       ) : null}
+      <PublicationBanner view={view} />
       <TaskActions
         view={view}
         tracker={tracker}
@@ -285,6 +286,46 @@ function OwnerAskBanner({ action }: { action: string }) {
       >
         {action}
       </h2>
+    </section>
+  );
+}
+
+/**
+ * Where a task that waits on publication stands, and what moves it on. "Awaiting publication"
+ * alone does not say that nothing more happens by itself, or what to do about it.
+ */
+function PublicationBanner({ view }: { view: TaskView }) {
+  const ask = publicationAsk(view);
+  if (!ask) return null;
+  return (
+    <section
+      aria-labelledby="publication-ask-heading"
+      data-testid="task-publication-ask"
+      data-kind={ask.kind}
+      className={cn(
+        'gap-xs p-md flex flex-col border-l-2',
+        ask.needsOwner ? 'border-status-attention' : 'border-border'
+      )}
+    >
+      <h2
+        id="publication-ask-heading"
+        className="text-muted-foreground text-2xs font-medium tracking-wide uppercase"
+      >
+        {ask.needsOwner ? 'Needs you' : 'Waiting on its pull request'}
+      </h2>
+      <p className="text-sm break-words">{ask.text}</p>
+      {ask.prUrl ? (
+        <p className="text-sm">
+          <a
+            href={ask.prUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="min-h-control inline-flex items-center underline"
+          >
+            {ask.prNumber != null ? `Open PR #${ask.prNumber} on GitHub` : 'Open the pull request'}
+          </a>
+        </p>
+      ) : null}
     </section>
   );
 }

@@ -5,6 +5,7 @@
  */
 import type { TaskProjection, TaskView } from '@/lib/contract';
 import type { ActionIntent, ActionOutcome } from '@/lib/taskActions';
+import { httpsUrl } from '@/lib/url';
 
 export type NoticeTone = 'info' | 'warn' | 'error';
 
@@ -70,6 +71,70 @@ export const FIXED_RETRY = 'I fixed it. Retry this task.';
 export function waitsOnOwner(view: TaskView): boolean {
   const { status, owner_decision } = view.task;
   return owner_decision != null || status === 'blocked' || status === 'failed';
+}
+
+/** What a task that waits on publication needs, in the owner's words, and its pull request to open. */
+export interface PublicationAsk {
+  /** Which case this is, for tests and for the banner's tone. */
+  kind: 'ready' | 'merged' | 'closed' | 'none';
+  /** True when only the owner can move it: the banner then leads as "Needs you". */
+  needsOwner: boolean;
+  text: string;
+  prNumber: number | null;
+  prUrl: string | null;
+}
+
+/**
+ * A code task whose agent reported `completed` waits on publication: it completes only when its
+ * own pull request is merged by a merge its own session proposed (docs/specs/tasks.md). The page
+ * said only "awaiting publication". This says where the pull request stands and what moves the
+ * task on, for the states where nothing more happens on its own:
+ *
+ * - open with CI passed and no merge proposed: someone has to ask for the merge;
+ * - merged: complete within a minute if the task's own merge did it, else never;
+ * - closed without merging, or no pull request at all: nothing is left to merge.
+ *
+ * While CI is still running or failed, or a merge is under way, there is nothing to ask: null.
+ */
+export function publicationAsk(view: TaskView): PublicationAsk | null {
+  if (view.task.status !== 'waiting' || view.task.reason !== 'publication') return null;
+  const p = view.projection;
+  const prNumber = p.pr_number ?? null;
+  const pr = prNumber != null ? `PR #${prNumber}` : 'The pull request';
+  // The link is the server's; only an https URL is offered as one.
+  const base = { prNumber, prUrl: httpsUrl(p.pr_url) };
+  if (p.pr_state === 'merged') {
+    return {
+      ...base,
+      kind: 'merged',
+      needsOwner: false,
+      text: `${pr} is merged. If this task's own agent merged it, the task completes within a minute. If it was merged another way (on GitHub, or by another session), the task cannot complete on its own: cancel it to close it.`
+    };
+  }
+  if (p.pr_state === 'closed') {
+    return {
+      ...base,
+      kind: 'closed',
+      needsOwner: false,
+      text: `${pr} was closed without merging, so this task will keep waiting. Ask its agent in a follow-up to open a new one, or cancel the task.`
+    };
+  }
+  if (p.pr_state === 'open') {
+    if (p.ci_state !== 'success' || p.merge_proposal_id) return null;
+    return {
+      ...base,
+      kind: 'ready',
+      needsOwner: true,
+      text: `${pr} is open and CI passed. Nothing merges it on its own. Ask this task's agent in a follow-up to merge it, so the task completes when the merge lands, or cancel the task if it should not land.`
+    };
+  }
+  if (prNumber != null || p.pr_url) return null;
+  return {
+    ...base,
+    kind: 'none',
+    needsOwner: false,
+    text: 'The agent reported this task finished, but no pull request is linked to it. A code task completes when its own pull request is merged, so this one will keep waiting. Ask its agent in a follow-up to open one, or cancel the task if there is nothing to publish.'
+  };
 }
 
 /**
