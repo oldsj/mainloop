@@ -1,13 +1,13 @@
 # web
 
-The Mainloop frontend: React 19, TypeScript (strict), Vite 7, Tailwind v4 and shadcn/ui. It replaces the frozen SvelteKit app in `frontend/`.
+The Mainloop frontend: React 19, TypeScript (strict), Vite 8, Tailwind v4 and shadcn/ui.
 
 ## Commands
 
 Run from `web/` with the workspace binaries (the repo avoids `pnpm exec`, which rewrites the lockfile):
 
 ```bash
-pnpm install                          # from the repository root
+corepack pnpm install                 # from the repository root, with Node 26 or later
 node_modules/.bin/vite                # dev server, http://127.0.0.1:5173
 node_modules/.bin/tsc -b              # type check
 node_modules/.bin/eslint .            # lint, including the tokens-only rule
@@ -19,6 +19,8 @@ node design/build.ts                  # regenerate src/styles/theme.css from des
 
 CI runs all of these and fails if `gen` or the design build leave a diff.
 
+The repository pins its pnpm version in `packageManager`, and `corepack` runs that one. An older global `pnpm` stops with `ERR_PNPM_BROKEN_LOCKFILE`.
+
 ## Running locally
 
 There are two ways to get an API behind the dev server. Both leave the app calling `/api/...`.
@@ -26,6 +28,8 @@ There are two ways to get an API behind the dev server. Both leave the app calli
 **Against the Go server.** Start `serve-api` (see `server/README.md`) on `127.0.0.1:8000`, then run `vite`. The dev server forwards `/api` to `http://127.0.0.1:8000` with the prefix stripped. Set `MAINLOOP_API_PROXY` to use another address.
 
 **With fixtures (no backend).** `VITE_MSW=1 node_modules/.bin/vite` starts a Mock Service Worker in the browser. The default responses live in `src/test/msw/handlers.ts`; the same handlers back the Vitest suite. Feature slices add their fixtures next to them.
+
+The default fixtures are empty. `VITE_MSW=1 VITE_MSW_SEED=review node_modules/.bin/vite` adds data for looking at the app in a browser (`src/test/msw/review-seed.ts`): tasks in every explorer group, a project page, a blocked task and more Needs-you rows than fit on a phone. `?seed=review` does the same for one page load only, so use the variable when you will open more than one URL. `?live=1` opens a session's live channel against a fake runner, and `?hitl=request` opens a pending approval card.
 
 `VITE_API_URL` sets the API base URL at build time. It defaults to `/api`.
 
@@ -48,7 +52,7 @@ There are two ways to get an API behind the dev server. Both leave the app calli
 - **Calls go through the generated client.** Use `$api.useQuery('get', '/path', ...)` from `src/api`. Do not hand-write endpoints or query keys: use the `keys` factory for invalidation, `setQueryData` and `getQueryData`.
 - **Errors are typed.** The client middleware throws `ApiError`, `TaskApiError` (task routes, with the backend's `reason`) or `SendError` (message sends). A request with no HTTP response is reported to the connection state, which drives the offline banner.
 - **Live updates.** `src/shell/LiveUpdates.tsx` opens `/events` (SSE with `Last-Event-ID`) and applies the invalidation map in `src/api/invalidation.ts`. A reconnect refetches everything.
-- **Views.** Wide screens (≥ 1024 px) get the desktop shell, narrower ones the compact shell with a bottom tab bar. `?view=desktop|compact` overrides the viewport and `?tab=chat|sessions|inbox` picks the compact pane.
+- **Views.** Wide screens (≥ 1024 px) get the desktop shell, narrower ones the compact shell with a bottom tab bar. `?view=desktop|compact` overrides the viewport and `?tab=chat|explorer` picks the compact pane (the older `sessions`, `inbox` and `projects` values still open the explorer).
 - **Themes.** `data-theme` on `<html>`, set before first paint by `public/theme-init.js` from `localStorage` (`mainloop-theme`). The default `eighties` theme is the `:root` block, so it has no attribute.
 
 ## Adding a shadcn component
@@ -65,4 +69,4 @@ cd serve && go test ./... && go vet ./...
 
 ## Playwright
 
-`playwright.config.ts` defines a desktop and a Pixel 5 project against the MSW dev server. The journeys land with the end-to-end slice.
+`playwright.config.ts` defines a desktop and a Pixel 5 project against the MSW dev server, reading tests from `e2e/`. That directory does not exist yet, and no CI job runs Playwright.
