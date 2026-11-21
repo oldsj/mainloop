@@ -99,8 +99,28 @@ describe('row copy', () => {
   it('shows Unavailable for an unknown count and Unassigned for a row with no task', () => {
     expect(countText(null)).toBe('Unavailable');
     expect(countText(1200)).toBe('1,200');
-    expect(rowTitle(row({ title: null, task_id: null }))).toBe('Unassigned');
+    expect(rowTitle(row({ title: null, task_id: null, sessions: [] }))).toBe('Unassigned');
     expect(rowTitle(row({ title: null, task_id: 'task-9' }))).toBe('task-9');
+  });
+
+  it('names a row with no task after its session, so two such rows can be told apart', () => {
+    // Given two sessions with no product task, which the server both titles "Unassigned".
+    const canary = (title: string | null) =>
+      row({
+        title: 'Unassigned',
+        task_id: null,
+        sessions: [{ ...row({}).sessions[0]!, session_id: 's1', title }]
+      });
+
+    // Then each takes its session's name, and one without a name stays "Unassigned".
+    expect(rowTitle(canary('Mainloop canary 15:40'))).toBe('Mainloop canary 15:40');
+    expect(rowTitle(canary('Mainloop canary 15:20'))).toBe('Mainloop canary 15:20');
+    expect(rowTitle(canary(null))).toBe('Unassigned');
+    expect(rowTitle(canary('  '))).toBe('Unassigned');
+    // A task row keeps the task's title, whatever its sessions are called.
+    expect(
+      rowTitle(row({ title: 'Fix CI', task_id: 't1', sessions: canary('Worker').sessions }))
+    ).toBe('Fix CI');
   });
 
   it('reads gap names and claim state in plain words', () => {

@@ -10,7 +10,10 @@ import {
   gapText,
   type HealthRow,
   reportText,
+  isUnassigned,
+  NO_TASK,
   rowTitle,
+  UNASSIGNED,
   sessionLine,
   unreadableClaimsText,
   usageLine
@@ -44,7 +47,15 @@ export function HealthRowCard({
         className="min-h-control block w-full text-left"
       >
         <span className="gap-sm flex flex-wrap items-center justify-between">
-          <span className="font-medium break-words">{rowTitle(row)}</span>
+          <span className="gap-x-sm flex min-w-0 flex-wrap items-baseline">
+            <span className="font-medium break-words">{rowTitle(row)}</span>
+            {/* A session's own name does not say it has no task; "Unassigned" already does. */}
+            {isUnassigned(row) && rowTitle(row) !== UNASSIGNED ? (
+              <span className="text-muted-foreground text-xs" data-testid="health-row-no-task">
+                {NO_TASK}
+              </span>
+            ) : null}
+          </span>
           <span className="text-muted-foreground text-xs">
             {coverageText(totals.coverage)} · Details
           </span>

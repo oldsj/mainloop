@@ -247,7 +247,25 @@ export function countText(value: number | null): string {
   return value === null ? 'Unavailable' : value.toLocaleString();
 }
 
+/** What a row for a session with no product task says beside its title. */
+export const NO_TASK = 'No task';
+
+/** A row with no product task: one session of the owner's (the main thread, the canary). */
+export function isUnassigned(row: HealthRow): boolean {
+  return row.task_id == null;
+}
+
+/**
+ * A row's title. Each session with no product task is a row of its own, and the server titles
+ * every one of them "Unassigned", so two such rows could not be told apart. Such a row takes its
+ * session's title when it has exactly one that is named; `NO_TASK` beside it says what kind of row
+ * it is. With no name to use it stays "Unassigned".
+ */
 export function rowTitle(row: HealthRow): string {
+  if (isUnassigned(row)) {
+    const named = row.sessions.map((session) => session.title?.trim()).filter(Boolean);
+    if (named.length === 1 && named[0]) return named[0];
+  }
   return row.title ?? row.task_id ?? UNASSIGNED;
 }
 

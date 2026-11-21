@@ -88,7 +88,8 @@ required to outlive detail. Independent report/decision/conversation retention i
 owner, including filter authorization. The `/health` page defaults to 24 hours; filters cover
 project, product task, attempt, session and provider. It shows distinct failures, groups of three or more failed calls,
 reported input/output, coverage, existing blocked/failed report IDs and approval state. Main and
-owner sessions without product tasks appear as **Unassigned**. Product child tasks remain
+owner sessions without product tasks have a row each, titled with the session's own name and marked
+**No task** (**Unassigned** when the session has no name), so two of them can be told apart. Product child tasks remain
 separate rows, so their totals are not added to the parent's reported root total. Unknown metrics
 show **Unavailable**; partial sources and supported-versus-observed turn coverage stay explicit.
 Collection gaps count only for receipts or turns inside the selected window. Task, session and
@@ -118,7 +119,7 @@ Implemented in the React client:
 - Changing the project, provider or window clears the task, session and attempt in the draft, since
   each belongs to one scope. Nothing is written until Apply.
 - Rows sort by failures, most first, with unknown counts last. An unknown count shows
-  "Unavailable". A row with no task or title shows "Unassigned".
+  "Unavailable". A row with no task takes its session's title, with "No task" beside it; with no title either it shows "Unassigned".
 - Each row is checked on its own. A malformed row is dropped and counted; the others render. A row
   whose id repeats an earlier row is dropped and counted separately, with its own notice.
 - Each report and approval is checked on its own. A malformed one is left out of its row, and the
@@ -139,7 +140,7 @@ Native session identity polls only while a turn is in flight.
 
 One owner-scoped **Orchestration health** page, reachable from the project and session views,
 defaults to the last 24 hours. Filter by project, product task, attempt, agent session and
-provider. A session without a product task stays visible as **Unassigned**. Mobile starts
+provider. A session without a product task stays visible under its own name, marked **No task**. Mobile starts
 with totals and task rows; selecting a row reveals its observations and coverage.
 
 1. **Friction:** failed tool attempts by category, permission denials when explicitly known,
