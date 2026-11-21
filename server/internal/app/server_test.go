@@ -283,6 +283,24 @@ func TestGuardsApplyToTheAPI(t *testing.T) {
 	})
 }
 
+func TestAPIResponsesPassThroughCompression(t *testing.T) {
+	t.Parallel()
+	// Given the owner API as it is served.
+	h := newHandler(t, nil, up())
+
+	// When a browser that accepts gzip reads a small answer.
+	r := send(h, "GET", "/health", "", map[string]string{"Accept-Encoding": "gzip"})
+
+	// Then the answer says it depends on the header, and a body this small is sent as written.
+	// CORS adds its own Vary value first, so every value is read.
+	if got := strings.Join(r.header.Values("Vary"), ", "); !strings.Contains(got, "Accept-Encoding") {
+		t.Errorf("Vary = %q: the compression middleware is not in the chain", got)
+	}
+	if r.status != 200 || r.header.Get("Content-Encoding") != "" || !strings.Contains(r.body, `"status":"healthy"`) {
+		t.Errorf("got %d, encoding %q, body %s", r.status, r.header.Get("Content-Encoding"), r.body)
+	}
+}
+
 func TestStubHandler(t *testing.T) {
 	t.Parallel()
 	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k"})
