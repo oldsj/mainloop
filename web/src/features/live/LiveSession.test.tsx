@@ -9,12 +9,13 @@ import { server } from '@/test/msw/server';
 import { useSessionRequests } from '@/features/hitl/session-requests';
 import { createFakeRunner, type FakeRunner } from './fakeRunner';
 import { LiveSession, controlsLabel } from './LiveSession';
+import type { HistoryMessage } from './store';
 import { LIVE_SUBPROTOCOL, LIVE_TIMING, liveDeps, liveUrl, type LiveDeps } from './useLiveSession';
 
 /** What Mainloop reports about session s1: kagent's current_active (null: no association) and its record. */
 const world: {
   active: boolean | null;
-  messages: { role: 'user' | 'assistant'; content: string }[];
+  messages: HistoryMessage[];
   nativeReads: number;
 } = { active: true, messages: [], nativeReads: 0 };
 
@@ -679,6 +680,40 @@ describe('live session', () => {
       );
       await pause(200);
       expect(runner.attaches).toHaveLength(0);
+    });
+
+    it('keeps a long one-line tool result to one line until the call is opened', async () => {
+      // Given a record with a tool call whose result is one long line of JSON.
+      const blob = JSON.stringify({ summary: 'x'.repeat(3000), task_status: 'waiting' });
+      world.active = false;
+      world.messages = [
+        { role: 'user', content: 'report it' },
+        {
+          role: 'tool',
+          name: 'report',
+          input: { outcome: 'completed' },
+          result: blob,
+          error: false
+        },
+        { role: 'tool', name: 'Bash', input: { command: 'ls' }, result: 'a\nb\nc', error: false }
+      ];
+
+      // When the session opens.
+      const { user } = setup();
+      await conn('asleep');
+      const [report, bash] = await screen.findAllByTestId('live-tool');
+
+      // Then the result is held to one truncated line, and the line count is still in view.
+      const closed = within(report!).getByTestId('live-tool-out');
+      expect(closed.className).not.toMatch(/whitespace-pre-wrap/);
+      expect(within(closed).getByText(blob)).toHaveClass('truncate');
+      expect(bash).toHaveTextContent('⎿ a … +2 lines');
+
+      // And opening the call shows all of it, wrapped.
+      await user.click(report!);
+      const opened = within(report!).getByTestId('live-tool-out');
+      expect(opened).toHaveClass('whitespace-pre-wrap');
+      expect(opened).toHaveTextContent(blob);
     });
 
     it("leads with the owner's message, and folds away the context Mainloop sent with it", async () => {
