@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { keys } from '@/api';
+import { eventStream } from '@/api/eventStream';
 import { useOwnerTaskPoll } from '@/features/tasks/queries';
 import * as polling from '@/lib/visiblePolling';
 import { useActivityPoll, useAttentionPoll } from './poll';
@@ -41,6 +42,7 @@ function harness() {
 }
 
 afterEach(() => {
+  eventStream.set('closed');
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -89,4 +91,50 @@ it('does not start the owner-task poll for a noncompact badge', async () => {
   expect(reads).not.toHaveBeenCalled();
   mounted.unmount();
   client.clear();
+});
+
+describe('the owner-task poll and the event stream', () => {
+  it('reads every 30 s while the stream is open, with no extra read when it opens', async () => {
+    // Given a visible page whose first poll has read the list.
+    const { client, reads, wrapper, visibility, tick } = harness();
+    const mounted = renderHook(() => useOwnerTaskPoll(true), { wrapper });
+    act(() => visibility(false));
+    await tick(0);
+    expect(reads).toHaveBeenCalledTimes(1);
+
+    // When the event stream opens.
+    act(() => eventStream.set('open'));
+    await tick(0);
+
+    // Then the list is not read again until 30 s have passed, and then every 30 s.
+    await tick(29_000);
+    expect(reads).toHaveBeenCalledTimes(1);
+    await tick(1_000);
+    expect(reads).toHaveBeenCalledTimes(2);
+    await tick(30_000);
+    expect(reads).toHaveBeenCalledTimes(3);
+    mounted.unmount();
+    client.clear();
+  });
+
+  it('reads at once and every 4 s again when the stream drops', async () => {
+    // Given a visible page with the stream open.
+    const { client, reads, wrapper, visibility, tick } = harness();
+    act(() => eventStream.set('open'));
+    const mounted = renderHook(() => useOwnerTaskPoll(true), { wrapper });
+    act(() => visibility(false));
+    await tick(5_000);
+    const before = reads.mock.calls.length;
+
+    // When the stream drops and reconnects are under way.
+    act(() => eventStream.set('connecting'));
+    await tick(0);
+
+    // Then the list is read straight away, and every 4 s after.
+    expect(reads).toHaveBeenCalledTimes(before + 1);
+    await tick(4_000);
+    expect(reads).toHaveBeenCalledTimes(before + 2);
+    mounted.unmount();
+    client.clear();
+  });
 });

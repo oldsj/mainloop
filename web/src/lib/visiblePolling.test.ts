@@ -186,3 +186,33 @@ test('hiding and last-unmount cancel active reads and clear queued work', async 
   expect(time.timers.size).toBe(0);
   expect(time.listeners.size).toBe(0);
 });
+
+test('a watch can read less often, skip its first read, and shares the shortest interval', async () => {
+  // Given a slow watch that was told the data is fresh.
+  const time = clock(),
+    polls = createVisiblePolling(time.env);
+  let reads = 0;
+  const read = async () => {
+    reads++;
+  };
+  const stopSlow = polls.watch('list', read, { everyMs: 30000, afterFirstInterval: true });
+
+  // Then it first reads one interval in, and then at that interval.
+  await time.tick(29999);
+  expect(reads).toBe(0);
+  await time.tick(1);
+  expect(reads).toBe(1);
+  await time.tick(30000);
+  expect(reads).toBe(2);
+
+  // When another mount of the same key asks for the default pace.
+  const stopFast = polls.watch('list', read);
+  await time.tick(30000);
+
+  // Then the shared read keeps its place and repeats at the shorter interval from there on.
+  expect(reads).toBe(3);
+  await time.tick(4000);
+  expect(reads).toBe(4);
+  stopSlow();
+  stopFast();
+});
