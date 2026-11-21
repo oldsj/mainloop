@@ -158,6 +158,8 @@ type Kagent interface {
 	ObserveSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	DeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	ForceDeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
+	// RevertSession recovers a Session whose runtime crashed; see [kagent.Client.RevertSession].
+	RevertSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	UpdateSessionDotfiles(ctx context.Context, id string, dotfiles *kagentapi.Dotfiles, previousDigest string) (*kagentapi.Session, error)
 	GetAgent(ctx context.Context, ref kagent.AgentRef) (*kagentapi.Agent, error)
 	SendMessage(ctx context.Context, agent kagent.AgentRef, p kagent.SendParams) iter.Seq2[a2a.Event, error]

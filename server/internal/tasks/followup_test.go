@@ -404,3 +404,34 @@ func TestCompletionWaitsForAQueuedFollowUp(t *testing.T) {
 		return r.taskStatus(id) == "completed"
 	})
 }
+
+// A crashed runtime awaiting its revert is not gone: the follow-up's delivery reverts it and the task
+// keeps its context. A FAILED runtime kagent will not revert is.
+func TestFollowUpToACrashedNativeSession(t *testing.T) {
+	scenarios := []struct {
+		name string
+		live kagent.SessionLiveness
+		gone bool
+	}{
+		{"Given a native session whose crashed runtime awaits its revert, when a follow-up is sent, assert that it is accepted",
+			kagent.SessionLiveness{Exists: true, Terminal: true, Recoverable: true}, false},
+		{"Given a native session that failed without a revert, when a follow-up is sent, assert that it is refused as session_gone",
+			kagent.SessionLiveness{Exists: true, Terminal: true}, true},
+	}
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
+			r := newRig(t)
+			id, _, session := r.completedCoordination()
+			r.exec(`UPDATE agent_bindings SET kagent_session_id = 'k-crashed' WHERE session_id = $1`, session)
+			r.live.set("k-crashed", sc.live)
+			_, err := r.svc.FollowUp(context.Background(), r.own, tasks.FollowUpInput{TaskID: id, RequestID: "c", Text: "t"})
+			if sc.gone {
+				wantReason(t, err, tasks.ReasonSessionGone)
+				return
+			}
+			if err != nil || r.taskStatus(id) == "completed" {
+				t.Fatalf("follow-up to a recoverable session: %v, task %s", err, r.taskStatus(id))
+			}
+		})
+	}
+}

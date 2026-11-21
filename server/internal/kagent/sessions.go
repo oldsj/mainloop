@@ -114,6 +114,10 @@ type SessionLiveness struct {
 	// settled. A caller deciding whether anything in the session could still be running (
 	// [tasks.KagentStops.Stopped]) must not treat Deleting the same as the rest of Terminal.
 	Deleting bool
+	// Recoverable is set only when Terminal is set for a crashed runtime that kagent admitted to crash
+	// recovery ([CrashRecoverable]): a send reverts it with [Client.RevertSession], so a caller
+	// deciding whether the session is gone for good must not treat it as gone.
+	Recoverable bool
 	// Asleep is set when kagent verified no running Actor for a Session that is not Terminal: idle
 	// settlement parked it, so nothing in it runs until the next send or attach wakes it. A sleeping
 	// Session stays READY; see [Awake].
@@ -158,8 +162,9 @@ func (c *Client) ObserveLiveness(ctx context.Context, id string) (SessionLivenes
 	state := s.GetState()
 	return SessionLiveness{
 		Exists: true, Terminal: terminalRuntimeStates(state),
-		Deleting: state == api.RuntimeState_RUNTIME_STATE_DELETING,
-		Asleep:   !terminalRuntimeStates(state) && Asleep(s), LastActivity: updated,
+		Deleting:    state == api.RuntimeState_RUNTIME_STATE_DELETING,
+		Recoverable: CrashRecoverable(s),
+		Asleep:      !terminalRuntimeStates(state) && Asleep(s), LastActivity: updated,
 	}, nil
 }
 
@@ -173,6 +178,32 @@ func (c *Client) DeleteSession(ctx context.Context, id string) (*api.Session, er
 // while they are active. It is for the paths that end a session on purpose (restart, stop).
 func (c *Client) ForceDeleteSession(ctx context.Context, id string) (*api.Session, error) {
 	return c.deleteSession(ctx, id, true)
+}
+
+// RevertSession asks kagent to recover a Session whose runtime crashed: it restores the Actor to its
+// last durable snapshot and returns the Session to READY with the Actor suspended. Interrupted turns
+// are failed and their input is not replayed. A repeat joins a revert still pending, and a Session
+// that is not crashed comes back unchanged, so a retry is safe. kagent answers FailedPrecondition
+// for a revert that can never succeed (delete the Session instead), and Aborted while another
+// lifecycle operation is active.
+func (c *Client) RevertSession(ctx context.Context, id string) (*api.Session, error) {
+	const op = "SessionService RevertSession"
+	if id == "" {
+		return nil, emptyArg(op, "session id")
+	}
+	resp, err := unary(ctx, c, op, c.sessionCl.RevertSession, &api.RevertSessionRequest{SessionId: id})
+	if err != nil {
+		return nil, err
+	}
+	return sessionOf(op, id, resp.GetSession())
+}
+
+// CrashRecoverable reports a Session whose runtime crashed and that kagent admitted to crash
+// recovery: FAILED with a revert operation, which [Client.RevertSession] completes. A FAILED Session
+// with any other operation is failed for good.
+func CrashRecoverable(s *api.Session) bool {
+	return s.GetState() == api.RuntimeState_RUNTIME_STATE_FAILED &&
+		s.GetOperation() == api.RuntimeOperation_RUNTIME_OPERATION_REVERT
 }
 
 // UpdateSessionDotfiles replaces a Session's agent dotfiles, laid out at its next turn. It is a
@@ -263,8 +294,9 @@ func ActorOf(s *api.Session) (atespace, name string, ok bool) {
 }
 
 // Settling reports whether kagent is doing internal lifecycle work on the Session (a brief
-// SUSPENDED state or a suspend/resume/revert operation). There is no call that asks for these any
-// more; a caller that sees one waits and reads again.
+// SUSPENDED state or a suspend/resume/revert operation). There is no call that asks for a suspend
+// or resume; a caller that sees one waits and reads again. A crashed Session awaiting its revert
+// ([CrashRecoverable]) is also Settling here; delivery completes it with [Client.RevertSession].
 func Settling(s *api.Session) bool {
 	if s.GetState() == api.RuntimeState_RUNTIME_STATE_SUSPENDED {
 		return true

@@ -174,7 +174,26 @@ type Server struct {
 	// SteerRefusal, when set, refuses every steer with this reason (steer_input_required,
 	// steer_process_driver), as kagent does for a turn that cannot take one.
 	SteerRefusal string
+	// Revert is how RevertSession answers; the zero value heals a crashed Session. Set it before the
+	// first request.
+	Revert RevertOutcome
 }
+
+// RevertOutcome is how the fake answers RevertSession.
+type RevertOutcome int
+
+const (
+	// RevertHeals returns a crashed Session to READY with no operation, as kagent's successful
+	// revert does, and leaves any other Session unchanged.
+	RevertHeals RevertOutcome = iota
+	// RevertUnavailable fails transiently, as a revert interrupted by a node that is down does: the
+	// Session stays crashed and a retry may succeed.
+	RevertUnavailable
+	// RevertUnrecoverable refuses with FailedPrecondition: the revert can never succeed.
+	RevertUnrecoverable
+	// RevertAborted refuses with Aborted, as kagent does while another lifecycle operation is active.
+	RevertAborted
+)
 
 // SteerRefused is kagent's refusal of a steer: not accepted, with the steer reason in the
 // ErrorInfo metadata. Nothing was dispatched.
@@ -204,6 +223,7 @@ func New() *Server {
 	handle(kagent.ProcGetSession, connect.NewUnaryHandler(kagent.ProcGetSession, s.getSession))
 	handle(kagent.ProcListSessions, connect.NewUnaryHandler(kagent.ProcListSessions, s.listSessions))
 	handle(kagent.ProcDeleteSession, connect.NewUnaryHandler(kagent.ProcDeleteSession, s.deleteSession))
+	handle(kagent.ProcRevertSession, connect.NewUnaryHandler(kagent.ProcRevertSession, s.revertSession))
 	handle(kagent.ProcUpdateSessionDotfiles,
 		connect.NewUnaryHandler(kagent.ProcUpdateSessionDotfiles, s.updateDotfiles))
 	handle(kagent.ProcGetAgent, connect.NewUnaryHandler(kagent.ProcGetAgent, s.getAgent))
@@ -595,6 +615,53 @@ func (s *Server) deleteSession(
 	delete(s.sessions, id)
 	s.order = removeString(s.order, id)
 	return connect.NewResponse(&api.DeleteSessionResponse{Session: s.out(kagent.ProcDeleteSession, sess)}), nil
+}
+
+// Crash puts the Session in the state kagent leaves a crashed runtime admitted to crash recovery
+// whose revert has not succeeded: FAILED, with a revert operation and the RuntimeCrashed reason.
+func (s *Server) Crash(id string) {
+	s.SetRuntime(id, api.RuntimeState_RUNTIME_STATE_FAILED, api.RuntimeOperation_RUNTIME_OPERATION_REVERT)
+}
+
+// SetRuntime sets the Session's runtime state and operation. A FAILED state carries the
+// RuntimeCrashed failure reason.
+func (s *Server) SetRuntime(id string, state api.RuntimeState, op api.RuntimeOperation) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.sessions[id]
+	if !ok {
+		return
+	}
+	sess.State, sess.Operation, sess.Failure = state, op, nil
+	if state == api.RuntimeState_RUNTIME_STATE_FAILED {
+		sess.Failure = &api.Failure{Reason: "RuntimeCrashed", Message: "the runtime crashed"}
+	}
+	sess.UpdatedAt = timestamppb.Now()
+}
+
+func (s *Server) revertSession(
+	_ context.Context, req *connect.Request[api.RevertSessionRequest],
+) (*connect.Response[api.RevertSessionResponse], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.lookup(req.Msg.GetSessionId())
+	if err != nil {
+		return nil, err
+	}
+	switch s.Revert {
+	case RevertUnavailable:
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("the revert was interrupted"))
+	case RevertUnrecoverable:
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("the runtime cannot be reverted"))
+	case RevertAborted:
+		return nil, connect.NewError(connect.CodeAborted, errors.New("another lifecycle operation is active"))
+	}
+	if kagent.CrashRecoverable(sess) {
+		sess.State, sess.Operation, sess.Failure = api.RuntimeState_RUNTIME_STATE_READY, api.RuntimeOperation_RUNTIME_OPERATION_NONE, nil
+		sess.UpdatedAt = timestamppb.Now()
+		s.asleep[sess.GetId()] = true // restored with its Actor suspended
+	}
+	return connect.NewResponse(&api.RevertSessionResponse{Session: s.out(kagent.ProcRevertSession, sess)}), nil
 }
 
 func removeString(list []string, v string) []string {

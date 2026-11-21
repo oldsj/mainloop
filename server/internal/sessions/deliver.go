@@ -490,29 +490,67 @@ func (t *turn) replaceKagentSession(ctx context.Context) error {
 // readyKagentSession returns the Session's id once kagent reports it ready, polling one that is
 // starting or that kagent is settling until Opts.ReadyWait. A sleeping Session is READY: kagent parks
 // an idle Actor itself and the send wakes it, so nothing is resumed here.
+//
+// A Session whose runtime crashed and that kagent admitted to crash recovery
+// ([kagent.CrashRecoverable]) is reverted: kagent may have tried once and failed (its node was
+// down), and only a RevertSession call retries it. The revert keeps the Session and its context,
+// restored to its last durable snapshot. At most maxReverts calls are made per delivery attempt, with
+// a short backoff inside the same ReadyWait; after that the Session's failure is returned as before,
+// and the delivery's own retries try again. A revert kagent says can never succeed ends at once with
+// errSessionUnrecoverable. A FAILED Session with any other operation fails at once, as it always has.
 func (t *turn) readyKagentSession(ctx context.Context, sess *kagentapi.Session) (string, error) {
 	wait := t.s.opts().ReadyWait
 	poll := min(max(wait/20, 10*time.Millisecond), time.Second)
 	deadline := time.Now().Add(wait)
+	reverts := 0
 	for {
 		if err := t.checkSendFence(ctx); err != nil {
 			return "", err
 		}
+		pause := poll
 		switch st := sess.GetState(); {
 		case st == kagentapi.RuntimeState_RUNTIME_STATE_READY && !changing(sess):
 			return sess.GetId(), nil
+		case kagent.CrashRecoverable(sess):
+			if reverts >= maxReverts || !time.Now().Before(deadline) {
+				return "", errSessionFailed
+			}
+			reverts++
+			reverted, err := t.s.Kagent.RevertSession(ctx, t.ksid)
+			var se *kagent.SessionError
+			switch {
+			case err == nil && !kagent.CrashRecoverable(reverted):
+				sess = reverted // reverted, or under way: settle it as any other Session
+				continue
+			case err == nil:
+				// The reply joined a revert kagent has not finished; read it again after a backoff.
+			case ctx.Err() != nil:
+				return "", ctx.Err()
+			case errors.As(err, &se) && se.Code == connect.CodeFailedPrecondition:
+				return "", fmt.Errorf("%w: %s", errSessionUnrecoverable, se.Detail)
+			default:
+				// Interrupted, or another lifecycle operation is active (Aborted): read the Session
+				// again after a backoff, and revert again if it is still crashed.
+				t.s.log().WarnContext(ctx, "revert of a crashed kagent session failed",
+					"session_id", t.d.SessionID, "kagent_session", t.ksid, "attempt", reverts, "error", err)
+			}
+			pause = poll << reverts
 		case st == kagentapi.RuntimeState_RUNTIME_STATE_FAILED:
-			return "", errors.New("the kagent session has failed")
+			return "", errSessionFailed
 		case st == kagentapi.RuntimeState_RUNTIME_STATE_DELETING, st == kagentapi.RuntimeState_RUNTIME_STATE_DELETED:
 			return "", errors.New("the kagent session is being deleted")
 		}
-		if !time.Now().Before(deadline) {
+		now := time.Now()
+		if !now.Before(deadline) {
+			if kagent.CrashRecoverable(sess) {
+				return "", errSessionFailed
+			}
 			return "", fmt.Errorf("the kagent session is not ready after %s (%s)", wait, sess.GetState())
 		}
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-time.After(poll):
+		case <-time.After(min(pause, deadline.Sub(now))):
 		}
 		if err := t.checkSendFence(ctx); err != nil {
 			return "", err
@@ -523,6 +561,19 @@ func (t *turn) readyKagentSession(ctx context.Context, sess *kagentapi.Session) 
 		}
 	}
 }
+
+// maxReverts bounds the RevertSession calls one delivery attempt makes for a crashed Session. A
+// revert that fails only because the node is still down is retried by the delivery's own backoff,
+// so a handful here is enough to ride out a brief interruption without hammering kagent.
+const maxReverts = 3
+
+var (
+	// errSessionFailed is a kagent Session that failed and that this attempt could not recover.
+	errSessionFailed = errors.New("the kagent session has failed")
+	// errSessionUnrecoverable is final: kagent says the crashed runtime can never be reverted, so the
+	// Session must be deleted and replaced.
+	errSessionUnrecoverable = fmt.Errorf("%w: kagent cannot revert its crashed runtime", errSessionFailed)
+)
 
 // sessionName is the display name of a kagent Session made for a session: its title, cut short.
 func sessionName(title string) string {
@@ -589,7 +640,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 		}
 		var cfg *kagent.ConfigError
 		if errors.As(err, &cfg) || errors.Is(err, errWorkspaceSessionGone) || errors.Is(err, errTaskSessionGone) ||
-			errors.Is(err, errWorkspacePreparationFailed) {
+			errors.Is(err, errWorkspacePreparationFailed) || errors.Is(err, errSessionUnrecoverable) {
 			return t.settle(ctx, dbstate.DeliveryFailed,
 				"not sent: could not prepare the kagent session: "+err.Error(), nil, false)
 		}

@@ -59,7 +59,7 @@ func (r FollowUpResult) API() api.TaskFollowUpResult {
 //
 // The kagent Session is checked first: a follow-up to a Session kagent no longer has is refused
 // (session_gone) rather than sent to a new, empty Session; an asleep one is fine, the send wakes
-// it. Everything after that commits in one transaction under the session's send lock, so two
+// it, and so is one whose runtime crashed and awaits its revert, which the send completes. Everything after that commits in one transaction under the session's send lock, so two
 // follow-ups, or a follow-up and a cancel or a completion, are serialized: there is never a
 // reopened task without its message, nor a second writer. The message id derives from the
 // principal and request id, so a retry finds the first send and never sends twice.
@@ -83,7 +83,9 @@ func (s *Service) FollowUp(ctx context.Context, p Principal, in FollowUpInput) (
 		if err != nil {
 			return FollowUpResult{}, fmt.Errorf("tasks: read the task's native session: %w", err)
 		}
-		if known && (!live.Exists || live.Terminal) {
+		// A crashed runtime awaiting its revert (Recoverable) is not gone: the send reverts it, and
+		// the task keeps its context.
+		if known && (!live.Exists || (live.Terminal && !live.Recoverable)) {
 			return FollowUpResult{}, refusal(409, ReasonSessionGone)
 		}
 	}

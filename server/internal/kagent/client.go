@@ -28,6 +28,7 @@ const (
 	ProcGetSession              = apiconnect.SessionServiceGetSessionProcedure
 	ProcListSessions            = apiconnect.SessionServiceListSessionsProcedure
 	ProcDeleteSession           = apiconnect.SessionServiceDeleteSessionProcedure
+	ProcRevertSession           = apiconnect.SessionServiceRevertSessionProcedure
 	ProcUpdateSessionDotfiles   = apiconnect.SessionServiceUpdateSessionDotfilesProcedure
 	ProcGetAgent                = apiconnect.AgentServiceGetAgentProcedure
 
