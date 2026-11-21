@@ -97,6 +97,24 @@ describe('project page', () => {
     expect(screen.getByTestId('project-environment')).toBeInTheDocument();
   });
 
+  it('has the shared page header: the way back beside the title, and the description under it', async () => {
+    // Given a project page.
+    server.use(...serveProjectPage());
+
+    // When it opens.
+    renderProjects(PAGE);
+    const title = await heading('acme/widgets');
+
+    // Then the title is in the header every page uses, with a back link to the main chat.
+    const header = screen.getByTestId('page-header');
+    expect(header).toContainElement(title);
+    expect(within(header).getByRole('link', { name: 'Back to the main chat' })).toHaveAttribute(
+      'href',
+      '/'
+    );
+    expect(title).toHaveAttribute('id', 'project-heading');
+  });
+
   it('opens with tasks, memory, open pull requests and sessions, and puts settings last', async () => {
     server.use(...serveProjectPage());
     renderProjects(PAGE);

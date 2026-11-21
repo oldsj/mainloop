@@ -3,8 +3,11 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
+import { PAGE } from '@/components/shared/measure';
+import { BACK_LINK, BackIcon, PageHeader } from '@/components/shared/page-header';
 import { SkeletonHeader, SkeletonRows } from '@/components/shared/skeleton';
 import { StatusBadge } from '@/components/shared/status-badge';
+import { cn } from '@/components/ui/cn';
 import { EnvironmentSection } from '@/features/environments/EnvironmentSection';
 import { ProjectDotfilesSection } from '@/features/dotfiles/DotfilesSection';
 import { SessionRow } from '@/features/sessions/SessionRow';
@@ -83,7 +86,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
     }
     return (
       // The page's own column, so the header and the task rows land where the placeholders were.
-      <div className="gap-lg p-md mx-auto flex w-full max-w-3xl min-w-0 flex-col">
+      <div className={cn(PAGE, 'gap-lg')}>
         <p role="status" className="sr-only">
           Loading project...
         </p>
@@ -115,10 +118,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
   );
 
   return (
-    <article
-      aria-labelledby="project-heading"
-      className="gap-lg p-md mx-auto flex w-full max-w-3xl min-w-0 flex-col"
-    >
+    <article aria-labelledby="project-heading" className={cn(PAGE, 'gap-lg')}>
       <title>{`${project.full_name} · Mainloop`}</title>
       {detail.isError ? (
         <div data-testid="project-refresh-error">
@@ -132,15 +132,22 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
         </div>
       ) : null}
 
-      <header className="gap-md flex items-start">
-        {avatar ? <img src={avatar} alt="" className="size-12 shrink-0" /> : null}
+      {/* The shared header, so the way back and the title sit where they do on every other page. */}
+      <div className="gap-xs flex min-w-0 flex-col">
+        <PageHeader
+          headingId="project-heading"
+          title={project.full_name}
+          description={project.description || undefined}
+          back={
+            <>
+              <Link to="/" aria-label="Back to the main chat" className={BACK_LINK}>
+                <BackIcon />
+              </Link>
+              {avatar ? <img src={avatar} alt="" className="size-8 shrink-0" /> : null}
+            </>
+          }
+        />
         <div className="gap-xs flex min-w-0 flex-col">
-          <h1 id="project-heading" className="text-lg font-medium break-words">
-            {project.full_name}
-          </h1>
-          {project.description ? (
-            <p className="text-muted-foreground text-sm break-words">{project.description}</p>
-          ) : null}
           <div className="gap-sm text-muted-foreground flex flex-wrap items-center text-xs">
             {github ? (
               <a
@@ -196,7 +203,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
             </button>
           </nav>
         </div>
-      </header>
+      </div>
 
       <section
         aria-labelledby="project-tasks-heading"
