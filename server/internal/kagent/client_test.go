@@ -105,6 +105,7 @@ func TestProcedureNamesMatchTheForkDefinitions(t *testing.T) {
 		kagent.ProcGetSession:                 "/kagent.api.v1.SessionService/GetSession",
 		kagent.ProcListSessions:               "/kagent.api.v1.SessionService/ListSessions",
 		kagent.ProcDeleteSession:              "/kagent.api.v1.SessionService/DeleteSession",
+		kagent.ProcRevertSession:              "/kagent.api.v1.SessionService/RevertSession",
 		kagent.ProcGetAgent:                   "/kagent.api.v1.AgentService/GetAgent",
 		kagent.ProcCreateScheduledRun:         "/kagent.api.v1.ScheduledRunService/CreateScheduledRun",
 		kagent.ProcGetScheduledRun:            "/kagent.api.v1.ScheduledRunService/GetScheduledRun",
