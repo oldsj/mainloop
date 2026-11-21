@@ -477,7 +477,7 @@ export function operationProgress(operation: TaskOperation): OperationProgress {
   const reason = reasonLabel(operation.reason);
   const kindLabel = KIND_LABELS[operation.kind] ?? operation.kind;
   const summary = held
-    ? `${kindLabel} ${operation.state}: last confirmed step “${stepLabel(operation.last_confirmed_step)}”${reason ? `; ${reason}` : ''}`
+    ? `${kindLabel} is ${operation.state} after “${stepLabel(operation.last_confirmed_step)}”${reason ? `: ${reason}` : ''}`
     : `${kindLabel}: ${stepLabel(operation.state)}`;
   return {
     operation,

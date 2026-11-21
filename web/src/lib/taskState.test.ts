@@ -302,7 +302,9 @@ test('operation progress shows the step and holds blocked and uncertain at the l
     })
   );
   expect(uncertain.held).toBe(true);
-  expect(uncertain.summary).toMatch(/reconciling uncertain state/);
+  expect(uncertain.summary).toBe(
+    'Reassign is uncertain after “Fencing the old attempt”: reconciling uncertain state'
+  );
   expect(uncertain.steps.find((s) => s.state === 'target_creating')?.status).toBe('pending');
 
   const done = operationProgress(

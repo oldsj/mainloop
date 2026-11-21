@@ -433,6 +433,71 @@ describe('back links and finished tasks', () => {
   });
 });
 
+describe('an operation that stopped part-way', () => {
+  it('says it is on hold, and marks each step so its state is not colour alone', async () => {
+    // Given a failed task whose handoff is blocked after creating the new attempt.
+    const held = view(
+      { status: 'failed' },
+      {
+        operations: [
+          operation({
+            kind: 'create',
+            state: 'blocked',
+            last_confirmed_step: 'target_creating',
+            reason: 'provisioning_unavailable'
+          })
+        ]
+      }
+    );
+    server.use(...serveTaskPage(taskScreen(held)));
+
+    // When its page opens and the details are shown.
+    renderTasks('/tasks/task-1');
+    const panel = await screen.findByTestId('task-operations');
+
+    // Then the section is not called in progress, and the summary reads as a sentence.
+    expect(within(panel).getByRole('heading', { name: 'On hold' })).toBeInTheDocument();
+    expect(panel).toHaveTextContent(
+      'Create is blocked after “Creating the new attempt”: workspace provisioning is not available yet'
+    );
+    // And the steps are marked and kept apart.
+    const steps = within(within(panel).getByTestId('task-operation-steps')).getAllByRole(
+      'listitem'
+    );
+    expect(steps.map((step) => step.getAttribute('data-status'))).toEqual([
+      'done',
+      'done',
+      'done',
+      'done',
+      'done',
+      'done',
+      'done',
+      'pending',
+      'pending'
+    ]);
+    expect(steps[0]).toHaveTextContent('Done: Requested');
+    expect(steps[6]).toHaveTextContent('› ✓ Done: Creating the new attempt');
+    expect(steps[7]).toHaveTextContent('› New attempt ready');
+  });
+
+  it('says in progress while an operation is still moving', async () => {
+    const moving = view(
+      {},
+      {
+        operations: [operation({ state: 'draining', last_confirmed_step: 'requested' })]
+      }
+    );
+    server.use(...serveTaskPage(taskScreen(moving)));
+    renderTasks('/tasks/task-1');
+
+    const panel = await screen.findByTestId('task-operations');
+    expect(within(panel).getByRole('heading', { name: 'In progress' })).toBeInTheDocument();
+    expect(
+      within(panel).getByText(/Draining the current attempt/, { selector: 'li' })
+    ).toHaveAttribute('aria-current', 'step');
+  });
+});
+
 describe('owner actions', () => {
   it('hides retry and reassign while the handoff is not installed, and says nothing about why', async () => {
     const page = view(
