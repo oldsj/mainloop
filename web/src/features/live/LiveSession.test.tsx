@@ -194,6 +194,30 @@ describe('the session controls label', () => {
     );
     expect(controlsLabel(undefined, 'opus-5-5', undefined, notes)).toBe('opus-5-5 (this session)');
   });
+
+  it('shows the recorded model and effort while the runner has not said what it runs', () => {
+    // Given a session that is asleep: the runner reports no model and no effort.
+    const recorded = { model: 'claude-opus-5-5', effort: 'high' };
+
+    // Then the chip names what Mainloop has on record, never a placeholder.
+    expect(controlsLabel('Claude', '', undefined, { model: 'this session', recorded })).toBe(
+      'Claude · opus-5-5 (this session) · high'
+    );
+    expect(controlsLabel('Claude', '', undefined, { all: 'main default', recorded })).toBe(
+      'Claude · opus-5-5 · high (main default)'
+    );
+    // And once the runner says, its own word wins.
+    expect(controlsLabel('Claude', 'claude-sonnet-5-5', 'low', { recorded })).toBe(
+      'Claude · sonnet-5-5 · low'
+    );
+  });
+
+  it('leaves out what nobody knows, and still has a name to press', () => {
+    // Given no record either: the provider's own default, which Mainloop is not told.
+    expect(controlsLabel('Claude', '', undefined)).toBe('Claude');
+    expect(controlsLabel('Claude', '', undefined, { recorded: {} })).toBe('Claude');
+    expect(controlsLabel(undefined, '', undefined)).toBe('Model and effort');
+  });
 });
 
 describe('live session', () => {

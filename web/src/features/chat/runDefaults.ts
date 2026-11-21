@@ -74,6 +74,8 @@ export interface RunNotes {
   /** A note per part, when they do not. */
   model?: string;
   effort?: string;
+  /** The recorded values for the chip to fall back on; see `runRecorded`. */
+  recorded?: { model?: string; effort?: string };
 }
 
 /**
@@ -92,6 +94,18 @@ export function runNotes(run: RunDefaults, role: DefaultsRole): RunNotes {
   const model = note(run.model.source);
   const effort = note(run.effort.source);
   return { ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
+}
+
+/**
+ * The model and effort Mainloop has on record for the session: its own choice, else the owner's
+ * default. The session controls chip shows them while the runner has not said what it runs (a
+ * session that is asleep or has ended). The provider's own is not known here, so it is left out.
+ */
+export function runRecorded(run: RunDefaults): { model?: string; effort?: string } {
+  return {
+    ...(run.model.value ? { model: run.model.value } : {}),
+    ...(run.effort.value ? { effort: run.effort.value } : {})
+  };
 }
 
 /**

@@ -8,7 +8,7 @@ import { PanelBoundary } from '@/shell/PanelBoundary';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { mainInputLock } from './mainProvider';
 import { MainThreadHeader } from './MainThreadHeader';
-import { runNotes, useRunDefaults, type RunNotes } from './runDefaults';
+import { runNotes, runRecorded, useRunDefaults, type RunNotes } from './runDefaults';
 import { ChatControls, ProviderChoice, providerChipLabel } from './ProviderChoice';
 import { SessionRequests } from './SessionRequests';
 import { SLASH_COMMANDS } from './slashCommand';
@@ -96,7 +96,7 @@ export function ChatPage({
             hitlId={hitlId}
             onFallback={() => setChatView(true)}
             renderBar={header}
-            notes={run ? runNotes(run, 'main') : undefined}
+            notes={run ? { ...runNotes(run, 'main'), recorded: runRecorded(run) } : undefined}
             prefill={prefill}
             onPrefillUsed={onPrefillUsed}
             provider={

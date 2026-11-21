@@ -182,9 +182,21 @@ export interface LiveNotes {
   all?: string;
   model?: string;
   effort?: string;
+  /**
+   * What Mainloop has on record for the session, shown until the runner says what it runs: a
+   * session that is asleep or has ended reports nothing.
+   */
+  recorded?: { model?: string; effort?: string };
 }
 
-/** "Claude · opus-5-5 · high (worker default)": what runs, and whose choice it is. */
+/** The chip's words when neither the runner nor the record names a provider, model or effort. */
+const CONTROLS_FALLBACK = 'Model and effort';
+
+/**
+ * "Claude · opus-5-5 · high (worker default)": what runs, and whose choice it is. `model` and
+ * `effort` are the runner's; where it has not said, the recorded ones stand in, and a part nobody
+ * knows is left out, never shown as a placeholder.
+ */
 export function controlsLabel(
   provider: string | undefined,
   model: string,
@@ -193,10 +205,18 @@ export function controlsLabel(
 ): string {
   const noted = (value: string | undefined, note?: string) =>
     value && note ? `${value} (${note})` : value;
-  const label = [provider, noted(model, notes.model), noted(effort, notes.effort)]
+  const shownModel = model || notes.recorded?.model || '';
+  const shownEffort = effort || notes.recorded?.effort;
+  const label = [
+    provider,
+    noted(shownModel ? short(shownModel) : '', notes.model),
+    noted(shownEffort, notes.effort)
+  ]
     .filter(Boolean)
     .join(' · ');
-  return notes.all ? `${label} (${notes.all})` : label;
+  if (!label) return CONTROLS_FALLBACK;
+  // A note for the whole chip is about the model and the effort; with neither, it has no subject.
+  return notes.all && (shownModel || shownEffort) ? `${label} (${notes.all})` : label;
 }
 
 /** A provider choice for the controls picker: the chip's first word, and the picker's first section. */
@@ -879,7 +899,7 @@ function Composer({
         </div>
         <div className="text-term-fg-muted gap-sm flex min-w-0 items-center text-xs">
           <SessionControls
-            label={controlsLabel(provider?.label, short(state.model), state.effort, notes)}
+            label={controlsLabel(provider?.label, state.model, state.effort, notes)}
             title="Session controls"
             open={controlsOpen}
             onOpenChange={setControlsOpen}

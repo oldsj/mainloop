@@ -14,7 +14,7 @@ import { useConnection } from '@/shell/ConnectionBanner';
 import { PanelBoundary } from '@/shell/PanelBoundary';
 import { SessionRequests } from '@/features/chat/SessionRequests';
 import { useSessionRequests } from '@/features/hitl/session-requests';
-import { runNotes, useRunDefaults } from '@/features/chat/runDefaults';
+import { runNotes, runRecorded, useRunDefaults } from '@/features/chat/runDefaults';
 import { LiveSession, liveForced, type LiveNotes } from '@/features/live';
 import { DotfilesRefresh } from '@/features/dotfiles/DotfilesRefresh';
 import { TranscriptView } from '@/features/transcripts';
@@ -297,7 +297,7 @@ export function SessionPage({
           <LiveWithRequests
             sessionId={session.id}
             onFallback={() => setChatView(true)}
-            notes={run ? runNotes(run, 'worker') : undefined}
+            notes={run ? { ...runNotes(run, 'worker'), recorded: runRecorded(run) } : undefined}
           />
         </PanelBoundary>
       ) : (
