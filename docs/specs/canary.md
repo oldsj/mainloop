@@ -20,14 +20,16 @@ For each `--target name=url[@host]` (in the chart, this instance's own API, name
 | `cleanup`        | cancels and archives canary sessions that ended or were superseded                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 **Self-restart.** When kagent refused the ping (its delivery `failed` with an A2A error, such as
--32004 for a native Session that accepts no input) and the native strip says the session is
+-32004 for a native Session that accepts no input), or the ping was not sent because the native
+Session itself has failed (the native strip's `session_state` is `failed`, as for a runtime that
+crashed while kagent's recovery of it is still pending), and the native strip says the session is
 `restartable`, the run restarts it as the owner would from the chat
 (`POST /sessions/{id}/restart` with a fresh `request_id`) and pings once more. A reply then passes
 the step, and the run reports `restarted` with the refusal: one priority-3 notification ("Mainloop
 canary restarted its session"), exit code 0. A failed restart, or a second ping that fails, fails
-the step as usual, naming both. A ping that was not sent because kagent did not answer is not a
-refusal and restarts nothing. Each run restarts at most once, so a session that keeps refusing
-fails every run.
+the step as usual, naming both. A ping that was not sent because kagent did not answer, or for any
+other reason while the native Session has not failed, restarts nothing. Each run restarts at most
+once, so a session that keeps refusing fails every run.
 
 The session is hidden: `GET /sessions` (and the session list in the attention snapshot) leaves it
 out unless `hidden=true` is asked for; it is still readable by id. A standalone session has no

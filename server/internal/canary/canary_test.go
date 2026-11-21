@@ -56,6 +56,8 @@ type fakeAPI struct {
 	restartStatus int
 	restarts      int
 	healOnRestart bool
+	// sessionState is the native strip's session_state; a healing restart makes it "ready".
+	sessionState string
 }
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +118,11 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		write(api.NativeSessionInfo{Deliveries: f.deliveries, Restartable: &f.restartable})
+		info := api.NativeSessionInfo{Deliveries: f.deliveries, Restartable: &f.restartable}
+		if f.sessionState != "" {
+			info.SessionState = ptr(f.sessionState)
+		}
+		write(info)
 	case len(parts) == 3 && parts[2] == "restart":
 		f.restarts++
 		if f.restartStatus != 0 {
@@ -128,6 +134,9 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.reply = f.reply || f.healOnRestart
+		if f.healOnRestart && f.sessionState != "" {
+			f.sessionState = "ready"
+		}
 		write(api.SessionRestartResponse{Status: "restarted", FailedMessageIds: []string{}})
 	case len(parts) == 3 && parts[2] == "archive":
 		if !f.ended[parts[1]] {
@@ -376,6 +385,38 @@ func TestARefusedPingRestartsARestartableSession(t *testing.T) {
 		f := &fakeAPI{restartable: true, healOnRestart: true}
 
 		res := runRefused(t, f, "not sent: kagent unreachable: connection refused")
+
+		if res.Err == nil || f.restarts != 0 {
+			t.Fatalf("result %v, %d restarts; want a failure and no restart", res, f.restarts)
+		}
+	})
+
+	const sessionFailed = "not sent: could not prepare the kagent session: the kagent session has failed"
+
+	t.Run("Given a restartable canary session whose native Session failed, when the ping is not sent, assert that the run restarts once and reports it", func(t *testing.T) {
+		f := &fakeAPI{restartable: true, healOnRestart: true, sessionState: "failed"}
+
+		res := runRefused(t, f, sessionFailed)
+
+		if res.Err != nil || res.Restarted != sessionFailed || res.OK() || f.restarts != 1 {
+			t.Fatalf("result %v, %d restarts; want one restart reported with the failure", res, f.restarts)
+		}
+	})
+
+	t.Run("Given a canary session whose native Session failed but is not restartable, when the ping is not sent, assert that the run fails without restarting", func(t *testing.T) {
+		f := &fakeAPI{healOnRestart: true, sessionState: "failed"}
+
+		res := runRefused(t, f, sessionFailed)
+
+		if res.Step != canary.StepReply || res.Err == nil || !strings.Contains(res.Err.Error(), sessionFailed) || f.restarts != 0 {
+			t.Fatalf("result %v, %d restarts; want await-reply failing with no restart", res, f.restarts)
+		}
+	})
+
+	t.Run("Given a restartable canary session whose native Session is ready, when the ping is not sent for another reason, assert that the run does not restart", func(t *testing.T) {
+		f := &fakeAPI{restartable: true, healOnRestart: true, sessionState: "ready"}
+
+		res := runRefused(t, f, "not sent: could not prepare the kagent session: the kagent session is not ready after 30s (RUNTIME_STATE_CREATING)")
 
 		if res.Err == nil || f.restarts != 0 {
 			t.Fatalf("result %v, %d restarts; want a failure and no restart", res, f.restarts)

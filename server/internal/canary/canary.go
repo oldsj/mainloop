@@ -197,9 +197,10 @@ func Run(ctx context.Context, o Options) (res Result) {
 
 	err := r.awaitReply(ctx, res.Session, messageID)
 	var ended *deliveryEnded
-	if errors.As(err, &ended) && ended.refused() && ended.restartable {
-		// kagent refuses the session's input, so no ping can get through until its native
-		// Session is replaced: restart it, as the owner would from the chat, and ping again.
+	if errors.As(err, &ended) && ended.healedByRestart() && ended.restartable {
+		// kagent refuses the session's input, or its native Session failed, so no ping can get
+		// through until that Session is replaced: restart it, as the owner would from the chat,
+		// and ping again.
 		res.Restarted = ended.detail
 		if rerr := r.restart(ctx, res.Session); rerr != nil {
 			res.Elapsed = o.Now().Sub(start)
@@ -305,6 +306,9 @@ type deliveryEnded struct {
 	state, detail string
 	// restartable is the session's POST /sessions/{id}/restart applies.
 	restartable bool
+	// nativeFailed is the native strip's session_state "failed": kagent reports the Session
+	// FAILED, for example a runtime that crashed and whose recovery is still pending.
+	nativeFailed bool
 }
 
 func (e *deliveryEnded) Error() string {
@@ -322,6 +326,14 @@ func (e *deliveryEnded) refused() bool {
 		(strings.HasPrefix(e.detail, "not sent: A2A error ") || strings.HasPrefix(e.detail, "send rejected: A2A error "))
 }
 
+// healedByRestart reports a delivery that a restart can get through: kagent refused it, or it
+// was not sent because the native Session itself has failed. A restart force-deletes that
+// Session, which kagent allows even while a crash recovery is pending, and the next ping creates
+// a new one. A delivery kagent did not answer at all stays a plain failure.
+func (e *deliveryEnded) healedByRestart() bool {
+	return e.refused() || (e.state == "failed" && e.nativeFailed)
+}
+
 // deliveryEnded reads the delivery ledger for messageID. A failed read proves nothing and is
 // nil; the reply wait goes on.
 func (r runner) deliveryEnded(ctx context.Context, session, messageID string) *deliveryEnded {
@@ -336,7 +348,11 @@ func (r runner) deliveryEnded(ctx context.Context, session, messageID string) *d
 		if d.MessageId != messageID || (d.State != "failed" && d.State != "cancelled") {
 			continue
 		}
-		e := &deliveryEnded{state: d.State, restartable: native.Restartable != nil && *native.Restartable}
+		e := &deliveryEnded{
+			state:        d.State,
+			restartable:  native.Restartable != nil && *native.Restartable,
+			nativeFailed: native.SessionState != nil && *native.SessionState == "failed",
+		}
 		if d.Detail != nil {
 			e.detail = *d.Detail
 		}
