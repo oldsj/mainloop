@@ -331,7 +331,7 @@ function TaskEntry({ view, action }: { view: TaskView; action: string }) {
   const { task } = view;
   return (
     <div className="gap-xs p-md flex flex-col">
-      <h3 className="text-sm font-medium break-words">{task.title.trim() || 'Untitled task'}</h3>
+      <h2 className="text-sm font-medium break-words">{task.title.trim() || 'Untitled task'}</h2>
       <p className="text-muted-foreground text-sm break-words">{statusLine(view)}</p>
       <Link
         to="/tasks/$id"
@@ -359,7 +359,7 @@ function AttentionEntry({ item }: { item: AttentionItem }) {
   const taskId = taskIdOf(item.task_id, item.href);
   return (
     <div className="gap-xs p-md flex flex-col">
-      <h3 className="text-sm font-medium break-words">{item.title}</h3>
+      <h2 className="text-sm font-medium break-words">{item.title}</h2>
       <p className="text-muted-foreground text-sm break-words">{item.needed}</p>
       {taskId ? (
         <Link

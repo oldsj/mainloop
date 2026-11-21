@@ -60,7 +60,7 @@ export function ActivityList() {
             const noticeId = item.dismissible ? item.queue_item_id : null;
             return (
               <li key={item.id} className="border-border-subtle p-md gap-xs flex flex-col border-b">
-                <h3 className="text-sm font-medium break-words">{item.title}</h3>
+                <h2 className="text-sm font-medium break-words">{item.title}</h2>
                 <p className="text-muted-foreground text-xs break-words whitespace-pre-wrap">
                   {item.content}
                 </p>

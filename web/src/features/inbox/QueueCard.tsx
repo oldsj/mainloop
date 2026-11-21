@@ -49,7 +49,7 @@ export function QueueCard({ item }: { item: QueueItem }) {
       <header className="gap-sm flex items-start justify-between">
         <div className="gap-sm flex min-w-0 items-center">
           <Icon aria-hidden className="text-muted-foreground size-4 shrink-0" />
-          <h3 className="text-sm font-medium break-words">{item.title}</h3>
+          <h2 className="text-sm font-medium break-words">{item.title}</h2>
         </div>
         <time dateTime={item.created_at} className="text-muted-foreground shrink-0 text-xs">
           {ageLabel(item.created_at)}
