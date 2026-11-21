@@ -16,6 +16,7 @@ import {
   ancestors,
   attemptHistory,
   buildTree,
+  foldCancelled,
   modelEffortLabel,
   normalizeView,
   observationAge,
@@ -400,4 +401,27 @@ test('failure and pending CI also require fresh exact-head evidence', () => {
     expect(ci.known).toBe(true);
     expect(ci.label).toBe(ci_state === 'failure' ? 'Failing' : 'Running');
   }
+});
+
+test('cancelled top-level tasks fold away with what is under them, unless something under them is open', () => {
+  // Given a tree: live work, a settled cancelled task with a cancelled child, and a cancelled
+  // task whose child is still running.
+  const rows = buildTree([
+    view({ id: 'live', status: 'running', created_at: '2026-01-04T00:00:00Z' }),
+    view({ id: 'gone', status: 'cancelled', created_at: '2026-01-03T00:00:00Z' }),
+    view({ id: 'gone-kid', status: 'cancelled', parent_task_id: 'gone' }),
+    view({ id: 'held', status: 'cancelled', created_at: '2026-01-02T00:00:00Z' }),
+    view({ id: 'held-kid', status: 'running', parent_task_id: 'held' })
+  ]);
+
+  // When the cancelled work is set aside.
+  const { shown, folded, count } = foldCancelled(rows);
+
+  // Then only the settled one folds, as one task with its child.
+  expect(shown.map((row) => row.view.task.id)).toEqual(['live', 'held', 'held-kid']);
+  expect(folded.map((row) => row.view.task.id)).toEqual(['gone', 'gone-kid']);
+  expect(count).toBe(1);
+  // And a list with nothing but cancelled tasks is left as it is.
+  const only = buildTree([view({ id: 'a', status: 'cancelled' })]);
+  expect(foldCancelled(only)).toEqual({ shown: only, folded: [], count: 0 });
 });

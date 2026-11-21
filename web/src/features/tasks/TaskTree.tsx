@@ -6,6 +6,7 @@ import { statusLine, workGroup } from '@/features/home/model';
 import type { TaskView } from '@/lib/contract';
 import {
   buildTree,
+  foldCancelled,
   isTerminal,
   openOperations,
   publicationFacts,
@@ -27,6 +28,8 @@ export function TaskTree({ projectId }: { projectId?: string }) {
   const list = useTaskList(filter);
   const unreadable = useUnreadableTaskCount(filter);
   const now = useNow();
+  // Cancelled work is folded away until asked for: on a long-lived project it is most of the list.
+  const [showCancelled, setShowCancelled] = useState(false);
 
   if (list.data === undefined) {
     if (list.isPending) {
@@ -46,7 +49,9 @@ export function TaskTree({ projectId }: { projectId?: string }) {
     );
   }
 
-  const rows = buildTree(list.data);
+  const all = buildTree(list.data);
+  const { shown, folded, count: cancelledCount } = foldCancelled(all);
+  const rows = showCancelled ? [...shown, ...folded] : shown;
   const unreadableCount = unreadable.data ?? 0;
   return (
     <section aria-label="Tasks" className="flex flex-col">
@@ -78,6 +83,19 @@ export function TaskTree({ projectId }: { projectId?: string }) {
           ))}
         </ul>
       )}
+      {cancelledCount > 0 ? (
+        <button
+          type="button"
+          aria-expanded={showCancelled}
+          data-testid="task-list-cancelled-toggle"
+          onClick={() => setShowCancelled((open) => !open)}
+          className="border-border-subtle text-muted-foreground hover:text-foreground px-md min-h-control border-t text-left text-xs underline"
+        >
+          {showCancelled
+            ? 'Hide cancelled tasks'
+            : `Show ${cancelledCount} cancelled ${cancelledCount === 1 ? 'task' : 'tasks'}`}
+        </button>
+      ) : null}
     </section>
   );
 }
