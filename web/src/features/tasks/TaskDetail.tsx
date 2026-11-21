@@ -215,7 +215,8 @@ export function TaskFacts({ view }: { view: TaskView }) {
           className={PANEL}
         >
           <h2 id="operations-heading" className={HEADING}>
-            In progress
+            {/* An operation held at a step is not moving, so the heading does not say it is. */}
+            {operations.every((progress) => progress.held) ? 'On hold' : 'In progress'}
           </h2>
           <ul className="gap-md flex flex-col">
             {operations.map((progress) => (
@@ -232,10 +233,13 @@ function OperationItem({ progress }: { progress: OperationProgress }) {
   return (
     <li className="gap-xs flex flex-col text-sm">
       <p className="break-words">{progress.summary}</p>
-      <ol className="gap-xs flex flex-wrap text-xs">
-        {progress.steps.map((step) => (
+      {/* One line of steps: a mark for what is done and what is under way, so the state is not
+          colour alone, and a separator so the names do not run together. */}
+      <ol className="gap-x-xs flex flex-wrap text-xs" data-testid="task-operation-steps">
+        {progress.steps.map((step, index) => (
           <li
             key={step.state}
+            data-status={step.status}
             aria-current={step.status === 'current' ? 'step' : undefined}
             className={
               step.status === 'pending'
@@ -245,6 +249,22 @@ function OperationItem({ progress }: { progress: OperationProgress }) {
                   : 'text-foreground'
             }
           >
+            {index > 0 ? (
+              <span aria-hidden="true" className="text-muted-foreground">
+                ›{' '}
+              </span>
+            ) : null}
+            {step.status === 'done' ? (
+              <>
+                <span aria-hidden="true">✓ </span>
+                <span className="sr-only">Done: </span>
+              </>
+            ) : step.status === 'current' ? (
+              <>
+                <span aria-hidden="true">● </span>
+                <span className="sr-only">Under way: </span>
+              </>
+            ) : null}
             {step.label}
           </li>
         ))}
