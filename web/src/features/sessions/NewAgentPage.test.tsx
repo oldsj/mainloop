@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connection } from '@/api';
+import { backendUnreachable } from '@/test/offline';
 import { server } from '@/test/msw/server';
 import { session } from './test/fixtures';
 import { createSession, otherListReads, problem, serveSession } from './test/handlers';
@@ -135,7 +136,7 @@ describe('new agent form', () => {
   });
 
   it('blocks starting while the backend is unreachable, and says why', async () => {
-    connection.reportFailure();
+    await backendUnreachable();
     server.use(...otherListReads());
     const user = userEvent.setup();
     renderSessions('/agents');

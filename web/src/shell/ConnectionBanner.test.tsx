@@ -14,7 +14,7 @@ describe('ConnectionBanner', () => {
     expect(screen.queryByTestId('connection-banner')).not.toBeInTheDocument();
   });
 
-  it('collapses repeated offline reports into one line', () => {
+  it('collapses repeated offline reports into one line', async () => {
     const connection = createConnection({ probe: async () => false });
     render(<ConnectionBanner connection={connection} />);
     act(() => {
@@ -22,7 +22,8 @@ describe('ConnectionBanner', () => {
       connection.reportFailure();
       connection.reportFailure();
     });
-    expect(screen.getAllByTestId('connection-banner')).toHaveLength(1);
+    // A report asks the probe; the probe cannot reach the backend, so the banner shows.
+    expect(await screen.findAllByTestId('connection-banner')).toHaveLength(1);
     expect(screen.getByTestId('connection-banner')).toHaveTextContent(/^Offline.*· reconnecting…$/);
     // The text is one truncated line, so a phone never stacks it into several rows.
     expect(screen.getByText(/reconnecting…$/)).toHaveClass('truncate');
