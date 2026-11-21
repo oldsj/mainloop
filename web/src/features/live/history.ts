@@ -1,15 +1,17 @@
+import { splitDelivered } from '@/lib/delivered';
 import type { Entry } from './store';
 
 /**
  * The owner's sent messages in this session, oldest first, for recall in the composer: every user
  * message the runner accepted (the attach backlog and the ones sent since). A message repeated back
- * to back is kept once, as a shell history does.
+ * to back is kept once, as a shell history does. Context Mainloop put in front of a message is not
+ * something the owner sent, so it is left out.
  */
 export function sentHistory(entries: readonly Entry[]): string[] {
   const out: string[] = [];
   for (const e of entries) {
     if (e.t !== 'user') continue;
-    const text = e.text.replace(/ {2}\(cancelled\)$/, '');
+    const text = splitDelivered(e.text).message.replace(/ {2}\(cancelled\)$/, '');
     if (!text.trim() || out[out.length - 1] === text) continue;
     out.push(text);
   }

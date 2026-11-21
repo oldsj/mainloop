@@ -139,6 +139,31 @@ describe('session transcript', () => {
     expect(within(log).queryByRole('button', { name: 'Show earlier' })).not.toBeInTheDocument();
   });
 
+  it('leads a message with what was written, and folds away the context Mainloop sent with it', async () => {
+    // Given a stored turn whose message was delivered behind a project update.
+    const delivered =
+      "[mainloop:project-context] This project's context changed since your brief.\n" +
+      '- Added: use pnpm (memory m1)\n[mainloop:new-message]\nrebase on main';
+    server.use(
+      http.get(`${API_URL}/sessions/s1/transcript`, () =>
+        HttpResponse.json(page([entry(1, 0, 'user', delivered)], { live: [] }))
+      ),
+      ...serveSession(session({ id: 's1' }), native({ session_id: 's1' }))
+    );
+
+    // When the transcript opens.
+    renderSessions('/sessions/s1?transcript=1');
+
+    // Then the row is the message, and the update opens on request.
+    const row = await screen.findByTestId('transcript-user');
+    expect(within(row).getByText(/rebase on main/)).toBeInTheDocument();
+    expect(within(row).queryByText(/new-message/)).not.toBeInTheDocument();
+    const context = within(row).getByTestId('delivered-context');
+    expect(context).not.toHaveAttribute('open');
+    await userEvent.click(within(context).getByText('Context Mainloop sent with this message'));
+    expect(within(context).getByText(/use pnpm/)).toBeInTheDocument();
+  });
+
   it("opens at a search hit's entry, marked, and pages on from there", async () => {
     const reads: URLSearchParams[] = [];
     server.use(

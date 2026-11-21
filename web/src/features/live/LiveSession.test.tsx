@@ -657,6 +657,34 @@ describe('live session', () => {
       expect(runner.attaches).toHaveLength(0);
     });
 
+    it("leads with the owner's message, and folds away the context Mainloop sent with it", async () => {
+      // Given a record whose first message was delivered behind Mainloop's context.
+      world.active = false;
+      world.messages = [
+        {
+          role: 'user',
+          content:
+            '[mainloop:context] You are the Mainloop main agent.\n\n## Working in Mainloop\n' +
+            '- Where you run: sessions are isolated.\n[mainloop:new-message]\nwhat changed?'
+        },
+        { role: 'assistant', content: 'Two files changed.' }
+      ];
+
+      // When the session opens.
+      const { user } = setup();
+      await conn('asleep');
+
+      // Then the row shows what the owner wrote, with the context one press away.
+      const row = await screen.findByTestId('live-user');
+      expect(within(row).getByText('what changed?')).toBeInTheDocument();
+      const context = within(row).getByTestId('delivered-context');
+      expect(context).not.toHaveAttribute('open');
+      expect(within(row).queryByText(/new-message/)).not.toBeInTheDocument();
+      await user.click(within(context).getByText('Context Mainloop sent with this message'));
+      expect(context).toHaveAttribute('open');
+      expect(within(context).getByText(/You are the Mainloop main agent/)).toBeInTheDocument();
+    });
+
     it('wakes on a message: it attaches with wake=1 and sends the message once the runner is up', async () => {
       world.active = false;
       const { runner, user } = setup();
