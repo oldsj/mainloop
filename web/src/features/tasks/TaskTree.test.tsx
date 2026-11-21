@@ -1,4 +1,5 @@
 import { act, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection, keys } from '@/api';
@@ -188,6 +189,63 @@ describe('task tree', () => {
     const row = await screen.findByRole('link', { name: /Supervise done/ });
     expect(within(row).getByTestId('task-state')).toHaveTextContent('supervisor · Cancelled');
     expect(within(row).getByTestId('task-dot')).toHaveAttribute('data-tone', 'muted');
+  });
+
+  it('folds cancelled tasks away behind one button, and never a cancelled task with open work under it', async () => {
+    // Given a project with live work, two cancelled tasks, and a cancelled supervisor whose child still runs.
+    const tasks = [
+      view({
+        id: 'live',
+        title: 'Live work',
+        status: 'running',
+        created_at: '2026-01-05T00:00:00Z'
+      }),
+      view({ id: 'old-1', title: 'Dropped one', status: 'cancelled' }),
+      view({ id: 'old-2', title: 'Dropped two', status: 'cancelled' }),
+      view({ id: 'sup', title: 'Stopped supervisor', status: 'cancelled' }),
+      view({ id: 'kid', title: 'Still running child', status: 'running', parent_task_id: 'sup' }),
+      view({ id: 'done', title: 'Shipped', status: 'completed' })
+    ];
+    server.use(
+      tasksList(() => HttpResponse.json(tasks)),
+      providersRead()
+    );
+
+    // When the list opens.
+    renderTasks('/', () => <TaskTree />);
+    await screen.findByRole('link', { name: /Live work/ });
+
+    // Then the two settled cancelled tasks are behind the button, and nothing with open work is.
+    expect(screen.queryByRole('link', { name: /Dropped one/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Stopped supervisor/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Still running child/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Shipped/ })).toBeInTheDocument();
+    const toggle = screen.getByRole('button', { name: 'Show 2 cancelled tasks' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    // And pressing it lists them after the rest, and offers to hide them again.
+    await userEvent.click(toggle);
+    const titles = screen.getAllByRole('link').map((link) => link.textContent ?? '');
+    expect(titles.findIndex((t) => t.includes('Dropped one'))).toBeGreaterThan(
+      titles.findIndex((t) => t.includes('Shipped'))
+    );
+    expect(screen.getByRole('button', { name: 'Hide cancelled tasks' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+  });
+
+  it('lists a project of only cancelled tasks as it is, with no button', async () => {
+    server.use(
+      tasksList(() =>
+        HttpResponse.json([view({ id: 'only', title: 'Only one', status: 'cancelled' })])
+      ),
+      providersRead()
+    );
+    renderTasks('/', () => <TaskTree />);
+
+    expect(await screen.findByRole('link', { name: /Only one/ })).toBeInTheDocument();
+    expect(screen.queryByTestId('task-list-cancelled-toggle')).not.toBeInTheDocument();
   });
 
   it('is one line: the dot, the title, the state and the age', async () => {

@@ -93,6 +93,39 @@ export function isTerminal(status: string): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 
+/**
+ * A task list with its cancelled work set aside. A top-level task that was cancelled is folded
+ * away with everything under it, but only when nothing under it is still open, so the fold never
+ * hides work. A cancelled child of a task that is shown stays with its parent. When every row would
+ * fold, nothing does: a list of only cancelled tasks is still a list.
+ */
+export function foldCancelled(rows: TreeRow[]): {
+  shown: TreeRow[];
+  folded: TreeRow[];
+  /** How many top-level tasks were folded. */
+  count: number;
+} {
+  const shown: TreeRow[] = [];
+  const folded: TreeRow[] = [];
+  let count = 0;
+  for (let start = 0; start < rows.length; ) {
+    let end = start + 1;
+    while (end < rows.length && (rows[end]?.depth ?? 0) > 0) end++;
+    const group = rows.slice(start, end);
+    const settled =
+      group[0]?.view.task.status === 'cancelled' &&
+      group.every((row) => isTerminal(row.view.task.status));
+    if (settled) {
+      folded.push(...group);
+      count++;
+    } else {
+      shown.push(...group);
+    }
+    start = end;
+  }
+  return shown.length === 0 ? { shown: rows, folded: [], count: 0 } : { shown, folded, count };
+}
+
 /** Every fact unknown: what a projection says before the backend has observed anything. */
 export const EMPTY_PROJECTION: TaskProjection = {
   agent_activity: null,
