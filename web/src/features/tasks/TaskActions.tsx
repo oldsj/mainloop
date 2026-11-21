@@ -155,6 +155,11 @@ export function TaskActions({
   // unavailable, the owner sees no control for them and no note about why: a control that cannot work is not shown,
   // and how the server is built is not the owner's concern.
   const retryHidden = view.actions.retry?.reason === 'handoff_unavailable';
+  // Retry starts a new attempt. That is the next step for a task that has stopped (blocked or
+  // failed), so there it leads. On a task that is running, or waiting on CI or on its pull request,
+  // it is still offered but is not what the page points at.
+  const retryLeads =
+    retry.enabled && (view.task.status === 'blocked' || view.task.status === 'failed');
   const reassignHidden = view.actions.reassign?.reason === 'handoff_unavailable';
   // The server refuses cancel with this reason once the task has ended. There is nothing left to
   // cancel then, so the button and its reason are not shown, like the two above.
@@ -273,7 +278,7 @@ export function TaskActions({
         {retryHidden ? null : (
           <Button
             type="button"
-            variant={retry.enabled ? 'default' : 'outline'}
+            variant={retryLeads ? 'default' : 'outline'}
             data-testid="task-action-retry"
             disabled={!retry.enabled}
             onClick={() => void submit('retry')}

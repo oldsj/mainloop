@@ -433,6 +433,124 @@ describe('back links and finished tasks', () => {
   });
 });
 
+describe('a task that waits on publication', () => {
+  const waiting = (
+    facts: Parameters<typeof projection>[0],
+    rest: Parameters<typeof view>[1] = {}
+  ) =>
+    view(
+      { status: 'waiting', reason: 'publication' },
+      {
+        projection: projection(facts),
+        actions: {
+          retry: { available: true, reason: null },
+          reassign: { available: false, reason: 'handoff_unavailable' },
+          cancel: { available: true, reason: null }
+        },
+        ...rest
+      }
+    );
+
+  it('says a green pull request needs the owner, how to land it, and does not lead with Retry', async () => {
+    // Given a task whose pull request is open with CI passed and no merge proposed.
+    const page = waiting({
+      pr_state: 'open',
+      ci_state: 'success',
+      pr_number: 228,
+      pr_url: 'https://github.com/acme/widgets/pull/228'
+    });
+    server.use(...serveTaskPage(taskScreen(page)));
+
+    // When its page opens.
+    renderTasks('/tasks/task-1');
+    const banner = await screen.findByTestId('task-publication-ask');
+
+    // Then it leads with what is needed and the two ways on.
+    expect(banner).toHaveAttribute('data-kind', 'ready');
+    expect(within(banner).getByRole('heading', { name: 'Needs you' })).toBeInTheDocument();
+    expect(banner).toHaveTextContent(
+      'PR #228 is open and CI passed. Nothing merges it on its own.'
+    );
+    expect(banner).toHaveTextContent(/follow-up to merge it/);
+    expect(within(banner).getByRole('link', { name: 'Open PR #228 on GitHub' })).toHaveAttribute(
+      'href',
+      'https://github.com/acme/widgets/pull/228'
+    );
+    // And Retry is offered, but is not the button the page points at.
+    const retry = screen.getByTestId('task-action-retry');
+    expect(retry).toBeEnabled();
+    expect(retry.className).not.toMatch(/bg-primary/);
+    // The banner sits above the actions.
+    expect(
+      banner.compareDocumentPosition(screen.getByTestId('task-actions')) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('says a merged pull request completes the task only when its own merge did it', async () => {
+    server.use(
+      ...serveTaskPage(
+        taskScreen(waiting({ pr_state: 'merged', pr_number: 237, merge_state: 'merged' }))
+      )
+    );
+    renderTasks('/tasks/task-1');
+
+    const banner = await screen.findByTestId('task-publication-ask');
+    expect(banner).toHaveAttribute('data-kind', 'merged');
+    expect(
+      within(banner).getByRole('heading', { name: 'Waiting on its pull request' })
+    ).toBeInTheDocument();
+    expect(banner).toHaveTextContent(/PR #237 is merged\./);
+    expect(banner).toHaveTextContent(/cancel it to close it/);
+  });
+
+  it('says so when there is no pull request to wait for', async () => {
+    server.use(...serveTaskPage(taskScreen(waiting({ pr_state: 'unknown', pr_number: null }))));
+    renderTasks('/tasks/task-1');
+
+    const banner = await screen.findByTestId('task-publication-ask');
+    expect(banner).toHaveAttribute('data-kind', 'none');
+    expect(banner).toHaveTextContent(/no pull request is linked to it/);
+    expect(within(banner).queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('says nothing while CI is still running or a merge is under way', async () => {
+    server.use(
+      ...serveTaskPage(taskScreen(waiting({ pr_state: 'open', ci_state: 'pending', pr_number: 5 })))
+    );
+    renderTasks('/tasks/task-1');
+
+    await screen.findByTestId('task-actions');
+    expect(screen.queryByTestId('task-publication-ask')).not.toBeInTheDocument();
+  });
+});
+
+describe('which action leads', () => {
+  it('leads with Retry on a task that has stopped', async () => {
+    const failed = view(
+      { status: 'failed' },
+      { actions: { ...view().actions, retry: { available: true, reason: null } } }
+    );
+    server.use(...serveTaskPage(taskScreen(failed)));
+    renderTasks('/tasks/task-1');
+
+    expect((await screen.findByTestId('task-action-retry')).className).toMatch(/bg-primary/);
+  });
+
+  it('offers Retry quietly on a task that is still running', async () => {
+    const running = view(
+      { status: 'running' },
+      { actions: { ...view().actions, retry: { available: true, reason: null } } }
+    );
+    server.use(...serveTaskPage(taskScreen(running)));
+    renderTasks('/tasks/task-1');
+
+    const retry = await screen.findByTestId('task-action-retry');
+    expect(retry).toBeEnabled();
+    expect(retry.className).not.toMatch(/bg-primary/);
+  });
+});
+
 describe('an operation that stopped part-way', () => {
   it('says it is on hold, and marks each step so its state is not colour alone', async () => {
     // Given a failed task whose handoff is blocked after creating the new attempt.
