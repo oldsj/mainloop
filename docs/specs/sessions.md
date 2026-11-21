@@ -231,7 +231,8 @@ When `NativeSessionInfo.live` is true (the session's Agent runs the SDK runner d
 page replaces the identity strip, actions and chat with a live view attached to
 `GET /sessions/{id}/live` (WebSocket, subprotocol `kagent.sdk-runner.v1`, the runner's Client event
 protocol). It renders the way Claude Code does: assistant text after `●`, tool calls with their first
-output line after `⎿` (tap to expand), edits as diffs, permission prompts with numbered answers, and
+output line after `⎿`, held to one line however long it is, with the count of further lines (tap
+to expand to the whole result), edits as diffs, permission prompts with numbered answers, and
 an interrupted turn as `⎿ Interrupted`; a finished turn prints nothing, and there are no status icons
 or cost lines. A long message from the owner, or one Mainloop sent on their behalf such as a task
 report, shows its first ten lines with **Show all** (and **Show less** once open), measured by the

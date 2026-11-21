@@ -575,17 +575,33 @@ function ToolRow({ entry: e }: { entry: Extract<Entry, { t: 'tool' }> }) {
           {e.arg}
         </span>
       </span>
-      {hasOut ? (
+      {hasOut && open ? (
         <span
+          data-testid="live-tool-out"
           className={cn(
             'text-term-fg-muted block pl-[3ch] text-xs [overflow-wrap:anywhere] whitespace-pre-wrap',
             e.status === 'err' && 'text-term-error'
           )}
         >
           <span className="-ml-[2ch]">⎿ </span>
-          {open
-            ? e.out.join('\n')
-            : e.out[0] + (e.out.length > 1 ? `  … +${e.out.length - 1} lines` : '')}
+          {e.out.join('\n')}
+        </span>
+      ) : null}
+      {hasOut && !open ? (
+        // Closed, the result is one line however long its first line is (a JSON result has no line
+        // breaks at all), so one tool call cannot fill the transcript. The count stays in view.
+        <span
+          data-testid="live-tool-out"
+          className={cn(
+            'text-term-fg-muted flex min-w-0 pl-[1ch] text-xs whitespace-pre',
+            e.status === 'err' && 'text-term-error'
+          )}
+        >
+          <span className="flex-none">⎿ </span>
+          <span className="min-w-0 truncate">{e.out[0]}</span>
+          {e.out.length > 1 ? (
+            <span className="flex-none">{`  … +${e.out.length - 1} lines`}</span>
+          ) : null}
         </span>
       ) : null}
     </button>
