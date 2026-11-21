@@ -89,6 +89,8 @@ export function ChatPage({
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="main-thread">
+      {/* The chat has no visible title; a screen reader still gets the page's heading. */}
+      <h1 className="sr-only">Mainloop chat</h1>
       {live && sessionId ? (
         <PanelBoundary name="Live session">
           <LiveMain

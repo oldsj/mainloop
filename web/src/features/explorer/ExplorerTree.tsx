@@ -14,6 +14,13 @@ import { sameTarget, visibleRows, type ExplorerNode, type Target } from './model
 import { RowMenu, useLongPress, type RowMenuAction } from './RowMenu';
 
 /**
+ * Muted text on a row that is hovered or is the current page: the row's background is the selection
+ * colour, where the muted colour is under 4.5:1, so the text takes the row's own foreground.
+ */
+const ON_ROW =
+  'group-hover:text-accent-foreground group-data-[current=true]:text-accent-foreground';
+
+/**
  * A row's small button: a touch target on the phone, 24 px with a mouse. The negative margin keeps
  * a one-line row at the control height, so a row with a button is no taller than one without.
  */
@@ -272,13 +279,22 @@ export function ExplorerTree({
                 <span
                   className={cn(
                     'min-w-0 flex-auto truncate',
-                    heading && 'text-muted-foreground text-2xs font-medium tracking-wide uppercase'
+                    heading &&
+                      cn(
+                        'text-muted-foreground text-2xs font-medium tracking-wide uppercase',
+                        ON_ROW
+                      )
                   )}
                 >
                   {node.label}
                 </span>
                 {node.detail ? (
-                  <span className="text-muted-foreground min-w-0 shrink-[4] truncate text-right text-xs">
+                  <span
+                    className={cn(
+                      'text-muted-foreground min-w-0 shrink-[4] truncate text-right text-xs',
+                      ON_ROW
+                    )}
+                  >
                     {node.detail}
                   </span>
                 ) : null}
@@ -290,7 +306,7 @@ export function ExplorerTree({
                 {meta ? (
                   <span
                     data-testid="explorer-meta"
-                    className="text-muted-foreground group-hover:text-accent-foreground min-w-0 truncate text-xs"
+                    className={cn('text-muted-foreground min-w-0 truncate text-xs', ON_ROW)}
                   >
                     {meta}
                   </span>
@@ -339,7 +355,10 @@ export function ExplorerTree({
             {node.count !== undefined ? (
               <span
                 data-testid="explorer-count"
-                className="text-muted-foreground pl-xs min-w-4 shrink-0 text-right text-xs tabular-nums"
+                className={cn(
+                  'text-muted-foreground pl-xs min-w-4 shrink-0 text-right text-xs tabular-nums',
+                  ON_ROW
+                )}
                 aria-hidden="true"
               >
                 {node.count}

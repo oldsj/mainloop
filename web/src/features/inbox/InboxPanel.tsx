@@ -42,9 +42,10 @@ export function InboxPanel({
       <div className="gap-sm p-md bg-background border-border-subtle sticky top-0 z-10 flex flex-wrap items-center justify-between border-b">
         <div className="gap-xs flex items-center">
           {back}
-          <h2 id="inbox-heading" className="text-sm font-medium">
+          {/* The answer view is a page of its own, so this is the page's heading. */}
+          <h1 id="inbox-heading" className="text-sm font-medium">
             Inbox
-          </h2>
+          </h1>
         </div>
         <div role="group" aria-label="Inbox views" className="gap-xs flex items-center">
           <Button
