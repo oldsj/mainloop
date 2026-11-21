@@ -292,7 +292,8 @@ func TestAPIResponsesPassThroughCompression(t *testing.T) {
 	r := send(h, "GET", "/health", "", map[string]string{"Accept-Encoding": "gzip"})
 
 	// Then the answer says it depends on the header, and a body this small is sent as written.
-	if got := r.header.Get("Vary"); !strings.Contains(got, "Accept-Encoding") {
+	// CORS adds its own Vary value first, so every value is read.
+	if got := strings.Join(r.header.Values("Vary"), ", "); !strings.Contains(got, "Accept-Encoding") {
 		t.Errorf("Vary = %q: the compression middleware is not in the chain", got)
 	}
 	if r.status != 200 || r.header.Get("Content-Encoding") != "" || !strings.Contains(r.body, `"status":"healthy"`) {

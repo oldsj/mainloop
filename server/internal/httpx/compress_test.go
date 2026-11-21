@@ -240,3 +240,20 @@ func TestCompressLetsRecoveryAnswerAfterAPanic(t *testing.T) {
 		t.Errorf("the held bytes were sent: %q", rec.Body.String())
 	}
 }
+
+func TestCompressKeepsTheVaryValueCORSAdds(t *testing.T) {
+	// Given the owner API's order: CORS outside compression.
+	h := httpx.Chain(jsonBody(4096), httpx.CORS("https://mainloop.example", false), httpx.Compress)
+
+	// When the frontend reads a large answer.
+	rec := do(h, "GET", "/tasks", map[string]string{"Origin": "https://mainloop.example", "Accept-Encoding": "gzip"})
+
+	// Then the answer varies on both headers, is compressed, and still carries the CORS grant.
+	vary := strings.Join(rec.Header().Values("Vary"), ", ")
+	if !strings.Contains(vary, "Origin") || !strings.Contains(vary, "Accept-Encoding") {
+		t.Errorf("Vary = %q", vary)
+	}
+	if rec.Header().Get("Content-Encoding") != "gzip" || rec.Header().Get("Access-Control-Allow-Origin") != "https://mainloop.example" {
+		t.Errorf("encoding = %q, allow-origin = %q", rec.Header().Get("Content-Encoding"), rec.Header().Get("Access-Control-Allow-Origin"))
+	}
+}
