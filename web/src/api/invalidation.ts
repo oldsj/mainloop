@@ -11,8 +11,10 @@ import { isProgressFrame, liveProgress, type ProgressFrame } from './liveProgres
  * - `connected`: refetch everything (the first connect of a page load needs nothing: queries are
  *   already loading).
  * - `inbox:updated`: attention and activity.
- * - `task:updated`: attention, task lists, and the task itself when the event is newer than the
- *   held version (duplicates are dropped by event id).
+ * - `task:updated`: attention, the task lists, and the task itself when the event is newer than the
+ *   held version (duplicates are dropped by event id). The task lists are large, and a busy fleet
+ *   sends these events in bursts, so their re-reads are coalesced: the first event re-reads at
+ *   once, and the events of the next `TASK_LIST_COALESCE_MS` share one re-read at its end.
  * - `workspace:updated`: upsert the workspace.
  * - `session:message`: that session's conversation and native info, plus the main thread.
  * - `schedule:updated`: the schedule list, that schedule, and its executions. The event names a
@@ -51,6 +53,7 @@ const isWorkspaceUpdated = (value: unknown): value is WorkspaceUpdated =>
 
 export type CacheAction =
   | { kind: 'invalidate'; keys: readonly QueryKey[] }
+  | { kind: 'taskLists' }
   | { kind: 'task'; taskId: string; version: number; eventId: string }
   | { kind: 'upsertWorkspace'; workspace: WorkspaceLifecycle }
   | { kind: 'progress'; frame: ProgressFrame }
@@ -75,7 +78,8 @@ export function planSseEvent(
     case 'task:updated': {
       if (!isTaskUpdated(payload)) return [{ kind: 'none' }];
       return [
-        { kind: 'invalidate', keys: [keys.attention(), keys.tasks()] },
+        { kind: 'invalidate', keys: [keys.attention()] },
+        { kind: 'taskLists' },
         {
           kind: 'task',
           taskId: payload.task_id,
@@ -138,11 +142,49 @@ export function createEventGate(limit = 500) {
   };
 }
 
+/**
+ * How long task-list re-reads are held together. One task change still shows at once; a burst of
+ * them costs one more read per window, not one per event.
+ */
+export const TASK_LIST_COALESCE_MS = 3000;
+
+/**
+ * Runs `run` at once for a first request, then at most once per window: requests that arrive
+ * inside a window share one run at its end, which opens the next window. Nothing is scheduled
+ * while requests are further apart than the window.
+ */
+export function createCoalescer(run: () => void, windowMs: number) {
+  let lastRun = Number.NEGATIVE_INFINITY;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const fire = () => {
+    timer = undefined;
+    lastRun = Date.now();
+    run();
+  };
+  return {
+    request() {
+      if (timer !== undefined) return;
+      const wait = lastRun + windowMs - Date.now();
+      if (wait <= 0) fire();
+      else timer = setTimeout(fire, wait);
+    },
+    /** Drops a run that is still waiting. */
+    cancel() {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+}
+
 export function createSseApplier(queryClient: QueryClient) {
   const accept = createEventGate();
   let connects = 0;
+  const taskLists = createCoalescer(
+    () => void queryClient.invalidateQueries({ queryKey: keys.tasks() }),
+    TASK_LIST_COALESCE_MS
+  );
 
-  return function apply(message: Pick<SseMessage, 'event' | 'data'>): void {
+  function apply(message: Pick<SseMessage, 'event' | 'data'>): void {
     const firstConnect = message.event === 'connected' && connects++ === 0;
     // A new stream sends the state of running turns again right after `connected`.
     if (message.event === 'connected') liveProgress.reset();
@@ -150,6 +192,9 @@ export function createSseApplier(queryClient: QueryClient) {
       switch (action.kind) {
         case 'invalidate':
           for (const key of action.keys) void queryClient.invalidateQueries({ queryKey: key });
+          break;
+        case 'taskLists':
+          taskLists.request();
           break;
         case 'task': {
           if (!accept(action.eventId)) break;
@@ -176,7 +221,10 @@ export function createSseApplier(queryClient: QueryClient) {
           break;
       }
     }
-  };
+  }
+
+  /** `stop` drops a task-list re-read that is still waiting, for when the stream's owner unmounts. */
+  return Object.assign(apply, { stop: taskLists.cancel });
 }
 
 function upsertWorkspace(list: WorkspaceLifecycle[], workspace: WorkspaceLifecycle) {

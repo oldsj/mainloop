@@ -76,7 +76,10 @@ Stored events are kept for 24 hours by default (`MAINLOOP_EVENTS_RETENTION_HOURS
 records the newest pruned id. A resume point older than that, or newer than the newest event
 (the database was reset), or not a number, is treated like a fresh connection: nothing is
 replayed and the new `connected` frame tells the client to re-read its state. The web client
-already refetches everything on every reconnect. If retention prunes past a replay that is still
+already refetches everything on every reconnect. For `task:updated` it re-reads attention and the
+changed task for every event, and coalesces its re-reads of the task lists, which are large: the
+first event re-reads them at once, and the events of the next three seconds share one re-read at
+the end of that window, so a burst from a busy fleet costs one read per window, not one per event. If retention prunes past a replay that is still
 running, the stream ends and the next attempt starts fresh.
 
 ## Delivery and back-pressure
