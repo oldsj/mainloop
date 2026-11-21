@@ -456,6 +456,49 @@ describe('owner actions', () => {
     expect(screen.getByRole('article')).not.toHaveTextContent(/handoff/i);
   });
 
+  it('offers no actions on a task that has ended', async () => {
+    // Given a completed task: the server refuses every action, cancel included.
+    const ended = { available: false, reason: 'cancel_unavailable' } as const;
+    const none = { available: false, reason: 'handoff_unavailable' } as const;
+    const page = view(
+      { status: 'completed' },
+      { actions: { retry: none, reassign: none, cancel: ended } }
+    );
+    server.use(...serveTaskPage(taskScreen(page)));
+
+    // When its page opens.
+    renderTasks('/tasks/task-1');
+    await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
+
+    // Then there is no Cancel button, no reason for one, and no empty actions panel.
+    expect(screen.queryByTestId('task-action-cancel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('task-actions')).not.toBeInTheDocument();
+    expect(screen.getByRole('article')).not.toHaveTextContent(/cancel/i);
+  });
+
+  it('keeps Retry and drops Cancel on a failed task', async () => {
+    // Given a failed task the server still lets the owner retry.
+    const page = view(
+      { status: 'failed' },
+      {
+        actions: {
+          retry: { available: true, reason: null },
+          reassign: { available: false, reason: 'handoff_unavailable' },
+          cancel: { available: false, reason: 'cancel_unavailable' }
+        }
+      }
+    );
+    server.use(...serveTaskPage(taskScreen(page)));
+
+    // When its page opens.
+    renderTasks('/tasks/task-1');
+
+    // Then Retry is the action, and nothing offers or explains a cancel.
+    expect(await screen.findByTestId('task-action-retry')).toBeEnabled();
+    expect(screen.queryByTestId('task-action-cancel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('task-actions')).not.toHaveTextContent(/cancel/i);
+  });
+
   it('hides only the action the handoff makes unavailable', async () => {
     const page = view(
       {},
