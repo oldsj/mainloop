@@ -156,6 +156,9 @@ export function TaskActions({
   // and how the server is built is not the owner's concern.
   const retryHidden = view.actions.retry?.reason === 'handoff_unavailable';
   const reassignHidden = view.actions.reassign?.reason === 'handoff_unavailable';
+  // The server refuses cancel with this reason once the task has ended. There is nothing left to
+  // cancel then, so the button and its reason are not shown, like the two above.
+  const cancelHidden = view.actions.cancel?.reason === 'cancel_unavailable';
   // On a task that waits on the owner, the main chat is where they say what they did about it. When
   // the server's own Retry works, that is the direct way, so the chat's "retry" is not offered too.
   const answerInChat = onAsk !== undefined && waitsOnOwner(view);
@@ -188,6 +191,18 @@ export function TaskActions({
                 ? 'Loading providers…'
                 : 'No other provider is available.')
         };
+
+  // An ended task with no action left, nothing unconfirmed and nothing to report shows no panel.
+  const nothingToShow =
+    retryHidden &&
+    reassignHidden &&
+    cancelHidden &&
+    !answerInChat &&
+    blockers.length === 0 &&
+    notice === null &&
+    !cancelChanged &&
+    KINDS.every((kind) => !remembered[kind]);
+  if (nothingToShow) return null;
 
   return (
     <section
@@ -292,19 +307,21 @@ export function TaskActions({
             </Link>
           </Button>
         ) : null}
-        <Button
-          type="button"
-          variant="outline"
-          data-testid="task-action-cancel"
-          disabled={!cancel.enabled}
-          onClick={() => {
-            setCancelSeen(view);
-            setCancelChanged(false);
-          }}
-          className="text-destructive"
-        >
-          {LABELS.cancel}
-        </Button>
+        {cancelHidden ? null : (
+          <Button
+            type="button"
+            variant="outline"
+            data-testid="task-action-cancel"
+            disabled={!cancel.enabled}
+            onClick={() => {
+              setCancelSeen(view);
+              setCancelChanged(false);
+            }}
+            className="text-destructive"
+          >
+            {LABELS.cancel}
+          </Button>
+        )}
       </div>
 
       {answerInChat ? (
@@ -318,7 +335,7 @@ export function TaskActions({
           {LABELS.retry}: {retry.reason}
         </p>
       ) : null}
-      {cancel.reason ? (
+      {!cancelHidden && cancel.reason ? (
         <p className="text-muted-foreground text-xs">
           {LABELS.cancel}: {cancel.reason}
         </p>
