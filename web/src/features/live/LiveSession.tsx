@@ -11,10 +11,12 @@ import {
 } from 'react';
 import { Markdown } from '@/components/markdown/markdown';
 import { ControlsHeading, SessionControls } from '@/components/shared/controls-sheet';
+import { DeliveredContext } from '@/components/shared/DeliveredContext';
 import { MEASURE } from '@/components/shared/measure';
 import { SessionBar } from '@/components/shared/session-bar';
 import { cn } from '@/components/ui/cn';
 import { barStatus, type LiveStatus } from '@/lib/barStatus';
+import { splitDelivered } from '@/lib/delivered';
 import {
   EFFORTS,
   MODE_IDS,
@@ -403,7 +405,17 @@ const OWNER_ACTION = /^Owner action needed:/m;
  * forwarded to this session, shows its first lines with "Show all", so one message cannot fill the
  * transcript. It is cut by the lines actually drawn, so a phone and a wide window each get it right.
  */
-function UserRow({ text, queued, joins }: { text: string; queued?: boolean; joins?: boolean }) {
+function UserRow({
+  text: delivered,
+  queued,
+  joins
+}: {
+  text: string;
+  queued?: boolean;
+  joins?: boolean;
+}) {
+  // What Mainloop put in front of the message folds away, so the row leads with what was written.
+  const { context, message: text } = useMemo(() => splitDelivered(delivered), [delivered]);
   const box = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   // Whether the clamped text is cut. Measured while clamped and kept while expanded, so the button
@@ -425,6 +437,7 @@ function UserRow({ text, queued, joins }: { text: string; queued?: boolean; join
       data-testid="live-user"
       className={cn('bg-term-bg-secondary px-sm py-xs', queued && 'opacity-60')}
     >
+      {context ? <DeliveredContext text={context} /> : null}
       <div
         ref={box}
         className={cn(

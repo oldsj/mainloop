@@ -201,7 +201,10 @@ around it.
 - **Rows.** Prompts, replies (as Markdown), and each tool call on one line: its name, its argument as
   the live view shows it, and the first line of its result after `⎿`. Tapping a call opens its full
   arguments and result. Thinking is collapsed under **✻ Thinking**; status lines are small and muted.
-  An entry cut when stored says how much was kept.
+  An entry cut when stored says how much was kept. A prompt Mainloop delivered behind context of
+  its own (the main session's standing context and guidance, a carried-over conversation, or a
+  project's changed instructions and memory) shows what was written; the context is one muted
+  line above it, **Context Mainloop sent with this message**, which opens to the text.
 - **The turn not stored yet.** After the stored entries, under "Not stored yet", come the turns kagent
   has not finished or Mainloop has not copied. The view reads the transcript again every 15 s while
   there are any.
@@ -233,7 +236,9 @@ an interrupted turn as `⎿ Interrupted`; a finished turn prints nothing, and th
 or cost lines. A long message from the owner, or one Mainloop sent on their behalf such as a task
 report, shows its first ten lines with **Show all** (and **Show less** once open), measured by the
 lines actually drawn, so one message cannot fill the transcript. A message with an
-`Owner action needed:` line is never cut. In assistant text, bold and headings are the text colour
+`Owner action needed:` line is never cut. A message Mainloop delivered behind context of its own
+shows what was written, with the context folded into one line above it, as in the transcript view;
+the composer's history recalls the message without it. In assistant text, bold and headings are the text colour
 and only links take the accent colour. Input goes through Mainloop's API, never the socket, so every message is in
 Mainloop's record before it reaches the runner. The composer sends each message with
 `POST /sessions/{id}/message`, with a message id chosen in the browser and `steer: true`; it shows at

@@ -14,6 +14,18 @@ describe('composer history', () => {
     expect(sentHistory(entries)).toEqual(['one', 'two', 'three']);
   });
 
+  it('recalls what the owner wrote, not the context Mainloop sent with it', () => {
+    const entries: Entry[] = [
+      {
+        t: 'user',
+        id: 1,
+        text: '[mainloop:context] You are the Mainloop main agent.\n[mainloop:new-message]\nstatus?',
+        queued: false
+      }
+    ];
+    expect(sentHistory(entries)).toEqual(['status?']);
+  });
+
   it('recalls only from the top and bottom line, with nothing selected', () => {
     expect(caretOnFirstLine('', 0, 0)).toBe(true);
     expect(caretOnFirstLine('a\nb', 1, 1)).toBe(true);

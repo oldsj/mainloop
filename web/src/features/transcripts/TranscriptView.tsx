@@ -2,9 +2,11 @@ import { useNavigate } from '@tanstack/react-router';
 import { Search } from 'lucide-react';
 import { useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Markdown } from '@/components/markdown/markdown';
+import { DeliveredContext } from '@/components/shared/DeliveredContext';
 import { MEASURE } from '@/components/shared/measure';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
+import { splitDelivered } from '@/lib/delivered';
 import {
   itemHas,
   toolArg,
@@ -197,17 +199,20 @@ function ItemRow({ item, hit }: { item: TranscriptItem; hit: boolean }) {
 
 function EntryItem({ e }: { e: TranscriptEntry }) {
   switch (e.kind) {
-    case 'user':
+    case 'user': {
+      // What Mainloop put in front of the message folds away; the row leads with what was written.
+      const { context, message } = splitDelivered(e.text);
       return (
-        <div
-          data-testid="transcript-user"
-          className="bg-term-bg-secondary px-sm py-xs [overflow-wrap:anywhere] whitespace-pre-wrap"
-        >
-          <span aria-hidden="true">› </span>
-          {e.text}
-          <Cut e={e} />
+        <div data-testid="transcript-user" className="bg-term-bg-secondary px-sm py-xs">
+          {context ? <DeliveredContext text={context} /> : null}
+          <div className="[overflow-wrap:anywhere] whitespace-pre-wrap">
+            <span aria-hidden="true">› </span>
+            {message}
+            <Cut e={e} />
+          </div>
         </div>
       );
+    }
     case 'assistant':
       return (
         <div className="flex min-w-0">
