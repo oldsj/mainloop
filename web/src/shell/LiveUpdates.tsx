@@ -40,6 +40,7 @@ export function LiveUpdates() {
       window.removeEventListener('pagehide', leave);
       window.removeEventListener('pageshow', restore);
       client.stop();
+      apply.stop();
     };
   }, [queryClient]);
 

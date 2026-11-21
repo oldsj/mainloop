@@ -1,6 +1,11 @@
 import { QueryClient } from '@tanstack/react-query';
-import { describe, expect, it } from 'vitest';
-import { createEventGate, createSseApplier, planSseEvent } from './invalidation';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  createEventGate,
+  createSseApplier,
+  planSseEvent,
+  TASK_LIST_COALESCE_MS
+} from './invalidation';
 import { allKeys, keys } from './keys';
 import { createSseParser, type SseMessage } from './sse';
 import { workspaceFixture } from '@/test/fixtures';
@@ -77,6 +82,18 @@ describe('planSseEvent', () => {
         keys.conversation()
       ]
     });
+  });
+
+  it('refreshes attention, the task lists and the task for task:updated', () => {
+    expect(
+      planSseEvent(message('task:updated', { event_id: 'e1', task_id: 't1', version: 2 }), {
+        firstConnect: false
+      })
+    ).toEqual([
+      { kind: 'invalidate', keys: [keys.attention()] },
+      { kind: 'taskLists' },
+      { kind: 'task', taskId: 't1', version: 2, eventId: 'e1' }
+    ]);
   });
 
   it('upserts the workspace carried by workspace:updated', () => {
@@ -176,6 +193,77 @@ describe('createSseApplier', () => {
     queryClient.setQueryData(keys.workspaces(), []);
     apply(message('workspace:updated', { workspace: created }));
     expect(queryClient.getQueryData(keys.workspaces())).toEqual([created]);
+  });
+
+  describe('task-list re-reads', () => {
+    afterEach(() => vi.useRealTimers());
+
+    /** How many times the task list was marked for a re-read. */
+    function listReads(queryClient: QueryClient) {
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+      return () =>
+        invalidate.mock.calls.filter(
+          ([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(keys.tasks())
+        ).length;
+    }
+
+    it('re-reads the list at once for one change, and once more for a burst that follows', () => {
+      // Given a fleet whose tasks change in a burst.
+      vi.useFakeTimers();
+      const { queryClient, apply } = setup();
+      const reads = listReads(queryClient);
+
+      // When the first event arrives.
+      apply(taskEvent(1));
+      // Then the list is re-read straight away.
+      expect(reads()).toBe(1);
+
+      // When twenty more arrive inside the window.
+      for (let version = 2; version <= 21; version++) apply(taskEvent(version));
+      // Then none of them re-reads the list on its own, and each still re-reads attention.
+      expect(reads()).toBe(1);
+      // And one re-read at the end of the window covers them all.
+      vi.advanceTimersByTime(TASK_LIST_COALESCE_MS);
+      expect(reads()).toBe(2);
+      vi.advanceTimersByTime(TASK_LIST_COALESCE_MS * 3);
+      expect(reads()).toBe(2);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('re-reads at once again when changes are further apart than the window', () => {
+      vi.useFakeTimers();
+      const { queryClient, apply } = setup();
+      const reads = listReads(queryClient);
+      apply(taskEvent(1));
+      vi.advanceTimersByTime(TASK_LIST_COALESCE_MS + 1);
+      apply(taskEvent(2));
+      expect(reads()).toBe(2);
+      // Nothing waits when no event fell inside a window.
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('drops a waiting re-read when the stream owner stops', () => {
+      vi.useFakeTimers();
+      const { queryClient, apply } = setup();
+      const reads = listReads(queryClient);
+      apply(taskEvent(1));
+      apply(taskEvent(2));
+      apply.stop();
+      vi.advanceTimersByTime(TASK_LIST_COALESCE_MS * 2);
+      expect(reads()).toBe(1);
+    });
+
+    it('still re-reads attention for every task event', () => {
+      vi.useFakeTimers();
+      const { queryClient, apply } = setup();
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+      apply(taskEvent(1));
+      apply(taskEvent(2));
+      const attention = invalidate.mock.calls.filter(
+        ([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(keys.attention())
+      );
+      expect(attention).toHaveLength(2);
+    });
   });
 
   it('refetches all queries on a second connect only', () => {
