@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { HttpResponse } from 'msw';
+import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeHITL } from '@/features/hitl/handlers';
 import { activityRead, attentionRead, respondPost } from '@/features/inbox/test/handlers';
@@ -17,6 +17,7 @@ import { project } from '@/features/projects/test/fixtures';
 import { serveTaskPage, taskRead, taskScreen, tasksList } from '@/features/tasks/test/handlers';
 import { hitlView } from '@/test/fixtures/hitl';
 import type * as ConnectionModule from '@/api/connection';
+import { API_URL } from '@/api/config';
 import { connection } from '@/api/connection';
 import { testSeen } from '@/test/msw/handlers';
 import { server } from '@/test/msw/server';
@@ -311,11 +312,13 @@ describe('compact tab badges', () => {
     await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2), { timeout: 6000 });
   });
 
-  it('updates the count without a live event while the chat tab is open', async () => {
+  it('updates the count from the poll while the event stream is down and the chat tab is open', async () => {
     setViewport(false);
     let needsOwner = true;
     let reads = 0;
     server.use(
+      // With the stream open a change arrives as an event and the poll slows to a safety net.
+      http.get(`${API_URL}/events`, () => new HttpResponse(null, { status: 503 })),
       tasksList(() => {
         reads++;
         return HttpResponse.json([view({ reason: needsOwner ? 'owner_decision' : null })]);

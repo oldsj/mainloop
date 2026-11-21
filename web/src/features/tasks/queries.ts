@@ -5,6 +5,7 @@
 import { useEffect } from 'react';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { $api, fetchClient, keys } from '@/api';
+import { useEventStreamOpen } from '@/api/eventStream';
 import type { TaskFollowUp, TaskFollowUpResult, TaskOperation } from '@/lib/contract';
 import type { ActionIntent } from '@/lib/taskActions';
 import { visiblePolling } from '@/lib/visiblePolling';
@@ -72,26 +73,46 @@ export function useTaskList(filter: TaskListFilter = {}) {
   return useQuery({ ...taskListQuery(filter), select: readableTaskRows });
 }
 
-/** Visible-only fallback for the compact count. All mounts share one poll and the list cache. */
+/**
+ * How often the owner task list is re-read while the event stream is open. Every task change
+ * arrives as an event that re-reads the list, so the poll is only a safety net then, and the list
+ * is the largest thing the app downloads.
+ */
+export const TASK_POLL_STREAMING_MS = 30_000;
+
+/**
+ * Visible-only fallback for the compact count. All mounts share one poll and the list cache. It
+ * reads every few seconds while the event stream is down, and every `TASK_POLL_STREAMING_MS`
+ * while it is open. When the stream drops, the faster poll starts with a read at once.
+ */
 export function useOwnerTaskPoll(enabled: boolean): void {
   const queryClient = useQueryClient();
+  const streaming = useEventStreamOpen();
   useEffect(() => {
     if (!enabled) return;
-    return visiblePolling().watch('tasks:owner', async (signal) => {
-      if (signal.aborted) return;
-      const query = taskListQuery({});
-      const cancel = () =>
-        void queryClient.cancelQueries({ queryKey: query.queryKey, exact: true }, { revert: true });
-      signal.addEventListener('abort', cancel, { once: true });
-      try {
-        await queryClient.fetchQuery({ ...query, staleTime: 0, retry: false });
-      } catch {
-        // The query holds the error; a later visible poll can recover.
-      } finally {
-        signal.removeEventListener('abort', cancel);
-      }
-    });
-  }, [enabled, queryClient]);
+    return visiblePolling().watch(
+      'tasks:owner',
+      async (signal) => {
+        if (signal.aborted) return;
+        const query = taskListQuery({});
+        const cancel = () =>
+          void queryClient.cancelQueries(
+            { queryKey: query.queryKey, exact: true },
+            { revert: true }
+          );
+        signal.addEventListener('abort', cancel, { once: true });
+        try {
+          await queryClient.fetchQuery({ ...query, staleTime: 0, retry: false });
+        } catch {
+          // The query holds the error; a later visible poll can recover.
+        } finally {
+          signal.removeEventListener('abort', cancel);
+        }
+      },
+      // The stream opening changes only the pace: the list was read moments ago.
+      streaming ? { everyMs: TASK_POLL_STREAMING_MS, afterFirstInterval: true } : undefined
+    );
+  }, [enabled, queryClient, streaming]);
 }
 
 /** How many rows of the same list this page cannot read, so the list can say so. */

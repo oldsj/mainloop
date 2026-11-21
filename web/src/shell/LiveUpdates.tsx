@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { connection } from '@/api/connection';
+import { eventStream } from '@/api/eventStream';
 import { createSseApplier } from '@/api/invalidation';
 import { createSseClient } from '@/api/sse';
 import { useConnection } from './ConnectionBanner';
@@ -18,7 +19,9 @@ export function LiveUpdates() {
   useEffect(() => {
     const apply = createSseApplier(queryClient);
     const client = createSseClient({
-      onMessage: (message) => apply(message)
+      onMessage: (message) => apply(message),
+      // Polls that are only a safety net while events arrive slow down while the stream is open.
+      onStatus: eventStream.set
     });
     // A page kept in the back/forward cache would keep its stream open. Over HTTP/1.1 each one
     // holds one of the browser's six connections to the API, and once they are used up every

@@ -5,11 +5,20 @@ export interface PollEnvironment {
   later: (fn: () => void, ms: number) => () => void;
   onVisibility: (fn: () => void) => () => void;
 }
+/** How often a watched read repeats unless it asks for something else. */
+export const POLL_MS = 4000;
+
+export interface PollOptions {
+  everyMs?: number;
+  afterFirstInterval?: boolean;
+}
+
 export function createVisiblePolling(env: PollEnvironment) {
   type Entry = {
     read: (signal: AbortSignal) => Promise<boolean | void>;
     users: number;
     due: number;
+    every: number;
     done: boolean;
   };
   const entries = new Map<string | symbol, Entry>();
@@ -38,7 +47,7 @@ export function createVisiblePolling(env: PollEnvironment) {
     active = { entry, controller };
     // At most four starts/second across inbox, session lists and request cards.
     nextStart = env.now() + 250;
-    entry.due = env.now() + 4000;
+    entry.due = env.now() + entry.every;
     const cancelDeadline = env.later(
       () => controller.abort(new DOMException('Polling read timed out', 'TimeoutError')),
       10000
@@ -65,12 +74,28 @@ export function createVisiblePolling(env: PollEnvironment) {
     }
   }
   return {
-    watch(key: string | symbol, read: Entry['read']) {
+    /**
+     * Reads now and then every `everyMs` while the page is visible. `afterFirstInterval` skips the
+     * read at the start, for a caller that only changed how often it reads. Mounts that share a
+     * key share its reads, at the shortest interval any of them asked for.
+     */
+    watch(
+      key: string | symbol,
+      read: Entry['read'],
+      { everyMs = POLL_MS, afterFirstInterval = false }: PollOptions = {}
+    ) {
       let entry = entries.get(key);
       if (!entry) {
-        entry = { read, users: 0, due: 0, done: false };
+        entry = {
+          read,
+          users: 0,
+          due: afterFirstInterval ? env.now() + everyMs : 0,
+          every: everyMs,
+          done: false
+        };
         entries.set(key, entry);
       }
+      entry.every = Math.min(entry.every, everyMs);
       entry.users++;
       unlisten ??= env.onVisibility(visibilityChanged);
       schedule();
