@@ -21,7 +21,7 @@ import { API_URL } from '@/api/config';
 import { connection } from '@/api/connection';
 import { testSeen } from '@/test/msw/handlers';
 import { server } from '@/test/msw/server';
-import { projection, view } from '@/test/fixtures/tasks';
+import { justNow, projection, view } from '@/test/fixtures/tasks';
 import { createAppRouter } from '@/router';
 
 // The first render of this file mounts the whole app through the real router; under a full,
@@ -1171,7 +1171,9 @@ describe('answer view on desktop', () => {
     server.use(
       attentionRead(() => HttpResponse.json(attentionSnapshot([hitlAttentionItem('req-a')]))),
       tasksList(() =>
-        HttpResponse.json([view({ id: 'task-f', title: 'Fix CI flake', status: 'failed' })])
+        HttpResponse.json([
+          view({ id: 'task-f', title: 'Fix CI flake', status: 'failed', updated_at: justNow() })
+        ])
       )
     );
     await renderAt('/inbox');

@@ -13,8 +13,11 @@ ordinary reconciliation do not imply owner attention. An empty inbox says **Noth
 the status bar, the phone's Needs you tab, the tree's Needs you heading and the Inbox's own Needs
 you tab), and it is the number of rows the Inbox's Needs you view lists. It counts the owner
 actions `GET /attention` lists, plus each task that needs a decision and that no listed item names:
-a failed task that can still be retried, reassigned or cancelled, a blocked task, or a task whose
-pull request waits on the owner. Those tasks follow the listed items in the Inbox, newest first,
+a task that failed in the last seven days and can still be retried, reassigned or cancelled, a
+blocked task, or a task whose pull request waits on the owner. A failed task that asks the owner
+nothing stops counting seven days after it last changed (the reach of Finished recently): retry
+stays available on a failed task for good, so without an end a failure nobody retried would need
+the owner for ever. It stays on its project's page and its own, where it can still be retried. Those tasks follow the listed items in the Inbox, newest first,
 each with its state and a link to its page, where it is decided. A task the main thread has set
 aside (Snoozed) is left out until its time passes. The **Problems** number works the same way: the
 listed problems plus each task Mainloop is recovering that no listed problem names, and the

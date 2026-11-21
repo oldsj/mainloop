@@ -296,7 +296,7 @@ const atRest = (tone: Tone): Tone => (tone === 'ok' ? 'muted' : tone);
 export function taskNode(view: TaskView, source: ExplorerSource, parent: string): ExplorerNode {
   const { task } = view;
   const id = `${parent}/task:${task.id}`;
-  const group = workGroup(view, null);
+  const group = workGroup(view, null, source.now);
   const target: Target = { to: 'task', id: task.id };
   const title = task.title.trim();
   const label = title || briefSnippet(task.brief, 60) || FALLBACK_TITLE;
@@ -481,7 +481,7 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
   ];
   const finishedSince = now - FINISHED_WINDOW_MS;
   for (const view of [...source.tasks].sort(byUpdatedDesc)) {
-    const group = workGroup(view, null);
+    const group = workGroup(view, null, now);
     const named = work.named.has(view.task.id);
     const nested = hasLoadedParent(view, source);
     // A task nested under its parent elsewhere in the tree is not also a flat Working or

@@ -24,18 +24,34 @@ export interface SinceCounts {
 const time = (iso: string): number => Date.parse(iso);
 
 /**
+ * How long a failed task that asks the owner nothing stays in front of them: seven days, the same
+ * reach as Finished recently. Retry stays available on a failed task for good, so without an end a
+ * failure nobody retried would count as needing the owner for ever.
+ */
+export const FAILED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
  * The group a task sits in. Precedence runs top down, so a failed task waiting on the owner counts
  * as needing them. A running, queued or waiting task is current work, never idle. Finished tasks
  * appear only when they finished after the owner's last visit. A failed task with no available
  * action (every one of retry/reassign/cancel refused) is not an owner decision: there is nothing
  * left to do about it, so it gets no group here and falls back to wherever else it is listed (its
- * project, or Finished recently within the window).
+ * project, or Finished recently within the window). The same goes for a failed task that asks the
+ * owner nothing and last changed more than `FAILED_WINDOW_MS` ago: it can still be retried from
+ * its page, but it no longer counts as needing them.
  */
-export function workGroup(view: TaskView, lastVisit: number | null): WorkGroup | null {
+export function workGroup(
+  view: TaskView,
+  lastVisit: number | null,
+  now: number = Date.now()
+): WorkGroup | null {
   if (needsOwner(view)) return 'needs-you';
   const { status, reason } = view.task;
   if (status === 'blocked' && reason != null && PROBLEM_REASONS.has(reason)) return 'problem';
-  if (status === 'failed') return hasAvailableAction(view) ? 'blocked' : null;
+  if (status === 'failed') {
+    const recent = now - time(view.task.updated_at) <= FAILED_WINDOW_MS;
+    return hasAvailableAction(view) && recent ? 'blocked' : null;
+  }
   if (status === 'blocked') return 'blocked';
   if (status === 'queued' || status === 'running' || status === 'waiting') return 'working';
   if (
