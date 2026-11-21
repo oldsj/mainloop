@@ -20,7 +20,8 @@ come from it. See [`../ROADMAP.md`](../ROADMAP.md) for direction.
 - `internal/config`: the only package that reads the environment (a lint rule enforces it).
   Variable names match the Python backend's. `AGENT_TOKEN_KEY` is required.
 - `internal/httpx`: request id, access log, panic recovery, Host guard, foreign-Origin write guard,
-  CORS, and the `{detail}` error shape. `Chain` makes its first middleware the outermost.
+  CORS, gzip for large JSON answers (streams, WebSockets and small bodies pass through), and the
+  `{detail}` error shape. `Chain` makes its first middleware the outermost.
   `httpx.Standard` (request id, access log, recovery, then the Host guard) fronts the MCP, git read
   and stub listeners, so every access line has a `request_id`; the owner API uses `httpx.Observed`
   (the same first three) because preview hosts are routed ahead of its Host guard. The push gate

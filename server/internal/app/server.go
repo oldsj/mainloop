@@ -183,8 +183,8 @@ func New(d Deps) *Server {
 }
 
 // Handler returns the owner API: the strict handlers behind request validation, the body cap,
-// authentication, then the Host guard, Origin guard and CORS, with preview hosts routed ahead of
-// them, all inside panic recovery, request id and access log.
+// authentication, response compression, then the Host guard, Origin guard and CORS, with preview
+// hosts routed ahead of them, all inside panic recovery, request id and access log.
 func (s *Server) Handler() (http.Handler, error) {
 	d := s.deps
 	if err := d.missing(); err != nil {
@@ -226,6 +226,9 @@ func (s *Server) Handler() (http.Handler, error) {
 		httpx.HostGuard(cfg.AllowedAPIHosts(), cfg.IsDev(), "/health"),
 		httpx.OriginGuard(cfg.FrontendOrigin(), cfg.IsDev()),
 		httpx.CORS(cfg.FrontendOrigin(), cfg.IsDev()),
+		// Inside CORS, so a compressed answer carries the same CORS headers, and around
+		// everything that writes JSON, refusals included.
+		httpx.Compress,
 		authn,
 		httpx.MaxBody(maxBodyBytes),
 		requestValidator(spec),
