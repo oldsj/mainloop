@@ -10,6 +10,7 @@ const agent = (overrides: Partial<AgentRow> = {}): AgentRow => ({
   spaceLabel: 'widgets',
   label: 'Add retry button',
   role: 'worker',
+  standing: false,
   detail: 'Running',
   tone: 'active',
   problem: false,
@@ -91,6 +92,39 @@ describe('TabStrip', () => {
     expect(within(tabs[2]!).getByTestId('tab-dot')).toHaveAttribute('data-tone', 'bad');
     expect(within(tabs[0]!).queryByTestId('tab-dot')).toBeNull();
     expect(tabs[1]).toHaveAttribute('title', 'Add retry button');
+  });
+
+  it('leads with the standing supervisor in a project that has one, and has no overview tab', () => {
+    // Given the widgets project has a standing supervisor, at rest
+    const supervised: AgentColumnModel = {
+      ...MODEL,
+      agents: [
+        MODEL.agents[0]!,
+        agent({
+          id: 'task:sup',
+          label: 'supervisor',
+          role: 'supervisor',
+          standing: true,
+          tone: 'muted',
+          target: { to: 'session', id: 'session-sup' },
+          pages: [
+            { to: 'task', id: 'sup' },
+            { to: 'session', id: 'session-sup' }
+          ]
+        }),
+        ...MODEL.agents.slice(1)
+      ]
+    };
+    renderStrip({ model: supervised, page: { to: 'session', id: 'session-sup' } });
+
+    const tabs = screen.getAllByTestId('tab');
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      'supervisor',
+      'Add retry button',
+      'Fix CI flake'
+    ]);
+    expect(tabs[0]).toHaveAttribute('aria-current', 'page');
+    expect(within(tabs[0]!).getByTestId('tab-dot')).toHaveAttribute('data-tone', 'muted');
   });
 
   it('opens a tab’s page on a click', async () => {

@@ -22,6 +22,7 @@ const agent = (overrides: Partial<AgentRow> = {}): AgentRow => ({
   spaceLabel: 'widgets',
   label: 'Add retry button',
   role: 'worker',
+  standing: false,
   detail: 'Running',
   at: '2026-01-01T09:00:00Z',
   tone: 'active',

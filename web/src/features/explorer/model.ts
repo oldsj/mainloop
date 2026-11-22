@@ -8,6 +8,7 @@ import { ownerWork } from '@/features/inbox/ownerWork';
 import {
   countText,
   isHeld,
+  isIdle,
   sinceCounts,
   statusLine,
   workGroup,
@@ -317,7 +318,7 @@ function parentDetail(view: TaskView, childTasks: TaskView[], source: ExplorerSo
 
 /**
  * A task row's dot. Needs you is red. A problem is Mainloop's own recovery work, not an owner
- * decision, so it is at rest (hollow). A completed task is teal until the owner has opened it,
+ * decision, so it is at rest (hollow), as is a standing supervisor waiting for its next message. A completed task is teal until the owner has opened it,
  * then at rest like any other finished row.
  */
 function taskTone(
@@ -326,7 +327,7 @@ function taskTone(
   source: ExplorerSource
 ): Tone {
   if (group === 'needs-you') return 'attention';
-  if (group === 'problem') return 'muted';
+  if (group === 'problem' || isIdle(view)) return 'muted';
   const tone = statusTone(view.task.status);
   if (tone !== 'ok') return tone;
   return isUnseen(source.seen, view.task.id, view.task.updated_at) ? 'unseen' : 'muted';

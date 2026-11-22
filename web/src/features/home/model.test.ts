@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskView } from '@/lib/contract';
 import { NOW, projection, view } from '@/test/fixtures/tasks';
-import { countText, sinceCounts, workGroup } from './model';
+import { countText, isIdle, sinceCounts, statusLine, workGroup } from './model';
 
 const MIN = 60_000;
 const at = (minutesBeforeNow: number) => new Date(NOW - minutesBeforeNow * MIN).toISOString();
@@ -105,6 +105,22 @@ describe('workGroup', () => {
 
   it('shows no finished task when there is no visit on record', () => {
     expect(workGroup(view({ status: 'completed', updated_at: at(1) }), null)).toBeNull();
+  });
+});
+
+describe('a standing supervisor at rest', () => {
+  const idle = view({ standing: true, mode: 'coordination', status: 'waiting', reason: 'idle' });
+
+  it('is in no group: it is waiting, but not on anything', () => {
+    expect(isIdle(idle)).toBe(true);
+    expect(workGroup(idle, null)).toBeNull();
+    // Waiting on something else is still work in progress.
+    expect(isIdle(view({ status: 'waiting', reason: 'ci' }))).toBe(false);
+    expect(workGroup(view({ status: 'waiting', reason: 'ci' }), null)).toBe('working');
+  });
+
+  it('reads Idle, not Waiting', () => {
+    expect(statusLine(idle)).toBe('Idle');
   });
 });
 

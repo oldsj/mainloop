@@ -316,6 +316,100 @@ describe('agents', () => {
   });
 });
 
+describe('a project’s standing supervisor', () => {
+  const supervisor = (rest: Parameters<typeof view>[0] = {}) =>
+    view(
+      {
+        id: 'sup',
+        title: 'Supervisor of acme/widgets',
+        mode: 'coordination',
+        standing: true,
+        status: 'waiting',
+        reason: 'idle',
+        created_at: at(30),
+        updated_at: at(600),
+        ...rest
+      },
+      { attempts: [attempt({ task_id: 'sup', session_id: 'session-sup' })] }
+    );
+
+  it('is always an agent, first in its space, named for what it is, hollow at rest', () => {
+    // Given a supervisor at rest, started after a task that is still running
+    const tasks = [running('older', { created_at: at(90) }), supervisor()];
+
+    const { agents, spaces } = buildAgentColumn(source({ tasks }));
+
+    // Then it leads its space, and being at rest is neither work nor anything for the owner
+    expect(agents.map((agent) => agent.id)).toEqual(['main', 'task:sup', 'task:older']);
+    expect(agents[1]).toMatchObject({
+      label: 'supervisor',
+      role: 'supervisor',
+      standing: true,
+      detail: 'Idle',
+      tone: 'muted',
+      problem: false,
+      target: { to: 'session', id: 'session-sup' }
+    });
+    expect(workingCount(agents)).toBe(1);
+    expect(spaces[1]).toMatchObject({ detail: '1 working', tone: 'active' });
+    expect(agents[0]).toMatchObject({ detail: 'Working' });
+  });
+
+  it('leaves a space with only a supervisor at rest idle', () => {
+    const { agents, spaces } = buildAgentColumn(source({ tasks: [supervisor()] }));
+
+    expect(spaces[1]).toMatchObject({ detail: 'idle', tone: 'muted' });
+    expect(agents[0]).toMatchObject({ detail: 'Idle', tone: 'muted' });
+  });
+
+  it('is amber while it works, with the workers it directs listed under it', () => {
+    const tasks = [
+      supervisor({ status: 'running', reason: null }),
+      running('worker', { parent_task_id: 'sup' })
+    ];
+
+    const { agents } = buildAgentColumn(source({ tasks }));
+
+    expect(agents.slice(1).map((agent) => [agent.id, agent.depth, agent.tone])).toEqual([
+      ['task:sup', 0, 'active'],
+      ['task:worker', 1, 'active']
+    ]);
+    expect(agents[1]?.detail).toBe('0/1 done · 1 running');
+  });
+
+  it('is the space’s first tab, and the project page is a tab only while it shows', () => {
+    const tasks = [supervisor(), running('worker', { parent_task_id: 'sup' })];
+    const src = source({ tasks });
+    const strip = (page: Parameters<typeof spaceTabs>[2], pathname: string) =>
+      spaceTabs(buildAgentColumn(src, page), 'project-1', page, pathname).map(
+        (tab) => `${tab.label}${tab.current ? '*' : ''}`
+      );
+
+    // On the supervisor's conversation: supervisor, then its workers, and no overview tab
+    expect(strip({ to: 'session', id: 'session-sup' }, '/sessions/session-sup')).toEqual([
+      'supervisor*',
+      'worker'
+    ]);
+    // On the project's page, reached from the space's row: a last tab of its own
+    expect(strip({ to: 'project', id: 'project-1' }, '/projects/project-1')).toEqual([
+      'supervisor',
+      'worker',
+      'overview*'
+    ]);
+  });
+
+  it('keeps overview first in a project that has no standing supervisor yet', () => {
+    const src = source({ tasks: [running('worker')] });
+    const page = { to: 'project', id: 'project-1' } as const;
+
+    expect(
+      spaceTabs(buildAgentColumn(src, page), 'project-1', page, '/projects/project-1').map(
+        (tab) => tab.label
+      )
+    ).toEqual(['overview', 'worker']);
+  });
+});
+
 describe('the page being shown', () => {
   const tasks = [
     view(

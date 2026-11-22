@@ -31,6 +31,14 @@ const time = (iso: string): number => Date.parse(iso);
 export const FAILED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
+ * A project's standing supervisor at rest: it waits for its next message. Only a standing task takes
+ * this state, and it is neither work in progress nor anything for the owner.
+ */
+export function isIdle(view: TaskView): boolean {
+  return view.task.status === 'waiting' && view.task.reason === 'idle';
+}
+
+/**
  * The group a task sits in. Precedence runs top down, so a failed task waiting on the owner counts
  * as needing them. A running, queued or waiting task is current work, never idle. Finished tasks
  * appear only when they finished after the owner's last visit. A failed task with no available
@@ -38,7 +46,8 @@ export const FAILED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
  * left to do about it, so it gets no group here and falls back to wherever else it is listed (its
  * project, or Finished recently within the window). The same goes for a failed task that asks the
  * owner nothing and last changed more than `FAILED_WINDOW_MS` ago: it can still be retried from
- * its page, but it no longer counts as needing them.
+ * its page, but it no longer counts as needing them. A standing supervisor at rest has no group: it
+ * is waiting, but not on anything.
  */
 export function workGroup(
   view: TaskView,
@@ -46,6 +55,7 @@ export function workGroup(
   now: number = Date.now()
 ): WorkGroup | null {
   if (needsOwner(view)) return 'needs-you';
+  if (isIdle(view)) return null;
   const { status, reason } = view.task;
   if (status === 'blocked' && reason != null && PROBLEM_REASONS.has(reason)) return 'problem';
   if (status === 'failed') {
@@ -78,6 +88,7 @@ export function statusLine(view: TaskView): string {
   if (view.task.reason === 'approval' || (view.projection.pending_approval_ids ?? []).length > 0) {
     return 'Waiting for your approval';
   }
+  if (isIdle(view)) return 'Idle';
   const reason = reasonLabel(view.task.reason);
   return reason ? `${statusLabel(view.task.status)} · ${reason}` : statusLabel(view.task.status);
 }

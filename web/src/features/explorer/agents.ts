@@ -41,6 +41,8 @@ export interface AgentRow {
   /** The row's first line: the task's or session's own title. */
   label: string;
   role: AgentRole;
+  /** The project's standing supervisor: one per project, first among its agents, never finished. */
+  standing: boolean;
   /** Where it stands or what it needs: the row's second line. */
   detail?: string;
   /** When it last changed, as an ISO time. The second line ends with its age. */
@@ -112,8 +114,9 @@ function actionFor(attention: AttentionItem[], taskId: string): AttentionItem | 
 }
 
 /**
- * Whether a task is an agent in the list: it has not ended, or it needs the owner, or it finished in
- * the last seven days and has not been looked at. A finished task that has been looked at leaves the
+ * Whether a task is an agent in the list: it is the project's standing supervisor (always, at rest
+ * or not), it has not ended, it needs the owner, or it finished in the last seven days and has not
+ * been looked at. A finished task that has been looked at leaves the
  * list; its project's page still has it.
  */
 function isListed(
@@ -122,7 +125,7 @@ function isListed(
   named: ReadonlySet<string>,
   now: number
 ): boolean {
-  if (named.has(view.task.id)) return true;
+  if (view.task.standing || named.has(view.task.id)) return true;
   if (workGroup(view, null, now) !== null) return true;
   return (
     view.task.status === 'completed' &&
@@ -152,9 +155,12 @@ function taskAgent(
     id: `task:${task.id}`,
     space: space.id,
     spaceLabel: space.label,
-    label: node.label,
+    // The standing supervisor is named for what it is: its space's name is already over it.
+    label: task.standing ? 'supervisor' : node.label,
     role: supervisor ? 'supervisor' : 'worker',
-    detail: supervisor ? ['supervisor', detail].filter(Boolean).join(' · ') : detail,
+    standing: task.standing === true,
+    detail:
+      supervisor && !task.standing ? ['supervisor', detail].filter(Boolean).join(' · ') : detail,
     at: node.at,
     tone: action ? 'attention' : (node.tone ?? 'muted'),
     problem,
@@ -177,6 +183,7 @@ function sessionAgent(session: Session, space: { id: string; label: string }): A
     spaceLabel: space.label,
     label: node.label,
     role: 'session',
+    standing: false,
     detail: node.detail,
     tone: node.tone ?? 'muted',
     problem: false,
@@ -189,10 +196,14 @@ function sessionAgent(session: Session, space: { id: string; label: string }): A
 
 const byCreated = (a: TaskView, b: TaskView) => a.task.created_at.localeCompare(b.task.created_at);
 
+/** The standing supervisor first, then the order the agents were started in. */
+const byStanding = (a: TaskView, b: TaskView) =>
+  Number(b.task.standing === true) - Number(a.task.standing === true) || byCreated(a, b);
+
 /**
  * The two lists. Spaces are Mainloop, then the projects in the order the server lists them. Within
- * a space the agents keep the order they were started in, so a row does not move as its state
- * changes; a task that another listed task directs follows that task, one step in. `page` is the
+ * a space the project's standing supervisor comes first, and the other agents keep the order they
+ * were started in, so a row does not move as its state changes; a task that another listed task directs follows that task, one step in. `page` is the
  * page being shown.
  */
 export function buildAgentColumn(
@@ -240,7 +251,7 @@ export function buildAgentColumn(
         add(child, 1);
       }
     };
-    for (const view of tasks.filter((candidate) => !directed(candidate)).sort(byCreated)) {
+    for (const view of tasks.filter((candidate) => !directed(candidate)).sort(byStanding)) {
       add(view, 0);
     }
     for (const session of source.sessions) {
@@ -267,6 +278,7 @@ export function buildAgentColumn(
     spaceLabel: mainloop.label,
     label: 'Mainloop',
     role: 'main',
+    standing: false,
     detail: state.label,
     tone: state.tone,
     problem: false,
@@ -348,15 +360,16 @@ const PAGE_TABS: Record<string, string> = {
   workspaces: 'workspace',
   tasks: 'task',
   sessions: 'session',
-  projects: 'project'
+  projects: 'overview'
 };
 
 /**
  * The tab strip over the page: the current space's agents, as a terminal workspace manager shows
- * one tab per agent in the space. First the space's own page (`main`, the main chat, for the main
- * thread's space; `overview`, the project page, for a project), then its agents in the column's
- * order. When the page being shown is none of those (the Inbox, Settings, a superseded session), it
- * gets a last tab of its own, so one tab is always lit.
+ * one tab per agent in the space. In the main thread's space, `main` (the main chat) and then its
+ * agents. In a project with a standing supervisor, `supervisor` and then its workers, in the
+ * column's order. In a project that has none yet, `overview` (the project page) and then its agents.
+ * When the page being shown is none of those (the Inbox, Settings, a supervised project's own page,
+ * a superseded session), it gets a last tab of its own, so one tab is always lit.
  */
 export function spaceTabs(
   model: AgentColumnModel,
@@ -380,18 +393,20 @@ export function spaceTabs(
           target: { to: 'project', id: space },
           current: page?.to === 'project' && page.id === space
         };
+  const agents = model.agents.filter((agent) => agent.space === space && agent.role !== 'main');
+  // A project with a standing supervisor opens on it: the supervisor is the space's first tab, and
+  // the project's page is reached from the space's row.
+  const supervised = agents.some((agent) => agent.standing);
   const tabs: TabRow[] = [
-    home,
-    ...model.agents
-      .filter((agent) => agent.space === space && agent.role !== 'main')
-      .map((agent) => ({
-        id: agent.id,
-        label: agent.label,
-        title: agent.label,
-        tone: agent.tone,
-        target: agent.target,
-        current: agent === here
-      }))
+    ...(supervised ? [] : [home]),
+    ...agents.map((agent) => ({
+      id: agent.id,
+      label: agent.label,
+      title: agent.standing ? undefined : agent.label,
+      tone: agent.tone,
+      target: agent.target,
+      current: agent === here
+    }))
   ];
   if (!tabs.some((tab) => tab.current)) {
     const part = pathname.split('/').filter(Boolean)[0] ?? '';
