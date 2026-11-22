@@ -9,6 +9,8 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/config"
+	"github.com/oldsj/mainloop/server/internal/kagent"
+	"github.com/oldsj/mainloop/server/internal/providers"
 )
 
 func testConfig(t *testing.T, extra map[string]string) *config.Config {
@@ -91,5 +93,26 @@ func TestGitReadIsOnlyWiredWhenTheTransportAppAndClusterAreAllPresent(t *testing
 				t.Errorf("wiring = %+v", g)
 			}
 		})
+	}
+}
+
+func TestTheMCPProcessCanSendButRunsNoLoops(t *testing.T) {
+	cfg := testConfig(t, nil)
+	reg, err := providers.NewRegistry(cfg.Kagent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kc, err := kagent.New(kagent.FromSettings(cfg.Kagent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := newMCPTasks(cfg, nil, reg, kc, quiet)
+	// Follow-ups, steers and supervisor sends need a sender and the liveness reader; the loops need
+	// a workspace runtime, which only serve-api has.
+	if svc.Sessions == nil || svc.Liveness == nil {
+		t.Fatalf("sessions = %v, liveness = %v", svc.Sessions, svc.Liveness)
+	}
+	if svc.Workspaces != nil {
+		t.Fatal("the MCP process has a workspace runtime and would run the task loops")
 	}
 }

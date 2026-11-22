@@ -1140,6 +1140,12 @@ func WithRuntimes(ws WorkspaceRuntime, sess SessionRuntime) Option {
 	return func(s *Service) { s.Workspaces, s.Sessions = ws, sess }
 }
 
+// WithSender sets the session runtime of a process that takes requests but runs no reconcile loops
+// (the MCP process). Follow-ups, steers and supervisor sends only record their message, with a
+// notify, in the database; the API process's delivery loop sends it. The loops stay unbuilt: there
+// is no workspace runtime.
+func WithSender(sess SessionRuntime) Option { return func(s *Service) { s.Sessions = sess } }
+
 // WithObserver sets the reader of a task's pull request and CI. Without one nothing is projected.
 func WithObserver(o Observer) Option { return func(s *Service) { s.Observer = o } }
 
