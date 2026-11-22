@@ -354,8 +354,20 @@ export function reviewSeed() {
     // A session's own page reads it by id, and its native state.
     http.get(url('/sessions/:session_id'), ({ params }) => {
       const found = [live, gone, ...standingSessions].find((item) => item.id === params.session_id);
-      return found
-        ? HttpResponse.json(found)
+      if (found) return HttpResponse.json(found);
+      // An agent that is still going opens on its session, so every task's session has a page.
+      const owner = tasks.find((task) =>
+        task.attempts.some((candidate) => candidate.session_id === params.session_id)
+      );
+      return owner
+        ? HttpResponse.json(
+            session({
+              id: String(params.session_id),
+              title: owner.task.title,
+              project_id: owner.task.project_id,
+              created_at: owner.task.created_at
+            })
+          )
         : HttpResponse.json({ detail: 'Session not found' }, { status: 404 });
     }),
     http.get(url(`/sessions/${gone.id}/native`), () =>

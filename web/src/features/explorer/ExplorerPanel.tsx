@@ -10,7 +10,7 @@ import {
   type ReactNode
 } from 'react';
 import { Button } from '@/components/ui/button';
-import { shortcutLabel } from '@/lib/platform';
+import { sidebarShortcutLabel } from '@/lib/platform';
 import { needsCount, targetOfLocation, type ExplorerNode } from './model';
 import {
   WIDTH_MAX,
@@ -63,7 +63,7 @@ function HideSidebar({ onClick }: { onClick: () => void }) {
       variant="ghost"
       size="sm"
       aria-label="Hide sidebar"
-      title={`Hide sidebar (${shortcutLabel('b')})`}
+      title={`Hide sidebar (${sidebarShortcutLabel()})`}
       onClick={onClick}
     >
       <PanelLeftClose aria-hidden="true" />
@@ -158,7 +158,7 @@ export interface ExplorerSidebarProps {
 /**
  * Desktop: the sidebar on the left, beside the page. It is the spaces and their agents, with **new**,
  * **inbox** and **menu** between the two lists. It is resizable from its right edge, and is hidden
- * with its own button or the sidebar shortcut (⌘B on a Mac, Ctrl+B elsewhere); the tab strip brings
+ * with its own button or the sidebar shortcut (⌘B on a Mac; the prefix and B anywhere); the tab strip brings
  * it back. The shell owns the prefs and the data, since the tab strip and the status bar read them
  * too.
  */
