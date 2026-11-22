@@ -250,7 +250,77 @@ export function reviewSeed() {
       updated_at: earlier
     })
   ];
-  const tasks = [running, ready, landing, stuck, ops, failed, merged, old, ...family];
+  // A second project with a standing supervisor at rest and one worker it directs, so the space's
+  // first tab is its supervisor. The first project has none, and keeps its overview tab.
+  const infra = project({
+    id: 'project-b',
+    owner: 'acme',
+    name: 'infra',
+    full_name: 'acme/infra',
+    open_pr_count: 0
+  });
+  const standing = view(
+    {
+      id: 'task-standing-0020',
+      project_id: infra.id,
+      title: 'Supervisor of acme/infra',
+      mode: 'coordination',
+      standing: true,
+      status: 'waiting',
+      reason: 'idle',
+      created_at: earlier,
+      updated_at: earlier
+    },
+    {
+      attempts: [attempt({ task_id: 'task-standing-0020', session_id: 'sess-standing-0020' })],
+      actions: {
+        retry: { available: false, reason: 'standing_supervisor' },
+        reassign: { available: false, reason: 'standing_supervisor' },
+        cancel: { available: false, reason: 'standing_supervisor' }
+      }
+    }
+  );
+  const directed = view(
+    {
+      id: 'task-directed-0021',
+      project_id: infra.id,
+      parent_task_id: standing.task.id,
+      title: 'Rotate the registry token',
+      status: 'running',
+      updated_at: now
+    },
+    {
+      attempts: [attempt({ task_id: 'task-directed-0021', session_id: 'sess-directed-0021' })]
+    }
+  );
+  const standingSessions = [
+    session({
+      id: 'sess-standing-0020',
+      title: 'Supervisor of acme/infra',
+      status: 'idle',
+      project_id: infra.id,
+      created_at: earlier
+    }),
+    session({
+      id: 'sess-directed-0021',
+      title: 'Rotate the registry token',
+      project_id: infra.id,
+      created_at: now
+    })
+  ];
+  const tasks = [
+    running,
+    ready,
+    landing,
+    stuck,
+    ops,
+    failed,
+    merged,
+    old,
+    ...family,
+    standing,
+    directed
+  ];
   // `&slow=1`: these reads never answer, so every loading state can be looked at.
   const slow = new URLSearchParams(window.location.search).get('slow') === '1';
   const never = async () => {
@@ -283,7 +353,7 @@ export function reviewSeed() {
     }),
     // A session's own page reads it by id, and its native state.
     http.get(url('/sessions/:session_id'), ({ params }) => {
-      const found = [live, gone].find((item) => item.id === params.session_id);
+      const found = [live, gone, ...standingSessions].find((item) => item.id === params.session_id);
       return found
         ? HttpResponse.json(found)
         : HttpResponse.json({ detail: 'Session not found' }, { status: 404 });
@@ -291,7 +361,7 @@ export function reviewSeed() {
     http.get(url(`/sessions/${gone.id}/native`), () =>
       HttpResponse.json(native({ session_id: gone.id, live: true }))
     ),
-    http.get(url('/projects'), () => HttpResponse.json([repo])),
+    http.get(url('/projects'), () => HttpResponse.json([repo, infra])),
     // Both built-in profiles, so Settings has rows to show; one worker default is already set.
     http.get(url('/providers'), () => HttpResponse.json([CLAUDE_PROFILE, CODEX_PROFILE])),
     ...sessionDefaultsHandlers([
