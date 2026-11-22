@@ -35,6 +35,8 @@ func (r *rig) liveStanding(ks string) (taskID, sessionID string) {
 	r.exec(`UPDATE agent_bindings SET kagent_session_id = $2, kagent_agent_namespace = 'kagent', kagent_agent_name = 'agent' WHERE session_id = $1`, sessionID, ks)
 	r.attempt(v.Task.Id, dbstate.AttemptSupervisor, dbstate.AttemptActive, sessionID)
 	r.setStatus(v.Task.Id, "running", "")
+	// Its create made this attempt and is done, as the reconciler leaves it.
+	r.exec(`UPDATE task_operations SET state = 'completed', last_confirmed_step = 'completed' WHERE task_id = $1`, v.Task.Id)
 	return v.Task.Id, sessionID
 }
 
@@ -145,19 +147,24 @@ func TestStandingSupervisorWedgedTurnStillStalls(t *testing.T) {
 	}
 }
 
-func TestStandingSupervisorAtRestWithAGoneSessionIsBlocked(t *testing.T) {
+func TestStandingSupervisorAtRestWithAGoneSessionIsRecovered(t *testing.T) {
 	r := newRig(t)
 	id, _ := r.liveStanding("ks-s")
 	r.live.set("ks-s", kagent.SessionLiveness{Exists: true})
 	r.sweep(r.svc.LivenessSweep())
+	attempt, _ := r.attemptOf(id)
 
 	// Given a standing supervisor at rest whose kagent session is then gone
 	r.live.set("ks-s", kagent.SessionLiveness{})
 	r.sweep(r.svc.LivenessSweep())
+	r.sweep(r.svc.LivenessSweep())
 
-	// Then it is blocked, session lost
-	if got := r.state(id); got != "blocked/session_lost" {
-		t.Fatalf("state = %s, want blocked/session_lost", got)
+	// Then Mainloop restarts it, once, keyed by the gone attempt
+	if got := r.state(id); got != "waiting/handoff" {
+		t.Fatalf("state = %s, want waiting/handoff", got)
+	}
+	if n := r.count(`SELECT count(*) FROM task_operations WHERE task_id = $1 AND kind = 'retry' AND request_id = $2`, id, "standing-recover:"+attempt); n != 1 {
+		t.Fatalf("recoveries = %d", n)
 	}
 }
 

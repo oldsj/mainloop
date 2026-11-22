@@ -81,7 +81,8 @@ func (s *Service) EnsureSupervisor(ctx context.Context, owner, projectID string)
 // no message on its way, a running standing supervisor moves to waiting/idle, which is not a stall;
 // a resting one whose session has a turn again moves back to running. A turn that is open but records
 // nothing for the stall timeout is still stalled, and a wake still has the runtime bound, counted from
-// the wake (a trigger restarts it). A session that is gone blocks it, resting or not.
+// the wake (a trigger restarts it). A session that is gone is recovered, resting or not (see
+// [Service.recoverStanding]).
 func (s *Service) checkStanding(ctx context.Context, a dbq.TaskAttempt) error {
 	if a.BindingID == nil {
 		return nil
@@ -122,10 +123,7 @@ func (s *Service) checkStanding(ctx context.Context, a dbq.TaskAttempt) error {
 	idle := TaskState{Status: dbstate.TaskWaiting, Reason: dbstate.ReasonIdle}
 	running := TaskState{Status: dbstate.TaskRunning}
 	if !live.Exists || live.Terminal && !live.Recoverable {
-		if resting {
-			return s.moveStanding(ctx, a, idle, TaskState{Status: dbstate.TaskBlocked, Reason: dbstate.ReasonSessionLost})
-		}
-		return s.blockAttempt(ctx, a, dbstate.ReasonSessionLost)
+		return s.recoverStanding(ctx, a)
 	}
 	busy := live.Progress != "" || live.AwaitingOwner
 	if !busy && a.SessionID != nil {
@@ -233,7 +231,22 @@ func (s *Service) SupervisorSend(ctx context.Context, p Principal, in Supervisor
 		case <-time.After(time.Second):
 		}
 	}
-	return s.FollowUp(ctx, p, FollowUpInput{TaskID: v.Task.Id, RequestID: in.RequestID, Text: in.Text, kind: "supervisor-send"})
+	res, err := s.FollowUp(ctx, p, FollowUpInput{TaskID: v.Task.Id, RequestID: in.RequestID, Text: in.Text, kind: "supervisor-send"})
+	var e *Error
+	if errors.As(err, &e) && e.Reason == ReasonSessionGone {
+		// Its session is gone: recover it, and main sends again once the successor has its brief.
+		if a, aerr := dbq.New(s.Pool).GetTaskByID(ctx, v.Task.Id); aerr == nil && a.CurrentAttemptID != nil {
+			att, aerr := dbq.New(s.Pool).GetTaskAttempt(ctx, *a.CurrentAttemptID)
+			if aerr == nil {
+				aerr = s.recoverStanding(ctx, att)
+			}
+			if aerr != nil {
+				return FollowUpResult{}, aerr
+			}
+		}
+		return FollowUpResult{}, refusal(409, ReasonSupervisorStarting)
+	}
+	return res, err
 }
 
 // briefed reports whether a task has a current attempt that has been given its first brief, or
@@ -243,6 +256,9 @@ func (s *Service) briefed(ctx context.Context, taskID string) (bool, error) {
 	t, err := q.GetTaskByID(ctx, taskID)
 	if err != nil {
 		return false, err
+	}
+	if t.Status == dbstate.TaskWaiting && t.Reason != nil && *t.Reason == dbstate.ReasonHandoff {
+		return false, nil // a restart is making its successor
 	}
 	if t.CurrentAttemptID == nil {
 		return TaskFinal(t.Status) || t.Status == dbstate.TaskBlocked, nil
@@ -264,7 +280,7 @@ const (
 // restartLimit refuses a restart past [maxRestartsPerHour] by anyone but the owner. A standing
 // supervisor has no lifetime handoff cap: it restarts for as long as the project lives.
 func (s *Service) restartLimit(ctx context.Context, q *dbq.Queries, p Principal, t dbq.Task) error {
-	if p.Role == "" {
+	if p.Role == "" && !p.Recovery {
 		return nil
 	}
 	n, err := q.CountTaskHandoffsSince(ctx, dbq.CountTaskHandoffsSinceParams{TaskID: t.ID, CreatedAt: s.now().Add(-restartWindow)})
@@ -451,4 +467,60 @@ func standingContinuation(ctx context.Context, q *dbq.Queries, a, prev dbq.TaskA
 		}
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// recoverRequestID keys the recovery of a standing supervisor's attempt whose session is gone: the
+// liveness sweep and a send that both notice start one operation.
+func recoverRequestID(attemptID string) string { return "standing-recover:" + attemptID }
+
+// recoverStanding restarts a standing supervisor whose native session is gone, as Mainloop: a
+// restart that keeps its children, keyed by the gone attempt. A restart already under way is joined,
+// not doubled. Past the hourly limit the supervisor is blocked session_lost for the owner instead,
+// so a crash loop stops.
+func (s *Service) recoverStanding(ctx context.Context, a dbq.TaskAttempt) error {
+	p := Principal{Recovery: true}
+	return s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
+		t, err := q.GetTaskByIDForUpdate(ctx, a.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		if !t.Standing || TaskFinal(t.Status) || t.CurrentAttemptID == nil || *t.CurrentAttemptID != a.ID {
+			return nil, nil
+		}
+		p.OwnerID = t.OwnerID
+		reqID := recoverRequestID(a.ID)
+		dig, payload, err := digest(dbstate.TaskOpRetry, t.ID, map[string]any{"recover": a.ID})
+		if err != nil {
+			return nil, err
+		}
+		if _, replay, err := request(ctx, q, p, reqID, dig); err != nil || replay {
+			return nil, err
+		}
+		if n, err := q.OpenOperationsForTask(ctx, &t.ID); err != nil || n > 0 {
+			return nil, err
+		}
+		op, drafts, err := s.actOn(ctx, q, p, dbstate.TaskOpRetry, ActionInput{RequestID: reqID, TaskID: t.ID}, t, dig, payload)
+		var e *Error
+		if errors.As(err, &e) && e.Reason == ReasonHandoffLimit {
+			s.log().WarnContext(ctx, "tasks: standing supervisor restarted too often; blocked for the owner", "task", t.ID)
+			return s.blockStanding(ctx, q, t, dbstate.ReasonSessionLost)
+		}
+		if err != nil {
+			return nil, err
+		}
+		s.log().InfoContext(ctx, "tasks: recovering standing supervisor", "task", t.ID, "attempt", a.ID, "operation", op.ID)
+		return drafts, nil
+	})
+}
+
+// blockStanding moves a standing supervisor to blocked with a reason, from running or rest.
+func (s *Service) blockStanding(ctx context.Context, q *dbq.Queries, t dbq.Task, reason dbstate.TaskReason) ([]events.Draft, error) {
+	if t.Status == dbstate.TaskBlocked {
+		return nil, nil
+	}
+	after, err := q.UpdateTaskState(ctx, dbq.UpdateTaskStateParams{ID: t.ID, Version: t.Version, Status: dbstate.TaskBlocked, Reason: &reason})
+	if err != nil {
+		return nil, err
+	}
+	return []events.Draft{s.updated(after)}, nil
 }

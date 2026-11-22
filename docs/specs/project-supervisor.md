@@ -6,9 +6,9 @@ layers: main (one per owner), a standing supervisor per project, and its workers
 which cannot delegate. The design, and the slices still to come, are in
 [docs/design/project-supervisor.md](../design/project-supervisor.md).
 
-Status: **identity, rest, liveness, main's routing and restart implemented** (server, contract
-and MCP tools), not yet proven live. Not built yet: recovery from a gone session, owner tasks under
-it, per-project model settings, and retiring it.
+Status: **identity, rest, liveness, main's routing, restart and recovery implemented** (server,
+contract and MCP tools), not yet proven live. Not built yet: owner tasks under it, per-project
+model settings, and retiring it.
 
 ## What it is
 
@@ -35,8 +35,8 @@ it, per-project model settings, and retiring it.
   being blocked `stalled`; at rest, once its session has a turn again (a child's report, a loop
   firing, a message from main or the owner), it moves back to `running`, within a sweep
   (the sweep runs every minute). Each move publishes `task:updated`.
-- A turn that is open but records nothing for `TASK_STALL_TIMEOUT` is still `stalled`, and a session
-  that is gone (not one kagent will revert on the next send) blocks it `session_lost`, at rest or not.
+- A turn that is open but records nothing for `TASK_STALL_TIMEOUT` is still `stalled`. A session that
+  is gone (not one kagent will revert on the next send) is recovered, at rest or not (see Recovery).
 - `TASK_MAX_RUNTIME` bounds a **wake**, not its life: every move from `waiting`/`idle` to `running`,
   whatever makes it, restarts the bound on its current attempt (a database trigger).
 - A `failed` report from it is refused, `422 standing_outcome`: it reports `blocked` instead.
@@ -85,7 +85,26 @@ before the successor exists, so there is never a second writer), with these diff
 - **Limits.** No `TASK_MAX_HANDOFFS` cap. Main may restart it three times in a rolling hour; the
   fourth is `409 handoff_limit` (detail `handoffs`, `limit`, `window`). The owner is not limited.
 
-How to ask for one:
+## Recovery
+
+When its native session is gone (kagent has no such Session, or it is terminal and not one kagent
+reverts on the next send), Mainloop restarts it, as a restart above, instead of blocking it
+`session_lost`:
+
+- The liveness sweep starts it within a minute, running or at rest. A `supervisor_send` that finds
+  the session gone starts it too and answers `409 supervisor_starting`: main sends again under the
+  same `request_id`, and the message goes to the new session once it has its brief (a send while a
+  restart is under way waits for it, up to the start wait).
+- The recovery is keyed by the gone attempt (request id `standing-recover:<attempt id>`), so the
+  sweep and a send that both notice start one operation, and one that finds a restart already under
+  way joins it.
+- It counts against the same three restarts per rolling hour as main's (every restart in the hour
+  counts, the owner's too). Past that, it is not restarted: it is blocked `session_lost` and the
+  owner restarts it.
+- `follow_up` to it with its session gone is still refused `409 session_gone`, as for any task; use
+  `supervisor_send` or a restart.
+
+How to ask for a restart:
 
 - The owner: `POST /projects/{project_id}/supervisor/restart` with `{request_id, fresh}` answers the
   handoff's `TaskOperation` (202). A retry of the same request id and body answers the same

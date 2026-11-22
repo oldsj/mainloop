@@ -23,6 +23,9 @@ type Principal struct {
 	// Final is set when the principal's task is completed and its attempt is the active current
 	// one (a completed task's attempt stays active until it is settled). Such a principal can still file the one completed report, and nothing else.
 	Final bool
+	// Recovery marks Mainloop's own restart of a standing supervisor whose session is gone. It acts
+	// for the owner but is limited as main is (docs/specs/project-supervisor.md).
+	Recovery bool
 }
 
 // OwnerPrincipal is the principal of an owner request.
@@ -30,6 +33,9 @@ func OwnerPrincipal(owner string) Principal { return Principal{OwnerID: owner} }
 
 // Key is the principal part of an operation's idempotency key.
 func (p Principal) Key() string {
+	if p.Recovery {
+		return "mainloop:recovery"
+	}
 	if p.BindingID == "" {
 		return "owner:" + p.OwnerID
 	}
