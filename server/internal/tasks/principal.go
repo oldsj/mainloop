@@ -106,8 +106,10 @@ func principalOf(ctx context.Context, q *dbq.Queries, role dbstate.BindingRole, 
 		return row, false, ErrInactive
 	}
 	if row.ParentTaskID != nil {
+		// A standing supervisor's children belong to its task, not its attempt: they keep working
+		// while a restart replaces the attempt (docs/specs/project-supervisor.md).
 		parent := dbstate.TaskStatus(row.ParentTaskStatus)
-		if row.ParentAttemptState != string(dbstate.AttemptActive) || TaskFinal(parent) {
+		if TaskFinal(parent) || !row.ParentStanding && row.ParentAttemptState != string(dbstate.AttemptActive) {
 			return row, false, ErrInactive
 		}
 	}
@@ -183,7 +185,7 @@ func ensureActive(ctx context.Context, q *dbq.Queries, p Principal) error {
 	if err != nil {
 		return err
 	}
-	if parent.State != dbstate.AttemptActive || TaskFinal(parent.TaskStatus) {
+	if TaskFinal(parent.TaskStatus) || !parent.Standing && parent.State != dbstate.AttemptActive {
 		return refusal(409, ReasonParentNotActive)
 	}
 	return nil

@@ -469,6 +469,11 @@ func (Unimplemented) RespondToQueueItem(context.Context, RespondToQueueItemReque
 	return nil, apierr.NotImplemented
 }
 
+// RestartProjectSupervisor is not implemented yet.
+func (Unimplemented) RestartProjectSupervisor(context.Context, RestartProjectSupervisorRequestObject) (RestartProjectSupervisorResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // RestartSession is not implemented yet.
 func (Unimplemented) RestartSession(context.Context, RestartSessionRequestObject) (RestartSessionResponseObject, error) {
 	return nil, apierr.NotImplemented

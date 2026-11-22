@@ -587,6 +587,23 @@ func (q *Queries) CountTaskHandoffs(ctx context.Context, taskID string) (int64, 
 	return count, err
 }
 
+const countTaskHandoffsSince = `-- name: CountTaskHandoffsSince :one
+SELECT count(*) FROM task_attempts WHERE task_id = $1 AND predecessor_id IS NOT NULL AND created_at > $2
+`
+
+type CountTaskHandoffsSinceParams struct {
+	TaskID    string
+	CreatedAt time.Time
+}
+
+// Successor attempts of a task made since a time: a standing supervisor's restarts per hour.
+func (q *Queries) CountTaskHandoffsSince(ctx context.Context, arg CountTaskHandoffsSinceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countTaskHandoffsSince, arg.TaskID, arg.CreatedAt)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deferAttemptResolve = `-- name: DeferAttemptResolve :one
 UPDATE task_attempts
 SET resolve_attempts = resolve_attempts + 1, resolve_after = now() + make_interval(secs => $1::float8),
@@ -689,7 +706,8 @@ SELECT a.id AS attempt_id, a.task_id, a.state AS attempt_state, a.role AS attemp
        (a.session_id IS NOT DISTINCT FROM a.binding_id
         AND a.workspace_id IS NOT DISTINCT FROM (CASE WHEN t.mode = 'code' THEN a.binding_id END)
         AND (s.id IS NULL OR s.project_id IS NOT DISTINCT FROM t.project_id))::boolean AS scope_consistent,
-       coalesce(pt.status, '')::text AS parent_task_status, coalesce(pa.state, '')::text AS parent_attempt_state
+       coalesce(pt.status, '')::text AS parent_task_status, coalesce(pa.state, '')::text AS parent_attempt_state,
+       coalesce(pt.standing, false)::boolean AS parent_standing
 FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
 LEFT JOIN tasks pt ON pt.id = t.parent_task_id
@@ -714,6 +732,7 @@ type GetAttemptPrincipalRow struct {
 	ScopeConsistent    bool
 	ParentTaskStatus   string
 	ParentAttemptState string
+	ParentStanding     bool
 }
 
 // The task principal behind an MCP binding: its attempt, the task it belongs to, whether that
@@ -737,6 +756,7 @@ func (q *Queries) GetAttemptPrincipal(ctx context.Context, bindingID *string) (G
 		&i.ScopeConsistent,
 		&i.ParentTaskStatus,
 		&i.ParentAttemptState,
+		&i.ParentStanding,
 	)
 	return i, err
 }
@@ -780,6 +800,41 @@ func (q *Queries) GetHandoffCheckpoint(ctx context.Context, targetAttemptID *str
 	var checkpoint_ref *string
 	err := row.Scan(&checkpoint_ref)
 	return checkpoint_ref, err
+}
+
+const getOperationForTarget = `-- name: GetOperationForTarget :one
+SELECT id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM task_operations WHERE target_attempt_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1
+`
+
+// The operation that made an attempt (a create or a handoff).
+func (q *Queries) GetOperationForTarget(ctx context.Context, targetAttemptID *string) (TaskOperation, error) {
+	row := q.db.QueryRow(ctx, getOperationForTarget, targetAttemptID)
+	var i TaskOperation
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.PrincipalKey,
+		&i.RequestID,
+		&i.RequestDigest,
+		&i.RequestPayload,
+		&i.Kind,
+		&i.TaskID,
+		&i.AttemptID,
+		&i.State,
+		&i.LastConfirmedStep,
+		&i.SourceAttemptID,
+		&i.TargetAttemptID,
+		&i.CheckpointRef,
+		&i.ManifestRef,
+		&i.Reason,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getProjectFullName = `-- name: GetProjectFullName :one
@@ -1846,6 +1901,30 @@ func (q *Queries) LatestAttemptReport(ctx context.Context, attemptID string) (Ta
 	return i, err
 }
 
+const latestTaskReport = `-- name: LatestTaskReport :one
+SELECT id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at FROM task_reports WHERE task_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1
+`
+
+// The latest report of any attempt of a task: what survives a standing supervisor's restart.
+func (q *Queries) LatestTaskReport(ctx context.Context, taskID string) (TaskReport, error) {
+	row := q.db.QueryRow(ctx, latestTaskReport, taskID)
+	var i TaskReport
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.AttemptID,
+		&i.RequestID,
+		&i.RequestDigest,
+		&i.Summary,
+		&i.Outcome,
+		&i.OwnerAction,
+		&i.EvidenceRefs,
+		&i.TaskVersion,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listActiveAttemptsForLiveness = `-- name: ListActiveAttemptsForLiveness :many
 SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at, a.progress_marker, a.progress_at, a.stop_requested_at, a.liveness_failing_since, a.model, a.effort, a.instructions_version, a.memory_seq, a.reopened_at, t.standing FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
@@ -2655,6 +2734,54 @@ func (q *Queries) ListRuntimeWaits(ctx context.Context, arg ListRuntimeWaitsPara
 	return items, nil
 }
 
+const listSessionMessagesSince = `-- name: ListSessionMessagesSince :many
+SELECT id, session_id, role, content, created_at FROM session_messages
+WHERE session_id = $1 AND role = 'user' AND created_at > $2
+  AND id IS DISTINCT FROM $3::text
+ORDER BY created_at DESC, id DESC
+LIMIT $4
+`
+
+type ListSessionMessagesSinceParams struct {
+	SessionID string
+	Since     time.Time
+	SkipID    *string
+	MaxRows   int32
+}
+
+// Messages the owner, main or Mainloop sent a session after a time, newest first, leaving one out
+// (an attempt's own brief).
+func (q *Queries) ListSessionMessagesSince(ctx context.Context, arg ListSessionMessagesSinceParams) ([]SessionMessage, error) {
+	rows, err := q.db.Query(ctx, listSessionMessagesSince,
+		arg.SessionID,
+		arg.Since,
+		arg.SkipID,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SessionMessage{}
+	for rows.Next() {
+		var i SessionMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Role,
+			&i.Content,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSessionNativeContexts = `-- name: ListSessionNativeContexts :many
 SELECT DISTINCT kagent_session_id::text AS kagent_session_id FROM deliveries
 WHERE session_id = $1 AND kagent_session_id IS NOT NULL AND kagent_session_id <> ''
@@ -3296,7 +3423,7 @@ func (q *Queries) ListUnsettledAttempts(ctx context.Context, arg ListUnsettledAt
 }
 
 const lockParentCurrentAttemptShared = `-- name: LockParentCurrentAttemptShared :one
-SELECT a.id, a.state, t.status AS task_status
+SELECT a.id, a.state, t.status AS task_status, t.standing
 FROM tasks t JOIN task_attempts a ON a.id = t.current_attempt_id
 WHERE t.id = $1
 FOR SHARE OF a
@@ -3306,6 +3433,7 @@ type LockParentCurrentAttemptSharedRow struct {
 	ID         string
 	State      dbstate.AttemptState
 	TaskStatus dbstate.TaskStatus
+	Standing   bool
 }
 
 // A child's report also holds the parent's current attempt, so the parent cannot be drained
@@ -3313,7 +3441,12 @@ type LockParentCurrentAttemptSharedRow struct {
 func (q *Queries) LockParentCurrentAttemptShared(ctx context.Context, id string) (LockParentCurrentAttemptSharedRow, error) {
 	row := q.db.QueryRow(ctx, lockParentCurrentAttemptShared, id)
 	var i LockParentCurrentAttemptSharedRow
-	err := row.Scan(&i.ID, &i.State, &i.TaskStatus)
+	err := row.Scan(
+		&i.ID,
+		&i.State,
+		&i.TaskStatus,
+		&i.Standing,
+	)
 	return i, err
 }
 

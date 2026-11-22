@@ -89,7 +89,8 @@ SELECT a.id AS attempt_id, a.task_id, a.state AS attempt_state, a.role AS attemp
        (a.session_id IS NOT DISTINCT FROM a.binding_id
         AND a.workspace_id IS NOT DISTINCT FROM (CASE WHEN t.mode = 'code' THEN a.binding_id END)
         AND (s.id IS NULL OR s.project_id IS NOT DISTINCT FROM t.project_id))::boolean AS scope_consistent,
-       coalesce(pt.status, '')::text AS parent_task_status, coalesce(pa.state, '')::text AS parent_attempt_state
+       coalesce(pt.status, '')::text AS parent_task_status, coalesce(pa.state, '')::text AS parent_attempt_state,
+       coalesce(pt.standing, false)::boolean AS parent_standing
 FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
 LEFT JOIN tasks pt ON pt.id = t.parent_task_id
@@ -612,7 +613,7 @@ WHERE id = $1;
 -- A child's report also holds the parent's current attempt, so the parent cannot be drained
 -- between the check and the commit. Returns no row when the parent has no current attempt.
 -- name: LockParentCurrentAttemptShared :one
-SELECT a.id, a.state, t.status AS task_status
+SELECT a.id, a.state, t.status AS task_status, t.standing
 FROM tasks t JOIN task_attempts a ON a.id = t.current_attempt_id
 WHERE t.id = $1
 FOR SHARE OF a;
@@ -873,6 +874,27 @@ SET status = 'waiting', reason = 'handoff', decision_attempt_id = NULL, decision
     decision_action = NULL, version = version + 1, updated_at = now()
 WHERE id = $1 AND version = $2 AND status = 'failed'
 RETURNING *;
+
+-- name: CountTaskHandoffsSince :one
+-- Successor attempts of a task made since a time: a standing supervisor's restarts per hour.
+SELECT count(*) FROM task_attempts WHERE task_id = $1 AND predecessor_id IS NOT NULL AND created_at > $2;
+
+-- The latest report of any attempt of a task: what survives a standing supervisor's restart.
+-- name: LatestTaskReport :one
+SELECT * FROM task_reports WHERE task_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1;
+
+-- Messages the owner, main or Mainloop sent a session after a time, newest first, leaving one out
+-- (an attempt's own brief).
+-- name: ListSessionMessagesSince :many
+SELECT * FROM session_messages
+WHERE session_id = sqlc.arg(session_id) AND role = 'user' AND created_at > sqlc.arg(since)
+  AND id IS DISTINCT FROM sqlc.narg(skip_id)::text
+ORDER BY created_at DESC, id DESC
+LIMIT sqlc.arg(max_rows);
+
+-- The operation that made an attempt (a create or a handoff).
+-- name: GetOperationForTarget :one
+SELECT * FROM task_operations WHERE target_attempt_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1;
 
 -- name: LatestAttemptReport :one
 SELECT * FROM task_reports WHERE attempt_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1;

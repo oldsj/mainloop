@@ -6,9 +6,9 @@ layers: main (one per owner), a standing supervisor per project, and its workers
 which cannot delegate. The design, and the slices still to come, are in
 [docs/design/project-supervisor.md](../design/project-supervisor.md).
 
-Status: **identity, rest, liveness and main's routing implemented** (server, contract and MCP
-tools), not yet proven live. Not built yet: restart and recovery that keep its children, owner
-tasks under it, and per-project model settings.
+Status: **identity, rest, liveness, main's routing and restart implemented** (server, contract
+and MCP tools), not yet proven live. Not built yet: recovery from a gone session, owner tasks under
+it, per-project model settings, and retiring it.
 
 ## What it is
 
@@ -41,9 +41,9 @@ tasks under it, and per-project model settings.
   whatever makes it, restarts the bound on its current attempt (a database trigger).
 - A `failed` report from it is refused, `422 standing_outcome`: it reports `blocked` instead.
 - Only a standing task can be `waiting`/`idle` (a database check).
-- Cancel, retry and reassign are refused, `409 standing_supervisor`, for the owner, main and any
-  other caller, and its view says so: `actions.cancel`, `retry` and `reassign` are unavailable with
-  reason `standing_supervisor`. `follow_up` is available as on any open task.
+- Cancel and reassign are refused, `409 standing_supervisor`, for the owner, main and any other
+  caller, and its view says so: `actions.cancel` and `reassign` are unavailable with reason
+  `standing_supervisor`. `retry` is a restart (below). `follow_up` is available as on any open task.
 
 ## How main reaches it
 
@@ -63,6 +63,36 @@ tasks under it, and per-project model settings.
   sessions get it with their next message.
 - Main uses `follow_up`, `steer`, `task_get` and `task_transcript` on the supervisor's task id as on
   any task, and `task_list` shows it with `standing: true`.
+
+## Restart and reset
+
+A restart replaces its attempt with a new one, on the same task, in a new native session. It runs
+the [handoff](task-handoff.md) operation (the old attempt is drained, its stop confirmed and fenced
+before the successor exists, so there is never a second writer), with these differences:
+
+- **Its workers are kept.** Its open children are not cancelled and keep their slots. A child's own
+  calls (report, task reads) keep working while the attempt is replaced: for a standing parent, a
+  child's authority asks that the parent task is open, not that its attempt is active. A child's
+  report or a loop firing made meanwhile waits and is delivered to the successor.
+- **What the successor is told** (its brief's Continuation, read from the database, no model call):
+  that it was restarted and is still the project's standing supervisor; its last report (any
+  attempt's, at most 4000 characters); its open workers, each with its link, status, pull request,
+  CI and last report line; its armed loops; and the newest three messages its old session received
+  after that report (at most 1000 characters each), so a message that woke a dying session is not
+  lost.
+- **Reset** (`fresh: true`) is a restart whose successor is not given the last report or those
+  messages: it starts from the facts (workers, loops) only.
+- **Limits.** No `TASK_MAX_HANDOFFS` cap. Main may restart it three times in a rolling hour; the
+  fourth is `409 handoff_limit` (detail `handoffs`, `limit`, `window`). The owner is not limited.
+
+How to ask for one:
+
+- The owner: `POST /projects/{project_id}/supervisor/restart` with `{request_id, fresh}` answers the
+  handoff's `TaskOperation` (202). A retry of the same request id and body answers the same
+  operation, even after the restart moved the task. No standing supervisor yet is
+  `404 task_not_found`; a foreign or missing project `404 project_not_found`; one already in a
+  handoff `409 operation_pending`. `POST /tasks/{id}/retry` on its task is a restart too.
+- Main: `task_retry` on its task id.
 
 ## Its brief
 

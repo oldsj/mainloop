@@ -281,3 +281,20 @@ func (a *TasksAPI) EnsureProjectSupervisor(ctx context.Context, req api.EnsurePr
 	}
 	return api.EnsureProjectSupervisor200JSONResponse(view), nil
 }
+
+// RestartProjectSupervisor implements api.StrictServerInterface: a restart (or, fresh, a reset) of
+// the project's standing supervisor that keeps its children.
+func (a *TasksAPI) RestartProjectSupervisor(ctx context.Context, req api.RestartProjectSupervisorRequestObject) (api.RestartProjectSupervisorResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	if req.Body == nil {
+		return nil, apierr.Invalid("Request body is required")
+	}
+	fresh := req.Body.Fresh != nil && *req.Body.Fresh
+	op, err := a.Svc.RestartSupervisor(ctx, a.OwnerID, req.ProjectId, req.Body.RequestId, fresh)
+	if err != nil {
+		return nil, taskReply(err, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity)
+	}
+	return api.RestartProjectSupervisor202JSONResponse(op), nil
+}

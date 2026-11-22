@@ -50,7 +50,11 @@ func (s *Service) handoff(ctx context.Context, q *dbq.Queries, p Principal, t db
 	} else if n > 0 {
 		return t, nil, refusal(409, ReasonOperationPending)
 	}
-	if lim := s.Limits.MaxHandoffs; lim > 0 && p.Role != "" {
+	if t.Standing {
+		if err := s.restartLimit(ctx, q, p, t); err != nil {
+			return t, nil, err
+		}
+	} else if lim := s.Limits.MaxHandoffs; lim > 0 && p.Role != "" {
 		n, err := q.CountTaskHandoffs(ctx, t.ID)
 		if err != nil {
 			return t, nil, err
@@ -271,6 +275,9 @@ func continuation(ctx context.Context, q *dbq.Queries, a dbq.TaskAttempt, t dbq.
 	prev, err := q.GetTaskAttempt(ctx, *a.PredecessorID)
 	if err != nil {
 		return "", err
+	}
+	if t.Standing {
+		return standingContinuation(ctx, q, a, prev, t)
 	}
 	var b strings.Builder
 	b.WriteString("## Continuation\n")

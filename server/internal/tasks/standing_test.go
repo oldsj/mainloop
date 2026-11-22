@@ -101,29 +101,32 @@ func TestStandingTaskShapeIsEnforced(t *testing.T) {
 	}
 }
 
-func TestStandingSupervisorIsNotCancelledRetriedOrReassigned(t *testing.T) {
+func TestStandingSupervisorIsNotCancelledOrReassigned(t *testing.T) {
 	e := newEnv(t)
 	id, _ := e.standing("sup-s")
 	ctx := context.Background()
 	v := e.view(e.own, id)
 
-	// Given a running standing supervisor, Then its view offers none of cancel, retry or reassign
-	for _, k := range []string{"cancel", "retry", "reassign"} {
+	// Given a running standing supervisor, Then its view offers neither cancel nor reassign, and
+	// offers retry (a restart that keeps its children)
+	for _, k := range []string{"cancel", "reassign"} {
 		a := v.Actions[k]
 		if a.Available || a.Reason == nil || *a.Reason != api.TaskEligibilityReasonStandingSupervisor {
 			t.Fatalf("%s = %+v", k, a)
 		}
 	}
-	if !v.Actions["follow_up"].Available {
-		t.Fatal("a standing supervisor takes follow-ups")
+	if !v.Actions["retry"].Available || !v.Actions["follow_up"].Available {
+		t.Fatalf("a standing supervisor is restarted and takes follow-ups: %+v", v.Actions)
 	}
 
-	// When the owner or main asks for one anyway, Then it is refused and nothing changes
+	// When the owner or main asks for a cancel or reassign anyway, Then it is refused and nothing changes
 	main := tasks.Principal{OwnerID: owner, Role: dbstate.RoleMain, BindingID: "main-1"}
 	for _, p := range []tasks.Principal{e.own, main} {
 		_, err := e.svc.Cancel(ctx, p, action(id, v, "c-"+string(p.Role)))
 		wantRefusal(t, err, 409, tasks.ReasonStandingSupervisor)
-		_, err = e.svc.Retry(ctx, p, action(id, v, "r-"+string(p.Role)))
+		in := action(id, v, "r-"+string(p.Role))
+		in.TargetProfileID = "codex"
+		_, err = e.svc.Reassign(ctx, p, in)
 		wantRefusal(t, err, 409, tasks.ReasonStandingSupervisor)
 	}
 	if after := e.view(e.own, id); after.Task.Version != v.Task.Version || after.Task.Status != "running" {

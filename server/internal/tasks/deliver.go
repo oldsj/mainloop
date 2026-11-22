@@ -216,8 +216,9 @@ func (s *Service) target(ctx context.Context, key string) (attemptID *string, se
 		return nil, "", false, err
 	}
 	if a.State != dbstate.AttemptActive || a.SessionID == nil {
-		// A parent still being created gets its report once it is active; the others have ended.
-		return nil, "", a.State != dbstate.AttemptCreating, nil
+		// A parent still being created gets its report once it is active; the others have ended,
+		// except a standing supervisor's, which a restart is replacing: its successor gets it.
+		return nil, "", a.State != dbstate.AttemptCreating && !p.Standing, nil
 	}
 	return &a.ID, *a.SessionID, false, nil
 }

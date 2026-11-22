@@ -597,6 +597,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/projects/{project_id}/supervisor/restart': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Restart the project's standing supervisor
+     * @description Replaces the standing supervisor's attempt with a new one on the same task, in a new native session, keeping its children running (a rolling handoff). The new session's brief carries a continuation: the supervisor's last report, its open children and loops read from the database, and the newest messages it received after that report. With `fresh: true` (reset) the last report and messages are left out. Reuse request_id to retry. See docs/specs/project-supervisor.md.
+     */
+    post: operations['restartProjectSupervisor'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/projects/{project_id}/dotfiles': {
     parameters: {
       query?: never;
@@ -2806,6 +2826,14 @@ export interface components {
       live: boolean;
       /** @description The agent dotfiles chosen for the session's newest native Session. Absent or null when none were recorded (a Session created before Mainloop recorded them, or a server with no GitHub App). */
       dotfiles?: components['schemas']['SessionDotfiles'] | null;
+    };
+    SupervisorRestart: {
+      request_id: string;
+      /**
+       * @description Reset rather than restart; the new session is not given the last report or messages.
+       * @default false
+       */
+      fresh: boolean;
     };
     /** @description A project's standing supervisor (docs/specs/project-supervisor.md). */
     ProjectSupervisor: {
@@ -8388,6 +8416,62 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['TaskError'];
+        };
+      };
+    };
+  };
+  restartProjectSupervisor: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SupervisorRestart'];
+      };
+    };
+    responses: {
+      /** @description The restart's task operation. */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskOperation'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description The project, or its standing supervisor, does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Conflict (an operation is pending, the supervisor is settling, or the request id was used with another body). */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['TaskError'];
         };
       };
     };

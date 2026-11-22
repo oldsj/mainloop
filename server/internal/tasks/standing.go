@@ -3,7 +3,10 @@ package tasks
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -249,4 +252,203 @@ func (s *Service) briefed(ctx context.Context, taskID string) (bool, error) {
 		return false, err
 	}
 	return a.BriefDeliveryID != nil || a.State != dbstate.AttemptCreating && a.State != dbstate.AttemptActive, nil
+}
+
+// Restarts of a standing supervisor that main and Mainloop may make in an hour; the owner's are not
+// counted. A crash loop stops at the fourth, and the owner decides.
+const (
+	maxRestartsPerHour = 3
+	restartWindow      = time.Hour
+)
+
+// restartLimit refuses a restart past [maxRestartsPerHour] by anyone but the owner. A standing
+// supervisor has no lifetime handoff cap: it restarts for as long as the project lives.
+func (s *Service) restartLimit(ctx context.Context, q *dbq.Queries, p Principal, t dbq.Task) error {
+	if p.Role == "" {
+		return nil
+	}
+	n, err := q.CountTaskHandoffsSince(ctx, dbq.CountTaskHandoffsSinceParams{TaskID: t.ID, CreatedAt: s.now().Add(-restartWindow)})
+	if err != nil {
+		return err
+	}
+	if n >= maxRestartsPerHour {
+		return refusalDetail(409, ReasonHandoffLimit, map[string]any{"handoffs": n, "limit": maxRestartsPerHour, "window": "1h"})
+	}
+	return nil
+}
+
+// RestartSupervisor restarts (fresh: false) or resets (fresh: true) a project's standing
+// supervisor for the owner: a retry of its task, keeping its children. The request is keyed by its
+// request id and body, not by the task's version, so a retry after the restart moved the task finds
+// the first operation.
+func (s *Service) RestartSupervisor(ctx context.Context, owner, projectID, requestID string, fresh bool) (api.TaskOperation, error) {
+	if n := len(requestID); n == 0 || n > 100 {
+		return api.TaskOperation{}, refusal(422, ReasonInvalidRequest)
+	}
+	p := OwnerPrincipal(owner)
+	dig, payload, err := digest(dbstate.TaskOpRetry, "standing:"+projectID, map[string]any{"fresh": fresh})
+	if err != nil {
+		return api.TaskOperation{}, err
+	}
+	var op dbq.TaskOperation
+	err = events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+		q := dbq.New(tx)
+		stored, replay, err := request(ctx, q, p, requestID, dig)
+		if err != nil {
+			return nil, err
+		}
+		if replay {
+			op = stored
+			return nil, nil
+		}
+		project, err := q.GetProject(ctx, projectID)
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && project.UserID != owner {
+			return nil, refusal(404, ReasonProjectNotFound)
+		}
+		if err != nil {
+			return nil, err
+		}
+		st, err := q.GetStandingTask(ctx, &projectID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, refusal(404, ReasonTaskNotFound)
+		}
+		if err != nil {
+			return nil, err
+		}
+		t, err := q.GetTaskForUpdate(ctx, dbq.GetTaskForUpdateParams{ID: st.ID, OwnerID: owner})
+		if err != nil {
+			return nil, err
+		}
+		in := ActionInput{RequestID: requestID, TaskID: t.ID, Fresh: fresh}
+		var drafts []events.Draft
+		op, drafts, err = s.actOn(ctx, q, p, dbstate.TaskOpRetry, in, t, dig, payload)
+		return drafts, err
+	})
+	if err != nil {
+		s.noteRefusal(ctx, err)
+		return api.TaskOperation{}, err
+	}
+	return toOperation(op)
+}
+
+// Continuation bounds: messages the old session received after its last report.
+const (
+	continuationMessages     = 3
+	continuationMessageChars = 1000
+	continuationChildren     = 50
+)
+
+// standingContinuation is a standing supervisor successor's continuation, read from the database
+// with no model call (the old session may be gone): its last report, unless the restart was a
+// reset; its open children and loops; and the newest messages its old session got after that
+// report, so a message that woke a dying session is not lost.
+func standingContinuation(ctx context.Context, q *dbq.Queries, a, prev dbq.TaskAttempt, t dbq.Task) (string, error) {
+	fresh := false
+	if op, err := q.GetOperationForTarget(ctx, &a.ID); err == nil {
+		var body struct {
+			Fresh bool `json:"fresh"`
+		}
+		if json.Unmarshal(op.RequestPayload, &body) == nil {
+			fresh = body.Fresh
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString("## Continuation\n")
+	fmt.Fprintf(&b, "You were restarted: you are attempt %d, in a new session, replacing attempt %d, and you do not have "+
+		"its context. You are still this project's standing supervisor, on the same task. Your workers kept running "+
+		"and report to you; `task_list` shows them. Check what exists before redoing anything.", a.Number, prev.Number)
+	since := prev.CreatedAt
+	if fresh {
+		b.WriteString(" This was a reset: start from the facts below, not from the old session's account.")
+	} else {
+		rep, err := q.LatestTaskReport(ctx, t.ID)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			b.WriteString("\n\nNo report was made before.")
+		case err != nil:
+			return "", err
+		default:
+			summary := rep.Summary
+			if r := []rune(summary); len(r) > maxContinuationReport {
+				summary = string(r[:maxContinuationReport]) + "…"
+			}
+			fmt.Fprintf(&b, "\n\nYour last report (%s):\n%s", rep.Outcome, summary)
+			since = rep.CreatedAt
+		}
+	}
+
+	children, err := q.ListChildTasks(ctx, dbq.ListChildTasksParams{OwnerID: t.OwnerID, ParentTaskID: &t.ID})
+	if err != nil {
+		return "", err
+	}
+	b.WriteString("\n\n### Open workers\n")
+	open := 0
+	for _, c := range children {
+		if TaskFinal(c.Status) {
+			continue
+		}
+		if open++; open > continuationChildren {
+			b.WriteString("- …more; `task_list` has all of them.\n")
+			break
+		}
+		fmt.Fprintf(&b, "- [%s](/tasks/%s): %s", c.Title, c.ID, c.Status)
+		if c.Reason != nil {
+			fmt.Fprintf(&b, "/%s", *c.Reason)
+		}
+		if c.PrNumber != nil {
+			fmt.Fprintf(&b, "; pull request #%d %s, CI %s", *c.PrNumber, c.PrState, c.CiState)
+		}
+		if rep, err := q.LatestTaskReport(ctx, c.ID); err == nil {
+			line, _, _ := strings.Cut(rep.Summary, "\n")
+			if r := []rune(line); len(r) > 200 {
+				line = string(r[:200]) + "…"
+			}
+			fmt.Fprintf(&b, "; last report (%s): %s", rep.Outcome, line)
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return "", err
+		}
+		b.WriteString("\n")
+	}
+	if open == 0 {
+		b.WriteString("None.\n")
+	}
+
+	loops, err := q.ListTaskLoops(ctx, dbq.ListTaskLoopsParams{OwnerID: t.OwnerID, RecipientKey: "parent-task:" + t.ID, MaxRows: maxListedLoops})
+	if err != nil {
+		return "", err
+	}
+	b.WriteString("\n### Armed loops\n")
+	armed := 0
+	for _, l := range loops {
+		if l.State != "armed" && l.State != "paused" {
+			continue
+		}
+		armed++
+		fmt.Fprintf(&b, "- %s (%s trigger, %s): %s\n", l.ID, l.Trigger, l.State, l.Note)
+	}
+	if armed == 0 {
+		b.WriteString("None.\n")
+	}
+
+	if !fresh && prev.SessionID != nil {
+		msgs, err := q.ListSessionMessagesSince(ctx, dbq.ListSessionMessagesSinceParams{
+			SessionID: *prev.SessionID, Since: since, SkipID: prev.BriefDeliveryID, MaxRows: continuationMessages,
+		})
+		if err != nil {
+			return "", err
+		}
+		if len(msgs) > 0 {
+			b.WriteString("\n### Messages to the old session after that report (newest first)\n")
+			for _, m := range msgs {
+				text := m.Content
+				if r := []rune(text); len(r) > continuationMessageChars {
+					text = string(r[:continuationMessageChars]) + "…"
+				}
+				fmt.Fprintf(&b, "- %s:\n%s\n", m.CreatedAt.UTC().Format(time.RFC3339), text)
+			}
+		}
+	}
+	return strings.TrimRight(b.String(), "\n"), nil
 }

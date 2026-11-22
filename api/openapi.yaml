@@ -1692,6 +1692,61 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TaskError'
+  /projects/{project_id}/supervisor/restart:
+    post:
+      tags:
+        - projects
+      summary: Restart the project's standing supervisor
+      description: >-
+        Replaces the standing supervisor's attempt with a new one on the same task, in a new native
+        session, keeping its children running (a rolling handoff). The new session's brief carries a
+        continuation: the supervisor's last report, its open children and loops read from the
+        database, and the newest messages it received after that report. With `fresh: true` (reset)
+        the last report and messages are left out. Reuse request_id to retry. See
+        docs/specs/project-supervisor.md.
+      operationId: restartProjectSupervisor
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SupervisorRestart'
+      responses:
+        '202':
+          description: The restart's task operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskOperation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The project, or its standing supervisor, does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
+        '409':
+          description: Conflict (an operation is pending, the supervisor is settling, or the request id was used with another body).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/TaskError'
   /projects/{project_id}/dotfiles:
     get:
       tags:
@@ -7564,6 +7619,20 @@ components:
         - note
       title: NativeSessionInfo
       description: Identity strip for a session bound to a native agent session in kagent.
+    SupervisorRestart:
+      type: object
+      additionalProperties: false
+      required:
+        - request_id
+      properties:
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+        fresh:
+          type: boolean
+          default: false
+          description: Reset rather than restart; the new session is not given the last report or messages.
     ProjectSupervisor:
       type: object
       additionalProperties: false

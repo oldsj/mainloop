@@ -603,6 +603,9 @@ type ActionInput struct {
 	ExpectedAttemptID string
 	// TargetProfileID is the new provider of a reassign.
 	TargetProfileID string
+	// Fresh resets a standing supervisor rather than restarting it: its successor is not given the
+	// last report or the messages after it.
+	Fresh bool
 }
 
 func (in ActionInput) payload(kind dbstate.TaskOpKind) map[string]any {
@@ -611,6 +614,9 @@ func (in ActionInput) payload(kind dbstate.TaskOpKind) map[string]any {
 	}
 	if kind == dbstate.TaskOpReassign {
 		m["target_profile_id"] = in.TargetProfileID
+	}
+	if in.Fresh {
+		m["fresh"] = true
 	}
 	return m
 }
@@ -688,43 +694,52 @@ func (s *Service) act(ctx context.Context, p Principal, kind dbstate.TaskOpKind,
 		if err != nil {
 			return nil, err
 		}
-		if t.Standing {
-			// A standing supervisor is never cancelled, and its restart keeps its children, which a
-			// plain retry or reassign would cancel (docs/specs/project-supervisor.md).
-			return nil, refusal(409, ReasonStandingSupervisor)
-		}
-		newOp := dbq.InsertTaskOperationParams{
-			ID: uuid.NewString(), OwnerID: p.OwnerID, PrincipalKey: p.Key(), RequestID: in.RequestID,
-			RequestDigest: dig, RequestPayload: payload, Kind: kind, TaskID: &t.ID,
-			State: dbstate.TaskOpRequested, LastConfirmedStep: dbstate.TaskOpRequested, AttemptID: t.CurrentAttemptID,
-		}
-		var after dbq.Task
 		var drafts []events.Draft
-		switch kind {
-		case dbstate.TaskOpCancel:
-			after, err = s.cancel(ctx, q, t, &newOp)
-		default:
-			after, drafts, err = s.handoff(ctx, q, p, t, kind, in, &newOp)
-		}
-		if err != nil {
-			return nil, err
-		}
-		if op, err = q.InsertTaskOperation(ctx, newOp); err != nil {
-			return nil, err
-		}
-		if err := s.notify(ctx, q, OpChannel, op.ID); err != nil {
-			return nil, err
-		}
-		if after.Version == t.Version {
-			return drafts, nil
-		}
-		return append(drafts, s.updated(after)), nil
+		op, drafts, err = s.actOn(ctx, q, p, kind, in, t, dig, payload)
+		return drafts, err
 	})
 	if err != nil {
 		s.noteRefusal(ctx, err)
 		return api.TaskOperation{}, err
 	}
 	return toOperation(op)
+}
+
+// actOn records a cancel, retry or reassign of a locked task the principal manages.
+func (s *Service) actOn(ctx context.Context, q *dbq.Queries, p Principal, kind dbstate.TaskOpKind, in ActionInput, t dbq.Task, dig string, payload json.RawMessage) (dbq.TaskOperation, []events.Draft, error) {
+	if t.Standing && kind != dbstate.TaskOpRetry {
+		// A standing supervisor is never cancelled, and a reassign waits on its project's settings;
+		// its retry is a restart that keeps its children (docs/specs/project-supervisor.md).
+		return dbq.TaskOperation{}, nil, refusal(409, ReasonStandingSupervisor)
+	}
+	newOp := dbq.InsertTaskOperationParams{
+		ID: uuid.NewString(), OwnerID: p.OwnerID, PrincipalKey: p.Key(), RequestID: in.RequestID,
+		RequestDigest: dig, RequestPayload: payload, Kind: kind, TaskID: &t.ID,
+		State: dbstate.TaskOpRequested, LastConfirmedStep: dbstate.TaskOpRequested, AttemptID: t.CurrentAttemptID,
+	}
+	var after dbq.Task
+	var drafts []events.Draft
+	var err error
+	switch kind {
+	case dbstate.TaskOpCancel:
+		after, err = s.cancel(ctx, q, t, &newOp)
+	default:
+		after, drafts, err = s.handoff(ctx, q, p, t, kind, in, &newOp)
+	}
+	if err != nil {
+		return dbq.TaskOperation{}, nil, err
+	}
+	op, err := q.InsertTaskOperation(ctx, newOp)
+	if err != nil {
+		return op, nil, err
+	}
+	if err := s.notify(ctx, q, OpChannel, op.ID); err != nil {
+		return op, nil, err
+	}
+	if after.Version == t.Version {
+		return op, drafts, nil
+	}
+	return op, append(drafts, s.updated(after)), nil
 }
 
 // cancel shapes the cancel operation and moves the task when it can be moved at once.
