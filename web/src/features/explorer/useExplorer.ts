@@ -27,6 +27,8 @@ export function useExplorer(): {
   needs: number;
   problems: number;
   ready: boolean;
+  /** The projects have answered, so each agent can be put under its space. */
+  placed: boolean;
   failed: boolean;
 } {
   // The shell is the owner's view of attention, so it polls while it is on screen.
@@ -62,10 +64,10 @@ export function useExplorer(): {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openId, markKey, mark, seen]);
 
-  const { source, ready, failed } = useExplorerSource();
+  const { source, ready, placed, failed } = useExplorerSource();
   // The same list the Inbox draws, so the counts here and the rows there always agree.
   const work = useMemo(() => ownerWork(source.attention, source.tasks), [source]);
-  return { needs: needsTotal(work), problems: problemTotal(work), ready, failed };
+  return { needs: needsTotal(work), problems: problemTotal(work), ready, placed, failed };
 }
 
 /**
@@ -75,6 +77,11 @@ export function useExplorer(): {
 export function useExplorerSource(): {
   source: ExplorerSource;
   ready: boolean;
+  /**
+   * The projects have answered (or failed to). Until then an agent's space is not known: it would be
+   * listed under the main thread's and move to its project a moment later.
+   */
+  placed: boolean;
   failed: boolean;
 } {
   const attention = useAttention();
@@ -98,6 +105,7 @@ export function useExplorerSource(): {
   return {
     source,
     ready: tasks.data !== undefined && attention.data !== undefined,
+    placed: projects.data !== undefined || projects.isError,
     failed: (tasks.isError && tasks.data === undefined) || (attention.isError && !attention.data)
   };
 }

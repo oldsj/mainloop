@@ -5,6 +5,7 @@ import { cn } from '@/components/ui/cn';
 import { isApplePlatform, isShortcut, sidebarShortcutLabel } from '@/lib/platform';
 import {
   ExplorerSidebar,
+  loadingTabs,
   newTaskPrefill,
   spaceTabs,
   TabStrip,
@@ -45,6 +46,9 @@ export function DesktopShell({
   const { prefs, update } = useExplorerPrefs();
   const explorer = useExplorer();
   const column = useAgentColumn();
+  // The lists and the tabs wait for the projects as well as the tasks: an agent drawn before its
+  // project is known would sit under the main thread's space and then move.
+  const listed = explorer.ready && explorer.placed;
 
   // ⌘B on a Mac hides and shows the sidebar, as in an editor, and works while typing. Off a Mac
   // the editor's key for it would be Ctrl+B, which is the prefix (below): there the sidebar is the
@@ -64,7 +68,9 @@ export function DesktopShell({
   // Ctrl+B, then one key, as a terminal workspace manager has it: n and p move between the tabs,
   // a number goes to that tab, c starts new work, b hides the sidebar, w goes to the spaces, and g
   // opens the menu. The status bar lists them while the prefix waits.
-  const tabs = spaceTabs(column.model, column.space, column.page, pathname);
+  const tabs = listed
+    ? spaceTabs(column.model, column.space, column.page, pathname)
+    : loadingTabs(column.model, column.page, pathname);
   const armed = usePrefixKeys((key) => {
     const action = prefixAction(key, tabs);
     if (!action) return false;
@@ -96,7 +102,7 @@ export function DesktopShell({
               prefs={prefs}
               update={update}
               column={column}
-              ready={explorer.ready}
+              ready={listed}
               failed={explorer.failed}
               needs={explorer.needs}
               onMenu={onSearch}
@@ -112,6 +118,7 @@ export function DesktopShell({
               pathname={pathname}
               onOpen={open}
               onAsk={ask}
+              ready={listed}
               leading={
                 // With the sidebar hidden, the strip is the only chrome left: it brings it back.
                 prefs.collapsed ? (

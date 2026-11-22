@@ -12,7 +12,11 @@ import {
   hitlAttentionItem,
   queueItem
 } from '@/features/inbox/test/fixtures';
-import { projectsRead, serveProjectPage } from '@/features/projects/test/handlers';
+import {
+  projectsRead,
+  projectsReadWith,
+  serveProjectPage
+} from '@/features/projects/test/handlers';
 import { native, session } from '@/features/sessions/test/fixtures';
 import { nativeRead, sessionRead } from '@/features/sessions/test/handlers';
 import { project } from '@/features/projects/test/fixtures';
@@ -714,6 +718,51 @@ describe('explorer panel', () => {
     release();
     expect(await within(aside).findByRole('group', { name: 'agents' })).toBeInTheDocument();
     expect(within(aside).queryByTestId('explorer-loading')).toBeNull();
+  });
+
+  it('waits for the projects before placing an agent, so none is drawn under main and then moved', async () => {
+    setViewport(true);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const running = view({ id: 'task-r', title: 'Add retry button', status: 'running' });
+    server.use(
+      tasksList(() => HttpResponse.json([running])),
+      projectsReadWith(async () => {
+        await held;
+        return HttpResponse.json([project({ id: running.task.project_id ?? undefined })]);
+      })
+    );
+    await renderAt('/');
+    const aside = screen.getByTestId('explorer-aside');
+    const strip = screen.getByTestId('tab-strip');
+    // Given the tasks have answered and the projects have not: the counts are known already
+    expect(await screen.findByTestId('status-working')).toHaveTextContent('1 working');
+    // Then the lists still hold their placeholder, and the strip has only the tab that is certain
+    expect(within(aside).getByTestId('explorer-loading')).toBeInTheDocument();
+    expect(within(aside).queryByTestId('agent-row')).toBeNull();
+    expect(
+      within(strip)
+        .getAllByTestId('tab')
+        .map((tab) => tab.textContent)
+    ).toEqual(['main']);
+    expect(within(strip).queryByText('Add retry button')).toBeNull();
+
+    // When the projects answer
+    release();
+
+    // Then the agent appears once, under its project, and the tabs are the main thread's own
+    const widgets = await within(aside).findByRole('list', { name: 'widgets' });
+    expect(within(widgets).getByRole('button', { name: /^Add retry button/ })).toBeInTheDocument();
+    expect(
+      within(within(aside).getByRole('list', { name: 'main' })).getAllByTestId('agent-row')
+    ).toHaveLength(1);
+    expect(
+      within(strip)
+        .getAllByTestId('tab')
+        .map((tab) => tab.textContent)
+    ).toEqual(['main']);
   });
 
   it('says the counts are loading until the first read answers, not that nothing needs the owner', async () => {

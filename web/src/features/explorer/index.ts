@@ -14,7 +14,7 @@ export {
   type ExplorerSource,
   type Target
 } from './model';
-export { newTaskPrefill, spaceTabs, workingCount, type TabRow } from './agents';
+export { loadingTabs, newTaskPrefill, spaceTabs, workingCount, type TabRow } from './agents';
 export { TabStrip } from './TabStrip';
 export {
   useAgentColumn,

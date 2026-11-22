@@ -127,6 +127,28 @@ describe('TabStrip', () => {
     expect(within(tabs[0]!).getByTestId('tab-dot')).toHaveAttribute('data-tone', 'muted');
   });
 
+  it('holds its line with no tabs on an agent’s page until the agents and their spaces are known', () => {
+    // Given a task's page while the lists are still being read: its space is not known yet
+    renderStrip({ ready: false });
+
+    const strip = screen.getByTestId('tab-strip');
+    expect(within(strip).queryAllByTestId('tab')).toEqual([]);
+    expect(within(strip).queryByTestId('tab-new')).toBeNull();
+    // The scroller is still there, at the height a tab has, so nothing moves when they arrive.
+    expect(within(strip).getByTestId('tab-scroller')).toHaveClass('min-h-control');
+  });
+
+  it('shows the tabs that are certain while it waits: main, and a page that is no agent’s', () => {
+    renderStrip({ ready: false, page: null, pathname: '/settings', space: MAINLOOP_SPACE });
+
+    expect(screen.getAllByTestId('tab').map((tab) => tab.textContent)).toEqual([
+      'main',
+      'settings'
+    ]);
+    // No agent's tab yet, though the model already holds some: they are not placed.
+    expect(screen.queryByText('Add retry button')).toBeNull();
+  });
+
   it('opens a tab’s page on a click', async () => {
     const user = userEvent.setup();
     const { onOpen } = renderStrip();

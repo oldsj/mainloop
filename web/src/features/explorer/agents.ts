@@ -416,6 +416,22 @@ export function spaceTabs(
 }
 
 /**
+ * The tabs while the agents or their spaces are still being read: only what is certain. A page that
+ * is no agent's (the main chat, the Inbox, Settings) is the main thread's, so `main` and that page's
+ * own tab can be drawn at once. On a task's, a session's or a project's page the space is not known
+ * yet, so there are no tabs until it is: a tab is never drawn in one space and then moved.
+ */
+export function loadingTabs(
+  model: AgentColumnModel,
+  page: Target | null,
+  pathname: string
+): TabRow[] {
+  if (page?.to === 'task' || page?.to === 'session' || page?.to === 'project') return [];
+  const main = model.agents.filter((agent) => agent.role === 'main');
+  return spaceTabs({ spaces: model.spaces, agents: main }, MAINLOOP_SPACE, page, pathname);
+}
+
+/**
  * What "new" is called in a space, for the sidebar's **new** and the strip's "+": a task in the
  * project, or a word with Mainloop in the main thread's space.
  */
