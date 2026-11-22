@@ -38,7 +38,8 @@ the `task-operations` loop. Every step is idempotent on stored state, so a crash
 
 1. **Request.** Under the task lock, in the request's transaction:
    - A running attempt is moved to `draining` (stop requested), so the old agent loses MCP before
-     the request returns. A supervisor's open children are cancelled with it, as for a cancel.
+     the request returns. A supervisor's open children are cancelled with it, as for a cancel (not a project's standing
+     supervisor's: its restart keeps them, see [project supervisor](project-supervisor.md)).
      The task moves to `waiting` / `handoff`. The operation is recorded `draining`.
    - A failed task whose attempt has already ended reopens to `waiting` / `handoff`. The operation
      is recorded `requested`.

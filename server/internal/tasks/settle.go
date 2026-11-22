@@ -92,9 +92,10 @@ func (s *Service) drainLocked(ctx context.Context, q *dbq.Queries, t dbq.Task, a
 		return out, nil, err
 	}
 	// A supervisor that stops takes its open children with it now, not when its own stop is
-	// confirmed: they must not keep working while that stays unresolved.
+	// confirmed: they must not keep working while that stays unresolved. A standing supervisor's
+	// children belong to its task and stay: only a restart drains its attempt.
 	var drafts []events.Draft
-	if out.Role == dbstate.AttemptSupervisor {
+	if out.Role == dbstate.AttemptSupervisor && !t.Standing {
 		if drafts, err = s.cancelOpenChildren(ctx, q, t); err != nil {
 			return out, nil, err
 		}

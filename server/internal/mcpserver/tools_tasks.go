@@ -112,6 +112,8 @@ func (s *Server) taskTools() []Tool {
 				"attempt's last report. Works on a running, waiting, blocked or failed task; a supervisor's open children " +
 				"are cancelled with it. To keep the agent's context, use follow_up instead. Main and supervisors may " +
 				"retry or reassign a task a limited number of times (handoff_limit); then the owner decides. " +
+				"On a project's standing supervisor a retry is a restart: its children keep running and its new " +
+				"session is told its last report, open children, loops and newest messages (3 per hour). " +
 				"Reuse request_id to retry the call.",
 			InputSchema: objectSchema(map[string]any{
 				"request_id":          id,
