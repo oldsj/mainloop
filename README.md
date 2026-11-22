@@ -168,11 +168,12 @@ one repository and the requested operation's permissions. There is no PAT
 or anonymous fallback. App permissions and cache behavior are in
 [Pull requests](docs/specs/pull-requests.md) and [production deployment](docs/production-rollout.md#github-app-permissions).
 The `get_issue`, `get_pull_request`, `list_dependabot_alerts` and `check_status` read-only tools, `create_issue` and
-`comment_issue` (the main thread and coordination tasks file issues and comments), and
+`comment_issue` (the main thread and coordination tasks file issues and comments),
+`comment_pull_request` (any task comments on or reviews a pull request; never approves), and
 `watch_checks` (which waits for CI without holding the agent's turn and messages the session when
 CI settles), reuse the same App credential; see
 [GitHub issue, pull request and Dependabot alert reads](docs/specs/github-reads.md),
-[GitHub issue writes](docs/specs/issue-writes.md) and [CI checks](docs/specs/ci.md).
+[GitHub issue and pull request comments](docs/specs/issue-writes.md) and [CI checks](docs/specs/ci.md).
 
 ## Production Deployment
 
@@ -239,7 +240,7 @@ mainloop/
 - [Sessions](docs/specs/sessions.md) - Background work and status
 - [Layout](docs/specs/layout.md) - Mobile and desktop views
 - [GitHub issue, Dependabot alert and check-run reads](docs/specs/github-reads.md) - Read-only issue/alert/check-run tools
-- [GitHub issue writes](docs/specs/issue-writes.md) - Filing issues and comments through the GitHub App
+- [GitHub issue and pull request comments](docs/specs/issue-writes.md) - Filing issues, comments and pull request reviews through the GitHub App
 
 **Guides**:
 

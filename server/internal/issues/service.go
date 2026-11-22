@@ -33,6 +33,9 @@ type GitHub interface {
 	PullRequest(ctx context.Context, repo github.Repo, number int) (*github.PullRequestInfo, error)
 	PullFiles(ctx context.Context, repo github.Repo, number, page, perPage int) ([]github.PullFile, bool, error)
 	PullRequestFeedback(ctx context.Context, repo github.Repo, number int, since time.Time) ([]github.PRFeedback, error)
+	PullCommentsSince(ctx context.Context, repo github.Repo, number int, since time.Time) ([]github.IssueWrite, error)
+	CreateReview(ctx context.Context, repo github.Repo, number int, commitSHA, body string, comments []github.ReviewComment) (*github.IssueWrite, error)
+	ReviewsSince(ctx context.Context, repo github.Repo, number int, since time.Time) ([]github.IssueWrite, error)
 }
 
 // ErrNotFound means the project is not the owner's.

@@ -165,6 +165,16 @@ func (a *App) IssuesCreatedSince(ctx context.Context, repo Repo, since time.Time
 // IssueCommentsSince lists an issue's comments updated at or after since, oldest first, with an
 // Issues read token.
 func (a *App) IssueCommentsSince(ctx context.Context, repo Repo, number int, since time.Time) ([]IssueWrite, error) {
+	return a.commentsSince(ctx, repo, number, since, Permissions{"issues": Read})
+}
+
+// PullCommentsSince lists a pull request's conversation comments updated at or after since, oldest
+// first, with a Pull requests read token.
+func (a *App) PullCommentsSince(ctx context.Context, repo Repo, number int, since time.Time) ([]IssueWrite, error) {
+	return a.commentsSince(ctx, repo, number, since, Permissions{"pull_requests": Read})
+}
+
+func (a *App) commentsSince(ctx context.Context, repo Repo, number int, since time.Time, perms Permissions) ([]IssueWrite, error) {
 	var all []IssueWrite
 	for page := 1; page <= listMaxPages; page++ {
 		q := url.Values{
@@ -172,7 +182,7 @@ func (a *App) IssueCommentsSince(ctx context.Context, repo Repo, number int, sin
 		}
 		var got []issueCommentJSON
 		path := repoPath(repo, "issues", strconv.Itoa(number), "comments") + "?" + q.Encode()
-		if err := a.call(ctx, repo, Permissions{"issues": Read}, http.MethodGet, path, nil, &got); err != nil {
+		if err := a.call(ctx, repo, perms, http.MethodGet, path, nil, &got); err != nil {
 			return nil, err
 		}
 		if len(got) > listPerPage {

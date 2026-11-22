@@ -7,6 +7,7 @@ package dbq
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
@@ -70,7 +71,7 @@ func (q *Queries) FinishIssueWriteRefused(ctx context.Context, arg FinishIssueWr
 }
 
 const getIssueWrite = `-- name: GetIssueWrite :one
-SELECT id, idempotency_key, owner_id, project_id, session_id, request_id, payload_hash, kind, repo_id, repo_full_name, title, labels, body, issue_number, comment_id, url, state, detail, attempts, rechecks, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM issue_writes WHERE id = $1
+SELECT id, idempotency_key, owner_id, project_id, session_id, request_id, payload_hash, kind, repo_id, repo_full_name, title, labels, body, issue_number, comment_id, url, state, detail, attempts, rechecks, next_attempt_at, lease_owner, lease_until, created_at, updated_at, commit_sha, review_comments FROM issue_writes WHERE id = $1
 `
 
 func (q *Queries) GetIssueWrite(ctx context.Context, id string) (IssueWrite, error) {
@@ -102,12 +103,14 @@ func (q *Queries) GetIssueWrite(ctx context.Context, id string) (IssueWrite, err
 		&i.LeaseUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CommitSha,
+		&i.ReviewComments,
 	)
 	return i, err
 }
 
 const getIssueWriteByKey = `-- name: GetIssueWriteByKey :one
-SELECT id, idempotency_key, owner_id, project_id, session_id, request_id, payload_hash, kind, repo_id, repo_full_name, title, labels, body, issue_number, comment_id, url, state, detail, attempts, rechecks, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM issue_writes WHERE idempotency_key = $1
+SELECT id, idempotency_key, owner_id, project_id, session_id, request_id, payload_hash, kind, repo_id, repo_full_name, title, labels, body, issue_number, comment_id, url, state, detail, attempts, rechecks, next_attempt_at, lease_owner, lease_until, created_at, updated_at, commit_sha, review_comments FROM issue_writes WHERE idempotency_key = $1
 `
 
 func (q *Queries) GetIssueWriteByKey(ctx context.Context, idempotencyKey string) (IssueWrite, error) {
@@ -139,6 +142,8 @@ func (q *Queries) GetIssueWriteByKey(ctx context.Context, idempotencyKey string)
 		&i.LeaseUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CommitSha,
+		&i.ReviewComments,
 	)
 	return i, err
 }
@@ -147,8 +152,8 @@ const insertIssueWrite = `-- name: InsertIssueWrite :execrows
 
 INSERT INTO issue_writes (
     id, idempotency_key, owner_id, project_id, session_id, request_id, payload_hash, kind,
-    repo_id, repo_full_name, title, labels, body, issue_number
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    repo_id, repo_full_name, title, labels, body, issue_number, commit_sha, review_comments
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 ON CONFLICT (idempotency_key) DO NOTHING
 `
 
@@ -167,6 +172,8 @@ type InsertIssueWriteParams struct {
 	Labels         []string
 	Body           string
 	IssueNumber    *int64
+	CommitSha      *string
+	ReviewComments json.RawMessage
 }
 
 // Issue write intents (internal/issues). The "fenced" queries record a claimer's outcome: they
@@ -189,6 +196,8 @@ func (q *Queries) InsertIssueWrite(ctx context.Context, arg InsertIssueWritePara
 		arg.Labels,
 		arg.Body,
 		arg.IssueNumber,
+		arg.CommitSha,
+		arg.ReviewComments,
 	)
 	if err != nil {
 		return 0, err

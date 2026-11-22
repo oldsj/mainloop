@@ -418,3 +418,52 @@ func TestGetPullRequestRendersTheDiffFeedbackAndChecks(t *testing.T) {
 		t.Errorf("missing pull request = %q", miss.text())
 	}
 }
+
+func TestCommentPullRequestFromACodeTaskCommentsAndReviews(t *testing.T) {
+	// Given a workspace agent bound to p1, whose pull request 44 changes x.go
+	h := newIssuesHarness(t)
+	a := h.seedAgent(t)
+
+	// When it comments on the pull request
+	_, c := h.call(ordinary, a.Token, "comment_pull_request", map[string]any{"project_id": "p1", "pr_number": 44, "body": "Reviewed.", "request_id": "c1"})
+
+	// Then the comment is created on the pull request
+	sc := c.Result.StructuredContent
+	if c.Result.IsError || sc["state"] != "created" || sc["kind"] != "pr_comment" || !strings.Contains(fmt.Sprint(sc["url"]), "/pull/44#issuecomment-") {
+		t.Fatalf("comment = %v %q", sc, c.text())
+	}
+
+	// When it reviews a line of x.go at the head commit
+	review := map[string]any{
+		"project_id": "p1", "pr_number": 44, "body": "One note.", "request_id": "r1", "commit_sha": checkRunsHeadSHA,
+		"comments": []map[string]any{{"path": "x.go", "line": 1, "body": "Add a doc comment."}},
+	}
+	_, r := h.call(ordinary, a.Token, "comment_pull_request", review)
+
+	// Then one COMMENT review is submitted
+	if r.Result.IsError || r.Result.StructuredContent["kind"] != "pr_review" || r.Result.StructuredContent["state"] != "created" {
+		t.Fatalf("review = %v %q", r.Result.StructuredContent, r.text())
+	}
+	var sent []githubtest.ReviewSent
+	h.fake.Update("o", "n", func(repo *githubtest.Repository) {
+		for _, p := range repo.PullRequests {
+			if p.Number == 44 {
+				sent = p.Reviews
+			}
+		}
+	})
+	if len(sent) != 1 || sent[0].Event != "COMMENT" || sent[0].CommitID != checkRunsHeadSHA {
+		t.Fatalf("reviews sent = %+v", sent)
+	}
+
+	// And inline comments without the commit, or a commit without comments, are refused
+	delete(review, "commit_sha")
+	review["request_id"] = "r2"
+	if _, bad := h.call(ordinary, a.Token, "comment_pull_request", review); !bad.Result.IsError || !strings.HasPrefix(bad.text(), "[validation]") {
+		t.Errorf("comments without commit_sha = %q", bad.text())
+	}
+	_, other := h.call(ordinary, a.Token, "comment_pull_request", map[string]any{"project_id": "p2", "pr_number": 44, "body": "x", "request_id": "c3"})
+	if !other.Result.IsError || !strings.HasPrefix(other.text(), "[forbidden]") {
+		t.Errorf("other project = %q", other.text())
+	}
+}

@@ -109,15 +109,23 @@ func withMarker(body, id string) string {
 }
 
 func writeHash(kind dbstate.IssueWriteKind, projectID, title, body string, labels []string, number int) string {
-	if labels == nil {
-		labels = []string{}
+	return payloadHash(map[string]any{
+		"kind": kind, "project_id": projectID, "title": title, "body": body, "labels": nonNil(labels), "issue_number": number,
+	})
+}
+
+func nonNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
 	}
+	return s
+}
+
+func payloadHash(v map[string]any) string {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
 	enc.SetEscapeHTML(false)
-	_ = enc.Encode(map[string]any{
-		"kind": kind, "project_id": projectID, "title": title, "body": body, "labels": labels, "issue_number": number,
-	})
+	_ = enc.Encode(v)
 	sum := sha256.Sum256(b.Bytes())
 	return hex.EncodeToString(sum[:])
 }
@@ -243,6 +251,9 @@ func (s *Service) labels(ctx context.Context, repo github.Repo, asked []string) 
 func (s *Service) insert(ctx context.Context, p dbq.InsertIssueWriteParams, sessionID string) (WriteResult, error) {
 	p.ID = uuid.NewString()
 	p.Body = withMarker(p.Body, p.ID)
+	if p.ReviewComments == nil {
+		p.ReviewComments = json.RawMessage("[]")
+	}
 	if sessionID != "" {
 		p.SessionID = &sessionID
 	}
@@ -336,9 +347,17 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 
 	// From here the POST may run, so every exit but a rate limit leaves the row for a lookup.
 	var w *github.IssueWrite
-	if row.Kind == dbstate.IssueWriteComment {
+	switch row.Kind {
+	case dbstate.IssueWriteComment, dbstate.IssueWritePRComment:
+		// GitHub takes a pull request's conversation comments through the issue endpoint.
 		w, err = s.GitHub.CommentIssue(ctx, repo, int(deref64(row.IssueNumber)), row.Body)
-	} else {
+	case dbstate.IssueWritePRReview:
+		var comments []github.ReviewComment
+		if jerr := json.Unmarshal(row.ReviewComments, &comments); jerr != nil {
+			return s.refuse(ctx, c, "invalid_review")
+		}
+		w, err = s.GitHub.CreateReview(ctx, repo, int(deref64(row.IssueNumber)), derefStr(row.CommitSha), row.Body, comments)
+	default:
 		w, err = s.GitHub.CreateIssue(ctx, repo, row.Title, row.Body, row.Labels)
 	}
 	switch st, hasStatus := github.StatusOf(err); {
@@ -367,7 +386,8 @@ func (s *Service) stillTrue(ctx context.Context, repo github.Repo, row dbq.Issue
 	if detail.ID != row.RepoID || !strings.EqualFold(detail.FullName, row.RepoFullName) {
 		return "repository_mismatch", nil
 	}
-	if row.Kind == dbstate.IssueWriteComment {
+	switch row.Kind {
+	case dbstate.IssueWriteComment:
 		_, err := s.GitHub.GetIssue(ctx, repo, int(deref64(row.IssueNumber)))
 		switch {
 		case errors.Is(err, github.ErrNotFound):
@@ -375,12 +395,20 @@ func (s *Service) stillTrue(ctx context.Context, repo github.Repo, row dbq.Issue
 		case err != nil:
 			return "", fmt.Errorf("read issue: %w", err)
 		}
+	case dbstate.IssueWritePRComment, dbstate.IssueWritePRReview:
+		_, err := s.GitHub.PullRequest(ctx, repo, int(deref64(row.IssueNumber)))
+		switch {
+		case errors.Is(err, github.ErrNotFound):
+			return "pull_request_missing", nil
+		case err != nil:
+			return "", fmt.Errorf("read pull request: %w", err)
+		}
 	}
 	return "", nil
 }
 
-// find looks for the write on GitHub by its marker: an issue created, or a comment on the issue,
-// since shortly before the intent was written, by a bot (the App), whose body carries the row's
+// find looks for the write on GitHub by its marker: an issue created, or a comment or review on
+// the issue or pull request, since shortly before the intent was written, by a bot (the App), whose body carries the row's
 // marker.
 func (s *Service) find(ctx context.Context, repo github.Repo, row dbq.IssueWrite) (*github.IssueWrite, error) {
 	since := row.CreatedAt.Add(-lookback)
@@ -388,15 +416,21 @@ func (s *Service) find(ctx context.Context, repo github.Repo, row dbq.IssueWrite
 		list []github.IssueWrite
 		err  error
 	)
-	if row.Kind == dbstate.IssueWriteComment {
-		list, err = s.GitHub.IssueCommentsSince(ctx, repo, int(deref64(row.IssueNumber)), since)
-		if errors.Is(err, github.ErrNotFound) {
-			// No issue, so no comment on it: stillTrue refuses a pending write, and an uncertain
-			// one runs out its window.
-			return nil, nil
-		}
-	} else {
+	number := int(deref64(row.IssueNumber))
+	switch row.Kind {
+	case dbstate.IssueWriteComment:
+		list, err = s.GitHub.IssueCommentsSince(ctx, repo, number, since)
+	case dbstate.IssueWritePRComment:
+		list, err = s.GitHub.PullCommentsSince(ctx, repo, number, since)
+	case dbstate.IssueWritePRReview:
+		list, err = s.GitHub.ReviewsSince(ctx, repo, number, since)
+	default:
 		list, err = s.GitHub.IssuesCreatedSince(ctx, repo, since)
+	}
+	if row.Kind != dbstate.IssueWriteIssue && errors.Is(err, github.ErrNotFound) {
+		// No issue or pull request, so no comment on it: stillTrue refuses a pending write, and an
+		// uncertain one runs out its window.
+		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("look for the write: %w", err)
@@ -533,4 +567,11 @@ func orLost(err error) error {
 // attemptsOf is the claim's attempt counter as the fenced queries take it.
 func attemptsOf(c reconcile.Claim) int32 {
 	return int32(c.Attempts) //nolint:gosec // a small counter
+}
+
+func derefStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }

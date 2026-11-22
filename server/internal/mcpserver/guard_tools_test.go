@@ -229,6 +229,10 @@ var writeCases = []writeCase{
 			})
 			return map[string]any{"project_id": "p1", "issue_number": 5, "body": "Found it.", "request_id": "dead"}
 		}},
+	{tool: "comment_pull_request", prs: true,
+		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
+			return map[string]any{"project_id": "p1", "pr_number": 1, "body": "Looks fine.", "request_id": "dead"}
+		}},
 	{tool: "watch_checks", prs: true,
 		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
 			return map[string]any{"project_id": "p1", "pr_number": 1, "request_id": "dead"}

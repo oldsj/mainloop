@@ -260,3 +260,104 @@ func orDash(s string) string {
 	}
 	return s
 }
+
+// maxReviewCommentBody bounds one inline comment, in bytes.
+const maxReviewCommentBody = 10000
+
+// pullCommentTool comments on or reviews a pull request. It writes an intent row like
+// comment_issue, and the API process's loop posts at most once. A review only ever comments.
+func (s *Server) pullCommentTool() Tool {
+	sha := map[string]any{"type": "string", "pattern": "^[0-9a-f]{40}$"}
+	return Tool{
+		Name: agentauth.ToolCommentPullRequest,
+		Description: "Comment on a pull request of the bound project's repository; returns the comment's URL. " +
+			"With comments (inline comments on lines of the diff: path, line, side RIGHT for the new version or LEFT " +
+			"for the old, body) it submits one review whose summary is body, pinned to commit_sha (the head_sha " +
+			"get_pull_request showed you). A review only comments: it never approves or requests changes. " +
+			"Supply a stable request_id: a retry with it never posts twice.",
+		InputSchema: objectSchema(map[string]any{
+			"project_id": stringSchema(1, 100),
+			"pr_number":  map[string]any{"type": "integer", "exclusiveMinimum": 0},
+			"body":       stringSchema(1, maxIssueBody),
+			"request_id": stringSchema(1, 100),
+			"commit_sha": sha,
+			"comments": map[string]any{
+				"type": "array", "maxItems": issues.MaxReviewComments,
+				"items": objectSchema(map[string]any{
+					"path": stringSchema(1, 1000),
+					"line": map[string]any{"type": "integer", "exclusiveMinimum": 0},
+					"side": map[string]any{"type": "string", "enum": []string{"RIGHT", "LEFT"}},
+					"body": stringSchema(1, maxReviewCommentBody),
+				}, "path", "line", "body"),
+			},
+		}, "project_id", "pr_number", "body", "request_id"),
+		Handle: s.commentPullRequest,
+	}
+}
+
+func (s *Server) commentPullRequest(ctx context.Context, a agentauth.Actor, raw json.RawMessage) (Result, error) {
+	var in struct {
+		ProjectID string `json:"project_id"`
+		PRNumber  int    `json:"pr_number"`
+		Body      string `json:"body"`
+		RequestID string `json:"request_id"`
+		CommitSHA string `json:"commit_sha"`
+		Comments  []struct {
+			Path string `json:"path"`
+			Line int    `json:"line"`
+			Side string `json:"side"`
+			Body string `json:"body"`
+		} `json:"comments"`
+	}
+	if err := decode(raw, &in); err != nil {
+		return Result{}, err
+	}
+	var err error
+	if in.ProjectID, err = text(in.ProjectID, 1, 100); err != nil {
+		return Result{}, err
+	}
+	if in.RequestID, err = text(in.RequestID, 1, 100); err != nil {
+		return Result{}, err
+	}
+	if in.PRNumber <= 0 || strings.TrimSpace(in.Body) == "" || len(in.Body) > maxIssueBody || len(in.Comments) > issues.MaxReviewComments {
+		return Result{}, errValidation
+	}
+	// A review's lines refer to one commit's diff, so a review names it; a plain comment does not.
+	if (len(in.Comments) > 0) != (in.CommitSHA != "") || (in.CommitSHA != "" && !isFullSHA(in.CommitSHA)) {
+		return Result{}, failure("validation", "commit_sha is required with comments, and only with them")
+	}
+	comments := make([]issues.ReviewComment, 0, len(in.Comments))
+	for _, c := range in.Comments {
+		if c.Path == "" || len(c.Path) > 1000 || c.Line <= 0 || strings.TrimSpace(c.Body) == "" || len(c.Body) > maxReviewCommentBody ||
+			(c.Side != "" && c.Side != "RIGHT" && c.Side != "LEFT") {
+			return Result{}, errValidation
+		}
+		comments = append(comments, issues.ReviewComment{Path: c.Path, Line: c.Line, Side: c.Side, Body: c.Body})
+	}
+	if s.Issues == nil {
+		return Result{}, failure("unavailable", "pull requests are not available")
+	}
+	if err := issueAuthority(a, in.ProjectID); err != nil {
+		return Result{}, err
+	}
+	res, err := s.Issues.CommentPullRequest(ctx, issues.CommentPullRequestInput{
+		OwnerID: a.UserID, ProjectID: in.ProjectID, SessionID: a.BindingID, RequestID: in.RequestID,
+		Number: in.PRNumber, Body: in.Body, CommitSHA: in.CommitSHA, Comments: comments,
+	})
+	if err != nil {
+		return Result{}, issuesFailure(err)
+	}
+	return issueWriteResult(res), nil
+}
+
+func isFullSHA(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}

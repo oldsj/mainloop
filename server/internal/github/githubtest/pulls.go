@@ -316,6 +316,8 @@ func (s *Server) pullCall(w http.ResponseWriter, r *http.Request, repo *Reposito
 		s.pullGet(w, repo, rest[1])
 	case len(rest) == 3 && rest[2] == "files":
 		s.pullFiles(w, r, repo, rest[1])
+	case len(rest) == 3 && rest[2] == "reviews" && r.Method == http.MethodPost:
+		s.reviewCreate(w, r, repo, rest[1])
 	case len(rest) == 3 && rest[2] == "reviews" && r.Method == http.MethodGet:
 		s.feedbackCall(w, r, repo, rest[1], FeedbackReview)
 	case len(rest) == 3 && rest[2] == "comments" && r.Method == http.MethodGet:
@@ -779,4 +781,60 @@ func (s *Server) annotations(w http.ResponseWriter, repo *Repository, id string)
 		out = append(out, item)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// reviewCreate serves POST /pulls/{n}/reviews as the App: a COMMENT review whose inline comments
+// must name a changed file. It records the review and its comments as the App's feedback.
+func (s *Server) reviewCreate(w http.ResponseWriter, r *http.Request, repo *Repository, num string) {
+	var in struct {
+		CommitID string `json:"commit_id"`
+		Body     string `json:"body"`
+		Event    string `json:"event"`
+		Comments []struct {
+			Path string `json:"path"`
+			Line int    `json:"line"`
+			Body string `json:"body"`
+		} `json:"comments"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.CommitID == "" || in.Event == "" {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "Validation Failed"})
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i, ok := s.find(repo, num)
+	if !ok {
+		notFound(w)
+		return
+	}
+	p := &repo.PullRequests[i]
+	for _, c := range in.Comments {
+		known := false
+		for _, f := range p.Files {
+			known = known || f.Filename == c.Path
+		}
+		if !known || c.Line <= 0 {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "Unprocessable Entity"})
+			return
+		}
+	}
+	var id int64 = 5000
+	for _, f := range p.Feedback {
+		id = max(id, f.ID)
+	}
+	now := time.Now().UTC()
+	state := map[string]string{"COMMENT": "COMMENTED", "APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED"}[in.Event]
+	review := Feedback{ID: id + 1, Kind: FeedbackReview, Author: "mainloop[bot]", AuthorType: "Bot", State: state, Body: in.Body, At: now}
+	p.Feedback = append(p.Feedback, review)
+	for k, c := range in.Comments {
+		p.Feedback = append(p.Feedback, Feedback{
+			ID: id + 2 + int64(k), Kind: FeedbackReviewComment, Author: "mainloop[bot]", AuthorType: "Bot", Path: c.Path, Line: c.Line, Body: c.Body, At: now,
+		})
+	}
+	p.Reviews = append(p.Reviews, ReviewSent{CommitID: in.CommitID, Event: in.Event, Body: in.Body, Comments: len(in.Comments)})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id": review.ID, "body": in.Body, "state": state, "submitted_at": now.Format(time.RFC3339),
+		"user":     map[string]any{"login": review.Author, "type": "Bot"},
+		"html_url": "https://github.com/" + repo.Owner + "/" + repo.Name + "/pull/" + num + "#pullrequestreview-" + strconv.FormatInt(review.ID, 10),
+	})
 }
