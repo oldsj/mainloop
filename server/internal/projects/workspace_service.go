@@ -69,11 +69,8 @@ func (s *Service) WorkspaceService(ctx context.Context, id string) (api.Workspac
 // SetWorkspaceService replaces the project's workspace service command and ports. Workspaces
 // created afterwards copy them; existing ones keep theirs.
 func (s *Service) SetWorkspaceService(ctx context.Context, id string, in api.WorkspaceService) (api.WorkspaceService, error) {
-	if !validServiceCommand(in.Command) {
-		return api.WorkspaceService{}, ErrInvalidService
-	}
-	if len(in.Ports) > maxServicePorts || ValidatePorts(in.Ports) != nil {
-		return api.WorkspaceService{}, ErrInvalidServicePorts
+	if err := ValidateWorkspaceService(in); err != nil {
+		return api.WorkspaceService{}, err
 	}
 	command, ports := in.Command, in.Ports
 	if command == nil {
@@ -104,6 +101,18 @@ func workspaceService(p dbq.Project) (api.WorkspaceService, error) {
 		return api.WorkspaceService{}, err
 	}
 	return api.WorkspaceService{Command: p.WorkspaceServiceCommand, Ports: ports}, nil
+}
+
+// ValidateWorkspaceService checks a workspace service against the contract's bounds, as a save
+// does: ErrInvalidService for the command, ErrInvalidServicePorts for the ports.
+func ValidateWorkspaceService(in api.WorkspaceService) error {
+	if !validServiceCommand(in.Command) {
+		return ErrInvalidService
+	}
+	if len(in.Ports) > maxServicePorts || ValidatePorts(in.Ports) != nil {
+		return ErrInvalidServicePorts
+	}
+	return nil
 }
 
 func validServiceCommand(command []string) bool {

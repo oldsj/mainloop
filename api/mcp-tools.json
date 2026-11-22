@@ -532,6 +532,96 @@
       }
     },
     {
+      "name": "project_propose",
+      "description": "Propose making a GitHub repository a Mainloop project. The owner gets one approval card in Needs you; nothing changes until they approve it, and approving imports the repository and applies the settings named here. Mainloop checks whether its GitHub App is installed on the repository and statically checks environment_image (digest-pinned, as environment registration requires); the result says what it found, including what the owner must do when the App is not installed. services and workspace_size are recorded on the card but not applied: Mainloop has no declared services or workspace sizes yet. Reuse request_id to read the same proposal back; a repository with an open proposal returns that one.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "environment_architecture": {
+            "enum": ["amd64", "arm64"],
+            "type": "string"
+          },
+          "environment_image": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "repository": {
+            "maxLength": 300,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "services": {
+            "items": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          "verification_mode": {
+            "enum": ["auto", "ci", "hybrid", "local"],
+            "type": "string"
+          },
+          "why": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "workspace_service": {
+            "additionalProperties": false,
+            "properties": {
+              "command": {
+                "items": {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 61,
+                "type": "array"
+              },
+              "ports": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "maxLength": 32,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "number": {
+                      "maximum": 65535,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["name", "number"],
+                  "type": "object"
+                },
+                "maxItems": 16,
+                "type": "array"
+              }
+            },
+            "required": ["command"],
+            "type": "object"
+          },
+          "workspace_size": {
+            "maxLength": 40,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["request_id", "repository", "why"],
+        "type": "object"
+      }
+    },
+    {
       "name": "task_get",
       "description": "Read a scoped task and its stored projections without a native turn.",
       "input_schema": {
@@ -1526,6 +1616,7 @@
         "pending_add",
         "pending_done",
         "project_context",
+        "project_propose",
         "remember",
         "steer",
         "supervisor_send",
@@ -1577,6 +1668,7 @@
         "pending_add",
         "pending_done",
         "project_context",
+        "project_propose",
         "remember",
         "steer",
         "supervisor_send",
@@ -1627,6 +1719,7 @@
         "pending_done",
         "prepare_pull_request_merge",
         "project_context",
+        "project_propose",
         "remember",
         "steer",
         "supervisor_send",
@@ -1681,6 +1774,7 @@
         "pending_done",
         "prepare_pull_request_merge",
         "project_context",
+        "project_propose",
         "remember",
         "steer",
         "supervisor_send",
@@ -1720,6 +1814,7 @@
         "loop_list",
         "loop_stop",
         "project_context",
+        "project_propose",
         "remember",
         "report",
         "steer",
@@ -1755,6 +1850,7 @@
         "loop_list",
         "loop_stop",
         "project_context",
+        "project_propose",
         "remember",
         "report",
         "steer",
@@ -1790,6 +1886,7 @@
         "loop_list",
         "loop_stop",
         "project_context",
+        "project_propose",
         "remember",
         "report",
         "steer",
@@ -1825,6 +1922,7 @@
         "loop_list",
         "loop_stop",
         "project_context",
+        "project_propose",
         "remember",
         "report",
         "steer",

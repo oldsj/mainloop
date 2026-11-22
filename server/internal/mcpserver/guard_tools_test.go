@@ -248,6 +248,10 @@ var writeCases = []writeCase{
 			e := setupCall(t, h, a, "remember", map[string]any{"project_id": "mem-p", "text": "Wrong."})
 			return map[string]any{"project_id": "mem-p", "entry_id": e["entry_id"]}
 		}},
+	{tool: "project_propose", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
+			return map[string]any{"request_id": "r1", "repository": "oldsj/opencozy-next", "why": "pilot"}
+		}},
 	// get_verification may write the project's cached CI detection.
 	{tool: "get_verification", prs: true,
 		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {

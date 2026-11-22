@@ -296,6 +296,19 @@ func (a *App) lookupInstallation(ctx context.Context, allow *Allowlist, repo Rep
 	return inst.GetID(), nil
 }
 
+// Installed reports whether the App is installed on repo. A missing installation is false with no
+// error; only a found one is cached, so a later call sees an installation made in between.
+func (a *App) Installed(ctx context.Context, repo Repo) (bool, error) {
+	_, err := a.installation(ctx, a.allowlist(Scope{Repo: repo}), repo)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ErrNotInstalled):
+		return false, nil
+	}
+	return false, a.opaque(err)
+}
+
 // forget drops what was learned about a repository's installation, so the next use looks again.
 func (a *App) forget(key string, repo Repo) {
 	a.mu.Lock()

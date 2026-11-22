@@ -45,6 +45,60 @@ After an import the section links to the project page.
 Both sections are proven by offline component tests against MSW handlers; not proven against a
 live server.
 
+## Onboarding proposals
+
+An agent can propose a repository as a project, and the owner approves it with one tap. Main and
+coordination supervisors (a project's standing supervisor or an ad-hoc one; not code tasks or
+workspace agents) call the MCP tool `project_propose` with a `request_id`, the `repository`
+(`owner/name` or a GitHub URL), `why`, and optionally the settings to apply:
+
+- `environment_image`: digest-pinned, with an optional `environment_architecture`, which defaults to
+  `amd64`.
+- `verification_mode`: `auto`, `ci`, `hybrid` or `local`.
+- `workspace_service`: the same shape and bounds as `PUT /projects/{id}/workspace-service`.
+- `services` (at most 8) and `workspace_size`: recorded, not applied. Mainloop has no declared
+  services or workspace sizes yet, so the card says so. A service such as Postgres can run inside the
+  environment image instead.
+
+Before it stores anything, Mainloop checks the repository with no transaction open:
+
+- **GitHub App.** It asks whether its GitHub App is installed on the repository: `installed`,
+  `not_installed`, or `unknown` with the reason (no App configured, GitHub unreachable). When the App
+  is missing, the card and the tool result tell the owner to install it from GitHub's
+  installed-apps settings before approving, because without it workspaces cannot clone or push.
+- **Existing project.** It checks whether the repository is already one of the owner's projects. If
+  so, approving applies the settings to that project.
+- **Environment image.** It checks the image as environment registration does
+  ([environments](environments.md)). A refused image fails the call (`[validation]`) with the
+  registry's reason, and nothing is stored.
+
+The proposal is then a durable row (`project_proposals`, state `proposed`), and an approval card
+opens in Needs you in the same transaction. The card uses the existing queue path (kind
+`approval`, queue item `project_proposal_<id>`) with the answers **Approve** and **Reject**. It
+reads "Approve onboarding owner/name as a Mainloop project?" and its text lists:
+
+- who proposed it, and why
+- the GitHub App's installation
+- whether the repository is new or already a project
+- the image and the platform manifest digest the check found
+- the checks mode and workspace service
+- what is recorded but not applied
+
+The owner answers with `POST /queue/{id}/respond`, which records the answer on the card and closes
+it.
+
+The same `request_id` returns the same proposal without checking again; the result is marked
+`replayed`. The same `request_id` with a different proposal is `[conflict]`. While a repository has
+a proposal that is proposed or approved and not yet applied, proposing it again under any request id
+(the repository's case does not matter) returns that proposal and opens no second card. The result
+carries the proposal id, its state, the queue item id, `/inbox?item=<queue item id>` and the facts
+above.
+
+**Not built yet:** applying an approved proposal. The apply step will import the repository
+through the project APIs, apply the settings idempotently and audit each step. Until then an answer
+is recorded on the card and nothing reads it. Proven by Postgres tests with a fake GitHub App and a
+fake image check; not proven against live GitHub or a registry.
+
 Project detail lists unarchived project sessions and excludes bindings with the `main` role.
 Unbound sessions remain visible.
 

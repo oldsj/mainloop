@@ -349,6 +349,31 @@ func TestNotInstalled(t *testing.T) {
 	}
 }
 
+// Installed answers whether the App is on a repository without minting a token; a missing
+// installation is false, not an error, and is asked again next time.
+func TestInstalled(t *testing.T) {
+	fake := githubtest.New(t)
+	fake.AddRepo(githubtest.Repository{Owner: "oldsj", Name: "mainloop"})
+	fake.AddRepo(githubtest.Repository{Owner: "oldsj", Name: "absent", NotInstalled: true})
+	app := newApp(t, fake)
+	ctx := context.Background()
+	if ok, err := app.Installed(ctx, repo); !ok || err != nil {
+		t.Fatalf("installed repo = %v, %v", ok, err)
+	}
+	absent := github.Repo{Owner: "oldsj", Name: "absent"}
+	for range 2 {
+		if ok, err := app.Installed(ctx, absent); ok || err != nil {
+			t.Fatalf("absent repo = %v, %v", ok, err)
+		}
+	}
+	if n := fake.Count("GET", "/repos/oldsj/absent/installation"); n != 2 {
+		t.Errorf("%d lookups of the absent installation, want 2 (not cached)", n)
+	}
+	if len(fake.Mints()) != 0 {
+		t.Errorf("Installed minted %d tokens", len(fake.Mints()))
+	}
+}
+
 func TestUpstreamFailuresAreTypedAndOpaque(t *testing.T) {
 	fake, app := seeded(t)
 	ctx := context.Background()
