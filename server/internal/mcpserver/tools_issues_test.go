@@ -42,7 +42,17 @@ func newIssuesHarness(t *testing.T) *issuesHarness {
 		DependabotAlerts: []githubtest.DependabotAlert{
 			{Number: 1, PackageName: "lodash", Ecosystem: "npm", Severity: "high", VulnerableVersionRange: "< 4.17.21", PatchedVersion: "4.17.21", GHSAID: "GHSA-xxxx", Summary: "Prototype pollution"},
 		},
-		PullRequests: []githubtest.PullRequest{{Number: 42, Title: "T", HeadRef: "feature", HeadSHA: checkRunsHeadSHA}},
+		PullRequests: []githubtest.PullRequest{
+			{Number: 42, Title: "T", HeadRef: "feature", HeadSHA: checkRunsHeadSHA},
+			// 44 is the pull request get_pull_request reads: a file with a patch and a member's review.
+			{
+				Number: 44, Title: "Add x", Author: "alice", Body: "Adds x.", HeadRef: "feature-x", HeadSHA: checkRunsHeadSHA,
+				Files: []githubtest.File{{Filename: "x.go", Status: "added", Additions: 1, Patch: "@@ -0,0 +1 @@\n+package x\n"}},
+				Feedback: []githubtest.Feedback{
+					{ID: 1, Kind: githubtest.FeedbackReview, Author: "bob", Association: "MEMBER", State: "APPROVED", Body: "LGTM", At: time.Now().Add(-time.Hour)},
+				},
+			},
+		},
 		Runs: map[string][]githubtest.CheckRun{
 			checkRunsHeadSHA: {
 				{ID: 1, AppID: 9, Name: "build", Conclusion: "success"},
@@ -369,5 +379,42 @@ func TestIssueWritesFollowTheGrantAndProject(t *testing.T) {
 	}
 	if _, r := h.call(ordinary, main.Token, "get_issue", map[string]any{"project_id": "p1", "issue_number": 5}); r.Result.IsError {
 		t.Errorf("main get_issue = %q", r.text())
+	}
+}
+
+func TestGetPullRequestRendersTheDiffFeedbackAndChecks(t *testing.T) {
+	// Given a workspace agent bound to p1, whose pull request 44 changes one file, has a member's
+	// review and one passing and one failing check
+	h := newIssuesHarness(t)
+	a := h.seedAgent(t)
+
+	// When it reads the pull request
+	_, r := h.call(ordinary, a.Token, "get_pull_request", map[string]any{"project_id": "p1", "pr_number": 44})
+
+	// Then the text carries the description, the patch, the review and the failing check, and the
+	// structured answer the same fields
+	text := r.text()
+	for _, want := range []string{"PR #44", "Adds x.", "--- x.go", "+package x", "[review APPROVED] bob", "LGTM", "## Checks: failed", "- test: failed"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text lacks %q:\n%s", want, text)
+		}
+	}
+	sc := r.Result.StructuredContent
+	if r.Result.IsError || sc["number"] != float64(44) || sc["head_sha"] != checkRunsHeadSHA {
+		t.Fatalf("get_pull_request = %v", sc)
+	}
+	files, _ := sc["files"].([]any)
+	if len(files) != 1 || files[0].(map[string]any)["patch_state"] != "full" {
+		t.Errorf("files = %v", sc["files"])
+	}
+
+	// And another project, or a missing pull request, is refused
+	_, other := h.call(ordinary, a.Token, "get_pull_request", map[string]any{"project_id": "p2", "pr_number": 44})
+	if !other.Result.IsError || !strings.HasPrefix(other.text(), "[forbidden]") {
+		t.Errorf("other project = %q", other.text())
+	}
+	_, miss := h.call(ordinary, a.Token, "get_pull_request", map[string]any{"project_id": "p1", "pr_number": 999})
+	if !miss.Result.IsError || miss.text() != "[not_found] no such pull request" {
+		t.Errorf("missing pull request = %q", miss.text())
 	}
 }

@@ -106,6 +106,9 @@ type PullFile struct {
 	Status           string
 	Additions        int
 	Deletions        int
+	// Patch is the file's unified diff hunks. GitHub leaves it out for a binary file and for one
+	// whose diff is too large to show; it is then empty.
+	Patch string
 }
 
 // CheckSuite is one check suite on a commit. AppID is zero for a suite with no app.
@@ -514,6 +517,7 @@ func (a *App) PullFiles(ctx context.Context, repo Repo, number, page, perPage in
 		Status           string  `json:"status"`
 		Additions        int     `json:"additions"`
 		Deletions        int     `json:"deletions"`
+		Patch            string  `json:"patch"`
 	}
 	path := repoPath(repo, "pulls", strconv.Itoa(number), "files") + "?" + q.Encode()
 	if err := a.call(ctx, repo, Permissions{"pull_requests": Read}, http.MethodGet, path, nil, &got); err != nil {
@@ -524,7 +528,7 @@ func (a *App) PullFiles(ctx context.Context, repo Repo, number, page, perPage in
 	}
 	out := make([]PullFile, 0, len(got))
 	for _, f := range got {
-		pf := PullFile{Filename: f.Filename, Status: f.Status, Additions: f.Additions, Deletions: f.Deletions}
+		pf := PullFile{Filename: f.Filename, Status: f.Status, Additions: f.Additions, Deletions: f.Deletions, Patch: f.Patch}
 		if f.PreviousFilename != nil {
 			pf.PreviousFilename = *f.PreviousFilename
 		}

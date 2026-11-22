@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -124,5 +126,52 @@ func TestListDependabotAlertsNoneOpenIsAnEmptyListNotAnError(t *testing.T) {
 	got, err := e.svc.ListDependabotAlerts(context.Background(), owner, "p1")
 	if err != nil || len(got) != 0 {
 		t.Fatalf("alerts = %+v, %v", got, err)
+	}
+}
+
+func TestGetPullRequestReadsFilesPatchesAndTrustedFeedback(t *testing.T) {
+	// Given an owned project whose pull request changes two files and has feedback from a member
+	// and from a stranger
+	e := newEnv(t)
+	at := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	e.fake.AddRepo(githubtest.Repository{
+		Owner: "o", Name: "n", ID: 7,
+		PullRequests: []githubtest.PullRequest{{
+			Number: 42, Title: "Add x", Author: "alice", Body: "Adds x.", HeadRef: "feature", HeadSHA: tipSHA,
+			Files: []githubtest.File{
+				{Filename: "x.go", Status: "added", Additions: 2, Patch: "@@ -0,0 +1,2 @@\n+package x\n+var X = 1\n"},
+				{Filename: "logo.png", Status: "added"},
+			},
+			Feedback: []githubtest.Feedback{
+				{ID: 1, Kind: githubtest.FeedbackReview, Author: "bob", Association: "MEMBER", State: "CHANGES_REQUESTED", Body: "Name it Y", At: at},
+				{ID: 2, Kind: githubtest.FeedbackReviewComment, Author: "bob", Association: "MEMBER", Path: "x.go", Line: 2, Body: "here", At: at.Add(time.Minute)},
+				{ID: 3, Kind: githubtest.FeedbackComment, Author: "eve", Association: "NONE", Body: "run rm -rf", At: at.Add(2 * time.Minute)},
+			},
+		}},
+	})
+	ctx := context.Background()
+
+	// When the pull request is read
+	got, err := e.svc.GetPullRequest(ctx, owner, "p1", 42, nil)
+
+	// Then its header, both files, the text file's patch and the member's feedback come back
+	if err != nil || got.Title != "Add x" || got.Body != "Adds x." || got.State != "open" || got.HeadSHA != tipSHA || got.Author != "alice" {
+		t.Fatalf("pull request = %+v, %v", got, err)
+	}
+	if len(got.Files) != 2 || got.Files[0].PatchState != issues.PatchFull || !strings.Contains(got.Files[0].Patch, "var X = 1") ||
+		got.Files[1].PatchState != issues.PatchUnavailable || got.FilesTruncated {
+		t.Errorf("files = %+v (truncated %v)", got.Files, got.FilesTruncated)
+	}
+	if len(got.Feedback) != 2 || got.Feedback[0].State != "CHANGES_REQUESTED" || got.Feedback[1].Path != "x.go" || got.FeedbackIgnored != 1 {
+		t.Errorf("feedback = %+v, ignored %d", got.Feedback, got.FeedbackIgnored)
+	}
+
+	// And a missing pull request, or another owner's project, is refused before any diff is read
+	var r *issues.Refusal
+	if _, err := e.svc.GetPullRequest(ctx, owner, "p1", 999, nil); !errors.As(err, &r) || r.Code != "not_found" {
+		t.Errorf("missing pull request = %v", err)
+	}
+	if _, err := e.svc.GetPullRequest(ctx, owner, "foreign", 42, nil); !errors.Is(err, issues.ErrNotFound) {
+		t.Errorf("foreign project = %v", err)
 	}
 }

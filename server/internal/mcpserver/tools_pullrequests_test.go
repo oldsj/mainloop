@@ -121,7 +121,7 @@ func TestBothSurfacesListTheMergeToolsByRoute(t *testing.T) {
 	h := newPRHarness(t)
 	a := h.seedAgent(t, nil)
 	want := []string{
-		"check_status", "forget", "get_issue", "get_pull_request_merge_status", "get_verification", "list_dependabot_alerts",
+		"check_status", "forget", "get_issue", "get_pull_request", "get_pull_request_merge_status", "get_verification", "list_dependabot_alerts",
 		"merge_pull_request", "open_pull_request", "prepare_pull_request_merge", "project_context", "remember", "watch_checks", "whoami",
 	}
 	if got := h.list(t, mcpserver.PathOrdinary, a.Token); !slices.Equal(got, want) {

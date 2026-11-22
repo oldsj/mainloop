@@ -24,7 +24,7 @@ import (
 // read mainloop-dev: each still inserts a devloop_operations row in Mainloop's own database, so
 // they are write cases too.
 var readOnlyTools = []string{
-	"check_status", "get_issue", "get_pull_request_merge_status", "list_dependabot_alerts", "loop_list", "task_get",
+	"check_status", "get_issue", "get_pull_request", "get_pull_request_merge_status", "list_dependabot_alerts", "loop_list", "task_get",
 	"task_history", "task_transcript", "transcript_search", "project_context", "task_list", "topics", "whoami",
 }
 

@@ -30,6 +30,7 @@ func (s *Server) issueTools() []Tool {
 			}, "project_id", "issue_number"),
 			Handle: s.getIssue,
 		},
+		s.pullReadTool(),
 		{
 			Name: agentauth.ToolCreateIssue,
 			Description: "File a GitHub issue in a project's repository through Mainloop's GitHub App; returns its number and URL. " +

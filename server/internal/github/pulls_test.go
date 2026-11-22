@@ -140,11 +140,16 @@ func TestPullFilesPage(t *testing.T) {
 	for i := range 5 {
 		files = append(files, githubtest.File{Filename: fmt.Sprintf("f%d", i), Additions: 1})
 	}
+	files[0].Patch = "@@ -0,0 +1 @@\n+x"
+
 	app, _ := pullApp(t, func(r *githubtest.Repository) { r.PullRequests[0].Files = files })
 	ctx := context.Background()
 	first, more, err := app.PullFiles(ctx, repoON, 1, 1, 3)
 	if err != nil || len(first) != 3 || !more || first[0].Filename != "f0" {
 		t.Fatalf("page 1 = %+v, %v, %v", first, more, err)
+	}
+	if first[0].Patch != "@@ -0,0 +1 @@\n+x" || first[1].Patch != "" {
+		t.Errorf("patches = %q, %q; want the text file's patch and none for the other", first[0].Patch, first[1].Patch)
 	}
 	rest, more, err := app.PullFiles(ctx, repoON, 1, 2, 3)
 	if err != nil || len(rest) != 2 || more {
