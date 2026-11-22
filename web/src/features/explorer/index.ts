@@ -10,4 +10,5 @@ export {
   type Target
 } from './model';
 export type { ExplorerPrefs } from './prefs';
-export { useAsk, useExplorer, useOpenTarget } from './useExplorer';
+export { workingCount } from './agents';
+export { useAgentColumn, useAsk, useExplorer, useOpenTarget } from './useExplorer';

@@ -6,8 +6,10 @@ import {
   ExplorerSidebar,
   needsCount,
   shellCounts,
+  useAgentColumn,
   useExplorer,
   useExplorerPrefs,
+  workingCount,
   type SidebarView
 } from '@/features/explorer';
 import { ActivityBar } from './ActivityBar';
@@ -20,8 +22,9 @@ import { StatusBar } from './StatusBar';
  * page in the centre and a status bar along the bottom. There is no top header. On home the centre
  * is the Mainloop chat alone, which owns the only scroll; other pages scroll in the centre.
  *
- * The shell owns the explorer's data and prefs, because three things read them: the activity bar
- * (the Needs-you count and which view shows), the sidebar, and the status bar (the counts).
+ * The shell owns the explorer's data and prefs, and the sidebar's spaces and agents, because three
+ * things read them: the activity bar (the Needs-you count and which view shows), the sidebar, and
+ * the status bar (the counts).
  */
 export function DesktopShell({
   children,
@@ -37,6 +40,7 @@ export function DesktopShell({
   const { prefs, update } = useExplorerPrefs();
   const explorer = useExplorer(lastVisit);
   const counts = shellCounts(explorer.nodes);
+  const column = useAgentColumn();
 
   // Choosing the view that is showing hides the sidebar; any other choice shows that view.
   const chooseView = (view: SidebarView) =>
@@ -75,6 +79,7 @@ export function DesktopShell({
               prefs={prefs}
               update={update}
               nodes={explorer.nodes}
+              column={column}
               ready={explorer.ready}
               failed={explorer.failed}
             />
@@ -94,7 +99,8 @@ export function DesktopShell({
       </div>
       <StatusBar
         needs={counts.needs}
-        working={counts.working}
+        // What has an amber dot in the column, so the count and the column agree.
+        working={workingCount(column.model.agents)}
         problems={counts.problems}
         counts={explorer.ready ? 'ready' : explorer.failed ? 'failed' : 'loading'}
         onShowWorking={() => update((prev) => ({ ...prev, view: 'sessions', collapsed: false }))}

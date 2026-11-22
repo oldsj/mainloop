@@ -15,7 +15,15 @@ import { useWorkspaces } from '@/features/sessions/queries';
 import { useOwnerTaskPoll, useTaskList } from '@/features/tasks/queries';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { currentAttempt } from '@/lib/taskState';
-import { buildExplorer, prStage, targetOfLocation, type ExplorerNode, type Target } from './model';
+import { buildAgentColumn, spaceOfPage, type AgentColumnModel } from './agents';
+import {
+  buildExplorer,
+  prStage,
+  targetOfLocation,
+  type ExplorerNode,
+  type ExplorerSource,
+  type Target
+} from './model';
 import { useSeen } from './seen';
 
 /** `lastVisit` is the shell's baseline for "Since you were here"; without it the group is left out. */
@@ -28,12 +36,7 @@ export function useExplorer(lastVisit: number | null = null): {
   useAttentionPoll();
   // Owner tasks poll the same way, so a task that stops needing the owner leaves the tree on its own.
   useOwnerTaskPoll(true);
-  const attention = useAttention();
   const tasks = useTaskList();
-  const workspaces = useWorkspaces();
-  const projects = useProjects();
-  const schedules = useSchedules();
-  const online = useConnection().status !== 'offline';
 
   // A finished task is "unseen" until the owner opens its page, or the page of its session, on any
   // device. It is marked when that page opens, and again when it changes under the owner while it
@@ -62,19 +65,39 @@ export function useExplorer(lastVisit: number | null = null): {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openId, markKey, mark, seen]);
 
-  const nodes = useMemo(
-    () =>
-      buildExplorer({
-        tasks: tasks.data ?? [],
-        attention: attentionItems(attention.data),
-        sessions: attention.data?.sessions ?? [],
-        workspaces: workspaces.data ?? [],
-        projects: keepValid(projects.data, projectRowSchema),
-        schedules: schedules.data?.pages.flatMap((page) => page.items) ?? [],
-        online,
-        lastVisit,
-        seen
-      }),
+  const { source, ready, failed } = useExplorerSource(lastVisit);
+  const nodes = useMemo(() => buildExplorer(source), [source]);
+  return { nodes, ready, failed };
+}
+
+/**
+ * What the tree and the agent column are both built from: the reads the pages already make, so a
+ * second caller costs no request. It does not poll; the shell's explorer does.
+ */
+export function useExplorerSource(lastVisit: number | null = null): {
+  source: ExplorerSource;
+  ready: boolean;
+  failed: boolean;
+} {
+  const attention = useAttention();
+  const tasks = useTaskList();
+  const workspaces = useWorkspaces();
+  const projects = useProjects();
+  const schedules = useSchedules();
+  const online = useConnection().status !== 'offline';
+  const { seen } = useSeen();
+  const source = useMemo(
+    (): ExplorerSource => ({
+      tasks: tasks.data ?? [],
+      attention: attentionItems(attention.data),
+      sessions: attention.data?.sessions ?? [],
+      workspaces: workspaces.data ?? [],
+      projects: keepValid(projects.data, projectRowSchema),
+      schedules: schedules.data?.pages.flatMap((page) => page.items) ?? [],
+      online,
+      lastVisit,
+      seen
+    }),
     [
       tasks.data,
       attention.data,
@@ -86,12 +109,34 @@ export function useExplorer(lastVisit: number | null = null): {
       seen
     ]
   );
-
   return {
-    nodes,
+    source,
     ready: tasks.data !== undefined && attention.data !== undefined,
     failed: (tasks.isError && tasks.data === undefined) || (attention.isError && !attention.data)
   };
+}
+
+/**
+ * The left column's spaces and agents, the page being shown and the space it belongs to. Built from
+ * the explorer's reads, so it changes with them.
+ */
+export interface AgentColumnState {
+  model: AgentColumnModel;
+  /** The page being shown. */
+  page: Target | null;
+  /** The space that page belongs to. */
+  space: string;
+}
+
+export function useAgentColumn(): AgentColumnState {
+  const { source } = useExplorerSource();
+  const page = useLocation({
+    select: (location) => targetOfLocation(location.pathname, location.search),
+    structuralSharing: true
+  });
+  const model = useMemo(() => buildAgentColumn(source, page), [source, page]);
+  const space = useMemo(() => spaceOfPage(page, source), [page, source]);
+  return { model, page, space };
 }
 
 /** Navigation helpers for the tree. Each returns a function, so the tree can call it on a key or click. */

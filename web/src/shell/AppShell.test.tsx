@@ -91,7 +91,7 @@ describe('shell switch', () => {
     const aside = screen.getByRole('complementary', { name: 'Sessions sidebar' });
     const main = screen.getByRole('main');
     const status = screen.getByTestId('status-bar');
-    expect(await within(aside).findByRole('tree')).toBeInTheDocument();
+    expect(await within(aside).findByRole('group', { name: 'agents' })).toBeInTheDocument();
     expect(main).not.toContainElement(aside);
     // Left to right, then the status bar last.
     const follows = (a: Element, b: Element) =>
@@ -488,16 +488,16 @@ describe('home work placement', () => {
     );
   }
 
-  it('keeps the desktop centre to the chat alone, with what changed in the explorer', async () => {
+  it('keeps the desktop centre to the chat alone, with the work in the left column', async () => {
     setViewport(true);
     serveFailedSinceVisit();
     await renderAt('/');
     const aside = screen.getByRole('complementary', { name: 'Sessions sidebar' });
-    expect(
-      await within(aside).findByRole('treeitem', { name: 'Since you were here, 1' })
-    ).toBeInTheDocument();
+    // The failed task is an agent in the column, with the red dot; nothing about it is in the centre.
+    const row = await within(aside).findByRole('button', { name: /^Broke/ });
+    expect(within(row).getByTestId('agent-dot')).toHaveAttribute('data-tone', 'bad');
     const main = screen.getByRole('main');
-    expect(within(main).queryByText('Since you were here')).toBeNull();
+    expect(within(main).queryByText('Broke')).toBeNull();
     expect(within(main).getByTestId('main-thread')).toBeInTheDocument();
     // One scroll in the centre: the thread's own. The pane around it does not scroll.
     expect(main.className).toContain('overflow-hidden');
@@ -627,7 +627,7 @@ describe('explorer panel', () => {
     );
     expect(within(aside).getByRole('status')).toHaveTextContent('Loading Mainloop…');
     release();
-    expect(await within(aside).findByRole('tree')).toBeInTheDocument();
+    expect(await within(aside).findByRole('group', { name: 'agents' })).toBeInTheDocument();
     expect(within(aside).queryByTestId('explorer-loading')).toBeNull();
   });
 
@@ -726,18 +726,29 @@ describe('explorer panel', () => {
     });
   });
 
-  it('shows one view at a time: Sessions is the work, Projects the catalogue', async () => {
+  it('shows one view at a time: Sessions is the spaces and their agents, Projects the catalogue', async () => {
     setViewport(true);
     const user = userEvent.setup();
+    server.use(projectsRead([project()]));
     await renderAt('/');
     const aside = () => screen.getByTestId('explorer-aside');
-    await within(aside()).findByRole('tree');
+    // Sessions: two lists, spaces (Mainloop, then each project) and the agents in them. No tree.
+    const spaces = await within(aside()).findByRole('list', { name: 'spaces' });
+    await waitFor(() =>
+      expect(
+        within(spaces)
+          .getAllByTestId('space-row')
+          .map((row) => row.textContent)
+      ).toEqual(['mainidle', 'widgetsidle'])
+    );
+    const agents = within(aside()).getByRole('group', { name: 'agents' });
+    expect(within(agents).getByTestId('agent-row')).toHaveTextContent('MainloopIdle');
+    expect(within(aside()).queryByRole('tree')).toBeNull();
     const top = () =>
       within(aside())
         .getAllByRole('treeitem')
         .filter((row) => row.getAttribute('aria-level') === '1')
         .map((row) => row.getAttribute('aria-label')?.split(',')[0]);
-    expect(top()).toEqual(['Mainloop', 'Needs you', 'Problems', 'Working', 'Finished recently']);
     await user.click(screen.getByRole('button', { name: 'Projects' }));
     expect(screen.getByRole('complementary', { name: 'Projects sidebar' })).toBe(aside());
     expect(top()).toEqual(['Projects', 'Schedules']);
@@ -750,7 +761,7 @@ describe('explorer panel', () => {
     setViewport(true);
     const user = userEvent.setup();
     const router = await renderAt('/');
-    await within(screen.getByTestId('explorer-aside')).findByRole('tree');
+    await within(screen.getByTestId('explorer-aside')).findByRole('group', { name: 'agents' });
     await user.click(screen.getByRole('button', { name: 'Projects' }));
     await user.click(screen.getByRole('button', { name: 'Import a project' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
@@ -807,8 +818,8 @@ describe('finished and not yet seen', () => {
       tasksList(() => HttpResponse.json([task])),
       taskRead(() => HttpResponse.json(task))
     );
-  const dotOf = (tree: ReturnType<typeof within>) =>
-    within(tree.getByRole('treeitem', { name: /Ship docs/ })).getByTestId('explorer-dot');
+  const dotOf = (column: ReturnType<typeof within>) =>
+    within(column.getByRole('button', { name: /^Ship docs/ })).getByTestId('agent-dot');
 
   it('lights a task that finished after the owner’s record began, and opening it puts it at rest on the server', async () => {
     setViewport(true);
@@ -816,16 +827,25 @@ describe('finished and not yet seen', () => {
     testSeen.begin({ since: Date.now() - HOUR, lastVisit: Date.now() - HOUR });
     serve();
     const user = userEvent.setup();
-    await renderAt('/');
-    const tree = within(await screen.findByTestId('explorer-aside'));
-    await user.click(await tree.findByText('Finished recently'));
-    await tree.findByRole('treeitem', { name: /Ship docs/ });
-    await waitFor(() => expect(dotOf(tree)).toHaveAttribute('data-tone', 'unseen'));
+    const router = await renderAt('/');
+    const column = within(await screen.findByTestId('explorer-aside'));
+    // A finished task nobody has looked at is still an agent in the column, with the teal dot.
+    await column.findByRole('button', { name: /^Ship docs/ });
+    await waitFor(() => expect(dotOf(column)).toHaveAttribute('data-tone', 'unseen'));
 
-    // Opening the task's page is looking at it: one write, to the owner's record.
-    await user.click(tree.getByText('Ship docs'));
-    await waitFor(() => expect(dotOf(tree)).toHaveAttribute('data-tone', 'muted'));
+    // Opening the task's page is looking at it: one write, to the owner's record. Its row stays
+    // while its page shows, at rest.
+    await user.click(column.getByText('Ship docs'));
+    await waitFor(() => expect(dotOf(column)).toHaveAttribute('data-tone', 'muted'));
     expect(testSeen.marked).toEqual(['done-1']);
+    expect(column.getByRole('button', { name: /^Ship docs/ })).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
+
+    // Once the owner moves on, a finished task that has been looked at leaves the column.
+    await act(() => router.navigate({ to: '/' }));
+    await waitFor(() => expect(column.queryByRole('button', { name: /^Ship docs/ })).toBeNull());
   });
 
   it('shows a task opened on another device as seen here', async () => {
@@ -836,13 +856,11 @@ describe('finished and not yet seen', () => {
       tasks: { 'done-1': Date.now() - 1000 }
     });
     serve();
-    const user = userEvent.setup();
-    await renderAt('/');
-    const tree = within(await screen.findByTestId('explorer-aside'));
-    await user.click(await tree.findByText('Finished recently'));
-    await tree.findByRole('treeitem', { name: /Ship docs/ });
+    await renderAt('/tasks/done-1');
+    const column = within(await screen.findByTestId('explorer-aside'));
+    await column.findByRole('button', { name: /^Ship docs/ });
     await waitFor(() => expect(testSeen.visits).toBe(1));
-    expect(dotOf(tree)).toHaveAttribute('data-tone', 'muted');
+    expect(dotOf(column)).toHaveAttribute('data-tone', 'muted');
     expect(testSeen.marked).toEqual([]);
   });
 
@@ -895,7 +913,7 @@ describe('answer view', () => {
     content: 'Approve or revise the migration plan.'
   });
 
-  it('answers a queue item with no task from the tree, in the centre column', async () => {
+  it('answers a queue item with no task from the status bar’s count, in the centre column', async () => {
     setViewport(true);
     const user = userEvent.setup();
     const bodies: unknown[] = [];
@@ -907,22 +925,25 @@ describe('answer view', () => {
       })
     );
     const router = await renderAt('/');
-    const tree = await screen.findByRole('tree');
-    await user.click(await within(tree).findByText('Review the plan'));
+    // An owner action that belongs to no task is no agent's: it turns the main thread's dot red,
+    // and the count in the status bar leads to it.
+    const column = within(screen.getByTestId('explorer-aside'));
+    await waitFor(() =>
+      expect(column.getByRole('button', { name: /^Mainloop/ })).toHaveTextContent('Needs you')
+    );
+    await user.click(await screen.findByRole('link', { name: '1 needs you' }));
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/inbox'));
-    expect(router.state.location.search).toMatchObject({ item: 'q-plan' });
     const main = screen.getByRole('main');
     await within(main).findByRole('heading', { name: 'Inbox' });
     expect(within(main).queryByTestId('main-thread')).toBeNull();
-    const row = main.querySelector('[data-attention-key="q-plan"]');
-    expect(row).toHaveAttribute('aria-current', 'true');
+    expect(main.querySelector('[data-attention-key="q-plan"]')).not.toBeNull();
     await user.type(within(main).getByLabelText('Reply to Review the plan'), 'Ship it');
     await user.click(within(main).getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(bodies).toEqual([{ response: 'Ship it' }]));
   });
 
-  it('opens the answer view from the Needs you group, with Activity beside it', async () => {
+  it('opens the answer view from the activity bar’s Inbox, with Activity beside it', async () => {
     setViewport(true);
     const user = userEvent.setup();
     server.use(
@@ -930,8 +951,7 @@ describe('answer view', () => {
       activityRead(() => HttpResponse.json([]))
     );
     const router = await renderAt('/');
-    const group = await screen.findByRole('treeitem', { name: 'Needs you, 1' });
-    await user.click(within(group).getByText('Needs you'));
+    await user.click(await screen.findByRole('link', { name: 'Inbox, 1 need you' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/inbox'));
     await user.click(await screen.findByRole('button', { name: 'Activity' }));
     expect(router.state.location.search).toMatchObject({ show: 'activity' });
@@ -1060,7 +1080,7 @@ describe('command palette', () => {
     seedTask();
     const user = userEvent.setup();
     const router = await renderAt('/');
-    await within(screen.getByTestId('explorer-aside')).findByRole('tree');
+    await within(screen.getByTestId('explorer-aside')).findByRole('group', { name: 'agents' });
     await user.click(screen.getByTestId('activity-search'));
     const field = await screen.findByRole('combobox');
     expect(field).toHaveFocus();
@@ -1107,7 +1127,7 @@ describe('command palette', () => {
     seedTask();
     const user = userEvent.setup();
     const router = await renderAt('/inbox');
-    await within(screen.getByTestId('explorer-aside')).findByRole('tree');
+    await within(screen.getByTestId('explorer-aside')).findByRole('group', { name: 'agents' });
     await user.click(screen.getByTestId('activity-search'));
     await user.type(await screen.findByRole('combobox'), 'queue');
     await user.keyboard('{Control>}{Enter}{/Control}');
@@ -1165,7 +1185,7 @@ describe('answer view on desktop', () => {
     expect(await screen.findByTestId('main-thread')).toBeInTheDocument();
   });
 
-  it('shows the same Needs-you number on the activity bar, the status bar, the tree and the Inbox', async () => {
+  it('shows the same Needs-you number on the activity bar, the status bar and the Inbox', async () => {
     setViewport(true);
     // One listed owner action, and one failed task that can be retried and that no item names.
     server.use(
@@ -1179,7 +1199,12 @@ describe('answer view on desktop', () => {
     await renderAt('/inbox');
     expect(await screen.findByRole('link', { name: 'Inbox, 2 need you' })).toBeInTheDocument();
     expect(screen.getByTestId('status-needs')).toHaveTextContent('2 need you');
-    expect(screen.getByRole('treeitem', { name: 'Needs you, 2' })).toBeInTheDocument();
+    // The column says it per agent: the failed task has the red dot, and so does the main thread.
+    const column = within(screen.getByTestId('explorer-aside'));
+    expect(column.getByRole('button', { name: /^Mainloop/ })).toHaveTextContent('Needs you');
+    expect(
+      within(column.getByRole('button', { name: /^Fix CI flake/ })).getByTestId('agent-dot')
+    ).toHaveAttribute('data-tone', 'bad');
     expect(screen.getByRole('button', { name: /^Needs you/ })).toHaveTextContent('Needs you2');
     // The Inbox lists both, so the number is the number of rows.
     const list = screen.getByRole('list', { name: 'Needs you' });
