@@ -1654,6 +1654,44 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/HTTPValidationError'
                   - $ref: '#/components/schemas/HTTPError'
+  /projects/{project_id}/supervisor:
+    post:
+      tags:
+        - projects
+      summary: Start the project's standing supervisor
+      description: >-
+        Ensures the project's standing supervisor exists, creating it on first use, and answers its
+        task. Idempotent: a project has one standing supervisor for its life, and a call when it
+        exists answers the same task without changing it. See docs/specs/project-supervisor.md.
+      operationId: ensureProjectSupervisor
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      responses:
+        '200':
+          description: The project's standing supervisor task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
+        '422':
+          description: The project's provider profile cannot run a supervisor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
   /projects/{project_id}/dotfiles:
     get:
       tags:
@@ -7526,6 +7564,45 @@ components:
         - note
       title: NativeSessionInfo
       description: Identity strip for a session bound to a native agent session in kagent.
+    ProjectSupervisor:
+      type: object
+      additionalProperties: false
+      description: A project's standing supervisor (docs/specs/project-supervisor.md).
+      properties:
+        task_id:
+          type: string
+          description: The standing supervisor's task. It never changes for the project.
+        session_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          description: The session of the task's current active attempt; null while none is active.
+        status:
+          type: string
+          enum:
+            - queued
+            - running
+            - waiting
+            - blocked
+            - completed
+            - failed
+            - cancelled
+          description: The task's status.
+        reason:
+          anyOf:
+            - type: string
+            - type: 'null'
+          description: The task's reason, as on the task (`idle` when it is at rest).
+        started_at:
+          type: string
+          format: date-time
+          description: When the standing supervisor was first created.
+      required:
+        - task_id
+        - session_id
+        - status
+        - reason
+        - started_at
     Project:
       properties:
         id:
@@ -7594,6 +7671,14 @@ components:
             - type: 'null'
           title: Metadata Updated At
           description: When GitHub data was refreshed
+        supervisor:
+          anyOf:
+            - $ref: '#/components/schemas/ProjectSupervisor'
+            - type: 'null'
+          default: null
+          description: >-
+            The project's standing supervisor, or null until it is first used. Its session follows
+            the task's current attempt, so read the task for the live session after a restart.
         open_pr_count:
           type: integer
           title: Open Pr Count
@@ -11006,6 +11091,13 @@ components:
             - $ref: '#/components/schemas/WorkspaceEnvironment'
             - type: 'null'
           default: null
+        standing:
+          type: boolean
+          default: false
+          title: Standing
+          description: >-
+            True for a project's standing supervisor: a root coordination task, one per project, that
+            never completes (docs/specs/project-supervisor.md).
         status:
           default: queued
           enum:
@@ -11034,6 +11126,7 @@ components:
                 - session_lost
                 - stalled
                 - runtime_limit
+                - idle
               type: string
             - type: 'null'
           default: null
@@ -11094,6 +11187,7 @@ components:
         - current_attempt_id
         - version
         - checkout
+        - standing
       title: Task
       type: object
     TaskArtifact:
@@ -11393,6 +11487,7 @@ components:
                 - handoff_unavailable
                 - cancel_unavailable
                 - follow_up_unavailable
+                - standing_supervisor
               type: string
             - type: 'null'
           default: null

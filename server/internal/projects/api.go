@@ -30,6 +30,15 @@ type ProjectsAPI struct {
 	CI *ci.Service
 }
 
+// withSupervisor is toProject with the project's standing supervisor, when it has one.
+func withSupervisor(p dbq.Project, sups map[string]api.ProjectSupervisor) api.Project {
+	out := toProject(p)
+	if sup, ok := sups[p.ID]; ok {
+		out.Supervisor = &sup
+	}
+	return out
+}
+
 func toProject(p dbq.Project) api.Project {
 	return api.Project{
 		AvatarUrl: p.AvatarURL, CreatedAt: p.CreatedAt, DefaultBranch: p.DefaultBranch,
@@ -59,9 +68,13 @@ func (a *ProjectsAPI) ListProjects(ctx context.Context, r api.ListProjectsReques
 	if err != nil {
 		return nil, err
 	}
+	sups, err := a.Svc.Supervisors(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := make(api.ListProjects200JSONResponse, 0, len(ps))
 	for _, p := range ps {
-		out = append(out, toProject(p))
+		out = append(out, withSupervisor(p, sups))
 	}
 	return out, nil
 }
@@ -87,7 +100,11 @@ func (a *ProjectsAPI) GetProject(ctx context.Context, r api.GetProjectRequestObj
 	case err != nil:
 		return nil, err
 	}
-	return api.GetProject200JSONResponse(toProject(p)), nil
+	sups, err := a.Svc.Supervisors(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return api.GetProject200JSONResponse(withSupervisor(p, sups)), nil
 }
 
 // GetProjectDetail implements api.StrictServerInterface.
@@ -99,8 +116,12 @@ func (a *ProjectsAPI) GetProjectDetail(ctx context.Context, r api.GetProjectDeta
 	case err != nil:
 		return nil, err
 	}
+	sups, err := a.Svc.Supervisors(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := api.GetProjectDetail200JSONResponse{
-		Project:       toProject(d.Project),
+		Project:       withSupervisor(d.Project, sups),
 		OpenPrs:       make([]api.ProjectPRSummary, 0, len(d.PRs)),
 		RecentCommits: make([]api.CommitSummary, 0, len(d.Commits)),
 		Sessions:      make([]api.Session, 0, len(d.Sessions)),

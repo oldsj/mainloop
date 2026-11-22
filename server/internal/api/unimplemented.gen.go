@@ -94,6 +94,11 @@ func (Unimplemented) DismissQueueDiagnostic(context.Context, DismissQueueDiagnos
 	return nil, apierr.NotImplemented
 }
 
+// EnsureProjectSupervisor is not implemented yet.
+func (Unimplemented) EnsureProjectSupervisor(context.Context, EnsureProjectSupervisorRequestObject) (EnsureProjectSupervisorResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // FireLoop is not implemented yet.
 func (Unimplemented) FireLoop(context.Context, FireLoopRequestObject) (FireLoopResponseObject, error) {
 	return nil, apierr.NotImplemented

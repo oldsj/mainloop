@@ -577,6 +577,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/projects/{project_id}/supervisor': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Start the project's standing supervisor
+     * @description Ensures the project's standing supervisor exists, creating it on first use, and answers its task. Idempotent: a project has one standing supervisor for its life, and a call when it exists answers the same task without changing it. See docs/specs/project-supervisor.md.
+     */
+    post: operations['ensureProjectSupervisor'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/projects/{project_id}/dotfiles': {
     parameters: {
       query?: never;
@@ -2787,6 +2807,25 @@ export interface components {
       /** @description The agent dotfiles chosen for the session's newest native Session. Absent or null when none were recorded (a Session created before Mainloop recorded them, or a server with no GitHub App). */
       dotfiles?: components['schemas']['SessionDotfiles'] | null;
     };
+    /** @description A project's standing supervisor (docs/specs/project-supervisor.md). */
+    ProjectSupervisor: {
+      /** @description The standing supervisor's task. It never changes for the project. */
+      task_id: string;
+      /** @description The session of the task's current active attempt; null while none is active. */
+      session_id: string | null;
+      /**
+       * @description The task's status.
+       * @enum {string}
+       */
+      status: 'queued' | 'running' | 'waiting' | 'blocked' | 'completed' | 'failed' | 'cancelled';
+      /** @description The task's reason, as on the task (`idle` when it is at rest). */
+      reason: string | null;
+      /**
+       * Format: date-time
+       * @description When the standing supervisor was first created.
+       */
+      started_at: string;
+    };
     /**
      * Project
      * @description A GitHub repository project tracked by the user.
@@ -2862,6 +2901,11 @@ export interface components {
        * @description When GitHub data was refreshed
        */
       metadata_updated_at: string | null;
+      /**
+       * @description The project's standing supervisor, or null until it is first used. Its session follows the task's current attempt, so read the task for the live session after a restart.
+       * @default null
+       */
+      supervisor: components['schemas']['ProjectSupervisor'] | null;
       /**
        * Open Pr Count
        * @description Cached open PR count
@@ -4735,6 +4779,12 @@ export interface components {
       /** @default null */
       accepted_environment: components['schemas']['WorkspaceEnvironment'] | null;
       /**
+       * Standing
+       * @description True for a project's standing supervisor: a root coordination task, one per project, that never completes (docs/specs/project-supervisor.md).
+       * @default false
+       */
+      standing: boolean;
+      /**
        * Status
        * @default queued
        * @enum {string}
@@ -4759,6 +4809,7 @@ export interface components {
             | 'session_lost'
             | 'stalled'
             | 'runtime_limit'
+            | 'idle'
           )
         | null;
       /** @default null */
@@ -4974,6 +5025,7 @@ export interface components {
             | 'handoff_unavailable'
             | 'cancel_unavailable'
             | 'follow_up_unavailable'
+            | 'standing_supervisor'
           )
         | null;
     };
@@ -8295,6 +8347,47 @@ export interface operations {
           'application/json':
             | components['schemas']['HTTPValidationError']
             | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  ensureProjectSupervisor: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The project's standing supervisor task. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskView'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description The project's provider profile cannot run a supervisor. */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
         };
       };
     };

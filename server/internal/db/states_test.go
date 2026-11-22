@@ -28,7 +28,8 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		string(dbstate.ReasonCI), string(dbstate.ReasonPublication), string(dbstate.ReasonHandoff),
 		string(dbstate.ReasonReconciliation), string(dbstate.ReasonProvisioningUnavailable),
 		string(dbstate.ReasonHandoffUnavailable), string(dbstate.ReasonCancelUnavailable),
-		string(dbstate.ReasonSessionLost), string(dbstate.ReasonStalled), string(dbstate.ReasonRuntimeLimit))
+		string(dbstate.ReasonSessionLost), string(dbstate.ReasonStalled), string(dbstate.ReasonRuntimeLimit),
+		string(dbstate.ReasonIdle))
 	taskOpStates := strs(
 		string(dbstate.TaskOpRequested), string(dbstate.TaskOpDraining), string(dbstate.TaskOpCheckpointRequired),
 		string(dbstate.TaskOpCheckpointVerified), string(dbstate.TaskOpSourceFencing), string(dbstate.TaskOpSourceFenced),

@@ -86,6 +86,7 @@ func toTask(t dbq.Task) (api.Task, error) {
 		Reason:              reasonOf[api.TaskReason](t.Reason),
 		RootTaskId:          t.RootTaskID,
 		RuntimeWaitSince:    t.RuntimeWaitSince,
+		Standing:            t.Standing,
 		SelectionSource:     api.TaskSelectionSource(t.SelectionSource),
 		Status:              api.TaskStatus(t.Status),
 		Title:               t.Title,
@@ -193,7 +194,8 @@ func toReport(r dbq.TaskReport) api.TaskReport {
 	}
 }
 
-// eligibility is what the owner may ask for next. Cancel is available until the task is final.
+// eligibility is what the owner may ask for next. Cancel is available until the task is final,
+// except on a standing supervisor, which takes none of cancel, retry and reassign.
 // Retry and reassign are offered on a task with an attempt that is running, waiting, blocked or
 // failed, and not already in a handoff; for a code task, only when Mainloop can read its branch
 // head on origin (codeHandoff).
@@ -220,6 +222,12 @@ func eligibility(t dbq.Task, codeHandoff bool) map[string]api.TaskEligibility {
 	case t.CurrentAttemptID == nil, t.Status == dbstate.TaskQueued, t.Status == dbstate.TaskCancelled,
 		t.Status == dbstate.TaskFailed, t.Status == dbstate.TaskCompleted && t.Mode == dbstate.TaskModeCode:
 		followUp = unavailable(api.TaskEligibilityReasonFollowUpUnavailable)
+	}
+	if t.Standing {
+		// A project's standing supervisor is not cancelled, retried or reassigned: it is restarted,
+		// keeping its children (docs/specs/project-supervisor.md).
+		cancel = unavailable(api.TaskEligibilityReasonStandingSupervisor)
+		handoff = cancel
 	}
 	return map[string]api.TaskEligibility{"cancel": cancel, "retry": handoff, "reassign": handoff, "follow_up": followUp}
 }

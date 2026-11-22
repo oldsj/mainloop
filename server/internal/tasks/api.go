@@ -268,3 +268,16 @@ func (a *TasksAPI) FireLoop(ctx context.Context, req api.FireLoopRequestObject) 
 	}
 	return api.FireLoop200JSONResponse(l), nil
 }
+
+// EnsureProjectSupervisor implements api.StrictServerInterface: it starts the project's standing
+// supervisor on first use and answers its task.
+func (a *TasksAPI) EnsureProjectSupervisor(ctx context.Context, req api.EnsureProjectSupervisorRequestObject) (api.EnsureProjectSupervisorResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	view, err := a.Svc.EnsureSupervisor(ctx, a.OwnerID, req.ProjectId)
+	if err != nil {
+		return nil, taskReply(err, http.StatusNotFound, http.StatusUnprocessableEntity)
+	}
+	return api.EnsureProjectSupervisor200JSONResponse(view), nil
+}

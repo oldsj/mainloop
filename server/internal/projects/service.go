@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
@@ -462,4 +463,27 @@ func NewService(cfg *config.Config, pool *pgxpool.Pool, remote Remote, policy Po
 		Pool: pool, Remote: remote, OwnerID: cfg.Identity.OwnerID,
 		PolicyWrites: bool(cfg.OwnerPolicyWritesEnabled), Policy: policy, NeedsOwner: needsOwner, Log: log,
 	}
+}
+
+// Supervisors maps each of the owner's projects that has a standing supervisor to it
+// (docs/specs/project-supervisor.md). The session is the current active attempt's, nil while there
+// is none.
+func (s *Service) Supervisors(ctx context.Context) (map[string]api.ProjectSupervisor, error) {
+	rows, err := dbq.New(s.Pool).ListStandingSupervisors(ctx, s.OwnerID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]api.ProjectSupervisor, len(rows))
+	for _, r := range rows {
+		var reason *string
+		if r.Reason != nil {
+			v := string(*r.Reason)
+			reason = &v
+		}
+		out[r.ProjectID] = api.ProjectSupervisor{
+			TaskId: r.TaskID, SessionId: r.SessionID, Status: api.ProjectSupervisorStatus(r.Status),
+			Reason: reason, StartedAt: r.CreatedAt,
+		}
+	}
+	return out, nil
 }

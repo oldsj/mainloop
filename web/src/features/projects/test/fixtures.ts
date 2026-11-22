@@ -31,6 +31,7 @@ export function project(overrides: Partial<ProjectFixture> = {}): ProjectFixture
     metadata_updated_at: null,
     open_pr_count: 1,
     open_issue_count: 0,
+    supervisor: null,
     ...overrides
   };
 }

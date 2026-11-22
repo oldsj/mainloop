@@ -48,6 +48,16 @@ func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief, proj
 	return b.String()
 }
 
+// StandingGuidance follows a standing supervisor's brief on every attempt: what it is and how it
+// works (docs/specs/project-supervisor.md).
+const StandingGuidance = "## Standing supervisor\n" +
+	"You are this project's standing supervisor, the middle of three layers: main sends you work and you report to main; " +
+	"the workers and reviewers you `delegate` report to you and cannot delegate.\n" +
+	"- You never complete. When a batch of work is done, `report` outcome `completed` with a summary and end your turn: " +
+	"you are then at rest, and the next message wakes you. Report `blocked`, never `failed`.\n" +
+	"- Hand code to workers (`delegate` mode `code`); you have no checkout. Steer, follow up and read them with the task tools, " +
+	"and arm a loop or end your turn rather than poll.\n"
+
 // attemptBrief renders the brief an attempt's agent receives. A task with a project carries the
 // project's instructions and active memory as of the version and memory sequence pinned on the
 // attempt by its first render, so a resend of the brief carries the same text. A retry's or
@@ -72,6 +82,9 @@ func attemptBrief(ctx context.Context, q *dbq.Queries, a dbq.TaskAttempt, t dbq.
 		}
 	}
 	brief := t.Brief
+	if t.Standing {
+		brief += "\n\n" + StandingGuidance
+	}
 	if note, err := continuation(ctx, q, a, t); err != nil {
 		return "", err
 	} else if note != "" {

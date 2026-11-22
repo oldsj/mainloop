@@ -951,6 +951,7 @@ type Task struct {
 	HeldReason          *string
 	CapacityTier        string
 	RuntimeWaitSince    *time.Time
+	Standing            bool
 }
 
 type TaskArtifact struct {

@@ -49,7 +49,8 @@ const REASON_LABELS: Record<TaskReason, string> = {
   cancel_unavailable: 'the task has already ended',
   session_lost: 'its native session is gone or terminal',
   stalled: 'its session has shown no activity for a while',
-  runtime_limit: 'it has run longer than its runtime bound'
+  runtime_limit: 'it has run longer than its runtime bound',
+  idle: 'at rest until its next message'
 };
 
 /**
