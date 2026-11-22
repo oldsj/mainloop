@@ -43,7 +43,9 @@ export function TabStrip({ model, space, page, pathname, onOpen, onAsk }: TabStr
     <nav
       aria-label={`Agents in ${name}`}
       data-testid="tab-strip"
-      className="border-border-subtle bg-card text-ui flex shrink-0 [scrollbar-width:none] items-stretch overflow-x-auto border-b font-mono"
+      // No scrollbar: one would be as tall as the strip. The lit tab is kept in view instead.
+      style={{ scrollbarWidth: 'none' }}
+      className="border-border-subtle bg-card text-ui flex shrink-0 items-stretch overflow-x-auto border-b font-mono"
     >
       {tabs.map((tab) => {
         const target = tab.target;
