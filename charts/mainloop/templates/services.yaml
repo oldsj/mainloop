@@ -25,6 +25,25 @@ spec:
       targetPort: 8000
   type: ClusterIP
 ---
+# Prometheus metrics of serve-api (MAINLOOP_METRICS_ADDR, :9100): unauthenticated, counts and
+# limits only. Reachable only from the peers in networkPolicy.metricsIngress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mainloop-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: mainloop-backend
+spec:
+  selector:
+    app: mainloop-backend
+  ports:
+    - name: metrics
+      protocol: TCP
+      port: 9100
+      targetPort: metrics
+  type: ClusterIP
+---
 apiVersion: v1
 kind: Service
 metadata:

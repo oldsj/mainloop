@@ -51,9 +51,11 @@ type Service struct {
 	// HEALTH_SUMMARY_RETENTION_DAYS as durations.
 	EventRetention   time.Duration
 	SummaryRetention time.Duration
-	// MaxChildrenPerParent and MaxChildrenGlobal are the task capacity limits the smoke ledger reports.
+	// MaxChildrenPerParent, MaxChildrenGlobal and MaxChildrenOverflow are the task capacity limits
+	// the smoke ledger reports; admission takes children up to MaxChildrenGlobal+MaxChildrenOverflow.
 	MaxChildrenPerParent int
 	MaxChildrenGlobal    int
+	MaxChildrenOverflow  int
 
 	// Kagent is only needed by the recovery sweep; the routes never call kagent. Nil in a process
 	// that does not reach it.
@@ -112,5 +114,6 @@ func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, log *slog.Logg
 		EventRetention:       time.Duration(cfg.Health.EventRetentionDays) * day,
 		SummaryRetention:     time.Duration(cfg.Health.SummaryRetentionDays) * day,
 		MaxChildrenPerParent: cfg.Tasks.MaxChildrenPerParent, MaxChildrenGlobal: cfg.Tasks.MaxChildrenGlobal,
+		MaxChildrenOverflow: cfg.Tasks.MaxChildrenOverflow,
 	}
 }

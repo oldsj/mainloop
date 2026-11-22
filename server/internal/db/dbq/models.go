@@ -949,6 +949,8 @@ type Task struct {
 	Effort              *string
 	HeldUntil           *time.Time
 	HeldReason          *string
+	CapacityTier        string
+	RuntimeWaitSince    *time.Time
 }
 
 type TaskArtifact struct {
@@ -1009,6 +1011,11 @@ type TaskAttempt struct {
 	InstructionsVersion       *int32
 	MemorySeq                 *int64
 	ReopenedAt                *time.Time
+}
+
+type TaskCapacityRefusal struct {
+	Reason string
+	Total  int64
 }
 
 type TaskEventDelivery struct {

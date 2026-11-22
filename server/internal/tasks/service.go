@@ -75,6 +75,10 @@ type Limits struct {
 	// that still holds capacity, or a task not yet given an attempt.
 	MaxChildrenPerParent int
 	MaxChildrenGlobal    int
+	// MaxChildrenOverflow is the overflow tier above MaxChildrenGlobal; 0 is none. A child given a
+	// slot in it waits for runtime capacity for up to OverflowWait (see runtimewait.go).
+	MaxChildrenOverflow int
+	OverflowWait        time.Duration
 	// ProvisionWindow is how long a new attempt may wait before it is aborted.
 	ProvisionWindow time.Duration
 	// Interval is the poll of the operation and delivery loops.
@@ -202,7 +206,7 @@ func (in CreateInput) payload() map[string]any {
 		"title": in.Title, "brief": in.Brief, "mode": in.Mode,
 		"project_id": nilIfEmpty(in.ProjectID), "topic_id": nilIfEmpty(in.TopicID),
 		"provider_profile_id": nilIfEmpty(in.ProviderProfileID),
-		"model": nilIfEmpty(in.Model), "effort": nilIfEmpty(in.Effort), "checkout": nil,
+		"model":               nilIfEmpty(in.Model), "effort": nilIfEmpty(in.Effort), "checkout": nil,
 	}
 	if in.Checkout != nil {
 		m["checkout"] = map[string]any{"branch": in.Checkout.Branch, "ref": in.Checkout.Ref, "depth": in.Checkout.Depth}
@@ -366,6 +370,7 @@ func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (api.
 		return []events.Draft{s.updated(t)}, nil
 	})
 	if err != nil {
+		s.noteRefusal(ctx, err)
 		return api.TaskOperation{}, err
 	}
 	return toOperation(op)
@@ -405,6 +410,8 @@ func validateCreate(in CreateInput) error {
 
 func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, in CreateInput) (dbq.Task, error) {
 	var parent *dbq.Task
+	tier := tierBase
+	var err error
 	if p.Role == dbstate.RoleSupervisor {
 		t, err := q.GetTaskForUpdate(ctx, dbq.GetTaskForUpdateParams{ID: p.TaskID, OwnerID: p.OwnerID})
 		if err != nil {
@@ -417,7 +424,7 @@ func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, i
 			return dbq.Task{}, refusal(409, ReasonParentNotActive)
 		}
 		parent = &t
-		if err := s.checkCapacity(ctx, q, p.OwnerID, t.ID); err != nil {
+		if tier, err = s.checkCapacity(ctx, q, p.OwnerID, t.ID); err != nil {
 			return dbq.Task{}, err
 		}
 	}
@@ -487,35 +494,80 @@ func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, i
 		depth := int32(c.Depth) //nolint:gosec // validate bounds it to 0..1000
 		args.CheckoutBranch, args.CheckoutRef, args.CheckoutDepth = &c.Branch, &c.Ref, &depth
 	}
-	return q.InsertTask(ctx, args)
+	t, err := q.InsertTask(ctx, args)
+	if err != nil || tier == tierBase {
+		return t, err
+	}
+	if err := q.SetTaskCapacityTier(ctx, dbq.SetTaskCapacityTierParams{ID: t.ID, CapacityTier: tier}); err != nil {
+		return dbq.Task{}, err
+	}
+	return q.GetTaskByID(ctx, t.ID)
 }
 
+// Capacity tiers of an admission (tasks.capacity_tier).
+const (
+	tierBase     = dbstate.CapacityTierBase
+	tierOverflow = dbstate.CapacityTierOverflow
+)
+
 // checkCapacity refuses a new child when its parent or the owner already has as many children as
-// the limits allow. A child counts from the moment its task is recorded until its attempt has
-// stopped, so the count is taken under an owner-wide lock that serializes concurrent creates.
-func (s *Service) checkCapacity(ctx context.Context, q *dbq.Queries, owner, parent string) error {
+// the limits allow, and otherwise says which tier of the global limit the child's slot is in: base
+// while fewer than MaxChildrenGlobal hold one, overflow above that up to MaxChildrenOverflow more.
+// A child counts from the moment its task is recorded until its attempt has stopped, so the count
+// is taken under an owner-wide lock that serializes concurrent creates.
+func (s *Service) checkCapacity(ctx context.Context, q *dbq.Queries, owner, parent string) (string, error) {
 	if err := q.LockTaskRequest(ctx, "capacity\x1f"+owner); err != nil {
-		return err
+		return "", err
 	}
 	if lim := s.Limits.MaxChildrenPerParent; lim > 0 {
 		n, err := q.CountParentCapacity(ctx, dbq.CountParentCapacityParams{OwnerID: owner, ParentTaskID: &parent})
 		if err != nil {
-			return err
+			return "", err
 		}
 		if n >= int64(lim) {
-			return refusal(409, ReasonChildCapacity)
+			return "", refusal(409, ReasonChildCapacity)
 		}
 	}
 	if lim := s.Limits.MaxChildrenGlobal; lim > 0 {
 		n, err := q.CountGlobalCapacity(ctx, owner)
 		if err != nil {
-			return err
+			return "", err
 		}
-		if n >= int64(lim) {
-			return refusal(409, ReasonGlobalCapacity)
+		switch {
+		case n < int64(lim):
+		case n < int64(lim+max(s.Limits.MaxChildrenOverflow, 0)):
+			return tierOverflow, nil
+		default:
+			return "", refusal(409, ReasonGlobalCapacity)
 		}
 	}
+	return tierBase, nil
+}
+
+// admit is [Service.checkCapacity] for a task that already exists, taking a slot again: it records
+// the tier, which starts (overflow) or ends (base) the task's wait for runtime capacity.
+func (s *Service) admit(ctx context.Context, q *dbq.Queries, t *dbq.Task) error {
+	tier, err := s.checkCapacity(ctx, q, t.OwnerID, *t.ParentTaskID)
+	if err != nil {
+		return err
+	}
+	if err := q.SetTaskCapacityTier(ctx, dbq.SetTaskCapacityTierParams{ID: t.ID, CapacityTier: tier}); err != nil {
+		return err
+	}
+	t.CapacityTier = tier
 	return nil
+}
+
+// noteRefusal counts a capacity refusal answered to a caller, for the metrics. It runs after the
+// refused transaction rolled back, in a statement of its own; a failure to count is only logged.
+func (s *Service) noteRefusal(ctx context.Context, err error) {
+	var e *Error
+	if !errors.As(err, &e) || (e.Reason != ReasonGlobalCapacity && e.Reason != ReasonChildCapacity) {
+		return
+	}
+	if nerr := dbq.New(s.Pool).NoteCapacityRefusal(context.WithoutCancel(ctx), e.Reason); nerr != nil {
+		s.log().WarnContext(ctx, "count capacity refusal", "reason", e.Reason, "error", nerr)
+	}
 }
 
 func notFoundOr(err error, reason string) error {
@@ -647,6 +699,7 @@ func (s *Service) act(ctx context.Context, p Principal, kind dbstate.TaskOpKind,
 		return append(drafts, s.updated(after)), nil
 	})
 	if err != nil {
+		s.noteRefusal(ctx, err)
 		return api.TaskOperation{}, err
 	}
 	return toOperation(op)
@@ -1064,6 +1117,7 @@ func NewService(cfg *config.Config, pool *pgxpool.Pool, reg Resolver, log *slog.
 		MergeTools: bool(cfg.MergeToolsEnabled), CodeHandoff: cfg.GitHub.AppID != "",
 		Limits: Limits{
 			MaxChildrenPerParent: cfg.Tasks.MaxChildrenPerParent, MaxChildrenGlobal: cfg.Tasks.MaxChildrenGlobal,
+			MaxChildrenOverflow: cfg.Tasks.MaxChildrenOverflow, OverflowWait: cfg.Tasks.OverflowWait.Duration(),
 			ProvisionWindow: cfg.Tasks.ProvisionWindow.Duration(), Interval: cfg.Tasks.ReconcileInterval.Duration(),
 			ProjectionEvery: cfg.Tasks.ProjectionEvery.Duration(),
 			StallTimeout:    cfg.Tasks.StallTimeout.Duration(), MaxRuntime: cfg.Tasks.MaxRuntime.Duration(),

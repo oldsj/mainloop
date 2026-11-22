@@ -229,6 +229,9 @@ type Options struct {
 	// ActivityWriteEvery is the shortest time between two writes of a turn's activity time; a change
 	// of what the turn is doing, or the end of a stall, is written at once.
 	ActivityWriteEvery time.Duration
+	// CapacityRecheck is the delay before a send kagent did not accept is tried again while its
+	// task waits for runtime capacity (see turn.awaitRuntimeCapacity).
+	CapacityRecheck time.Duration
 }
 
 // OptionsFrom reads the settings.
@@ -270,6 +273,7 @@ func (o Options) withDefaults() Options {
 	}
 	def(&o.StallEvery, 30*time.Second)
 	def(&o.ActivityWriteEvery, 30*time.Second)
+	def(&o.CapacityRecheck, 15*time.Second)
 	if o.Concurrency <= 0 {
 		o.Concurrency = 16
 	}

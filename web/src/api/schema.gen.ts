@@ -3001,7 +3001,10 @@ export interface components {
       native_provider: 'claude' | 'codex';
       /** Configuration Revision */
       configuration_revision: string;
-      /** Agents */
+      /**
+       * Agents
+       * @description The kagent Agent for each role. agent-overflow, when present, runs a code child task given an overflow capacity slot (TASK_MAX_CHILDREN_OVERFLOW) in place of agent, so it is placed on the overflow worker pool; without it such a task runs on agent.
+       */
       agents: {
         [key: string]: components['schemas']['ProviderAgentRef'];
       };
@@ -4706,6 +4709,19 @@ export interface components {
        * @default null
        */
       held_reason: string | null;
+      /**
+       * Capacity Tier
+       * @description Which part of the global child limit admission last gave this task a slot in: base (TASK_MAX_CHILDREN_GLOBAL) or overflow (TASK_MAX_CHILDREN_OVERFLOW, above base). Root tasks and every task while the overflow tier is 0 are base.
+       * @default base
+       * @enum {string}
+       */
+      capacity_tier: 'base' | 'overflow';
+      /**
+       * Runtime Wait Since
+       * @description Set while an overflow-tier task waits for runtime capacity: from when it was given its slot (or its attempt was replaced) until kagent first accepts a message for its current attempt. A send kagent refuses meanwhile is retried, not failed. A task still waiting after TASK_OVERFLOW_WAIT_SECONDS fails and its slot is released.
+       * @default null
+       */
+      runtime_wait_since: string | null;
       /**
        * Selection Source
        * @enum {string}

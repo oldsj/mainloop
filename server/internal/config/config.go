@@ -117,14 +117,30 @@ type Kagent struct {
 	SessionReadyTimeout   Seconds          `env:"KAGENT_SESSION_READY_TIMEOUT_SECONDS" envDefault:"120"`
 	SendRetryBudget       Seconds          `env:"KAGENT_SEND_RETRY_BUDGET_SECONDS" envDefault:"30"`
 	ProviderProfiles      ProviderProfiles `env:"PROVIDER_PROFILES"`
+
+	// WorkspaceClaudeOverflowAgent and WorkspaceCodexOverflowAgent are the built-in profiles'
+	// agent-overflow Agents: a code child task admitted in the overflow capacity tier
+	// (TASK_MAX_CHILDREN_OVERFLOW) runs on it instead of the workspace Agent, so Substrate places
+	// it on the overflow worker pool, and keeps it for that attempt's life. Empty, the default, is
+	// none: such a task runs on the workspace Agent.
+	WorkspaceClaudeOverflowAgent string `env:"KAGENT_WORKSPACE_CLAUDE_OVERFLOW_AGENT"`
+	WorkspaceCodexOverflowAgent  string `env:"KAGENT_WORKSPACE_CODEX_OVERFLOW_AGENT"`
 }
 
 // Tasks limits delegated work.
 type Tasks struct {
-	DefaultProviderProfileID string  `env:"TASK_DEFAULT_PROVIDER_PROFILE_ID" envDefault:"claude"`
-	MaxChildrenPerParent     int     `env:"TASK_MAX_CHILDREN_PER_PARENT" envDefault:"3"`
-	MaxChildrenGlobal        int     `env:"TASK_MAX_CHILDREN_GLOBAL" envDefault:"6"`
-	ReconcileInterval        Seconds `env:"TASK_RECONCILE_SECONDS" envDefault:"5"`
+	DefaultProviderProfileID string `env:"TASK_DEFAULT_PROVIDER_PROFILE_ID" envDefault:"claude"`
+	MaxChildrenPerParent     int    `env:"TASK_MAX_CHILDREN_PER_PARENT" envDefault:"3"`
+	MaxChildrenGlobal        int    `env:"TASK_MAX_CHILDREN_GLOBAL" envDefault:"6"`
+
+	// MaxChildrenOverflow is the overflow tier above MaxChildrenGlobal: with it above 0, admission
+	// takes children up to MaxChildrenGlobal+MaxChildrenOverflow, and a child given an overflow slot
+	// waits for runtime capacity (a spare worker waking) for up to OverflowWait before it fails.
+	// 0, the default, is no overflow tier.
+	MaxChildrenOverflow int     `env:"TASK_MAX_CHILDREN_OVERFLOW" envDefault:"0"`
+	OverflowWait        Seconds `env:"TASK_OVERFLOW_WAIT_SECONDS" envDefault:"900"`
+
+	ReconcileInterval Seconds `env:"TASK_RECONCILE_SECONDS" envDefault:"5"`
 	// ProvisionWindow is how long a new attempt may wait for its workspace before it is aborted.
 	ProvisionWindow Seconds `env:"TASK_PROVISION_WINDOW_SECONDS" envDefault:"900"`
 	// MaxHandoffs is how many retries and reassigns main and supervisors may make of one task. The
@@ -245,6 +261,18 @@ type Server struct {
 	// KubernetesServiceHost is set by Kubernetes in every pod; it tells the process it can reach
 	// the cluster API.
 	KubernetesServiceHost string `env:"KUBERNETES_SERVICE_HOST"`
+	// MetricsAddr is where serve-api serves Prometheus metrics (GET /metrics), unauthenticated and
+	// apart from the API. The metrics carry counts and limits only, no task or owner data. "off"
+	// turns the listener off (an empty value takes the default); see [Config.MetricsListenAddr].
+	MetricsAddr string `env:"MAINLOOP_METRICS_ADDR" envDefault:":9100"`
+}
+
+// MetricsListenAddr is the metrics listener's address, or "" when MAINLOOP_METRICS_ADDR is off.
+func (c *Config) MetricsListenAddr() string {
+	if c.Server.MetricsAddr == "off" {
+		return ""
+	}
+	return c.Server.MetricsAddr
 }
 
 // Ntfy configures push notifications to the owner's phone (docs/specs/push-notifications.md).
@@ -451,6 +479,12 @@ func (c *Config) validate() error {
 	}
 	if c.Tasks.MaxChildrenPerParent < 1 || c.Tasks.MaxChildrenGlobal < 1 {
 		fail("TASK_MAX_CHILDREN_PER_PARENT and TASK_MAX_CHILDREN_GLOBAL must be at least 1")
+	}
+	if c.Tasks.MaxChildrenOverflow < 0 {
+		fail("TASK_MAX_CHILDREN_OVERFLOW must be at least 0")
+	}
+	if c.Tasks.OverflowWait.Duration() < time.Minute {
+		fail("TASK_OVERFLOW_WAIT_SECONDS must be at least 60")
 	}
 	if c.Tasks.MaxHandoffs < 1 {
 		fail("TASK_MAX_HANDOFFS must be at least 1")

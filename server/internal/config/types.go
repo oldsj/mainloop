@@ -87,7 +87,11 @@ const (
 	NativeCodex  = "codex"
 )
 
-var providerRoles = map[string]bool{"main": true, "supervisor": true, "child": true, "agent": true}
+// AgentOverflowRole is the profile Agent that runs a code child task admitted in the overflow
+// capacity tier, in place of "agent" (docs/specs/tasks.md#capacity).
+const AgentOverflowRole = "agent-overflow"
+
+var providerRoles = map[string]bool{"main": true, "supervisor": true, "child": true, "agent": true, AgentOverflowRole: true}
 
 // AgentRef names one kagent Agent.
 type AgentRef struct {

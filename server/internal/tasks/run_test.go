@@ -33,6 +33,8 @@ type fakeWorkspaces struct {
 	// made and removed are the workspace ids created and deleted.
 	made, removed []string
 	requests      []string
+	// agents is the Agent name each create was asked to run on, by request id.
+	agents map[string]string
 	// refs is the checkout ref of each workspace made, in order.
 	refs []string
 	// crash makes the next creates write their rows and then fail, as a process dying before it
@@ -59,9 +61,22 @@ func (f *fakeWorkspaces) Create(ctx context.Context, body api.CreateWorkspaceReq
 	return f.CreateWithRequestID(ctx, uuid.NewString(), body)
 }
 
-func (f *fakeWorkspaces) CreateWithRequestID(ctx context.Context, requestID string, body api.CreateWorkspaceRequest) (api.WorkspaceLifecycle, error) {
+// agentFor is the Agent name the create with requestID was asked to run on, or "".
+func (f *fakeWorkspaces) agentFor(requestID string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.agents[requestID]
+}
+
+func (f *fakeWorkspaces) CreateWithRequestID(ctx context.Context, requestID string, body api.CreateWorkspaceRequest, opts ...workspaces.CreateOption) (api.WorkspaceLifecycle, error) {
 	f.mu.Lock()
 	f.requests = append(f.requests, requestID)
+	if a := workspaces.OptionAgent(opts...); a != nil {
+		if f.agents == nil {
+			f.agents = map[string]string{}
+		}
+		f.agents[requestID] = a.Name
+	}
 	gate, gateErr, entered := f.gate, f.gateErr, f.entered
 	f.gate = nil
 	f.mu.Unlock()

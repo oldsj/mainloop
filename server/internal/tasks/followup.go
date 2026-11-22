@@ -142,6 +142,7 @@ func (s *Service) FollowUp(ctx context.Context, p Principal, in FollowUpInput) (
 			// follow-up rolled back with nothing written, and the caller retries with its request id.
 			return FollowUpResult{}, refusal(409, ReasonOperationPending)
 		}
+		s.noteRefusal(ctx, err)
 		return FollowUpResult{}, err
 	}
 	return out, nil
@@ -268,7 +269,7 @@ func (s *Service) reopen(ctx context.Context, q *dbq.Queries, t dbq.Task, a dbq.
 		if TaskFinal(parent.Status) {
 			return t, false, refusal(409, ReasonParentNotActive)
 		}
-		if err := s.checkCapacity(ctx, q, t.OwnerID, *t.ParentTaskID); err != nil {
+		if err := s.admit(ctx, q, &t); err != nil {
 			return t, false, err
 		}
 	}

@@ -705,6 +705,9 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 	var rejected *kagent.A2AError
 	switch {
 	case kagent.NotSent(sendErr):
+		if out, ok, err := t.awaitRuntimeCapacity(ctx, sendErr); ok || err != nil {
+			return out, err
+		}
 		return t.settle(ctx, dbstate.DeliveryFailed, "not sent: "+sendErr.Error(), nil, false)
 	case errors.As(sendErr, &cfg):
 		return t.settle(ctx, dbstate.DeliveryFailed, "not sent: "+sendErr.Error(), nil, false)
@@ -712,6 +715,35 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 		return t.settle(ctx, dbstate.DeliveryFailed, "send rejected: "+sendErr.Error(), nil, false)
 	}
 	return t.undecided(ctx, "the send may have reached kagent: "+sendErr.Error())
+}
+
+// awaitRuntimeCapacity handles a send kagent did not accept when the session is the current attempt
+// of a task given an overflow slot that still waits for runtime capacity (docs/specs/tasks.md#capacity):
+// kagent answers "not accepted" while Substrate has no free worker for the session's actor, and the
+// spare worker may still be waking. The delivery is put back to recorded and tried again later
+// instead of failed. The tasks runtime-wait sweep bounds the wait: it fails the task, which stops the
+// attempt, and the next try finds the attempt stopped. ok is false when the session is not waiting.
+func (t *turn) awaitRuntimeCapacity(ctx context.Context, sendErr error) (reconcile.Outcome, bool, error) {
+	q := dbq.New(t.s.Pool)
+	waiting, err := q.SessionAwaitsRuntimeCapacity(ctx, &t.d.SessionID)
+	if err != nil {
+		return reconcile.Retry(), false, err
+	}
+	if !waiting {
+		return reconcile.Outcome{}, false, nil
+	}
+	id, owner, attempts := t.fence()
+	d := safeDetail("waiting for runtime capacity: " + sendErr.Error())
+	if err := lost(q.RequeueDeliveryForCapacity(ctx, dbq.RequeueDeliveryForCapacityParams{
+		ID: id, LeaseOwner: owner, Attempts: attempts, Detail: &d,
+	})); err != nil {
+		return reconcile.Retry(), false, err
+	}
+	t.cur = dbstate.DeliveryRecorded
+	t.s.Progress.EndMessage(t.c.ID)
+	t.s.log().InfoContext(ctx, "send not accepted while the task waits for runtime capacity; it is tried again",
+		"session_id", t.d.SessionID, "message_id", t.c.ID, "error", sendErr)
+	return reconcile.RetryAfter(t.s.opts().CapacityRecheck), true, nil
 }
 
 // decideSend locks the attempt before the delivery and commits before native I/O. The session's

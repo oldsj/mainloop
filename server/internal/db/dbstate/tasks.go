@@ -199,3 +199,16 @@ const (
 
 // PRConditions lists the pull request conditions, in the order the contract lists them.
 var PRConditions = []PRCondition{PRCISuccess, PRCIFailure, PRMerged, PRClosed}
+
+// Capacity tiers of a task's last admission (tasks.capacity_tier; docs/specs/tasks.md#capacity).
+const (
+	CapacityTierBase     = "base"
+	CapacityTierOverflow = "overflow"
+)
+
+// Capacity refusal reasons counted in task_capacity_refusals; the same strings as the task error
+// reasons child_capacity and global_capacity.
+const (
+	CapacityRefusalChild  = "child_capacity"
+	CapacityRefusalGlobal = "global_capacity"
+)

@@ -99,7 +99,7 @@ spec:
           "root" .
           "name" "backend"
           "subcommand" "serve-api"
-          "ports" (list (dict "containerPort" 8000))
+          "ports" (list (dict "containerPort" 8000) (dict "name" "metrics" "containerPort" 9100))
           "mounts" $routerMounts
           "resources" .Values.server.api.resources
           "liveness" (dict "tcpSocket" (dict "port" 8000) "initialDelaySeconds" 30 "periodSeconds" 10 "timeoutSeconds" 5 "failureThreshold" 3)

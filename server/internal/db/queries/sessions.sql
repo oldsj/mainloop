@@ -399,6 +399,14 @@ WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attemp
       AND s.status NOT IN ('cancelled', 'failed') AND s.archived_at IS NULL
   );
 
+-- name: RequeueDeliveryForCapacity :execrows
+-- Puts back a send kagent refused (nothing was sent) while its task waits for runtime capacity:
+-- the row is recorded again and the next claim sends it again. Fenced on the claim; the caller
+-- returns RetryAfter, which releases the lease and makes the row due later.
+UPDATE deliveries
+SET state = 'recorded', detail = $4, updated_at = now()
+WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state = 'sending' AND task_id IS NULL;
+
 -- name: MarkDeliveryDelivered :execrows
 -- Outcome writes advance the durable version atomically with the state, including recovered
 -- delivered tasks. A task id proves acceptance, not that native execution has finished.

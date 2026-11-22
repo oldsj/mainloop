@@ -233,3 +233,6 @@ networkPolicy:
       ports:
         - protocol: TCP
           port: 8000
+  # Peers (NetworkPolicy "from" entries) let in to the metrics listener on 9100, such as the
+  # cluster's Prometheus scraper. Empty, the default, adds no policy, so no one is let in.
+  metricsIngress: []

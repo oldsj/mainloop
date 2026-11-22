@@ -95,7 +95,7 @@ func (s *Service) handoff(ctx context.Context, q *dbq.Queries, p Principal, t db
 			if TaskFinal(parent.Status) {
 				return t, nil, refusal(409, ReasonParentNotActive)
 			}
-			if err := s.checkCapacity(ctx, q, t.OwnerID, *t.ParentTaskID); err != nil {
+			if err := s.admit(ctx, q, &t); err != nil {
 				return t, nil, err
 			}
 		}
@@ -209,7 +209,7 @@ func (s *Service) successor(ctx context.Context, q *dbq.Queries, c reconcile.Cla
 		// A fenced source gave its slot up in this transaction, so the successor takes it back. One
 		// that ended earlier holds none, and another child may have taken it since the request.
 		if src.State != dbstate.AttemptFenced {
-			if err := s.checkCapacity(ctx, q, t.OwnerID, *t.ParentTaskID); err != nil {
+			if err := s.admit(ctx, q, &t); err != nil {
 				return nil, err
 			}
 		}
