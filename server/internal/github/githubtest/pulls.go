@@ -17,6 +17,8 @@ type File struct {
 	Status           string
 	Additions        int
 	Deletions        int
+	// Patch is served as the file's patch when set, as GitHub does for a text file.
+	Patch string
 }
 
 // CheckSuite is a check suite on a commit. Status defaults to "completed". HeadSHA defaults to
@@ -446,6 +448,9 @@ func (s *Server) pullFiles(w http.ResponseWriter, r *http.Request, repo *Reposit
 		item := map[string]any{"filename": f.Filename, "status": status, "additions": f.Additions, "deletions": f.Deletions, "changes": f.Additions + f.Deletions}
 		if f.PreviousFilename != "" {
 			item["previous_filename"] = f.PreviousFilename
+		}
+		if f.Patch != "" {
+			item["patch"] = f.Patch
 		}
 		out = append(out, item)
 	}

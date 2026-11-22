@@ -1,5 +1,5 @@
-// Package issues serves the GitHub issue and Dependabot-alert tools over the project's bound
-// repository. The reads (this file) write nothing: a read that fails is simply retried by the
+// Package issues serves the GitHub issue, pull-request read and Dependabot-alert tools over the
+// project's bound repository. The reads (this file and pulls.go) write nothing: a read that fails is simply retried by the
 // caller. The writes (writes.go) follow the pull-request pattern: a call writes an intent row
 // first, and a reconcile loop posts at most once and looks a lost answer up by a marker in the
 // body, never resending.
@@ -30,6 +30,9 @@ type GitHub interface {
 	CommentIssue(ctx context.Context, repo github.Repo, number int, body string) (*github.IssueWrite, error)
 	IssuesCreatedSince(ctx context.Context, repo github.Repo, since time.Time) ([]github.IssueWrite, error)
 	IssueCommentsSince(ctx context.Context, repo github.Repo, number int, since time.Time) ([]github.IssueWrite, error)
+	PullRequest(ctx context.Context, repo github.Repo, number int) (*github.PullRequestInfo, error)
+	PullFiles(ctx context.Context, repo github.Repo, number, page, perPage int) ([]github.PullFile, bool, error)
+	PullRequestFeedback(ctx context.Context, repo github.Repo, number int, since time.Time) ([]github.PRFeedback, error)
 }
 
 // ErrNotFound means the project is not the owner's.

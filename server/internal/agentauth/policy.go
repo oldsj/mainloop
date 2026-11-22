@@ -17,6 +17,7 @@ const (
 	ToolPendingDone               = "pending_done"
 	ToolOpenPullRequest           = "open_pull_request"
 	ToolGetIssue                  = "get_issue"
+	ToolGetPullRequest            = "get_pull_request"
 	ToolCreateIssue               = "create_issue"
 	ToolCommentIssue              = "comment_issue"
 	ToolListDependabotAlerts      = "list_dependabot_alerts"
@@ -57,7 +58,7 @@ const (
 var AllTools = []string{
 	ToolWhoami, ToolTopics, ToolTopicOpen, ToolNote, ToolDecide, ToolPendingAdd, ToolPendingDone,
 	ToolOpenPullRequest,
-	ToolGetIssue, ToolCreateIssue, ToolCommentIssue, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
+	ToolGetIssue, ToolGetPullRequest, ToolCreateIssue, ToolCommentIssue, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
 	ToolProjectContext, ToolRemember, ToolForget,
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolTaskTranscript, ToolTranscriptSearch, ToolDelegate, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign,
 	ToolTaskHold, ToolSteer, ToolFollowUp, ToolSupervisorSend, ToolReport, ToolLoopArm, ToolLoopList, ToolLoopStop,
@@ -133,15 +134,16 @@ var (
 	devLoopTools = []string{
 		ToolDevLeaseAcquire, ToolDevLeaseRelease, ToolDevSync, ToolDevStatus,
 	}
-	// issueTools are the read-only GitHub issue and Dependabot-alert tools, and checkTools the CI
-	// tools. They carry no feature gate of their own: wherever an actor can open a pull request on
-	// its bound project, it can also read that project's issues, alerts and CI results.
-	issueTools = []string{ToolGetIssue, ToolListDependabotAlerts}
+	// issueTools are the read-only GitHub issue, pull-request and Dependabot-alert tools, and
+	// checkTools the CI tools. They carry no feature gate of their own: wherever an actor can open a
+	// pull request on its bound project, it can also read that project's issues, pull requests,
+	// alerts and CI results.
+	issueTools = []string{ToolGetIssue, ToolGetPullRequest, ToolListDependabotAlerts}
 	checkTools = []string{ToolCheckStatus, ToolWatchChecks, ToolGetVerification}
 	// issueWriteTools file issues and comments. The coordination grant holds them (the main thread,
-	// and coordination supervisors and children), with get_issue so a comment can follow a read;
-	// code tasks report what they find instead.
-	issueWriteTools = []string{ToolGetIssue, ToolCreateIssue, ToolCommentIssue}
+	// and coordination supervisors and children), with get_issue and get_pull_request so a comment
+	// can follow a read; code tasks report what they find instead.
+	issueWriteTools = []string{ToolGetIssue, ToolGetPullRequest, ToolCreateIssue, ToolCommentIssue}
 )
 
 // Tools returns the tool names the actor may use on the surface, in [AllTools] order.

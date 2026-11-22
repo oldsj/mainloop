@@ -43,7 +43,7 @@ project's repository:
 | ----------------- | ----------- | ----------------------------------------------------------------------------------- |
 | Metadata          | Read        | Repository lookup, branch rules                                                     |
 | Contents          | Read, write | Branches and commits; squash merge                                                  |
-| Pull requests     | Read, write | Pull requests, reviews and comments; opening a pull request                         |
+| Pull requests     | Read, write | Pull requests, reviews and comments (`get_pull_request`); opening a pull request    |
 | Issues            | Read, write | `get_issue`; filing an issue and commenting with `create_issue` and `comment_issue` |
 | Checks            | Read        | Check runs and suites                                                               |
 | Commit statuses   | Read        | Status contexts                                                                     |

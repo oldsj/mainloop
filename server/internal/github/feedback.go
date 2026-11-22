@@ -33,6 +33,16 @@ type PRFeedback struct {
 	At    time.Time
 }
 
+// Trusted reports whether the item's author may steer an agent: the repository's owner, a member
+// or a collaborator, or a bot (a GitHub App only comments where it is installed). Anyone else's
+// text is counted, never read out.
+func (f PRFeedback) Trusted() bool {
+	return f.AuthorType == "Bot" || slices.Contains(trustedAssociations, f.Association)
+}
+
+// trustedAssociations are the author associations of people with write access to the repository.
+var trustedAssociations = []string{"OWNER", "MEMBER", "COLLABORATOR"}
+
 // feedbackPages bounds the reviews read (100 a page): the reviews listing has no since filter.
 const feedbackPages = 3
 

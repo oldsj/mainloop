@@ -217,11 +217,6 @@ func runSummary(r github.CheckRun) string {
 	return r.OutputTitle + "\n\n" + r.OutputSummary
 }
 
-// trustedAssociations are the author associations whose feedback reaches the agent: people with
-// a role in the repository. Anyone can comment on a public pull request, so a comment from
-// anyone else is counted but never read out to the agent.
-var trustedAssociations = []string{"OWNER", "MEMBER", "COLLABORATOR"}
-
 // Feedback reads the trusted review feedback on a pull request after since. An author is trusted
 // when it is the repository's owner, a member or a collaborator, or a bot (a GitHub App only
 // comments where it is installed). The pull request's own author never counts: Mainloop's App
@@ -247,7 +242,7 @@ func (g GitHub) Feedback(ctx context.Context, repo Repo, pr int, since time.Time
 			continue
 		case f.Kind == github.FeedbackReview && (f.State == "PENDING" || f.State == "COMMENTED" && strings.TrimSpace(f.Body) == ""):
 			continue
-		case f.AuthorType != "Bot" && !slices.Contains(trustedAssociations, f.Association):
+		case !f.Trusted():
 			out.Ignored++
 			continue
 		}
