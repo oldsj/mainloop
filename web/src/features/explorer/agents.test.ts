@@ -141,9 +141,33 @@ describe('agents', () => {
       label: 'Add retry button',
       role: 'worker',
       detail: 'Running',
-      tone: 'active',
-      target: { to: 'task', id: 'a' }
+      tone: 'active'
     });
+  });
+
+  it('opens an agent that is still going on its conversation, and any other on its task', () => {
+    // Given a running task with a session, one with no session yet, a failed one and a stuck one
+    const tasks = [
+      running('going'),
+      view({ id: 'new', status: 'queued', current_attempt_id: null, updated_at: at(5) }),
+      view({ id: 'ended', status: 'failed', updated_at: at(5) }),
+      view({ id: 'lost', status: 'blocked', reason: 'session_lost', updated_at: at(5) })
+    ];
+
+    const { agents } = buildAgentColumn(source({ tasks }));
+    const of = (id: string) => agents.find((agent) => agent.id === `task:${id}`);
+
+    // Then the first opens where it can be read and told things, the others where their state is
+    expect(of('going')?.target).toEqual({ to: 'session', id: 'session-1' });
+    expect(of('new')?.target).toEqual({ to: 'task', id: 'new' });
+    expect(of('ended')?.target).toEqual({ to: 'task', id: 'ended' });
+    // A task Mainloop is recovering may have no session left to show
+    expect(of('lost')?.target).toEqual({ to: 'task', id: 'lost' });
+    // And either page of an agent is its own
+    expect(of('going')?.pages).toEqual([
+      { to: 'task', id: 'going' },
+      { to: 'session', id: 'session-1' }
+    ]);
   });
 
   it('groups agents by space in the spaces’ order, oldest first within a space', () => {

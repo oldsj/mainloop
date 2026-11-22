@@ -6,13 +6,14 @@ import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Skeleton } from '@/components/shared/skeleton';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { Button } from '@/components/ui/button';
-import type { SessionStatus } from '@/lib/contract';
+import type { SessionStatus, TaskView } from '@/lib/contract';
 import { statusLabel } from '@/lib/sessionStatus';
-import { taskForSession } from '@/lib/taskState';
+import { statusLabel as taskStatusLabel, taskForSession } from '@/lib/taskState';
 import { zoomSession } from '@/lib/zoomSession';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { PanelBoundary } from '@/shell/PanelBoundary';
 import { SessionRequests } from '@/features/chat/SessionRequests';
+import { needsOwner } from '@/features/tasks/cache';
 import { useSessionRequests } from '@/features/hitl/session-requests';
 import { runNotes, runRecorded, useRunDefaults } from '@/features/chat/runDefaults';
 import { LiveSession, liveForced, type LiveNotes } from '@/features/live';
@@ -120,6 +121,31 @@ function ViewToggle({ id, transcript }: { id: string; transcript: boolean }) {
         data-testid="session-view-toggle"
       >
         {transcript ? 'Conversation' : 'Transcript'}
+      </Link>
+    </Button>
+  );
+}
+
+/**
+ * From a task's conversation to the task itself: its pull request, CI, attempts and actions. It says
+ * the task's state, in the Needs-you colour while the task waits on the owner, so the conversation
+ * shows when the next step is on the task's page and not in the thread.
+ */
+function TaskLink({ view }: { view: TaskView }) {
+  const needs = needsOwner(view);
+  return (
+    <Button asChild variant="ghost" size="sm" className="flex-none">
+      <Link
+        to="/tasks/$id"
+        params={{ id: view.task.id }}
+        data-testid="session-task-state"
+        data-needs-owner={needs ? 'true' : undefined}
+        title={needs ? 'This task needs you' : undefined}
+        className={needs ? 'text-status-attention' : undefined}
+      >
+        Task {/* A phone keeps the row for the title: the word alone leads to the same page. */}
+        <span className="hidden sm:inline">· {taskStatusLabel(view.task.status)}</span>
+        {needs ? <span className="sr-only">, needs you</span> : null}
       </Link>
     </Button>
   );
@@ -277,6 +303,7 @@ export function SessionPage({
         >
           {session.title}
         </h1>
+        {compact && task ? <TaskLink view={task.view} /> : null}
         {compact ? <ViewToggle id={session.id} transcript={transcript} /> : null}
         {session.description && !compact ? (
           <p className="text-muted-foreground text-sm break-words">{session.description}</p>

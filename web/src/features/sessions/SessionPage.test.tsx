@@ -10,7 +10,7 @@ import { hitlView } from '@/test/fixtures/hitl';
 import { dotfilesHandlers } from '@/test/msw/handlers';
 import { server } from '@/test/msw/server';
 import { workspaceFixture } from '@/test/fixtures';
-import { attempt, view } from '@/test/fixtures/tasks';
+import { attempt, projection, view } from '@/test/fixtures/tasks';
 import { delivery, native, session } from './test/fixtures';
 import {
   nativeReadWith,
@@ -625,6 +625,61 @@ describe('task and workspace', () => {
       'href',
       '/tasks/task-1'
     );
+  });
+
+  it('names the task’s state beside a live conversation, and leads to the task', async () => {
+    // Given a live session that belongs to a running task
+    server.use(
+      tasksRead([
+        view(
+          { id: 'task-1', title: 'Add retry button', status: 'running' },
+          { attempts: [attempt({ task_id: 'task-1', session_id: 's1' })] }
+        )
+      ]),
+      ...createFakeRunner().handlers,
+      ...serveSession(session({ id: 's1' }), native({ session_id: 's1', live: true }))
+    );
+    renderSessions('/sessions/s1');
+    await screen.findByTestId('live-session');
+
+    // Then the one-row header has a link to the task that says where the task stands
+    const link = await screen.findByTestId('session-task-state');
+    expect(link).toHaveTextContent('Task · Running');
+    expect(link).toHaveAttribute('href', '/tasks/task-1');
+    expect(link).not.toHaveAttribute('data-needs-owner');
+  });
+
+  it('marks that link while the task waits on the owner', async () => {
+    // Given a task whose pull request is open and green: the next step is on the task, not in the thread
+    server.use(
+      tasksRead([
+        view(
+          { id: 'task-1', status: 'waiting', reason: 'publication' },
+          {
+            attempts: [attempt({ task_id: 'task-1', session_id: 's1' })],
+            projection: projection({ pr_state: 'open', ci_state: 'success' })
+          }
+        )
+      ]),
+      ...createFakeRunner().handlers,
+      ...serveSession(session({ id: 's1' }), native({ session_id: 's1', live: true }))
+    );
+    renderSessions('/sessions/s1');
+
+    const link = await screen.findByTestId('session-task-state');
+    expect(link).toHaveAttribute('data-needs-owner', 'true');
+    expect(link).toHaveAccessibleName('Task · Waiting, needs you');
+  });
+
+  it('has no such link on a live session that belongs to no task', async () => {
+    server.use(
+      ...createFakeRunner().handlers,
+      ...serveSession(session({ id: 's1' }), native({ session_id: 's1', live: true }))
+    );
+    renderSessions('/sessions/s1');
+    await screen.findByTestId('live-session');
+
+    expect(screen.queryByTestId('session-task-state')).toBeNull();
   });
 
   it('the back link goes to the project when the session has no task', async () => {

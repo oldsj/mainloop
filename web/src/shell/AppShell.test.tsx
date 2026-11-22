@@ -13,6 +13,8 @@ import {
   queueItem
 } from '@/features/inbox/test/fixtures';
 import { projectsRead, serveProjectPage } from '@/features/projects/test/handlers';
+import { native, session } from '@/features/sessions/test/fixtures';
+import { nativeRead, sessionRead } from '@/features/sessions/test/handlers';
 import { project } from '@/features/projects/test/fixtures';
 import { serveTaskPage, taskRead, taskScreen, tasksList } from '@/features/tasks/test/handlers';
 import { hitlView } from '@/test/fixtures/hitl';
@@ -130,7 +132,10 @@ describe('shell switch', () => {
     server.use(
       projectsRead([project({ id: running.task.project_id ?? undefined })]),
       tasksList(() => HttpResponse.json([running])),
-      taskRead(() => HttpResponse.json(running))
+      taskRead(() => HttpResponse.json(running)),
+      // The agent's conversation is the session of the task's current attempt.
+      sessionRead(() => HttpResponse.json(session({ id: 'session-1' }))),
+      nativeRead(native({ session_id: 'session-1' }))
     );
     const router = await renderAt('/');
     // Given the main chat: the strip is the main thread's space, above the page and outside it
@@ -146,8 +151,9 @@ describe('shell switch', () => {
       })
     );
 
-    // Then the strip is that agent's space, with its tab lit beside the project's overview
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/task-r'));
+    // Then its conversation opens, and the strip is that agent's space, with its tab lit beside
+    // the project's overview
+    await waitFor(() => expect(router.state.location.pathname).toBe('/sessions/session-1'));
     await waitFor(() => expect(strip()).toHaveAccessibleName('Agents in widgets'));
     expect(
       within(strip())

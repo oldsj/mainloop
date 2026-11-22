@@ -9,7 +9,7 @@ import { needsTotal, ownerWork } from '@/features/inbox/ownerWork';
 import { workGroup } from '@/features/home/model';
 import type { Session, TaskView } from '@/lib/contract';
 import { isCurrent } from '@/lib/sessionStatus';
-import { currentAttempt, taskForSession, type Tone } from '@/lib/taskState';
+import { currentAttempt, isTerminal, taskForSession, type Tone } from '@/lib/taskState';
 import {
   FINISHED_WINDOW_MS,
   mainloopState,
@@ -143,8 +143,11 @@ function taskAgent(
   const action = actionFor(source.attention, task.id);
   const supervisor = task.mode === 'coordination';
   const detail = action?.needed ?? node.detail;
-  const target: Target = { to: 'task', id: task.id };
+  const stuck = workGroup(view, null, now) === 'problem';
+  const problem = !action && stuck;
+  const page: Target = { to: 'task', id: task.id };
   const sessionId = currentAttempt(view)?.session_id;
+  const conversation: Target | null = sessionId ? { to: 'session', id: sessionId } : null;
   return {
     id: `task:${task.id}`,
     space: space.id,
@@ -154,9 +157,12 @@ function taskAgent(
     detail: supervisor ? ['supervisor', detail].filter(Boolean).join(' · ') : detail,
     at: node.at,
     tone: action ? 'attention' : (node.tone ?? 'muted'),
-    problem: !action && workGroup(view, null, now) === 'problem',
-    target,
-    pages: sessionId ? [target, { to: 'session', id: sessionId }] : [target],
+    problem,
+    // An agent that is still going opens on its conversation, where it can be read and told
+    // things. One that has ended, has no session yet, or that Mainloop is recovering (its session
+    // may be gone) opens on its task page: what happened, its pull request, and what can be done.
+    target: conversation && !isTerminal(task.status) && !stuck ? conversation : page,
+    pages: conversation ? [page, conversation] : [page],
     ask: node.ask,
     depth
   };
