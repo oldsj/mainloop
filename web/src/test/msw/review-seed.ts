@@ -274,7 +274,7 @@ export function reviewSeed() {
     {
       attempts: [attempt({ task_id: 'task-standing-0020', session_id: 'sess-standing-0020' })],
       actions: {
-        retry: { available: false, reason: 'standing_supervisor' },
+        retry: { available: true, reason: null },
         reassign: { available: false, reason: 'standing_supervisor' },
         cancel: { available: false, reason: 'standing_supervisor' }
       }

@@ -552,6 +552,69 @@ describe('which action leads', () => {
   });
 });
 
+describe('a standing supervisor’s actions', () => {
+  const supervisor = (status: 'waiting' | 'blocked' = 'waiting') =>
+    view(
+      {
+        mode: 'coordination',
+        standing: true,
+        status,
+        reason: status === 'waiting' ? 'idle' : 'session_lost'
+      },
+      {
+        actions: {
+          retry: { available: true, reason: null },
+          reassign: { available: false, reason: 'standing_supervisor' },
+          cancel: { available: false, reason: 'standing_supervisor' }
+        }
+      }
+    );
+
+  it('calls Retry Restart, says what it does, and shows no Cancel or Reassign', async () => {
+    // Given a project's standing supervisor, at rest
+    server.use(...serveTaskPage(taskScreen(supervisor())));
+    renderTasks('/tasks/task-1');
+
+    // Then the one action is named for what the server does with it
+    const restart = await screen.findByTestId('task-action-retry');
+    expect(restart).toHaveTextContent('Restart');
+    expect(restart).toBeEnabled();
+    expect(screen.getByTestId('task-restart-note')).toHaveTextContent(
+      'Restart gives the supervisor a new session on this same task. Its workers keep running.'
+    );
+    // And the two the server refuses for good are not offered, nor is their reason
+    expect(screen.queryByTestId('task-action-cancel')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reassign' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('task-actions')).not.toHaveTextContent(/standing.supervisor/i);
+  });
+
+  it('leads with Restart when the supervisor has stopped', async () => {
+    server.use(...serveTaskPage(taskScreen(supervisor('blocked'))));
+    renderTasks('/tasks/task-1');
+
+    expect((await screen.findByTestId('task-action-retry')).className).toMatch(/bg-primary/);
+  });
+
+  it('sends the same retry request, which the server runs as a restart', async () => {
+    const user = userEvent.setup();
+    let asked = 0;
+    server.use(
+      ...serveTaskPage(taskScreen(supervisor())),
+      taskAction('retry', () => {
+        asked += 1;
+        return HttpResponse.json(operation({ kind: 'retry', state: 'requested' }), {
+          status: 202
+        });
+      })
+    );
+    renderTasks('/tasks/task-1');
+
+    await user.click(await screen.findByRole('button', { name: 'Restart' }));
+
+    await waitFor(() => expect(asked).toBe(1));
+  });
+});
+
 describe('an operation that stopped part-way', () => {
   it('says it is on hold, and marks each step so its state is not colour alone', async () => {
     // Given a failed task whose handoff is blocked after creating the new attempt.

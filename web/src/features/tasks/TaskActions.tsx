@@ -151,6 +151,12 @@ export function TaskActions({
 
   const retry = gate('retry');
   const cancel = gate('cancel');
+  // A project's standing supervisor is never retried from scratch, cancelled or handed to another
+  // provider: the server's retry on it is a restart (a new session on the same task, its workers
+  // kept), and it refuses the other two for good. So Retry is named for what it does there, and
+  // the two controls that can never work are not shown.
+  const standing = view.task.standing === true;
+  const retryLabel = standing ? 'Restart' : LABELS.retry;
   // A code task's retry and reassign need a GitHub App to read the branch. While the server reports them
   // unavailable, the owner sees no control for them and no note about why: a control that cannot work is not shown,
   // and how the server is built is not the owner's concern.
@@ -160,10 +166,14 @@ export function TaskActions({
   // it is still offered but is not what the page points at.
   const retryLeads =
     retry.enabled && (view.task.status === 'blocked' || view.task.status === 'failed');
-  const reassignHidden = view.actions.reassign?.reason === 'handoff_unavailable';
+  const reassignHidden =
+    view.actions.reassign?.reason === 'handoff_unavailable' ||
+    view.actions.reassign?.reason === 'standing_supervisor';
   // The server refuses cancel with this reason once the task has ended. There is nothing left to
   // cancel then, so the button and its reason are not shown, like the two above.
-  const cancelHidden = view.actions.cancel?.reason === 'cancel_unavailable';
+  const cancelHidden =
+    view.actions.cancel?.reason === 'cancel_unavailable' ||
+    view.actions.cancel?.reason === 'standing_supervisor';
   // On a task that waits on the owner, the main chat is where they say what they did about it. When
   // the server's own Retry works, that is the direct way, so the chat's "retry" is not offered too.
   const answerInChat = onAsk !== undefined && waitsOnOwner(view);
@@ -283,7 +293,7 @@ export function TaskActions({
             disabled={!retry.enabled}
             onClick={() => void submit('retry')}
           >
-            {LABELS.retry}
+            {retryLabel}
           </Button>
         )}
         {answerInChat && (retryHidden || !retry.enabled) ? (
@@ -335,9 +345,14 @@ export function TaskActions({
         </p>
       ) : null}
       {/* A disabled action keeps its reason on screen, named, so it is read with the button. */}
+      {standing && !retryHidden ? (
+        <p className="text-muted-foreground text-xs" data-testid="task-restart-note">
+          Restart gives the supervisor a new session on this same task. Its workers keep running.
+        </p>
+      ) : null}
       {!retryHidden && retry.reason ? (
         <p className="text-muted-foreground text-xs">
-          {LABELS.retry}: {retry.reason}
+          {retryLabel}: {retry.reason}
         </p>
       ) : null}
       {!cancelHidden && cancel.reason ? (
