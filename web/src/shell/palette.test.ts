@@ -7,7 +7,7 @@ import { schedule } from '@/features/schedules/test/fixtures';
 import { session } from '@/features/sessions/test/fixtures';
 import { workspaceFixture } from '@/test/fixtures';
 import { NOW, view } from '@/test/fixtures/tasks';
-import { filterItems, PALETTE_LIMIT, paletteItems } from './palette';
+import { commandItems, filterItems, PALETTE_LIMIT, paletteItems } from './palette';
 import { THEMES } from './themes';
 
 const EMPTY: ExplorerSource = {
@@ -211,6 +211,55 @@ describe('how a query narrows the list', () => {
     const many = paletteItems(source({ tasks }));
     expect(filterItems(many, '')).toHaveLength(PALETTE_LIMIT);
     expect(filterItems(many, 'task')).toHaveLength(PALETTE_LIMIT);
+  });
+});
+
+describe('the shell’s commands', () => {
+  const desktop = { newLabel: 'New task in widgets', keys: true };
+
+  it('lists the prefix keys’ actions as rows, each with its key, on the desktop', () => {
+    expect(commandItems(desktop).map((item) => [item.label, item.detail, item.kind])).toEqual([
+      ['Next tab', 'Ctrl+B n', 'Command'],
+      ['Previous tab', 'Ctrl+B p', 'Command'],
+      ['New task in widgets', 'Ctrl+B c', 'Command'],
+      ['Hide or show the sidebar', 'Ctrl+B b', 'Command'],
+      ['Go to the spaces', 'Ctrl+B w', 'Command']
+    ]);
+    expect(commandItems(desktop)[0]?.action).toEqual({ do: 'command', command: 'next-tab' });
+  });
+
+  it('names no keys on the phone, where there are none, and calls the sidebar what it is there', () => {
+    const items = commandItems({ newLabel: 'New: ask Mainloop', keys: false });
+
+    expect(items.every((item) => item.detail === undefined)).toBe(true);
+    expect(items.map((item) => item.label)).toContain('Show or hide the spaces and agents');
+  });
+
+  it('sits after the pages and before everything there is to jump to', () => {
+    const kindsInOrder = paletteItems(EMPTY, desktop).map((item) => item.kind);
+    const first = kindsInOrder.indexOf('Command');
+
+    expect(kindsInOrder.slice(0, first).every((kind) => kind === 'Page')).toBe(true);
+    expect(kindsInOrder.slice(first, first + 5)).toEqual(Array(5).fill('Command'));
+    expect(kindsInOrder.slice(first + 5).every((kind) => kind === 'Theme')).toBe(true);
+  });
+
+  it('is found by what it does or by its key', () => {
+    const items = paletteItems(EMPTY, desktop);
+
+    expect(filterItems(items, 'next tab')[0]?.label).toBe('Next tab');
+    expect(filterItems(items, 'sidebar')[0]?.label).toBe('Hide or show the sidebar');
+    expect(filterItems(items, 'spaces')[0]?.label).toBe('Go to the spaces');
+    // The prefix finds all five, and only them.
+    expect(
+      filterItems(items, 'ctrl+b')
+        .filter((item) => item.kind !== 'Ask')
+        .map((item) => item.kind)
+    ).toEqual(Array(5).fill('Command'));
+  });
+
+  it('is left out when the caller gives none', () => {
+    expect(paletteItems(EMPTY).some((item) => item.kind === 'Command')).toBe(false);
   });
 });
 

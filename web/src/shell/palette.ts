@@ -16,6 +16,7 @@ import { attentionKey, type AttentionItem } from '@/features/inbox/model';
 import { ownerWork } from '@/features/inbox/ownerWork';
 import { isCurrent } from '@/lib/sessionStatus';
 import { taskForSession } from '@/lib/taskState';
+import { COMMAND_KEYS, type ShellCommand } from './commands';
 import { THEMES, type ThemeId } from './themes';
 
 /** What running an item does. The palette turns it into a navigation, a theme change or a prefill. */
@@ -25,6 +26,7 @@ export type PaletteAction =
   | { do: 'schedules' }
   | { do: 'theme'; theme: ThemeId }
   | { do: 'ask'; text: string }
+  | { do: 'command'; command: ShellCommand }
   | { do: 'transcripts' };
 
 export interface PaletteItem {
@@ -197,15 +199,50 @@ function placeItems(source: ExplorerSource): PaletteItem[] {
   return items;
 }
 
-/** Everything the palette lists before a query narrows it: pages, the places above, then themes. */
-export function paletteItems(source: ExplorerSource): PaletteItem[] {
+export interface CommandOptions {
+  /** What "new" is called in the space the owner is in: "New task in widgets". */
+  newLabel: string;
+  /** Whether the prefix keys are on (the desktop shell), so each command can say its key. */
+  keys: boolean;
+}
+
+/**
+ * The shell's own actions as rows: the same ones the prefix keys run, so they can be reached in any
+ * browser, with an extension that takes the prefix, or without knowing the keys. On the desktop each
+ * says its key.
+ */
+export function commandItems({ newLabel, keys }: CommandOptions): PaletteItem[] {
+  const rows: { command: ShellCommand; label: string }[] = [
+    { command: 'next-tab', label: 'Next tab' },
+    { command: 'previous-tab', label: 'Previous tab' },
+    { command: 'new', label: newLabel },
+    {
+      command: 'sidebar',
+      label: keys ? 'Hide or show the sidebar' : 'Show or hide the spaces and agents'
+    },
+    { command: 'spaces', label: 'Go to the spaces' }
+  ];
+  return rows.map(({ command, label }) => ({
+    id: `command:${command}`,
+    label,
+    detail: keys ? `Ctrl+B ${COMMAND_KEYS[command]}` : undefined,
+    kind: 'Command',
+    action: { do: 'command', command }
+  }));
+}
+
+/**
+ * Everything the palette lists before a query narrows it: pages, the shell's commands when the
+ * caller gives them, the places above, then themes.
+ */
+export function paletteItems(source: ExplorerSource, commands?: CommandOptions): PaletteItem[] {
   const themes: PaletteItem[] = THEMES.map(({ id, label }) => ({
     id: `theme:${id}`,
     label: `Theme: ${label}`,
     kind: 'Theme',
     action: { do: 'theme', theme: id }
   }));
-  return [...PAGES, ...placeItems(source), ...themes];
+  return [...PAGES, ...(commands ? commandItems(commands) : []), ...placeItems(source), ...themes];
 }
 
 /**

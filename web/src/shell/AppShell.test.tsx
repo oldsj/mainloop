@@ -1416,6 +1416,68 @@ describe('command palette', () => {
     );
   });
 
+  it('runs the prefix keys’ actions by name: the next tab, and the spaces', async () => {
+    as('Win32');
+    setViewport(true);
+    // A task of the main thread's own space with no session yet, so its tab opens its task page.
+    const queued = view({
+      id: 'task-q',
+      title: 'Queue backend',
+      status: 'queued',
+      current_attempt_id: null
+    });
+    server.use(
+      tasksList(() => HttpResponse.json([queued])),
+      taskRead(() => HttpResponse.json(queued))
+    );
+    const user = userEvent.setup();
+    const router = await renderAt('/');
+    await within(screen.getByTestId('explorer-aside')).findByRole('button', {
+      name: /^Queue backend/
+    });
+
+    // Given the palette, where each action is a row that says its key
+    await user.click(screen.getByTestId('column-menu'));
+    await user.type(await screen.findByRole('combobox'), 'next tab');
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')[0]).toHaveTextContent(
+      /^Next tabCtrl\+B nCommand$/
+    );
+
+    // When the owner runs Next tab
+    await user.keyboard('{Enter}');
+
+    // Then the palette closes and the next tab of the space opens
+    await waitFor(() => expect(palette()).toBeNull());
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/task-q'));
+
+    // And Go to the spaces puts keyboard focus on the current space's row, not back in the page
+    await user.click(screen.getByTestId('column-menu'));
+    await user.type(await screen.findByRole('combobox'), 'go to the spaces');
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(palette()).toBeNull());
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('list', { name: 'spaces' })).getByRole('button', { current: true })
+      ).toHaveFocus()
+    );
+  });
+
+  it('offers the same actions on a phone, without keys, and opens the lists from one', async () => {
+    setViewport(false);
+    const user = userEvent.setup();
+    const router = await renderAt('/?tab=explorer');
+    await user.click(await screen.findByTestId('column-menu'));
+    await user.type(await screen.findByRole('combobox'), 'spaces and agents');
+    const row = within(screen.getByRole('listbox')).getAllByRole('option')[0]!;
+    expect(row).toHaveTextContent(/^Show or hide the spaces and agentsCommand$/);
+
+    await user.keyboard('{Enter}');
+
+    // The lists were showing, so the command puts them away.
+    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('tab'));
+    await waitFor(() => expect(screen.queryByTestId('agent-column')).toBeNull());
+  });
+
   it('changes the theme', async () => {
     as('Win32');
     setViewport(true);
