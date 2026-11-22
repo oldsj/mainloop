@@ -71,5 +71,5 @@ session, with the last report in its brief.
   `requireApproval`. The harness pauses before each call, and the pause surfaces as an approval
   request on the task, the same human-in-the-loop path as other approval cards. The tool server
   holds the write credentials. Merges to the infrastructure repository stay human.
-- Home Assistant and OpenCozy MCP servers bound to the ops agent (or main), with their tokens
-  injected by the egress gateway rather than held in the Session.
+- Home Assistant and OpenCozy go to main, not the ops agent, read-only: see
+  [home tools](home-tools.md).
