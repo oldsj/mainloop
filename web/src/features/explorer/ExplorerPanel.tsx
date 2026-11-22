@@ -11,14 +11,7 @@ import {
 } from 'react';
 import { Button } from '@/components/ui/button';
 import { shortcutLabel } from '@/lib/platform';
-import {
-  needsCount,
-  SIDEBAR_VIEWS,
-  targetOfLocation,
-  viewNodes,
-  type ExplorerNode,
-  type SidebarView
-} from './model';
+import { needsCount, targetOfLocation, type ExplorerNode } from './model';
 import {
   WIDTH_MAX,
   WIDTH_MIN,
@@ -62,7 +55,7 @@ function useTree(update: ReturnType<typeof useExplorerPrefs>['update']) {
   return { open, ask, toggle };
 }
 
-/** Desktop only: folds the sidebar away; the activity bar or the shortcut brings it back. */
+/** Desktop only: folds the sidebar away; the tab strip's button or the shortcut brings it back. */
 function HideSidebar({ onClick }: { onClick: () => void }) {
   return (
     <Button
@@ -86,15 +79,13 @@ interface BodyProps {
   onToggle: (id: string) => void;
   onOpen: ReturnType<typeof useOpenTarget>;
   onAsk: (text: string) => void;
-  /** The panel's heading: the view's name on desktop, "Explorer" on the phone. */
+  /** The panel's heading. */
   title: string;
-  /** Desktop only: folds the sidebar away; the activity bar brings it back. */
-  onCollapse?: () => void;
   /** Phone only: controls at the end of the header (health and the theme). */
   actions?: ReactNode;
 }
 
-/** The header and the tree. Shared by the desktop sidebar and the phone pane. */
+/** The header and the tree: the phone's pane. */
 function ExplorerBody({
   nodes,
   ready,
@@ -104,7 +95,6 @@ function ExplorerBody({
   onOpen,
   onAsk,
   title,
-  onCollapse,
   actions
 }: BodyProps) {
   // The row for the page being shown is marked, so the tree says where the owner is.
@@ -121,7 +111,6 @@ function ExplorerBody({
         >
           {title}
         </h2>
-        {onCollapse ? <HideSidebar onClick={onCollapse} /> : null}
         {actions ? <div className="gap-xs flex items-center">{actions}</div> : null}
       </header>
       <div className="p-xs min-h-0 flex-1 overflow-y-auto">
@@ -156,34 +145,37 @@ function ExplorerBody({
 export interface ExplorerSidebarProps {
   prefs: ExplorerPrefs;
   update: ReturnType<typeof useExplorerPrefs>['update'];
-  nodes: ExplorerNode[];
-  /** The Sessions view's spaces and agents. The shell owns them: the status bar counts them too. */
+  /** The spaces and agents. The shell owns them: the tab strip and the status bar read them too. */
   column: AgentColumnState;
   ready: boolean;
   failed: boolean;
+  /** How many things need the owner, for **inbox**. */
+  needs: number;
+  /** Opens the command palette: **menu**. */
+  onMenu: () => void;
 }
 
 /**
- * Desktop: the sidebar on the left, between the activity bar and the page. It shows one view at a
- * time, chosen in the activity bar: Sessions is the spaces and their agents, Projects is the tree of
- * projects and schedules. It is resizable from its right
- * edge, and is hidden from the activity bar or with the sidebar shortcut (⌘B on a Mac, Ctrl+B elsewhere). The shell owns the prefs and the
- * data, since the activity bar and the status bar read them too.
+ * Desktop: the sidebar on the left, beside the page. It is the spaces and their agents, with **new**,
+ * **inbox** and **menu** between the two lists. It is resizable from its right edge, and is hidden
+ * with its own button or the sidebar shortcut (⌘B on a Mac, Ctrl+B elsewhere); the tab strip brings
+ * it back. The shell owns the prefs and the data, since the tab strip and the status bar read them
+ * too.
  */
 export function ExplorerSidebar({
   prefs,
   update,
-  nodes,
   column,
   ready,
-  failed
+  failed,
+  needs,
+  onMenu
 }: ExplorerSidebarProps) {
-  const { open, ask, toggle } = useTree(update);
+  const open = useOpenTarget();
+  const ask = useAsk();
   const drag = useRef<{ startX: number; startWidth: number; width: number } | null>(null);
   // The width while a drag is in progress. It is drawn from here and saved only when the drag ends.
   const [dragWidth, setDragWidth] = useState<number | null>(null);
-  const view: SidebarView = prefs.view;
-  const title = SIDEBAR_VIEWS.find(({ id }) => id === view)?.label ?? 'Explorer';
 
   const collapse = () => update((prev) => ({ ...prev, collapsed: true }));
 
@@ -216,36 +208,23 @@ export function ExplorerSidebar({
 
   return (
     <aside
-      aria-label={`${title} sidebar`}
+      aria-label="Sidebar"
       data-testid="explorer-aside"
-      data-view={view}
       style={{ width: dragWidth ?? prefs.width }}
       className="border-border-subtle relative flex min-h-0 shrink-0 flex-col border-r"
     >
-      {view === 'sessions' ? (
-        <AgentColumn
-          model={column.model}
-          page={column.page}
-          space={column.space}
-          ready={ready}
-          failed={failed}
-          onOpen={open}
-          onAsk={ask}
-          action={<HideSidebar onClick={collapse} />}
-        />
-      ) : (
-        <ExplorerBody
-          nodes={viewNodes(nodes, view)}
-          ready={ready}
-          failed={failed}
-          prefs={prefs}
-          onToggle={toggle}
-          onOpen={open}
-          onAsk={ask}
-          title={title}
-          onCollapse={collapse}
-        />
-      )}
+      <AgentColumn
+        model={column.model}
+        page={column.page}
+        space={column.space}
+        ready={ready}
+        failed={failed}
+        onOpen={open}
+        onAsk={ask}
+        needs={needs}
+        onMenu={onMenu}
+        action={<HideSidebar onClick={collapse} />}
+      />
       {/* A focusable window splitter (WAI-ARIA): the separator takes keys, so it is not a plain static element. */}
       {/* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
       <div

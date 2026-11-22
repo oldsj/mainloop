@@ -23,7 +23,6 @@ import {
   shortProject,
   targetOfLocation,
   taskNode,
-  viewNodes,
   visibleRows,
   type ExplorerSource
 } from './model';
@@ -838,10 +837,6 @@ describe('groups by pull request state', () => {
     ]);
     expect(isExpanded(DEFAULT_PREFS, 'review')).toBe(true);
     expect(isExpanded(DEFAULT_PREFS, 'landing')).toBe(false);
-    expect(topLevel(viewNodes(nodes, 'sessions'))).toEqual(
-      expect.arrayContaining(['review', 'landing'])
-    );
-    expect(topLevel(viewNodes(nodes, 'projects'))).toEqual(['projects', 'schedules']);
   });
 });
 
@@ -950,7 +945,6 @@ describe('snoozed tasks', () => {
     expect(ids.indexOf('snoozed')).toBe(ids.indexOf('working') + 1);
     expect(ids.indexOf('snoozed')).toBeLessThan(ids.indexOf('projects'));
     expect(isExpanded(DEFAULT_PREFS, 'snoozed')).toBe(false);
-    expect(topLevel(viewNodes(nodes, 'sessions'))).toContain('snoozed');
     expect(group(buildExplorer(source({ now })), 'snoozed')).toBeUndefined();
   });
 });

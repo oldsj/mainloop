@@ -38,18 +38,15 @@ describe('remembered layout', () => {
     const prefs = {
       width: 420,
       collapsed: true,
-      expanded: { working: true, needs: false },
-      view: 'projects' as const
+      expanded: { working: true, needs: false }
     };
     writePrefs(prefs);
     expect(readPrefs()).toEqual(prefs);
   });
 
-  it('shows the Sessions view when none, or an unknown one, is stored', () => {
-    window.localStorage.setItem(PREFS_KEY, JSON.stringify({ width: 300 }));
-    expect(readPrefs().view).toBe('sessions');
-    window.localStorage.setItem(PREFS_KEY, JSON.stringify({ view: 'files' }));
-    expect(readPrefs().view).toBe('sessions');
+  it('drops the view an older version stored: the sidebar has one', () => {
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify({ width: 320, view: 'projects' }));
+    expect(readPrefs()).toEqual({ ...DEFAULT_PREFS, width: 320 });
   });
 
   it('ignores junk and keeps the defaults for the parts it cannot read', () => {
@@ -60,8 +57,7 @@ describe('remembered layout', () => {
     expect(readPrefs()).toEqual({
       width: WIDTH_DEFAULT,
       collapsed: false,
-      expanded: { b: true },
-      view: 'sessions'
+      expanded: { b: true }
     });
   });
 

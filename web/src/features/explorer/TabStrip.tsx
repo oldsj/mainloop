@@ -1,8 +1,8 @@
 import { Plus } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { StatusDot } from '@/components/shared/status-dot';
 import { cn } from '@/components/ui/cn';
-import { MAINLOOP_SPACE, newTaskPrefill, spaceTabs, type AgentColumnModel } from './agents';
+import { newLabel, newTaskPrefill, spaceTabs, type AgentColumnModel } from './agents';
 import type { Target } from './model';
 
 /** A tab: one line at the control height, its label cut at about 24 characters. */
@@ -17,6 +17,8 @@ export interface TabStripProps {
   pathname: string;
   onOpen: (target: Target) => void;
   onAsk: (text: string) => void;
+  /** A control before the first tab: the button that brings a hidden sidebar back. */
+  leading?: ReactNode;
 }
 
 /**
@@ -27,7 +29,7 @@ export interface TabStripProps {
  * It is navigation, not a tab list: each tab opens a page, the lit one is marked
  * `aria-current="page"`, and the page below is the routed one.
  */
-export function TabStrip({ model, space, page, pathname, onOpen, onAsk }: TabStripProps) {
+export function TabStrip({ model, space, page, pathname, onOpen, onAsk, leading }: TabStripProps) {
   const tabs = spaceTabs(model, space, page, pathname);
   const spaceRow = model.spaces.find((row) => row.id === space);
   const name = spaceRow?.label ?? 'main';
@@ -47,6 +49,7 @@ export function TabStrip({ model, space, page, pathname, onOpen, onAsk }: TabStr
       style={{ scrollbarWidth: 'none' }}
       className="border-border-subtle bg-card text-ui flex shrink-0 items-stretch overflow-x-auto border-b font-mono"
     >
+      {leading}
       {tabs.map((tab) => {
         const target = tab.target;
         return (
@@ -77,8 +80,8 @@ export function TabStrip({ model, space, page, pathname, onOpen, onAsk }: TabStr
       <button
         type="button"
         data-testid="tab-new"
-        aria-label={space === MAINLOOP_SPACE ? 'New: ask Mainloop' : `New task in ${name}`}
-        title={space === MAINLOOP_SPACE ? 'Ask Mainloop' : `Start a task in ${name}`}
+        aria-label={newLabel(model, space)}
+        title={newLabel(model, space)}
         onClick={() => (prefill ? onAsk(prefill) : onOpen({ to: 'chat' }))}
         className={cn(
           TAB,

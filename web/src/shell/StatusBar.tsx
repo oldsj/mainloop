@@ -10,7 +10,7 @@ export interface StatusBarProps {
   working: number;
   /** How many problems Mainloop is handling. */
   problems: number;
-  /** Shows the sidebar's Sessions view, where the working tasks are. */
+  /** Shows the sidebar, where the working agents are. */
   onShowWorking: () => void;
   /**
    * Whether the counts are known. Before the first read they are not zero, they are unknown, so the
