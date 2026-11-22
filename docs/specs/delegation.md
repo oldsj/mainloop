@@ -48,7 +48,6 @@ Status: **implemented** (guidance v8, `server/internal/agentcontext`); wording i
 - In text the owner reads, a task is written as a link, `[<task title>](/tasks/<task id>)`, which the web renders as an in-app link (see [chat](chat.md#delegating-tasks)), not as a bare id.
 - Tasks `report` evidence, not claims, and raise an owner decision as `report` with `outcome=blocked` and `owner_action`. The main session has no `report` tool and asks the owner directly in chat.
 - The owner's Insights page (`/health`, see [orchestration health](orchestration-health.md)) shows orchestration health at a high level.
-- New projects: main and coordination tasks propose a repository with `project_propose`; the owner approves it from one Needs-you card instead of importing it by hand (see [onboarding proposals](projects.md#onboarding-proposals)).
 - Memory: `remember` records a one-line lesson for later agents on the project, from the owner's words or a verified fact, never a repository fact (that goes in `AGENTS.md`). The main session's entries apply at once; anyone else's are proposals the owner decides. `forget` ends a wrong one (see [project memory](project-context.md#project-memory)).
 
 A change of substance to the wording bumps the version in the code and its heading; the main binding records the version it was given, so a bump reaches a running main on its next message. Not measured: whether agents follow it.

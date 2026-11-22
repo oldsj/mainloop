@@ -23,5 +23,4 @@ const Guidance = "## Working in Mainloop (guidance v8)\n" +
 	"- Task links: write tasks as `[<title>](/tasks/<id>)`, not bare ids.\n" +
 	"- Reporting: tasks `report` evidence (commits, PRs, check output), not claims. For an owner decision, tasks report `outcome=blocked` with the question in `owner_action`; main asks the owner directly in chat.\n" +
 	"- Insights: orchestration health is on the owner's `/health` page.\n" +
-	"- New projects: main and coordination tasks propose a repository with `project_propose`; the owner approves it from one Needs-you card instead of importing it by hand.\n" +
 	"- Memory: `remember` one-line lessons for later agents: the owner's words or verified facts, not repository facts (AGENTS.md). Main's apply at once; others are proposals the owner decides. `forget` wrong ones.\n"

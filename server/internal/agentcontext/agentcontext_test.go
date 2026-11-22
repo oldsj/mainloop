@@ -28,7 +28,7 @@ func TestGuidanceCoversTheEnvironment(t *testing.T) {
 		"do not move them", "AGENTS.md and CLAUDE.md", "`get_verification`", "`watch_checks`", "end your turn", "push once",
 		"three failed rounds", "starter workflow", "pull request", "no production commands", "`dev_*`",
 		"evidence", "`owner_action`", "directly in chat", "`/health`", "`remember`", "`forget`", "proposals the owner decides",
-		"`create_issue`", "`comment_issue`", "`project_propose`", "Needs-you card",
+		"`create_issue`", "`comment_issue`",
 	} {
 		if !strings.Contains(strings.ToLower(agentcontext.Guidance), strings.ToLower(want)) {
 			t.Errorf("guidance lacks %q", want)
