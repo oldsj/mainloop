@@ -33,7 +33,6 @@ function source(overrides: Partial<ExplorerSource> = {}): ExplorerSource {
     workspaces: [],
     projects: PROJECTS,
     schedules: [],
-    online: true,
     now: NOW,
     ...overrides
   };

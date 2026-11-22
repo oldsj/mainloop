@@ -1,9 +1,25 @@
-/** Public surface of the explorer: the desktop sidebar, the phone pane, the chat starters, the data and prefs the shell shares, and the Needs-you count. */
+/**
+ * Public surface of the explorer: the desktop sidebar, the agent column, the tab strip, the chat
+ * starters, the rules for one row, and the data, counts and prefs the shell shares.
+ */
 export { ChatStarters } from './ChatStarters';
 export { AgentColumn } from './AgentColumn';
 export { ExplorerSidebar, useExplorerPrefs } from './ExplorerPanel';
-export { needsCount, shellCounts, type ExplorerNode, type Target } from './model';
-export type { ExplorerPrefs } from './prefs';
+export {
+  askPrefill,
+  sessionNode,
+  shortId,
+  stagedTaskNode,
+  workspaceNode,
+  type ExplorerSource,
+  type Target
+} from './model';
 export { newTaskPrefill, spaceTabs, workingCount, type TabRow } from './agents';
 export { TabStrip } from './TabStrip';
-export { useAgentColumn, useAsk, useExplorer, useOpenTarget } from './useExplorer';
+export {
+  useAgentColumn,
+  useAsk,
+  useExplorer,
+  useExplorerSource,
+  useOpenTarget
+} from './useExplorer';

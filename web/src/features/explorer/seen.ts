@@ -57,7 +57,7 @@ function needsMark(seen: Seen, taskId: string, changedAt: string | undefined): b
   return Number.isFinite(changed) && changed > Date.parse(mark);
 }
 
-// Marks being written, per query client, so two trees on one page send one write between them.
+// Marks being written, per query client, so two callers on one page send one write between them.
 const writing = new WeakMap<QueryClient, Set<string>>();
 
 /**

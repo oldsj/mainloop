@@ -1,2 +1,2 @@
-/** Public surface of home: the visit baseline that "Since you were here" counts from. */
-export { useLastVisit } from './lastVisit';
+/** Public surface of home: recording the owner's visit when the app opens. */
+export { useRecordVisit } from './lastVisit';

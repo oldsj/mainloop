@@ -1,10 +1,8 @@
 /**
- * The explorer's remembered layout, per browser: the panel width, whether it is folded to a rail,
- * and each node's expanded state. Storage can be blocked or hold junk, so every read and write is
- * guarded and a bad value falls back to the default.
+ * The sidebar's remembered layout, per browser: its width and whether it is hidden. Storage can be
+ * blocked or hold junk, so every read and write is guarded and a bad value falls back to the
+ * default. Keys an older version stored (`expanded`, `view`) are ignored.
  */
-import { DEFAULT_EXPANDED } from './model';
-
 export const PREFS_KEY = 'mainloop.explorer.v1';
 export const WIDTH_MIN = 240;
 export const WIDTH_MAX = 480;
@@ -13,24 +11,14 @@ export const WIDTH_DEFAULT = 300;
 export interface ExplorerPrefs {
   width: number;
   collapsed: boolean;
-  /** Node id to its expanded state. A node not listed takes its default. */
-  expanded: Record<string, boolean>;
 }
 
-export const DEFAULT_PREFS: ExplorerPrefs = {
-  width: WIDTH_DEFAULT,
-  collapsed: false,
-  expanded: {}
-};
+export const DEFAULT_PREFS: ExplorerPrefs = { width: WIDTH_DEFAULT, collapsed: false };
 
 /** Keeps a dragged width inside the range the panel can show. */
 export function clampWidth(width: number): number {
   if (!Number.isFinite(width)) return WIDTH_DEFAULT;
   return Math.min(WIDTH_MAX, Math.max(WIDTH_MIN, Math.round(width)));
-}
-
-export function isExpanded(prefs: ExplorerPrefs, id: string): boolean {
-  return prefs.expanded[id] ?? DEFAULT_EXPANDED.has(id);
 }
 
 function parse(raw: string | null): ExplorerPrefs {
@@ -39,16 +27,9 @@ function parse(raw: string | null): ExplorerPrefs {
     const value: unknown = JSON.parse(raw);
     if (typeof value !== 'object' || value === null) return DEFAULT_PREFS;
     const record = value as Record<string, unknown>;
-    const expanded: Record<string, boolean> = {};
-    if (typeof record.expanded === 'object' && record.expanded !== null) {
-      for (const [id, open] of Object.entries(record.expanded)) {
-        if (typeof open === 'boolean') expanded[id] = open;
-      }
-    }
     return {
       width: typeof record.width === 'number' ? clampWidth(record.width) : WIDTH_DEFAULT,
-      collapsed: record.collapsed === true,
-      expanded
+      collapsed: record.collapsed === true
     };
   } catch {
     return DEFAULT_PREFS;

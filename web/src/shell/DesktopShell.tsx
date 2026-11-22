@@ -5,10 +5,8 @@ import { cn } from '@/components/ui/cn';
 import { isApplePlatform, isShortcut, sidebarShortcutLabel } from '@/lib/platform';
 import {
   ExplorerSidebar,
-  needsCount,
   newTaskPrefill,
   spaceTabs,
-  shellCounts,
   TabStrip,
   useAgentColumn,
   useAsk,
@@ -29,16 +27,14 @@ import { StatusBar } from './StatusBar';
  * palette, which reaches every page. On home the centre is the Mainloop chat alone, which owns the
  * only scroll; other pages scroll in the centre.
  *
- * The shell owns the explorer's data and prefs, and the sidebar's spaces and agents, because three
+ * The shell owns the explorer's counts and prefs, and the sidebar's spaces and agents, because three
  * things read them: the sidebar, the tab strip and the status bar (the counts).
  */
 export function DesktopShell({
   children,
-  lastVisit,
   onSearch
 }: {
   children: ReactNode;
-  lastVisit: number | null;
   /** Opens the command palette. */
   onSearch: () => void;
 }) {
@@ -47,8 +43,7 @@ export function DesktopShell({
   const open = useOpenTarget();
   const ask = useAsk();
   const { prefs, update } = useExplorerPrefs();
-  const explorer = useExplorer(lastVisit);
-  const counts = shellCounts(explorer.nodes);
+  const explorer = useExplorer();
   const column = useAgentColumn();
 
   // ⌘B on a Mac hides and shows the sidebar, as in an editor, and works while typing. Off a Mac
@@ -103,7 +98,7 @@ export function DesktopShell({
               column={column}
               ready={explorer.ready}
               failed={explorer.failed}
-              needs={needsCount(explorer.nodes)}
+              needs={explorer.needs}
               onMenu={onSearch}
             />
           </PanelBoundary>
@@ -148,10 +143,10 @@ export function DesktopShell({
         </div>
       </div>
       <StatusBar
-        needs={counts.needs}
+        needs={explorer.needs}
         // What has an amber dot in the column, so the count and the column agree.
         working={workingCount(column.model.agents)}
-        problems={counts.problems}
+        problems={explorer.problems}
         counts={explorer.ready ? 'ready' : explorer.failed ? 'failed' : 'loading'}
         onShowWorking={show}
         hint={armed ? PREFIX_HINT : undefined}

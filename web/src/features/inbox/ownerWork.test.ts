@@ -47,6 +47,21 @@ describe('owner work', () => {
     expect(needsTotal(ownerWork([], [held], NOW + 120_000))).toBe(1);
   });
 
+  it('still lists an owner action for a task that is set aside, once', () => {
+    // Given a task set aside for a minute, and an owner action that names it.
+    const later = new Date(NOW + 60_000).toISOString();
+    const held = view({ id: 'held', status: 'running', held_until: later });
+    const question = attentionItem(queueItem({ id: 'q1' }), { task_id: 'held' });
+
+    // When the owner's work is listed.
+    const work = ownerWork([question], [held], NOW);
+
+    // Then the action still needs them, and the task is not listed beside it.
+    expect(work.needs).toEqual([question]);
+    expect(work.needsTasks).toEqual([]);
+    expect(needsTotal(work)).toBe(1);
+  });
+
   it('leaves out a failure nobody retried once it is over seven days old', () => {
     // Given two failed tasks that can still be retried, one from yesterday and one from last month.
     const DAY = 24 * 60 * 60 * 1000;

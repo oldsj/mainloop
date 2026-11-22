@@ -1,31 +1,21 @@
 /**
- * The explorer tree's rules: which rows sit under which top-level node, what each row says, where
- * it leads and what "Ask Mainloop" prefills. Pure, so the rules test without a QueryClient. Every
- * fact comes from the existing reads; nothing here decides what a task or session is allowed to do.
+ * The rules for one row: what it says, where it leads and what "Ask Mainloop" prefills. The agent
+ * column and the command palette build their lists from these. Pure, so the rules test without a
+ * QueryClient. Every fact comes from the existing reads; nothing here decides what a task or session
+ * is allowed to do.
  */
-import { attentionKey, needsYouItems, type AttentionItem } from '@/features/inbox/model';
-import { ownerWork } from '@/features/inbox/ownerWork';
-import {
-  countText,
-  isHeld,
-  isIdle,
-  sinceCounts,
-  statusLine,
-  workGroup,
-  type SinceCounts
-} from '@/features/home/model';
+import { needsYouItems, type AttentionItem } from '@/features/inbox/model';
+import { isHeld, isIdle, statusLine, workGroup } from '@/features/home/model';
 import type { ProjectRow } from '@/features/projects/model';
 import type { ScheduleView } from '@/features/schedules/model';
 import { sessionTone, workspaceTone, type WorkspaceBadgeFields } from '@/features/sessions/model';
-import { hasAvailableAction } from '@/features/tasks/cache';
 import type { Session, TaskView } from '@/lib/contract';
-import { childrenOf, currentAttempt, statusTone, type Tone } from '@/lib/taskState';
-import { isCurrent } from '@/lib/sessionStatus';
+import { childrenOf, statusTone, type Tone } from '@/lib/taskState';
 import { isUnseen, type SeenState } from './seen';
 
 export { isHeld };
 
-/** Where a row leads. The shell turns it into a route; the tree never builds URLs itself. */
+/** Where a row leads. The shell turns it into a route; a list never builds URLs itself. */
 export type Target =
   | { to: 'chat' }
   | { to: 'needs'; item?: string }
@@ -40,29 +30,19 @@ export type Target =
   | { to: 'import' };
 
 export interface ExplorerNode {
-  /** Unique within the tree: the parent's id plus this row's own id, so one task under two projects keeps its own expansion. */
+  /** The list's own prefix plus this row's id, so the same task in two lists has two ids. */
   id: string;
   label: string;
-  /**
-   * Muted text about the row: a status line, what an owner action needs, a schedule or a workspace
-   * state. A top-level row shows it beside the label; any other row shows it on the line below.
-   */
+  /** Muted text about the row: where a task stands, a session's status or a workspace's state. */
   detail?: string;
   /** The short name of the row's project (`widgets` for `acme/widgets`), first on the line below. */
   project?: string;
   /** When the row last changed, as an ISO time. The line below ends with its age. */
   at?: string;
   tone?: Tone;
-  /** The muted count on the right of a group row. */
-  count?: number;
   target?: Target;
-  /** A placeholder that says a group is empty. It is read, never opened. */
-  note?: boolean;
   /** The prefill "Ask Mainloop" puts in the composer for this row. */
   ask?: string;
-  /** A "+" on a group's heading: what it adds, and where that is done. */
-  add?: { label: string; target: Target };
-  children: ExplorerNode[];
 }
 
 export interface ExplorerSource {
@@ -73,17 +53,13 @@ export interface ExplorerSource {
   workspaces: WorkspaceBadgeFields[];
   projects: ProjectRow[];
   schedules: ScheduleView[];
-  /** Whether the backend answered the last read. Drives the Insights row. */
-  online: boolean;
-  /** The last app open, in ms, for "Since you were here". Null on a first visit or with storage blocked. */
-  lastVisit?: number | null;
   /** The clock the finished window is measured from, in ms. Defaults to now. */
   now?: number;
   /** Which finished tasks the owner has looked at in this browser. Without it nothing is unseen. */
   seen?: SeenState | null;
 }
 
-/** How far back "Finished recently" reaches: tasks completed or cancelled in the last seven days. */
+/** How long a finished task the owner has not looked at stays listed: seven days. */
 export const FINISHED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** The short form of an ID, as the rest of the app shows it. */
@@ -105,17 +81,6 @@ export function briefSnippet(brief: string, max = 140): string {
 
 const byUpdatedDesc = (a: TaskView, b: TaskView) =>
   Date.parse(b.task.updated_at) - Date.parse(a.task.updated_at);
-
-/**
- * Node ids a group starts expanded with. Everything else starts folded. Ready for review is open:
- * it is the owner's own next step.
- */
-export const DEFAULT_EXPANDED: ReadonlySet<string> = new Set([
-  'mainloop',
-  'needs',
-  'since',
-  'review'
-]);
 
 /**
  * Where a working task's pull request stands, from the facts the task already carries (no new
@@ -151,20 +116,15 @@ export function heldUntilText(iso: string, now: number): string {
 }
 
 /**
- * A row in Snoozed: at rest, with when it comes back and, when the main thread gave one, why it
- * was set aside. Its age is left out: the time that matters is the one it returns at.
+ * A task the main thread set aside: at rest, with when it comes back and, when the main thread gave
+ * one, why it was set aside. Its age is left out: the time that matters is the one it returns at.
  */
-function snoozedNode({
-  view,
-  source,
-  now,
-  parent = 'snoozed'
-}: {
-  view: TaskView;
-  source: ExplorerSource;
-  now: number;
-  parent?: string;
-}): ExplorerNode {
+function snoozedNode(
+  view: TaskView,
+  source: ExplorerSource,
+  parent: string,
+  now: number
+): ExplorerNode {
   const node = taskNode(view, source, parent);
   const until = heldUntilText(view.task.held_until ?? '', now);
   const reason = view.task.held_reason?.trim();
@@ -180,7 +140,7 @@ function snoozedNode({
 const prLabel = (view: TaskView) =>
   view.projection.pr_number != null ? `PR #${view.projection.pr_number}` : 'PR';
 
-/** The line under a row in Ready for review or Landing: the pull request and where it stands. */
+/** The line under a task whose pull request is ready or landing: the pull request and where it stands. */
 function prStageDetail(view: TaskView, stage: PrStage): string {
   if (stage === 'review') return `${prLabel(view)} · CI passing`;
   return view.projection.pr_state === 'merged'
@@ -189,14 +149,15 @@ function prStageDetail(view: TaskView, stage: PrStage): string {
 }
 
 /**
- * A row in Ready for review or Landing. Ready for review is finished work the owner has not looked
- * at, so it is teal until its page has been opened and then at rest; Landing is still moving.
+ * A task whose pull request is ready for review or landing. Ready for review is finished work the
+ * owner has not looked at, so it is teal until its page has been opened and then at rest; a landing
+ * one is still moving.
  */
 function prStageNode(
   view: TaskView,
   source: ExplorerSource,
   stage: PrStage,
-  parent: string = stage
+  parent: string
 ): ExplorerNode {
   const node = taskNode(view, source, parent);
   const tone: Tone =
@@ -222,7 +183,7 @@ export function stagedTaskNode(
 ): ExplorerNode {
   const group = workGroup(view, null, now);
   const moving = group === 'working' || group === 'needs-you' || group === 'blocked';
-  if (moving && isHeld(view, now)) return snoozedNode({ view, source, parent, now });
+  if (moving && isHeld(view, now)) return snoozedNode(view, source, parent, now);
   if (group === 'working') {
     const stage = prStage(view);
     if (stage) return prStageNode(view, source, stage, parent);
@@ -248,23 +209,6 @@ export function askPrefill(node: Pick<ExplorerNode, 'label'>, target: Target): s
     default:
       return undefined;
   }
-}
-
-/** The task's own child tasks, then its session and workspace, read from its current attempt only. */
-function taskChildren(
-  view: TaskView,
-  source: ExplorerSource,
-  path: string,
-  childTasks: TaskView[]
-): ExplorerNode[] {
-  const children: ExplorerNode[] = childTasks.map((child) => taskNode(child, source, path));
-  const attempt = currentAttempt(view);
-  if (!attempt) return children;
-  const session = source.sessions.find((row) => row.id === attempt.session_id);
-  if (session) children.push(sessionNode(session, `${path}/`));
-  const workspace = source.workspaces.find((row) => row.workspace_id === attempt.workspace_id);
-  if (workspace) children.push(workspaceNode(workspace, `${path}/`));
-  return children;
 }
 
 /** Whether a direct child needs the owner, is still moving, is blocked, or is done. */
@@ -353,15 +297,8 @@ export function taskNode(view: TaskView, source: ExplorerSource, parent: string)
     at: task.updated_at,
     tone: taskTone(view, group, source),
     target,
-    ask: askPrefill({ label }, target),
-    children: taskChildren(view, source, id, childTasks)
+    ask: askPrefill({ label }, target)
   };
-}
-
-/** A task nested under a loaded parent is shown there, not again as a flat sibling. */
-function hasLoadedParent(view: TaskView, source: ExplorerSource): boolean {
-  const parentId = view.task.parent_task_id;
-  return parentId != null && source.tasks.some((candidate) => candidate.task.id === parentId);
 }
 
 export function sessionNode(session: Session, parent: string): ExplorerNode {
@@ -373,8 +310,7 @@ export function sessionNode(session: Session, parent: string): ExplorerNode {
     detail: session.needs_owner ? 'Needs you' : session.status.replaceAll('_', ' '),
     tone: atRest(sessionTone(session)),
     target,
-    ask: askPrefill({ label: session.title || 'session' }, target),
-    children: []
+    ask: askPrefill({ label: session.title || 'session' }, target)
   };
 }
 
@@ -385,306 +321,15 @@ export function workspaceNode(workspace: WorkspaceBadgeFields, parent: string): 
     label: `Workspace ${shortId(workspace.workspace_id)}`,
     detail: workspace.observed_state.replaceAll('_', ' '),
     tone: workspaceTone(workspace.observed_state),
-    target,
-    children: []
+    target
   };
 }
-
-/** What an owner action is called in an Ask Mainloop prefill. */
-const KIND: Record<string, string> = {
-  approval: 'approval',
-  question: 'question',
-  owner_decision: 'decision'
-};
-
-/**
- * An owner action. It opens the answer view on its own row, so a question, plan review or approval
- * is answered there whether or not it belongs to a task.
- */
-function attentionNode(item: AttentionItem, parent: string): ExplorerNode {
-  const target: Target = { to: 'needs', item: attentionKey(item) };
-  return {
-    id: `${parent}/attention:${item.id}`,
-    label: item.title,
-    detail: item.needed,
-    tone: 'attention',
-    target,
-    ask: item.task_id
-      ? `About ${KIND[item.kind] ?? 'request'} ${item.title} (task ${shortId(item.task_id)}): `
-      : `About ${KIND[item.kind] ?? 'request'} ${item.title}: `,
-    children: []
-  };
-}
-
-/**
- * A problem: Mainloop's own recovery work (a stall, an unconfirmed stop), with no decision yet for
- * the owner. It opens the Problems view, not Needs you, and reads muted rather than attention, so
- * only a real owner decision shows yellow.
- */
-function problemNode(item: AttentionItem, parent: string): ExplorerNode {
-  const target: Target = { to: 'problems', item: attentionKey(item) };
-  return {
-    id: `${parent}/problem:${item.id}`,
-    label: item.title,
-    detail: item.needed,
-    tone: 'muted',
-    target,
-    children: []
-  };
-}
-
-/**
- * The "Since you were here" rows. The waiting row opens the answer view, on the latest task's action
- * when one is listed, as the same work does under Needs you; the others open the latest task.
- */
-const SINCE: { key: keyof SinceCounts; label: (count: number) => string; tone: Tone }[] = [
-  { key: 'waiting', label: needsYou, tone: 'attention' },
-  { key: 'failed', label: () => 'failed', tone: 'bad' },
-  // New since the owner was last here, so it is finished and not yet seen.
-  { key: 'merged', label: () => 'merged', tone: 'unseen' }
-];
-
-/**
- * What changed since the last app open, as a group. It is left out when nothing changed or there is
- * no baseline, so it never shows empty.
- */
-function sinceNode(source: ExplorerSource): ExplorerNode[] {
-  const counts = sinceCounts(source.tasks, source.lastVisit ?? null);
-  const children = SINCE.flatMap(({ key, label, tone }): ExplorerNode[] => {
-    const [latest] = counts[key];
-    if (!latest) return [];
-    return [
-      {
-        id: `since/${key}`,
-        label: `${countText(counts[key].length, 'task')} ${label(counts[key].length)}`,
-        detail: latest.task.title,
-        tone,
-        target:
-          key === 'waiting'
-            ? needsTarget(source, latest.task.id)
-            : { to: 'task', id: latest.task.id },
-        children: []
-      }
-    ];
-  });
-  if (children.length === 0) return [];
-  // A task can be counted twice (failed and waiting on the owner), so the group counts distinct tasks.
-  const count = new Set(SINCE.flatMap(({ key }) => counts[key].map((view) => view.task.id))).size;
-  return [{ id: 'since', label: 'Since you were here', count, children }];
-}
-
-/** The answer view, on the task's first listed owner action if it has one. */
-function needsTarget(source: ExplorerSource, taskId: string): Target {
-  const item = source.attention.find((entry) => entry.task_id === taskId);
-  return item ? { to: 'needs', item: attentionKey(item) } : { to: 'needs' };
-}
-
-/** A row that says the group is empty. It has no target, so it is only read, not opened. */
-const note = (id: string, label: string): ExplorerNode => ({ id, label, note: true, children: [] });
 
 /** Mainloop's own state: waiting when the owner is needed, working while a task runs, else idle. */
 export function mainloopState(needs: number, working: number): { label: string; tone: Tone } {
   if (needs > 0) return { label: 'Needs you', tone: 'attention' };
   if (working > 0) return { label: 'Working', tone: 'active' };
   return { label: 'Idle', tone: 'muted' };
-}
-
-/**
- * The top-level tree, in the order the owner sees it: Mainloop, Needs you, Problems, Since you were
- * here (only when something changed), Working, Ready for review, Landing and Snoozed (each only
- * when it has rows), Projects, Schedules, Finished recently, Insights (the health row; its page is still
- * `/health`).
- */
-export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
-  const groups = {
-    needs: [] as ExplorerNode[],
-    problems: [] as ExplorerNode[],
-    working: [] as TaskView[],
-    review: [] as TaskView[],
-    landing: [] as TaskView[],
-    snoozed: [] as TaskView[],
-    finished: [] as TaskView[]
-  };
-  // Needs you: owner actions first, then a blocked task (not a problem) that no action already
-  // names. A failed or blocked task with nothing the owner can do about it (every action
-  // unavailable) is not an owner decision either: workGroup leaves it out of both groups below, so
-  // it falls through to Finished recently or its project instead of piling up here forever.
-  // Problems: Mainloop's own recovery work first, then blocked tasks no problem item already names.
-  // Kept apart from Needs you: a problem is not an owner decision, so it never shows there.
-  // Both lists are `ownerWork`, which the Inbox draws too, so the tree and the Inbox always agree.
-  const now = source.now ?? Date.now();
-  const work = ownerWork(source.attention, source.tasks, now);
-  const needs = [
-    ...work.needs.map((item) => attentionNode(item, 'needs')),
-    ...work.needsTasks.map((view) => taskNode(view, source, 'needs'))
-  ];
-  const problems = [
-    ...work.problems.map((item) => problemNode(item, 'problems')),
-    ...work.problemTasks.map((view) => taskNode(view, source, 'problems'))
-  ];
-  const finishedSince = now - FINISHED_WINDOW_MS;
-  for (const view of [...source.tasks].sort(byUpdatedDesc)) {
-    const group = workGroup(view, null, now);
-    const named = work.named.has(view.task.id);
-    const nested = hasLoadedParent(view, source);
-    // A task nested under its parent elsewhere in the tree is not also a flat Working or
-    // Finished row; Needs you stays flat regardless, so an owner action is never hidden a level down.
-    // Working is what is still in progress. A task whose pull request is ready to be looked at, or
-    // is landing, moves to its own group, so Working does not hide what only waits on a review.
-    // A task the main thread set aside is out of the way until its time: it leaves Working, the two
-    // pull request groups and the Needs you rows read from task state, and waits under Snoozed. An
-    // owner action listed by `/attention` still shows under Needs you, and a problem under Problems.
-    const held = isHeld(view, now);
-    if (held && !nested && (group === 'working' || group === 'needs-you' || group === 'blocked')) {
-      if (!named) groups.snoozed.push(view);
-    } else if (group === 'working' && !named && !nested) {
-      const stage = prStage(view);
-      if (stage === 'review') groups.review.push(view);
-      else if (stage === 'landing') groups.landing.push(view);
-      else groups.working.push(view);
-    }
-    // A failed task joins completed/cancelled ones here once it has nothing left for the owner to
-    // do: same recency window, same fallback to its project once that window passes.
-    const finished =
-      view.task.status === 'completed' ||
-      view.task.status === 'cancelled' ||
-      (view.task.status === 'failed' && !hasAvailableAction(view));
-    if (finished && Date.parse(view.task.updated_at) >= finishedSince && !nested) {
-      groups.finished.push(view);
-    }
-  }
-  groups.needs = needs;
-  groups.problems = problems;
-
-  const live = source.sessions.filter((session) => isCurrent(session));
-  // A merge under way is still Mainloop working; a pull request waiting to be looked at is not.
-  const mainloop = mainloopState(needs.length, groups.working.length + groups.landing.length);
-
-  const projects = source.projects.map((project) => {
-    const path = `projects/${project.id}`;
-    const tasks = source.tasks
-      .filter((view) => view.task.project_id === project.id && !hasLoadedParent(view, source))
-      .sort(byUpdatedDesc);
-    const target: Target = { to: 'project', id: project.id };
-    return {
-      id: path,
-      label: project.full_name,
-      count: tasks.length,
-      target,
-      ask: askPrefill({ label: project.full_name }, target),
-      children: tasks.map((view) => taskNode(view, source, path))
-    } satisfies ExplorerNode;
-  });
-
-  const schedules = source.schedules.map((schedule) => {
-    const target: Target = { to: 'schedule', id: schedule.id };
-    return {
-      id: `schedules/${schedule.id}`,
-      label: schedule.config.name,
-      detail: schedule.config.paused ? 'Paused' : schedule.config.schedule,
-      tone: 'muted',
-      target,
-      ask: askPrefill({ label: schedule.config.name }, target),
-      children: []
-    } satisfies ExplorerNode;
-  });
-
-  const finished = groups.finished.sort(byUpdatedDesc);
-
-  return [
-    {
-      id: 'mainloop',
-      label: 'Mainloop',
-      detail: mainloop.label,
-      tone: mainloop.tone,
-      target: { to: 'chat' },
-      children: live.map((session) => sessionNode(session, 'mainloop/'))
-    },
-    {
-      id: 'needs',
-      label: 'Needs you',
-      count: needs.length,
-      target: { to: 'needs' },
-      tone: needs.length > 0 ? 'attention' : undefined,
-      children: needs.length > 0 ? needs : [note('needs/none', 'Nothing needs you')]
-    },
-    {
-      id: 'problems',
-      label: 'Problems',
-      count: problems.length,
-      target: { to: 'problems' },
-      children:
-        problems.length > 0 ? problems : [note('problems/none', 'Nothing Mainloop is handling')]
-    },
-    ...sinceNode(source),
-    {
-      id: 'working',
-      label: 'Working',
-      count: groups.working.length,
-      children:
-        groups.working.length > 0
-          ? groups.working.map((view) => taskNode(view, source, 'working'))
-          : [note('working/none', 'Nothing running')]
-    },
-    // Left out when empty, like Since you were here: most of the time nothing is at either stage.
-    ...(groups.review.length > 0
-      ? [
-          {
-            id: 'review',
-            label: 'Ready for review',
-            count: groups.review.length,
-            children: groups.review.map((view) => prStageNode(view, source, 'review'))
-          } satisfies ExplorerNode
-        ]
-      : []),
-    ...(groups.landing.length > 0
-      ? [
-          {
-            id: 'landing',
-            label: 'Landing',
-            count: groups.landing.length,
-            children: groups.landing.map((view) => prStageNode(view, source, 'landing'))
-          } satisfies ExplorerNode
-        ]
-      : []),
-    ...(groups.snoozed.length > 0
-      ? [
-          {
-            id: 'snoozed',
-            label: 'Snoozed',
-            count: groups.snoozed.length,
-            children: groups.snoozed.map((view) => snoozedNode({ view, source, now }))
-          } satisfies ExplorerNode
-        ]
-      : []),
-    {
-      id: 'projects',
-      label: 'Projects',
-      count: projects.length,
-      add: { label: 'Import a project', target: { to: 'import' } },
-      children: projects.length > 0 ? projects : [note('projects/none', 'No projects yet')]
-    },
-    {
-      id: 'schedules',
-      label: 'Schedules',
-      count: schedules.length,
-      children: schedules.length > 0 ? schedules : [note('schedules/none', 'No schedules')]
-    },
-    {
-      id: 'finished',
-      label: 'Finished recently',
-      count: finished.length,
-      children: finished.map((view) => taskNode(view, source, 'finished'))
-    },
-    {
-      id: 'health',
-      label: 'Insights',
-      detail: source.online ? 'Connected' : 'Offline',
-      tone: source.online ? 'ok' : 'bad',
-      target: { to: 'health' },
-      children: []
-    }
-  ];
 }
 
 /**
@@ -728,42 +373,4 @@ export function sameTarget(a: Target | null | undefined, b: Target | null | unde
   const idOf = (t: Target) => ('id' in t ? t.id : undefined);
   const itemOf = (t: Target) => ('item' in t ? t.item : undefined);
   return idOf(a) === idOf(b) && itemOf(a) === itemOf(b);
-}
-
-/** The three counts the status bar shows, read from the same groups the tree draws. */
-export function shellCounts(nodes: ExplorerNode[]): {
-  needs: number;
-  working: number;
-  problems: number;
-} {
-  const count = (id: string) => nodes.find((node) => node.id === id)?.count ?? 0;
-  return { needs: count('needs'), working: count('working'), problems: count('problems') };
-}
-
-/** The count the Explorer tab's badge shows: the Needs you group. */
-export function needsCount(nodes: ExplorerNode[]): number {
-  return nodes.find((node) => node.id === 'needs')?.count ?? 0;
-}
-
-/** The visible rows in order, with each row's depth and parent. Drives keyboard movement. */
-export interface VisibleRow {
-  node: ExplorerNode;
-  depth: number;
-  parentId: string | null;
-}
-
-export function visibleRows(
-  nodes: ExplorerNode[],
-  isExpanded: (id: string) => boolean,
-  depth = 1,
-  parentId: string | null = null
-): VisibleRow[] {
-  const rows: VisibleRow[] = [];
-  for (const node of nodes) {
-    rows.push({ node, depth, parentId });
-    if (node.children.length > 0 && isExpanded(node.id)) {
-      rows.push(...visibleRows(node.children, isExpanded, depth + 1, node.id));
-    }
-  }
-  return rows;
 }
