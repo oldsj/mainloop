@@ -59,6 +59,12 @@ const (
 	ReasonModelUnavailable     = "model_unavailable"
 	ReasonEffortUnavailable    = "effort_unavailable"
 	ReasonTaskNotRunning       = "task_not_running"
+	// ReasonStandingSupervisor refuses an action a project's standing supervisor does not take:
+	// it is never cancelled, and is restarted rather than retried or reassigned.
+	ReasonStandingSupervisor = "standing_supervisor"
+	// ReasonStandingOutcome refuses a failed report from a standing supervisor, which never fails:
+	// it reports blocked instead.
+	ReasonStandingOutcome = "standing_outcome"
 	// Follow-up refusals; see [Service.FollowUp].
 	ReasonSessionGone       = "session_gone"
 	ReasonSessionArchived   = "session_archived"

@@ -13,11 +13,24 @@ SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(key)::text, 0));
 INSERT INTO tasks (
     id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief,
     mode, assigned_profile_id, selection_source, provider_constraint, checkout_branch, checkout_ref,
-    checkout_depth, model, effort
+    checkout_depth, model, effort, standing
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
 )
 RETURNING *;
+
+-- name: GetStandingTask :one
+-- The project's standing supervisor, whatever its state (docs/specs/project-supervisor.md).
+SELECT * FROM tasks WHERE project_id = $1 AND standing;
+
+-- name: ListStandingSupervisors :many
+-- Every standing supervisor of the owner's projects, with the session of its current attempt
+-- (NULL before the attempt has one, or while a successor is being made).
+SELECT t.project_id::text AS project_id, t.id AS task_id, t.status, t.reason, t.created_at,
+       a.session_id
+FROM tasks t
+LEFT JOIN task_attempts a ON a.id = t.current_attempt_id AND a.state = 'active'
+WHERE t.owner_id = $1 AND t.standing;
 
 -- name: GetTask :one
 SELECT * FROM tasks WHERE id = $1 AND owner_id = $2;

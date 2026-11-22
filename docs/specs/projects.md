@@ -1,5 +1,8 @@
 # Projects
 
+A project read (`GET /projects`, `GET /projects/{id}`, the detail) carries `supervisor`, the
+project's [standing supervisor](project-supervisor.md), or null until it is first used.
+
 The project detail page includes the current merge policy, a versioned selector and the server's
 read-only protected-path patterns. Policies are **Auto** and **Approval required**. Auto still
 requires server merge checks; protected-path changes always require owner approval.

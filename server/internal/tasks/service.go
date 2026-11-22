@@ -192,6 +192,8 @@ type CreateInput struct {
 	Model    string
 	Effort   string
 	Checkout *Checkout
+	// standing marks a project's standing supervisor; only [Service.EnsureSupervisor] sets it.
+	standing bool
 }
 
 // Checkout is the repository position a code task starts from.
@@ -352,19 +354,9 @@ func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (api.
 			op = stored
 			return nil, nil
 		}
-		t, err := s.insertTask(ctx, q, p, in)
+		var t dbq.Task
+		op, t, err = s.createTx(ctx, q, p, in, dig, payload)
 		if err != nil {
-			return nil, err
-		}
-		op, err = q.InsertTaskOperation(ctx, dbq.InsertTaskOperationParams{
-			ID: uuid.NewString(), OwnerID: p.OwnerID, PrincipalKey: p.Key(), RequestID: in.RequestID,
-			RequestDigest: dig, RequestPayload: payload, Kind: dbstate.TaskOpCreate, TaskID: &t.ID,
-			State: dbstate.TaskOpRequested, LastConfirmedStep: dbstate.TaskOpRequested,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if err := s.notify(ctx, q, OpChannel, op.ID); err != nil {
 			return nil, err
 		}
 		return []events.Draft{s.updated(t)}, nil
@@ -374,6 +366,23 @@ func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (api.
 		return api.TaskOperation{}, err
 	}
 	return toOperation(op)
+}
+
+// createTx records a new task and its create operation, and wakes the operation loop.
+func (s *Service) createTx(ctx context.Context, q *dbq.Queries, p Principal, in CreateInput, dig string, payload json.RawMessage) (dbq.TaskOperation, dbq.Task, error) {
+	t, err := s.insertTask(ctx, q, p, in)
+	if err != nil {
+		return dbq.TaskOperation{}, t, err
+	}
+	op, err := q.InsertTaskOperation(ctx, dbq.InsertTaskOperationParams{
+		ID: uuid.NewString(), OwnerID: p.OwnerID, PrincipalKey: p.Key(), RequestID: in.RequestID,
+		RequestDigest: dig, RequestPayload: payload, Kind: dbstate.TaskOpCreate, TaskID: &t.ID,
+		State: dbstate.TaskOpRequested, LastConfirmedStep: dbstate.TaskOpRequested,
+	})
+	if err != nil {
+		return op, t, err
+	}
+	return op, t, s.notify(ctx, q, OpChannel, op.ID)
 }
 
 // Limits the database also enforces; checked here so a request over them is refused, not a 500.
@@ -488,7 +497,7 @@ func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, i
 		ID: id, OwnerID: p.OwnerID, ProjectID: project, TopicID: topic, ParentTaskID: parentID, RootTaskID: root,
 		CreatorBindingID: ptr(p.BindingID), Title: in.Title, Brief: in.Brief, Mode: in.Mode,
 		AssignedProfileID: sel.profile.ID, SelectionSource: sel.source, ProviderConstraint: sel.constraint,
-		Model: ptr(in.Model), Effort: ptr(in.Effort),
+		Model: ptr(in.Model), Effort: ptr(in.Effort), Standing: in.standing,
 	}
 	if c := in.Checkout; c != nil {
 		depth := int32(c.Depth) //nolint:gosec // validate bounds it to 0..1000
@@ -671,6 +680,11 @@ func (s *Service) act(ctx context.Context, p Principal, kind dbstate.TaskOpKind,
 		if err != nil {
 			return nil, err
 		}
+		if t.Standing {
+			// A standing supervisor is never cancelled, and its restart keeps its children, which a
+			// plain retry or reassign would cancel (docs/specs/project-supervisor.md).
+			return nil, refusal(409, ReasonStandingSupervisor)
+		}
 		newOp := dbq.InsertTaskOperationParams{
 			ID: uuid.NewString(), OwnerID: p.OwnerID, PrincipalKey: p.Key(), RequestID: in.RequestID,
 			RequestDigest: dig, RequestPayload: payload, Kind: kind, TaskID: &t.ID,
@@ -834,7 +848,11 @@ func (s *Service) applyReport(ctx context.Context, q *dbq.Queries, t dbq.Task, i
 	} else if TaskFinal(t.Status) {
 		return t, dbq.TaskReport{}, refusal(409, ReasonTaskTerminal)
 	}
-	if in.Outcome == dbstate.OutcomeCompleted && t.Mode == dbstate.TaskModeCoordination {
+	if t.Standing && in.Outcome == dbstate.OutcomeFailed {
+		return t, dbq.TaskReport{}, refusal(422, ReasonStandingOutcome)
+	}
+	// A standing supervisor's completed report puts it at rest; its children run on.
+	if in.Outcome == dbstate.OutcomeCompleted && t.Mode == dbstate.TaskModeCoordination && !t.Standing {
 		live, err := q.CountParentCapacity(ctx, dbq.CountParentCapacityParams{OwnerID: t.OwnerID, ParentTaskID: &t.ID})
 		if err != nil {
 			return t, dbq.TaskReport{}, err
@@ -923,8 +941,11 @@ func reportedState(t dbq.Task, in ReportInput) TaskState {
 	}
 	switch in.Outcome {
 	case dbstate.OutcomeCompleted:
-		if t.Mode == dbstate.TaskModeCode {
+		switch {
+		case t.Mode == dbstate.TaskModeCode:
 			return TaskState{Status: dbstate.TaskWaiting, Reason: dbstate.ReasonPublication}
+		case t.Standing:
+			return TaskState{Status: dbstate.TaskWaiting, Reason: dbstate.ReasonIdle}
 		}
 		return TaskState{Status: dbstate.TaskWaiting, Reason: dbstate.ReasonReconciliation}
 	case dbstate.OutcomeBlocked:
@@ -940,6 +961,10 @@ func reportedState(t dbq.Task, in ReportInput) TaskState {
 	// owner answered) and the liveness sweep's own session_lost/stalled (it was wrong). It does not
 	// recover runtime_limit: that bound fires regardless of activity, so a report alone must not
 	// clear it; only the owner's own action on the blocked task does.
+	if cur.Status == dbstate.TaskWaiting && cur.Reason == dbstate.ReasonIdle {
+		// A standing supervisor at rest that reports progress has been woken.
+		return TaskState{Status: dbstate.TaskRunning}
+	}
 	if cur.Status == dbstate.TaskBlocked {
 		switch cur.Reason {
 		case dbstate.ReasonOwnerDecision, dbstate.ReasonSessionLost, dbstate.ReasonStalled:

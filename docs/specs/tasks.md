@@ -85,6 +85,10 @@ delivery, workspace health, attention and publication remain
 separate observations. A provider report or finished turn cannot prove coding-task completion.
 Verified merged publication is the later completion gate.
 
+A project's [standing supervisor](project-supervisor.md) (`standing: true`) never completes: its
+`completed` report puts it at rest as `waiting` / `idle`, a reason only a standing task takes, and
+it is not cancelled, retried or reassigned.
+
 **Liveness bounds.** Every `running` task is bounded, not just watched: a periodic liveness
 sweep reads the kagent session behind the task's current (`active`) attempt, resolved fresh from
 its binding's `kagent_session_id` on every look (never Mainloop's own session id, which kagent

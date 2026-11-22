@@ -41,7 +41,7 @@ func (s TaskState) String() string {
 var taskReasons = map[dbstate.TaskStatus][]dbstate.TaskReason{
 	dbstate.TaskQueued:    {"", dbstate.ReasonProvisioningUnavailable},
 	dbstate.TaskRunning:   {""},
-	dbstate.TaskWaiting:   {dbstate.ReasonAwaitingChild, dbstate.ReasonApproval, dbstate.ReasonCI, dbstate.ReasonPublication, dbstate.ReasonHandoff, dbstate.ReasonReconciliation},
+	dbstate.TaskWaiting:   {dbstate.ReasonAwaitingChild, dbstate.ReasonApproval, dbstate.ReasonCI, dbstate.ReasonPublication, dbstate.ReasonHandoff, dbstate.ReasonReconciliation, dbstate.ReasonIdle},
 	dbstate.TaskBlocked: {
 		dbstate.ReasonOwnerDecision, dbstate.ReasonReconciliation,
 		dbstate.ReasonSessionLost, dbstate.ReasonStalled, dbstate.ReasonRuntimeLimit,

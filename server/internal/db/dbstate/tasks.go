@@ -56,6 +56,10 @@ const (
 	ReasonSessionLost  TaskReason = "session_lost"
 	ReasonStalled      TaskReason = "stalled"
 	ReasonRuntimeLimit TaskReason = "runtime_limit"
+
+	// ReasonIdle is a project's standing supervisor at rest: waiting for its next message after a
+	// completed report. Only a standing task takes it (docs/specs/project-supervisor.md).
+	ReasonIdle TaskReason = "idle"
 )
 
 // AttemptState is task_attempts.state.
