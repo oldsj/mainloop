@@ -1,6 +1,6 @@
 import { ArrowDown } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { MEASURE } from '@/components/shared/measure';
+import { CONVERSATION } from '@/components/shared/measure';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import type { Message } from '@/lib/contract';
@@ -144,7 +144,7 @@ export function MessageList({
         className="h-full overflow-y-auto font-mono"
         data-testid="message-list"
       >
-        <div className={cn('gap-sm py-md flex min-h-full flex-col', MEASURE)}>
+        <div className={cn('gap-sm py-md flex min-h-full flex-col', CONVERSATION)}>
           <div
             ref={log}
             role="log"

@@ -73,7 +73,7 @@ export function TabStrip({ model, space, page, pathname, onOpen, onAsk, leading 
             )}
           >
             {tab.tone ? <StatusDot tone={tab.tone} testId="tab-dot" /> : null}
-            <span className="max-w-[24ch] truncate">{tab.label}</span>
+            <span className="max-w-tab truncate">{tab.label}</span>
           </button>
         );
       })}

@@ -12,7 +12,7 @@ import {
 import { Markdown } from '@/components/markdown/markdown';
 import { ControlsHeading, SessionControls } from '@/components/shared/controls-sheet';
 import { DeliveredContext } from '@/components/shared/DeliveredContext';
-import { MEASURE } from '@/components/shared/measure';
+import { CONVERSATION } from '@/components/shared/measure';
 import { SessionBar } from '@/components/shared/session-bar';
 import { cn } from '@/components/ui/cn';
 import { barStatus, type LiveStatus } from '@/lib/barStatus';
@@ -319,7 +319,7 @@ export function LiveSessionView({
           data-testid="live-unavailable"
           className={cn(
             'px-md py-sm border-term-warning mt-sm flex flex-col gap-2 border',
-            MEASURE
+            CONVERSATION
           )}
         >
           <div className="text-term-warning font-bold">Live view unavailable</div>
@@ -395,8 +395,8 @@ function Log({
       }}
       className="px-md py-sm min-h-0 flex-1 overflow-y-auto overscroll-contain"
     >
-      {/* The scroller is the full width; the transcript inside it keeps to the reading width. */}
-      <div className={cn('gap-sm flex flex-col', MEASURE)}>
+      {/* The scroller is the full width; the transcript inside it stops at the terminal width. */}
+      <div className={cn('gap-sm flex flex-col', CONVERSATION)}>
         {state.entries.map((e) => (
           <Row
             key={e.id}
@@ -814,8 +814,8 @@ function Composer({
   const stop = busy && !text.trim();
   return (
     <div className="px-md pt-sm border-border-subtle border-t pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
-      {/* Centred on the transcript's reading width; the menus above the box open against it. */}
-      <div className={cn('relative flex flex-col gap-1', MEASURE)}>
+      {/* As wide as the transcript; the menus above the box open against it. */}
+      <div className={cn('relative flex flex-col gap-1', CONVERSATION)}>
         {historyOpen && history.length ? (
           <div
             role="listbox"
@@ -899,7 +899,7 @@ function Composer({
                     : 'Message, or / for commands'
             }
             aria-label="Message"
-            className="placeholder:text-term-fg-muted max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 text-base leading-snug outline-none"
+            className="placeholder:text-term-fg-muted max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 text-base leading-snug outline-none lg:text-sm"
           />
           <button
             type="button"

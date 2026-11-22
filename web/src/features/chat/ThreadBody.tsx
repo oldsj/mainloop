@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
-import { MEASURE } from '@/components/shared/measure';
+import { CONVERSATION } from '@/components/shared/measure';
 import { cn } from '@/components/ui/cn';
 import { Composer } from './Composer';
 import { assignmentIds } from './assignments';
@@ -103,7 +103,7 @@ export function ThreadBody({
         </div>
       ) : null}
       {thread.conversationFailed && thread.loaded ? (
-        <p className={cn('text-muted-foreground px-md py-xs text-xs', MEASURE)} role="status">
+        <p className={cn('text-muted-foreground px-md py-xs text-xs', CONVERSATION)} role="status">
           Could not refresh the conversation. Showing the last messages.
         </p>
       ) : null}
@@ -126,7 +126,7 @@ export function ThreadBody({
         <p
           className={cn(
             'text-destructive px-md py-xs shrink-0 text-sm [overflow-wrap:anywhere]',
-            MEASURE
+            CONVERSATION
           )}
           role="alert"
           data-testid="send-error"
@@ -135,17 +135,20 @@ export function ThreadBody({
         </p>
       ) : null}
       {thread.stopError ? (
-        <p className={cn('text-destructive px-md py-xs shrink-0 text-sm', MEASURE)} role="alert">
+        <p
+          className={cn('text-destructive px-md py-xs shrink-0 text-sm', CONVERSATION)}
+          role="alert"
+        >
           {thread.stopError}
         </p>
       ) : null}
-      <div className={cn('shrink-0', MEASURE)}>
+      <div className={cn('shrink-0', CONVERSATION)}>
         <TurnRecovery thread={thread} offline={offline} />
       </div>
 
       {closedReason ? (
         <p
-          className={cn('text-muted-foreground px-md py-xs shrink-0 text-sm', MEASURE)}
+          className={cn('text-muted-foreground px-md py-xs shrink-0 text-sm', CONVERSATION)}
           role="status"
         >
           {closedReason}
@@ -155,7 +158,7 @@ export function ThreadBody({
         <p
           className={cn(
             'text-muted-foreground px-md py-xs shrink-0 text-sm whitespace-pre-line',
-            MEASURE
+            CONVERSATION
           )}
           role="status"
           data-testid="command-notice"
