@@ -415,7 +415,16 @@ export function spaceTabs(
   return tabs;
 }
 
-/** What the strip's "+" puts in the main chat's composer, unsent: work starts from the chat. */
+/**
+ * What "new" is called in a space, for the sidebar's **new** and the strip's "+": a task in the
+ * project, or a word with Mainloop in the main thread's space.
+ */
+export function newLabel(model: AgentColumnModel, space: string): string {
+  const row = model.spaces.find((candidate) => candidate.id === space);
+  return space === MAINLOOP_SPACE || !row ? 'New: ask Mainloop' : `New task in ${row.label}`;
+}
+
+/** What "new" puts in the main chat's composer, unsent: work starts from the chat. */
 export function newTaskPrefill(model: AgentColumnModel, space: string): string | undefined {
   if (space === MAINLOOP_SPACE) return undefined;
   const row = model.spaces.find((candidate) => candidate.id === space);

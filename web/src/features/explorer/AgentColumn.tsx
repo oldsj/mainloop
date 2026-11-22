@@ -12,7 +12,16 @@ import { SkeletonRows } from '@/components/shared/skeleton';
 import { StatusDot } from '@/components/shared/status-dot';
 import { cn } from '@/components/ui/cn';
 import { relativeAge } from '@/lib/taskState';
-import { currentAgent, type AgentColumnModel, type AgentRow, type SpaceRow } from './agents';
+import { badgeText } from '@/features/inbox/model';
+import { shortcutLabel } from '@/lib/platform';
+import {
+  currentAgent,
+  newLabel,
+  newTaskPrefill,
+  type AgentColumnModel,
+  type AgentRow,
+  type SpaceRow
+} from './agents';
 import type { Target } from './model';
 import { RowMenu, type RowMenuAction } from './RowMenu';
 
@@ -22,6 +31,10 @@ import { RowMenu, type RowMenuAction } from './RowMenu';
  */
 const ON_ROW =
   'group-hover:text-accent-foreground group-data-[current=true]:text-accent-foreground';
+
+/** A word in the row between the lists: muted until hovered, at the control height. */
+const ROW_BUTTON =
+  'text-muted-foreground hover:text-foreground px-xs min-h-control focus-visible:ring-ring inline-flex cursor-default items-center outline-none focus-visible:ring-1 focus-visible:ring-inset';
 
 /** A list's name: lowercase and muted, with no rule or box around it. */
 const LABEL = 'text-muted-foreground px-sm text-xs font-normal lowercase';
@@ -38,6 +51,10 @@ export interface AgentColumnProps {
   onAsk: (text: string) => void;
   /** A control at the end of the first label's row: the button that hides the column. */
   action?: ReactNode;
+  /** How many things need the owner. The row between the lists carries it on **inbox**. */
+  needs?: number;
+  /** Opens the command palette: the row's **menu**. Without it the row is not drawn. */
+  onMenu?: () => void;
   /** The clock a row's age is measured from, in ms. Defaults to now. */
   now?: number;
 }
@@ -75,6 +92,10 @@ function bySpace(agents: AgentRow[]): { id: string; label: string; rows: AgentRo
  * status dot, a title and one muted line. The agent whose page is showing is filled and marked `aria-current="page"`;
  * the space that page belongs to is filled too.
  *
+ * Between the lists is one row of words: **new** (start work in the current space, from the main
+ * chat), **inbox** (with the Needs-you count) and **menu** (the command palette, which reaches
+ * every other page and the themes).
+ *
  * The two lists are one stop for the Tab key: up and down move through every row, Home and End go
  * to the ends, Enter opens the row, and `a` on an agent asks Mainloop about it. A row's actions are
  * also in a small menu on right-click, Shift+F10 or the menu key.
@@ -88,6 +109,8 @@ export function AgentColumn({
   onOpen,
   onAsk,
   action,
+  needs = 0,
+  onMenu,
   now: fixedNow
 }: AgentColumnProps) {
   const now = useNow(fixedNow);
@@ -290,21 +313,79 @@ export function AgentColumn({
             <SkeletonRows rows={8} testId="explorer-loading" />
           </div>
         ) : (
+          <ul aria-labelledby="spaces-heading" className="m-0 list-none p-0">
+            {model.spaces.map((spaceRow) =>
+              row(`space:${spaceRow.id}`, {
+                target: spaceRow.target,
+                tone: spaceRow.tone,
+                label: spaceRow.label,
+                title: spaceRow.title,
+                meta: spaceRow.detail,
+                current: spaceRow.id === space ? 'true' : undefined,
+                testId: 'space-row'
+              })
+            )}
+          </ul>
+        )}
+        {/* The row of words is there from the start, so the menu works while the lists load. */}
+        {onMenu ? (
+          // Between the lists, as a terminal workspace manager has it: start something, and
+          // everything else. The Inbox is here too, with its count, since what needs the owner
+          // is the first thing to check.
+          <div
+            data-testid="column-actions"
+            className="px-xs mt-sm flex items-center justify-between text-xs"
+          >
+            <button
+              type="button"
+              data-testid="column-new"
+              aria-label={newLabel(model, space)}
+              title={newLabel(model, space)}
+              onClick={() => {
+                const prefill = newTaskPrefill(model, space);
+                if (prefill) onAsk(prefill);
+                else onOpen({ to: 'chat' });
+              }}
+              className={ROW_BUTTON}
+            >
+              new
+            </button>
+            <span className="flex items-center">
+              <button
+                type="button"
+                data-testid="column-inbox"
+                aria-label={needs > 0 ? `Inbox, ${needs} need you` : 'Inbox'}
+                aria-current={page?.to === 'needs' ? 'page' : undefined}
+                onClick={() => onOpen({ to: 'needs' })}
+                className={cn(ROW_BUTTON, 'gap-xs', page?.to === 'needs' && 'text-foreground')}
+              >
+                inbox
+                {needs > 0 ? (
+                  <span
+                    data-testid="column-needs"
+                    aria-hidden="true"
+                    className="text-status-attention font-semibold tabular-nums"
+                  >
+                    {badgeText(needs)}
+                  </span>
+                ) : null}
+              </button>
+              <button
+                type="button"
+                data-testid="column-menu"
+                aria-label="Menu"
+                title={`Search and commands (${shortcutLabel('k')})`}
+                onClick={onMenu}
+                className={ROW_BUTTON}
+              >
+                menu
+              </button>
+            </span>
+          </div>
+        ) : null}
+        {ready && !failed ? (
           <>
-            <ul aria-labelledby="spaces-heading" className="m-0 list-none p-0">
-              {model.spaces.map((spaceRow) =>
-                row(`space:${spaceRow.id}`, {
-                  target: spaceRow.target,
-                  tone: spaceRow.tone,
-                  label: spaceRow.label,
-                  title: spaceRow.title,
-                  meta: spaceRow.detail,
-                  current: spaceRow.id === space ? 'true' : undefined,
-                  testId: 'space-row'
-                })
-              )}
-            </ul>
-            <h2 id="agents-heading" className={cn(LABEL, 'mt-md flex h-6 items-center')}>
+            <h2 id="agents-heading" className={cn(LABEL, 'mt-sm flex h-6 items-center')}>
               agents
             </h2>
             <div role="group" aria-labelledby="agents-heading">
@@ -338,7 +419,7 @@ export function AgentColumn({
               ))}
             </div>
           </>
-        )}
+        ) : null}
       </div>
       {menu && menuRow ? (
         <RowMenu
