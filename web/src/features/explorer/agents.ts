@@ -317,3 +317,86 @@ export function spaceOfPage(page: Target | null, source: ExplorerSource): string
   }
   return MAINLOOP_SPACE;
 }
+
+export interface TabRow {
+  /** Unique in the strip: `home`, an agent's id, or `page`. */
+  id: string;
+  label: string;
+  /** The full name, for a tooltip, when the label may be cut short. */
+  title?: string;
+  /** The agent's dot. A tab that is a page, not an agent, has none. */
+  tone?: Tone;
+  /** Where the tab leads. The tab for the page being shown, when it is no agent's, leads nowhere. */
+  target?: Target;
+  current: boolean;
+}
+
+/** What a page that is no agent's is called on its tab, by the first part of its path. */
+const PAGE_TABS: Record<string, string> = {
+  inbox: 'inbox',
+  settings: 'settings',
+  health: 'health',
+  schedules: 'schedules',
+  transcripts: 'transcripts',
+  agents: 'new agent',
+  workspaces: 'workspace',
+  tasks: 'task',
+  sessions: 'session',
+  projects: 'project'
+};
+
+/**
+ * The tab strip over the page: the current space's agents, as a terminal workspace manager shows
+ * one tab per agent in the space. First the space's own page (`main`, the main chat, for the main
+ * thread's space; `overview`, the project page, for a project), then its agents in the column's
+ * order. When the page being shown is none of those (the Inbox, Settings, a superseded session), it
+ * gets a last tab of its own, so one tab is always lit.
+ */
+export function spaceTabs(
+  model: AgentColumnModel,
+  space: string,
+  page: Target | null,
+  pathname: string
+): TabRow[] {
+  const here = currentAgent(model.agents, page);
+  const home: TabRow =
+    space === MAINLOOP_SPACE
+      ? {
+          id: 'home',
+          label: 'main',
+          tone: model.agents.find((agent) => agent.role === 'main')?.tone,
+          target: { to: 'chat' },
+          current: page?.to === 'chat'
+        }
+      : {
+          id: 'home',
+          label: 'overview',
+          target: { to: 'project', id: space },
+          current: page?.to === 'project' && page.id === space
+        };
+  const tabs: TabRow[] = [
+    home,
+    ...model.agents
+      .filter((agent) => agent.space === space && agent.role !== 'main')
+      .map((agent) => ({
+        id: agent.id,
+        label: agent.label,
+        title: agent.label,
+        tone: agent.tone,
+        target: agent.target,
+        current: agent === here
+      }))
+  ];
+  if (!tabs.some((tab) => tab.current)) {
+    const part = pathname.split('/').filter(Boolean)[0] ?? '';
+    tabs.push({ id: 'page', label: PAGE_TABS[part] ?? (part || 'page'), current: true });
+  }
+  return tabs;
+}
+
+/** What the strip's "+" puts in the main chat's composer, unsent: work starts from the chat. */
+export function newTaskPrefill(model: AgentColumnModel, space: string): string | undefined {
+  if (space === MAINLOOP_SPACE) return undefined;
+  const row = model.spaces.find((candidate) => candidate.id === space);
+  return row ? `Start a task in ${row.title ?? row.label}: ` : undefined;
+}

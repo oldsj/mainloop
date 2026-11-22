@@ -8,7 +8,9 @@ import {
   buildAgentColumn,
   currentAgent,
   MAINLOOP_SPACE,
+  newTaskPrefill,
   spaceOfPage,
+  spaceTabs,
   workingCount
 } from './agents';
 import type { ExplorerSource } from './model';
@@ -319,5 +321,71 @@ describe('the page being shown', () => {
     expect(spaceOfPage({ to: 'health' }, src)).toBe(MAINLOOP_SPACE);
     expect(spaceOfPage({ to: 'task', id: 'unknown' }, src)).toBe(MAINLOOP_SPACE);
     expect(spaceOfPage(null, src)).toBe(MAINLOOP_SPACE);
+  });
+});
+
+describe('the tab strip', () => {
+  const tasks = [
+    view(
+      { id: 'a', title: 'Add retry button', status: 'running', updated_at: at(5) },
+      { attempts: [attempt({ task_id: 'a', session_id: 'session-a' })] }
+    ),
+    view({ id: 'b', title: 'Fix CI flake', status: 'running', updated_at: at(5) }),
+    view({ id: 'c', title: 'Infra work', status: 'running', project_id: 'project-2' })
+  ];
+  const sessions = [session({ id: 'free', title: 'Scratch', status: 'active', project_id: null })];
+  const src = source({ tasks, sessions });
+  const strip = (page: Parameters<typeof spaceTabs>[2], pathname: string) => {
+    const model = buildAgentColumn(src, page);
+    return spaceTabs(model, spaceOfPage(page, src), page, pathname).map(
+      (tab) => `${tab.label}${tab.current ? '*' : ''}`
+    );
+  };
+
+  it('is the main chat and the agents of no project, in the main thread’s space', () => {
+    expect(strip({ to: 'chat' }, '/')).toEqual(['main*', 'Scratch']);
+  });
+
+  it('is the project’s overview, then its agents, with the one being shown lit', () => {
+    expect(strip({ to: 'project', id: 'project-1' }, '/projects/project-1')).toEqual([
+      'overview*',
+      'Add retry button',
+      'Fix CI flake'
+    ]);
+    expect(strip({ to: 'task', id: 'b' }, '/tasks/b')).toEqual([
+      'overview',
+      'Add retry button',
+      'Fix CI flake*'
+    ]);
+    // An agent's tab is lit on its session as on its task page.
+    expect(strip({ to: 'session', id: 'session-a' }, '/sessions/session-a')).toEqual([
+      'overview',
+      'Add retry button*',
+      'Fix CI flake'
+    ]);
+  });
+
+  it('gives a page that is no agent’s a last tab of its own, so one tab is always lit', () => {
+    expect(strip({ to: 'needs' }, '/inbox')).toEqual(['main', 'Scratch', 'inbox*']);
+    expect(strip(null, '/settings')).toEqual(['main', 'Scratch', 'settings*']);
+    expect(strip(null, '/schedules/new')).toEqual(['main', 'Scratch', 'schedules*']);
+  });
+
+  it('leads each tab to its page, except the one that only names the page being shown', () => {
+    const page = { to: 'needs' } as const;
+    const tabs = spaceTabs(buildAgentColumn(src, page), MAINLOOP_SPACE, page, '/inbox');
+
+    expect(tabs.map((tab) => tab.target)).toEqual([
+      { to: 'chat' },
+      { to: 'session', id: 'free' },
+      undefined
+    ]);
+  });
+
+  it('starts new work in the project from the chat, by name', () => {
+    const model = buildAgentColumn(src);
+
+    expect(newTaskPrefill(model, 'project-1')).toBe('Start a task in acme/widgets: ');
+    expect(newTaskPrefill(model, MAINLOOP_SPACE)).toBeUndefined();
   });
 });

@@ -6,9 +6,12 @@ import {
   ExplorerSidebar,
   needsCount,
   shellCounts,
+  TabStrip,
   useAgentColumn,
+  useAsk,
   useExplorer,
   useExplorerPrefs,
+  useOpenTarget,
   workingCount,
   type SidebarView
 } from '@/features/explorer';
@@ -19,8 +22,9 @@ import { StatusBar } from './StatusBar';
 
 /**
  * ≥1024 px, laid out as an IDE is: an activity bar down the left edge, the sidebar beside it, the
- * page in the centre and a status bar along the bottom. There is no top header. On home the centre
- * is the Mainloop chat alone, which owns the only scroll; other pages scroll in the centre.
+ * page in the centre under a strip of tabs (the current space's agents), and a status bar along the
+ * bottom. There is no top header. On home the centre is the Mainloop chat alone, which owns the
+ * only scroll; other pages scroll in the centre.
  *
  * The shell owns the explorer's data and prefs, and the sidebar's spaces and agents, because three
  * things read them: the activity bar (the Needs-you count and which view shows), the sidebar, and
@@ -36,7 +40,10 @@ export function DesktopShell({
   /** Opens the command palette. */
   onSearch: () => void;
 }) {
-  const onHome = useRouterState({ select: (state) => state.location.pathname === '/' });
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const onHome = pathname === '/';
+  const open = useOpenTarget();
+  const ask = useAsk();
   const { prefs, update } = useExplorerPrefs();
   const explorer = useExplorer(lastVisit);
   const counts = shellCounts(explorer.nodes);
@@ -85,17 +92,29 @@ export function DesktopShell({
             />
           </PanelBoundary>
         )}
-        {/* Relative, so an absolutely placed descendant scrolls with it and never stretches the page. */}
-        <main
-          id={MAIN_ID}
-          tabIndex={-1}
-          className={cn(
-            'relative flex min-w-0 flex-1 flex-col outline-none',
-            onHome ? 'overflow-hidden' : 'overflow-y-auto'
-          )}
-        >
-          <div className="min-h-0 flex-1">{children}</div>
-        </main>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <PanelBoundary name="Tabs">
+            <TabStrip
+              model={column.model}
+              space={column.space}
+              page={column.page}
+              pathname={pathname}
+              onOpen={open}
+              onAsk={ask}
+            />
+          </PanelBoundary>
+          {/* Relative, so an absolutely placed descendant scrolls with it and never stretches the page. */}
+          <main
+            id={MAIN_ID}
+            tabIndex={-1}
+            className={cn(
+              'relative flex min-h-0 min-w-0 flex-1 flex-col outline-none',
+              onHome ? 'overflow-hidden' : 'overflow-y-auto'
+            )}
+          >
+            <div className="min-h-0 flex-1">{children}</div>
+          </main>
+        </div>
       </div>
       <StatusBar
         needs={counts.needs}
