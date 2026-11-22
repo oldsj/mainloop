@@ -111,6 +111,9 @@ type Limits struct {
 	// LoopPoll is how often a task loop looks at its subject when no status change wakes it. Zero
 	// takes the default.
 	LoopPoll time.Duration
+	// SupervisorStartWait is how long supervisor_send waits for a standing supervisor that is starting
+	// to be given its first brief before it refuses supervisor_starting. Zero takes 30 seconds.
+	SupervisorStartWait time.Duration
 }
 
 func (s *Service) log() *slog.Logger {
@@ -353,6 +356,11 @@ func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (api.
 		if replay {
 			op = stored
 			return nil, nil
+		}
+		// Three layers: main hands a project's work to its standing supervisor, which delegates it.
+		// After the replay, so a request made before this rule still answers its stored operation.
+		if p.Role == dbstate.RoleMain && in.ProjectID != "" {
+			return nil, refusal(409, ReasonProjectSupervisor)
 		}
 		var t dbq.Task
 		op, t, err = s.createTx(ctx, q, p, in, dig, payload)

@@ -257,7 +257,7 @@ func TestDiscoveryFollowsThePerActorTable(t *testing.T) {
 	// it) is listed of the pull request tools. The coordination grant adds the issue writes.
 	want := []string{
 		"check_status", "comment_issue", "create_issue", "decide", "delegate", "follow_up", "forget", "get_issue", "get_verification", "list_dependabot_alerts", "loop_arm", "loop_list", "loop_stop", "note", "open_pull_request",
-		"pending_add", "pending_done", "project_context", "remember", "steer", "task_cancel", "task_get", "task_history", "task_hold", "task_list", "task_reassign", "task_retry", "task_transcript", "topic_open", "topics", "transcript_search", "watch_checks", "whoami",
+		"pending_add", "pending_done", "project_context", "remember", "steer", "supervisor_send", "task_cancel", "task_get", "task_history", "task_hold", "task_list", "task_reassign", "task_retry", "task_transcript", "topic_open", "topics", "transcript_search", "watch_checks", "whoami",
 	}
 	if got := h.list(t, mcpserver.PathOrdinary, main.Token); !slices.Equal(got, want) {
 		t.Errorf("main lists %v, want %v", got, want)

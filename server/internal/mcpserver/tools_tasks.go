@@ -26,7 +26,8 @@ func (s *Server) taskTools() []Tool {
 			Name: agentauth.ToolDelegate,
 			Description: "Create a durable task and scoped attempt. Reuse request_id for lost or uncertain responses. " +
 				"After a confirmed terminal blocked create, use a NEW request_id for a new create; reusing the old id " +
-				"returns the blocked operation. Role and tool guidance prefixes the brief. " +
+				"returns the blocked operation. Role and tool guidance prefixes the brief. Main does not delegate in a " +
+				"project (refused project_supervisor): it sends the work to the project's supervisor with supervisor_send. " +
 				"Choosing model and effort: match the tier to the task's scope, risk and reversibility, not habit. " +
 				"Mechanical or bounded, easily-reversible work takes the cheapest model and lowest effort likely to " +
 				"succeed; design, debugging, security-sensitive review, or anything hard to undo takes the strongest " +
@@ -175,7 +176,56 @@ func (s *Server) taskTools() []Tool {
 			}, "task_id", "request_id", "text"),
 			Handle: s.taskFollowUp,
 		},
+		{
+			Name: agentauth.ToolSupervisorSend,
+			Description: "Send work or a message to a project's standing supervisor, which delegates the project's " +
+				"work to workers and reviewers and reports back to you. Its first use starts the supervisor; one at " +
+				"rest wakes. The result names its task and session and says sent or queued. A supervisor still " +
+				"starting is refused supervisor_starting: send again with the same request_id. Reuse request_id to " +
+				"retry; follow_up, steer, task_get and task_transcript work on its task id as on any task.",
+			InputSchema: objectSchema(map[string]any{
+				"project_id": id,
+				"request_id": id,
+				"text":       stringSchema(1, tasks.MaxFollowUpChars),
+			}, "project_id", "request_id", "text"),
+			Handle: s.supervisorSend,
+		},
 	}
+}
+
+func (s *Server) supervisorSend(ctx context.Context, a agentauth.Actor, args json.RawMessage) (Result, error) {
+	var in struct {
+		ProjectID string `json:"project_id"`
+		RequestID string `json:"request_id"`
+		Text      string `json:"text"`
+	}
+	if err := decode(args, &in); err != nil {
+		return Result{}, err
+	}
+	var ss tasks.SupervisorSendInput
+	var err error
+	if ss.ProjectID, err = text(in.ProjectID, 1, 100); err != nil {
+		return Result{}, err
+	}
+	if ss.RequestID, err = text(in.RequestID, 1, 100); err != nil {
+		return Result{}, err
+	}
+	if ss.Text, err = text(in.Text, 1, tasks.MaxFollowUpChars); err != nil {
+		return Result{}, err
+	}
+	p, err := s.taskPrincipal(ctx, a)
+	if err != nil {
+		return Result{}, err
+	}
+	res, err := s.Tasks.SupervisorSend(ctx, p, ss)
+	if err != nil {
+		return Result{}, taskFailure(err)
+	}
+	line := fmt.Sprintf("message %s to the supervisor of project %s (task %s): %s", res.MessageID, ss.ProjectID, res.TaskID, res.How)
+	return Result{Text: line, Structured: map[string]any{
+		"project_id": ss.ProjectID, "task_id": res.TaskID, "attempt_id": res.AttemptID, "session_id": res.SessionID,
+		"message_id": res.MessageID, "delivery": res.How, "version": res.Version, "text": line,
+	}}, nil
 }
 
 func (s *Server) taskFollowUp(ctx context.Context, a agentauth.Actor, args json.RawMessage) (Result, error) {
@@ -267,6 +317,10 @@ func taskFailure(err error) error {
 	if errors.As(err, &r) {
 		reason := r.Reason
 		switch reason {
+		case tasks.ReasonProjectSupervisor:
+			reason += ": send project work to the project's standing supervisor with supervisor_send"
+		case tasks.ReasonSupervisorStarting:
+			reason += ": the project's supervisor is starting; send again with the same request_id in a minute"
 		case tasks.ReasonEnvironmentRequired:
 			reason += ": the owner must select a development environment on the project page (Environment section), then delegate again"
 		case tasks.ReasonModelUnavailable:

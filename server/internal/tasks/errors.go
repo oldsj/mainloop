@@ -65,6 +65,12 @@ const (
 	// ReasonStandingOutcome refuses a failed report from a standing supervisor, which never fails:
 	// it reports blocked instead.
 	ReasonStandingOutcome = "standing_outcome"
+	// ReasonProjectSupervisor refuses main's delegate in a project: project work goes to the
+	// project's standing supervisor (supervisor_send), which delegates it.
+	ReasonProjectSupervisor = "project_supervisor"
+	// ReasonSupervisorStarting refuses a supervisor_send whose supervisor has not been given its
+	// first brief yet; the same request_id is sent again a moment later.
+	ReasonSupervisorStarting = "supervisor_starting"
 	// Follow-up refusals; see [Service.FollowUp].
 	ReasonSessionGone       = "session_gone"
 	ReasonSessionArchived   = "session_archived"

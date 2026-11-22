@@ -38,6 +38,7 @@ const (
 	ToolTaskHold                  = "task_hold"
 	ToolSteer                     = "steer"
 	ToolFollowUp                  = "follow_up"
+	ToolSupervisorSend            = "supervisor_send"
 	ToolReport                    = "report"
 	ToolLoopArm                   = "loop_arm"
 	ToolLoopList                  = "loop_list"
@@ -59,7 +60,7 @@ var AllTools = []string{
 	ToolGetIssue, ToolCreateIssue, ToolCommentIssue, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
 	ToolProjectContext, ToolRemember, ToolForget,
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolTaskTranscript, ToolTranscriptSearch, ToolDelegate, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign,
-	ToolTaskHold, ToolSteer, ToolFollowUp, ToolReport, ToolLoopArm, ToolLoopList, ToolLoopStop,
+	ToolTaskHold, ToolSteer, ToolFollowUp, ToolSupervisorSend, ToolReport, ToolLoopArm, ToolLoopList, ToolLoopStop,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
 	ToolDevLeaseAcquire, ToolDevLeaseRelease, ToolDevSync, ToolDevStatus,
@@ -183,8 +184,9 @@ func (p Policy) actorTools(a Actor) []string {
 		tools = append(tools, taskRead...)
 		tools = append(tools, taskManagement...)
 		tools = append(tools, loopTools...)
-		// Only the main thread holds a task: it is the owner's view that a hold changes.
-		tools = append(tools, ToolTaskHold)
+		// Only the main thread holds a task: it is the owner's view that a hold changes. Only main
+		// sends to a project's standing supervisor: it is the top of the three layers.
+		tools = append(tools, ToolTaskHold, ToolSupervisorSend)
 	case (a.Role == dbstate.RoleSupervisor && a.Depth == 1) || (a.Role == dbstate.RoleChild && a.Depth == 2):
 		tools = append(tools, ToolWhoami, ToolReport)
 		tools = append(tools, taskRead...)

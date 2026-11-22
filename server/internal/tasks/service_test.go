@@ -209,7 +209,7 @@ func TestCreateIsIdempotent(t *testing.T) {
 	_, err = e.create(e.own, in)
 	wantRefusal(t, err, 409, tasks.ReasonPayloadConflict)
 	// The same request id from another principal is another request.
-	if _, err := e.create(tasks.Principal{OwnerID: owner, Role: dbstate.RoleMain, BindingID: "main-1"}, tasks.CreateInput{RequestID: "r1", ProjectID: "p1"}); err != nil {
+	if _, err := e.create(tasks.Principal{OwnerID: owner, Role: dbstate.RoleMain, BindingID: "main-1"}, tasks.CreateInput{RequestID: "r1"}); err != nil {
 		t.Fatal(err)
 	}
 	if n := e.count(`SELECT count(*) FROM tasks`); n != 2 {

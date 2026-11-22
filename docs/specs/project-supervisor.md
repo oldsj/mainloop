@@ -6,9 +6,9 @@ layers: main (one per owner), a standing supervisor per project, and its workers
 which cannot delegate. The design, and the slices still to come, are in
 [docs/design/project-supervisor.md](../design/project-supervisor.md).
 
-Status: **identity, rest and liveness implemented** (server and contract), not yet proven live.
-Not built yet: main routing work through it (`supervisor_send`), restart and recovery that
-keep its children, owner tasks under it, and per-project model settings.
+Status: **identity, rest, liveness and main's routing implemented** (server, contract and MCP
+tools), not yet proven live. Not built yet: restart and recovery that keep its children, owner
+tasks under it, and per-project model settings.
 
 ## What it is
 
@@ -44,6 +44,25 @@ keep its children, owner tasks under it, and per-project model settings.
 - Cancel, retry and reassign are refused, `409 standing_supervisor`, for the owner, main and any
   other caller, and its view says so: `actions.cancel`, `retry` and `reassign` are unavailable with
   reason `standing_supervisor`. `follow_up` is available as on any open task.
+
+## How main reaches it
+
+- `supervisor_send(project_id, request_id, text)`, an MCP tool only main has. It starts the
+  project's standing supervisor if it has none (as `POST /projects/{id}/supervisor` does) and sends
+  `text` to its session as `follow_up` does: labelled `[message from main]`, waking it from rest,
+  queued behind a turn that is open. The result names its task, attempt and session and says
+  `sent` or `queued`. The message id derives from main and `request_id`, so a retry never sends
+  twice.
+- A supervisor that is starting is waited on, up to 30 seconds, until its first brief is recorded,
+  so main's message never runs before the brief. Past that, the call is refused
+  `409 supervisor_starting` and main sends again under the same `request_id`.
+- Main's `delegate` with a `project_id` is refused `409 project_supervisor` (see
+  [delegation](delegation.md)); without one it still makes a root coordination task.
+- The line naming main's role in its first message says this (guidance v7): a project's work goes to
+  its supervisor with `supervisor_send`, `delegate` is for work outside any project. Main's existing
+  sessions get it with their next message.
+- Main uses `follow_up`, `steer`, `task_get` and `task_transcript` on the supervisor's task id as on
+  any task, and `task_list` shows it with `standing: true`.
 
 ## Its brief
 
