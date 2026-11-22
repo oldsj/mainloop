@@ -116,6 +116,16 @@ func TestDefaults(t *testing.T) {
 	if cfg.Tasks.ReconcileInterval.Duration() != 5*time.Second || cfg.WorkspaceDevelopmentPlatform != "linux/arm64" || cfg.EnvironmentFollowInterval.Duration() != time.Hour {
 		t.Errorf("tasks/platform defaults: %+v", cfg.Tasks)
 	}
+	if cfg.Tasks.MaxChildrenOverflow != 0 || cfg.Tasks.OverflowWait.Duration() != 15*time.Minute || cfg.Server.MetricsAddr != ":9100" {
+		t.Errorf("overflow/metrics defaults: %d %v %q", cfg.Tasks.MaxChildrenOverflow, cfg.Tasks.OverflowWait, cfg.Server.MetricsAddr)
+	}
+	if cfg.MetricsListenAddr() != ":9100" {
+		t.Errorf("metrics listen addr = %q", cfg.MetricsListenAddr())
+	}
+	if cfg, err := Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "MAINLOOP_METRICS_ADDR": "off", "TASK_MAX_CHILDREN_OVERFLOW": "2"}); err != nil ||
+		cfg.MetricsListenAddr() != "" || cfg.Tasks.MaxChildrenOverflow != 2 {
+		t.Errorf("metrics off, overflow 2: %v", err)
+	}
 	if cfg.Events.RetentionHours != 24 || cfg.Events.SubscriberBuffer != 64 || cfg.Events.PollInterval.Duration() != 5*time.Second {
 		t.Errorf("events defaults: %+v", cfg.Events)
 	}
@@ -191,6 +201,8 @@ func TestInvalidValues(t *testing.T) {
 		{"bad port", base("PORT", "70000"), "PORT"},
 		{"non-numeric port", base("DB_PORT", "abc"), "DB_PORT"},
 		{"zero children", base("TASK_MAX_CHILDREN_PER_PARENT", "0"), "TASK_MAX_CHILDREN"},
+		{"negative overflow", base("TASK_MAX_CHILDREN_OVERFLOW", "-1"), "TASK_MAX_CHILDREN_OVERFLOW"},
+		{"short overflow wait", base("TASK_OVERFLOW_WAIT_SECONDS", "30"), "TASK_OVERFLOW_WAIT_SECONDS"},
 		{"bad seconds", base("TASK_RECONCILE_SECONDS", "0"), "TASK_RECONCILE_SECONDS"},
 		{"zero provision window", base("TASK_PROVISION_WINDOW_SECONDS", "0"), "TASK_PROVISION_WINDOW_SECONDS"},
 		{"negative projection period", base("TASK_PROJECTION_SECONDS", "-5"), "TASK_PROJECTION_SECONDS"},

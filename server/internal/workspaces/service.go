@@ -16,6 +16,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/events"
@@ -378,7 +379,29 @@ func (s *Service) Touch(ctx context.Context, workspaceID string) error {
 // *RejectedError; one that is still in flight or failing transiently returns the workspace, and the
 // operation keeps retrying.
 func (s *Service) Create(ctx context.Context, body api.CreateWorkspaceRequest) (api.WorkspaceLifecycle, error) {
-	return s.create(ctx, body, uuid.NewString())
+	return s.create(ctx, body, uuid.NewString(), createOptions{})
+}
+
+// CreateOption adjusts a workspace create made by another service.
+type CreateOption func(*createOptions)
+
+type createOptions struct {
+	agent *config.AgentRef
+}
+
+// OptionAgent is the Agent a set of create options names, or nil: for a fake of the create.
+func OptionAgent(opts ...CreateOption) *config.AgentRef {
+	var o createOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o.agent
+}
+
+// WithAgent runs the workspace on agent instead of its profile's workspace Agent: a task attempt
+// passes the Agent it recorded, such as the overflow pool's (docs/specs/tasks.md#capacity).
+func WithAgent(agent config.AgentRef) CreateOption {
+	return func(o *createOptions) { o.agent = &agent }
 }
 
 // CreateWithRequestID is [Service.Create] made idempotent on the caller's request id, a UUID. A
@@ -387,7 +410,9 @@ func (s *Service) Create(ctx context.Context, body api.CreateWorkspaceRequest) (
 // sees, so no second Session can exist either. The body of a repeat is not compared. A workspace
 // that has since been deleted is gone; the same id then makes a new one, which kagent refuses as it
 // does any replay of a deleted Session.
-func (s *Service) CreateWithRequestID(ctx context.Context, requestID string, body api.CreateWorkspaceRequest) (api.WorkspaceLifecycle, error) {
+//
+// A [WithAgent] option runs the workspace on that Agent instead of the profile's workspace Agent.
+func (s *Service) CreateWithRequestID(ctx context.Context, requestID string, body api.CreateWorkspaceRequest, opts ...CreateOption) (api.WorkspaceLifecycle, error) {
 	id, err := uuid.Parse(requestID)
 	if err != nil {
 		return api.WorkspaceLifecycle{}, &InvalidError{"request id must be a UUID"}
@@ -396,7 +421,11 @@ func (s *Service) CreateWithRequestID(ctx context.Context, requestID string, bod
 	if w, err := s.repeat(ctx, requestID); !errors.Is(err, ErrNotFound) {
 		return w, err
 	}
-	w, err := s.create(ctx, body, requestID)
+	var o createOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	w, err := s.create(ctx, body, requestID, o)
 	if isRequestIDTaken(err) {
 		return s.repeat(ctx, requestID)
 	}
@@ -450,10 +479,13 @@ func isRequestIDTaken(err error) bool {
 	return errors.As(err, &pg) && pg.Code == "23505" && pg.ConstraintName == "workspaces_request_id_key"
 }
 
-func (s *Service) create(ctx context.Context, body api.CreateWorkspaceRequest, requestID string) (api.WorkspaceLifecycle, error) {
+func (s *Service) create(ctx context.Context, body api.CreateWorkspaceRequest, requestID string, o createOptions) (api.WorkspaceLifecycle, error) {
 	p, err := s.plan(ctx, body)
 	if err != nil {
 		return api.WorkspaceLifecycle{}, err
+	}
+	if o.agent != nil {
+		p.insert.AgentNamespace, p.insert.AgentName = o.agent.Namespace, o.agent.Name
 	}
 	p.insert.RequestID = requestID
 	var op dbq.WorkspaceOp

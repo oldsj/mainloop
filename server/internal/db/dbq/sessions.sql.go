@@ -2823,6 +2823,35 @@ func (q *Queries) ReplaceDeliveryKagentSession(ctx context.Context, arg ReplaceD
 	return result.RowsAffected(), nil
 }
 
+const requeueDeliveryForCapacity = `-- name: RequeueDeliveryForCapacity :execrows
+UPDATE deliveries
+SET state = 'recorded', detail = $4, updated_at = now()
+WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state = 'sending' AND task_id IS NULL
+`
+
+type RequeueDeliveryForCapacityParams struct {
+	ID         string
+	LeaseOwner *string
+	Attempts   int32
+	Detail     *string
+}
+
+// Puts back a send kagent refused (nothing was sent) while its task waits for runtime capacity:
+// the row is recorded again and the next claim sends it again. Fenced on the claim; the caller
+// returns RetryAfter, which releases the lease and makes the row due later.
+func (q *Queries) RequeueDeliveryForCapacity(ctx context.Context, arg RequeueDeliveryForCapacityParams) (int64, error) {
+	result, err := q.db.Exec(ctx, requeueDeliveryForCapacity,
+		arg.ID,
+		arg.LeaseOwner,
+		arg.Attempts,
+		arg.Detail,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const resolveCreate = `-- name: ResolveCreate :execrows
 UPDATE agent_bindings b
 SET kagent_create_request_id = NULL, kagent_create_agent_namespace = NULL, kagent_create_agent_name = NULL,

@@ -35,7 +35,7 @@ func (s *Service) Smoke(ctx context.Context, projectID string, branch *string) (
 		if err != nil {
 			return err
 		}
-		out.GlobalCapacityAvailable = int(held) < s.MaxChildrenGlobal
+		out.GlobalCapacityAvailable = int(held) < s.MaxChildrenGlobal+max(s.MaxChildrenOverflow, 0)
 
 		deliveries, err := q.ListSmokeDeliveries(ctx, dbq.ListSmokeDeliveriesParams{UserID: s.OwnerID, ProjectID: &projectID})
 		if err != nil {

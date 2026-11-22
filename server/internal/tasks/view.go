@@ -64,10 +64,12 @@ func toTask(t dbq.Task) (api.Task, error) {
 	if err != nil {
 		return api.Task{}, err
 	}
+	tier := api.TaskCapacityTier(t.CapacityTier)
 	out := api.Task{
 		AcceptedEnvironment: env,
 		AssignedProfileId:   t.AssignedProfileID,
 		Brief:               t.Brief,
+		CapacityTier:        &tier,
 		CreatedAt:           t.CreatedAt,
 		CreatorBindingId:    t.CreatorBindingID,
 		CurrentAttemptId:    t.CurrentAttemptID,
@@ -83,6 +85,7 @@ func toTask(t dbq.Task) (api.Task, error) {
 		ProviderConstraint:  t.ProviderConstraint,
 		Reason:              reasonOf[api.TaskReason](t.Reason),
 		RootTaskId:          t.RootTaskID,
+		RuntimeWaitSince:    t.RuntimeWaitSince,
 		SelectionSource:     api.TaskSelectionSource(t.SelectionSource),
 		Status:              api.TaskStatus(t.Status),
 		Title:               t.Title,

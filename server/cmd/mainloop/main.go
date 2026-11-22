@@ -27,6 +27,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/kagent"
+	"github.com/oldsj/mainloop/server/internal/metrics"
 	"github.com/oldsj/mainloop/server/internal/notify"
 	"github.com/oldsj/mainloop/server/internal/preview"
 	"github.com/oldsj/mainloop/server/internal/progress"
@@ -96,7 +97,7 @@ func usage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: mainloop <command>
 
 commands:
-  serve-api       owner API on :8000
+  serve-api       owner API on :8000, Prometheus metrics on :9100 (MAINLOOP_METRICS_ADDR)
   serve-mcp       MCP listener on :8002
   serve-git       git transport: upload-pack on :8003, validated receive-pack on :8004
   migrate         up | status | reset the database schema
@@ -313,6 +314,14 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	g.Go(func() error { return source.Run(gctx) })
 	g.Go(func() error { return runner.Run(gctx) })
 	g.Go(func() error { return httpx.Serve(gctx, log, "api", cfg.ListenAddr(), handler) })
+	if addr := cfg.MetricsListenAddr(); addr != "" {
+		// Only serve-api serves metrics: the processes share a pod, and the values come from the
+		// database whichever process wrote them.
+		m := &metrics.Handler{Pool: pool, Log: log, Limits: metrics.Limits{
+			Base: cfg.Tasks.MaxChildrenGlobal, Overflow: cfg.Tasks.MaxChildrenOverflow,
+		}}
+		g.Go(func() error { return httpx.Serve(gctx, log, "metrics", addr, m) })
+	}
 	return g.Wait()
 }
 

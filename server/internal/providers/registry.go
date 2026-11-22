@@ -143,12 +143,21 @@ var (
 func builtins(k config.Kagent) []config.ProviderProfile {
 	ref := func(name string) config.AgentRef { return config.AgentRef{Namespace: k.Namespace, Name: name} }
 	build := func(
-		kind, display, main, supervisor, child, workspace string,
+		kind, display, main, supervisor, child, workspace, overflow string,
 		models []config.ProviderModel, defaultModel string, effortLevels []string, defaultEffort string,
 	) config.ProviderProfile {
 		caps := make([]config.CapabilityResult, len(Capabilities))
 		for i, name := range Capabilities {
 			caps[i] = config.CapabilityResult{Capability: name, State: "unknown", Scope: "unverified"}
+		}
+		agents := map[string]config.AgentRef{
+			"main":       ref(main),
+			"supervisor": ref(supervisor),
+			"child":      ref(child),
+			"agent":      ref(workspace),
+		}
+		if overflow != "" {
+			agents[config.AgentOverflowRole] = ref(overflow)
 		}
 		return config.ProviderProfile{
 			ID:                    kind,
@@ -156,25 +165,20 @@ func builtins(k config.Kagent) []config.ProviderProfile {
 			RuntimeAdapter:        "kagent",
 			NativeProvider:        kind,
 			ConfigurationRevision: "native-v1",
-			Agents: map[string]config.AgentRef{
-				"main":       ref(main),
-				"supervisor": ref(supervisor),
-				"child":      ref(child),
-				"agent":      ref(workspace),
-			},
-			Aliases:       []string{},
-			Enabled:       true,
-			Capabilities:  caps,
-			Models:        models,
-			DefaultModel:  defaultModel,
-			EffortLevels:  effortLevels,
-			DefaultEffort: defaultEffort,
+			Agents:                agents,
+			Aliases:               []string{},
+			Enabled:               true,
+			Capabilities:          caps,
+			Models:                models,
+			DefaultModel:          defaultModel,
+			EffortLevels:          effortLevels,
+			DefaultEffort:         defaultEffort,
 		}
 	}
 	return []config.ProviderProfile{
-		build(config.NativeClaude, "Claude Code", k.MainAgent, k.SupervisorClaudeAgent, k.ClaudeAgent, k.WorkspaceClaudeAgent,
+		build(config.NativeClaude, "Claude Code", k.MainAgent, k.SupervisorClaudeAgent, k.ClaudeAgent, k.WorkspaceClaudeAgent, k.WorkspaceClaudeOverflowAgent,
 			claudeModels, claudeModels[0].ID, claudeEffortLevels, "medium"),
-		build(config.NativeCodex, "Codex", k.MainCodexAgent, k.SupervisorCodexAgent, k.CodexAgent, k.WorkspaceCodexAgent,
+		build(config.NativeCodex, "Codex", k.MainCodexAgent, k.SupervisorCodexAgent, k.CodexAgent, k.WorkspaceCodexAgent, k.WorkspaceCodexOverflowAgent,
 			codexModels, codexModels[0].ID, codexEffortLevels, "medium"),
 	}
 }

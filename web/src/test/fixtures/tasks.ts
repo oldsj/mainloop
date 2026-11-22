@@ -36,6 +36,8 @@ export function task(overrides: Partial<Task> = {}): Task {
     effort: null,
     held_until: null,
     held_reason: null,
+    capacity_tier: 'base',
+    runtime_wait_since: null,
     selection_source: 'explicit',
     provider_constraint: null,
     accepted_environment: null,

@@ -306,6 +306,68 @@ WHERE t.owner_id = $1 AND t.parent_task_id IS NOT NULL
   AND (EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id AND a.capacity_held)
        OR (t.status NOT IN ('completed', 'failed', 'cancelled') AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id)));
 
+-- CountAllGlobalCapacity is CountGlobalCapacity summed over every owner, for the metrics endpoint.
+-- name: CountAllGlobalCapacity :one
+SELECT count(*) FROM tasks t
+WHERE t.parent_task_id IS NOT NULL
+  AND (EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id AND a.capacity_held)
+       OR (t.status NOT IN ('completed', 'failed', 'cancelled') AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id)));
+
+-- Overflow tier. SetTaskCapacityTier records the tier of an admission in its transaction: an
+-- overflow task starts waiting for runtime capacity now, a base one does not wait.
+-- name: SetTaskCapacityTier :exec
+UPDATE tasks
+SET capacity_tier = sqlc.arg(capacity_tier)::text,
+    runtime_wait_since = CASE WHEN sqlc.arg(capacity_tier)::text = 'overflow' THEN now() END
+WHERE id = sqlc.arg(id);
+
+-- RestartTaskRuntimeWait starts the wait again for an overflow task's new attempt, which needs a
+-- runtime of its own.
+-- name: RestartTaskRuntimeWait :exec
+UPDATE tasks SET runtime_wait_since = now()
+WHERE id = $1 AND capacity_tier = 'overflow' AND status NOT IN ('completed', 'failed', 'cancelled');
+
+-- name: CountRuntimeWaiting :one
+SELECT count(*) FROM tasks
+WHERE runtime_wait_since IS NOT NULL AND status NOT IN ('completed', 'failed', 'cancelled');
+
+-- ListRuntimeWaits is the runtime-wait sweep's work: each waiting task, whether kagent has
+-- accepted a message for its current attempt since the wait began (a delivery with a kagent task
+-- id), and whether the wait has run past the window.
+-- name: ListRuntimeWaits :many
+SELECT t.id, t.current_attempt_id, t.runtime_wait_since::timestamptz AS wait_since,
+       EXISTS (
+           SELECT 1 FROM task_attempts a JOIN deliveries d ON d.session_id = a.session_id
+           WHERE a.id = t.current_attempt_id AND d.task_id IS NOT NULL AND d.created_at >= t.runtime_wait_since
+       )::boolean AS accepted,
+       (t.runtime_wait_since < now() - make_interval(secs => sqlc.arg(window_seconds)::float8))::boolean AS expired
+FROM tasks t
+WHERE t.runtime_wait_since IS NOT NULL AND t.status NOT IN ('completed', 'failed', 'cancelled')
+ORDER BY t.runtime_wait_since, t.id
+LIMIT sqlc.arg(row_limit);
+
+-- ClearTaskRuntimeWait ends a wait, only if it is still the same one.
+-- name: ClearTaskRuntimeWait :one
+UPDATE tasks SET runtime_wait_since = NULL, updated_at = now()
+WHERE id = $1 AND runtime_wait_since = $2
+RETURNING *;
+
+-- SessionAwaitsRuntimeCapacity is whether a session is the current, active attempt of a task that
+-- is waiting for runtime capacity, so a send kagent refused is tried again rather than failed.
+-- name: SessionAwaitsRuntimeCapacity :one
+SELECT EXISTS (
+    SELECT 1 FROM tasks t JOIN task_attempts a ON a.id = t.current_attempt_id
+    WHERE a.session_id = $1 AND a.state = 'active' AND a.stop_state = 'none'
+      AND t.runtime_wait_since IS NOT NULL AND t.status NOT IN ('completed', 'failed', 'cancelled')
+)::boolean;
+
+-- name: NoteCapacityRefusal :exec
+INSERT INTO task_capacity_refusals (reason, total) VALUES ($1, 1)
+ON CONFLICT (reason) DO UPDATE SET total = task_capacity_refusals.total + 1;
+
+-- name: ListCapacityRefusals :many
+SELECT reason, total FROM task_capacity_refusals ORDER BY reason;
+
 -- Writer claims. A task claim is keyed by its attempt and leaves binding_id empty.
 
 -- name: ClaimTaskWriter :one

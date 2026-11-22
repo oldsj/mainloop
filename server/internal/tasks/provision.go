@@ -26,7 +26,7 @@ const OpChannel = "mainloop_task_ops"
 
 // WorkspaceRuntime is the part of [workspaces.Service] provisioning uses.
 type WorkspaceRuntime interface {
-	CreateWithRequestID(ctx context.Context, requestID string, body api.CreateWorkspaceRequest) (api.WorkspaceLifecycle, error)
+	CreateWithRequestID(ctx context.Context, requestID string, body api.CreateWorkspaceRequest, opts ...workspaces.CreateOption) (api.WorkspaceLifecycle, error)
 	Delete(ctx context.Context, id string) error
 }
 
@@ -66,6 +66,7 @@ func (s *Service) Register(r *reconcile.Runner) {
 	r.AddSweep(s.ProjectionSweep())
 	r.AddSweep(s.LivenessSweep())
 	r.AddSweep(s.HoldSweep())
+	r.AddSweep(s.RuntimeWaitSweep())
 }
 
 // OpTable is the table of operations the loop drives. A code task's retry or reassign without
@@ -180,9 +181,15 @@ func shapeOf(t dbq.Task) attemptShape {
 }
 
 // agentOf is the kagent Agent that runs an attempt: the workspace Agent for code, otherwise the
-// profile's Agent for the attempt's role.
-func agentOf(prof config.ProviderProfile, shape attemptShape, mode dbstate.TaskMode) (config.AgentRef, error) {
+// profile's Agent for the attempt's role. A code child given an overflow slot runs on the
+// profile's agent-overflow Agent when it has one, so it is placed on the overflow worker pool.
+func agentOf(prof config.ProviderProfile, shape attemptShape, mode dbstate.TaskMode, tier string) (config.AgentRef, error) {
 	key := agentKey(shape, mode)
+	if key == string(dbstate.RoleAgent) && shape.role == dbstate.AttemptChild && tier == tierOverflow {
+		if ref, ok := prof.Agents[config.AgentOverflowRole]; ok {
+			return ref, nil
+		}
+	}
 	ref, ok := prof.Agents[key]
 	if !ok {
 		return ref, fmt.Errorf("provider %q has no %q Agent", prof.ID, key)
@@ -265,7 +272,7 @@ func (s *Service) insertAttempt(ctx context.Context, q *dbq.Queries, t dbq.Task,
 	if err != nil {
 		return dbq.TaskAttempt{}, err
 	}
-	agent, err := agentOf(prof, shape, t.Mode)
+	agent, err := agentOf(prof, shape, t.Mode, t.CapacityTier)
 	if err != nil {
 		return dbq.TaskAttempt{}, err
 	}
@@ -300,6 +307,12 @@ func (s *Service) insertAttempt(ctx context.Context, q *dbq.Queries, t dbq.Task,
 	att, err := q.InsertTaskAttempt(ctx, a)
 	if err != nil {
 		return dbq.TaskAttempt{}, err
+	}
+	if predecessor != nil {
+		// A successor needs a runtime of its own: an overflow task waits for capacity again.
+		if err := q.RestartTaskRuntimeWait(ctx, t.ID); err != nil {
+			return dbq.TaskAttempt{}, err
+		}
 	}
 	if t.Mode == dbstate.TaskModeCode {
 		gen, err := q.ClaimTaskWriter(ctx, dbq.ClaimTaskWriterParams{
@@ -495,7 +508,10 @@ func (s *Service) makeWorkspace(ctx context.Context, c reconcile.Claim, op dbq.T
 			d := int(*t.CheckoutDepth)
 			req.Depth = &d
 		}
-		lc, cerr := s.Workspaces.CreateWithRequestID(ctx, *a.WorkspaceRequestID, req)
+		// The workspace runs on the Agent the attempt recorded: an overflow child's may be the
+		// overflow pool's (see [agentOf]).
+		lc, cerr := s.Workspaces.CreateWithRequestID(ctx, *a.WorkspaceRequestID, req,
+			workspaces.WithAgent(config.AgentRef{Namespace: a.AgentNamespace, Name: a.AgentName}))
 		var rej *workspaces.RejectedError
 		if errors.As(cerr, &rej) {
 			out, err = s.abort(ctx, c, op, a, "workspace was refused: "+rej.Detail)
