@@ -1,11 +1,12 @@
 /**
  * The explorer's data and its two actions. Reads reuse the queries the pages use, so SSE
- * invalidation reaches the tree without a second map. Opening a row and asking Mainloop both leave
- * the tree's tab, so on the phone the page or the composer shows in the chat pane.
+ * invalidation reaches the lists without a second map. Opening a row and asking Mainloop both leave
+ * the phone's list, so the page or the composer shows in its place.
  */
 import { useLocation, useNavigate } from '@tanstack/react-router';
 import { useEffect, useMemo } from 'react';
 import { attentionItems } from '@/features/inbox/model';
+import { needsTotal, ownerWork, problemTotal } from '@/features/inbox/ownerWork';
 import { useAttention } from '@/features/inbox/queries';
 import { useAttentionPoll } from '@/features/inbox/poll';
 import { keepValid, projectRowSchema } from '@/features/projects/model';
@@ -13,28 +14,24 @@ import { useProjects } from '@/features/projects/queries';
 import { useSchedules } from '@/features/schedules/queries';
 import { useWorkspaces } from '@/features/sessions/queries';
 import { useOwnerTaskPoll, useTaskList } from '@/features/tasks/queries';
-import { useConnection } from '@/shell/ConnectionBanner';
 import { currentAttempt } from '@/lib/taskState';
 import { buildAgentColumn, spaceOfPage, type AgentColumnModel } from './agents';
-import {
-  buildExplorer,
-  prStage,
-  targetOfLocation,
-  type ExplorerNode,
-  type ExplorerSource,
-  type Target
-} from './model';
+import { prStage, targetOfLocation, type ExplorerSource, type Target } from './model';
 import { useSeen } from './seen';
 
-/** `lastVisit` is the shell's baseline for "Since you were here"; without it the group is left out. */
-export function useExplorer(lastVisit: number | null = null): {
-  nodes: ExplorerNode[];
+/**
+ * What the shell keeps up while it is on screen: the two polls, the mark that a task has been looked
+ * at, and the two counts every badge shows (what needs the owner, and what Mainloop is handling).
+ */
+export function useExplorer(): {
+  needs: number;
+  problems: number;
   ready: boolean;
   failed: boolean;
 } {
-  // The tree is the owner's view of attention, so it polls while it is on screen.
+  // The shell is the owner's view of attention, so it polls while it is on screen.
   useAttentionPoll();
-  // Owner tasks poll the same way, so a task that stops needing the owner leaves the tree on its own.
+  // Owner tasks poll the same way, so a task that stops needing the owner leaves the lists on its own.
   useOwnerTaskPoll(true);
   const tasks = useTaskList();
 
@@ -65,16 +62,17 @@ export function useExplorer(lastVisit: number | null = null): {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openId, markKey, mark, seen]);
 
-  const { source, ready, failed } = useExplorerSource(lastVisit);
-  const nodes = useMemo(() => buildExplorer(source), [source]);
-  return { nodes, ready, failed };
+  const { source, ready, failed } = useExplorerSource();
+  // The same list the Inbox draws, so the counts here and the rows there always agree.
+  const work = useMemo(() => ownerWork(source.attention, source.tasks), [source]);
+  return { needs: needsTotal(work), problems: problemTotal(work), ready, failed };
 }
 
 /**
- * What the tree and the agent column are both built from: the reads the pages already make, so a
- * second caller costs no request. It does not poll; the shell's explorer does.
+ * What the agent column and the command palette are both built from: the reads the pages already
+ * make, so a second caller costs no request. It does not poll; the shell's explorer does.
  */
-export function useExplorerSource(lastVisit: number | null = null): {
+export function useExplorerSource(): {
   source: ExplorerSource;
   ready: boolean;
   failed: boolean;
@@ -84,7 +82,6 @@ export function useExplorerSource(lastVisit: number | null = null): {
   const workspaces = useWorkspaces();
   const projects = useProjects();
   const schedules = useSchedules();
-  const online = useConnection().status !== 'offline';
   const { seen } = useSeen();
   const source = useMemo(
     (): ExplorerSource => ({
@@ -94,20 +91,9 @@ export function useExplorerSource(lastVisit: number | null = null): {
       workspaces: workspaces.data ?? [],
       projects: keepValid(projects.data, projectRowSchema),
       schedules: schedules.data?.pages.flatMap((page) => page.items) ?? [],
-      online,
-      lastVisit,
       seen
     }),
-    [
-      tasks.data,
-      attention.data,
-      workspaces.data,
-      projects.data,
-      schedules.data,
-      online,
-      lastVisit,
-      seen
-    ]
+    [tasks.data, attention.data, workspaces.data, projects.data, schedules.data, seen]
   );
   return {
     source,
@@ -139,12 +125,12 @@ export function useAgentColumn(): AgentColumnState {
   return { model, page, space };
 }
 
-/** Navigation helpers for the tree. Each returns a function, so the tree can call it on a key or click. */
+/** Navigation helpers for the lists. Each returns a function, so a row can call it on a key or click. */
 export function useOpenTarget() {
   const navigate = useNavigate();
   return (target: Target) => {
-    // Each move starts the search afresh (the root keeps `?view=`), so the explorer tab is left and a
-    // phone shows the page in the chat pane.
+    // Each move starts the search afresh (the root keeps `?view=`), so the phone's list is put away
+    // and the page shows.
     switch (target.to) {
       case 'chat':
         void navigate({ to: '/', search: {} });
@@ -180,7 +166,7 @@ export function useOpenTarget() {
   };
 }
 
-/** Puts `text` in the main composer, unsent, and leaves the explorer tab. */
+/** Puts `text` in the main composer, unsent, and puts the phone's list away. */
 export function useAsk() {
   const navigate = useNavigate();
   return (text: string) =>

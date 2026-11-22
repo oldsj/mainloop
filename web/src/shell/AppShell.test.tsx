@@ -575,7 +575,7 @@ describe('home work placement', () => {
     });
     server.use(
       tasksList(() => HttpResponse.json([failed])),
-      // Opening the failed task from "Since you were here" reads this task directly.
+      // Opening the failed task reads this task directly.
       taskRead(() => HttpResponse.json(failed))
     );
   }
@@ -641,20 +641,6 @@ describe('home work placement', () => {
     // Not again as the page settles: a second record would make "the visit before" this one.
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(testSeen.visits).toBe(1);
-  });
-
-  it('shows nothing as changed on the owner’s first visit, which has no visit before it', async () => {
-    setViewport(true);
-    const failed = view({
-      id: 'fail-1',
-      title: 'Broke',
-      status: 'failed',
-      updated_at: failedNow()
-    });
-    server.use(tasksList(() => HttpResponse.json([failed])));
-    await renderAt('/');
-    await waitFor(() => expect(testSeen.visits).toBe(1));
-    expect(screen.queryByRole('treeitem', { name: /Since you were here/ })).toBeNull();
   });
 });
 

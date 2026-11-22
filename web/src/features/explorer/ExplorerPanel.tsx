@@ -1,29 +1,17 @@
-import { SkeletonRows } from '@/components/shared/skeleton';
-import { useLocation } from '@tanstack/react-router';
 import { PanelLeftClose } from 'lucide-react';
-import {
-  useCallback,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type PointerEvent,
-  type ReactNode
-} from 'react';
+import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { sidebarShortcutLabel } from '@/lib/platform';
-import { needsCount, targetOfLocation, type ExplorerNode } from './model';
 import {
   WIDTH_MAX,
   WIDTH_MIN,
   clampWidth,
-  isExpanded,
   readPrefs,
   writePrefs,
   type ExplorerPrefs
 } from './prefs';
-import { ExplorerTree } from './ExplorerTree';
 import { AgentColumn } from './AgentColumn';
-import { useAsk, useExplorer, useOpenTarget, type AgentColumnState } from './useExplorer';
+import { useAsk, useOpenTarget, type AgentColumnState } from './useExplorer';
 
 /** Arrow-key step on the resize handle, in pixels. */
 const RESIZE_STEP = 16;
@@ -41,20 +29,6 @@ export function useExplorerPrefs() {
   return { prefs, update };
 }
 
-function useTree(update: ReturnType<typeof useExplorerPrefs>['update']) {
-  const open = useOpenTarget();
-  const ask = useAsk();
-  const toggle = useCallback(
-    (id: string) =>
-      update((prev) => ({
-        ...prev,
-        expanded: { ...prev.expanded, [id]: !isExpanded(prev, id) }
-      })),
-    [update]
-  );
-  return { open, ask, toggle };
-}
-
 /** Desktop only: folds the sidebar away; the tab strip's button or the shortcut brings it back. */
 function HideSidebar({ onClick }: { onClick: () => void }) {
   return (
@@ -68,77 +42,6 @@ function HideSidebar({ onClick }: { onClick: () => void }) {
     >
       <PanelLeftClose aria-hidden="true" />
     </Button>
-  );
-}
-
-interface BodyProps {
-  nodes: ExplorerNode[];
-  ready: boolean;
-  failed: boolean;
-  prefs: ExplorerPrefs;
-  onToggle: (id: string) => void;
-  onOpen: ReturnType<typeof useOpenTarget>;
-  onAsk: (text: string) => void;
-  /** The panel's heading. */
-  title: string;
-  /** Phone only: controls at the end of the header (health and the theme). */
-  actions?: ReactNode;
-}
-
-/** The header and the tree: the phone's pane. */
-function ExplorerBody({
-  nodes,
-  ready,
-  failed,
-  prefs,
-  onToggle,
-  onOpen,
-  onAsk,
-  title,
-  actions
-}: BodyProps) {
-  // The row for the page being shown is marked, so the tree says where the owner is.
-  const current = useLocation({
-    select: (location) => targetOfLocation(location.pathname, location.search),
-    structuralSharing: true
-  });
-  return (
-    <section aria-labelledby="explorer-heading" className="flex min-h-0 flex-1 flex-col">
-      <header className="gap-sm px-md py-xs border-border-subtle flex items-center justify-between border-b">
-        <h2
-          id="explorer-heading"
-          className="text-muted-foreground text-2xs font-medium tracking-wide uppercase"
-        >
-          {title}
-        </h2>
-        {actions ? <div className="gap-xs flex items-center">{actions}</div> : null}
-      </header>
-      <div className="p-xs min-h-0 flex-1 overflow-y-auto">
-        {failed ? (
-          <p role="alert" className="px-xs py-sm text-term-red text-sm">
-            Couldn’t load the explorer. It fills in when the next read succeeds.
-          </p>
-        ) : !ready ? (
-          // Rows in the tree's own shape, so nothing jumps when it arrives. The line is for a screen
-          // reader; the rows are hidden from it.
-          <>
-            <p role="status" className="sr-only">
-              Loading Mainloop…
-            </p>
-            <SkeletonRows rows={8} testId="explorer-loading" />
-          </>
-        ) : (
-          <ExplorerTree
-            nodes={nodes}
-            isExpanded={(id) => isExpanded(prefs, id)}
-            onToggle={onToggle}
-            onOpen={onOpen}
-            onAsk={onAsk}
-            current={current}
-          />
-        )}
-      </div>
-    </section>
   );
 }
 
@@ -245,39 +148,4 @@ export function ExplorerSidebar({
       {/* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
     </aside>
   );
-}
-
-/** Phone: the same tree, full width, in the Explorer tab. */
-export function ExplorerPane({
-  lastVisit = null,
-  title = 'Explorer',
-  actions
-}: {
-  lastVisit?: number | null;
-  /** The pane's heading: the tab's own label. */
-  title?: string;
-  /** Controls at the end of the header: health and the theme, which have no header of their own on a phone. */
-  actions?: ReactNode;
-}) {
-  const { prefs, update } = useExplorerPrefs();
-  const { nodes, ready, failed } = useExplorer(lastVisit);
-  const { open, ask, toggle } = useTree(update);
-  return (
-    <ExplorerBody
-      nodes={nodes}
-      ready={ready}
-      failed={failed}
-      prefs={prefs}
-      onToggle={toggle}
-      onOpen={open}
-      onAsk={ask}
-      title={title}
-      actions={actions}
-    />
-  );
-}
-
-/** The Needs-you count the Explorer tab shows. Shares the explorer's read, so the number matches the tree. */
-export function useNeedsCount(): number {
-  return needsCount(useExplorer().nodes);
 }

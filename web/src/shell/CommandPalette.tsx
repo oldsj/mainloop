@@ -3,7 +3,7 @@ import { Search } from 'lucide-react';
 import { Dialog } from 'radix-ui';
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { cn } from '@/components/ui/cn';
-import { useAsk, useExplorer, useOpenTarget } from '@/features/explorer';
+import { useAsk, useExplorerSource, useOpenTarget } from '@/features/explorer';
 import { isApplePlatform } from '@/lib/platform';
 import { filterItems, paletteItems, type PaletteItem } from './palette';
 import { useTheme } from './themes';
@@ -11,16 +11,14 @@ import { useTheme } from './themes';
 export interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** The shell's baseline for "Since you were here", passed on to the explorer's read. */
-  lastVisit: number | null;
 }
 
 /**
  * The command palette: one field that jumps to any task, session, project, schedule or page, changes
  * the theme, or asks Mainloop. It opens with ⌘K on a Mac and Ctrl+K elsewhere (the shell owns the
- * shortcut), and lists the same things the explorer does.
+ * shortcut), and is built from the same reads as the sidebar.
  */
-export function CommandPalette({ open, onOpenChange, lastVisit }: CommandPaletteProps) {
+export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   // The palette is opened from state, so Radix has no trigger to return focus to. Remember what had
   // focus and return there, unless running an item moved the owner to another page.
   const opener = useRef<HTMLElement | null>(null);
@@ -42,16 +40,17 @@ export function CommandPalette({ open, onOpenChange, lastVisit }: CommandPalette
           className="inset-x-md border-border bg-popover text-popover-foreground fixed top-24 z-50 mx-auto flex max-h-[70dvh] max-w-xl flex-col rounded-none border font-sans"
         >
           <Dialog.Title className="sr-only">Search and commands</Dialog.Title>
-          <PaletteBody lastVisit={lastVisit} close={() => onOpenChange(false)} />
+          <PaletteBody close={() => onOpenChange(false)} />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
   );
 }
 
-/** Mounted only while the palette is open, so its read and its state start fresh each time. */
-function PaletteBody({ lastVisit, close }: { lastVisit: number | null; close: () => void }) {
-  const { nodes } = useExplorer(lastVisit);
+/** Mounted only while the palette is open, so its state starts fresh each time. */
+function PaletteBody({ close }: { close: () => void }) {
+  // The shell's explorer keeps these reads fresh; the palette only lists what they hold.
+  const { source } = useExplorerSource();
   const openTarget = useOpenTarget();
   const ask = useAsk();
   const navigate = useNavigate();
@@ -60,7 +59,7 @@ function PaletteBody({ lastVisit, close }: { lastVisit: number | null; close: ()
   const [picked, setPicked] = useState(0);
   const listId = useId();
 
-  const items = useMemo(() => paletteItems(nodes), [nodes]);
+  const items = useMemo(() => paletteItems(source), [source]);
   const shown = useMemo(() => filterItems(items, query), [items, query]);
   // The list changes under the highlight as the owner types or data arrives; keep it on a real row.
   const active = Math.min(picked, Math.max(0, shown.length - 1));

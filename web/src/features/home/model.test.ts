@@ -1,13 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { TaskView } from '@/lib/contract';
 import { NOW, projection, view } from '@/test/fixtures/tasks';
-import { countText, isIdle, sinceCounts, statusLine, workGroup } from './model';
+import { countText, isIdle, statusLine, workGroup } from './model';
 
 const MIN = 60_000;
 const at = (minutesBeforeNow: number) => new Date(NOW - minutesBeforeNow * MIN).toISOString();
 const LAST_VISIT = NOW - 60 * MIN; // the owner was last here an hour ago
-
-const viewIds = (views: TaskView[]) => views.map((view) => view.task.id);
 
 describe('workGroup', () => {
   it('counts a running task as current work, never as idle', () => {
@@ -121,40 +118,6 @@ describe('a standing supervisor at rest', () => {
 
   it('reads Idle, not Waiting', () => {
     expect(statusLine(idle)).toBe('Idle');
-  });
-});
-
-describe('sinceCounts', () => {
-  it('counts merged, failed and waiting tasks that changed since the visit, newest first', () => {
-    const views = [
-      view(
-        { id: 'merged-new', status: 'completed', updated_at: at(5) },
-        {
-          projection: projection({ merge_state: 'merged', pr_state: 'merged' })
-        }
-      ),
-      view(
-        { id: 'merged-old', status: 'completed', updated_at: at(20) },
-        {
-          projection: projection({ merge_state: 'merged', pr_state: 'merged' })
-        }
-      ),
-      view({ id: 'failed', status: 'failed', updated_at: at(10) }),
-      view({ id: 'asks', status: 'waiting', reason: 'owner_decision', updated_at: at(15) }),
-      view({ id: 'old-failed', status: 'failed', updated_at: at(300) })
-    ];
-    const counts = sinceCounts(views, LAST_VISIT);
-    expect(viewIds(counts.merged)).toEqual(['merged-new', 'merged-old']);
-    expect(viewIds(counts.failed)).toEqual(['failed']);
-    expect(viewIds(counts.waiting)).toEqual(['asks']);
-  });
-
-  it('counts nothing without a visit on record', () => {
-    expect(sinceCounts([view({ status: 'failed', updated_at: at(1) })], null)).toEqual({
-      merged: [],
-      failed: [],
-      waiting: []
-    });
   });
 });
 

@@ -1,6 +1,6 @@
 /**
- * Task rules the explorer shares: which group a task belongs to, its status line, and what "Since you
- * were here" counts. Pure, so the rules test without a QueryClient. Task state comes from the
+ * Task rules the explorer shares: which group a task belongs to and its status line. Pure, so the
+ * rules test without a QueryClient. Task state comes from the
  * owner task read; nothing here decides what is allowed.
  */
 import type { TaskView } from '@/lib/contract';
@@ -15,17 +15,11 @@ export type WorkGroup = 'needs-you' | 'working' | 'blocked' | 'problem' | 'finis
  */
 const PROBLEM_REASONS = new Set(['session_lost', 'stalled', 'runtime_limit', 'reconciliation']);
 
-export interface SinceCounts {
-  merged: TaskView[];
-  failed: TaskView[];
-  waiting: TaskView[];
-}
-
 const time = (iso: string): number => Date.parse(iso);
 
 /**
- * How long a failed task that asks the owner nothing stays in front of them: seven days, the same
- * reach as Finished recently. Retry stays available on a failed task for good, so without an end a
+ * How long a failed task that asks the owner nothing stays in front of them: seven days, as long
+ * as a finished task they have not opened stays listed. Retry stays available on a failed task for good, so without an end a
  * failure nobody retried would count as needing the owner for ever.
  */
 export const FAILED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -43,8 +37,7 @@ export function isIdle(view: TaskView): boolean {
  * as needing them. A running, queued or waiting task is current work, never idle. Finished tasks
  * appear only when they finished after the owner's last visit. A failed task with no available
  * action (every one of retry/reassign/cancel refused) is not an owner decision: there is nothing
- * left to do about it, so it gets no group here and falls back to wherever else it is listed (its
- * project, or Finished recently within the window). The same goes for a failed task that asks the
+ * left to do about it, so it gets no group here and is found on its project's page. The same goes for a failed task that asks the
  * owner nothing and last changed more than `FAILED_WINDOW_MS` ago: it can still be retried from
  * its page, but it no longer counts as needing them. A standing supervisor at rest has no group: it
  * is waiting, but not on anything.
@@ -91,24 +84,6 @@ export function statusLine(view: TaskView): string {
   if (isIdle(view)) return 'Idle';
   const reason = reasonLabel(view.task.reason);
   return reason ? `${statusLabel(view.task.status)} · ${reason}` : statusLabel(view.task.status);
-}
-
-/** Whether a task changed after the owner's last visit. No visit on record counts nothing as new. */
-const changedSince = (view: TaskView, lastVisit: number | null) =>
-  lastVisit !== null && time(view.task.updated_at) > lastVisit;
-
-/** The three "Since you were here" counts. Each list is newest first, so its first task is the link target. */
-export function sinceCounts(views: TaskView[], lastVisit: number | null): SinceCounts {
-  const counts: SinceCounts = { merged: [], failed: [], waiting: [] };
-  for (const view of [...views].sort((a, b) => time(b.task.updated_at) - time(a.task.updated_at))) {
-    if (!changedSince(view, lastVisit)) continue;
-    if (view.task.status === 'completed' && view.projection.merge_state === 'merged') {
-      counts.merged.push(view);
-    }
-    if (view.task.status === 'failed') counts.failed.push(view);
-    if (needsOwner(view)) counts.waiting.push(view);
-  }
-  return counts;
 }
 
 /** Row wording: a count and its noun, singular or plural. */

@@ -1,16 +1,5 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type PointerEvent
-} from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 
-/** How long a finger rests on a row before its menu opens. */
-export const LONG_PRESS_MS = 500;
-/** A finger that moves further than this is scrolling, not pressing. */
-const SLOP_PX = 10;
 /** The menu keeps this far from the viewport edge. */
 const EDGE_PX = 8;
 
@@ -20,11 +9,10 @@ export interface RowMenuAction {
 }
 
 /**
- * A row's actions in a small menu at the point it was asked for: right-click on desktop, a long
- * press on the phone, or Shift+F10 and the menu key. Escape, a press outside, a scroll of the
- * explorer itself, or its row moving closes it. Other scrolling, such as the chat following a turn,
- * leaves it open. `onClose` is told whether focus was in the menu, so it is returned to the row only
- * then and never taken from the composer.
+ * A row's actions in a small menu at the point it was asked for: right-click, or Shift+F10 and the
+ * menu key. Escape, a press outside, a scroll of the list the row is in, or its row moving closes
+ * it. Other scrolling, such as the chat following a turn, leaves it open. `onClose` is told whether
+ * focus was in the menu, so it is returned to the row only then and never taken from the composer.
  */
 export function RowMenu({
   label,
@@ -37,7 +25,7 @@ export function RowMenu({
   label: string;
   x: number;
   y: number;
-  /** The tree node id (`data-node-id`) of the row the menu belongs to. */
+  /** The id (`data-node-id`) of the row the menu belongs to. */
   rowId: string;
   actions: RowMenuAction[];
   onClose: (restoreFocus: boolean) => void;
@@ -73,7 +61,7 @@ export function RowMenu({
     const outside = (event: Event) => {
       if (!menu.current?.contains(event.target as Node)) onClose(false);
     };
-    // A scroll of something holding the row (the explorer, or the page on a phone) moves it. Any
+    // A scroll of something holding the row (the sidebar, or the page on a phone) moves it. Any
     // other scroll closes the menu only if it moved the row after all.
     const scroll = (event: Event) => {
       const target = event.target;
@@ -81,15 +69,15 @@ export function RowMenu({
       if (holdsRow || moved()) onClose(focused());
     };
     const resize = () => onClose(focused());
-    // Rows added or removed above it move the row without any scroll.
-    const tree = anchor?.closest('[role="tree"]');
+    // Rows added or removed above it move the row without any scroll: its list changes height.
+    const list = anchor?.closest('ul');
     const observer =
-      tree && typeof ResizeObserver !== 'undefined'
+      list && typeof ResizeObserver !== 'undefined'
         ? new ResizeObserver(() => {
             if (moved()) onClose(focused());
           })
         : null;
-    if (tree) observer?.observe(tree);
+    if (list) observer?.observe(list);
     window.addEventListener('pointerdown', outside, true);
     window.addEventListener('scroll', scroll, true);
     window.addEventListener('resize', resize);
@@ -141,53 +129,4 @@ export function RowMenu({
       ))}
     </div>
   );
-}
-
-/**
- * A long press on a touch screen. It calls `onPress` with the row and the finger's point after `LONG_PRESS_MS`,
- * unless the finger lifts or moves first, and `pressed()` then tells the click that follows to do
- * nothing. Mouse and pen are left to `contextmenu`.
- */
-export function useLongPress(onPress: (key: string, x: number, y: number) => void) {
-  const timer = useRef<number | null>(null);
-  const start = useRef({ x: 0, y: 0 });
-  const fired = useRef(false);
-
-  const cancel = () => {
-    if (timer.current !== null) window.clearTimeout(timer.current);
-    timer.current = null;
-  };
-  useEffect(() => cancel, []);
-
-  return {
-    /** The handlers for one row, named by `key`. */
-    handlers: (key: string) => ({
-      onPointerDown: (event: PointerEvent) => {
-        fired.current = false;
-        if (event.pointerType !== 'touch') return;
-        const { clientX: x, clientY: y } = event;
-        start.current = { x, y };
-        cancel();
-        timer.current = window.setTimeout(() => {
-          timer.current = null;
-          fired.current = true;
-          onPress(key, x, y);
-        }, LONG_PRESS_MS);
-      },
-      onPointerMove: (event: PointerEvent) => {
-        if (timer.current === null) return;
-        const dx = event.clientX - start.current.x;
-        const dy = event.clientY - start.current.y;
-        if (Math.hypot(dx, dy) > SLOP_PX) cancel();
-      },
-      onPointerUp: cancel,
-      onPointerCancel: cancel
-    }),
-    /** True once, right after a long press opened the menu, so its trailing click is ignored. */
-    pressed: () => {
-      const was = fired.current;
-      fired.current = false;
-      return was;
-    }
-  };
 }

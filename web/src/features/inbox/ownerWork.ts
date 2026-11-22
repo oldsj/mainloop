@@ -1,6 +1,7 @@
 /**
  * What waits on the owner and what Mainloop is handling, as one list for every place that shows or
- * counts it: the tree's groups, the status bar, the Inbox badge and the Inbox's own two views.
+ * counts it: the status bar, the Inbox counts in the sidebar and on the phone, the command palette
+ * and the Inbox's own two views.
  *
  * `/attention` lists the owner's open actions. A task can also need a decision that `/attention`
  * does not list (a task that failed in the last seven days and can be retried, a pull request

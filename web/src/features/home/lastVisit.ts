@@ -1,19 +1,15 @@
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { $api, fetchClient } from '@/api';
-import type { components } from '@/api';
-
-type Seen = components['schemas']['Seen'];
 
 /**
- * The owner's previous visit, the baseline for "Since you were here". It is the owner's, kept on
- * the server (`POST /seen/visits`; see docs/specs/seen.md), so it is the last time they opened the
- * app on any device, not on this one.
+ * The owner's visits are kept on the server (`POST /seen/visits`; see docs/specs/seen.md), so the
+ * last one is the last time they opened the app on any device, not on this one.
  *
- * One visit is recorded per page load. A second record in the same load would make "the visit
- * before" this very load, and nothing would have changed since it.
+ * One visit is recorded per page load. A second record in the same load would make the server's
+ * "visit before" this very load.
  */
-const recorded = new WeakMap<QueryClient, Promise<Seen | null>>();
+const recorded = new WeakSet<QueryClient>();
 
 /** The keys this browser kept these records under before they moved to the server. */
 const LEGACY_KEYS = ['mainloop.home.lastVisit', 'mainloop.seen.v1'];
@@ -26,40 +22,28 @@ function forgetLocalRecords(): void {
   }
 }
 
-/** Records this visit and answers with the owner's state after it, or null when it cannot be. */
-async function recordVisit(queryClient: QueryClient): Promise<Seen | null> {
+/** Records this visit and keeps the owner's state after it, when the server answers with one. */
+async function recordVisit(queryClient: QueryClient): Promise<void> {
   forgetLocalRecords();
   try {
     const { data } = await fetchClient.POST('/seen/visits');
-    if (!data) return null;
+    if (!data) return;
     // The answer is the whole record, so the explorer's read of it needs no request of its own.
     queryClient.setQueryData($api.queryOptions('get', '/seen').queryKey, data);
-    return data;
   } catch {
-    // Offline, or the server has no record to give: "Since you were here" has no baseline.
-    return null;
+    // Offline, or the server has no record to give: the visit is not recorded this time.
   }
 }
 
 /**
- * The previous visit's time in ms, or null: before the server has answered, on a first visit, or
- * when the visit could not be recorded. The shell calls this once and passes the value down, so
- * the desktop sidebar and the phone tabs compare against the same baseline.
+ * Records the owner's visit, once per page load however many times it is mounted. The shell calls
+ * it, so opening the app on any route counts. Nothing in the web app reads the visit back.
  */
-export function useLastVisit(): number | null {
+export function useRecordVisit(): void {
   const queryClient = useQueryClient();
-  const [previous, setPrevious] = useState<number | null>(null);
   useEffect(() => {
-    let live = true;
-    let visit = recorded.get(queryClient);
-    if (!visit) recorded.set(queryClient, (visit = recordVisit(queryClient)));
-    void visit.then((seen) => {
-      const at = seen?.previous_visit ? Date.parse(seen.previous_visit) : Number.NaN;
-      if (live && Number.isFinite(at)) setPrevious(at);
-    });
-    return () => {
-      live = false;
-    };
+    if (recorded.has(queryClient)) return;
+    recorded.add(queryClient);
+    void recordVisit(queryClient);
   }, [queryClient]);
-  return previous;
 }

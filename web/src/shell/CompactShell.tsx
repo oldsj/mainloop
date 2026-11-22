@@ -4,7 +4,6 @@ import { useState, type ReactNode } from 'react';
 import { cn } from '@/components/ui/cn';
 import {
   AgentColumn,
-  needsCount,
   TabStrip,
   useAgentColumn,
   useAsk,
@@ -35,12 +34,10 @@ const END =
  */
 export function CompactShell({
   tab,
-  lastVisit,
   onSearch,
   children
 }: {
   tab: Tab;
-  lastVisit: number | null;
   /** Opens the command palette. */
   onSearch: () => void;
   children: ReactNode;
@@ -51,8 +48,8 @@ export function CompactShell({
   const open = useOpenTarget();
   const ask = useAsk();
   // The explorer's reads poll while the shell is up, and mark a task seen when its page opens.
-  const explorer = useExplorer(lastVisit);
-  const needs = needsCount(explorer.nodes);
+  const explorer = useExplorer();
+  const { needs } = explorer;
   const column = useAgentColumn();
   const listing = tab === 'explorer';
   // The page is built the first time it is the thing showing, and then kept.

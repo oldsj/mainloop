@@ -6,9 +6,10 @@ seen on the desktop too.
 
 **Implemented (server):** the API below. **Implemented (web, checked against MSW, not a live
 backend):** the explorer's unseen dots read `GET /seen` and mark with `PUT /seen/tasks/{task_id}`,
-and "Since you were here" takes its baseline from `POST /seen/visits`; see [layout](layout.md) for
-when each is called. The web app no longer keeps either record in local storage, and removes the
-old keys (`mainloop.seen.v1`, `mainloop.home.lastVisit`) when it opens.
+and the app records one visit per page load with `POST /seen/visits`; see [layout](layout.md) for
+when each is called. The web app no longer shows "Since you were here", so nothing in it reads
+`previous_visit`. It no longer keeps either record in local storage, and removes the old keys
+(`mainloop.seen.v1`, `mainloop.home.lastVisit`) when it opens.
 
 ## API
 
@@ -17,7 +18,8 @@ old keys (`mainloop.seen.v1`, `mainloop.home.lastVisit`) when it opens.
   unseen. Nothing is written by a read.
 - `POST /seen/visits` records that the owner opened the app now and answers with the state after
   it: `last_visit` is now and `previous_visit` the visit before it, from whichever device made it.
-  `previous_visit` is the baseline for **Since you were here**; it is `null` on the first visit.
+  `previous_visit` is `null` on the first visit. It was the baseline for **Since you were here**,
+  which the web app no longer shows.
 - `PUT /seen/tasks/{task_id}` records that the owner has the task, or the page of one of its
   sessions, open now. Only the owner's own tasks (`404` otherwise). The time is the database's
   clock, the same clock that stamps the task's `updated_at`, so a mark is never earlier than the

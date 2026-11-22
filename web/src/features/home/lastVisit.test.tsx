@@ -7,7 +7,7 @@ import { $api, connection } from '@/api';
 import { API_URL } from '@/api/config';
 import { testSeen } from '@/test/msw/handlers';
 import { server } from '@/test/msw/server';
-import { useLastVisit } from './lastVisit';
+import { useRecordVisit } from './lastVisit';
 
 // The visit goes through the app's client, whose limiter the tests skip. See fastReads.ts.
 vi.mock('@/api/middleware', async (importOriginal) => {
@@ -31,40 +31,42 @@ function setup(strict = false) {
   return { queryClient, wrapper };
 }
 
-describe('the previous visit', () => {
-  it('is null on the owner’s first visit, and records it', async () => {
+describe('recording the visit', () => {
+  it('records the owner’s visit when it mounts', async () => {
+    // Given an owner who has not been here before.
     const { wrapper } = setup();
-    const { result } = renderHook(() => useLastVisit(), { wrapper });
-    expect(result.current).toBeNull();
+
+    // When the shell mounts the hook.
+    renderHook(() => useRecordVisit(), { wrapper });
+
+    // Then the server has one visit.
     await waitFor(() => expect(testSeen.visits).toBe(1));
-    expect(result.current).toBeNull();
   });
 
-  it('is the owner’s last visit before this one, from whichever device made it', async () => {
+  it('records one visit per page load, however many times it is mounted', async () => {
+    // Given an owner whose last visit was an hour ago.
     const before = Date.now() - HOUR;
     testSeen.begin({ since: before, lastVisit: before });
-    const { wrapper } = setup();
-    const { result } = renderHook(() => useLastVisit(), { wrapper });
-    await waitFor(() => expect(result.current).toBe(before));
-    expect(testSeen.visits).toBe(1);
-  });
+    const { queryClient, wrapper } = setup(true);
 
-  it('records one visit per page load, however many times it is asked', async () => {
-    const before = Date.now() - HOUR;
-    testSeen.begin({ since: before, lastVisit: before });
-    const { wrapper } = setup(true);
-    const first = renderHook(() => useLastVisit(), { wrapper });
-    const second = renderHook(() => useLastVisit(), { wrapper });
-    await waitFor(() => expect(first.result.current).toBe(before));
-    await waitFor(() => expect(second.result.current).toBe(before));
-    // A second record would have answered with the first one's time, not the hour-old visit.
+    // When the hook mounts twice, under StrictMode's doubled effects.
+    renderHook(() => useRecordVisit(), { wrapper });
+    renderHook(() => useRecordVisit(), { wrapper });
+    const key = $api.queryOptions('get', '/seen').queryKey;
+    await waitFor(() => expect(queryClient.getQueryData(key)).toBeDefined());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Then one visit was recorded, and the visit before it is still the hour-old one.
     expect(testSeen.visits).toBe(1);
+    expect(queryClient.getQueryData(key)).toMatchObject({
+      previous_visit: new Date(before).toISOString()
+    });
   });
 
   it('hands the answer to the explorer’s read of the record, so it needs no request of its own', async () => {
     testSeen.begin({ since: Date.now() - HOUR, tasks: { t1: Date.now() - 1000 } });
     const { queryClient, wrapper } = setup();
-    renderHook(() => useLastVisit(), { wrapper });
+    renderHook(() => useRecordVisit(), { wrapper });
     const key = $api.queryOptions('get', '/seen').queryKey;
     await waitFor(() => expect(queryClient.getQueryData(key)).toBeDefined());
     expect(queryClient.getQueryData(key)).toMatchObject({ tasks: [{ task_id: 't1' }] });
@@ -75,7 +77,7 @@ describe('the previous visit', () => {
     window.localStorage.setItem('mainloop.seen.v1', '{}');
     window.localStorage.setItem('mainloop.explorer.v1', '{}');
     const { wrapper } = setup();
-    renderHook(() => useLastVisit(), { wrapper });
+    renderHook(() => useRecordVisit(), { wrapper });
     await waitFor(() => expect(testSeen.visits).toBe(1));
     expect(window.localStorage.getItem('mainloop.home.lastVisit')).toBeNull();
     expect(window.localStorage.getItem('mainloop.seen.v1')).toBeNull();
@@ -83,15 +85,20 @@ describe('the previous visit', () => {
     expect(window.localStorage.getItem('mainloop.explorer.v1')).toBe('{}');
   });
 
-  it('has no baseline when the visit cannot be recorded', async () => {
+  it('leaves the record unread when the visit cannot be recorded', async () => {
+    // Given a server that refuses the visit.
     server.use(
       http.post(`${API_URL}/seen/visits`, () =>
         HttpResponse.json({ detail: 'no' }, { status: 500 })
       )
     );
-    const { wrapper } = setup();
-    const { result } = renderHook(() => useLastVisit(), { wrapper });
+    const { queryClient, wrapper } = setup();
+
+    // When the hook mounts.
+    renderHook(() => useRecordVisit(), { wrapper });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(result.current).toBeNull();
+
+    // Then nothing is put in the cache for the explorer to mistake for the owner's record.
+    expect(queryClient.getQueryData($api.queryOptions('get', '/seen').queryKey)).toBeUndefined();
   });
 });

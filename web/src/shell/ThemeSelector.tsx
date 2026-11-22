@@ -3,7 +3,7 @@ import { DropdownMenu } from 'radix-ui';
 import { Button } from '@/components/ui/button';
 import { THEMES, useTheme } from './themes';
 
-/** The theme menu: in Settings, and in the phone tree's header. The command palette has the themes too. */
+/** The theme menu, in Settings. The command palette has the themes too. */
 export function ThemeSelector() {
   const [theme, setTheme] = useTheme();
   return (

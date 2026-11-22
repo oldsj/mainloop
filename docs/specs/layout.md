@@ -75,10 +75,9 @@ the loading message. Retrying requests the details for the current project.
 
 ## Home
 
-- **Home is the main chat.** The work list, the home strip and the separate Since strip were removed; the explorer (see Desktop) holds the same groups.
-- **Since you were here**: counts of tasks that need you, failed, and merged since the last visit. The waiting row opens the answer view; the failed and merged rows link to the most recent task they count. It is an explorer group (see Desktop), on both layouts. It is left out when nothing changed, and on a first visit, which has no baseline.
-- **Last visit**: the owner's, on the server ([seen](seen.md)). When the app shell opens it records one visit (`POST /seen/visits`) and takes the visit before it as the baseline, from whichever device made it, so the desktop sidebar and the phone tabs share one baseline and it follows the owner between devices. One visit is recorded per page load. Because the shell is on every route, the visit is the app's last open, not only the last time home was shown. This is deliberate: the baseline is the last app open, not the last home view. On the owner's first visit, or when the visit cannot be recorded (offline), the Since you were here group has no baseline and is left out. The records this browser used to keep (`mainloop.home.lastVisit`, `mainloop.seen.v1`) are removed.
-- **Updates**: the list refreshes from the same task invalidation as the task pages. The relative times refresh each minute on the page.
+- **Home is the main chat.** The work list, the home strip and the separate Since strip were removed; the sidebar's spaces and agents (see Desktop) hold the work.
+- **Visits**: when the app shell opens it records one visit on the server (`POST /seen/visits`; see [seen](seen.md)). One visit is recorded per page load. Because the shell is on every route, the visit is the app's last open, not only the last time home was shown. Nothing in the web app compares against the previous visit any more: the **Since you were here** group, which did, was removed with the tree of groups. The records this browser used to keep (`mainloop.home.lastVisit`, `mainloop.seen.v1`) are removed.
+- **Updates**: the lists refresh from the same task invalidation as the task pages. The relative times refresh each minute on the page.
 
 ## Tasks
 

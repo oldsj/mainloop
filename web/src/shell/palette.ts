@@ -1,9 +1,21 @@
 /**
  * The command palette's rules: what it lists and how a typed query narrows and orders the list.
- * Pure, so they test without a DOM. Everything it can jump to comes from the explorer's tree, so the
- * palette and the sidebar never disagree about what exists.
+ * Pure, so they test without a DOM. Everything it can jump to comes from the reads the sidebar is
+ * built from, and each row's words from the same rules, so the two never disagree about what exists.
  */
-import type { ExplorerNode, Target } from '@/features/explorer';
+import {
+  askPrefill,
+  sessionNode,
+  shortId,
+  stagedTaskNode,
+  workspaceNode,
+  type ExplorerSource,
+  type Target
+} from '@/features/explorer';
+import { attentionKey, type AttentionItem } from '@/features/inbox/model';
+import { ownerWork } from '@/features/inbox/ownerWork';
+import { isCurrent } from '@/lib/sessionStatus';
+import { taskForSession } from '@/lib/taskState';
 import { THEMES, type ThemeId } from './themes';
 
 /** What running an item does. The palette turns it into a navigation, a theme change or a prefill. */
@@ -69,64 +81,131 @@ const PAGES: PaletteItem[] = [
   }
 ];
 
-const KINDS: Partial<Record<Target['to'], string>> = {
-  task: 'Task',
-  session: 'Session',
-  workspace: 'Workspace',
-  project: 'Project',
-  schedule: 'Schedule',
-  needs: 'Needs you',
-  problems: 'Problem'
+/** What an owner action is called in an Ask Mainloop prefill. */
+const ACTION_NAMES: Record<string, string> = {
+  approval: 'approval',
+  question: 'question',
+  owner_decision: 'decision'
 };
 
-/** One key per place, so a task listed under Needs you and under its project appears once. */
+/** "About question Which branch?: ", naming the action's task when it has one. */
+function actionAsk(item: AttentionItem): string {
+  const name = ACTION_NAMES[item.kind] ?? 'request';
+  return item.task_id
+    ? `About ${name} ${item.title} (task ${shortId(item.task_id)}): `
+    : `About ${name} ${item.title}: `;
+}
+
+/** One key per place, so a task that needs the owner is not listed again among the other tasks. */
 function targetKey(target: Target): string {
   const id = 'id' in target ? target.id : 'item' in target ? (target.item ?? '') : '';
   return `${target.to}:${id}`;
 }
 
+/** A row before it has its id, which is its target's key. */
+type Place = Omit<PaletteItem, 'id' | 'action'> & { target: Target };
+
 /**
- * Every row of the tree that leads somewhere, once each, in the tree's own order (what needs the
- * owner first). Group headings and the pages listed above are left out.
+ * Everything that has a page of its own, once each, what needs the owner first: the owner actions,
+ * the problems Mainloop is handling, every task (those that need the owner, then the rest by latest
+ * change), the live sessions that belong to no task, the workspaces, the projects and the schedules.
  */
-function treeItems(nodes: ExplorerNode[]): PaletteItem[] {
+function placeItems(source: ExplorerSource): PaletteItem[] {
+  const now = source.now ?? Date.now();
+  const work = ownerWork(source.attention, source.tasks, now);
+  const newestFirst = [...source.tasks].sort(
+    (a, b) => Date.parse(b.task.updated_at) - Date.parse(a.task.updated_at)
+  );
+
+  const places: Place[] = [
+    // An owner action opens the answer view on its own row, whether or not it belongs to a task.
+    ...work.needs.map((item) => ({
+      label: item.title,
+      detail: item.needed,
+      kind: 'Needs you',
+      target: { to: 'needs', item: attentionKey(item) } satisfies Target,
+      ask: actionAsk(item)
+    })),
+    // A problem is Mainloop's own recovery work, with no decision to ask about.
+    ...work.problems.map((item) => ({
+      label: item.title,
+      detail: item.needed,
+      kind: 'Problem',
+      target: { to: 'problems', item: attentionKey(item) } satisfies Target
+    })),
+    ...[...work.needsTasks, ...newestFirst].map((view) => {
+      const node = stagedTaskNode(view, source, 'palette', now);
+      return {
+        label: node.label,
+        detail: [node.project, node.detail].filter(Boolean).join(' · ') || undefined,
+        kind: 'Task',
+        target: { to: 'task', id: view.task.id } satisfies Target,
+        ask: node.ask
+      };
+    }),
+    // A task's session is reached from its task; only a session with no task is listed on its own.
+    ...source.sessions
+      .filter((session) => isCurrent(session) && !taskForSession(source.tasks, session.id))
+      .map((session) => {
+        const node = sessionNode(session, 'palette/');
+        return {
+          label: node.label,
+          detail: node.detail,
+          kind: 'Session',
+          target: { to: 'session', id: session.id } satisfies Target,
+          ask: node.ask
+        };
+      }),
+    ...source.workspaces.map((workspace) => {
+      const node = workspaceNode(workspace, 'palette/');
+      return {
+        label: node.label,
+        detail: node.detail,
+        kind: 'Workspace',
+        target: { to: 'workspace', id: workspace.workspace_id } satisfies Target
+      };
+    }),
+    ...source.projects.map((project) => {
+      const target: Target = { to: 'project', id: project.id };
+      return {
+        label: project.full_name,
+        kind: 'Project',
+        target,
+        ask: askPrefill({ label: project.full_name }, target)
+      };
+    }),
+    ...source.schedules.map((schedule) => {
+      const target: Target = { to: 'schedule', id: schedule.id };
+      return {
+        label: schedule.config.name,
+        detail: schedule.config.paused ? 'Paused' : schedule.config.schedule,
+        kind: 'Schedule',
+        target,
+        ask: askPrefill({ label: schedule.config.name }, target)
+      };
+    })
+  ];
+
   const seen = new Set<string>();
   const items: PaletteItem[] = [];
-  const visit = (node: ExplorerNode) => {
-    const { target } = node;
-    const kind = target ? KINDS[target.to] : undefined;
-    // A heading's own target (the whole Needs you list) is a page, already listed.
-    const isRow =
-      target && kind && (('id' in target && target.id) || ('item' in target && target.item));
-    if (target && kind && isRow && !node.note) {
-      const key = targetKey(target);
-      if (!seen.has(key)) {
-        seen.add(key);
-        items.push({
-          id: key,
-          label: node.label,
-          detail: [node.project, node.detail].filter(Boolean).join(' · ') || undefined,
-          kind,
-          action: { do: 'open', target },
-          ask: node.ask
-        });
-      }
-    }
-    node.children.forEach(visit);
-  };
-  nodes.forEach(visit);
+  for (const { target, ...place } of places) {
+    const key = targetKey(target);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push({ id: key, ...place, action: { do: 'open', target } });
+  }
   return items;
 }
 
-/** Everything the palette lists before a query narrows it: pages, the tree's rows, then themes. */
-export function paletteItems(nodes: ExplorerNode[]): PaletteItem[] {
+/** Everything the palette lists before a query narrows it: pages, the places above, then themes. */
+export function paletteItems(source: ExplorerSource): PaletteItem[] {
   const themes: PaletteItem[] = THEMES.map(({ id, label }) => ({
     id: `theme:${id}`,
     label: `Theme: ${label}`,
     kind: 'Theme',
     action: { do: 'theme', theme: id }
   }));
-  return [...PAGES, ...treeItems(nodes), ...themes];
+  return [...PAGES, ...placeItems(source), ...themes];
 }
 
 /**
