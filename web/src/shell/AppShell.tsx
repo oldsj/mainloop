@@ -44,7 +44,7 @@ export function AppShell({ view, tab }: { view?: View; tab?: ShellSearch['tab'] 
           <Outlet />
         </CompactShell>
       )}
-      <CommandPalette open={palette} onOpenChange={setPalette} />
+      <CommandPalette open={palette} onOpenChange={setPalette} keys={resolved === 'desktop'} />
     </div>
   );
 }

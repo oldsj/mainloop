@@ -18,8 +18,21 @@ import {
 } from '@/features/explorer';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
+import { COMMAND_KEYS, useShellCommands } from './commands';
 import { PREFIX_HINT, prefixAction, usePrefixKeys } from './prefixKeys';
 import { StatusBar } from './StatusBar';
+
+/**
+ * Puts keyboard focus on the current space's row, from where the arrows move and Enter opens. The
+ * sidebar may have been hidden a moment ago, so its rows may not be drawn yet: it looks again on the
+ * next few frames, then gives up.
+ */
+function focusCurrentSpace(tries = 20): void {
+  const rows = document.querySelectorAll<HTMLElement>('[data-testid="space-row"]');
+  const row = [...rows].find((el) => el.getAttribute('aria-current') === 'true') ?? rows[0];
+  if (row) row.focus();
+  else if (tries > 0) setTimeout(() => focusCurrentSpace(tries - 1), 16);
+}
 
 /**
  * ≥1024 px, laid out as a terminal workspace manager is: the sidebar (spaces and their agents) on
@@ -71,7 +84,7 @@ export function DesktopShell({
   const tabs = listed
     ? spaceTabs(column.model, column.space, column.page, pathname)
     : loadingTabs(column.model, column.page, pathname);
-  const armed = usePrefixKeys((key) => {
+  const runKey = (key: string): boolean => {
     const action = prefixAction(key, tabs);
     if (!action) return false;
     if (action.do === 'open') open(action.target);
@@ -83,15 +96,13 @@ export function DesktopShell({
       else open({ to: 'chat' });
     } else if (action.do === 'spaces') {
       show();
-      // After the sidebar has drawn: the current space's row takes focus, and the arrows move on.
-      setTimeout(() => {
-        const rows = document.querySelectorAll<HTMLElement>('[data-testid="space-row"]');
-        const current = [...rows].find((row) => row.getAttribute('aria-current') === 'true');
-        (current ?? rows[0])?.focus();
-      }, 0);
+      focusCurrentSpace();
     }
     return true;
-  });
+  };
+  const armed = usePrefixKeys(runKey);
+  // The same actions by name, for the command palette: it reaches them in any browser.
+  useShellCommands((command) => void runKey(COMMAND_KEYS[command]));
 
   return (
     <div data-testid="desktop-shell" className="flex min-h-0 flex-1 flex-col">

@@ -4,6 +4,9 @@ import { useState, type ReactNode } from 'react';
 import { cn } from '@/components/ui/cn';
 import {
   AgentColumn,
+  loadingTabs,
+  newTaskPrefill,
+  spaceTabs,
   TabStrip,
   useAgentColumn,
   useAsk,
@@ -11,6 +14,8 @@ import {
   useOpenTarget
 } from '@/features/explorer';
 import { badgeText } from '@/features/inbox/model';
+import { COMMAND_KEYS, useShellCommands } from './commands';
+import { prefixAction } from './prefixKeys';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
 import type { Tab } from './view';
@@ -67,6 +72,23 @@ export function CompactShell({
         tab: listing ? undefined : ('explorer' as const)
       })
     });
+
+  // The shell's actions by name, for the command palette. The phone has no prefix keys; here the
+  // sidebar and the spaces are both the lists over the page.
+  const tabs = listed
+    ? spaceTabs(column.model, column.space, column.page, pathname)
+    : loadingTabs(column.model, column.page, pathname);
+  useShellCommands((command) => {
+    if (command === 'sidebar') return toggle();
+    if (command === 'spaces') return listing ? undefined : toggle();
+    const action = prefixAction(COMMAND_KEYS[command], tabs);
+    if (action?.do === 'open') open(action.target);
+    else if (action?.do === 'new') {
+      const prefill = newTaskPrefill(column.model, column.space);
+      if (prefill) ask(prefill);
+      else open({ to: 'chat' });
+    }
+  });
 
   return (
     // The bottom inset is the shell's: there is no bar down there to take it.
