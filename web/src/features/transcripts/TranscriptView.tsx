@@ -3,7 +3,7 @@ import { Search } from 'lucide-react';
 import { useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Markdown } from '@/components/markdown/markdown';
 import { DeliveredContext } from '@/components/shared/DeliveredContext';
-import { MEASURE } from '@/components/shared/measure';
+import { CONVERSATION } from '@/components/shared/measure';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import { splitDelivered } from '@/lib/delivered';
@@ -52,7 +52,7 @@ export function TranscriptView({ sessionId, entry }: { sessionId: string; entry?
         data-testid="transcript"
         className="px-md py-sm min-h-0 flex-1 overflow-y-auto overscroll-contain font-mono text-sm"
       >
-        <div className={cn('gap-sm flex flex-col', MEASURE)}>
+        <div className={cn('gap-sm flex flex-col', CONVERSATION)}>
           {transcript.isPending ? (
             <p role="status" className="text-muted-foreground font-sans">
               Loading transcript…

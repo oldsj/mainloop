@@ -301,14 +301,16 @@ describe('live session', () => {
     });
   });
 
-  it('keeps the transcript and the composer to the reading width, inside a full-width scroller', async () => {
+  it('fills the pane from the left as a terminal does, up to the terminal width, inside a full-width scroller', async () => {
     setup();
     await attached();
     const log = screen.getByTestId('live-log');
-    expect(log).not.toHaveClass('max-w-measure');
-    expect(log.firstElementChild).toHaveClass('max-w-measure', 'mx-auto');
+    expect(log).not.toHaveClass('max-w-terminal');
+    // Not centred: the transcript starts at the pane's left edge, and the composer lines up with it.
+    expect(log.firstElementChild).toHaveClass('max-w-terminal', 'w-full');
+    expect(log.firstElementChild).not.toHaveClass('mx-auto');
     expect(
-      screen.getByRole('textbox', { name: 'Message' }).closest('.max-w-measure')
+      screen.getByRole('textbox', { name: 'Message' }).closest('.max-w-terminal')
     ).not.toBeNull();
   });
 

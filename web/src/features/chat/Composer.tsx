@@ -10,7 +10,7 @@ import {
   type KeyboardEvent,
   type ReactNode
 } from 'react';
-import { MEASURE } from '@/components/shared/measure';
+import { CONVERSATION } from '@/components/shared/measure';
 import { cn } from '@/components/ui/cn';
 import { clearDraft, loadDraft, NEW_CONVERSATION, saveDraft } from './drafts';
 import {
@@ -359,8 +359,8 @@ export function Composer({
 
   return (
     <div className="border-border-subtle bg-background border-t font-mono">
-      {/* Centred on the transcript's reading width, so the box lines up with the messages above it. */}
-      <div className={MEASURE}>
+      {/* As wide as the transcript, so the box lines up with the messages above it. */}
+      <div className={CONVERSATION}>
         {allowImages && images.length > 0 ? (
           <div className="gap-xs px-md pt-sm flex flex-wrap" data-testid="composer-images">
             {images.map((image, index) => (
@@ -468,7 +468,7 @@ export function Composer({
               onKeyDown={keyDown}
               onPaste={paste}
               data-testid="command-input"
-              className="text-foreground placeholder:text-muted-foreground max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 text-base leading-snug outline-none"
+              className="text-foreground placeholder:text-muted-foreground max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 text-base leading-snug outline-none lg:text-sm"
             />
             <button
               type="button"
