@@ -29,7 +29,8 @@ import {
   type ExplorerPrefs
 } from './prefs';
 import { ExplorerTree } from './ExplorerTree';
-import { useAsk, useExplorer, useOpenTarget } from './useExplorer';
+import { AgentColumn } from './AgentColumn';
+import { useAsk, useExplorer, useOpenTarget, type AgentColumnState } from './useExplorer';
 
 /** Arrow-key step on the resize handle, in pixels. */
 const RESIZE_STEP = 16;
@@ -59,6 +60,22 @@ function useTree(update: ReturnType<typeof useExplorerPrefs>['update']) {
     [update]
   );
   return { open, ask, toggle };
+}
+
+/** Desktop only: folds the sidebar away; the activity bar or the shortcut brings it back. */
+function HideSidebar({ onClick }: { onClick: () => void }) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      aria-label="Hide sidebar"
+      title={`Hide sidebar (${shortcutLabel('b')})`}
+      onClick={onClick}
+    >
+      <PanelLeftClose aria-hidden="true" />
+    </Button>
+  );
 }
 
 interface BodyProps {
@@ -104,18 +121,7 @@ function ExplorerBody({
         >
           {title}
         </h2>
-        {onCollapse ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            aria-label="Hide sidebar"
-            title={`Hide sidebar (${shortcutLabel('b')})`}
-            onClick={onCollapse}
-          >
-            <PanelLeftClose aria-hidden="true" />
-          </Button>
-        ) : null}
+        {onCollapse ? <HideSidebar onClick={onCollapse} /> : null}
         {actions ? <div className="gap-xs flex items-center">{actions}</div> : null}
       </header>
       <div className="p-xs min-h-0 flex-1 overflow-y-auto">
@@ -151,23 +157,35 @@ export interface ExplorerSidebarProps {
   prefs: ExplorerPrefs;
   update: ReturnType<typeof useExplorerPrefs>['update'];
   nodes: ExplorerNode[];
+  /** The Sessions view's spaces and agents. The shell owns them: the status bar counts them too. */
+  column: AgentColumnState;
   ready: boolean;
   failed: boolean;
 }
 
 /**
- * Desktop: the sidebar on the left, between the activity bar and the page. It shows one view of the
- * tree at a time (Sessions or Projects, chosen in the activity bar), is resizable from its right
+ * Desktop: the sidebar on the left, between the activity bar and the page. It shows one view at a
+ * time, chosen in the activity bar: Sessions is the spaces and their agents, Projects is the tree of
+ * projects and schedules. It is resizable from its right
  * edge, and is hidden from the activity bar or with the sidebar shortcut (⌘B on a Mac, Ctrl+B elsewhere). The shell owns the prefs and the
  * data, since the activity bar and the status bar read them too.
  */
-export function ExplorerSidebar({ prefs, update, nodes, ready, failed }: ExplorerSidebarProps) {
+export function ExplorerSidebar({
+  prefs,
+  update,
+  nodes,
+  column,
+  ready,
+  failed
+}: ExplorerSidebarProps) {
   const { open, ask, toggle } = useTree(update);
   const drag = useRef<{ startX: number; startWidth: number; width: number } | null>(null);
   // The width while a drag is in progress. It is drawn from here and saved only when the drag ends.
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const view: SidebarView = prefs.view;
   const title = SIDEBAR_VIEWS.find(({ id }) => id === view)?.label ?? 'Explorer';
+
+  const collapse = () => update((prev) => ({ ...prev, collapsed: true }));
 
   const setWidth = (width: number) => update((prev) => ({ ...prev, width: clampWidth(width) }));
 
@@ -204,17 +222,30 @@ export function ExplorerSidebar({ prefs, update, nodes, ready, failed }: Explore
       style={{ width: dragWidth ?? prefs.width }}
       className="border-border-subtle relative flex min-h-0 shrink-0 flex-col border-r"
     >
-      <ExplorerBody
-        nodes={viewNodes(nodes, view)}
-        ready={ready}
-        failed={failed}
-        prefs={prefs}
-        onToggle={toggle}
-        onOpen={open}
-        onAsk={ask}
-        title={title}
-        onCollapse={() => update((prev) => ({ ...prev, collapsed: true }))}
-      />
+      {view === 'sessions' ? (
+        <AgentColumn
+          model={column.model}
+          page={column.page}
+          space={column.space}
+          ready={ready}
+          failed={failed}
+          onOpen={open}
+          onAsk={ask}
+          action={<HideSidebar onClick={collapse} />}
+        />
+      ) : (
+        <ExplorerBody
+          nodes={viewNodes(nodes, view)}
+          ready={ready}
+          failed={failed}
+          prefs={prefs}
+          onToggle={toggle}
+          onOpen={open}
+          onAsk={ask}
+          title={title}
+          onCollapse={collapse}
+        />
+      )}
       {/* A focusable window splitter (WAI-ARIA): the separator takes keys, so it is not a plain static element. */}
       {/* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
       <div

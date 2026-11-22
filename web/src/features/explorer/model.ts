@@ -153,8 +153,18 @@ export function heldUntilText(iso: string, now: number): string {
  * A row in Snoozed: at rest, with when it comes back and, when the main thread gave one, why it
  * was set aside. Its age is left out: the time that matters is the one it returns at.
  */
-function snoozedNode(view: TaskView, source: ExplorerSource, now: number): ExplorerNode {
-  const node = taskNode(view, source, 'snoozed');
+function snoozedNode({
+  view,
+  source,
+  now,
+  parent = 'snoozed'
+}: {
+  view: TaskView;
+  source: ExplorerSource;
+  now: number;
+  parent?: string;
+}): ExplorerNode {
+  const node = taskNode(view, source, parent);
   const until = heldUntilText(view.task.held_until ?? '', now);
   const reason = view.task.held_reason?.trim();
   return {
@@ -181,8 +191,13 @@ function prStageDetail(view: TaskView, stage: PrStage): string {
  * A row in Ready for review or Landing. Ready for review is finished work the owner has not looked
  * at, so it is teal until its page has been opened and then at rest; Landing is still moving.
  */
-function prStageNode(view: TaskView, source: ExplorerSource, stage: PrStage): ExplorerNode {
-  const node = taskNode(view, source, stage);
+function prStageNode(
+  view: TaskView,
+  source: ExplorerSource,
+  stage: PrStage,
+  parent: string = stage
+): ExplorerNode {
+  const node = taskNode(view, source, parent);
   const tone: Tone =
     stage === 'landing'
       ? 'active'
@@ -190,6 +205,33 @@ function prStageNode(view: TaskView, source: ExplorerSource, stage: PrStage): Ex
         ? 'unseen'
         : 'muted';
   return { ...node, detail: prStageDetail(view, stage), tone };
+}
+
+/**
+ * A task as one row wherever it is listed on its own, with the line that says where it stands: when
+ * it comes back for a task set aside, its pull request for one that is ready to be looked at
+ * (whether or not that already counts as needing the owner) or is landing, and otherwise its status
+ * or its children's progress.
+ */
+export function stagedTaskNode(
+  view: TaskView,
+  source: ExplorerSource,
+  parent: string,
+  now: number
+): ExplorerNode {
+  const group = workGroup(view, null, now);
+  const moving = group === 'working' || group === 'needs-you' || group === 'blocked';
+  if (moving && isHeld(view, now)) return snoozedNode({ view, source, parent, now });
+  if (group === 'working') {
+    const stage = prStage(view);
+    if (stage) return prStageNode(view, source, stage, parent);
+  }
+  const node = taskNode(view, source, parent);
+  // A pull request that only the owner can move on says so in the pull request's own words.
+  if (group === 'needs-you' && view.task.reason === 'publication' && prStage(view) === 'review') {
+    return { ...node, detail: prStageDetail(view, 'review') };
+  }
+  return node;
 }
 
 export function askPrefill(node: Pick<ExplorerNode, 'label'>, target: Target): string | undefined {
@@ -610,7 +652,7 @@ export function buildExplorer(source: ExplorerSource): ExplorerNode[] {
             id: 'snoozed',
             label: 'Snoozed',
             count: groups.snoozed.length,
-            children: groups.snoozed.map((view) => snoozedNode(view, source, now))
+            children: groups.snoozed.map((view) => snoozedNode({ view, source, now }))
           } satisfies ExplorerNode
         ]
       : []),
