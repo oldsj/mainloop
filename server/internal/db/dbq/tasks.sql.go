@@ -1847,74 +1847,82 @@ func (q *Queries) LatestAttemptReport(ctx context.Context, attemptID string) (Ta
 }
 
 const listActiveAttemptsForLiveness = `-- name: ListActiveAttemptsForLiveness :many
-SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at, a.progress_marker, a.progress_at, a.stop_requested_at, a.liveness_failing_since, a.model, a.effort, a.instructions_version, a.memory_seq, a.reopened_at FROM task_attempts a
+SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at, a.progress_marker, a.progress_at, a.stop_requested_at, a.liveness_failing_since, a.model, a.effort, a.instructions_version, a.memory_seq, a.reopened_at, t.standing FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
-WHERE a.state = 'active' AND t.status = 'running' AND t.current_attempt_id = a.id
+WHERE a.state = 'active' AND t.current_attempt_id = a.id
+  AND (t.status = 'running' OR (t.standing AND t.status = 'waiting' AND t.reason = 'idle'))
 ORDER BY a.updated_at, a.id
 LIMIT $1
 `
 
+type ListActiveAttemptsForLivenessRow struct {
+	TaskAttempt TaskAttempt
+	Standing    bool
+}
+
 // The current attempt of every task that still thinks it is running: the liveness sweep checks
 // each one's kagent session and bounds how long it may go without activity or in total. A task
 // already blocked, however that happened, drops out on its own; this sweep never reopens one.
-func (q *Queries) ListActiveAttemptsForLiveness(ctx context.Context, limit int32) ([]TaskAttempt, error) {
+// A standing supervisor at rest (waiting/idle) is listed too: the sweep wakes it when a turn starts.
+func (q *Queries) ListActiveAttemptsForLiveness(ctx context.Context, limit int32) ([]ListActiveAttemptsForLivenessRow, error) {
 	rows, err := q.db.Query(ctx, listActiveAttemptsForLiveness, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []TaskAttempt{}
+	items := []ListActiveAttemptsForLivenessRow{}
 	for rows.Next() {
-		var i TaskAttempt
+		var i ListActiveAttemptsForLivenessRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.Number,
-			&i.ProfileID,
-			&i.NativeProvider,
-			&i.ConfigurationRevision,
-			&i.AgentNamespace,
-			&i.AgentName,
-			&i.Role,
-			&i.Depth,
-			&i.State,
-			&i.CapacityHeld,
-			&i.SessionID,
-			&i.BindingID,
-			&i.WorkspaceID,
-			&i.WorkspaceRequestID,
-			&i.WorkspaceCreatesInflight,
-			&i.WorkspaceCleanupConfirmed,
-			&i.WorkspaceCleanupAttempts,
-			&i.WorkspaceCleanupAfter,
-			&i.WriterGeneration,
-			&i.BriefDeliveryID,
-			&i.PredecessorID,
-			&i.SuccessorID,
-			&i.EvidenceRefs,
-			&i.ResultRef,
-			&i.Environment,
-			&i.InitialRef,
-			&i.CheckpointRef,
-			&i.ManifestRef,
-			&i.SupersededAt,
-			&i.ArchivedAt,
-			&i.NativeDeletedAt,
-			&i.RetentionHold,
-			&i.StopState,
-			&i.ResolveAttempts,
-			&i.ResolveAfter,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ProgressMarker,
-			&i.ProgressAt,
-			&i.StopRequestedAt,
-			&i.LivenessFailingSince,
-			&i.Model,
-			&i.Effort,
-			&i.InstructionsVersion,
-			&i.MemorySeq,
-			&i.ReopenedAt,
+			&i.TaskAttempt.ID,
+			&i.TaskAttempt.TaskID,
+			&i.TaskAttempt.Number,
+			&i.TaskAttempt.ProfileID,
+			&i.TaskAttempt.NativeProvider,
+			&i.TaskAttempt.ConfigurationRevision,
+			&i.TaskAttempt.AgentNamespace,
+			&i.TaskAttempt.AgentName,
+			&i.TaskAttempt.Role,
+			&i.TaskAttempt.Depth,
+			&i.TaskAttempt.State,
+			&i.TaskAttempt.CapacityHeld,
+			&i.TaskAttempt.SessionID,
+			&i.TaskAttempt.BindingID,
+			&i.TaskAttempt.WorkspaceID,
+			&i.TaskAttempt.WorkspaceRequestID,
+			&i.TaskAttempt.WorkspaceCreatesInflight,
+			&i.TaskAttempt.WorkspaceCleanupConfirmed,
+			&i.TaskAttempt.WorkspaceCleanupAttempts,
+			&i.TaskAttempt.WorkspaceCleanupAfter,
+			&i.TaskAttempt.WriterGeneration,
+			&i.TaskAttempt.BriefDeliveryID,
+			&i.TaskAttempt.PredecessorID,
+			&i.TaskAttempt.SuccessorID,
+			&i.TaskAttempt.EvidenceRefs,
+			&i.TaskAttempt.ResultRef,
+			&i.TaskAttempt.Environment,
+			&i.TaskAttempt.InitialRef,
+			&i.TaskAttempt.CheckpointRef,
+			&i.TaskAttempt.ManifestRef,
+			&i.TaskAttempt.SupersededAt,
+			&i.TaskAttempt.ArchivedAt,
+			&i.TaskAttempt.NativeDeletedAt,
+			&i.TaskAttempt.RetentionHold,
+			&i.TaskAttempt.StopState,
+			&i.TaskAttempt.ResolveAttempts,
+			&i.TaskAttempt.ResolveAfter,
+			&i.TaskAttempt.CreatedAt,
+			&i.TaskAttempt.UpdatedAt,
+			&i.TaskAttempt.ProgressMarker,
+			&i.TaskAttempt.ProgressAt,
+			&i.TaskAttempt.StopRequestedAt,
+			&i.TaskAttempt.LivenessFailingSince,
+			&i.TaskAttempt.Model,
+			&i.TaskAttempt.Effort,
+			&i.TaskAttempt.InstructionsVersion,
+			&i.TaskAttempt.MemorySeq,
+			&i.TaskAttempt.ReopenedAt,
+			&i.Standing,
 		); err != nil {
 			return nil, err
 		}

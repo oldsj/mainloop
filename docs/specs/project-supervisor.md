@@ -6,8 +6,8 @@ layers: main (one per owner), a standing supervisor per project, and its workers
 which cannot delegate. The design, and the slices still to come, are in
 [docs/design/project-supervisor.md](../design/project-supervisor.md).
 
-Status: **identity and rest implemented** (server and contract), not yet proven live. Not built
-yet: liveness at rest, main routing work through it (`supervisor_send`), restart and recovery that
+Status: **identity, rest and liveness implemented** (server and contract), not yet proven live.
+Not built yet: main routing work through it (`supervisor_send`), restart and recovery that
 keep its children, owner tasks under it, and per-project model settings.
 
 ## What it is
@@ -30,6 +30,15 @@ keep its children, owner tasks under it, and per-project model settings.
   `waiting` with reason **`idle`**, its attempt stays active, nothing is settled, and main hears
   the report, as it hears any root task's terminal report. Its children keep running. A later
   `progress` report, or a follow-up, moves it back to `running`.
+- The liveness sweep keeps its state true to its session. Running, with no turn open, nothing waiting
+  on the owner and no message on its way to its session, it moves to `waiting`/`idle` instead of
+  being blocked `stalled`; at rest, once its session has a turn again (a child's report, a loop
+  firing, a message from main or the owner), it moves back to `running`, within a sweep
+  (the sweep runs every minute). Each move publishes `task:updated`.
+- A turn that is open but records nothing for `TASK_STALL_TIMEOUT` is still `stalled`, and a session
+  that is gone (not one kagent will revert on the next send) blocks it `session_lost`, at rest or not.
+- `TASK_MAX_RUNTIME` bounds a **wake**, not its life: every move from `waiting`/`idle` to `running`,
+  whatever makes it, restarts the bound on its current attempt (a database trigger).
 - A `failed` report from it is refused, `422 standing_outcome`: it reports `blocked` instead.
 - Only a standing task can be `waiting`/`idle` (a database check).
 - Cancel, retry and reassign are refused, `409 standing_supervisor`, for the owner, main and any

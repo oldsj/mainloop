@@ -127,6 +127,10 @@ type SessionLiveness struct {
 	// (never by [Client.ObserveLiveness]): it changes whenever kagent records anything new for a
 	// submitted or working task, and is empty when none is running.
 	Progress string
+	// AwaitingOwner is set, also only by internal/tasks.KagentLiveness, when a task of the session is
+	// waiting on the owner (input-required or auth-required): no turn runs, but the agent is not at
+	// rest either.
+	AwaitingOwner bool
 }
 
 // terminalRuntimeStates are the Session states nothing can wake: failed outright, or on the way

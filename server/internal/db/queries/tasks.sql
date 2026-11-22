@@ -248,9 +248,11 @@ LIMIT $1;
 -- The current attempt of every task that still thinks it is running: the liveness sweep checks
 -- each one's kagent session and bounds how long it may go without activity or in total. A task
 -- already blocked, however that happened, drops out on its own; this sweep never reopens one.
-SELECT a.* FROM task_attempts a
+-- A standing supervisor at rest (waiting/idle) is listed too: the sweep wakes it when a turn starts.
+SELECT sqlc.embed(a), t.standing FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
-WHERE a.state = 'active' AND t.status = 'running' AND t.current_attempt_id = a.id
+WHERE a.state = 'active' AND t.current_attempt_id = a.id
+  AND (t.status = 'running' OR (t.standing AND t.status = 'waiting' AND t.reason = 'idle'))
 ORDER BY a.updated_at, a.id
 LIMIT $1;
 

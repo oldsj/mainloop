@@ -113,11 +113,11 @@ func (k *KagentLiveness) ObserveLiveness(ctx context.Context, sessionID string) 
 	if !live.Exists || live.Terminal {
 		return live, true, nil // gone or done: no point reading its activity
 	}
-	activity, progress, err := k.activity(ctx, q, sessionID, b, ksid)
+	activity, progress, awaiting, err := k.activity(ctx, q, sessionID, b, ksid)
 	if err != nil {
 		return kagent.SessionLiveness{}, true, err
 	}
-	live.LastActivity, live.Progress = activity, progress
+	live.LastActivity, live.Progress, live.AwaitingOwner = activity, progress, awaiting
 	return live, true, nil
 }
 
@@ -130,24 +130,24 @@ func (k *KagentLiveness) ObserveLiveness(ctx context.Context, sessionID string) 
 // activity — only a change in the fingerprint is, and [Service.checkLiveness] times that.
 func (k *KagentLiveness) activity(
 	ctx context.Context, q *dbq.Queries, sessionID string, b dbq.GetOwnedSessionBindingRow, ksid string,
-) (last time.Time, progress string, err error) {
+) (last time.Time, progress string, awaitingOwner bool, err error) {
 	contexts, err := q.ListSessionNativeContexts(ctx, sessionID)
 	if err != nil {
-		return time.Time{}, "", err
+		return time.Time{}, "", false, err
 	}
 	contexts = append(contexts, ksid)
 	slices.Sort(contexts)
 	contexts = slices.Compact(contexts)
 	agent, err := k.Sessions.ResolveAgent(&b.ResolvedAgentNamespace, &b.ResolvedAgentName, &b.Kind, b.Role)
 	if err != nil {
-		return time.Time{}, "", err
+		return time.Time{}, "", false, err
 	}
 	var latest time.Time
 	var running []string
 	for _, c := range contexts {
 		listed, err := k.Kagent.ListTasksLatest(ctx, agent, c)
 		if err != nil {
-			return time.Time{}, "", fmt.Errorf("list tasks: %w", err)
+			return time.Time{}, "", false, fmt.Errorf("list tasks: %w", err)
 		}
 		var unfinished []a2a.TaskState
 		for _, t := range listed {
@@ -156,7 +156,7 @@ func (k *KagentLiveness) activity(
 			}
 			switch t.Status.State {
 			case a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired:
-				return k.now(), "", nil
+				return k.now(), "", true, nil
 			case a2a.TaskStateSubmitted, a2a.TaskStateWorking:
 				if !slices.Contains(unfinished, t.Status.State) {
 					unfinished = append(unfinished, t.Status.State)
@@ -170,7 +170,7 @@ func (k *KagentLiveness) activity(
 		for _, state := range unfinished {
 			busy, err := k.Kagent.ListTasksInStateLatest(ctx, agent, c, state)
 			if err != nil {
-				return time.Time{}, "", fmt.Errorf("list %s tasks: %w", state, err)
+				return time.Time{}, "", false, fmt.Errorf("list %s tasks: %w", state, err)
 			}
 			for _, t := range busy {
 				if t != nil {
@@ -182,13 +182,13 @@ func (k *KagentLiveness) activity(
 	slices.Sort(running)
 	progress = strings.Join(running, ";")
 	if k.Activity == nil {
-		return latest, progress, nil
+		return latest, progress, false, nil
 	}
 	fromLedger, err := k.Activity.LastActivity(ctx, sessionID)
 	if err != nil {
-		return time.Time{}, "", err
+		return time.Time{}, "", false, err
 	}
-	return laterOf(latest, fromLedger), progress, nil
+	return laterOf(latest, fromLedger), progress, false, nil
 }
 
 // taskProgress fingerprints a running task by what kagent has recorded for it: its id, state and
@@ -264,7 +264,14 @@ func (s *Service) runLiveness(ctx context.Context) error {
 		return err
 	}
 	var errs []error
-	for _, a := range rows {
+	for _, r := range rows {
+		a := r.TaskAttempt
+		if r.Standing {
+			if err := s.checkStanding(ctx, a); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
 		if err := s.checkLiveness(ctx, a); err != nil {
 			errs = append(errs, err)
 		}
