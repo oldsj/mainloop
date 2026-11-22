@@ -268,7 +268,8 @@ export function AgentColumn({
       data-testid="agent-column"
       className="text-ui flex min-h-0 flex-1 flex-col font-mono"
     >
-      <header className="pr-xs flex h-8 shrink-0 items-center justify-between">
+      {/* As tall as the tab strip beside it, rule included, so the two first rows line up. */}
+      <header className="pr-xs min-h-control box-content flex shrink-0 items-center justify-between border-b border-transparent">
         <h2 id="spaces-heading" className={LABEL}>
           spaces
         </h2>

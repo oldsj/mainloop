@@ -11,4 +11,5 @@ export {
 } from './model';
 export type { ExplorerPrefs } from './prefs';
 export { workingCount } from './agents';
+export { TabStrip } from './TabStrip';
 export { useAgentColumn, useAsk, useExplorer, useOpenTarget } from './useExplorer';

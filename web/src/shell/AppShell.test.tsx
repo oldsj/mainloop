@@ -123,11 +123,58 @@ describe('shell switch', () => {
     expect(screen.getByTestId('desktop-shell').firstElementChild?.firstElementChild).toBe(bar);
   });
 
+  it('puts a strip of tabs over the page: the current space’s agents, with the page’s own lit', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    const running = view({ id: 'task-r', title: 'Add retry button', status: 'running' });
+    server.use(
+      projectsRead([project({ id: running.task.project_id ?? undefined })]),
+      tasksList(() => HttpResponse.json([running])),
+      taskRead(() => HttpResponse.json(running))
+    );
+    const router = await renderAt('/');
+    // Given the main chat: the strip is the main thread's space, above the page and outside it
+    const strip = () => screen.getByTestId('tab-strip');
+    expect(strip()).toHaveAccessibleName('Agents in main');
+    expect(screen.getByRole('main')).not.toContainElement(strip());
+    expect(within(strip()).getByRole('button', { current: 'page' })).toHaveTextContent('main');
+
+    // When the owner opens an agent from the column
+    await user.click(
+      await within(screen.getByTestId('explorer-aside')).findByRole('button', {
+        name: /^Add retry button/
+      })
+    );
+
+    // Then the strip is that agent's space, with its tab lit beside the project's overview
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/task-r'));
+    await waitFor(() => expect(strip()).toHaveAccessibleName('Agents in widgets'));
+    expect(
+      within(strip())
+        .getAllByTestId('tab')
+        .map((tab) => tab.textContent)
+    ).toEqual(['overview', 'Add retry button']);
+    expect(within(strip()).getByRole('button', { current: 'page' })).toHaveTextContent(
+      'Add retry button'
+    );
+
+    // And a page that is no agent's gets a tab of its own beside the main chat's
+    await act(() => router.navigate({ to: '/settings' }));
+    await waitFor(() =>
+      expect(
+        within(strip())
+          .getAllByTestId('tab')
+          .map((tab) => tab.textContent)
+      ).toEqual(['main', 'settings'])
+    );
+  });
+
   it('renders the compact shell on a narrow viewport', async () => {
     setViewport(false);
     await renderAt('/');
     expect(screen.getByTestId('compact-shell')).toBeInTheDocument();
     expect(screen.getByTestId('mobile-tab-bar')).toBeInTheDocument();
+    expect(screen.queryByTestId('tab-strip')).toBeNull();
   });
 
   it('lets ?view=compact win on a wide viewport', async () => {
