@@ -32,7 +32,7 @@ func TestScrapeReadsTheDatabase(t *testing.T) {
 	}
 	h := &metrics.Handler{Pool: d.Pool, Limits: metrics.Limits{Base: 1, Overflow: 1}}
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodGet, "/metrics", nil))
 	body := rec.Body.String()
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain; version=0.0.4") {
 		t.Fatalf("%d %s\n%s", rec.Code, rec.Header().Get("Content-Type"), body)

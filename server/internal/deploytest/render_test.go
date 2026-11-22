@@ -240,7 +240,7 @@ func TestServeSubcommandsAndPorts(t *testing.T) {
 		subcommand string
 		ports      []int32
 	}{
-		"backend": {"serve-api", []int32{8000}},
+		"backend": {"serve-api", []int32{8000, 9100}},
 		"mcp":     {"serve-mcp", []int32{8002}},
 		"git":     {"serve-git", []int32{8003, 8004}},
 	}

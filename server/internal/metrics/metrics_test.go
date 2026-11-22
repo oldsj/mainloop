@@ -43,7 +43,7 @@ func TestOnlyGetMetricsIsServed(t *testing.T) {
 		{http.MethodPost, "/metrics", http.StatusMethodNotAllowed},
 	} {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), tc.method, tc.path, nil))
 		if rec.Code != tc.want {
 			t.Errorf("%s %s = %d, want %d", tc.method, tc.path, rec.Code, tc.want)
 		}
