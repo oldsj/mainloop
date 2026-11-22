@@ -1,60 +1,37 @@
-import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
-import {
-  Activity,
-  Compass,
-  Inbox,
-  MessageSquare,
-  Search,
-  Settings,
-  type LucideIcon
-} from 'lucide-react';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
+import { Inbox, Menu } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
-import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
-import { ExplorerPane, useNeedsCount } from '@/features/explorer';
+import {
+  AgentColumn,
+  needsCount,
+  TabStrip,
+  useAgentColumn,
+  useAsk,
+  useExplorer,
+  useOpenTarget
+} from '@/features/explorer';
 import { badgeText } from '@/features/inbox/model';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
-import { ThemeSelector } from './ThemeSelector';
-import { activeNavTab, EXPLORER_TAB_LABEL, type NavTab, type Tab } from './view';
+import type { Tab } from './view';
+
+/** A control at either end of the top row: a 44 px touch target that does not scroll with the tabs. */
+const END =
+  'text-muted-foreground hover:text-foreground size-control focus-visible:ring-ring relative inline-flex shrink-0 items-center justify-center outline-none focus-visible:ring-1 focus-visible:ring-inset [&_svg]:size-4';
 
 /**
- * The tab bar's three items. Chat is the main chat, Needs you is the answer view with its count,
- * and the third is the tree, under the label in `EXPLORER_TAB_LABEL`.
- */
-const TAB_ITEMS: readonly { id: NavTab; label: string; Icon: LucideIcon }[] = [
-  { id: 'chat', label: 'Chat', Icon: MessageSquare },
-  { id: 'needs', label: 'Needs you', Icon: Inbox },
-  { id: 'explorer', label: EXPLORER_TAB_LABEL, Icon: Compass }
-];
-
-/** The tab's name. Needs you carries its count, so a screen reader announces it. */
-function tabName(id: NavTab, label: string, needs: number): string {
-  return id === 'needs' && needs > 0 ? `${label}, ${needs}` : label;
-}
-
-/** Hides a pane's content without unmounting it, so its state survives switching away. */
-function TabPane({ active, children }: { active: boolean; children: ReactNode }) {
-  return (
-    <div hidden={!active} className="h-full">
-      {children}
-    </div>
-  );
-}
-
-/**
- * <1024 px. There is no header: the page starts at the top of the screen, so on the main chat the
- * one row above the thread is the session row. A bottom tab bar has three items, and the lit one
- * follows where the owner is:
+ * <1024 px: one agent, full screen, as a terminal workspace manager is on a narrow terminal. There
+ * is no header and no bar at the bottom. One row at the top holds, left to right:
  *
- * - **Chat** opens the main chat.
- * - **Needs you** opens the answer view and carries the count, so attention keeps polling.
- * - **Sessions** shows the tree. It is also lit on a page opened from the tree (a task, a session,
- *   a project, health), where tapping it brings the tree back.
+ * - the button for the **spaces and agents**, which opens them over the page (`?tab=explorer`, so
+ *   Back closes them);
+ * - the current space's **tabs**, which scroll sideways, with "+" at their end;
+ * - the **Inbox**, with the Needs-you count, so attention keeps polling and is one tap away.
  *
- * Two panes sit under the bar: the routed page and the tree (`?tab=explorer`). Each is built the
- * first time it opens and stays mounted, so an open tree survives a switch. Health and the theme
- * are in the tree's header.
+ * Under it is the routed page. It is built the first time it shows and stays mounted while the
+ * spaces and agents cover it, so a conversation keeps its place. Choosing a space, an agent or a tab
+ * goes to its page and puts the list away.
  */
 export function CompactShell({
   tab,
@@ -71,26 +48,76 @@ export function CompactShell({
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const onHome = pathname === '/';
-  const active = activeNavTab(tab, pathname);
-  const needs = useNeedsCount();
-  const [opened, setOpened] = useState<ReadonlySet<Tab>>(() => new Set([tab]));
-  // Adjusts state during render, the React way to derive it from a prop: the first visit adds the tab.
-  if (!opened.has(tab)) setOpened(new Set([...opened, tab]));
+  const open = useOpenTarget();
+  const ask = useAsk();
+  // The explorer's reads poll while the shell is up, and mark a task seen when its page opens.
+  const explorer = useExplorer(lastVisit);
+  const needs = needsCount(explorer.nodes);
+  const column = useAgentColumn();
+  const listing = tab === 'explorer';
+  // The page is built the first time it is the thing showing, and then kept.
+  const [paged, setPaged] = useState(!listing);
+  // Adjusts state during render, the React way to derive it from a prop.
+  if (!listing && !paged) setPaged(true);
 
-  const go = (id: NavTab) => {
-    // Each item leads to one place. Chat and Needs you are pages, so they start the search afresh
-    // (the root keeps `?view=`). The tree is a pane over the current page, so it keeps the route.
-    if (id === 'chat') void navigate({ to: '/', search: {} });
-    else if (id === 'needs') void navigate({ to: '/inbox', search: {} });
-    else
-      void navigate({
-        to: '.',
-        search: (prev: Record<string, unknown>) => ({ ...prev, tab: 'explorer' as const })
-      });
-  };
+  const toggle = () =>
+    void navigate({
+      to: '.',
+      search: (prev: Record<string, unknown>) => ({
+        ...prev,
+        tab: listing ? undefined : ('explorer' as const)
+      })
+    });
 
   return (
-    <div data-testid="compact-shell" className="flex min-h-0 flex-1 flex-col">
+    // The bottom inset is the shell's: there is no bar down there to take it.
+    <div
+      data-testid="compact-shell"
+      className="flex min-h-0 flex-1 flex-col pb-[env(safe-area-inset-bottom)]"
+    >
+      <PanelBoundary name="Tabs">
+        <TabStrip
+          model={column.model}
+          space={column.space}
+          page={column.page}
+          pathname={pathname}
+          onOpen={open}
+          onAsk={ask}
+          leading={
+            <button
+              type="button"
+              data-testid="agents-toggle"
+              aria-label="Spaces and agents"
+              aria-expanded={listing}
+              onClick={toggle}
+              className={cn(END, listing && 'bg-accent text-accent-foreground')}
+            >
+              <Menu aria-hidden="true" />
+            </button>
+          }
+          trailing={
+            <button
+              type="button"
+              data-testid="inbox-link"
+              aria-label={needs > 0 ? `Inbox, ${needs} need you` : 'Inbox'}
+              aria-current={pathname === '/inbox' && !listing ? 'page' : undefined}
+              onClick={() => open({ to: 'needs' })}
+              className={cn(END, pathname === '/inbox' && !listing && 'text-foreground')}
+            >
+              <Inbox aria-hidden="true" />
+              {needs > 0 ? (
+                <span
+                  data-testid="needs-badge"
+                  aria-hidden="true"
+                  className="bg-destructive text-destructive-foreground text-2xs absolute top-1.5 right-1 inline-flex min-w-4 items-center justify-center px-0.5 leading-4 font-semibold tabular-nums"
+                >
+                  {badgeText(needs)}
+                </span>
+              ) : null}
+            </button>
+          }
+        />
+      </PanelBoundary>
       {/* The home chat owns its scroll, so the pane around it does not scroll as well. It is the
           containing block too: an absolutely placed descendant (an sr-only label) would otherwise
           stretch the document, and scrolling a row into view would scroll the whole page. */}
@@ -99,91 +126,31 @@ export function CompactShell({
         tabIndex={-1}
         className={cn(
           'relative min-h-0 flex-1 outline-none',
-          onHome && tab === 'chat' ? 'overflow-hidden' : 'overflow-y-auto'
+          onHome && !listing ? 'overflow-hidden' : 'overflow-y-auto'
         )}
       >
-        {opened.has('chat') && (
-          <TabPane active={tab === 'chat'}>
-            <div className="h-full min-h-0">{children}</div>
-          </TabPane>
-        )}
-        {opened.has('explorer') && (
-          <TabPane active={tab === 'explorer'}>
-            <PanelBoundary name="Explorer">
-              <ExplorerPane
-                lastVisit={lastVisit}
-                title={EXPLORER_TAB_LABEL}
-                actions={
-                  <>
-                    <button
-                      type="button"
-                      data-testid="header-search"
-                      aria-label="Search"
-                      onClick={onSearch}
-                      className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }))}
-                    >
-                      <Search aria-hidden="true" />
-                    </button>
-                    <Link
-                      to="/health"
-                      data-testid="header-health"
-                      aria-label="Orchestration health"
-                      className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }))}
-                    >
-                      <Activity aria-hidden="true" />
-                    </Link>
-                    <Link
-                      to="/settings"
-                      data-testid="header-settings"
-                      aria-label="Settings"
-                      className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }))}
-                    >
-                      <Settings aria-hidden="true" />
-                    </Link>
-                    <ThemeSelector />
-                  </>
-                }
-              />
-            </PanelBoundary>
-          </TabPane>
-        )}
+        {paged ? (
+          // Hidden, not unmounted, while the list covers it, so its state survives.
+          <div hidden={listing} className="h-full min-h-0">
+            {children}
+          </div>
+        ) : null}
+        {listing ? (
+          <PanelBoundary name="Explorer">
+            <AgentColumn
+              model={column.model}
+              page={column.page}
+              space={column.space}
+              ready={explorer.ready}
+              failed={explorer.failed}
+              onOpen={open}
+              onAsk={ask}
+              needs={needs}
+              onMenu={onSearch}
+            />
+          </PanelBoundary>
+        ) : null}
       </main>
-      <nav
-        data-testid="mobile-tab-bar"
-        aria-label="Sections"
-        className="border-border-subtle bg-card flex border-t pb-[env(safe-area-inset-bottom)]"
-      >
-        {TAB_ITEMS.map(({ id, label, Icon }) => (
-          <button
-            key={id}
-            type="button"
-            data-testid={`tab-${id}`}
-            aria-label={tabName(id, label, needs)}
-            aria-pressed={active === id}
-            onClick={() => go(id)}
-            className={cn(
-              'gap-xs text-2xs flex min-h-11 flex-1 flex-col items-center justify-center',
-              active === id
-                ? 'bg-accent text-accent-foreground font-semibold'
-                : 'text-muted-foreground'
-            )}
-          >
-            <span className="relative inline-flex">
-              <Icon className="size-4" aria-hidden="true" />
-              {id === 'needs' && needs > 0 ? (
-                <span
-                  data-testid="needs-badge"
-                  aria-hidden="true"
-                  className="bg-destructive text-destructive-foreground text-2xs absolute -top-1.5 left-3 inline-flex min-w-4 items-center justify-center px-0.5 leading-4 font-semibold tabular-nums"
-                >
-                  {badgeText(needs)}
-                </span>
-              ) : null}
-            </span>
-            {label}
-          </button>
-        ))}
-      </nav>
     </div>
   );
 }

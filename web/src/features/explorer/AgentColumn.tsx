@@ -276,8 +276,9 @@ export function AgentColumn({
           aria-label={`Ask Mainloop about ${opts.label}`}
           title="Ask Mainloop about this"
           onClick={() => onAsk(opts.ask ?? '')}
-          // Shown on hover, or while its row has keyboard focus.
-          className="text-muted-foreground hover:text-foreground mr-xs inline-flex size-6 shrink-0 items-center justify-center self-center opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
+          // A phone has no hover, so it is always shown there, as a touch target. With a mouse it
+          // shows on hover, or while its row has keyboard focus.
+          className="text-muted-foreground hover:text-foreground lg:mr-xs inline-flex size-11 shrink-0 items-center justify-center self-center lg:size-6 lg:opacity-0 lg:group-focus-within:opacity-100 lg:group-hover:opacity-100"
         >
           <MessageSquarePlus className="size-3.5" aria-hidden="true" />
         </button>

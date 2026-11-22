@@ -9,7 +9,7 @@ export type Tab = (typeof TABS)[number];
 
 /**
  * Tab values from before the explorer, kept so old links still land: `sessions` and `projects` open
- * the Explorer tab, and `inbox` is sent to the answer view at `/inbox` by the root route.
+ * the spaces and agents, and `inbox` is sent to the answer view at `/inbox` by the root route.
  */
 const LEGACY_TABS = ['sessions', 'inbox', 'projects'] as const;
 
@@ -23,25 +23,12 @@ export const shellSearchSchema = z.object({
 });
 export type ShellSearch = z.infer<typeof shellSearchSchema>;
 
-/** The phone tab a URL asks for. The old session, inbox and project tabs all show the explorer. */
+/**
+ * What a URL asks the phone to show: the page (`chat`), or the spaces and agents over it
+ * (`explorer`). The old session, inbox and project tabs all show the spaces and agents.
+ */
 export function resolveTab(tab: ShellSearch['tab']): Tab {
   if (tab === undefined || tab === 'chat') return 'chat';
-  return 'explorer';
-}
-
-/** The three items of the phone's tab bar. `needs` is the answer view at `/inbox`, not a `?tab=`. */
-export type NavTab = 'chat' | 'needs' | 'explorer';
-
-/**
- * Which tab-bar item is lit. It follows where the owner is: the tree, the main chat, the answer
- * view, or a page reached from the tree (a task, a session, a project, health), which lights the
- * tree's own tab, since that is where the page was opened from and where "back" leads.
- */
-export function activeNavTab(tab: Tab, pathname: string): NavTab {
-  if (tab === 'explorer') return 'explorer';
-  const path = pathname.replace(/\/+$/, '') || '/';
-  if (path === '/') return 'chat';
-  if (path === '/inbox') return 'needs';
   return 'explorer';
 }
 
@@ -71,9 +58,3 @@ export function useIsWide(): boolean {
     () => true
   );
 }
-
-/**
- * The word on the phone's third tab, which shows the tree. The tab's id and its `?tab=explorer`
- * link keep the tree's own name; the owner chose this word, so it is set in one place.
- */
-export const EXPLORER_TAB_LABEL = 'Sessions';

@@ -171,12 +171,24 @@ describe('shell switch', () => {
     );
   });
 
-  it('renders the compact shell on a narrow viewport', async () => {
+  it('renders the compact shell on a narrow viewport: one row at the top, and no bar at the bottom', async () => {
     setViewport(false);
     await renderAt('/');
-    expect(screen.getByTestId('compact-shell')).toBeInTheDocument();
-    expect(screen.getByTestId('mobile-tab-bar')).toBeInTheDocument();
-    expect(screen.queryByTestId('tab-strip')).toBeNull();
+    const shell = screen.getByTestId('compact-shell');
+    expect(screen.queryByTestId('mobile-tab-bar')).toBeNull();
+    expect(screen.queryByTestId('status-bar')).toBeNull();
+    // The row is the shell's first thing: the spaces and agents, the space's tabs, the Inbox.
+    const strip = screen.getByTestId('tab-strip');
+    expect(shell.firstElementChild).toBe(strip);
+    expect(
+      [...strip.children].map(
+        (child) => child.getAttribute('aria-label') ?? child.getAttribute('data-testid')
+      )
+    ).toEqual(['Spaces and agents', 'tab-scroller', 'Inbox']);
+    expect(within(strip).getByRole('button', { current: 'page' })).toHaveTextContent('main');
+    // The page is under it, and the lists are not drawn until they are asked for.
+    expect(screen.getByRole('main')).not.toContainElement(strip);
+    expect(screen.queryByTestId('agent-column')).toBeNull();
   });
 
   it('lets ?view=compact win on a wide viewport', async () => {
@@ -185,31 +197,37 @@ describe('shell switch', () => {
     expect(screen.getByTestId('compact-shell')).toBeInTheDocument();
   });
 
-  it('shows the explorer tree when the explorer tab is selected', async () => {
+  it('shows the spaces and agents over the page when the URL asks for them', async () => {
     setViewport(false);
     await renderAt('/?tab=explorer');
-    expect(await screen.findByRole('tree')).toBeVisible();
-    expect(screen.getByTestId('tab-explorer')).toHaveAttribute('aria-pressed', 'true');
+    expect(await screen.findByRole('group', { name: 'agents' })).toBeVisible();
+    expect(screen.getByTestId('agents-toggle')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByRole('tree')).toBeNull();
   });
 
-  it('switches tabs from the tab bar', async () => {
+  it('opens the spaces and agents from their button, and puts them away again', async () => {
     setViewport(false);
     const user = userEvent.setup();
-    await renderAt('/');
-    await user.click(screen.getByTestId('tab-explorer'));
-    expect(await screen.findByRole('tree')).toBeVisible();
-    await user.click(screen.getByTestId('tab-chat'));
-    expect(screen.getByTestId('tab-chat')).toHaveAttribute('aria-pressed', 'true');
+    const router = await renderAt('/');
+    const toggle = screen.getByTestId('agents-toggle');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(toggle);
+    expect(await screen.findByRole('group', { name: 'agents' })).toBeVisible();
+    // It is in the URL, so the phone's Back puts the list away.
+    expect(router.state.location.search).toMatchObject({ tab: 'explorer' });
+    await user.click(toggle);
+    await waitFor(() => expect(screen.queryByTestId('agent-column')).toBeNull());
+    expect(router.state.location.search).not.toHaveProperty('tab');
+    expect(screen.getByTestId('main-thread')).toBeVisible();
   });
 
   it.each(['sessions', 'projects'])(
-    'maps the old ?tab=%s value to the explorer tab',
+    'maps the old ?tab=%s value to the spaces and agents',
     async (legacy) => {
       setViewport(false);
       await renderAt(`/?tab=${legacy}`);
-      expect(await screen.findByRole('tree')).toBeVisible();
-      expect(screen.getByTestId('tab-explorer')).toHaveAttribute('aria-pressed', 'true');
-      expect(screen.getByTestId('tab-chat')).toHaveAttribute('aria-pressed', 'false');
+      expect(await screen.findByRole('group', { name: 'agents' })).toBeVisible();
+      expect(screen.getByTestId('agents-toggle')).toHaveAttribute('aria-expanded', 'true');
     }
   );
 });
@@ -219,10 +237,9 @@ describe('?view= override', () => {
     setViewport(true);
     const user = userEvent.setup();
     const router = await renderAt('/?view=compact');
-    // The phone has no header: health is in the tree's header.
-    await user.click(screen.getByTestId('tab-explorer'));
-    await user.click(await screen.findByTestId('header-health'));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/health'));
+    // The phone's Inbox is a button in its top row.
+    await user.click(screen.getByTestId('inbox-link'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/inbox'));
     expect(router.state.location.search).toMatchObject({ view: 'compact' });
     expect(screen.getByTestId('compact-shell')).toBeInTheDocument();
   });
@@ -253,13 +270,17 @@ describe('header health link', () => {
     await waitFor(() => expect(document.title).toBe('Settings · Mainloop'));
   });
 
-  it('opens Settings from the tree’s header on a phone', async () => {
+  it('opens Settings on a phone from the menu, under the spaces and agents', async () => {
     setViewport(false);
     const user = userEvent.setup();
     const router = await renderAt('/?tab=explorer');
-    await user.click(await screen.findByRole('link', { name: 'Settings' }));
+    await user.click(await screen.findByRole('button', { name: 'Menu' }));
+    await user.type(await screen.findByRole('combobox'), 'settings');
+    await user.keyboard('{Enter}');
     await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
     expect(await screen.findByTestId('settings-page')).toBeVisible();
+    // The page shows, not the lists it was opened from.
+    expect(screen.queryByTestId('agent-column')).toBeNull();
   });
 
   it('opens orchestration health from the desktop status bar’s connection', async () => {
@@ -270,17 +291,32 @@ describe('header health link', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/health'));
   });
 
-  it('opens orchestration health from the tree on a phone, and shows the page, not the tree', async () => {
+  it('opens an agent on a phone from the list, and shows its page with its tab lit, not the list', async () => {
     setViewport(false);
     const user = userEvent.setup();
+    const queued = view({
+      id: 'task-q',
+      title: 'Queue backend',
+      status: 'queued',
+      current_attempt_id: null
+    });
+    server.use(
+      tasksList(() => HttpResponse.json([queued])),
+      taskRead(() => HttpResponse.json(queued))
+    );
     const router = await renderAt('/');
-    await user.click(screen.getByTestId('tab-explorer'));
-    await user.click(await screen.findByTestId('header-health'));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/health'));
+    await user.click(screen.getByTestId('agents-toggle'));
+    await user.click(
+      await within(await screen.findByTestId('agent-column')).findByRole('button', {
+        name: /^Queue backend/
+      })
+    );
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/task-q'));
     expect(router.state.location.search).not.toHaveProperty('tab');
-    // A page opened from the tree keeps the tree's tab lit.
-    expect(screen.getByTestId('tab-explorer')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('tab-chat')).toHaveAttribute('aria-pressed', 'false');
+    await waitFor(() => expect(screen.queryByTestId('agent-column')).toBeNull());
+    expect(
+      within(screen.getByTestId('tab-strip')).getByRole('button', { current: 'page' })
+    ).toHaveTextContent('Queue backend');
   });
 });
 
@@ -320,8 +356,8 @@ describe('theme selector', () => {
   });
 });
 
-describe('compact tab badges', () => {
-  it('shows the Needs-you count on the Needs you tab, read from GET /attention', async () => {
+describe('the phone’s Inbox count', () => {
+  it('shows the Needs-you count on the Inbox button, read from GET /attention', async () => {
     setViewport(false);
     server.use(
       attentionRead(() =>
@@ -332,15 +368,14 @@ describe('compact tab badges', () => {
     );
     await renderAt('/');
     expect(await screen.findByTestId('needs-badge')).toHaveTextContent('3');
-    expect(screen.getByTestId('tab-needs')).toHaveAccessibleName('Needs you, 3');
-    expect(screen.getByTestId('tab-explorer')).toHaveAccessibleName('Sessions');
+    expect(screen.getByTestId('inbox-link')).toHaveAccessibleName('Inbox, 3 need you');
   });
 
   it('shows no count when nothing needs the owner', async () => {
     setViewport(false);
     await renderAt('/');
     expect(screen.queryByTestId('needs-badge')).not.toBeInTheDocument();
-    expect(screen.getByTestId('tab-needs')).toHaveAccessibleName('Needs you');
+    expect(screen.getByTestId('inbox-link')).toHaveAccessibleName('Inbox');
   });
 
   it('counts a task that needs an owner decision, read from GET /tasks', async () => {
@@ -348,10 +383,10 @@ describe('compact tab badges', () => {
     server.use(tasksList(() => HttpResponse.json([view({ reason: 'owner_decision' })])));
     await renderAt('/');
     expect(await screen.findByTestId('needs-badge')).toHaveTextContent('1');
-    expect(screen.getByTestId('tab-needs')).toHaveAccessibleName('Needs you, 1');
+    expect(screen.getByTestId('inbox-link')).toHaveAccessibleName('Inbox, 1 need you');
   });
 
-  it('keeps polling attention while the chat tab is open', async () => {
+  it('keeps polling attention while the chat is open', async () => {
     setViewport(false);
     let reads = 0;
     server.use(
@@ -365,7 +400,7 @@ describe('compact tab badges', () => {
     await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2), { timeout: 6000 });
   });
 
-  it('updates the count from the poll while the event stream is down and the chat tab is open', async () => {
+  it('updates the count from the poll while the event stream is down and the chat is open', async () => {
     setViewport(false);
     let needsOwner = true;
     let reads = 0;
@@ -384,7 +419,7 @@ describe('compact tab badges', () => {
       timeout: 6000
     });
     expect(reads).toBeGreaterThanOrEqual(2);
-    expect(screen.getByTestId('tab-needs')).toHaveAccessibleName('Needs you');
+    expect(screen.getByTestId('inbox-link')).toHaveAccessibleName('Inbox');
   });
 });
 
@@ -417,97 +452,101 @@ describe('page titles and focus', () => {
   });
 });
 
-describe('compact explorer tab', () => {
-  it('has three tabs with plain labels, and no header above the page', async () => {
+describe('the phone’s top row', () => {
+  const lit = () =>
+    within(screen.getByTestId('tab-strip'))
+      .getAllByTestId('tab')
+      .filter((tab) => tab.getAttribute('aria-current') === 'page')
+      .map((tab) => tab.textContent);
+
+  it('has no header above it: the row is the first thing on the screen', async () => {
     setViewport(false);
     await renderAt('/');
-    const bar = screen.getByTestId('mobile-tab-bar');
-    const tabs = within(bar).getAllByRole('button');
-    expect(tabs.map((tab) => tab.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
-      'Chat',
-      'Needs you',
-      'Sessions'
-    ]);
-    // The page starts at the top: the main chat's own row is the first thing in the shell.
     expect(screen.queryByText('$ mainloop')).toBeNull();
-    expect(screen.getByTestId('compact-shell').firstElementChild).toBe(screen.getByRole('main'));
+    expect(screen.getByTestId('compact-shell').firstElementChild).toBe(
+      screen.getByTestId('tab-strip')
+    );
   });
 
   it.each([
-    ['/', 'tab-chat'],
-    ['/inbox', 'tab-needs'],
-    ['/health', 'tab-explorer'],
-    ['/tasks/t-1', 'tab-explorer'],
-    ['/projects/project-a', 'tab-explorer'],
-    ['/?tab=explorer', 'tab-explorer'],
-    ['/inbox?tab=explorer', 'tab-explorer']
-  ])('lights the tab for where the owner is: %s', async (url, lit) => {
+    ['/', 'main'],
+    ['/inbox', 'inbox'],
+    ['/health', 'health'],
+    ['/settings', 'settings'],
+    ['/inbox?tab=explorer', 'inbox']
+  ])('lights the tab for where the owner is: %s', async (url, tab) => {
     setViewport(false);
     await renderAt(url);
-    for (const id of ['tab-chat', 'tab-needs', 'tab-explorer'])
-      expect(screen.getByTestId(id)).toHaveAttribute('aria-pressed', String(id === lit));
+    expect(lit()).toEqual([tab]);
   });
 
-  it('opens the answer view from Needs you, and the main chat from Chat', async () => {
+  it('marks the Inbox while the answer view shows, and opens it and the main chat', async () => {
     setViewport(false);
     const user = userEvent.setup();
     const router = await renderAt('/?tab=explorer');
-    await user.click(screen.getByTestId('tab-needs'));
+    const inbox = screen.getByTestId('inbox-link');
+    expect(inbox).not.toHaveAttribute('aria-current');
+    await user.click(inbox);
     await waitFor(() => expect(router.state.location.pathname).toBe('/inbox'));
     expect(router.state.location.search).not.toHaveProperty('tab');
-    expect(screen.getByTestId('tab-needs')).toHaveAttribute('aria-pressed', 'true');
-    await user.click(screen.getByTestId('tab-chat'));
+    expect(inbox).toHaveAttribute('aria-current', 'page');
+    // The main chat is the first tab of the main thread's space.
+    await user.click(within(screen.getByTestId('tab-strip')).getByRole('button', { name: 'main' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    expect(screen.getByTestId('tab-chat')).toHaveAttribute('aria-pressed', 'true');
+    expect(lit()).toEqual(['main']);
   });
 
-  it('brings the tree back over a page opened from it, keeping the page’s route', async () => {
+  it('brings the lists up over a page, keeping the page’s route', async () => {
     setViewport(false);
     const user = userEvent.setup();
     const router = await renderAt('/health');
-    await user.click(screen.getByTestId('tab-explorer'));
-    expect(await screen.findByRole('tree')).toBeVisible();
+    await user.click(screen.getByTestId('agents-toggle'));
+    expect(await screen.findByRole('group', { name: 'agents' })).toBeVisible();
     expect(router.state.location.pathname).toBe('/health');
     expect(router.state.location.search).toMatchObject({ tab: 'explorer' });
   });
 
-  it('puts health and the theme in the tree’s header', async () => {
+  it('has the menu under the spaces, which reaches health, Settings and the themes', async () => {
     setViewport(false);
     const user = userEvent.setup();
     await renderAt('/');
-    expect(screen.queryByTestId('theme-selector')).toBeNull();
-    await user.click(screen.getByTestId('tab-explorer'));
-    await screen.findByRole('tree');
-    expect(screen.getByTestId('theme-selector')).toBeVisible();
-    expect(screen.getByRole('link', { name: 'Orchestration health' })).toBeVisible();
-  });
-
-  it('opens the explorer from its tab, and keeps it mounted after switching away', async () => {
-    setViewport(false);
-    const user = userEvent.setup();
-    await renderAt('/');
-    await user.click(screen.getByTestId('tab-explorer'));
-    const tree = await screen.findByRole('tree');
-    expect(screen.getByTestId('tab-explorer')).toHaveAttribute('aria-pressed', 'true');
-    await user.click(screen.getByTestId('tab-chat'));
-    expect(tree).not.toBeVisible();
-    await user.click(screen.getByTestId('tab-explorer'));
-    expect(screen.getByRole('tree')).toBe(tree);
-    expect(tree).toBeVisible();
+    await user.click(screen.getByTestId('agents-toggle'));
+    await user.click(await screen.findByRole('button', { name: 'Menu' }));
+    const options = within(await screen.findByRole('listbox'))
+      .getAllByRole('option')
+      .map((option) => option.textContent);
+    expect(options).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^Orchestration health/),
+        expect.stringMatching(/^Settings/),
+        expect.stringMatching(/^Theme: nord/)
+      ])
+    );
   });
 });
 
-describe('compact tab state', () => {
-  it('keeps an opened tab mounted when switching away and back', async () => {
+describe('the phone’s page under the lists', () => {
+  it('keeps the page mounted while the lists cover it, so it is the same page afterwards', async () => {
+    setViewport(false);
+    const user = userEvent.setup();
+    await renderAt('/');
+    const thread = await screen.findByTestId('main-thread');
+    await user.click(screen.getByTestId('agents-toggle'));
+    await screen.findByRole('group', { name: 'agents' });
+    expect(thread).not.toBeVisible();
+    await user.click(screen.getByTestId('agents-toggle'));
+    await waitFor(() => expect(thread).toBeVisible());
+    expect(screen.getByTestId('main-thread')).toBe(thread);
+  });
+
+  it('does not build the page until it is the thing showing', async () => {
     setViewport(false);
     const user = userEvent.setup();
     await renderAt('/?tab=explorer');
-    const tree = await screen.findByRole('tree');
-    await user.click(screen.getByTestId('tab-chat'));
-    expect(tree).not.toBeVisible();
-    await user.click(screen.getByTestId('tab-explorer'));
-    expect(screen.getByRole('tree')).toBe(tree);
-    expect(tree).toBeVisible();
+    await screen.findByRole('group', { name: 'agents' });
+    expect(screen.queryByTestId('main-thread')).toBeNull();
+    await user.click(screen.getByTestId('agents-toggle'));
+    expect(await screen.findByTestId('main-thread')).toBeVisible();
   });
 });
 
@@ -557,20 +596,25 @@ describe('home work placement', () => {
     expect(main.className).not.toContain('overflow-y-auto');
   });
 
-  it('shows what changed in the phone explorer, not above the chat', async () => {
+  it('shows the work in the phone’s list, not above the chat', async () => {
     setViewport(false);
     const user = userEvent.setup();
     serveFailedSinceVisit();
     await renderAt('/');
-    expect(screen.queryByText('Since you were here')).toBeNull();
+    expect(within(screen.getByRole('main')).queryByText('Broke')).toBeNull();
     expect(screen.getByRole('main').className).toContain('overflow-hidden');
-    await user.click(screen.getByTestId('tab-explorer'));
-    const row = await screen.findByRole('treeitem', { name: '1 task failed, Broke' });
-    await user.click(within(row).getByText('1 task failed'));
-    // The task's page shows in place of the tree, and the tree's tab stays lit.
-    await waitFor(() => expect(row).not.toBeVisible());
-    expect(screen.getByTestId('tab-explorer')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('tab-chat')).toHaveAttribute('aria-pressed', 'false');
+    await user.click(screen.getByTestId('agents-toggle'));
+    // The failed task is an agent in the list, with the red dot.
+    const row = await within(await screen.findByTestId('agent-column')).findByRole('button', {
+      name: /^Broke/
+    });
+    expect(within(row).getByTestId('agent-dot')).toHaveAttribute('data-tone', 'bad');
+    await user.click(row);
+    // The task's page shows in place of the list.
+    await waitFor(() => expect(screen.queryByTestId('agent-column')).toBeNull());
+    expect(
+      within(screen.getByTestId('tab-strip')).getByRole('button', { current: 'page' })
+    ).toHaveTextContent('Broke');
   });
 
   it('lets other pages scroll in the main pane', async () => {
@@ -637,7 +681,9 @@ describe('offline banner', () => {
     const main = screen.getByRole('main');
     expect(column).toContainElement(main);
     expect(banner.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(column).toContainElement(screen.getByTestId('mobile-tab-bar'));
+    // The top row is under the banner, so the banner takes its line from the page, not from the row.
+    const strip = screen.getByTestId('tab-strip');
+    expect(banner.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('is the status bar on desktop: it turns to the offline colour in place, with no banner', async () => {
@@ -1166,19 +1212,23 @@ describe('answer view', () => {
     );
   });
 
-  it('opens on the phone over the chat pane, with a way back to the explorer', async () => {
+  it('opens on the phone from the Inbox button, with a way back to the chat', async () => {
     setViewport(false);
     const user = userEvent.setup();
     server.use(
       attentionRead(() => HttpResponse.json(attentionSnapshot([attentionItem(planReview)])))
     );
     const router = await renderAt('/?tab=explorer');
-    await user.click(await within(await screen.findByRole('tree')).findByText('Review the plan'));
+    await waitFor(() =>
+      expect(screen.getByTestId('inbox-link')).toHaveAccessibleName('Inbox, 1 need you')
+    );
+    await user.click(screen.getByTestId('inbox-link'));
     await waitFor(() => expect(router.state.location.pathname).toBe('/inbox'));
     expect(await screen.findByRole('heading', { name: 'Inbox' })).toBeVisible();
-    await user.click(screen.getByRole('link', { name: 'Back to Sessions' }));
+    expect(screen.getByText('Review the plan')).toBeVisible();
+    await user.click(screen.getByRole('link', { name: 'Back to chat' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    expect(screen.getByTestId('tab-explorer')).toHaveAttribute('aria-pressed', 'true');
+    expect(await screen.findByTestId('main-thread')).toBeVisible();
   });
 
   it('sends an old ?tab=inbox link to the answer view', async () => {
@@ -1344,11 +1394,11 @@ describe('command palette', () => {
     localStorage.removeItem('mainloop-theme');
   });
 
-  it('opens from the tree’s header on a phone', async () => {
+  it('opens from the menu on a phone', async () => {
     setViewport(false);
     const user = userEvent.setup();
     await renderAt('/?tab=explorer');
-    await user.click(await screen.findByTestId('header-search'));
+    await user.click(await screen.findByTestId('column-menu'));
     expect(await screen.findByRole('combobox')).toHaveFocus();
   });
 });

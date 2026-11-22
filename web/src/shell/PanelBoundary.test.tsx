@@ -20,9 +20,9 @@ vi.mock('@/features/explorer', async (importOriginal) => {
       if (failing.on) throw new Error('explorer exploded');
       return <section data-testid="explorer-aside">Explorer</section>;
     },
-    ExplorerPane: () => {
+    AgentColumn: () => {
       if (failing.on) throw new Error('explorer exploded');
-      return <section data-testid="explorer-pane">Explorer</section>;
+      return <section data-testid="agent-column">Explorer</section>;
     }
   };
 });
@@ -80,6 +80,7 @@ describe('panel error boundaries', () => {
     setViewport(false);
     await renderAt('/?tab=explorer');
     expect(await screen.findByTestId('panel-error-explorer')).toBeInTheDocument();
-    expect(screen.getByTestId('mobile-tab-bar')).toBeInTheDocument();
+    // The top row is outside the boundary, so the way to the Inbox and the tabs is still there.
+    expect(screen.getByTestId('tab-strip')).toBeInTheDocument();
   });
 });

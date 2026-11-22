@@ -17,19 +17,34 @@ export interface TabStripProps {
   pathname: string;
   onOpen: (target: Target) => void;
   onAsk: (text: string) => void;
-  /** A control before the first tab: the button that brings a hidden sidebar back. */
+  /**
+   * A control before the first tab, which stays put while the tabs scroll: the button that brings a
+   * hidden sidebar back, or the phone's button for the spaces and agents.
+   */
   leading?: ReactNode;
+  /** A control after the tabs, which stays put too: the phone's Inbox, with its count. */
+  trailing?: ReactNode;
 }
 
 /**
  * The strip over the page, as a terminal workspace manager draws it: one tab per agent in the
  * current space, the lit one filled, and a "+" at the end. A tab is a status dot and a name. The
- * strip scrolls sideways when the tabs do not fit, and keeps the lit tab in view.
+ * tabs scroll sideways when they do not fit, with the lit tab kept in view; a control before or
+ * after them stays where it is.
  *
  * It is navigation, not a tab list: each tab opens a page, the lit one is marked
  * `aria-current="page"`, and the page below is the routed one.
  */
-export function TabStrip({ model, space, page, pathname, onOpen, onAsk, leading }: TabStripProps) {
+export function TabStrip({
+  model,
+  space,
+  page,
+  pathname,
+  onOpen,
+  onAsk,
+  leading,
+  trailing
+}: TabStripProps) {
   const tabs = spaceTabs(model, space, page, pathname);
   const spaceRow = model.spaces.find((row) => row.id === space);
   const name = spaceRow?.label ?? 'main';
@@ -45,51 +60,57 @@ export function TabStrip({ model, space, page, pathname, onOpen, onAsk, leading 
     <nav
       aria-label={`Agents in ${name}`}
       data-testid="tab-strip"
-      // No scrollbar: one would be as tall as the strip. The lit tab is kept in view instead.
-      style={{ scrollbarWidth: 'none' }}
-      className="border-border-subtle bg-card text-ui flex shrink-0 items-stretch overflow-x-auto border-b font-mono"
+      className="border-border-subtle bg-card text-ui flex shrink-0 items-stretch border-b font-mono"
     >
       {leading}
-      {tabs.map((tab) => {
-        const target = tab.target;
-        return (
-          <button
-            key={tab.id}
-            type="button"
-            ref={(el) => {
-              if (tab.current) lit.current = el;
-            }}
-            data-testid="tab"
-            aria-current={tab.current ? 'page' : undefined}
-            title={tab.title}
-            // A tab for a page that is no agent's leads nowhere: the owner is already on it.
-            onClick={target ? () => onOpen(target) : undefined}
-            className={cn(
-              TAB,
-              tab.current
-                ? // A hollow dot takes the tab's own text colour, so it shows on the fill.
-                  'bg-primary text-primary-foreground focus-visible:ring-foreground [&_[data-tone=muted]]:border-current'
-                : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring'
-            )}
-          >
-            {tab.tone ? <StatusDot tone={tab.tone} testId="tab-dot" /> : null}
-            <span className="max-w-tab truncate">{tab.label}</span>
-          </button>
-        );
-      })}
-      <button
-        type="button"
-        data-testid="tab-new"
-        aria-label={newLabel(model, space)}
-        title={newLabel(model, space)}
-        onClick={() => (prefill ? onAsk(prefill) : onOpen({ to: 'chat' }))}
-        className={cn(
-          TAB,
-          'text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring'
-        )}
+      <div
+        data-testid="tab-scroller"
+        // No scrollbar: one would be as tall as the strip. The lit tab is kept in view instead.
+        style={{ scrollbarWidth: 'none' }}
+        className="flex min-w-0 flex-1 items-stretch overflow-x-auto"
       >
-        <Plus className="size-3.5" aria-hidden="true" />
-      </button>
+        {tabs.map((tab) => {
+          const target = tab.target;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              ref={(el) => {
+                if (tab.current) lit.current = el;
+              }}
+              data-testid="tab"
+              aria-current={tab.current ? 'page' : undefined}
+              title={tab.title}
+              // A tab for a page that is no agent's leads nowhere: the owner is already on it.
+              onClick={target ? () => onOpen(target) : undefined}
+              className={cn(
+                TAB,
+                tab.current
+                  ? // A hollow dot takes the tab's own text colour, so it shows on the fill.
+                    'bg-primary text-primary-foreground focus-visible:ring-foreground [&_[data-tone=muted]]:border-current'
+                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring'
+              )}
+            >
+              {tab.tone ? <StatusDot tone={tab.tone} testId="tab-dot" /> : null}
+              <span className="max-w-tab truncate">{tab.label}</span>
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          data-testid="tab-new"
+          aria-label={newLabel(model, space)}
+          title={newLabel(model, space)}
+          onClick={() => (prefill ? onAsk(prefill) : onOpen({ to: 'chat' }))}
+          className={cn(
+            TAB,
+            'text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring'
+          )}
+        >
+          <Plus className="size-3.5" aria-hidden="true" />
+        </button>
+      </div>
+      {trailing}
     </nav>
   );
 }

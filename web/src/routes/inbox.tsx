@@ -1,10 +1,9 @@
-import { createFileRoute, Link, useSearch } from '@tanstack/react-router';
+import { createFileRoute, Link } from '@tanstack/react-router';
 import { ChevronLeft } from 'lucide-react';
 import { z } from 'zod';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import { InboxPanel } from '@/features/inbox/InboxPanel';
-import { EXPLORER_TAB_LABEL, useShellView } from '@/shell/view';
 
 // `show` picks Needs you, Problems or Activity; `item` names the Needs-you row to bring into view,
 // by its approval request id or queue item id (what the explorer and a task's pending approvals
@@ -21,14 +20,9 @@ export const Route = createFileRoute('/inbox')({
   component: Inbox
 });
 
-/**
- * The answer view, in place of the chat. Its back link returns to where the owner came from: the
- * Sessions tab on the phone, the chat on desktop (where the explorer stays beside it).
- */
+/** The answer view, in place of the chat. Its back link returns to the chat. */
 function Inbox() {
   const { show = 'needs', item } = Route.useSearch();
-  const { view } = useSearch({ strict: false });
-  const compact = useShellView(view) === 'compact';
   const navigate = Route.useNavigate();
   return (
     <InboxPanel
@@ -46,10 +40,10 @@ function Inbox() {
       back={
         <Link
           to="/"
-          search={compact ? { tab: 'explorer' } : {}}
+          search={{}}
           className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }))}
-          aria-label={compact ? `Back to ${EXPLORER_TAB_LABEL}` : 'Back to chat'}
-          title={compact ? `Back to ${EXPLORER_TAB_LABEL}` : 'Back to chat'}
+          aria-label="Back to chat"
+          title="Back to cha"
         >
           <ChevronLeft aria-hidden="true" />
         </Link>
