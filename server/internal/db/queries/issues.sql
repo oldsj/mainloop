@@ -6,8 +6,8 @@
 -- then reads the row that is there.
 INSERT INTO issue_writes (
     id, idempotency_key, owner_id, project_id, session_id, request_id, payload_hash, kind,
-    repo_id, repo_full_name, title, labels, body, issue_number
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    repo_id, repo_full_name, title, labels, body, issue_number, commit_sha, review_comments
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 ON CONFLICT (idempotency_key) DO NOTHING;
 
 -- name: GetIssueWriteByKey :one

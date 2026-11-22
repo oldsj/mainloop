@@ -68,4 +68,8 @@ type IssueWriteKind string
 const (
 	IssueWriteIssue   IssueWriteKind = "issue"
 	IssueWriteComment IssueWriteKind = "comment"
+	// IssueWritePRComment is a conversation comment on a pull request.
+	IssueWritePRComment IssueWriteKind = "pr_comment"
+	// IssueWritePRReview is a COMMENT review with inline comments on a pull request.
+	IssueWritePRReview IssueWriteKind = "pr_review"
 )

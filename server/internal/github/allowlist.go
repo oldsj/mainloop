@@ -140,6 +140,8 @@ var rules = []rule{
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/labels", kindRepo, Permissions{"issues": Read}),
 	newRule(http.MethodPost, "/repos/{owner}/{repo}/issues", kindRepo, Permissions{"issues": Write}),
 	newRule(http.MethodPost, "/repos/{owner}/{repo}/issues/*/comments", kindRepo, Permissions{"issues": Write}),
+	// A pull request review with inline comments (comment_pull_request): always the COMMENT event.
+	newRule(http.MethodPost, "/repos/{owner}/{repo}/pulls/*/reviews", kindRepo, Permissions{"pull_requests": Write}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/dependabot/alerts", kindRepo, Permissions{"vulnerability_alerts": Read}),
 }
 

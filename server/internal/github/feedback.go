@@ -124,3 +124,69 @@ func (a *App) PullRequestFeedback(ctx context.Context, repo Repo, number int, si
 	slices.SortStableFunc(out, func(x, y PRFeedback) int { return x.At.Compare(y.At) })
 	return out, nil
 }
+
+// ReviewComment is one inline comment of a review: a line of the diff on the new (RIGHT) or old
+// (LEFT) side of a file, and the text.
+type ReviewComment struct {
+	Path string `json:"path"`
+	Line int    `json:"line"`
+	Side string `json:"side"`
+	Body string `json:"body"`
+}
+
+type reviewJSON struct {
+	ID          int64         `json:"id"`
+	Body        *pullBody     `json:"body"`
+	HTMLURL     string        `json:"html_url"`
+	SubmittedAt *time.Time    `json:"submitted_at"`
+	User        issueUserJSON `json:"user"`
+}
+
+func (r reviewJSON) write(number int) IssueWrite {
+	w := IssueWrite{Number: number, CommentID: r.ID, HTMLURL: r.HTMLURL, Body: bodyText(r.Body), UserType: r.User.Type}
+	if r.SubmittedAt != nil {
+		w.CreatedAt = *r.SubmittedAt
+	}
+	return w
+}
+
+// CreateReview submits a review of the pull request at commitSHA with body and inline comments. The
+// event is always COMMENT: Mainloop never approves or requests changes. The answer's CommentID is
+// the review's id.
+func (a *App) CreateReview(ctx context.Context, repo Repo, number int, commitSHA, body string, comments []ReviewComment) (*IssueWrite, error) {
+	in := map[string]any{"commit_id": commitSHA, "body": body, "event": "COMMENT", "comments": comments}
+	var out reviewJSON
+	path := repoPath(repo, "pulls", strconv.Itoa(number), "reviews")
+	if err := a.call(ctx, repo, Permissions{"pull_requests": Write}, http.MethodPost, path, in, &out); err != nil {
+		return nil, err
+	}
+	if out.ID <= 0 || out.HTMLURL == "" {
+		return nil, ErrUnavailable
+	}
+	w := out.write(number)
+	return &w, nil
+}
+
+// ReviewsSince lists the pull request's submitted reviews at or after since, oldest first, reading
+// at most [feedbackPages] pages of 100: GitHub cannot filter reviews by time. A listing that never
+// ends within them is [ErrIncomplete].
+func (a *App) ReviewsSince(ctx context.Context, repo Repo, number int, since time.Time) ([]IssueWrite, error) {
+	var all []IssueWrite
+	for page := 1; page <= feedbackPages; page++ {
+		q := url.Values{"per_page": {"100"}, "page": {strconv.Itoa(page)}}
+		var got []reviewJSON
+		path := repoPath(repo, "pulls", strconv.Itoa(number), "reviews") + "?" + q.Encode()
+		if err := a.call(ctx, repo, Permissions{"pull_requests": Read}, http.MethodGet, path, nil, &got); err != nil {
+			return nil, err
+		}
+		for _, r := range got {
+			if r.SubmittedAt != nil && !r.SubmittedAt.Before(since) {
+				all = append(all, r.write(number))
+			}
+		}
+		if len(got) < 100 {
+			return all, nil
+		}
+	}
+	return nil, ErrIncomplete
+}

@@ -133,6 +133,7 @@ range the advisory matched (`vulnerable_version_range`) and, when known, the fir
 
 These tools read only. They do not close or label an issue, do not review, approve or comment on a
 pull request, do not dismiss or act on an alert,
-and do not grant a sandbox direct GitHub API access or install `gh`. Filing an issue and commenting
-on one are [issue writes](issue-writes.md). The default tests use a fake GitHub HTTP transport
+and do not grant a sandbox direct GitHub API access or install `gh`. Filing an issue, commenting
+on one, and commenting on or reviewing a pull request (`comment_pull_request`) are
+[issue and pull request comments](issue-writes.md). The default tests use a fake GitHub HTTP transport
 (`server/internal/github/githubtest`) and scratch PostgreSQL; they are not live GitHub proof.

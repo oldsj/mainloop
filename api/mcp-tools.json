@@ -313,6 +313,69 @@
       }
     },
     {
+      "name": "comment_pull_request",
+      "description": "Comment on a pull request of the bound project's repository; returns the comment's URL. With comments (inline comments on lines of the diff: path, line, side RIGHT for the new version or LEFT for the old, body) it submits one review whose summary is body, pinned to commit_sha (the head_sha get_pull_request showed you). A review only comments: it never approves or requests changes. Supply a stable request_id: a retry with it never posts twice.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 60000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "comments": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "body": {
+                  "maxLength": 10000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "line": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                "path": {
+                  "maxLength": 1000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "side": {
+                  "enum": ["RIGHT", "LEFT"],
+                  "type": "string"
+                }
+              },
+              "required": ["path", "line", "body"],
+              "type": "object"
+            },
+            "maxItems": 30,
+            "type": "array"
+          },
+          "commit_sha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "pr_number": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["project_id", "pr_number", "body", "request_id"],
+        "type": "object"
+      }
+    },
+    {
       "name": "list_dependabot_alerts",
       "description": "List open Dependabot security alerts for the bound project's repository.",
       "input_schema": {
@@ -1445,6 +1508,7 @@
       "ordinary": [
         "check_status",
         "comment_issue",
+        "comment_pull_request",
         "create_issue",
         "decide",
         "delegate",
@@ -1491,6 +1555,7 @@
       "ordinary": [
         "check_status",
         "comment_issue",
+        "comment_pull_request",
         "create_issue",
         "decide",
         "delegate",
@@ -1541,6 +1606,7 @@
       "ordinary": [
         "check_status",
         "comment_issue",
+        "comment_pull_request",
         "create_issue",
         "decide",
         "delegate",
@@ -1590,6 +1656,7 @@
       "ordinary": [
         "check_status",
         "comment_issue",
+        "comment_pull_request",
         "create_issue",
         "decide",
         "delegate",
@@ -1642,6 +1709,7 @@
       "devloop_enabled": false,
       "ordinary": [
         "comment_issue",
+        "comment_pull_request",
         "create_issue",
         "delegate",
         "follow_up",
@@ -1676,6 +1744,7 @@
       "devloop_enabled": true,
       "ordinary": [
         "comment_issue",
+        "comment_pull_request",
         "create_issue",
         "delegate",
         "follow_up",
@@ -1710,6 +1779,7 @@
       "devloop_enabled": false,
       "ordinary": [
         "comment_issue",
+        "comment_pull_request",
         "create_issue",
         "delegate",
         "follow_up",
@@ -1744,6 +1814,7 @@
       "devloop_enabled": true,
       "ordinary": [
         "comment_issue",
+        "comment_pull_request",
         "create_issue",
         "delegate",
         "follow_up",
@@ -1778,6 +1849,7 @@
       "devloop_enabled": false,
       "ordinary": [
         "check_status",
+        "comment_pull_request",
         "delegate",
         "follow_up",
         "forget",
@@ -1815,6 +1887,7 @@
       "devloop_enabled": true,
       "ordinary": [
         "check_status",
+        "comment_pull_request",
         "delegate",
         "dev_lease_acquire",
         "dev_lease_release",
@@ -1856,6 +1929,7 @@
       "devloop_enabled": false,
       "ordinary": [
         "check_status",
+        "comment_pull_request",
         "delegate",
         "follow_up",
         "forget",
@@ -1896,6 +1970,7 @@
       "devloop_enabled": true,
       "ordinary": [
         "check_status",
+        "comment_pull_request",
         "delegate",
         "dev_lease_acquire",
         "dev_lease_release",
@@ -1940,6 +2015,7 @@
       "devloop_enabled": false,
       "ordinary": [
         "comment_issue",
+        "comment_pull_request",
         "create_issue",
         "forget",
         "get_issue",
@@ -1965,6 +2041,7 @@
       "devloop_enabled": true,
       "ordinary": [
         "comment_issue",
+        "comment_pull_request",
         "create_issue",
         "forget",
         "get_issue",
@@ -1990,6 +2067,7 @@
       "devloop_enabled": false,
       "ordinary": [
         "comment_issue",
+        "comment_pull_request",
         "create_issue",
         "forget",
         "get_issue",
@@ -2015,6 +2093,7 @@
       "devloop_enabled": true,
       "ordinary": [
         "comment_issue",
+        "comment_pull_request",
         "create_issue",
         "forget",
         "get_issue",
@@ -2040,6 +2119,7 @@
       "devloop_enabled": false,
       "ordinary": [
         "check_status",
+        "comment_pull_request",
         "forget",
         "get_issue",
         "get_pull_request",
@@ -2068,6 +2148,7 @@
       "devloop_enabled": true,
       "ordinary": [
         "check_status",
+        "comment_pull_request",
         "dev_lease_acquire",
         "dev_lease_release",
         "dev_status",
@@ -2100,6 +2181,7 @@
       "devloop_enabled": false,
       "ordinary": [
         "check_status",
+        "comment_pull_request",
         "forget",
         "get_issue",
         "get_pull_request",
@@ -2131,6 +2213,7 @@
       "devloop_enabled": true,
       "ordinary": [
         "check_status",
+        "comment_pull_request",
         "dev_lease_acquire",
         "dev_lease_release",
         "dev_status",
@@ -2166,32 +2249,7 @@
       "devloop_enabled": false,
       "ordinary": [
         "check_status",
-        "forget",
-        "get_issue",
-        "get_pull_request",
-        "get_verification",
-        "list_dependabot_alerts",
-        "open_pull_request",
-        "project_context",
-        "remember",
-        "watch_checks",
-        "whoami"
-      ],
-      "approval": []
-    },
-    {
-      "role": "agent",
-      "depth": 0,
-      "grant": "workspace",
-      "merge_status_only": false,
-      "merge_tools_enabled": false,
-      "devloop_enabled": true,
-      "ordinary": [
-        "check_status",
-        "dev_lease_acquire",
-        "dev_lease_release",
-        "dev_status",
-        "dev_sync",
+        "comment_pull_request",
         "forget",
         "get_issue",
         "get_pull_request",
@@ -2210,10 +2268,38 @@
       "depth": 0,
       "grant": "workspace",
       "merge_status_only": false,
+      "merge_tools_enabled": false,
+      "devloop_enabled": true,
+      "ordinary": [
+        "check_status",
+        "comment_pull_request",
+        "dev_lease_acquire",
+        "dev_lease_release",
+        "dev_status",
+        "dev_sync",
+        "forget",
+        "get_issue",
+        "get_pull_request",
+        "get_verification",
+        "list_dependabot_alerts",
+        "open_pull_request",
+        "project_context",
+        "remember",
+        "watch_checks",
+        "whoami"
+      ],
+      "approval": []
+    },
+    {
+      "role": "agent",
+      "depth": 0,
+      "grant": "workspace",
+      "merge_status_only": false,
       "merge_tools_enabled": true,
       "devloop_enabled": false,
       "ordinary": [
         "check_status",
+        "comment_pull_request",
         "forget",
         "get_issue",
         "get_pull_request",
@@ -2239,6 +2325,7 @@
       "devloop_enabled": true,
       "ordinary": [
         "check_status",
+        "comment_pull_request",
         "dev_lease_acquire",
         "dev_lease_release",
         "dev_status",

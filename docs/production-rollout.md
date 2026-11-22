@@ -39,17 +39,17 @@ The chart needs these objects in the release namespace. Any deployment can provi
 The App named by `github-app-id` needs these repository permissions, and an installation on each
 project's repository:
 
-| Permission        | Access      | Used for                                                                            |
-| ----------------- | ----------- | ----------------------------------------------------------------------------------- |
-| Metadata          | Read        | Repository lookup, branch rules                                                     |
-| Contents          | Read, write | Branches and commits; squash merge                                                  |
-| Pull requests     | Read, write | Pull requests, reviews and comments (`get_pull_request`); opening a pull request    |
-| Issues            | Read, write | `get_issue`; filing an issue and commenting with `create_issue` and `comment_issue` |
-| Checks            | Read        | Check runs and suites                                                               |
-| Commit statuses   | Read        | Status contexts                                                                     |
-| Dependabot alerts | Read        | `list_dependabot_alerts`                                                            |
-| Administration    | Read        | Classic branch protection                                                           |
-| Workflows         | Read, write | Registration only; no current call's token asks for it                              |
+| Permission        | Access      | Used for                                                                     |
+| ----------------- | ----------- | ---------------------------------------------------------------------------- |
+| Metadata          | Read        | Repository lookup, branch rules                                              |
+| Contents          | Read, write | Branches and commits; squash merge                                           |
+| Pull requests     | Read, write | `get_pull_request`; opening a pull request; reviews (`comment_pull_request`) |
+| Issues            | Read, write | `get_issue`, `create_issue`, `comment_issue`; pull request comments          |
+| Checks            | Read        | Check runs and suites                                                        |
+| Commit statuses   | Read        | Status contexts                                                              |
+| Dependabot alerts | Read        | `list_dependabot_alerts`                                                     |
+| Administration    | Read        | Classic branch protection                                                    |
+| Workflows         | Read, write | Registration only; no current call's token asks for it                       |
 
 Each call's token asks only for what that call needs ([pull requests](specs/pull-requests.md)). A
 permission the App lacks makes only the calls that need it fail: without Issues write, `create_issue`

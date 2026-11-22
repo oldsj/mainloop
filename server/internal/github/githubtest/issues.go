@@ -189,7 +189,8 @@ func commentJSON(repo *Repository, num string, c IssueComment) map[string]any {
 	}
 }
 
-// createCommentCall serves POST /issues/{n}/comments on an issue.
+// createCommentCall serves POST /issues/{n}/comments on an issue or, as GitHub does through the
+// same endpoint, on a pull request.
 func (s *Server) createCommentCall(w http.ResponseWriter, r *http.Request, repo *Repository, num string) {
 	var in struct {
 		Body string `json:"body"`
@@ -202,7 +203,7 @@ func (s *Server) createCommentCall(w http.ResponseWriter, r *http.Request, repo 
 	defer s.mu.Unlock()
 	i, ok := issueIndex(repo, num)
 	if !ok {
-		notFound(w)
+		s.pullCommentLocked(w, repo, num, in.Body)
 		return
 	}
 	var id int64 = 1000
@@ -323,4 +324,25 @@ func (s *Server) dependabotCall(w http.ResponseWriter, r *http.Request, repo *Re
 	}
 	s.link(w, r, pageNo, last)
 	writeJSON(w, http.StatusOK, out)
+}
+
+// pullCommentLocked adds the App's conversation comment to pull request num, or answers 404.
+func (s *Server) pullCommentLocked(w http.ResponseWriter, repo *Repository, num, body string) {
+	i, ok := s.find(repo, num)
+	if !ok {
+		notFound(w)
+		return
+	}
+	p := &repo.PullRequests[i]
+	var id int64 = 3000
+	for _, f := range p.Feedback {
+		id = max(id, f.ID)
+	}
+	c := Feedback{ID: id + 1, Kind: FeedbackComment, Author: "mainloop[bot]", AuthorType: "Bot", Body: body, At: time.Now().UTC()}
+	p.Feedback = append(p.Feedback, c)
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id": c.ID, "body": body, "created_at": c.At.Format(time.RFC3339),
+		"user":     map[string]any{"login": c.Author, "type": "Bot"},
+		"html_url": "https://github.com/" + repo.Owner + "/" + repo.Name + "/pull/" + num + "#issuecomment-" + strconv.FormatInt(c.ID, 10),
+	})
 }

@@ -525,6 +525,8 @@ type IssueWrite struct {
 	LeaseUntil     *time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	CommitSha      *string
+	ReviewComments json.RawMessage
 }
 
 type KagentAgent struct {

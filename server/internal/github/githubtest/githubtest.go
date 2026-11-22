@@ -96,6 +96,16 @@ type PullRequest struct {
 	HeadRepoGone bool
 	// Feedback are the pull request's reviews, inline review comments and conversation comments.
 	Feedback []Feedback
+	// Reviews records each review the App submitted, as sent.
+	Reviews []ReviewSent
+}
+
+// ReviewSent is one review submission the fake received.
+type ReviewSent struct {
+	CommitID string
+	Event    string
+	Body     string
+	Comments int
 }
 
 // Commit is a commit in the fake. Commits are served newest first, in the order given.
@@ -458,7 +468,8 @@ func need(method string, segs []string) map[string]string {
 		// GitHub serves a pull request's conversation comments to Pull requests read as well as Issues read.
 		method == http.MethodGet && len(rest) == 3 && rest[0] == "issues" && rest[2] == "comments":
 		return read("pull_requests")
-	case method == http.MethodPost && len(rest) == 1 && rest[0] == "pulls":
+	case method == http.MethodPost && len(rest) == 1 && rest[0] == "pulls",
+		method == http.MethodPost && len(rest) == 3 && rest[0] == "pulls" && rest[2] == "reviews":
 		return map[string]string{"pull_requests": "write"}
 	case method == http.MethodPut && len(rest) == 3 && rest[0] == "pulls" && rest[2] == "merge":
 		return map[string]string{"pull_requests": "write", "contents": "write"}
@@ -528,7 +539,12 @@ func (s *Server) tokenHas(r *http.Request, name string) bool {
 func (s *Server) repoCall(w http.ResponseWriter, r *http.Request, segs []string) {
 	needs := need(r.Method, segs)
 	if r.Method == http.MethodGet && len(segs) == 6 && segs[3] == "issues" && segs[5] == "comments" && !s.isPull(segs) {
-		// Comments on anything but a pull request need Issues read; a pull request's take either.
+		if !s.isIssue(segs) {
+			// Neither an issue nor a pull request: there is nothing to list.
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+			return
+		}
+		// Comments on an issue need Issues read; a pull request's take Pull requests read.
 		needs = map[string]string{"issues": "read"}
 	}
 	if needs == nil {
