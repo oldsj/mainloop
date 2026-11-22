@@ -18,7 +18,7 @@ The tools follow the MCP grant, not the role:
 Code tasks do not file issues. Their findings reach the owner through `report`, and the main thread
 or a coordination supervisor, which sees the wider picture and can find a duplicate, files the
 issue. That keeps one place deciding what becomes an issue and keeps a busy code task from opening
-issues the owner then has to triage. The guidance every session receives says the same (guidance v6,
+issues the owner then has to triage. The guidance every session receives says the same (guidance v7,
 [delegation](delegation.md)).
 
 The main thread may name any project of its owner, as it may for merges: "make an issue for that"

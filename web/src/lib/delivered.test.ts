@@ -3,7 +3,7 @@ import { splitDelivered } from './delivered';
 
 const MAIN =
   "[mainloop:context] You are the Mainloop main agent, the owner's home chat.\n\n" +
-  '## Working in Mainloop (guidance v6)\n- Where you run: sessions are isolated.\n';
+  '## Working in Mainloop (guidance v7)\n- Where you run: sessions are isolated.\n';
 const CARRY =
   '[mainloop:carry-over] Earlier conversation, carried over.\nuser: status?\nassistant: all quiet\n';
 const PROJECT =

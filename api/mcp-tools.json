@@ -643,7 +643,7 @@
     },
     {
       "name": "delegate",
-      "description": "Create a durable task and scoped attempt. Reuse request_id for lost or uncertain responses. After a confirmed terminal blocked create, use a NEW request_id for a new create; reusing the old id returns the blocked operation. Role and tool guidance prefixes the brief. Choosing model and effort: match the tier to the task's scope, risk and reversibility, not habit. Mechanical or bounded, easily-reversible work takes the cheapest model and lowest effort likely to succeed; design, debugging, security-sensitive review, or anything hard to undo takes the strongest model and highest effort the profile offers. When re-delegating a failed attempt, prefer a higher tier over repeating the same one. Read the resolved provider profile's own models and effort_levels (see the providers list) rather than assuming any provider's names; leaving both unset keeps the profile's defaults.",
+      "description": "Create a durable task and scoped attempt. Reuse request_id for lost or uncertain responses. After a confirmed terminal blocked create, use a NEW request_id for a new create; reusing the old id returns the blocked operation. Role and tool guidance prefixes the brief. Main does not delegate in a project (refused project_supervisor): it sends the work to the project's supervisor with supervisor_send. Choosing model and effort: match the tier to the task's scope, risk and reversibility, not habit. Mechanical or bounded, easily-reversible work takes the cheapest model and lowest effort likely to succeed; design, debugging, security-sensitive review, or anything hard to undo takes the strongest model and highest effort the profile offers. When re-delegating a failed attempt, prefer a higher tier over repeating the same one. Read the resolved provider profile's own models and effort_levels (see the providers list) rather than assuming any provider's names; leaving both unset keeps the profile's defaults.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -970,6 +970,32 @@
           }
         },
         "required": ["task_id", "request_id", "text"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "supervisor_send",
+      "description": "Send work or a message to a project's standing supervisor, which delegates the project's work to workers and reviewers and reports back to you. Its first use starts the supervisor; one at rest wakes. The result names its task and session and says sent or queued. A supervisor still starting is refused supervisor_starting: send again with the same request_id. Reuse request_id to retry; follow_up, steer, task_get and task_transcript work on its task id as on any task.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["project_id", "request_id", "text"],
         "type": "object"
       }
     },
@@ -1408,6 +1434,7 @@
         "project_context",
         "remember",
         "steer",
+        "supervisor_send",
         "task_cancel",
         "task_get",
         "task_history",
@@ -1456,6 +1483,7 @@
         "project_context",
         "remember",
         "steer",
+        "supervisor_send",
         "task_cancel",
         "task_get",
         "task_history",
@@ -1503,6 +1531,7 @@
         "project_context",
         "remember",
         "steer",
+        "supervisor_send",
         "task_cancel",
         "task_get",
         "task_history",
@@ -1554,6 +1583,7 @@
         "project_context",
         "remember",
         "steer",
+        "supervisor_send",
         "task_cancel",
         "task_get",
         "task_history",

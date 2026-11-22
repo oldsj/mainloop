@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -24,6 +25,9 @@ const MaxFollowUpChars = 8000
 // FollowUpInput is a follow-up: a message for a task's own native session.
 type FollowUpInput struct {
 	TaskID, RequestID, Text string
+	// kind names the message id's namespace ("follow-up" when empty), so another tool's request ids
+	// never collide with follow_up's.
+	kind string
 }
 
 // FollowUpResult says what became of a follow-up.
@@ -89,7 +93,7 @@ func (s *Service) FollowUp(ctx context.Context, p Principal, in FollowUpInput) (
 			return FollowUpResult{}, refusal(409, ReasonSessionGone)
 		}
 	}
-	mid := uuid.NewSHA1(uuid.NameSpaceURL, fmt.Appendf(nil, "mainloop:follow-up:%s:%s", p.Key(), in.RequestID)).String()
+	mid := uuid.NewSHA1(uuid.NameSpaceURL, fmt.Appendf(nil, "mainloop:%s:%s:%s", cmp.Or(in.kind, "follow-up"), p.Key(), in.RequestID)).String()
 	source, text := sessions.SourceUser, in.Text
 	switch p.Role {
 	case dbstate.RoleMain:

@@ -176,6 +176,11 @@ var writeCases = []writeCase{
 			id, _ := made["task_id"].(string)
 			return map[string]any{"request_id": "dead", "task_id": id, "text": "and the staging cluster?"}
 		}},
+	{tool: "supervisor_send", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(t *testing.T, h *harness, _ *prHarness, _ authtest.Seeded) map[string]any {
+			memoryProject(t, h)
+			return map[string]any{"project_id": "mem-p", "request_id": "dead", "text": "start on the docs"}
+		}},
 	{tool: "loop_arm", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
 		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
 			return map[string]any{"request_id": "dead", "trigger": "time", "after_minutes": 30, "note": "look at prod"}

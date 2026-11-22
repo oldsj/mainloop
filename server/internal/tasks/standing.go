@@ -1,8 +1,10 @@
 package tasks
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -179,4 +181,72 @@ func (s *Service) moveStanding(ctx context.Context, a dbq.TaskAttempt, from, to 
 		}
 		return []events.Draft{s.updated(after)}, nil
 	})
+}
+
+// defaultSupervisorStartWait is [Limits.SupervisorStartWait]'s default: a coordination attempt has
+// no workspace, so its first brief is normally recorded within seconds of the create.
+const defaultSupervisorStartWait = 30 * time.Second
+
+// SupervisorSendInput is main's message for a project's standing supervisor.
+type SupervisorSendInput struct {
+	ProjectID, RequestID, Text string
+}
+
+// SupervisorSend is main's way to a project (docs/specs/project-supervisor.md): it starts the
+// project's standing supervisor if it has none and sends text to its session, as [Service.FollowUp]
+// does, waking it. A supervisor still starting is waited on until its first brief is recorded, so the
+// message never runs before the brief; past the wait it is refused supervisor_starting and sent again
+// under the same request_id. The message id derives from main and request_id, so a retry never sends
+// twice.
+func (s *Service) SupervisorSend(ctx context.Context, p Principal, in SupervisorSendInput) (FollowUpResult, error) {
+	if p.Role != dbstate.RoleMain {
+		return FollowUpResult{}, refusal(403, ReasonManagementDenied)
+	}
+	if n := len(in.ProjectID); n == 0 || n > 100 {
+		return FollowUpResult{}, refusal(422, ReasonInvalidRequest)
+	}
+	if err := ensureActive(ctx, dbq.New(s.Pool), p); err != nil {
+		return FollowUpResult{}, err
+	}
+	v, err := s.EnsureSupervisor(ctx, p.OwnerID, in.ProjectID)
+	if err != nil {
+		return FollowUpResult{}, err
+	}
+	deadline := s.now().Add(cmp.Or(s.Limits.SupervisorStartWait, defaultSupervisorStartWait))
+	for {
+		ready, err := s.briefed(ctx, v.Task.Id)
+		if err != nil {
+			return FollowUpResult{}, err
+		}
+		if ready {
+			break
+		}
+		if !s.now().Before(deadline) {
+			return FollowUpResult{}, refusal(409, ReasonSupervisorStarting)
+		}
+		select {
+		case <-ctx.Done():
+			return FollowUpResult{}, ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	return s.FollowUp(ctx, p, FollowUpInput{TaskID: v.Task.Id, RequestID: in.RequestID, Text: in.Text, kind: "supervisor-send"})
+}
+
+// briefed reports whether a task has a current attempt that has been given its first brief, or
+// that ended: an ended one is for FollowUp to refuse, not for SupervisorSend to wait on.
+func (s *Service) briefed(ctx context.Context, taskID string) (bool, error) {
+	q := dbq.New(s.Pool)
+	t, err := q.GetTaskByID(ctx, taskID)
+	if err != nil {
+		return false, err
+	}
+	if t.CurrentAttemptID == nil {
+		return TaskFinal(t.Status) || t.Status == dbstate.TaskBlocked, nil
+	}
+	a, err := q.GetTaskAttempt(ctx, *t.CurrentAttemptID)
+	if err != nil {
+		return false, err
+	}
+	return a.BriefDeliveryID != nil || a.State != dbstate.AttemptCreating && a.State != dbstate.AttemptActive, nil
 }
