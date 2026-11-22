@@ -2,10 +2,12 @@ import { useRouterState } from '@tanstack/react-router';
 import { PanelLeftOpen } from 'lucide-react';
 import { useEffect, type ReactNode } from 'react';
 import { cn } from '@/components/ui/cn';
-import { isShortcut, shortcutLabel } from '@/lib/platform';
+import { isApplePlatform, isShortcut, sidebarShortcutLabel } from '@/lib/platform';
 import {
   ExplorerSidebar,
   needsCount,
+  newTaskPrefill,
+  spaceTabs,
   shellCounts,
   TabStrip,
   useAgentColumn,
@@ -17,6 +19,7 @@ import {
 } from '@/features/explorer';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
+import { PREFIX_HINT, prefixAction, usePrefixKeys } from './prefixKeys';
 import { StatusBar } from './StatusBar';
 
 /**
@@ -48,12 +51,12 @@ export function DesktopShell({
   const counts = shellCounts(explorer.nodes);
   const column = useAgentColumn();
 
-  // ⌘B on a Mac, Ctrl+B elsewhere, hides and shows the sidebar, as in an editor. Never both on one
-  // platform: on a Mac, Ctrl+B in a text field is the system's "back one character" and must be left
-  // alone. ⌘B works while typing.
+  // ⌘B on a Mac hides and shows the sidebar, as in an editor, and works while typing. Off a Mac
+  // the editor's key for it would be Ctrl+B, which is the prefix (below): there the sidebar is the
+  // prefix and then B, as it also is on a Mac.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (!isShortcut(event, 'b')) return;
+      if (!isApplePlatform() || !isShortcut(event, 'b')) return;
       event.preventDefault();
       update((prev) => ({ ...prev, collapsed: !prev.collapsed }));
     };
@@ -62,6 +65,32 @@ export function DesktopShell({
   }, [update]);
 
   const show = () => update((prev) => ({ ...prev, collapsed: false }));
+
+  // Ctrl+B, then one key, as a terminal workspace manager has it: n and p move between the tabs,
+  // a number goes to that tab, c starts new work, b hides the sidebar, w goes to the spaces, and g
+  // opens the menu. The status bar lists them while the prefix waits.
+  const tabs = spaceTabs(column.model, column.space, column.page, pathname);
+  const armed = usePrefixKeys((key) => {
+    const action = prefixAction(key, tabs);
+    if (!action) return false;
+    if (action.do === 'open') open(action.target);
+    else if (action.do === 'sidebar') update((prev) => ({ ...prev, collapsed: !prev.collapsed }));
+    else if (action.do === 'menu') onSearch();
+    else if (action.do === 'new') {
+      const prefill = newTaskPrefill(column.model, column.space);
+      if (prefill) ask(prefill);
+      else open({ to: 'chat' });
+    } else if (action.do === 'spaces') {
+      show();
+      // After the sidebar has drawn: the current space's row takes focus, and the arrows move on.
+      setTimeout(() => {
+        const rows = document.querySelectorAll<HTMLElement>('[data-testid="space-row"]');
+        const current = [...rows].find((row) => row.getAttribute('aria-current') === 'true');
+        (current ?? rows[0])?.focus();
+      }, 0);
+    }
+    return true;
+  });
 
   return (
     <div data-testid="desktop-shell" className="flex min-h-0 flex-1 flex-col">
@@ -95,7 +124,7 @@ export function DesktopShell({
                     type="button"
                     data-testid="show-sidebar"
                     aria-label="Show sidebar"
-                    title={`Show sidebar (${shortcutLabel('b')})`}
+                    title={`Show sidebar (${sidebarShortcutLabel()})`}
                     onClick={show}
                     className="text-muted-foreground hover:bg-accent hover:text-accent-foreground px-sm min-h-control focus-visible:ring-ring inline-flex shrink-0 items-center outline-none focus-visible:ring-1 focus-visible:ring-inset"
                   >
@@ -125,6 +154,7 @@ export function DesktopShell({
         problems={counts.problems}
         counts={explorer.ready ? 'ready' : explorer.failed ? 'failed' : 'loading'}
         onShowWorking={show}
+        hint={armed ? PREFIX_HINT : undefined}
       />
     </div>
   );

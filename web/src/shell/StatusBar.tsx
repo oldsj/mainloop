@@ -17,6 +17,8 @@ export interface StatusBarProps {
    * bar says it is loading; when that read failed it says the counts are unavailable.
    */
   counts?: 'ready' | 'loading' | 'failed';
+  /** The prefix keys, shown while the prefix waits for its key. */
+  hint?: string;
 }
 
 function since(iso: string | null): string {
@@ -36,7 +38,8 @@ export function StatusBar({
   working,
   problems,
   onShowWorking,
-  counts = 'ready'
+  counts = 'ready',
+  hint
 }: StatusBarProps) {
   const connection = useConnection();
   const signedOut = useSignIn() === 'expired';
@@ -82,7 +85,14 @@ export function StatusBar({
           </span>
         </Link>
       )}
-      <span className="flex-1" />
+      {/* Announced when it appears, so the keys are heard as well as seen. */}
+      <span
+        aria-live="polite"
+        data-testid="status-keys"
+        className="text-foreground min-w-0 flex-1 truncate"
+      >
+        {hint}
+      </span>
       {counts === 'ready' ? (
         <>
           <Link to="/inbox" className={item} data-testid="status-needs">

@@ -745,28 +745,42 @@ describe('explorer panel', () => {
       return event;
     };
 
-    it('is Ctrl+B off a Mac, and ⌘B does nothing there', async () => {
+    // The key after the prefix, on whatever has focus.
+    const then = (key: string, target: Element = document.body) => {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      act(() => {
+        target.dispatchEvent(event);
+      });
+      return event;
+    };
+
+    it('is the prefix and then B off a Mac, where ⌘B does nothing', async () => {
       as('Win32');
       setViewport(true);
       await renderAt('/');
       expect(shown()).toBe(true);
       expect(press('metaKey').defaultPrevented).toBe(false);
       expect(shown()).toBe(true);
+      // Ctrl+B alone is the prefix: it is taken, and waits for its key.
       expect(press('ctrlKey').defaultPrevented).toBe(true);
+      expect(shown()).toBe(true);
+      expect(then('b').defaultPrevented).toBe(true);
       expect(shown()).toBe(false);
       press('ctrlKey');
+      then('b');
       expect(shown()).toBe(true);
+      expect(screen.getByRole('button', { name: 'Hide sidebar' })).toHaveAttribute(
+        'title',
+        'Hide sidebar (Ctrl+B B)'
+      );
     });
 
-    it('is ⌘B on a Mac, and leaves Ctrl+B to the system’s text keys, also while typing', async () => {
+    it('is ⌘B on a Mac, also while typing, and the prefix and B there too', async () => {
       as('MacIntel');
       setViewport(true);
       await renderAt('/');
       const box = await screen.findByRole('textbox', { name: 'Message' });
       act(() => box.focus());
-      // Ctrl+B is "back one character" on macOS: the app must neither act on it nor cancel it.
-      expect(press('ctrlKey', box).defaultPrevented).toBe(false);
-      expect(shown()).toBe(true);
       // ⌘B works with the caret in the composer, and the box keeps the caret.
       expect(press('metaKey', box).defaultPrevented).toBe(true);
       expect(shown()).toBe(false);
@@ -777,6 +791,112 @@ describe('explorer panel', () => {
         'title',
         'Hide sidebar (⌘B)'
       );
+      // Ctrl+B is the prefix on a Mac as well: in a text field it replaces "back one character".
+      expect(press('ctrlKey', box).defaultPrevented).toBe(true);
+      expect(shown()).toBe(true);
+      then('b', box);
+      expect(shown()).toBe(false);
+      // The b went to the sidebar, not into the message.
+      expect(box).toHaveValue('');
+    });
+  });
+
+  describe('the prefix keys', () => {
+    const prefix = (target: Element = document.body) => {
+      act(() => {
+        target.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true, cancelable: true })
+        );
+      });
+    };
+    const then = (key: string, target: Element = document.body) => {
+      act(() => {
+        target.dispatchEvent(
+          new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+        );
+      });
+    };
+    const tabs = () =>
+      within(screen.getByTestId('tab-strip'))
+        .getAllByTestId('tab')
+        .map((tab) => `${tab.textContent}${tab.getAttribute('aria-current') ? '*' : ''}`);
+
+    it('lists the keys in the status bar while the prefix waits', async () => {
+      setViewport(true);
+      await renderAt('/');
+      const keys = screen.getByTestId('status-keys');
+      expect(keys).toBeEmptyDOMElement();
+      prefix();
+      expect(keys).toHaveTextContent('ctrl+b · n next · p previous · 1–9 tab · c new');
+      then('Escape');
+      expect(keys).toBeEmptyDOMElement();
+    });
+
+    it('moves between the current space’s tabs with n, p and a number, also while typing', async () => {
+      setViewport(true);
+      // Two tasks of the main thread's own space (their project is not loaded), neither with a
+      // session, so each opens on its task page.
+      const first = view({
+        id: 'task-a',
+        title: 'First',
+        status: 'queued',
+        current_attempt_id: null
+      });
+      const second = view({
+        id: 'task-b',
+        title: 'Second',
+        status: 'queued',
+        current_attempt_id: null,
+        created_at: justNow()
+      });
+      server.use(
+        tasksList(() => HttpResponse.json([first, second])),
+        taskRead(({ params }) => HttpResponse.json(params.task_id === 'task-a' ? first : second))
+      );
+      const router = await renderAt('/');
+      await waitFor(() => expect(tabs()).toEqual(['main*', 'First', 'Second']));
+      const box = await screen.findByRole('textbox', { name: 'Message' });
+      act(() => box.focus());
+
+      // n: the next tab, from the composer, and the n is not typed
+      prefix(box);
+      then('n', box);
+      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/task-a'));
+      await waitFor(() => expect(tabs()).toEqual(['main', 'First*', 'Second']));
+
+      // 3: the third tab; p: back one; n from the last wraps to the first
+      prefix();
+      then('3');
+      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/task-b'));
+      prefix();
+      then('p');
+      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/task-a'));
+      prefix();
+      then('1');
+      await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+      // The composer got none of those keys.
+      expect(await screen.findByRole('textbox', { name: 'Message' })).toHaveValue('');
+    });
+
+    it('opens the menu with g, and goes to the spaces with w', async () => {
+      setViewport(true);
+      await renderAt('/');
+      await within(screen.getByTestId('explorer-aside')).findByRole('group', { name: 'agents' });
+
+      prefix();
+      then('w');
+      // The current space's row has focus, so the arrows move from there and Enter opens.
+      await waitFor(() =>
+        expect(
+          within(screen.getByRole('list', { name: 'spaces' })).getByRole('button', {
+            current: true
+          })
+        ).toHaveFocus()
+      );
+
+      prefix();
+      then('g');
+      expect(await screen.findByTestId('command-palette')).toBeInTheDocument();
     });
   });
 

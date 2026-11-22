@@ -3,6 +3,6 @@ export { ChatStarters } from './ChatStarters';
 export { ExplorerPane, ExplorerSidebar, useExplorerPrefs, useNeedsCount } from './ExplorerPanel';
 export { needsCount, shellCounts, type ExplorerNode, type Target } from './model';
 export type { ExplorerPrefs } from './prefs';
-export { newTaskPrefill, workingCount } from './agents';
+export { newTaskPrefill, spaceTabs, workingCount, type TabRow } from './agents';
 export { TabStrip } from './TabStrip';
 export { useAgentColumn, useAsk, useExplorer, useOpenTarget } from './useExplorer';
