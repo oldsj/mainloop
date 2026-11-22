@@ -813,7 +813,7 @@ function Composer({
 
   const stop = busy && !text.trim();
   return (
-    <div className="px-md pt-sm border-border-subtle border-t pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
+    <div className="px-md py-sm border-border-subtle border-t">
       {/* As wide as the transcript; the menus above the box open against it. */}
       <div className={cn('relative flex flex-col gap-1', CONVERSATION)}>
         {historyOpen && history.length ? (

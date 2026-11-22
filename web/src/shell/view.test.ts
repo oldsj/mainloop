@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeNavTab, resolveView, shellSearchSchema } from './view';
+import { resolveTab, resolveView, shellSearchSchema } from './view';
 
 describe('resolveView', () => {
   it('follows the viewport when no view is requested', () => {
@@ -22,17 +22,15 @@ describe('shellSearchSchema', () => {
   });
 });
 
-describe('activeNavTab', () => {
-  it('lights the tree whenever it is showing', () => {
-    expect(activeNavTab('explorer', '/')).toBe('explorer');
-    expect(activeNavTab('explorer', '/inbox')).toBe('explorer');
+describe('resolveTab', () => {
+  it('shows the page unless the URL asks for the spaces and agents', () => {
+    expect(resolveTab(undefined)).toBe('chat');
+    expect(resolveTab('chat')).toBe('chat');
+    expect(resolveTab('explorer')).toBe('explorer');
   });
 
-  it('follows the page otherwise', () => {
-    expect(activeNavTab('chat', '/')).toBe('chat');
-    expect(activeNavTab('chat', '/inbox')).toBe('needs');
-    expect(activeNavTab('chat', '/inbox/')).toBe('needs');
-    for (const path of ['/health', '/tasks/t', '/sessions/s', '/projects/p', '/schedules', '/nope'])
-      expect(activeNavTab('chat', path)).toBe('explorer');
+  it('maps the tabs from before the explorer to the spaces and agents', () => {
+    expect(resolveTab('sessions')).toBe('explorer');
+    expect(resolveTab('projects')).toBe('explorer');
   });
 });
