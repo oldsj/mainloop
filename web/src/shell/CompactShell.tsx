@@ -51,6 +51,8 @@ export function CompactShell({
   const explorer = useExplorer();
   const { needs } = explorer;
   const column = useAgentColumn();
+  // As on desktop: no agent is drawn until its space is known.
+  const listed = explorer.ready && explorer.placed;
   const listing = tab === 'explorer';
   // The page is built the first time it is the thing showing, and then kept.
   const [paged, setPaged] = useState(!listing);
@@ -80,6 +82,7 @@ export function CompactShell({
           pathname={pathname}
           onOpen={open}
           onAsk={ask}
+          ready={listed}
           leading={
             <button
               type="button"
@@ -138,7 +141,7 @@ export function CompactShell({
               model={column.model}
               page={column.page}
               space={column.space}
-              ready={explorer.ready}
+              ready={listed}
               failed={explorer.failed}
               onOpen={open}
               onAsk={ask}

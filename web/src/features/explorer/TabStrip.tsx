@@ -2,7 +2,13 @@ import { Plus } from 'lucide-react';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { StatusDot } from '@/components/shared/status-dot';
 import { cn } from '@/components/ui/cn';
-import { newLabel, newTaskPrefill, spaceTabs, type AgentColumnModel } from './agents';
+import {
+  loadingTabs,
+  newLabel,
+  newTaskPrefill,
+  spaceTabs,
+  type AgentColumnModel
+} from './agents';
 import type { Target } from './model';
 
 /** A tab: one line at the control height, its label cut at about 24 characters. */
@@ -24,6 +30,11 @@ export interface TabStripProps {
   leading?: ReactNode;
   /** A control after the tabs, which stays put too: the phone's Inbox, with its count. */
   trailing?: ReactNode;
+  /**
+   * Whether the agents and their spaces are known. Until they are, the strip shows only the tabs
+   * that are certain (see `loadingTabs`), so a tab is never drawn in one space and then moved.
+   */
+  ready?: boolean;
 }
 
 /**
@@ -43,9 +54,12 @@ export function TabStrip({
   onOpen,
   onAsk,
   leading,
-  trailing
+  trailing,
+  ready = true
 }: TabStripProps) {
-  const tabs = spaceTabs(model, space, page, pathname);
+  const tabs = ready
+    ? spaceTabs(model, space, page, pathname)
+    : loadingTabs(model, page, pathname);
   const spaceRow = model.spaces.find((row) => row.id === space);
   const name = spaceRow?.label ?? 'main';
   const prefill = newTaskPrefill(model, space);
@@ -67,7 +81,8 @@ export function TabStrip({
         data-testid="tab-scroller"
         // No scrollbar: one would be as tall as the strip. The lit tab is kept in view instead.
         style={{ scrollbarWidth: 'none' }}
-        className="flex min-w-0 flex-1 items-stretch overflow-x-auto"
+        // The line is as tall with no tabs as with them, so nothing moves when they arrive.
+        className="min-h-control flex min-w-0 flex-1 items-stretch overflow-x-auto"
       >
         {tabs.map((tab) => {
           const target = tab.target;
@@ -96,19 +111,21 @@ export function TabStrip({
             </button>
           );
         })}
-        <button
-          type="button"
-          data-testid="tab-new"
-          aria-label={newLabel(model, space)}
-          title={newLabel(model, space)}
-          onClick={() => (prefill ? onAsk(prefill) : onOpen({ to: 'chat' }))}
-          className={cn(
-            TAB,
-            'text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring'
-          )}
-        >
-          <Plus className="size-3.5" aria-hidden="true" />
-        </button>
+        {ready ? (
+          <button
+            type="button"
+            data-testid="tab-new"
+            aria-label={newLabel(model, space)}
+            title={newLabel(model, space)}
+            onClick={() => (prefill ? onAsk(prefill) : onOpen({ to: 'chat' }))}
+            className={cn(
+              TAB,
+              'text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring'
+            )}
+          >
+            <Plus className="size-3.5" aria-hidden="true" />
+          </button>
+        ) : null}
       </div>
       {trailing}
     </nav>
