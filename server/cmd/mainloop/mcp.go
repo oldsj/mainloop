@@ -18,6 +18,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/mcpserver"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
+	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/topics"
 	"github.com/oldsj/mainloop/server/internal/transcripts"
@@ -36,12 +37,12 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	taskSvc := tasks.NewService(cfg, pool, reg, log)
-	gh, err := newGitHubApp(cfg)
+	kc, err := kagent.New(kagent.FromSettings(cfg.Kagent))
 	if err != nil {
 		return err
 	}
-	kc, err := kagent.New(kagent.FromSettings(cfg.Kagent))
+	taskSvc := newMCPTasks(cfg, pool, reg, kc, log)
+	gh, err := newGitHubApp(cfg)
 	if err != nil {
 		return err
 	}
@@ -76,6 +77,16 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 	return httpx.Serve(ctx, log, "mcp", mcpAddr, handler)
+}
+
+// newMCPTasks builds this process's task service. Its agents' follow-ups, steers and supervisor
+// sends record a message for serve-api's delivery loop to send, so it has a session sender (that
+// only writes rows) and reads kagent to refuse a send to a gone session, as the API does. It runs
+// no task loops: those are serve-api's.
+func newMCPTasks(cfg *config.Config, pool *pgxpool.Pool, reg *providers.Registry, kc *kagent.Client, log *slog.Logger) *tasks.Service {
+	sess := sessions.NewService(cfg, pool, kc, reg, nil, nil, nil, nil, log)
+	return tasks.NewService(cfg, pool, reg, log, tasks.WithSender(sess),
+		tasks.WithLivenessObserver(&tasks.KagentLiveness{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: sess, Kagent: kc}))
 }
 
 // newCredentials builds the one credential service of this process. In a cluster it publishes
