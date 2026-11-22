@@ -56,6 +56,21 @@ func TestProjectProposeOpensACardForTheOwner(t *testing.T) {
 		t.Fatalf("replay = %v", r.Result.StructuredContent)
 	}
 
+	// Once applied, the same request id reads the outcome back.
+	if _, err := h.env.Pool.Exec(ctx, `INSERT INTO projects (id, user_id, owner, name, full_name, html_url)
+		VALUES ('p-ocn', 'owner', 'oldsj', 'opencozy-next', 'oldsj/opencozy-next', 'https://x')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.env.Pool.Exec(ctx, `UPDATE project_proposals SET state = 'applied', decided_at = now(), finished_at = now(),
+		project_id = 'p-ocn', attempts = 1 WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	_, r = h.call(mcpserver.PathOrdinary, main.Token, "project_propose", args)
+	if sc := r.Result.StructuredContent; r.Result.IsError || sc["state"] != "applied" || sc["project_id"] != "p-ocn" ||
+		!strings.Contains(r.text(), "was approved and applied: project p-ocn") {
+		t.Fatalf("applied replay = %v %q", sc, r.text())
+	}
+
 	_, r = h.call(mcpserver.PathOrdinary, sup.Token, "project_propose", map[string]any{"request_id": "r2", "repository": "oldsj/other", "why": "x"})
 	if r.Result.IsError {
 		t.Fatalf("supervisor propose = %q", r.text())

@@ -122,6 +122,11 @@ type Proposal struct {
 	ProjectID   *string
 	QueueItemID string
 	CreatedAt   time.Time
+	// Attempts and LastError say how applying an approved proposal went; FinishedAt is set once it
+	// was rejected, applied or failed.
+	Attempts   int
+	LastError  *string
+	FinishedAt *time.Time
 	// Replayed is set when the call returned a proposal made earlier: the same request id, or an
 	// open proposal of the same repository.
 	Replayed bool
@@ -371,7 +376,8 @@ func contains(list []string, v string) bool {
 func fromRow(r dbq.ProjectProposal) (Proposal, error) {
 	p := Proposal{
 		ID: r.ID, RequestID: r.RequestID, Repository: r.Repository, State: r.State, ProjectID: r.ProjectID,
-		QueueItemID: QueueIDPrefix + r.ID, CreatedAt: r.CreatedAt,
+		QueueItemID: QueueIDPrefix + r.ID, CreatedAt: r.CreatedAt, Attempts: int(r.Attempts),
+		LastError: r.LastError, FinishedAt: r.FinishedAt,
 	}
 	if err := json.Unmarshal(r.Spec, &p.Spec); err != nil {
 		return Proposal{}, fmt.Errorf("project proposal %s spec: %w", r.ID, err)

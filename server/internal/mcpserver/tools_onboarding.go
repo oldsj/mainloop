@@ -85,6 +85,15 @@ func proposalResult(p onboarding.Proposal) Result {
 	switch {
 	case p.Replayed && p.State == onboarding.StateProposed:
 		fmt.Fprintf(&b, "Proposal %s for %s already waits for the owner (Needs you).", p.ID, p.Repository)
+	case p.Replayed && p.State == onboarding.StateApproved:
+		fmt.Fprintf(&b, "Proposal %s for %s was approved and is being applied (attempt %d).", p.ID, p.Repository, p.Attempts)
+		if p.LastError != nil {
+			b.WriteString(" The last attempt failed: " + *p.LastError + ".")
+		}
+	case p.Replayed && p.State == onboarding.StateApplied:
+		fmt.Fprintf(&b, "Proposal %s for %s was approved and applied: project %s.", p.ID, p.Repository, deref(p.ProjectID))
+	case p.Replayed && p.State == onboarding.StateFailed:
+		fmt.Fprintf(&b, "Proposal %s for %s was approved but applying it failed: %s. The owner has an item in Needs you.", p.ID, p.Repository, deref(p.LastError))
 	case p.Replayed:
 		fmt.Fprintf(&b, "Proposal %s for %s is %s.", p.ID, p.Repository, p.State)
 	default:
@@ -123,5 +132,18 @@ func proposalResult(p onboarding.Proposal) Result {
 	if p.ProjectID != nil {
 		m["project_id"] = *p.ProjectID
 	}
+	if p.LastError != nil {
+		m["last_error"] = *p.LastError
+	}
+	if p.Attempts > 0 {
+		m["attempts"] = p.Attempts
+	}
 	return Result{Text: line, Structured: m}
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

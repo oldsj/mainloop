@@ -755,6 +755,19 @@ type ProjectProposal struct {
 	ProjectID         *string
 	CreatedAt         time.Time
 	DecidedAt         *time.Time
+	Attempts          int32
+	NextAttemptAt     *time.Time
+	ClaimedUntil      *time.Time
+	LastError         *string
+	FinishedAt        *time.Time
+}
+
+type ProjectProposalEvent struct {
+	ID         int64
+	ProposalID string
+	Step       string
+	Detail     string
+	CreatedAt  time.Time
 }
 
 type ProjectProviderPreference struct {
