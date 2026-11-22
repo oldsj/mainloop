@@ -2,13 +2,7 @@ import { Plus } from 'lucide-react';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { StatusDot } from '@/components/shared/status-dot';
 import { cn } from '@/components/ui/cn';
-import {
-  loadingTabs,
-  newLabel,
-  newTaskPrefill,
-  spaceTabs,
-  type AgentColumnModel
-} from './agents';
+import { loadingTabs, newLabel, newTaskPrefill, spaceTabs, type AgentColumnModel } from './agents';
 import type { Target } from './model';
 
 /** A tab: one line at the control height, its label cut at about 24 characters. */
@@ -57,9 +51,7 @@ export function TabStrip({
   trailing,
   ready = true
 }: TabStripProps) {
-  const tabs = ready
-    ? spaceTabs(model, space, page, pathname)
-    : loadingTabs(model, page, pathname);
+  const tabs = ready ? spaceTabs(model, space, page, pathname) : loadingTabs(model, page, pathname);
   const spaceRow = model.spaces.find((row) => row.id === space);
   const name = spaceRow?.label ?? 'main';
   const prefill = newTaskPrefill(model, space);
