@@ -62,7 +62,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string) (Actor, 
 	actor := Actor{
 		CredentialID: row.CredentialID, BindingID: row.BindingID, UserID: row.UserID,
 		AgentKind: row.AgentKind, Role: row.Role, Grant: row.MCPGrantKind,
-		Depth: roleDepth(row.Role),
+		Depth: roleDepth(row.Role), WebFetch: row.WebFetch,
 	}
 	if row.ProjectID != nil {
 		actor.ProjectID = *row.ProjectID

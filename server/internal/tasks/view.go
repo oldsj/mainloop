@@ -87,6 +87,7 @@ func toTask(t dbq.Task) (api.Task, error) {
 		RootTaskId:          t.RootTaskID,
 		RuntimeWaitSince:    t.RuntimeWaitSince,
 		Standing:            t.Standing,
+		WebFetch:            &t.WebFetch,
 		SelectionSource:     api.TaskSelectionSource(t.SelectionSource),
 		Status:              api.TaskStatus(t.Status),
 		Title:               t.Title,
