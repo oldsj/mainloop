@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"time"
 	"strings"
+	"time"
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/api"
@@ -56,6 +56,10 @@ func (s *Server) taskTools() []Tool {
 					"ref":    map[string]any{"type": "string", "maxLength": 255, "default": ""},
 					"depth":  map[string]any{"type": "integer", "minimum": 0, "maximum": 1000, "default": 0},
 				}, "branch")),
+				"web_fetch": map[string]any{
+					"type": "boolean", "default": false,
+					"description": "Give the task's agents the open-web web_fetch tool. Only an agent that has web_fetch may set it.",
+				},
 			}, "request_id", "title", "brief", "mode"),
 			Handle: s.delegate,
 		},
@@ -475,6 +479,7 @@ func (s *Server) delegate(ctx context.Context, a agentauth.Actor, args json.RawM
 		ProviderProfileID *string `json:"provider_profile_id"`
 		Model             *string `json:"model"`
 		Effort            *string `json:"effort"`
+		WebFetch          bool    `json:"web_fetch"`
 		Checkout          *struct {
 			Branch string `json:"branch"`
 			Ref    string `json:"ref"`
@@ -487,7 +492,12 @@ func (s *Server) delegate(ctx context.Context, a agentauth.Actor, args json.RawM
 	var err error
 	create := tasks.CreateInput{
 		ProjectID: str(in.ProjectID), TopicID: str(in.TopicID), ProviderProfileID: str(in.ProviderProfileID),
-		Model: str(in.Model), Effort: str(in.Effort),
+		Model: str(in.Model), Effort: str(in.Effort), WebFetch: in.WebFetch,
+	}
+	// Only an agent that holds web_fetch may hand it on: one without it cannot create a task that
+	// fetches what it cannot (docs/specs/web-fetch.md).
+	if in.WebFetch && !a.WebFetch {
+		return Result{}, failure("forbidden", "web_fetch can be given to a task only by an agent that has web_fetch itself")
 	}
 	if create.RequestID, err = text(in.RequestID, 1, 100); err != nil {
 		return Result{}, err

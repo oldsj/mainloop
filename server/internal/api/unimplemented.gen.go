@@ -559,6 +559,11 @@ func (Unimplemented) SetSessionModel(context.Context, SetSessionModelRequestObje
 	return nil, apierr.NotImplemented
 }
 
+// SetSessionWebFetch is not implemented yet.
+func (Unimplemented) SetSessionWebFetch(context.Context, SetSessionWebFetchRequestObject) (SetSessionWebFetchResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // StopTurn is not implemented yet.
 func (Unimplemented) StopTurn(context.Context, StopTurnRequestObject) (StopTurnResponseObject, error) {
 	return nil, apierr.NotImplemented

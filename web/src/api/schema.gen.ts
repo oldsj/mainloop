@@ -1402,6 +1402,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/sessions/{session_id}/web-fetch': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Set Session Web Fetch
+     * @description Turn the open-web `web_fetch` MCP tool on or off for this session's agent (docs/specs/web-fetch.md). Off by default for every session. An agent also has the tool when the task it runs was created with `web_fetch` (`from_task`); this call changes only the session's own flag. Turning it off takes effect at the agent's next tool call; turning it on, when the agent next lists its tools. The main thread is a session like any other here.
+     */
+    post: operations['setSessionWebFetch'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/sessions/{session_id}/live': {
     parameters: {
       query?: never;
@@ -2884,6 +2904,7 @@ export interface components {
        * @description The owner's /effort override, null for the provider's default.
        */
       effort_override: components['schemas']['EffortLevel'] | null;
+      web_fetch: components['schemas']['SessionWebFetch'];
       /**
        * Turns
        * @default 0
@@ -3928,6 +3949,29 @@ export interface components {
       /** Effort */
       effort: components['schemas']['EffortLevel'] | null;
     };
+    /** SessionWebFetchRequest */
+    SessionWebFetchRequest: {
+      /** Enabled */
+      enabled: boolean;
+    };
+    /**
+     * SessionWebFetch
+     * @description Whether a session's agent holds the open-web web_fetch tool: it does when either flag is set (docs/specs/web-fetch.md).
+     */
+    SessionWebFetch: {
+      /** Session Id */
+      session_id: string;
+      /**
+       * Enabled
+       * @description The session's own flag, which POST /sessions/{session_id}/web-fetch sets.
+       */
+      enabled: boolean;
+      /**
+       * From Task
+       * @description The task this session runs was created with web_fetch, which this flag cannot turn off.
+       */
+      from_task: boolean;
+    };
     /**
      * SessionDotfiles
      * @description The agent dotfiles a native Session holds, pinned when its create was first sent or by its latest applied refresh; a fork has its source's.
@@ -4122,6 +4166,12 @@ export interface components {
        */
       effort?: components['schemas']['EffortLevel'] | null;
       checkout?: components['schemas']['TaskCheckout'] | null;
+      /**
+       * Web Fetch
+       * @description Give every attempt of this task the open-web web_fetch MCP tool (docs/specs/web-fetch.md). Its child tasks do not inherit it.
+       * @default false
+       */
+      web_fetch: boolean;
     };
     /** TaskReassign */
     TaskReassign: {
@@ -4962,6 +5012,12 @@ export interface components {
        * @default false
        */
       standing: boolean;
+      /**
+       * Web Fetch
+       * @description Every attempt of this task holds the open-web web_fetch MCP tool (docs/specs/web-fetch.md).
+       * @default false
+       */
+      web_fetch: boolean;
       /**
        * Status
        * @default queued
@@ -11657,6 +11713,53 @@ export interface operations {
           'application/json': components['schemas']['HTTPError'];
         };
       };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  setSessionWebFetch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SessionWebFetchRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SessionWebFetch'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
       /** @description Not Found */
       404: {
         headers: {

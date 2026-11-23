@@ -43,4 +43,5 @@ in-cluster MCP allowlist.
 A kagent Session pins the Agent revision it was created with, so new tool bindings reach only
 **new** Sessions. Resuming a suspended Session doesn't move it, and a fork keeps its source's
 revision. The running main thread gets the tools only after a new main Session (a restart, which
-loses the native context). Until then it answers household questions as before.
+loses the native context). Until then it answers household questions as before. The
+[personal tools](personal-tools.md) are bound in the same change, so main restarts once.

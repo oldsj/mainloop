@@ -280,6 +280,11 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row nativeBind
 		ModelOverride: row.ModelOverride, EffortOverride: (*api.EffortLevel)(row.EffortOverride),
 		Live: row.KagentSessionID != nil && *row.KagentSessionID != "" && a.Svc.IsLiveAgent(agentName),
 	}
+	wf, err := q.GetBindingWebFetch(ctx, row.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	n.WebFetch = api.SessionWebFetch{SessionId: wf.SessionID, Enabled: wf.WebFetch, FromTask: wf.FromTask}
 	if row.TopicID != nil {
 		if name, err := q.GetTopicName(ctx, *row.TopicID); err == nil {
 			n.Topic = &name
@@ -553,6 +558,21 @@ func (a *SessionsAPI) SetSessionEffort(ctx context.Context, r api.SetSessionEffo
 		return nil, err
 	}
 	return api.SetSessionEffort200JSONResponse(toModelEffort(st)), nil
+}
+
+// SetSessionWebFetch implements api.StrictServerInterface.
+func (a *SessionsAPI) SetSessionWebFetch(ctx context.Context, r api.SetSessionWebFetchRequestObject) (api.SetSessionWebFetchResponseObject, error) {
+	if r.Body == nil {
+		return nil, apierr.Invalid("the body is required")
+	}
+	st, err := a.Svc.SetWebFetch(ctx, r.SessionId, r.Body.Enabled)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, apierr.NotFound("Session not found")
+	case err != nil:
+		return nil, err
+	}
+	return api.SetSessionWebFetch200JSONResponse(st), nil
 }
 
 // ListSessionDefaults implements api.StrictServerInterface.

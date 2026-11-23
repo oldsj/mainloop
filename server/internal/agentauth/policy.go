@@ -55,6 +55,7 @@ const (
 	ToolDevLeaseRelease           = "dev_lease_release"
 	ToolDevSync                   = "dev_sync"
 	ToolDevStatus                 = "dev_status"
+	ToolWebFetch                  = "web_fetch"
 )
 
 // AllTools lists every tool, in the order api/mcp-tools.json lists them.
@@ -68,6 +69,7 @@ var AllTools = []string{
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
 	ToolDevLeaseAcquire, ToolDevLeaseRelease, ToolDevSync, ToolDevStatus,
+	ToolWebFetch,
 }
 
 // Surface is one of the two MCP endpoints. The approval-gated merge tool is served alone on its
@@ -96,6 +98,9 @@ type Actor struct {
 	Depth int
 	// MergeStatusOnly marks the actor of a completed task: it may only look at merge status.
 	MergeStatusOnly bool
+	// WebFetch is set when the owner turned on the open-web web_fetch tool for this agent: its
+	// session's flag, or the flag of the task it runs (docs/specs/web-fetch.md).
+	WebFetch bool
 }
 
 // ValidPair reports whether a binding role may hold an MCP grant of this kind. The same set
@@ -232,6 +237,10 @@ func (p Policy) actorTools(a Actor) []string {
 	}
 	if p.DevLoop && slices.Contains(tools, ToolOpenPullRequest) {
 		tools = append(tools, devLoopTools...)
+	}
+	// web_fetch is opt-in per agent, never by role: any live actor the owner turned it on for.
+	if a.WebFetch && len(tools) > 0 {
+		tools = append(tools, ToolWebFetch)
 	}
 	return tools
 }
