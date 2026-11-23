@@ -102,6 +102,10 @@ func render(r dbq.PrivilegedAction) (string, string, map[string]any, error) {
 		return title, b.String(), ctx, nil
 	case TypeItemToSecret:
 		return renderItemToSecret(r, ctx)
+	case TypeRolloutRestart, TypeScale:
+		return renderWorkload(r, ctx)
+	case TypeDelete:
+		return renderDelete(r, ctx)
 	}
 	return "", "", nil, fmt.Errorf("privileged: no card for type %q", r.Type)
 }

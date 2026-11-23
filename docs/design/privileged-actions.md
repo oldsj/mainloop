@@ -317,6 +317,14 @@ creates every item; agents never create or read them.**
 A host whose item is missing is reported as `credential_missing` with the item and field names;
 the executor never falls back to another credential.
 
+As built in slice 3 (first part): the accounts are `mainloop-executor-workloads` (get and patch
+Deployments, StatefulSets and DaemonSets; list autoscalers) and `mainloop-executor-delete` (get and
+delete any object), with cluster roles named after the executor's namespace. RBAC cannot grant
+"everything but Secrets", so the delete account can read Secrets; the executor only ever reads
+through it with metadata-only requests, and the guard on its own namespace and roles is in the
+executor. `onepassword.item_to_secret` kept slice 2's Role in each allowed namespace instead of a
+minted `executor-secret-writer` token.
+
 ### Database and audit
 
 The executor has its own database role, `mainloop_executor`. The database operator creates it,

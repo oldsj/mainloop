@@ -10,8 +10,11 @@ sends the requesting session one message with the outcome.
   through Mainloop's own GitHub App, in `serve-api`.
 - Slice 2: `onepassword.item_to_secret`, run by a separate process, `serve-executor`, which holds a
   1Password credential `serve-api` never sees. Also the owner's read-only audit page.
+- Slice 3, first part: the typed Kubernetes actions `k8s.rollout_restart`, `k8s.scale` and
+  `k8s.delete`, run by `serve-executor` with short-lived credentials it mints per run.
 
-Approved commands and other Kubernetes and LAN types are later slices. They are not described here.
+`k8s.patch`, `k8s.apply`, `argocd.sync`, approved commands and the home-network types are later
+parts. They are not described here.
 
 ## Enablement
 
@@ -22,7 +25,10 @@ or there is no GitHub App, the tools are still listed but answer `[unavailable]`
 
 The executor types are accepted only when `MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED` is also exactly
 `true`. The chart sets it when `executor.enabled` deploys `serve-executor` (see
-[The executor](#the-executor)). Without it, a request of an executor type is `[invalid]`.
+[The executor](#the-executor)). Without it, a request of an executor type is `[unsupported_action]`.
+
+The `k8s.*` types also need `MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED`, exactly `true`. The
+chart sets it with `executor.kubernetes.enabled`, which is off by default.
 
 ## Tools
 
@@ -76,6 +82,21 @@ Neither type bypasses a branch rule. GitHub's own protection still decides the m
 The value never leaves the executor: not in the facts, the card, the result, an event or an error.
 The 1Password service account is read-only, scoped to the vaults the owner chose.
 
+The Kubernetes types act on the cluster the executor runs in, named on the card from
+`executor.kubernetes.clusterName`:
+
+- `k8s.rollout_restart {namespace, kind, name}` restarts a Deployment, StatefulSet or DaemonSet the
+  way `kubectl rollout restart` does: it sets the pod template's `kubectl.kubernetes.io/restartedAt`
+  to the approval time.
+- `k8s.scale {namespace, kind, name, replicas}` sets a Deployment's or StatefulSet's replicas, 0 to 100. Asking for the current count is refused.
+- `k8s.delete {namespace, kind, name}` deletes one object. `kind` is a kind or resource name,
+  optionally with its API group (`Pod`, `Job.batch`, `Certificate.cert-manager.io`); `namespace` is
+  empty for a cluster-scoped object. An object already being deleted is refused. A delete waits
+  1 hour for the owner, not 24.
+
+All three refuse the executor's own namespace, and the cluster-scoped objects named after it (its
+roles). Those change only through GitOps.
+
 ## Preflight and the card
 
 Mainloop canonicalizes the arguments and writes the intent row. It then reads the target with no
@@ -103,9 +124,13 @@ A database trigger refuses any later change to the digest, facts, type, version 
 The card is a Needs-you `approval` item with high priority, so it gets an ntfy push. It has:
 
 - **Title:** "Merge owner/repo#N", "Close owner/repo#N", "Close K pull requests in owner/repo",
-  or `Copy 1Password "item › field" to Secret namespace/name`.
+  `Copy 1Password "item › field" to Secret namespace/name`, "Restart Kind namespace/name",
+  "Scale Kind namespace/name to N" or "Delete Kind namespace/name", each followed by "on cluster"
+  when the cluster has a name.
 - **Content:** the rendered facts, risk tags (checks failing, pending or unread; not mergeable;
-  overwrites an existing key; a Secret labelled managed-by),
+  overwrites an existing key; a Secret labelled managed-by; destructive, irreversible, scales to
+  zero; Argo-managed; an autoscaler or an owner that may undo it; a paused Deployment; a namespace
+  that is Mainloop's, the cluster's or Argo CD's),
   the labelled agent reason, the expiry, and the action id with the first 16 characters of the
   digest.
 - **Options:** `Approve` and `Deny`. The card also accepts a free-text reply.
@@ -128,6 +153,9 @@ records the decision:
 
 For `onepassword.item_to_secret` the frozen facts are the vault, item and field metadata, with
 the item's version, and the target Secret's uid, resourceVersion and key names, or its absence.
+For a workload they are its uid, generation, resourceVersion, replicas and their status, images,
+last restart, Argo tracking and autoscaler. For a delete they are the resolved kind, the object's
+uid, creation time, owners, finalizers and Argo tracking.
 
 An undecided action expires after 24 hours. An approved action that no executor claims within 5
 minutes also expires, so a backlog never runs an old approval late.
@@ -167,6 +195,25 @@ For `onepassword.item_to_secret` (in `serve-executor`):
 - **Failures.** A 403 is `failed`. Other errors are retried like a merge, and each retry observes
   first.
 
+For `k8s.rollout_restart` and `k8s.scale` (in `serve-executor`):
+
+- **Observe.** A workload annotated `mainloop.dev/privileged-action: <this action's id>` was written
+  by an earlier attempt, so the action `succeeded`. One deleted, replaced (another uid) or with a
+  changed spec (another generation) is `stale`. A status change alone does not count.
+- **Write.** A JSON merge patch of the restart annotation or `spec.replicas`, plus the action
+  annotation, carrying the resourceVersion just observed. A concurrent write is retried, observing
+  first.
+
+For `k8s.delete` (in `serve-executor`):
+
+- **Observe.** On the first attempt, an object already gone or replaced is `stale`: someone else
+  acted. On a later attempt it is this action's own delete, whose answer was lost, so `succeeded`.
+- **Write.** A delete with the frozen uid as its precondition and background propagation, as
+  `kubectl delete` does. A replaced object is `stale` and nothing is deleted. The result says when
+  finalizers still hold the object.
+
+A 403 from Kubernetes is `failed`; other errors are retried like a merge.
+
 States: `requested`, `pending_approval`, `preflight_failed`, `approved`, `executing`, `succeeded`,
 `failed`, `stale`, `denied`, `expired`, `cancelled`, `uncertain`.
 
@@ -186,6 +233,19 @@ role can:
 
 It cannot record or change a decision, change what was asked, or read any other table. The
 executor refuses to start under a role that can read `attention_items`.
+
+**Kubernetes credentials.** With `executor.kubernetes.enabled`, the chart renders two
+ServiceAccounts in the executor's namespace. No pod runs as either:
+
+- `mainloop-executor-workloads`: get and patch Deployments, StatefulSets and DaemonSets, and list
+  HorizontalPodAutoscalers, cluster-wide
+- `mainloop-executor-delete`: get and delete any object, cluster-wide
+
+The executor's own account may only create tokens for those two. Each run of a `k8s.*` type mints a
+10-minute token for the one it needs. The delete account can read every object, Secrets included,
+because RBAC cannot grant "everything but Secrets". The executor reads through it with
+metadata-only requests, so no object's data reaches it. The guard on the executor's own namespace
+and roles is the executor's, not RBAC's.
 
 The split of work:
 

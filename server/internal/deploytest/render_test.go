@@ -43,6 +43,11 @@ var installs = map[string]struct {
 	"production-executor": {"mainloop", "ci/production-values.yaml", []string{
 		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.secretNamespaces={widgets,billing}",
 	}},
+	// The same, with the typed Kubernetes actions on.
+	"production-executor-kubernetes": {"mainloop", "ci/production-values.yaml", []string{
+		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.kubernetes.enabled=true",
+		"executor.kubernetes.clusterName=internal-01",
+	}},
 	// Production with the preview screenshot browser on.
 	"production-screenshots": {"mainloop", "ci/production-values.yaml", []string{
 		"screenshots.enabled=true",
@@ -62,6 +67,7 @@ type rendered struct {
 	clusterRoles []rbacv1.ClusterRole
 	bindings     []rbacv1.ClusterRoleBinding
 	roleBindings []rbacv1.RoleBinding
+	roles        []rbacv1.Role
 	cronJobs     map[string]batchv1.CronJob
 	accounts     map[string]corev1.ServiceAccount
 	// objects is "Kind/name" for every object, so a test can assert what is absent.
@@ -155,6 +161,10 @@ func render(t *testing.T, path string) rendered {
 			var b rbacv1.ClusterRoleBinding
 			mustUnmarshal(t, raw, &b)
 			r.bindings = append(r.bindings, b)
+		case "Role":
+			var ro rbacv1.Role
+			mustUnmarshal(t, raw, &ro)
+			r.roles = append(r.roles, ro)
 		case "RoleBinding":
 			var b rbacv1.RoleBinding
 			mustUnmarshal(t, raw, &b)
@@ -576,7 +586,7 @@ func TestNoClusterScopedSecretAccess(t *testing.T) {
 }
 
 func TestFeatureFlagsDefaultOff(t *testing.T) {
-	flags := []string{"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_MERGE_TOOLS_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED", "MAINLOOP_OWNER_POLICY_WRITES_ENABLED", "MAINLOOP_PRIVILEGED_ACTIONS_ENABLED", "MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED"}
+	flags := []string{"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_MERGE_TOOLS_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED", "MAINLOOP_OWNER_POLICY_WRITES_ENABLED", "MAINLOOP_PRIVILEGED_ACTIONS_ENABLED", "MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED", "MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED"}
 	// The live dev instance is a single-owner prototype, so it may turn HITL answers, Git transport
 	// and the push gate on (through its own proxies). Every other install keeps every flag off.
 	allowed := map[string][]string{

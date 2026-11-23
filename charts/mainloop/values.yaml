@@ -46,6 +46,7 @@ config:
   MAINLOOP_PRIVILEGED_ACTIONS_ENABLED: 'false'
   # Accepts the executor types (onepassword.*). The chart sets it true with executor.enabled.
   MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED: 'false'
+  MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED: 'false'
   # Owner API authentication (docs/specs/authentication.md): observe verifies and logs what enforce
   # would refuse, and refuses nothing. serve-api will not start outside development without a mode.
   # A deployment sets enforce once it has MAINLOOP_AUTH_OIDC_* and its machine callers carry tokens.
@@ -296,6 +297,13 @@ executor:
   # Namespaces onepassword.item_to_secret may write Secrets in; a Role is rendered in each. Some
   # (kube-*, mainloop*, onepassword*, argocd*, default) are always refused.
   secretNamespaces: []
+  # The typed Kubernetes actions (k8s.rollout_restart, k8s.scale, k8s.delete). On, it renders two
+  # narrow ServiceAccounts with cluster-wide roles (named after the executor's namespace) and lets
+  # the executor mint 10-minute tokens for them.
+  kubernetes:
+    enabled: false
+    # Shown on the cards, e.g. internal-01.
+    clusterName: ''
   nodeSelector: {}
   affinity: {}
   tolerations: []

@@ -9,8 +9,8 @@ import (
 )
 
 // Executor is serve-executor's settings (docs/specs/privileged-actions.md): its own database login,
-// the owner whose actions it runs, the 1Password service account token and the namespaces it may
-// write Secrets in. It needs nothing of serve-api's, and serve-api has none of these.
+// the owner whose actions it runs, the 1Password service account token, the namespaces it may
+// write Secrets in, and whether it runs the k8s.* types. It needs nothing of serve-api's, and serve-api has none of these.
 type Executor struct {
 	DB      Database
 	OwnerID string `env:"MAINLOOP_OWNER_ID" envDefault:"local-dev-user"`
@@ -20,6 +20,13 @@ type Executor struct {
 	// Secrets in. Empty allows none.
 	SecretNamespaceList string   `env:"MAINLOOP_EXECUTOR_SECRET_NAMESPACES"`
 	SecretNamespaces    []string `env:"-"`
+	// Namespace is the executor's own, where its narrow ServiceAccounts live; the k8s.* types never
+	// change it. The chart sets it from the pod's namespace.
+	Namespace string `env:"MAINLOOP_EXECUTOR_NAMESPACE"`
+	// Kubernetes turns on the k8s.* types: the executor mints tokens for its narrow ServiceAccounts.
+	Kubernetes ExactTrue `env:"MAINLOOP_EXECUTOR_KUBERNETES_ENABLED"`
+	// Cluster names the cluster the executor acts on, for the cards.
+	Cluster string `env:"MAINLOOP_EXECUTOR_CLUSTER"`
 }
 
 // LoadExecutor reads and validates serve-executor's settings from the process environment.
@@ -53,6 +60,10 @@ func ParseExecutor(vars map[string]string) (*Executor, error) {
 			continue
 		}
 		e.SecretNamespaces = append(e.SecretNamespaces, ns)
+	}
+	e.Namespace, e.Cluster = strings.TrimSpace(e.Namespace), strings.TrimSpace(e.Cluster)
+	if bool(e.Kubernetes) && !dnsLabel.MatchString(e.Namespace) {
+		errs = append(errs, errors.New("MAINLOOP_EXECUTOR_NAMESPACE must be the executor's namespace when MAINLOOP_EXECUTOR_KUBERNETES_ENABLED is true"))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("config: %w", err)

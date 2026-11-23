@@ -29,7 +29,13 @@ func (s *Server) privilegedTools() []Tool {
 			"GitHub App and never bypasses a branch rule; github.pr_close {repo, prs: [numbers, at most 20], comment?} closes " +
 			"open pull requests without merging; onepassword.item_to_secret {vault, item, field (each an id or exact title), " +
 			"namespace, secret, key} copies one 1Password field into one key of a Kubernetes Secret through Mainloop's executor " +
-			"(you never see the value; only the namespaces the executor allows; answers unavailable where no executor runs). " +
+			"(you never see the value; only the namespaces the executor allows; answers unavailable where no executor runs); " +
+			"k8s.rollout_restart {namespace, kind: Deployment|StatefulSet|DaemonSet, name} restarts its pods as kubectl rollout " +
+			"restart does; k8s.scale {namespace, kind: Deployment|StatefulSet, name, replicas: 0-100} sets its replicas; " +
+			"k8s.delete {namespace (empty for a cluster-scoped object), kind (Pod, Job.batch, Certificate.cert-manager.io), name} " +
+			"deletes that one object (its card expires in an hour). The k8s.* types run through the executor on the cluster it " +
+			"runs in, never in its own namespace, and answer unavailable where it has no Kubernetes access; prefer a Git change " +
+			"for anything Argo CD manages. " +
 			"An executor type returns state requested; its card opens once the executor has checked the target. Reuse request_id to read the same request back. At most 3 requests per session " +
 			"and 10 in all wait for the owner.",
 		InputSchema: objectSchema(map[string]any{

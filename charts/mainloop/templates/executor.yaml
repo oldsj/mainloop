@@ -89,6 +89,16 @@ spec:
                   key: token
             - name: MAINLOOP_EXECUTOR_SECRET_NAMESPACES
               value: {{ join "," .secretNamespaces | quote }}
+            - name: MAINLOOP_EXECUTOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- if .kubernetes.enabled }}
+            - name: MAINLOOP_EXECUTOR_KUBERNETES_ENABLED
+              value: "true"
+            - name: MAINLOOP_EXECUTOR_CLUSTER
+              value: {{ .kubernetes.clusterName | quote }}
+            {{- end }}
             # The root filesystem is read-only; /tmp is the only writable path.
             - name: HOME
               value: /tmp
@@ -139,6 +149,86 @@ subjects:
   - kind: ServiceAccount
     name: mainloop-executor
     namespace: {{ $.Values.executor.namespace }}
+{{- end }}
+{{- if .kubernetes.enabled }}
+{{- $ns := .namespace }}
+{{- $accounts := dict "workloads" "mainloop-executor-workloads" "delete" "mainloop-executor-delete" }}
+{{- range $role, $account := $accounts }}
+---
+# The k8s.* types' narrow ServiceAccounts. Nothing runs as them: the executor mints a 10-minute
+# token for one per run, and its own account may do nothing else with them.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $account }}
+  namespace: {{ $ns }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  # Named after the executor's namespace, so two releases on one cluster do not collide, and so the
+  # executor refuses to delete it (it never changes its own objects).
+  name: {{ $ns }}-{{ $role }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $ns }}-{{ $role }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $account }}
+    namespace: {{ $ns }}
+{{- end }}
+---
+# k8s.rollout_restart and k8s.scale: read and patch workloads, and see their autoscalers.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $ns }}-workloads
+rules:
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets]
+    verbs: [get, patch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [list]
+---
+# k8s.delete: read (metadata only, as the executor asks) and delete any object. The executor refuses
+# its own namespace and these roles; RBAC cannot express "all but", so that guard is the executor's.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $ns }}-delete
+rules:
+  - apiGroups: ['*']
+    resources: ['*']
+    verbs: [get, delete]
+---
+# The executor's own account may mint tokens for the narrow accounts, and nothing else here.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mainloop-executor-tokens
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: ['']
+    resources: [serviceaccounts/token]
+    resourceNames: [{{ join ", " (values $accounts | sortAlpha) }}]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mainloop-executor-tokens
+  namespace: {{ $ns }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mainloop-executor-tokens
+subjects:
+  - kind: ServiceAccount
+    name: mainloop-executor
+    namespace: {{ $ns }}
 {{- end }}
 {{- end }}
 {{- end }}

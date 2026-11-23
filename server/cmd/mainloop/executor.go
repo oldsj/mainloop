@@ -47,11 +47,17 @@ func serveExecutor(ctx context.Context, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("executor: Kubernetes client: %w", err)
 	}
-	r := &privileged.Runner{Service: &privileged.Service{
+	svc := &privileged.Service{
 		Pool: pool, OwnerID: cfg.OwnerID, Log: log, Executor: true,
 		OnePassword: op, Secrets: privileged.KubeSecrets{Client: kube}, SecretNamespaces: cfg.SecretNamespaces,
-	}}
-	log.Info("executor ready", "types", privileged.TypesFor(true), "secret_namespaces", cfg.SecretNamespaces)
+		ExecutorNamespace: cfg.Namespace, Cluster: cfg.Cluster,
+	}
+	if cfg.Kubernetes {
+		svc.Kube = privileged.NewKubeActions(privileged.KubeClients{Client: kube, Base: kc, Namespace: cfg.Namespace})
+	}
+	r := &privileged.Runner{Service: svc}
+	log.Info("executor ready", "types", privileged.TypesFor(true), "secret_namespaces", cfg.SecretNamespaces,
+		"kubernetes", bool(cfg.Kubernetes), "namespace", cfg.Namespace)
 	t := time.NewTicker(executorEvery)
 	defer t.Stop()
 	for {
