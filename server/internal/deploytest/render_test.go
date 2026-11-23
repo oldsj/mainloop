@@ -546,7 +546,7 @@ func TestNoClusterScopedSecretAccess(t *testing.T) {
 }
 
 func TestFeatureFlagsDefaultOff(t *testing.T) {
-	flags := []string{"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_MERGE_TOOLS_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED", "MAINLOOP_OWNER_POLICY_WRITES_ENABLED"}
+	flags := []string{"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_MERGE_TOOLS_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED", "MAINLOOP_OWNER_POLICY_WRITES_ENABLED", "MAINLOOP_PRIVILEGED_ACTIONS_ENABLED"}
 	// The live dev instance is a single-owner prototype, so it may turn HITL answers, Git transport
 	// and the push gate on (through its own proxies). Every other install keeps every flag off.
 	allowed := map[string][]string{

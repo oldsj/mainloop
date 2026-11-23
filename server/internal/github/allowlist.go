@@ -119,6 +119,8 @@ var rules = []rule{
 	newRule(http.MethodPost, "/repos/{owner}/{repo}/pulls", kindRepo, Permissions{"pull_requests": Write, "contents": Read}),
 	newRule(http.MethodPut, "/repos/{owner}/{repo}/pulls/*/merge", kindRepo,
 		Permissions{"contents": Write, "pull_requests": Write}),
+	// Closing a pull request (privileged github.pr_close). The client sends only {"state":"closed"}.
+	newRule(http.MethodPatch, "/repos/{owner}/{repo}/pulls/*", kindRepo, Permissions{"pull_requests": Write}),
 	// Protection must precede the general branch rule so it asks for administration.
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/branches/*/protection", kindRepo, Permissions{"administration": Read}),
 	newRule(http.MethodGet, "/repos/{owner}/{repo}/branches/**", kindRepo, Permissions{"contents": Read}),

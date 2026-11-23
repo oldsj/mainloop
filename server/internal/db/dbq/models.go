@@ -666,6 +666,48 @@ type PreviewLease struct {
 	CreatedAt   time.Time
 }
 
+type PrivilegedAction struct {
+	ID                 string
+	OwnerID            string
+	RequestID          string
+	RequesterRole      string
+	RequesterSessionID string
+	RequesterTaskID    *string
+	Type               string
+	Version            int32
+	Args               json.RawMessage
+	ArgsKey            string
+	Reason             string
+	State              string
+	ExpiresAt          time.Time
+	PreflightAttempts  int32
+	FrozenFacts        json.RawMessage
+	Digest             *string
+	DecidedAt          *time.Time
+	DecisionNote       *string
+	ApprovedDigest     *string
+	Attempts           int32
+	ClaimedUntil       *time.Time
+	NextAttemptAt      *time.Time
+	Result             json.RawMessage
+	LastError          *string
+	FinishedAt         *time.Time
+	DeliveryState      string
+	DeliveryAttempts   int32
+	DeliveryNextAt     *time.Time
+	DeliveryDetail     *string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+type PrivilegedActionEvent struct {
+	ID        int64
+	ActionID  string
+	Step      string
+	Detail    string
+	CreatedAt time.Time
+}
+
 type Project struct {
 	ID                      string
 	UserID                  string

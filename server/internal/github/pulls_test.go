@@ -181,6 +181,30 @@ func TestMergeSendsSquashAtTheHeadAndRefusalsCarryTheirStatus(t *testing.T) {
 	}
 }
 
+func TestCloseSendsOnlyTheClosedState(t *testing.T) {
+	app, fake := pullApp(t, nil)
+	ctx := context.Background()
+	if err := app.ClosePullRequest(ctx, repoON, 1); err != nil {
+		t.Fatal(err)
+	}
+	var sent string
+	for _, r := range fake.Requests() {
+		if r.Method == http.MethodPatch && strings.HasSuffix(r.Path, "/pulls/1") {
+			sent = r.Body
+		}
+	}
+	if strings.TrimSpace(sent) != `{"state":"closed"}` {
+		t.Errorf("close body = %s", sent)
+	}
+	p, err := app.PullRequest(ctx, repoON, 1)
+	if err != nil || p.State != "closed" || p.Merged {
+		t.Fatalf("after close = %+v, %v", p, err)
+	}
+	if err := app.ClosePullRequest(ctx, repoON, 99); !errors.Is(err, github.ErrNotFound) {
+		t.Errorf("missing = %v", err)
+	}
+}
+
 func TestCIAndRuleReadsReportTheirStatus(t *testing.T) {
 	app, fake := pullApp(t, func(r *githubtest.Repository) {
 		r.Runs = map[string][]githubtest.CheckRun{tipSHA: {{ID: 1, AppID: 9, Name: "ci", Conclusion: "success"}}}

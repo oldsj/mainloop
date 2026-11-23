@@ -54,6 +54,10 @@ type Config struct {
 	// DevloopEnabled turns on the dev_* MCP tools (live sync to the shared mainloop-dev instance).
 	// Off by default; see docs/specs/devloop.md.
 	DevloopEnabled ExactTrue `env:"MAINLOOP_DEVLOOP_ENABLED"`
+	// PrivilegedActionsEnabled turns on privileged actions (docs/specs/privileged-actions.md): the
+	// request tools, the approval cards and the executor. serve-api refuses to start with it on
+	// unless MAINLOOP_AUTH_MODE is enforce, since an approval must be attributable to the owner.
+	PrivilegedActionsEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_ACTIONS_ENABLED"`
 
 	// WebFetchPerMinute bounds the open-web web_fetch tool's fetches per owner per minute, and
 	// WebFetchDenyCIDRs adds comma-separated ranges it never connects to, beyond the built-in
@@ -572,6 +576,12 @@ func (c *Config) validate() error {
 
 // IsDev reports whether loopback Hosts and localhost Origins are accepted.
 func (c *Config) IsDev() bool { return c.Identity.DevMode || c.Identity.IsTestEnv }
+
+// PrivilegedActionsOn reports whether privileged actions run: enabled, and owner authentication
+// enforced.
+func (c *Config) PrivilegedActionsOn() bool {
+	return bool(c.PrivilegedActionsEnabled) && c.Auth.Mode == "enforce"
+}
 
 // ServiceOrigin returns the in-cluster origin of one of this instance's Services.
 func (c *Config) ServiceOrigin(service string) string {

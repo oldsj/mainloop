@@ -30,6 +30,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/issues"
 	"github.com/oldsj/mainloop/server/internal/merge"
 	"github.com/oldsj/mainloop/server/internal/onboarding"
+	"github.com/oldsj/mainloop/server/internal/privileged"
 	"github.com/oldsj/mainloop/server/internal/prs"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/topics"
@@ -75,6 +76,9 @@ type Server struct {
 	// Onboarding serves project_propose; its OwnerID is set per call from the actor. With none,
 	// the tool answers that proposals are unavailable.
 	Onboarding *onboarding.Service
+	// Privileged serves the privileged-action tools; its OwnerID is set per call from the actor.
+	// Nil when privileged actions are off: the tools then answer that they are unavailable.
+	Privileged *privileged.Service
 	// WebFetch serves the web_fetch tool, at most WebFetchPerMinute fetches a minute per owner.
 	// With none, the tool answers that it is unavailable.
 	WebFetch          PageFetcher
@@ -89,7 +93,7 @@ type Server struct {
 // later adds its function here and nothing else changes.
 func (s *Server) tools() map[string]Tool {
 	all := map[string]Tool{}
-	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.transcriptTools(), s.loopTools(), s.pullRequestTools(), s.issueTools(), s.checkTools(), s.devLoopTools(), s.projectTools(), s.onboardingTools(), s.webFetchTools()} {
+	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.transcriptTools(), s.loopTools(), s.pullRequestTools(), s.issueTools(), s.checkTools(), s.devLoopTools(), s.projectTools(), s.onboardingTools(), s.webFetchTools(), s.privilegedTools()} {
 		for _, t := range domain {
 			all[t.Name] = t
 		}

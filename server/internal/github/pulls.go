@@ -554,6 +554,20 @@ func (a *App) MergePullRequest(ctx context.Context, repo Repo, number int, sha s
 	return &MergeResult{Merged: out.Merged, SHA: out.SHA}, nil
 }
 
+// ClosePullRequest closes an open pull request without merging it. It sends only the state; the
+// caller writes its intent first and observes the pull request before any retry.
+func (a *App) ClosePullRequest(ctx context.Context, repo Repo, number int) error {
+	var out pullJSON
+	path := repoPath(repo, "pulls", strconv.Itoa(number))
+	if err := a.call(ctx, repo, Permissions{"pull_requests": Write}, http.MethodPatch, path, map[string]any{"state": "closed"}, &out); err != nil {
+		return err
+	}
+	if out.Number != number || out.State != "closed" {
+		return ErrUnavailable
+	}
+	return nil
+}
+
 // checkPages reads a counted listing (check suites or runs) a page at a time. GitHub's total_count
 // must be present, the same on every page, within the cap, and equal to what was listed: a listing
 // that disagrees with itself is not evidence.
