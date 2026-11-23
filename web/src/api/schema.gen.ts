@@ -3040,7 +3040,7 @@ export interface components {
     };
     /**
      * EffortLevel
-     * @description A reasoning-effort level. Which of these a profile actually offers is its own `effort_levels`: Mainloop's built-in Claude profile offers low, medium, high, xhigh, max; its built-in Codex profile offers minimal, low, medium, high. Setting a level the session's profile does not offer is `422`.
+     * @description A reasoning-effort level. Which of these a profile actually offers is its own `effort_levels`: Mainloop's built-in Claude profile offers low, medium, high, xhigh, max; its built-in Codex profile offers low, medium, high. Setting a level the session's profile does not offer is `422`.
      * @enum {string}
      */
     EffortLevel: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';

@@ -329,8 +329,8 @@ func TestCreateValidatesModelAndEffort(t *testing.T) {
 		t.Fatalf("allowed_models = %v, want %v", refused.Detail["allowed_models"], want)
 	}
 
-	// An effort the resolved profile does not offer is refused with the allowed levels (codex's
-	// minimal is not one of claude's).
+	// An effort the resolved profile does not offer is refused with the allowed levels (minimal
+	// is not one of claude's).
 	_, err = e.create(e.own, tasks.CreateInput{ProjectID: "p1", Effort: "minimal"})
 	if !errors.As(err, &refused) || refused.Status != 422 || refused.Reason != tasks.ReasonEffortUnavailable {
 		t.Fatalf("err = %v", err)

@@ -85,7 +85,7 @@ func TestRegistryDefaults(t *testing.T) {
 		}
 	}
 	wantEffort(claude, []string{"low", "medium", "high", "xhigh", "max"}, "medium")
-	wantEffort(codex, []string{"minimal", "low", "medium", "high"}, "medium")
+	wantEffort(codex, []string{"low", "medium", "high"}, "medium")
 	if len(codex.Models) == 0 || codex.DefaultModel == "" {
 		t.Errorf("codex models = %+v, default %q", codex.Models, codex.DefaultModel)
 	}

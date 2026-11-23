@@ -64,21 +64,30 @@ func (s *Service) SetSessionDefault(ctx context.Context, d SessionDefault) ([]Se
 }
 
 // turnModelEffort is the model and effort a turn names: the session's override, else the owner's
-// default for its role and provider. A default effort its provider no longer offers (the profile
-// changed since it was set) is left out rather than failing the turn.
+// default for its role and provider. An effort its provider no longer offers (the profile changed
+// since it was set, as when the built-in Codex profile dropped minimal) is left out rather than
+// failing every turn: the session's override falls back to the default, and the default to none.
 func (s *Service) turnModelEffort(d dbq.GetDeliveryContextRow) (model, effort *string) {
-	model, effort = d.ModelOverride, d.EffortOverride
+	model = d.ModelOverride
 	if model == nil {
 		model = d.DefaultModel
 	}
-	if effort == nil && d.DefaultEffort != nil {
-		kind := ""
-		if d.BindingKind != nil {
-			kind = *d.BindingKind
+	kind := ""
+	if d.BindingKind != nil {
+		kind = *d.BindingKind
+	}
+	offered := func(e *string) bool {
+		if e == nil {
+			return false
 		}
-		if profile, ok := s.profileFor(kind); !ok || slices.Contains(profile.EffortLevels, *d.DefaultEffort) {
-			effort = d.DefaultEffort
-		}
+		profile, ok := s.profileFor(kind)
+		return !ok || slices.Contains(profile.EffortLevels, *e)
+	}
+	switch {
+	case offered(d.EffortOverride):
+		effort = d.EffortOverride
+	case offered(d.DefaultEffort):
+		effort = d.DefaultEffort
 	}
 	return model, effort
 }

@@ -50,7 +50,7 @@ export const CODEX_PROFILE: ProviderProfile = {
   native_provider: 'codex',
   models: [{ id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' }],
   default_model: 'gpt-6.1-sol',
-  effort_levels: ['minimal', 'low', 'medium', 'high']
+  effort_levels: ['low', 'medium', 'high']
 };
 
 /** A refusal the next request gets: the status, the detail, and the contract's `code` when it has one. */

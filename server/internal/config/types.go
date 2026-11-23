@@ -69,7 +69,7 @@ var (
 
 // EffortLevels is every reasoning-effort word a profile's effort_levels may name, in display
 // order. A profile's own effort_levels is a subset: Mainloop's built-in Claude profile offers
-// low, medium, high, xhigh, max; its built-in Codex profile offers minimal, low, medium, high.
+// low, medium, high, xhigh, max; its built-in Codex profile offers low, medium, high.
 var EffortLevels = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
 
 func validEffortLevel(level string) bool {

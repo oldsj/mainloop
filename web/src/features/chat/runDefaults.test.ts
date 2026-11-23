@@ -26,6 +26,23 @@ describe('where a session’s model and effort come from', () => {
     });
   });
 
+  it('falls back past an effort the provider no longer offers, as the turn does', () => {
+    // Given a Codex session set to minimal, which the provider stopped offering
+    const codexHigh = [
+      { role: 'worker' as const, provider: 'codex', model: null, effort: 'high' as const }
+    ];
+    const levels = ['low', 'medium', 'high'];
+
+    // When its sources are read, Then the role default stands in for it
+    expect(
+      runDefaults({ kind: 'codex', effort_override: 'minimal' }, codexHigh, 'worker', levels).effort
+    ).toEqual({ value: 'high', source: 'role' });
+    // And with no offered default either, it is the provider's
+    expect(
+      runDefaults({ kind: 'codex', effort_override: 'minimal' }, [], 'worker', levels).effort
+    ).toEqual({ value: null, source: 'provider' });
+  });
+
   it('is the provider’s when there is neither', () => {
     const none = { value: null, source: 'provider' };
     expect(runDefaults({ kind: 'claude' }, [], 'worker')).toEqual({ model: none, effort: none });

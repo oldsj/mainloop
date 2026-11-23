@@ -137,7 +137,9 @@ var (
 	codexModels        = []config.ProviderModel{
 		{ID: "gpt-6.1-sol", Label: "GPT-6.1 Sol"},
 	}
-	codexEffortLevels = []string{"minimal", "low", "medium", "high"}
+	// gpt-6.1-sol rejects minimal ("Supported values are: low, medium, high, x…", measured on
+	// mainloop-dev, 2026-11-22). The truncated rest was not read, so xhigh is not offered yet.
+	codexEffortLevels = []string{"low", "medium", "high"}
 )
 
 func builtins(k config.Kagent) []config.ProviderProfile {

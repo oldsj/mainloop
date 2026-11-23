@@ -23,7 +23,7 @@ const codexProfile: ProviderProfile = {
   ...claudeProfile,
   id: 'codex',
   native_provider: 'codex',
-  effort_levels: ['minimal', 'low', 'medium', 'high']
+  effort_levels: ['low', 'medium', 'high']
 };
 
 describe('resolveEffortCommand', () => {
@@ -54,9 +54,11 @@ describe('resolveEffortCommand', () => {
     });
   });
 
-  it('accepts minimal for Codex', () => {
+  it('rejects minimal for Codex, whose model does not accept it', () => {
     const native = nativeFixture({ effort_override: null });
-    expect(resolveEffortCommand(['minimal'], native, codexProfile)).toEqual({ effort: 'minimal' });
+    expect(resolveEffortCommand(['minimal'], native, codexProfile)).toEqual({
+      notice: expect.stringContaining('Unknown effort "minimal"')
+    });
   });
 
   it('reports a no-op instead of resetting when the level is already selected', () => {

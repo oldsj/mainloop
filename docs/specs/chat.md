@@ -50,7 +50,7 @@ Status: **implemented**. The commands are client-side in `web/src/features/chat`
 
 Every session — the main thread and a session's own chat alike, since both are one binding with one override — has a sticky `/model` and `/effort` override, independent of each other: durable per session, surviving reloads and restarts, and applied from that session's next turn. A change made mid-turn never interrupts the turn in flight; the turn already sending keeps the model and effort it started with, and the next one picks up whatever is current when it starts. `/model default` and `/effort default` clear the override back to the provider's own default. Neither command switches the main provider (Claude Code or Codex); that remains the header's `PUT /main-thread/provider` switch (above), unrelated to this state.
 
-`/model` lists the models the session's _current_ provider offers and sets one; `/effort` lists and sets a reasoning-effort level the same way. Both read their choices from the session's provider profile (`GET /providers`, `ProviderProfile.models` and `.effort_levels`; see [provider profiles](providers.md)) — not a value hardcoded in the web app — so an operator profile's own model list and effort levels autocomplete too. Mainloop's built-in Claude profile lists `low`, `medium`, `high`, `xhigh`, `max`; its built-in Codex profile lists `minimal`, `low`, `medium`, `high`. `/model <name>` accepts any name matching the contract's bounded pattern (`[A-Za-z0-9._:/-]{1,200}`), even one the profile does not list: kagent is the real gate on whether a model exists, and rejects an unknown one synchronously when the next turn starts (see below), so the client is not the source of truth here. `/effort <level>` is stricter: a level the current provider profile does not offer is refused client-side (and the server itself re-checks and refuses with `422` on a direct write), since the levels are a small, known set, not an open one. Typing either command in a composer and sending it is intercepted client-side: the text is never posted as a chat message, and the sent draft is cleared the same way an accepted message's is. Each command's own output is a transient status line above its composer; it is not a conversation message, is not persisted, and is replaced or cleared by the next command or ordinary send. The composer also shows the session's current model and effort (`default` for no override) next to the input box.
+`/model` lists the models the session's _current_ provider offers and sets one; `/effort` lists and sets a reasoning-effort level the same way. Both read their choices from the session's provider profile (`GET /providers`, `ProviderProfile.models` and `.effort_levels`; see [provider profiles](providers.md)) — not a value hardcoded in the web app — so an operator profile's own model list and effort levels autocomplete too. Mainloop's built-in Claude profile lists `low`, `medium`, `high`, `xhigh`, `max`; its built-in Codex profile lists `low`, `medium`, `high` (gpt-6.1-sol rejects `minimal`). `/model <name>` accepts any name matching the contract's bounded pattern (`[A-Za-z0-9._:/-]{1,200}`), even one the profile does not list: kagent is the real gate on whether a model exists, and rejects an unknown one synchronously when the next turn starts (see below), so the client is not the source of truth here. `/effort <level>` is stricter: a level the current provider profile does not offer is refused client-side (and the server itself re-checks and refuses with `422` on a direct write), since the levels are a small, known set, not an open one. Typing either command in a composer and sending it is intercepted client-side: the text is never posted as a chat message, and the sent draft is cleared the same way an accepted message's is. Each command's own output is a transient status line above its composer; it is not a conversation message, is not persisted, and is replaced or cleared by the next command or ordinary send. The composer also shows the session's current model and effort (`default` for no override) next to the input box.
 
 The wire routes are `POST /sessions/{session_id}/model` (`{"model": "<name>"|null}`) and `POST /sessions/{session_id}/effort` (`{"effort": "<level>"|null}`), both `200` with the session's resulting `{session_id, model, effort}`, `404` for a session that is not the owner's, and `422` for an effort level the provider does not offer. They apply equally to the main thread (its `session_id` is `GET /main-thread`'s own) and to any other session.
 
@@ -78,8 +78,9 @@ read when each turn starts, not copied into the session, so:
   (or the provider's, when there is none);
 - a delegation's `model` and `effort` are overrides and win over the default.
 
-A default effort its provider stopped offering (the profile changed after it was set) is left out
-of the turn rather than failing it.
+An effort its provider stopped offering (the profile changed after it was set, as when the built-in
+Codex profile dropped `minimal`) is left out of the turn rather than failing it: a session's own
+falls back to the default, and a default to the provider's.
 
 **Settings page (implemented, checked against MSW, not a live backend).** `/settings` has a
 **Session defaults** section: for **Main thread** and for **Workers**, one row per enabled provider
@@ -113,8 +114,9 @@ default for its role and provider, or the provider. The composer names it, per f
   A session's own choice is shown bare, a role default with whose it is, and the provider's as
   `default`, since nothing is sent for it.
 
-The main thread falls under the `main` defaults and every other session under `worker`. A default
-effort the provider no longer offers reads as the provider's, as the turn treats it. Until the
+The main thread falls under the `main` defaults and every other session under `worker`. An effort
+the provider no longer offers reads as the turn treats it: a session's own as the default, a
+default as the provider's. Until the
 owner's defaults have been read the composer says nothing about them.
 
 ## Sending messages

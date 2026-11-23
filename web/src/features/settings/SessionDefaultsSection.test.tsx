@@ -117,7 +117,8 @@ describe('session defaults', () => {
     serve();
     renderSection();
     const codex = await field('Workers, Codex: effort');
-    expect(within(codex).getByRole('option', { name: 'minimal' })).toBeInTheDocument();
+    expect(within(codex).getByRole('option', { name: 'low' })).toBeInTheDocument();
+    expect(within(codex).queryByRole('option', { name: 'minimal' })).toBeNull();
     expect(within(codex).queryByRole('option', { name: 'max' })).toBeNull();
     const claude = await field('Workers, Claude Code: effort');
     expect(within(claude).getByRole('option', { name: 'max' })).toBeInTheDocument();
