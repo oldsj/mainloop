@@ -20,12 +20,14 @@ import {
   policy,
   project,
   verification,
+  workerLimit,
   type DetailFixture,
   type InstructionsFixture,
   type MemoryFixture,
   type PolicyFixture,
   type ProjectFixture,
   type VerificationFixture,
+  type WorkerLimitFixture,
   type WorkspaceFixture
 } from './fixtures';
 
@@ -42,6 +44,12 @@ export const detailRead = (resolve: HttpResponseResolver) =>
 
 export const policyRead = (resolve: HttpResponseResolver) =>
   http.get(url('/projects/:project_id/merge-policy'), resolve);
+
+export const workerLimitRead = (resolve: HttpResponseResolver) =>
+  http.get(url('/projects/:project_id/worker-limit'), resolve);
+
+export const workerLimitWrite = (resolve: HttpResponseResolver) =>
+  http.put(url('/projects/:project_id/worker-limit'), resolve);
 
 export const verificationRead = (resolve: HttpResponseResolver) =>
   http.get(url('/projects/:project_id/verification'), resolve);
@@ -100,6 +108,7 @@ export function serveProjectPage(
     detail?: DetailFixture;
     policy?: PolicyFixture;
     verification?: VerificationFixture;
+    workerLimit?: WorkerLimitFixture;
     instructions?: InstructionsFixture;
     memory?: MemoryFixture;
     workspaces?: WorkspaceFixture[];
@@ -115,6 +124,7 @@ export function serveProjectPage(
     detailRead(() => HttpResponse.json(value)),
     policyRead(() => HttpResponse.json(options.policy ?? policy())),
     verificationRead(() => HttpResponse.json(options.verification ?? verification())),
+    workerLimitRead(() => HttpResponse.json(options.workerLimit ?? workerLimit())),
     instructionsRead(() => HttpResponse.json(options.instructions ?? instructions())),
     memoryRead(() => HttpResponse.json(options.memory ?? memory())),
     workspacesRead(options.workspaces ?? []),

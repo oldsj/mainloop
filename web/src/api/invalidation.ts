@@ -179,10 +179,11 @@ export function createCoalescer(run: () => void, windowMs: number) {
 export function createSseApplier(queryClient: QueryClient) {
   const accept = createEventGate();
   let connects = 0;
-  const taskLists = createCoalescer(
-    () => void queryClient.invalidateQueries({ queryKey: keys.tasks() }),
-    TASK_LIST_COALESCE_MS
-  );
+  const taskLists = createCoalescer(() => {
+    void queryClient.invalidateQueries({ queryKey: keys.tasks() });
+    // A project's "workers running" is counted from its tasks, so it is re-read with them.
+    void queryClient.invalidateQueries({ queryKey: keys.workerLimits() });
+  }, TASK_LIST_COALESCE_MS);
 
   function apply(message: Pick<SseMessage, 'event' | 'data'>): void {
     const firstConnect = message.event === 'connected' && connects++ === 0;

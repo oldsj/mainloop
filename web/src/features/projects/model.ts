@@ -101,6 +101,66 @@ export const mergePolicyViewSchema = z.object({
   >
 >;
 
+export type WorkerLimit = Schemas['WorkerLimit'];
+
+/** The range the server accepts for a project's own limit. */
+export const WORKER_LIMIT_MIN = 1;
+export const WORKER_LIMIT_MAX = 100;
+
+/** One object, not a list, so a bad one fails the section rather than being shown half-read. */
+export const workerLimitSchema = z.object({
+  project_id: text,
+  max_workers: z.number().int().nullable(),
+  default_max_workers: z.number().int(),
+  effective_max_workers: z.number().int(),
+  global_max_workers: z.number().int(),
+  workers_running: z.number().int()
+}) satisfies z.ZodType<WorkerLimit>;
+
+/**
+ * The most workers the project can run at once. Its own limit (or the default) and the owner-wide
+ * limit both apply; the server's effective limit is already the smaller of the two.
+ */
+export function workerBound(view: WorkerLimit): number {
+  return view.effective_max_workers;
+}
+
+/** How often the count is read again while workers run: a slot can be freed with no event. */
+export const WORKER_LIMIT_POLL_MS = 60_000;
+
+/** "2 of 6 workers running", the line the project page leads its tasks with. */
+export function workersRunningText(view: WorkerLimit): string {
+  const bound = workerBound(view);
+  return `${view.workers_running} of ${bound} ${bound === 1 ? 'worker' : 'workers'} running`;
+}
+
+/** Where the project's limit comes from: its own value, or the default. */
+export function workerLimitSourceText(view: WorkerLimit): string {
+  return view.max_workers === null
+    ? `This project uses the default limit of ${view.default_max_workers}.`
+    : `This project’s own limit is ${view.max_workers}. The default is ${view.default_max_workers}.`;
+}
+
+/**
+ * The owner-wide limit, said louder when it is the one that binds: the project asks for more than
+ * it. It is shared, so other projects' workers count against it too.
+ */
+export function workerLimitGlobalText(view: WorkerLimit): string {
+  const all = view.global_max_workers;
+  const asked = view.max_workers ?? view.default_max_workers;
+  return asked > all
+    ? `The limit across all projects is ${all}, which is lower, so at most ${all} run here. It is shared, so workers in other projects can hold this one back sooner.`
+    : `The limit across all projects (${all}) applies as well. It is shared, so workers in other projects can hold this one back sooner.`;
+}
+
+/** The whole number a typed limit stands for, or null when it is not one the server accepts. */
+export function parseWorkerLimit(input: string): number | null {
+  const typed = input.trim();
+  if (!/^\d+$/.test(typed)) return null;
+  const value = Number(typed);
+  return value >= WORKER_LIMIT_MIN && value <= WORKER_LIMIT_MAX ? value : null;
+}
+
 export const pullRequestRowSchema = z.object({
   number: z.number().int(),
   title: text,

@@ -5,6 +5,7 @@
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { $api, keys } from '@/api';
+import { WORKER_LIMIT_POLL_MS } from './model';
 
 export function useProjects() {
   return $api.useQuery('get', '/projects');
@@ -42,6 +43,40 @@ export function useUpdateMergePolicy(projectId: string) {
         queryClient.invalidateQueries({ queryKey: keys.projectDetail(projectId) }),
         queryClient.invalidateQueries({ queryKey: keys.projects() })
       ])
+  });
+}
+
+/**
+ * How many workers the project may run at once, and how many it runs now. Task events re-read it
+ * (see `api/invalidation`). One slot can be freed with no event, when a child that had already ended
+ * is cleaned up later, so while any worker runs it is also read again every minute and whenever the
+ * owner comes back to the page.
+ */
+export function useWorkerLimit(projectId: string) {
+  return $api.useQuery(
+    'get',
+    '/projects/{project_id}/worker-limit',
+    { params: { path: { project_id: projectId } } },
+    {
+      refetchInterval: (query) =>
+        (query.state.data?.workers_running ?? 0) > 0 ? WORKER_LIMIT_POLL_MS : false,
+      refetchOnWindowFocus: true
+    }
+  );
+}
+
+/** Sets the project's own limit, or returns it to the default. The answer is the new view. */
+export function useUpdateWorkerLimit(projectId: string) {
+  const queryClient = useQueryClient();
+  const key = $api.queryOptions('get', '/projects/{project_id}/worker-limit', {
+    params: { path: { project_id: projectId } }
+  }).queryKey;
+  return $api.useMutation('put', '/projects/{project_id}/worker-limit', {
+    onSuccess: (data) => {
+      queryClient.setQueryData(key, data);
+      // The project carries its own limit too.
+      return queryClient.invalidateQueries({ queryKey: keys.projects() });
+    }
   });
 }
 

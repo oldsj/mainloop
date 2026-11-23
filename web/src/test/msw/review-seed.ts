@@ -8,7 +8,7 @@ import { delay, http, HttpResponse } from 'msw';
 import { API_URL } from '@/api/config';
 import { attentionItem, hitlAttentionItem, queueItem } from '@/features/inbox/test/fixtures';
 import { CLAUDE_PROFILE, CODEX_PROFILE } from '@/features/chat/handlers';
-import { project } from '@/features/projects/test/fixtures';
+import { project, workerLimit } from '@/features/projects/test/fixtures';
 import { serveProjectPage } from '@/features/projects/test/handlers';
 import { native, session } from '@/features/sessions/test/fixtures';
 import { approvalRequest, hitlView } from '@/test/fixtures/hitl';
@@ -374,6 +374,29 @@ export function reviewSeed() {
       HttpResponse.json(native({ session_id: gone.id, live: true }))
     ),
     http.get(url('/projects'), () => HttpResponse.json([repo, infra])),
+    // The first project is on the default limit; the second set its own.
+    http.get(url('/projects/:project_id/worker-limit'), ({ params }) =>
+      HttpResponse.json(
+        params.project_id === infra.id
+          ? workerLimit({
+              project_id: infra.id,
+              max_workers: 3,
+              effective_max_workers: 3,
+              workers_running: 1
+            })
+          : workerLimit({ project_id: String(params.project_id) })
+      )
+    ),
+    http.put(url('/projects/:project_id/worker-limit'), async ({ params, request }) => {
+      const { max_workers } = (await request.json()) as { max_workers: number | null };
+      return HttpResponse.json(
+        workerLimit({
+          project_id: String(params.project_id),
+          max_workers,
+          effective_max_workers: Math.min(max_workers ?? 6, 20)
+        })
+      );
+    }),
     // Both built-in profiles, so Settings has rows to show; one worker default is already set.
     http.get(url('/providers'), () => HttpResponse.json([CLAUDE_PROFILE, CODEX_PROFILE])),
     ...sessionDefaultsHandlers([

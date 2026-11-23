@@ -62,6 +62,21 @@ export function commit(overrides: Partial<Schemas['CommitSummary']> = {}) {
   };
 }
 
+export type WorkerLimitFixture = Schemas['WorkerLimit'];
+
+/** A project on the default limit of 6, under an owner-wide 20, with two workers running. */
+export function workerLimit(overrides: Partial<WorkerLimitFixture> = {}): WorkerLimitFixture {
+  return {
+    project_id: 'project-a',
+    max_workers: null,
+    default_max_workers: 6,
+    effective_max_workers: 6,
+    global_max_workers: 20,
+    workers_running: 2,
+    ...overrides
+  };
+}
+
 export function policy(overrides: Partial<PolicyFixture> = {}): PolicyFixture {
   return {
     writes_enabled: false,
