@@ -44,6 +44,7 @@ var installs = map[string]struct {
 		"screenshots.enabled=true",
 		"screenshots.previewEgress[0].namespaceSelector.matchLabels.kubernetes\\.io/metadata\\.name=gateway-system",
 		"screenshots.previewEgress[0].podSelector.matchLabels.app=preview-gateway",
+		"screenshots.previewEgressPorts={10443}",
 	}},
 }
 
@@ -1051,7 +1052,7 @@ func TestScreenshotBrowserIsFencedIn(t *testing.T) {
 		}
 	}
 	gw := out[1]
-	if len(gw.Ports) != 1 || gw.Ports[0].Port.String() != "443" || len(gw.To) != 1 || gw.To[0].IPBlock != nil ||
+	if len(gw.Ports) != 1 || gw.Ports[0].Port.String() != "10443" || len(gw.To) != 1 || gw.To[0].IPBlock != nil ||
 		gw.To[0].PodSelector == nil || gw.To[0].PodSelector.MatchLabels["app"] != "preview-gateway" {
 		t.Errorf("browser egress to the gateway: %+v", gw)
 	}

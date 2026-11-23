@@ -1,7 +1,7 @@
 {{- if .Values.screenshots.enabled }}
 {{- $egress := .Values.screenshots.previewEgress }}
-{{- if not $egress }}
-{{- fail "screenshots.previewEgress must name the preview gateway (NetworkPolicy peers)" }}
+{{- if or (not $egress) (not .Values.screenshots.previewEgressPorts) }}
+{{- fail "screenshots.previewEgress and previewEgressPorts must name the preview gateway's pods and ports" }}
 {{- end }}
 # The headless browser behind the preview_screenshot tool (docs/specs/workspaces.md, "Preview
 # screenshots"). serve-mcp drives it over the DevTools protocol, which has no authentication, so
@@ -127,6 +127,8 @@ spec:
     - to:
         {{- toYaml $egress | nindent 8 }}
       ports:
+        {{- range .Values.screenshots.previewEgressPorts }}
         - protocol: TCP
-          port: 443
+          port: {{ . }}
+        {{- end }}
 {{- end }}
