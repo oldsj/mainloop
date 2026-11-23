@@ -13,7 +13,7 @@ and is not yet proven live.
 | Backend verification, scopes, write checks, `off`/`observe`/`enforce`; chart default `observe` | implemented                      |
 | Canary, in-pod smoke and operator ServiceAccount tokens (chart); `--token-file`                | implemented                      |
 | Web app sends `X-Mainloop-Client`, re-login on `401`, sign-out in Settings                     | implemented                      |
-| Production web build served same-origin at `/api` (needs the gateway's `/api` route first)     | proposed                         |
+| Production web build served same-origin at `/api` (needs the gateway's `/api` route first)     | implemented (image build)        |
 | Pocket ID login at the admin gateway (Envoy SecurityPolicy) for dev, then prod                 | proposed (deployment repository) |
 | `enforce` on dev, then prod; `mainloop-api.<domain>` route removed                             | proposed                         |
 
