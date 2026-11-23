@@ -29,6 +29,9 @@ const (
 	ToolRemember                  = "remember"
 	ToolForget                    = "forget"
 	ToolProjectPropose            = "project_propose"
+	ToolRequestPrivilegedAction   = "request_privileged_action"
+	ToolGetPrivilegedAction       = "get_privileged_action"
+	ToolCancelPrivilegedAction    = "cancel_privileged_action"
 	ToolTaskGet                   = "task_get"
 	ToolTaskList                  = "task_list"
 	ToolTaskHistory               = "task_history"
@@ -64,6 +67,7 @@ var AllTools = []string{
 	ToolOpenPullRequest,
 	ToolGetIssue, ToolGetPullRequest, ToolCreateIssue, ToolCommentIssue, ToolCommentPullRequest, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
 	ToolProjectContext, ToolRemember, ToolForget, ToolProjectPropose,
+	ToolRequestPrivilegedAction, ToolGetPrivilegedAction, ToolCancelPrivilegedAction,
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolTaskTranscript, ToolTranscriptSearch, ToolDelegate, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign,
 	ToolTaskHold, ToolSteer, ToolFollowUp, ToolSupervisorSend, ToolProjectSettings, ToolReport, ToolLoopArm, ToolLoopList, ToolLoopStop,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
@@ -133,9 +137,11 @@ var (
 	taskRead       = []string{ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolTaskTranscript, ToolTranscriptSearch}
 	taskManagement = []string{ToolDelegate, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign, ToolSteer, ToolFollowUp}
 	// loopTools are main's and supervisors' wake-ups: what fires is a message to them.
-	loopTools      = []string{ToolLoopArm, ToolLoopList, ToolLoopStop}
-	workspaceTools = []string{ToolWhoami, ToolOpenPullRequest}
-	mergeTools     = []string{
+	loopTools = []string{ToolLoopArm, ToolLoopList, ToolLoopStop}
+	// privilegedTools request credentialed actions the owner approves.
+	privilegedTools = []string{ToolRequestPrivilegedAction, ToolGetPrivilegedAction, ToolCancelPrivilegedAction}
+	workspaceTools  = []string{ToolWhoami, ToolOpenPullRequest}
+	mergeTools      = []string{
 		ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 		ToolGetPullRequestMergeStatus,
 	}
@@ -201,6 +207,9 @@ func (p Policy) actorTools(a Actor) []string {
 		tools = append(tools, ToolTaskHold, ToolSupervisorSend, ToolProjectSettings)
 		// Main and supervisors propose new projects; the owner approves each one.
 		tools = append(tools, ToolProjectPropose)
+		// Main and coordinating supervisors request privileged actions; children report blocked to
+		// their supervisor instead (docs/specs/privileged-actions.md).
+		tools = append(tools, privilegedTools...)
 	case (a.Role == dbstate.RoleSupervisor && a.Depth == 1) || (a.Role == dbstate.RoleChild && a.Depth == 2):
 		tools = append(tools, ToolWhoami, ToolReport)
 		tools = append(tools, taskRead...)
@@ -211,6 +220,7 @@ func (p Policy) actorTools(a Actor) []string {
 			// project; a root code task, which also runs as a supervisor, may not.
 			if a.Grant == dbstate.GrantCoordination {
 				tools = append(tools, ToolProjectPropose)
+				tools = append(tools, privilegedTools...)
 			}
 		}
 		if a.Grant == dbstate.GrantWorkspace {

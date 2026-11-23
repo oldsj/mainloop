@@ -30,6 +30,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/metrics"
 	"github.com/oldsj/mainloop/server/internal/notify"
 	"github.com/oldsj/mainloop/server/internal/preview"
+	"github.com/oldsj/mainloop/server/internal/privileged"
 	"github.com/oldsj/mainloop/server/internal/progress"
 	"github.com/oldsj/mainloop/server/internal/projects"
 	"github.com/oldsj/mainloop/server/internal/providers"
@@ -126,6 +127,9 @@ func serve(ctx context.Context, cmd string, log *slog.Logger) error {
 }
 
 func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
+	if cfg.PrivilegedActionsEnabled && cfg.Auth.Mode != "enforce" {
+		return errors.New("MAINLOOP_PRIVILEGED_ACTIONS_ENABLED needs MAINLOOP_AUTH_MODE=enforce: an approval must be attributable to the owner")
+	}
 	pool, err := db.NewPool(ctx, cfg, db.WithMaxConns(db.APIMaxConns))
 	if err != nil {
 		return err
@@ -255,6 +259,11 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	runner.AddSweep(projectSvc.MetadataSweep())
 	runner.AddSweep(newProposalApplier(cfg, pool, projectSvc, ciSvc, gh, log).Sweep())
+	if p := newPrivileged(cfg, pool, gh, log); p != nil {
+		// Slice 1's executor: GitHub merges and closes through the App key this process already
+		// holds. Later credentials run in their own no-ingress executor (docs/specs/privileged-actions.md).
+		runner.AddSweep((&privileged.Runner{Service: p, Sender: svc}).Sweep())
+	}
 	runner.AddSweep(events.PruneSweep(pool, time.Duration(cfg.Events.RetentionHours)*time.Hour))
 	wsSvc.Register(runner)
 	registerCredentials(cfg, creds, runner)

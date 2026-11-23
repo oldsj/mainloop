@@ -6,6 +6,8 @@ import {
   messageOf,
   prLink,
   priorityBorder,
+  privilegedDigest,
+  responseMetadata,
   takesTextReply,
   type QueueItem
 } from './model';
@@ -18,8 +20,9 @@ const TYPE_ICONS: Partial<Record<QueueItem['item_type'], LucideIcon>> = {
 };
 
 /**
- * A queue item that is not a live HITL request: a question or a plan to review. Answers go to
- * `POST /queue/{id}/respond`. Input notices are dismissed from Activity, not here.
+ * A queue item that is not a live HITL request: a question, a plan to review or an approval. Answers
+ * go to `POST /queue/{id}/respond`; Approve on a privileged-action card carries the card's digest.
+ * Input notices are dismissed from Activity, not here.
  */
 export function QueueCard({ item }: { item: QueueItem }) {
   const [planOpen, setPlanOpen] = useState(false);
@@ -35,7 +38,10 @@ export function QueueCard({ item }: { item: QueueItem }) {
 
   const send = (response: string, onSent?: () => void) =>
     respond.mutate(
-      { params: { path: { item_id: item.id } }, body: { response } },
+      {
+        params: { path: { item_id: item.id } },
+        body: { response, metadata: responseMetadata(item, response) }
+      },
       {
         onSuccess: () => {
           setSent(response);
@@ -123,7 +129,11 @@ export function QueueCard({ item }: { item: QueueItem }) {
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             placeholder={
-              item.item_type === 'plan_review' ? 'Request changes...' : 'Type your response...'
+              privilegedDigest(item)
+                ? 'Deny with a note...'
+                : item.item_type === 'plan_review'
+                  ? 'Request changes...'
+                  : 'Type your response...'
             }
             disabled={respond.isPending}
             className="border-input bg-background text-foreground placeholder:text-muted-foreground focus-visible:border-ring min-h-control min-w-0 flex-1 border px-3 text-sm focus-visible:outline-none disabled:opacity-50"

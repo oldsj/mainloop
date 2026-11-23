@@ -41,6 +41,9 @@ config:
   MAINLOOP_MERGE_PROTECTED_AUTO: 'false'
   # The live dev loop (dev_sync and the lease tools) stays off except where a deployment turns it on.
   MAINLOOP_DEVLOOP_ENABLED: 'false'
+  # Privileged actions (docs/specs/privileged-actions.md): off unless a deployment turns them on,
+  # and serve-api refuses them unless MAINLOOP_AUTH_MODE is enforce.
+  MAINLOOP_PRIVILEGED_ACTIONS_ENABLED: 'false'
   # Owner API authentication (docs/specs/authentication.md): observe verifies and logs what enforce
   # would refuse, and refuses nothing. serve-api will not start outside development without a mode.
   # A deployment sets enforce once it has MAINLOOP_AUTH_OIDC_* and its machine callers carry tokens.

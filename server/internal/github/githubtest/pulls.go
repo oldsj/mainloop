@@ -312,6 +312,8 @@ func (s *Server) pullCall(w http.ResponseWriter, r *http.Request, repo *Reposito
 		s.pullList(w, r, repo)
 	case len(rest) == 1 && r.Method == http.MethodPost:
 		s.pullCreate(w, r, repo)
+	case len(rest) == 2 && r.Method == http.MethodPatch:
+		s.pullUpdate(w, r, repo, rest[1])
 	case len(rest) == 2:
 		s.pullGet(w, repo, rest[1])
 	case len(rest) == 3 && rest[2] == "files":
@@ -427,6 +429,26 @@ func (s *Server) pullGet(w http.ResponseWriter, repo *Repository, num string) {
 		notFound(w)
 		return
 	}
+	writeJSON(w, http.StatusOK, pullJSON(repo, repo.PullRequests[i], true))
+}
+
+// pullUpdate serves the one update the client sends: {"state":"closed"}.
+func (s *Server) pullUpdate(w http.ResponseWriter, r *http.Request, repo *Repository, num string) {
+	var in struct {
+		State string `json:"state"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.State != "closed" {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "Validation Failed"})
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i, ok := s.find(repo, num)
+	if !ok {
+		notFound(w)
+		return
+	}
+	repo.PullRequests[i].Closed = true
 	writeJSON(w, http.StatusOK, pullJSON(repo, repo.PullRequests[i], true))
 }
 

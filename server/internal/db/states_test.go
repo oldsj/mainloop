@@ -12,6 +12,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/dotfiles"
 	"github.com/oldsj/mainloop/server/internal/onboarding"
+	"github.com/oldsj/mainloop/server/internal/privileged"
 	"github.com/oldsj/mainloop/server/internal/projectcontext"
 	"github.com/oldsj/mainloop/server/internal/testdb"
 	"github.com/oldsj/mainloop/server/internal/transcripts"
@@ -199,6 +200,9 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"project_memory_entries", "state", strs(
 			projectcontext.StateProposed, projectcontext.StateActive, projectcontext.StateRejected,
 			projectcontext.StateWithdrawn, projectcontext.StateForgotten, projectcontext.StateReplaced)},
+		{"privileged_actions", "state", privileged.States},
+		{"privileged_actions", "type", privileged.Types()},
+		{"privileged_actions", "delivery_state", privileged.DeliveryStates},
 		{"project_proposals", "state", strs(
 			onboarding.StateProposed, onboarding.StateApproved, onboarding.StateRejected,
 			onboarding.StateApplied, onboarding.StateFailed)},

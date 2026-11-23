@@ -74,6 +74,7 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		Topics:            topics.NewService(pool),
 		Pool:              pool,
 		Onboarding:        newOnboarding(cfg, pool, gh, log),
+		Privileged:        newPrivileged(cfg, pool, gh, log),
 		WebFetch:          &webfetch.Fetcher{Deny: deny},
 		WebFetchPerMinute: cfg.WebFetchPerMinute,
 		Log:               log,

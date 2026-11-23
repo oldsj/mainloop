@@ -100,6 +100,47 @@ describe('Needs you', () => {
     expect(await screen.findByText('> Use main')).toBeInTheDocument();
   });
 
+  it('approves a privileged action with the digest it showed, and denies with a note', async () => {
+    const user = userEvent.setup();
+    const digest = 'a'.repeat(64);
+    const bodies: unknown[] = [];
+    const card = (id: string) =>
+      queueItem({
+        id,
+        item_type: 'approval',
+        title: `Merge octo-org/widgets#${id}`,
+        options: ['Approve', 'Deny'],
+        context: { privileged_action_digest: digest }
+      });
+    server.use(
+      attentionRead(() =>
+        HttpResponse.json(attentionSnapshot([attentionItem(card('7')), attentionItem(card('8'))]))
+      ),
+      respondPost(async ({ request, params }) => {
+        bodies.push([params.item_id, await request.json()]);
+        return HttpResponse.json({ status: 'ok', message: 'Sent' });
+      })
+    );
+    renderInbox();
+
+    const first = (await screen.findByText('Merge octo-org/widgets#7')).closest('article')!;
+    await user.click(within(first as HTMLElement).getByRole('button', { name: 'Approve' }));
+    await waitFor(() =>
+      expect(bodies).toEqual([
+        ['7', { response: 'Approve', metadata: { reviewed_context: digest } }]
+      ])
+    );
+
+    const second = screen.getByText('Merge octo-org/widgets#8').closest('article')!;
+    await user.type(
+      within(second as HTMLElement).getByPlaceholderText('Deny with a note...'),
+      'Wait for the release'
+    );
+    await user.click(within(second as HTMLElement).getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toEqual(['8', { response: 'Wait for the release' }]);
+  });
+
   it('shows a plan review with its plan folded away until opened', async () => {
     const user = userEvent.setup();
     const plan = queueItem({

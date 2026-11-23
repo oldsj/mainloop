@@ -622,6 +622,66 @@
       }
     },
     {
+      "name": "request_privileged_action",
+      "description": "Ask the owner to approve a credentialed action you cannot run yourself. Mainloop checks the target (preflight), freezes what it found and puts one approval card in the owner's Needs you, pushed to their phone; the card shows the exact target and facts, and your reason labelled as your claim. Nothing runs until the owner approves that exact card; then Mainloop runs it once and sends you one message with the outcome (succeeded, failed, stale, denied with the owner's note, expired or uncertain). End your turn after requesting; do not poll. Types: github.pr_merge {repo: \"owner/name\", pr, expected_head_sha} squash-merges exactly that head through Mainloop's GitHub App and never bypasses a branch rule; github.pr_close {repo, prs: [numbers, at most 20], comment?} closes open pull requests without merging. Reuse request_id to read the same request back. At most 3 requests per session and 10 in all wait for the owner.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "type": "object"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": {
+            "enum": ["github.pr_close", "github.pr_merge"],
+            "type": "string"
+          }
+        },
+        "required": ["request_id", "type", "args", "reason"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_privileged_action",
+      "description": "Read a privileged action you requested: its state, frozen facts, the owner's decision, the result and the audit events.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["action_id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "cancel_privileged_action",
+      "description": "Withdraw a privileged action you requested that the owner has not decided yet; its card closes.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["action_id"],
+        "type": "object"
+      }
+    },
+    {
       "name": "task_get",
       "description": "Read a scoped task and its stored projections without a native turn.",
       "input_schema": {
@@ -1688,6 +1748,7 @@
       "devloop_enabled": false,
       "web_fetch_enabled": false,
       "ordinary": [
+        "cancel_privileged_action",
         "check_status",
         "comment_issue",
         "comment_pull_request",
@@ -1697,6 +1758,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "get_verification",
         "list_dependabot_alerts",
@@ -1711,6 +1773,7 @@
         "project_propose",
         "project_settings",
         "remember",
+        "request_privileged_action",
         "steer",
         "supervisor_send",
         "task_cancel",
@@ -1738,6 +1801,7 @@
       "devloop_enabled": false,
       "web_fetch_enabled": true,
       "ordinary": [
+        "cancel_privileged_action",
         "check_status",
         "comment_issue",
         "comment_pull_request",
@@ -1747,6 +1811,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "get_verification",
         "list_dependabot_alerts",
@@ -1761,6 +1826,7 @@
         "project_propose",
         "project_settings",
         "remember",
+        "request_privileged_action",
         "steer",
         "supervisor_send",
         "task_cancel",
@@ -1789,6 +1855,7 @@
       "devloop_enabled": true,
       "web_fetch_enabled": false,
       "ordinary": [
+        "cancel_privileged_action",
         "check_status",
         "comment_issue",
         "comment_pull_request",
@@ -1802,6 +1869,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "get_verification",
         "list_dependabot_alerts",
@@ -1816,6 +1884,7 @@
         "project_propose",
         "project_settings",
         "remember",
+        "request_privileged_action",
         "steer",
         "supervisor_send",
         "task_cancel",
@@ -1843,6 +1912,7 @@
       "devloop_enabled": true,
       "web_fetch_enabled": true,
       "ordinary": [
+        "cancel_privileged_action",
         "check_status",
         "comment_issue",
         "comment_pull_request",
@@ -1856,6 +1926,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "get_verification",
         "list_dependabot_alerts",
@@ -1870,6 +1941,7 @@
         "project_propose",
         "project_settings",
         "remember",
+        "request_privileged_action",
         "steer",
         "supervisor_send",
         "task_cancel",
@@ -1898,6 +1970,7 @@
       "devloop_enabled": false,
       "web_fetch_enabled": false,
       "ordinary": [
+        "cancel_privileged_action",
         "check_status",
         "comment_issue",
         "comment_pull_request",
@@ -1907,6 +1980,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "get_pull_request_merge_status",
         "get_verification",
@@ -1924,6 +1998,7 @@
         "project_propose",
         "project_settings",
         "remember",
+        "request_privileged_action",
         "steer",
         "supervisor_send",
         "task_cancel",
@@ -1951,6 +2026,7 @@
       "devloop_enabled": false,
       "web_fetch_enabled": true,
       "ordinary": [
+        "cancel_privileged_action",
         "check_status",
         "comment_issue",
         "comment_pull_request",
@@ -1960,6 +2036,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "get_pull_request_merge_status",
         "get_verification",
@@ -1977,6 +2054,7 @@
         "project_propose",
         "project_settings",
         "remember",
+        "request_privileged_action",
         "steer",
         "supervisor_send",
         "task_cancel",
@@ -2005,6 +2083,7 @@
       "devloop_enabled": true,
       "web_fetch_enabled": false,
       "ordinary": [
+        "cancel_privileged_action",
         "check_status",
         "comment_issue",
         "comment_pull_request",
@@ -2018,6 +2097,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "get_pull_request_merge_status",
         "get_verification",
@@ -2035,6 +2115,7 @@
         "project_propose",
         "project_settings",
         "remember",
+        "request_privileged_action",
         "steer",
         "supervisor_send",
         "task_cancel",
@@ -2062,6 +2143,7 @@
       "devloop_enabled": true,
       "web_fetch_enabled": true,
       "ordinary": [
+        "cancel_privileged_action",
         "check_status",
         "comment_issue",
         "comment_pull_request",
@@ -2075,6 +2157,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "get_pull_request_merge_status",
         "get_verification",
@@ -2092,6 +2175,7 @@
         "project_propose",
         "project_settings",
         "remember",
+        "request_privileged_action",
         "steer",
         "supervisor_send",
         "task_cancel",
@@ -2120,6 +2204,7 @@
       "devloop_enabled": false,
       "web_fetch_enabled": false,
       "ordinary": [
+        "cancel_privileged_action",
         "comment_issue",
         "comment_pull_request",
         "create_issue",
@@ -2127,6 +2212,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "loop_arm",
         "loop_list",
@@ -2135,6 +2221,7 @@
         "project_propose",
         "remember",
         "report",
+        "request_privileged_action",
         "steer",
         "task_cancel",
         "task_get",
@@ -2157,6 +2244,7 @@
       "devloop_enabled": false,
       "web_fetch_enabled": true,
       "ordinary": [
+        "cancel_privileged_action",
         "comment_issue",
         "comment_pull_request",
         "create_issue",
@@ -2164,6 +2252,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "loop_arm",
         "loop_list",
@@ -2172,6 +2261,7 @@
         "project_propose",
         "remember",
         "report",
+        "request_privileged_action",
         "steer",
         "task_cancel",
         "task_get",
@@ -2195,6 +2285,7 @@
       "devloop_enabled": true,
       "web_fetch_enabled": false,
       "ordinary": [
+        "cancel_privileged_action",
         "comment_issue",
         "comment_pull_request",
         "create_issue",
@@ -2202,6 +2293,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "loop_arm",
         "loop_list",
@@ -2210,6 +2302,7 @@
         "project_propose",
         "remember",
         "report",
+        "request_privileged_action",
         "steer",
         "task_cancel",
         "task_get",
@@ -2232,6 +2325,7 @@
       "devloop_enabled": true,
       "web_fetch_enabled": true,
       "ordinary": [
+        "cancel_privileged_action",
         "comment_issue",
         "comment_pull_request",
         "create_issue",
@@ -2239,6 +2333,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "loop_arm",
         "loop_list",
@@ -2247,6 +2342,7 @@
         "project_propose",
         "remember",
         "report",
+        "request_privileged_action",
         "steer",
         "task_cancel",
         "task_get",
@@ -2270,6 +2366,7 @@
       "devloop_enabled": false,
       "web_fetch_enabled": false,
       "ordinary": [
+        "cancel_privileged_action",
         "comment_issue",
         "comment_pull_request",
         "create_issue",
@@ -2277,6 +2374,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "loop_arm",
         "loop_list",
@@ -2285,6 +2383,7 @@
         "project_propose",
         "remember",
         "report",
+        "request_privileged_action",
         "steer",
         "task_cancel",
         "task_get",
@@ -2307,6 +2406,7 @@
       "devloop_enabled": false,
       "web_fetch_enabled": true,
       "ordinary": [
+        "cancel_privileged_action",
         "comment_issue",
         "comment_pull_request",
         "create_issue",
@@ -2314,6 +2414,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "loop_arm",
         "loop_list",
@@ -2322,6 +2423,7 @@
         "project_propose",
         "remember",
         "report",
+        "request_privileged_action",
         "steer",
         "task_cancel",
         "task_get",
@@ -2345,6 +2447,7 @@
       "devloop_enabled": true,
       "web_fetch_enabled": false,
       "ordinary": [
+        "cancel_privileged_action",
         "comment_issue",
         "comment_pull_request",
         "create_issue",
@@ -2352,6 +2455,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "loop_arm",
         "loop_list",
@@ -2360,6 +2464,7 @@
         "project_propose",
         "remember",
         "report",
+        "request_privileged_action",
         "steer",
         "task_cancel",
         "task_get",
@@ -2382,6 +2487,7 @@
       "devloop_enabled": true,
       "web_fetch_enabled": true,
       "ordinary": [
+        "cancel_privileged_action",
         "comment_issue",
         "comment_pull_request",
         "create_issue",
@@ -2389,6 +2495,7 @@
         "follow_up",
         "forget",
         "get_issue",
+        "get_privileged_action",
         "get_pull_request",
         "loop_arm",
         "loop_list",
@@ -2397,6 +2504,7 @@
         "project_propose",
         "remember",
         "report",
+        "request_privileged_action",
         "steer",
         "task_cancel",
         "task_get",

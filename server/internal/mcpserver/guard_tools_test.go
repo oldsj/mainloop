@@ -26,6 +26,7 @@ import (
 var readOnlyTools = []string{
 	"check_status", "get_issue", "get_pull_request", "get_pull_request_merge_status", "list_dependabot_alerts", "loop_list", "task_get",
 	"task_history", "task_transcript", "transcript_search", "project_context", "task_list", "topics", "whoami",
+	"get_privileged_action",
 }
 
 // A writeCase calls one write tool with arguments valid enough to reach its write. prepare runs
@@ -257,6 +258,15 @@ var writeCases = []writeCase{
 	{tool: "project_propose", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
 		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
 			return map[string]any{"request_id": "r1", "repository": "oldsj/opencozy-next", "why": "pilot"}
+		}},
+	{tool: "request_privileged_action", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
+			return privilegedMergeArgs("r1")
+		}},
+	{tool: "cancel_privileged_action", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(t *testing.T, h *harness, _ *prHarness, a authtest.Seeded) map[string]any {
+			r := setupCall(t, h, a, "request_privileged_action", privilegedMergeArgs("r1"))
+			return map[string]any{"action_id": r["action_id"]}
 		}},
 	// get_verification may write the project's cached CI detection.
 	{tool: "get_verification", prs: true,

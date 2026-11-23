@@ -163,10 +163,34 @@ export function prLink(item: QueueItem): string | null {
   return httpsUrl(item.context?.pr_url);
 }
 
-/** A free-text reply is offered for questions and plan reviews that are still open. */
+/**
+ * The digest a privileged-action approval card is bound to, or null for any other item. The
+ * server runs the action only for an Approve that carries this exact digest back.
+ */
+export function privilegedDigest(item: QueueItem): string | null {
+  const digest = item.context?.privileged_action_digest;
+  return typeof digest === 'string' && /^[0-9a-f]{64}$/.test(digest) ? digest : null;
+}
+
+/** The metadata an answer carries: Approve on a privileged-action card names the digest reviewed. */
+export function responseMetadata(
+  item: QueueItem,
+  response: string
+): { reviewed_context: string } | undefined {
+  const digest = privilegedDigest(item);
+  return digest && response === 'Approve' ? { reviewed_context: digest } : undefined;
+}
+
+/**
+ * A free-text reply is offered for questions and plan reviews that are still open, and on a
+ * privileged-action card, where any text is a denial with that note for the agent.
+ */
 export function takesTextReply(item: QueueItem): boolean {
   return (
-    (item.item_type === 'question' || item.item_type === 'plan_review') && item.status === 'pending'
+    (item.item_type === 'question' ||
+      item.item_type === 'plan_review' ||
+      privilegedDigest(item) !== null) &&
+    item.status === 'pending'
   );
 }
 

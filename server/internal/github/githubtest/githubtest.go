@@ -469,7 +469,8 @@ func need(method string, segs []string) map[string]string {
 		method == http.MethodGet && len(rest) == 3 && rest[0] == "issues" && rest[2] == "comments":
 		return read("pull_requests")
 	case method == http.MethodPost && len(rest) == 1 && rest[0] == "pulls",
-		method == http.MethodPost && len(rest) == 3 && rest[0] == "pulls" && rest[2] == "reviews":
+		method == http.MethodPost && len(rest) == 3 && rest[0] == "pulls" && rest[2] == "reviews",
+		method == http.MethodPatch && len(rest) == 2 && rest[0] == "pulls":
 		return map[string]string{"pull_requests": "write"}
 	case method == http.MethodPut && len(rest) == 3 && rest[0] == "pulls" && rest[2] == "merge":
 		return map[string]string{"pull_requests": "write", "contents": "write"}
