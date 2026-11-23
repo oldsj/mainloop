@@ -31,6 +31,15 @@ Stack-specific checks run in their own workflows, filtered by path:
 CI uses `ubuntu-latest`, read-only contents/actions permissions by default, and
 check-write permission for lint. It publishes no images or job outputs.
 
+## Workspace environment images
+
+[Workspace environment images](workflows/env-images.yml) builds and smoke-tests each image under
+`images/` that a project selects as its workspace environment, on PRs that touch it. On `main` it
+publishes the image by digest to GHCR and writes the `image@sha256:` reference to the run summary,
+which is what registration takes. `images/opencozy-next-env` is the amd64 environment for
+`oldsj/opencozy-next`: Go, Node, pnpm, Postgres 18 (`ocn-postgres`, run as the project's workspace
+service on port 54329) and agent-browser with Debian's Chromium.
+
 ## Multiarchitecture workspace development image
 
 [Mainloop dev image](workflows/dev-image.yml) runs on PRs targeting `main` and

@@ -1,0 +1,31 @@
+#!/bin/bash
+# Postgres for an opencozy-next workspace, in the foreground: the project's workspace service, so
+# kagent keeps it running across sleep. It matches compose.yaml (user app, password app-dev-only,
+# database app, durability off) on 127.0.0.1:54329, the port the Makefile's TEST_DATABASE_URL uses;
+# run checks with `make test DB_UP=`. The cluster lives under /data and survives sleep. The
+# password is the repository's public development default, not a credential.
+set -euo pipefail
+root=${OCN_POSTGRES_ROOT:-/data/ocn-postgres}
+port=${OCN_POSTGRES_PORT:-54329}
+socket=/tmp/ocn-postgres-socket
+bin=/usr/lib/postgresql/18/bin
+if [[ ! -s ${root}/PG_VERSION ]]; then
+	# Build the cluster beside its final path and move it in whole, so a cluster cut off part way
+	# is rebuilt rather than half used.
+	rm -rf -- "${root}.init"
+	mkdir -p "${root}.init"
+	chmod 700 "${root}.init"
+	pw=$(mktemp)
+	printf 'app-dev-only\n' >"${pw}"
+	"${bin}/initdb" -D "${root}.init" -U app --pwfile="${pw}" -A scram-sha-256 --no-sync >/dev/null
+	rm -f -- "${pw}"
+	echo 'CREATE DATABASE app' | "${bin}/postgres" --single -D "${root}.init" postgres >/dev/null
+	mv -- "${root}.init" "${root}"
+fi
+# A workspace resumed from a snapshot can carry the pid file of a server that is gone.
+if [[ -f ${root}/postmaster.pid ]] && ! "${bin}/pg_ctl" -D "${root}" status >/dev/null 2>&1; then
+	rm -f -- "${root}/postmaster.pid"
+fi
+mkdir -p "${socket}"
+exec "${bin}/postgres" -D "${root}" -p "${port}" -h 127.0.0.1 -k "${socket}" \
+	-c fsync=off -c synchronous_commit=off -c full_page_writes=off
