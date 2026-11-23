@@ -25,7 +25,7 @@ import (
 // they are write cases too.
 var readOnlyTools = []string{
 	"check_status", "get_issue", "get_pull_request", "get_pull_request_merge_status", "list_dependabot_alerts", "loop_list", "task_get",
-	"task_history", "task_transcript", "transcript_search", "project_context", "task_list", "topics", "whoami",
+	"task_history", "task_transcript", "transcript_search", "project_context", "task_list", "topics", "whoami", "list_models",
 	"get_privileged_action",
 }
 

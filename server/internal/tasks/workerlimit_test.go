@@ -17,6 +17,17 @@ func (r *rig) rootIn(project, binding string) tasks.Principal {
 	return r.agent(dbstate.RoleSupervisor, binding)
 }
 
+// runningRootIn is rootIn for a rig whose loops run: the root's create is provisioned by the op loop,
+// as in production, rather than given a hand-written attempt that the loop would then race to
+// write too (the same task's first attempt from two writers: a duplicate, or a deadlock).
+func (r *rig) runningRootIn(project string) tasks.Principal {
+	r.t.Helper()
+	root := r.mustCreate(r.own, tasks.CreateInput{ProjectID: project})
+	r.eventually("root running", func() bool { return r.taskStatus(root) == "running" })
+	_, binding := r.attemptOf(root)
+	return r.agent(dbstate.RoleSupervisor, binding)
+}
+
 func intp(n int) *int { return &n }
 
 func TestAProjectRefusesWorkersOverItsLimit(t *testing.T) {
@@ -77,7 +88,7 @@ func TestAStandingSupervisorIsBoundByItsProjectNotThePerParentLimit(t *testing.T
 
 	// And an ordinary supervisor in the same project is still bound by the per-parent limit, and
 	// counts against the project: the project is full
-	other := r.rootIn("p1", "sup-o")
+	other := r.runningRootIn("p1")
 	_, err = r.create(other, tasks.CreateInput{})
 	wantRefusal(t, err, 409, tasks.ReasonProjectCapacity)
 }

@@ -28,6 +28,8 @@ import (
 // Resolver finds a provider profile; [providers.Registry] is the implementation.
 type Resolver interface {
 	Resolve(identifier, role string, selecting bool) (config.ProviderProfile, error)
+	// Profiles lists every configured profile, enabled or not, in display order.
+	Profiles() []config.ProviderProfile
 }
 
 // Service records tasks, operations and reports, and runs the reconcile loops that pick them up:
