@@ -448,12 +448,35 @@ slot until runtime termination is confirmed; uncertain disposal remains visible 
 
 ### Capacity
 
+<a id="project-worker-limit"></a>
+**Project worker limit.** A project also limits its own worker tasks: every child task in it,
+counted as above (a held slot, or no attempt yet). That includes a standing supervisor's workers
+and those of any other supervisor in the project; the standing supervisor itself is a root task
+and does not count. The limit is the project's own `projects.max_workers` (1 to 100), or
+`TASK_MAX_WORKERS_PER_PROJECT` (6) when it sets none. A child that would go past it is refused
+`409 project_capacity` and counted in `mainloop_task_capacity_refusals_total{reason="project_capacity"}`.
+The project limit and the global limit both apply, so the effective limit is the smaller of the
+two. A **standing supervisor's** children are not under the per-parent limit: it delegates all of
+its project's work, so the project limit is its bound. Every other parent still has the per-parent
+limit as well. The check runs under the same owner-wide lock as the others, in this order:
+per-parent, project, global.
+
+The owner reads and changes it with `GET`/`PUT /projects/{id}/worker-limit` (`max_workers`, or
+`null` to return to the default). The answer gives the project's own value, the default, the
+effective limit, the global limit and `workers_running`, the project's workers holding a slot now.
+`Project.max_workers` carries the project's own value. Main changes it for the owner with the MCP
+tool `project_settings(project_id, max_workers | reset_max_workers)`, which with neither only
+reads; no supervisor or worker has the tool. A lower limit stops nothing that runs: it only
+refuses new workers until enough end. Setting the value it already has records nothing. Every
+change is a row in `project_worker_limit_audit` (who: `owner` or `main` with its session id, the
+old and new value), which is never rewritten.
+
 The global limit has two tiers. `TASK_MAX_CHILDREN_GLOBAL` (6) is the base tier.
 `TASK_MAX_CHILDREN_OVERFLOW` (0) is an overflow tier above it, for slots the cluster may not have
 room for yet (a spare worker that wakes on demand). Admission counts held slots as above. Below the
 base limit a child gets a base slot. From the base limit up to base + overflow it gets an overflow
 slot. At base + overflow it is refused `409 global_capacity`. The per-parent limit
-(`TASK_MAX_CHILDREN_PER_PARENT`, 3) is unchanged and checked first. With the overflow tier at 0,
+(`TASK_MAX_CHILDREN_PER_PARENT`, 3) is unchanged and checked first, then the project limit. With the overflow tier at 0,
 the default, admission is exactly the single global limit. The tier of a task's last admission is
 `capacity_tier` on the task (`base` or `overflow`). Root tasks and every task admitted while the
 overflow tier is 0 are `base`. Every admission records it: create, retry, reassign, the handoff

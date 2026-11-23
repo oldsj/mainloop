@@ -192,7 +192,63 @@ func (s *Server) taskTools() []Tool {
 			}, "project_id", "request_id", "text"),
 			Handle: s.supervisorSend,
 		},
+		{
+			Name: agentauth.ToolProjectSettings,
+			Description: "Read or change a project's settings for the owner. Today that is max_workers: how many of the " +
+				"project's worker tasks (every task delegated in it, its supervisor's included) may hold a slot at " +
+				"once. Give max_workers to set the project's own limit (1-" + strconv.Itoa(tasks.MaxWorkerLimit) +
+				"), reset_max_workers to return it to the default, or neither to read. The owner-wide limit " +
+				"(global_max_workers) applies as well. Running workers are not stopped by a lower limit. Every " +
+				"change is recorded. Change it only when the owner asks.",
+			InputSchema: objectSchema(map[string]any{
+				"project_id":        id,
+				"max_workers":       optional(map[string]any{"type": "integer", "minimum": 1, "maximum": tasks.MaxWorkerLimit}),
+				"reset_max_workers": map[string]any{"type": "boolean", "default": false},
+			}, "project_id"),
+			Handle: s.projectSettings,
+		},
 	}
+}
+
+func (s *Server) projectSettings(ctx context.Context, a agentauth.Actor, args json.RawMessage) (Result, error) {
+	var in struct {
+		ProjectID       string `json:"project_id"`
+		MaxWorkers      *int   `json:"max_workers"`
+		ResetMaxWorkers bool   `json:"reset_max_workers"`
+	}
+	if err := decode(args, &in); err != nil {
+		return Result{}, err
+	}
+	project, err := text(in.ProjectID, 1, 100)
+	if err != nil {
+		return Result{}, err
+	}
+	if in.ResetMaxWorkers && in.MaxWorkers != nil {
+		return Result{}, failure("validation", "give max_workers or reset_max_workers, not both")
+	}
+	if s.Tasks == nil {
+		return Result{}, failure("unavailable", "tasks are not available")
+	}
+	var w tasks.WorkerLimit
+	if in.MaxWorkers != nil || in.ResetMaxWorkers {
+		w, err = s.Tasks.SetWorkerLimit(ctx, a.UserID, project, in.MaxWorkers, tasks.LimitChanger{SessionID: a.BindingID})
+	} else {
+		w, err = s.Tasks.WorkerLimit(ctx, a.UserID, project)
+	}
+	if err != nil {
+		return Result{}, taskFailure(err)
+	}
+	own := "the default"
+	var maxWorkers any
+	if w.Max != nil {
+		own, maxWorkers = "its own", *w.Max
+	}
+	line := fmt.Sprintf("project %s: max_workers %d (%s; default %d, owner-wide %d), %d running",
+		project, w.Effective, own, w.Default, w.Global, w.Running)
+	return Result{Text: line, Structured: map[string]any{
+		"project_id": project, "max_workers": maxWorkers, "default_max_workers": w.Default,
+		"effective_max_workers": w.Effective, "global_max_workers": w.Global, "workers_running": w.Running, "text": line,
+	}}, nil
 }
 
 func (s *Server) supervisorSend(ctx context.Context, a agentauth.Actor, args json.RawMessage) (Result, error) {
@@ -321,6 +377,8 @@ func taskFailure(err error) error {
 		switch reason {
 		case tasks.ReasonProjectSupervisor:
 			reason += ": send project work to the project's standing supervisor with supervisor_send"
+		case tasks.ReasonProjectCapacity:
+			reason += ": the project is at its worker limit; wait for a worker to end (the owner or main may raise the limit with project_settings)"
 		case tasks.ReasonSupervisorStarting:
 			reason += ": the project's supervisor is starting; send again with the same request_id in a minute"
 		case tasks.ReasonEnvironmentRequired:

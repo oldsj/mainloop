@@ -1747,6 +1747,82 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/HTTPValidationError'
                   - $ref: '#/components/schemas/TaskError'
+  /projects/{project_id}/worker-limit:
+    get:
+      tags:
+        - projects
+      summary: Get the project's worker limit
+      description: >-
+        How many worker tasks of the project may hold a slot at once, and how many do now. See
+        docs/specs/tasks.md#capacity.
+      operationId: getProjectWorkerLimit
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      responses:
+        '200':
+          description: The project's worker limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerLimit'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The project does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
+    put:
+      tags:
+        - projects
+      summary: Set the project's worker limit
+      description: >-
+        Sets the project's own limit on worker tasks holding a slot, or with null returns it to the
+        default. Tasks already running are not stopped; a lower limit only refuses new workers
+        until enough end. Every change is recorded. See docs/specs/tasks.md#capacity.
+      operationId: updateProjectWorkerLimit
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkerLimitUpdate'
+      responses:
+        '200':
+          description: The project's worker limit after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerLimit'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The project does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/TaskError'
   /projects/{project_id}/dotfiles:
     get:
       tags:
@@ -7633,6 +7709,60 @@ components:
           type: boolean
           default: false
           description: Reset rather than restart; the new session is not given the last report or messages.
+    WorkerLimit:
+      type: object
+      additionalProperties: false
+      description: >-
+        A project's limit on worker tasks (every child task of the project, the standing
+        supervisor's included) holding a slot at once (docs/specs/tasks.md#capacity).
+      properties:
+        project_id:
+          type: string
+        max_workers:
+          anyOf:
+            - type: integer
+              minimum: 1
+              maximum: 100
+            - type: 'null'
+          description: The project's own limit, or null for the default.
+        default_max_workers:
+          type: integer
+          minimum: 1
+          description: The limit of a project that sets none (TASK_MAX_WORKERS_PER_PROJECT).
+        effective_max_workers:
+          type: integer
+          minimum: 1
+          description: The limit admission applies, max_workers or else the default.
+        global_max_workers:
+          type: integer
+          minimum: 1
+          description: >-
+            The owner-wide limit on child tasks across all projects (TASK_MAX_CHILDREN_GLOBAL). It
+            applies as well, so a project limit above it is never reached.
+        workers_running:
+          type: integer
+          minimum: 0
+          description: The project's worker tasks holding a slot now.
+      required:
+        - project_id
+        - max_workers
+        - default_max_workers
+        - effective_max_workers
+        - global_max_workers
+        - workers_running
+    WorkerLimitUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        max_workers:
+          anyOf:
+            - type: integer
+              minimum: 1
+              maximum: 100
+            - type: 'null'
+          description: The project's own limit, or null to use the default.
+      required:
+        - max_workers
     ProjectSupervisor:
       type: object
       additionalProperties: false
@@ -7740,6 +7870,16 @@ components:
             - type: 'null'
           title: Metadata Updated At
           description: When GitHub data was refreshed
+        max_workers:
+          anyOf:
+            - type: integer
+              minimum: 1
+              maximum: 100
+            - type: 'null'
+          default: null
+          description: >-
+            The project's own limit on worker tasks holding a slot, or null for the default. See
+            /projects/{project_id}/worker-limit.
         supervisor:
           anyOf:
             - $ref: '#/components/schemas/ProjectSupervisor'

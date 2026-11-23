@@ -548,6 +548,26 @@ func (q *Queries) CountParentCapacity(ctx context.Context, arg CountParentCapaci
 	return count, err
 }
 
+const countProjectCapacity = `-- name: CountProjectCapacity :one
+SELECT count(*) FROM tasks t
+WHERE t.owner_id = $1 AND t.project_id = $2 AND t.parent_task_id IS NOT NULL
+  AND (EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id AND a.capacity_held)
+       OR (t.status NOT IN ('completed', 'failed', 'cancelled') AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id)))
+`
+
+type CountProjectCapacityParams struct {
+	OwnerID   string
+	ProjectID *string
+}
+
+// The project's worker tasks (child tasks) that hold a slot, counted as CountGlobalCapacity is.
+func (q *Queries) CountProjectCapacity(ctx context.Context, arg CountProjectCapacityParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countProjectCapacity, arg.OwnerID, arg.ProjectID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countRuntimeWaiting = `-- name: CountRuntimeWaiting :one
 SELECT count(*) FROM tasks
 WHERE runtime_wait_since IS NOT NULL AND status NOT IN ('completed', 'failed', 'cancelled')
@@ -846,6 +866,22 @@ func (q *Queries) GetProjectFullName(ctx context.Context, id string) (string, er
 	var full_name string
 	err := row.Scan(&full_name)
 	return full_name, err
+}
+
+const getProjectMaxWorkers = `-- name: GetProjectMaxWorkers :one
+SELECT max_workers FROM projects WHERE id = $1 AND user_id = $2
+`
+
+type GetProjectMaxWorkersParams struct {
+	ID     string
+	UserID string
+}
+
+func (q *Queries) GetProjectMaxWorkers(ctx context.Context, arg GetProjectMaxWorkersParams) (*int32, error) {
+	row := q.db.QueryRow(ctx, getProjectMaxWorkers, arg.ID, arg.UserID)
+	var max_workers *int32
+	err := row.Scan(&max_workers)
+	return max_workers, err
 }
 
 const getStandingTask = `-- name: GetStandingTask :one
@@ -1809,6 +1845,32 @@ func (q *Queries) InsertTaskReport(ctx context.Context, arg InsertTaskReportPara
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const insertWorkerLimitAudit = `-- name: InsertWorkerLimitAudit :exec
+INSERT INTO project_worker_limit_audit (project_id, owner_id, changed_by, session_id, old_max_workers, new_max_workers)
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type InsertWorkerLimitAuditParams struct {
+	ProjectID     string
+	OwnerID       string
+	ChangedBy     string
+	SessionID     *string
+	OldMaxWorkers *int32
+	NewMaxWorkers *int32
+}
+
+func (q *Queries) InsertWorkerLimitAudit(ctx context.Context, arg InsertWorkerLimitAuditParams) error {
+	_, err := q.db.Exec(ctx, insertWorkerLimitAudit,
+		arg.ProjectID,
+		arg.OwnerID,
+		arg.ChangedBy,
+		arg.SessionID,
+		arg.OldMaxWorkers,
+		arg.NewMaxWorkers,
+	)
+	return err
 }
 
 const joinTaskEventBatch = `-- name: JoinTaskEventBatch :many
@@ -3450,6 +3512,22 @@ func (q *Queries) LockParentCurrentAttemptShared(ctx context.Context, id string)
 	return i, err
 }
 
+const lockProjectMaxWorkers = `-- name: LockProjectMaxWorkers :one
+SELECT max_workers FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE
+`
+
+type LockProjectMaxWorkersParams struct {
+	ID     string
+	UserID string
+}
+
+func (q *Queries) LockProjectMaxWorkers(ctx context.Context, arg LockProjectMaxWorkersParams) (*int32, error) {
+	row := q.db.QueryRow(ctx, lockProjectMaxWorkers, arg.ID, arg.UserID)
+	var max_workers *int32
+	err := row.Scan(&max_workers)
+	return max_workers, err
+}
+
 const lockTaskAttemptShared = `-- name: LockTaskAttemptShared :one
 SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since, model, effort, instructions_version, memory_seq, reopened_at FROM task_attempts WHERE id = $1 FOR SHARE
 `
@@ -4388,6 +4466,20 @@ func (q *Queries) SetBindingRole(ctx context.Context, arg SetBindingRoleParams) 
 		&i.EffortOverride,
 	)
 	return i, err
+}
+
+const setProjectMaxWorkers = `-- name: SetProjectMaxWorkers :exec
+UPDATE projects SET max_workers = $1 WHERE id = $2
+`
+
+type SetProjectMaxWorkersParams struct {
+	MaxWorkers *int32
+	ID         string
+}
+
+func (q *Queries) SetProjectMaxWorkers(ctx context.Context, arg SetProjectMaxWorkersParams) error {
+	_, err := q.db.Exec(ctx, setProjectMaxWorkers, arg.MaxWorkers, arg.ID)
+	return err
 }
 
 const setTaskAttempt = `-- name: SetTaskAttempt :one

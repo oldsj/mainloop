@@ -617,6 +617,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/projects/{project_id}/worker-limit': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get the project's worker limit
+     * @description How many worker tasks of the project may hold a slot at once, and how many do now. See docs/specs/tasks.md#capacity.
+     */
+    get: operations['getProjectWorkerLimit'];
+    /**
+     * Set the project's worker limit
+     * @description Sets the project's own limit on worker tasks holding a slot, or with null returns it to the default. Tasks already running are not stopped; a lower limit only refuses new workers until enough end. Every change is recorded. See docs/specs/tasks.md#capacity.
+     */
+    put: operations['updateProjectWorkerLimit'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/projects/{project_id}/dotfiles': {
     parameters: {
       query?: never;
@@ -2835,6 +2859,24 @@ export interface components {
        */
       fresh: boolean;
     };
+    /** @description A project's limit on worker tasks (every child task of the project, the standing supervisor's included) holding a slot at once (docs/specs/tasks.md#capacity). */
+    WorkerLimit: {
+      project_id: string;
+      /** @description The project's own limit, or null for the default. */
+      max_workers: number | null;
+      /** @description The limit of a project that sets none (TASK_MAX_WORKERS_PER_PROJECT). */
+      default_max_workers: number;
+      /** @description The limit admission applies, max_workers or else the default. */
+      effective_max_workers: number;
+      /** @description The owner-wide limit on child tasks across all projects (TASK_MAX_CHILDREN_GLOBAL). It applies as well, so a project limit above it is never reached. */
+      global_max_workers: number;
+      /** @description The project's worker tasks holding a slot now. */
+      workers_running: number;
+    };
+    WorkerLimitUpdate: {
+      /** @description The project's own limit, or null to use the default. */
+      max_workers: number | null;
+    };
     /** @description A project's standing supervisor (docs/specs/project-supervisor.md). */
     ProjectSupervisor: {
       /** @description The standing supervisor's task. It never changes for the project. */
@@ -2929,6 +2971,11 @@ export interface components {
        * @description When GitHub data was refreshed
        */
       metadata_updated_at: string | null;
+      /**
+       * @description The project's own limit on worker tasks holding a slot, or null for the default. See /projects/{project_id}/worker-limit.
+       * @default null
+       */
+      max_workers: number | null;
       /**
        * @description The project's standing supervisor, or null until it is first used. Its session follows the task's current attempt, so read the task for the live session after a restart.
        * @default null
@@ -8456,6 +8503,85 @@ export interface operations {
       };
       /** @description Conflict (an operation is pending, the supervisor is settling, or the request id was used with another body). */
       409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['TaskError'];
+        };
+      };
+    };
+  };
+  getProjectWorkerLimit: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The project's worker limit. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WorkerLimit'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description The project does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+    };
+  };
+  updateProjectWorkerLimit: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['WorkerLimitUpdate'];
+      };
+    };
+    responses: {
+      /** @description The project's worker limit after the change. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WorkerLimit'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description The project does not exist. */
+      404: {
         headers: {
           [name: string]: unknown;
         };

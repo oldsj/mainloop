@@ -127,6 +127,8 @@ const REASON_MESSAGES: Record<string, string> = {
   task_terminal: 'This task has ended.',
   parent_not_active: 'The parent task has ended, so this task cannot start again.',
   child_capacity: 'The parent task is at its limit of open children.',
+  project_capacity:
+    'The project is at its worker limit. Raise it on the project, or wait for a worker to end.',
   handoff_limit:
     'This task has been retried or reassigned as often as agents may. The owner decides.'
 };

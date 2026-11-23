@@ -32,7 +32,7 @@ import (
 )
 
 // Refusal reasons the counter always reports, at 0 before the first refusal.
-var refusalReasons = []string{dbstate.CapacityRefusalChild, dbstate.CapacityRefusalGlobal}
+var refusalReasons = []string{dbstate.CapacityRefusalChild, dbstate.CapacityRefusalProject, dbstate.CapacityRefusalGlobal}
 
 // scrapeTimeout bounds the database reads of one scrape.
 const scrapeTimeout = 5 * time.Second

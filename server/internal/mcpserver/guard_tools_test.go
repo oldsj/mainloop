@@ -181,6 +181,11 @@ var writeCases = []writeCase{
 			memoryProject(t, h)
 			return map[string]any{"project_id": "mem-p", "request_id": "dead", "text": "start on the docs"}
 		}},
+	{tool: "project_settings", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
+		prepare: func(t *testing.T, h *harness, _ *prHarness, _ authtest.Seeded) map[string]any {
+			memoryProject(t, h)
+			return map[string]any{"project_id": "mem-p", "max_workers": 4}
+		}},
 	{tool: "loop_arm", role: dbstate.RoleMain, grant: dbstate.GrantCoordination,
 		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
 			return map[string]any{"request_id": "dead", "trigger": "time", "after_minutes": 30, "note": "look at prod"}

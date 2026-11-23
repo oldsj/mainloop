@@ -239,6 +239,11 @@ func (Unimplemented) GetProjectVerification(context.Context, GetProjectVerificat
 	return nil, apierr.NotImplemented
 }
 
+// GetProjectWorkerLimit is not implemented yet.
+func (Unimplemented) GetProjectWorkerLimit(context.Context, GetProjectWorkerLimitRequestObject) (GetProjectWorkerLimitResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetProjectWorkspaceService is not implemented yet.
 func (Unimplemented) GetProjectWorkspaceService(context.Context, GetProjectWorkspaceServiceRequestObject) (GetProjectWorkspaceServiceResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -576,6 +581,11 @@ func (Unimplemented) UpdateProjectInstructions(context.Context, UpdateProjectIns
 
 // UpdateProjectVerification is not implemented yet.
 func (Unimplemented) UpdateProjectVerification(context.Context, UpdateProjectVerificationRequestObject) (UpdateProjectVerificationResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// UpdateProjectWorkerLimit is not implemented yet.
+func (Unimplemented) UpdateProjectWorkerLimit(context.Context, UpdateProjectWorkerLimitRequestObject) (UpdateProjectWorkerLimitResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 
