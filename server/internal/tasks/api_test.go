@@ -2,14 +2,17 @@ package tasks_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/app"
@@ -187,4 +190,43 @@ func TestRESTTaskLifecycle(t *testing.T) {
 		}
 	}
 	r.do("POST", "/tasks/"+id+"/cancel", nil, 422)
+}
+
+// The owner reads a screenshot only through a report of the task that shows it.
+func TestRESTTaskScreenshot(t *testing.T) {
+	r := newRest(t)
+	id := r.do("POST", "/tasks", map[string]any{"request_id": "req-s", "title": "Menu", "brief": "b", "mode": "coordination", "project_id": "p1"}, 202)["task_id"].(string)
+	other := r.do("POST", "/tasks", map[string]any{"request_id": "req-o", "title": "Other", "brief": "b", "mode": "coordination", "project_id": "p1"}, 202)["task_id"].(string)
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := r.pool.Exec(context.Background(), sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO sessions (id, user_id, project_id, title, description, prompt) VALUES ('ws-1', 'local-dev-user', 'p1', 't', '', '')`)
+	png := []byte("\x89PNG\r\n\x1a\nfictional")
+	for _, s := range []string{"shot-shown", "shot-unshown"} {
+		exec(`INSERT INTO preview_screenshots (id, owner_id, session_id, request_id, port, path, viewport, media_type, width, height, data, size_bytes)
+			VALUES ($1, 'local-dev-user', 'ws-1', $1, 3000, '/menu', 'mobile', 'image/png', 780, 1688, $2, $3)`, s, png, len(png))
+	}
+	attempt := uuid.NewString()
+	exec(`INSERT INTO task_attempts (id, task_id, number, profile_id, native_provider, configuration_revision,
+		agent_namespace, agent_name, role, depth, state, stop_state, capacity_held)
+		VALUES ($1, $2, 1, 'claude', 'claude', 'native-v1', 'kagent', 'agent', 'child', 2, 'fenced', 'confirmed', false)`, attempt, id)
+	exec(`INSERT INTO task_reports (id, task_id, attempt_id, request_id, request_digest, summary, outcome, task_version, screenshot_ids)
+		VALUES ($1, $2, $3, 'rep-1', $4, 'the menu page', 'progress', 1, '{shot-shown}')`, uuid.NewString(), id, attempt, strings.Repeat("a", 64))
+
+	got := r.do("GET", "/tasks/"+id+"/screenshots/shot-shown", nil, 200)
+	if got["id"] != "shot-shown" || got["media_type"] != "image/png" || got["viewport"] != "mobile" || got["path"] != "/menu" ||
+		got["data"] != base64.StdEncoding.EncodeToString(png) {
+		t.Errorf("screenshot = %v", got)
+	}
+	if reports := r.do("GET", "/tasks/"+id, nil, 200)["reports"].([]any); len(reports) != 1 ||
+		!reflect.DeepEqual(reports[0].(map[string]any)["screenshot_ids"], []any{"shot-shown"}) {
+		t.Errorf("reports = %v", reports)
+	}
+	// Not shown by a report, shown by another task's report, or unknown: not found.
+	for _, path := range []string{id + "/screenshots/shot-unshown", other + "/screenshots/shot-shown", id + "/screenshots/nope"} {
+		r.do("GET", "/tasks/"+path, nil, 404)
+	}
 }

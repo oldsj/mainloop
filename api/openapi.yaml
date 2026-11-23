@@ -5650,6 +5650,60 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /tasks/{task_id}/screenshots/{screenshot_id}:
+    get:
+      tags:
+        - tasks
+      summary: Get Task Screenshot
+      description: >-
+        One preview screenshot that a report of the task shows. A screenshot no report of this task
+        names is not found.
+      operationId: getTaskScreenshot
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Task Id
+        - name: screenshot_id
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 100
+            title: Screenshot Id
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskScreenshot'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /tasks/{task_id}/cancel:
     post:
       tags:
@@ -12531,6 +12585,18 @@ components:
           maxItems: 64
           title: Evidence Refs
           type: array
+        screenshot_ids:
+          default: []
+          description: >-
+            Preview screenshots the report shows the owner, oldest first. Read each with
+            GET /tasks/{task_id}/screenshots/{screenshot_id}.
+          items:
+            maxLength: 100
+            minLength: 1
+            type: string
+          maxItems: 8
+          title: Screenshot Ids
+          type: array
       required:
         - task_id
         - attempt_id
@@ -12539,7 +12605,54 @@ components:
         - outcome
         - owner_action
         - evidence_refs
+        - screenshot_ids
       title: TaskReport
+      type: object
+    TaskScreenshot:
+      additionalProperties: false
+      description: >-
+        A screenshot of a workspace preview that Mainloop's headless browser took for the task's agent
+        (docs/specs/workspaces.md, "Preview screenshots").
+      properties:
+        id:
+          type: string
+        media_type:
+          type: string
+          enum:
+            - image/png
+        data:
+          type: string
+          format: byte
+          description: Base64-encoded image bytes.
+        viewport:
+          type: string
+          enum:
+            - mobile
+            - desktop
+        port:
+          type: integer
+        path:
+          type: string
+        width:
+          type: integer
+          description: Width in device pixels.
+        height:
+          type: integer
+          description: Height in device pixels.
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - media_type
+        - data
+        - viewport
+        - port
+        - path
+        - width
+        - height
+        - created_at
+      title: TaskScreenshot
       type: object
     TaskView:
       additionalProperties: false

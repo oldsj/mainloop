@@ -23,10 +23,18 @@ type Tool struct {
 	Handle      func(ctx context.Context, actor agentauth.Actor, args json.RawMessage) (Result, error)
 }
 
-// Result is what a tool returns: text for the model and the same facts as structured content.
+// Result is what a tool returns: text for the model and the same facts as structured content,
+// and any images for the model to see.
 type Result struct {
 	Text       string
 	Structured map[string]any
+	Images     []Image
+}
+
+// Image is image content in a tool result.
+type Image struct {
+	MediaType string
+	Data      []byte
 }
 
 // toolError is a failure the caller sees as an error result, in the Python server's

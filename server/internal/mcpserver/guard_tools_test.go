@@ -37,6 +37,7 @@ type writeCase struct {
 	prs     bool
 	devloop bool
 	fetch   bool
+	shots   bool
 	role    dbstate.BindingRole
 	grant   dbstate.MCPGrantKind
 	prepare func(t *testing.T, h *harness, p *prHarness, a authtest.Seeded) map[string]any
@@ -290,6 +291,11 @@ var writeCases = []writeCase{
 			optIn(t, h, a)
 			return map[string]any{"url": "https://example.org/"}
 		}},
+	// preview_screenshot stores the images it captured.
+	{tool: "preview_screenshot", shots: true, role: dbstate.RoleAgent, grant: dbstate.GrantWorkspace,
+		prepare: func(*testing.T, *harness, *prHarness, authtest.Seeded) map[string]any {
+			return map[string]any{"request_id": "dead", "port": 3000}
+		}},
 }
 
 // dump is a digest of every table: its row count and a hash of all its rows, so a write to any
@@ -367,6 +373,9 @@ func TestEveryWriteToolIsRefusedAfterItsCredentialIsRevoked(t *testing.T) {
 				a = seedDevloopAgent(t, h)
 			case w.fetch:
 				h = newWebFetchHarness(t, &fakeFetcher{}, 0)
+				a = h.env.Seed(t, authtest.Agent{Role: w.role, Grant: w.grant})
+			case w.shots:
+				h = newScreenshotHarness(t, &fakeBrowser{}, true, 0)
 				a = h.env.Seed(t, authtest.Agent{Role: w.role, Grant: w.grant})
 			default:
 				h = newTaskHarness(t, true)

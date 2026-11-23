@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/apierr"
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
@@ -395,4 +398,30 @@ func (a *TasksAPI) UpdateProjectWorkerLimit(ctx context.Context, req api.UpdateP
 		return nil, taskReply(err, http.StatusNotFound, http.StatusUnprocessableEntity)
 	}
 	return api.UpdateProjectWorkerLimit200JSONResponse(workerLimitView(w)), nil
+}
+
+// GetTaskScreenshot implements api.StrictServerInterface.
+func (a *TasksAPI) GetTaskScreenshot(ctx context.Context, req api.GetTaskScreenshotRequestObject) (api.GetTaskScreenshotResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	s, err := dbq.New(a.Svc.Pool).GetTaskReportScreenshot(ctx, dbq.GetTaskReportScreenshotParams{
+		ID: req.ScreenshotId, OwnerID: a.OwnerID, TaskID: req.TaskId,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apierr.NotFound("Screenshot not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	// A screenshot never changes once stored.
+	cache := "private, max-age=31536000, immutable"
+	return api.GetTaskScreenshot200JSONResponse{
+		Body: api.TaskScreenshot{
+			Id: s.ID, MediaType: api.TaskScreenshotMediaType(s.MediaType), Data: s.Data,
+			Viewport: api.TaskScreenshotViewport(s.Viewport), Port: int(s.Port), Path: s.Path,
+			Width: int(s.Width), Height: int(s.Height), CreatedAt: s.CreatedAt,
+		},
+		Headers: api.GetTaskScreenshot200ResponseHeaders{CacheControl: &cache},
+	}, nil
 }

@@ -16,6 +16,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/oldsj/mainloop/server/internal/config"
 )
 
 // Preview sign-in (issue #415). A preview host serves nothing without a preview cookie: a
@@ -132,28 +135,39 @@ func (p *Proxy) hostName(h Host) string {
 // has already checked that the request comes from the signed-in owner. Nothing is woken or
 // touched.
 func (p *Proxy) Grant(ctx context.Context, workspaceID string, port int, next string) (string, time.Time, error) {
-	if next == "" {
-		next = "/"
-	}
-	if !localPath(next) {
-		return "", time.Time{}, ErrBadPath
-	}
-	h := Host{Port: port, WorkspaceID: workspaceID}
-	if _, ok := p.base.parse(p.hostName(h)); !ok {
-		return "", time.Time{}, ErrNotPreviewable
-	}
-	t, err := p.resolve(ctx, workspaceID)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return "", time.Time{}, ErrNotPreviewable
-	case err != nil:
+	h, next, err := p.admit(ctx, workspaceID, port, next)
+	if err != nil {
 		return "", time.Time{}, err
-	case !t.ports[port]:
-		return "", time.Time{}, ErrPortNotDeclared
 	}
 	exp := p.now().Add(GrantTTL)
 	frag := url.Values{"t": {p.mint(kindGrant, h, exp)}, "next": {next}}
 	return p.base.scheme + "://" + p.hostName(h) + AuthPath + "#" + frag.Encode(), exp, nil
+}
+
+// admit checks a sign-in for path on the workspace's preview of port: a path on the preview
+// host, a host the base URL parses back, the owner's previewable workspace and a declared port.
+// It returns the host and the path ("/" when empty). Nothing is woken or touched.
+func (p *Proxy) admit(ctx context.Context, workspaceID string, port int, path string) (Host, string, error) {
+	if path == "" {
+		path = "/"
+	}
+	if !localPath(path) {
+		return Host{}, "", ErrBadPath
+	}
+	h := Host{Port: port, WorkspaceID: workspaceID}
+	if _, ok := p.base.parse(p.hostName(h)); !ok {
+		return Host{}, "", ErrNotPreviewable
+	}
+	t, err := p.resolve(ctx, workspaceID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return Host{}, "", ErrNotPreviewable
+	case err != nil:
+		return Host{}, "", err
+	case !t.ports[port]:
+		return Host{}, "", ErrPortNotDeclared
+	}
+	return h, path, nil
 }
 
 // localPath reports whether next is a path on the same host: one leading slash, not a
@@ -245,4 +259,45 @@ func navigation(r *http.Request) bool {
 		return mode == "navigate"
 	}
 	return strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
+// VisitTTL is how long the preview cookie of a screenshot visit is accepted.
+const VisitTTL = 2 * time.Minute
+
+// Visit is what Mainloop's own headless browser needs to open the owner's preview: the page URL
+// and the preview cookie that signs it in to that one host.
+type Visit struct {
+	URL    string
+	Cookie *http.Cookie
+}
+
+// NewSigner builds a Proxy that only signs visits: it serves nothing and dials no router. The MCP
+// process uses it for preview screenshots.
+func NewSigner(cfg *config.Config, pool *pgxpool.Pool) (*Proxy, error) {
+	b, ok := parseBase(cfg.Preview.BaseURL)
+	if !ok {
+		return nil, errors.New("preview: SUBSTRATE_PREVIEW_BASE_URL has no host")
+	}
+	return &Proxy{
+		Pool: pool, OwnerID: cfg.Identity.OwnerID, base: b,
+		authKey: previewKey([]byte(cfg.Identity.AgentTokenKey.Reveal())), now: time.Now,
+	}, nil
+}
+
+// Visit signs a visit to path on the workspace's preview of port, for Mainloop's headless browser.
+// It refuses exactly what Grant refuses. The cookie is a session cookie like the owner's, accepted
+// for VisitTTL; the browser context that holds it is disposed after one capture.
+func (p *Proxy) Visit(ctx context.Context, workspaceID string, port int, path string) (Visit, error) {
+	h, path, err := p.admit(ctx, workspaceID, port, path)
+	if err != nil {
+		return Visit{}, err
+	}
+	exp := p.now().Add(VisitTTL)
+	return Visit{
+		URL: p.base.scheme + "://" + p.hostName(h) + path,
+		Cookie: &http.Cookie{
+			Name: p.cookieName(), Value: p.mint(kindSession, h, exp), Path: "/", Expires: exp,
+			HttpOnly: true, Secure: p.base.scheme == "https", SameSite: http.SameSiteLaxMode,
+		},
+	}, nil
 }

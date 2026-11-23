@@ -230,6 +230,11 @@ type Preview struct {
 	RouterCA       string  `env:"SUBSTRATE_ROUTER_CA" envDefault:"/run/substrate-router/ca/trust-bundle.pem"`
 	BaseURL        string  `env:"SUBSTRATE_PREVIEW_BASE_URL" envDefault:"http://localhost:8001"`
 	ConnectTimeout Seconds `env:"SUBSTRATE_PREVIEW_CONNECT_TIMEOUT_SECONDS" envDefault:"5"`
+	// ScreenshotBrowserURL is the DevTools endpoint (http://host:9222) of the headless browser that
+	// takes preview screenshots for workspace agents. Empty turns preview_screenshot off.
+	ScreenshotBrowserURL string `env:"MAINLOOP_SCREENSHOT_BROWSER_URL"`
+	// ScreenshotsPerMinute bounds the screenshots one workspace takes a minute.
+	ScreenshotsPerMinute int `env:"MAINLOOP_SCREENSHOTS_PER_MINUTE" envDefault:"10"`
 }
 
 // Transcripts bounds stored session transcripts (docs/specs/transcripts.md).

@@ -51,7 +51,8 @@ function report(): TaskView['reports'][number] {
     summary: 'Checked the logs.',
     outcome: 'progress',
     owner_action: null,
-    evidence_refs: []
+    evidence_refs: [],
+    screenshot_ids: []
   };
 }
 

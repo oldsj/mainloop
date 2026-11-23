@@ -215,6 +215,28 @@ canary:
   # run only logs and exits non-zero on failure.
   env: []
 
+# A headless Chromium for the preview_screenshot MCP tool (docs/specs/workspaces.md, "Preview
+# screenshots"). Needs the preview host (SUBSTRATE_PREVIEW_BASE_URL). Enabling it sets
+# MAINLOOP_SCREENSHOT_BROWSER_URL, which offers the tool to workspace agents.
+screenshots:
+  enabled: false
+  image:
+    repository: docker.io/chromedp/headless-shell
+    tag: 159.0.8154.13
+    digest: sha256:381353d3530ab9d579d2fe8b9c0f4519c995617f5a71daf6bb649e2d12005bd9
+  # Required when enabled: NetworkPolicy "to" peers for the preview host's gateway. The browser
+  # may reach these on 443, and DNS, and nothing else. In-cluster traffic to a load-balancer IP
+  # usually reaches the gateway's pods directly, so name those pods (namespaceSelector plus
+  # podSelector) rather than the IP.
+  previewEgress: []
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 1Gi
+      cpu: 1000m
+
 networkPolicy:
   # Ingress to the REST and MCP listeners. The git listeners have their own fixed policy, open only
   # to the actor egress proxy.

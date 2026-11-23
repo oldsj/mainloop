@@ -17,6 +17,7 @@ import {
   type OperationProgress
 } from '@/lib/taskState';
 import { hasPublication, notPublishedYet } from './model';
+import { ReportScreenshots } from './ReportScreenshots';
 
 /** A section's heading: small capitals, as the explorer's group headings are. */
 const HEADING = 'text-muted-foreground text-2xs font-medium tracking-wide uppercase';
@@ -366,6 +367,7 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
                     Owner request: {report.owner_action}
                   </p>
                 ) : null}
+                <ReportScreenshots taskId={report.task_id} ids={report.screenshot_ids ?? []} />
               </li>
             ))}
           </ul>

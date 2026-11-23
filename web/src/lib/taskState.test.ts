@@ -126,7 +126,8 @@ test('reports are claims; a completed report does not make the task completed', 
       summary: 'done',
       outcome: 'completed',
       owner_action: null,
-      evidence_refs: []
+      evidence_refs: [],
+      screenshot_ids: []
     })
   ).toMatch(/unverified claim/);
   const claimed = view(
@@ -140,7 +141,8 @@ test('reports are claims; a completed report does not make the task completed', 
           summary: 'done',
           outcome: 'completed',
           owner_action: null,
-          evidence_refs: []
+          evidence_refs: [],
+          screenshot_ids: []
         }
       ]
     }

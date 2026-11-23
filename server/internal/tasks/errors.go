@@ -37,6 +37,7 @@ const (
 	ReasonStaleVersion         = "stale_task_version"
 	ReasonPayloadConflict      = "request_payload_conflict"
 	ReasonReportConflict       = "report_request_conflict"
+	ReasonReportScreenshots    = "report_screenshots"
 	ReasonTaskTerminal         = "task_terminal"
 	ReasonCompletedRecorded    = "completed_report_already_recorded"
 	ReasonLiveChildren         = "live_children"

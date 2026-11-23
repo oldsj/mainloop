@@ -34,6 +34,8 @@ type WorkspaceRuntime interface {
 type SessionRuntime interface {
 	SendToAs(ctx context.Context, source sessions.Source, sessionID, messageID, text string) (sessions.Sent, error)
 	SendAs(ctx context.Context, source sessions.Source, messageID, conversationID, text string) (sessions.Sent, error)
+	// SendAsWithImages is SendAs with stored chat images attached: a report's screenshots.
+	SendAsWithImages(ctx context.Context, source sessions.Source, messageID, conversationID, text string, imageIDs []string) (sessions.Sent, error)
 	SendToWith(ctx context.Context, source sessions.Source, sessionID, messageID, text string, o sessions.SendOptions) (sessions.Sent, error)
 	// SendInTx records a message inside the caller's transaction; a follow-up commits it with the
 	// task's reopening.

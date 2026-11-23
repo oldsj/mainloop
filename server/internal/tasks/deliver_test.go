@@ -275,3 +275,40 @@ func TestAReportToAMainThatIsSwitchingProviderWaitsThenDrains(t *testing.T) {
 		return r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, main) == 1
 	})
 }
+
+// A report that shows preview screenshots carries them to the main thread as images of its
+// message, copied from the attempt's workspace.
+func TestReportScreenshotsReachMainAsImages(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	root, sup := r.supervisor()
+	r.finishTurns()
+	_, binding := r.attemptOf(root)
+	png := []byte("\x89PNG\r\n\x1a\nfictional")
+	shot := uuid.NewString()
+	if _, err := r.pool.Exec(context.Background(), `INSERT INTO preview_screenshots
+		(id, owner_id, session_id, request_id, port, path, viewport, media_type, width, height, data, size_bytes)
+		SELECT $1, owner_id, $2, 'shot-1', 3000, '/menu', 'mobile', 'image/png', 780, 1688, $3, $4 FROM tasks WHERE id = $5`,
+		shot, binding, png, len(png), root); err != nil {
+		t.Fatal(err)
+	}
+	in := report(sup, "done", dbstate.OutcomeCompleted)
+	in.Summary, in.ScreenshotIDs = "the menu page", []string{shot}
+	if _, err := r.svc.Report(context.Background(), sup, in); err != nil {
+		t.Fatal(err)
+	}
+	r.eventually("the report to main is sent", func() bool {
+		return r.count(`SELECT count(*) FROM session_messages m JOIN agent_bindings b ON b.session_id = m.session_id
+			WHERE b.role = 'main' AND m.content LIKE '[report from%'`) == 1
+	})
+	got := r.str(`SELECT m.content FROM session_messages m JOIN agent_bindings b ON b.session_id = m.session_id
+		WHERE b.role = 'main' AND m.content LIKE '[report from%'`)
+	if !strings.Contains(got, "Screenshots: 1") {
+		t.Errorf("main message = %q", got)
+	}
+	if n := r.count(`SELECT count(*) FROM message_images i JOIN session_messages m ON m.id = i.message_id
+		JOIN agent_bindings b ON b.session_id = m.session_id
+		WHERE b.role = 'main' AND i.session_id = m.session_id AND i.media_type = 'image/png' AND i.data = $1`, png); n != 1 {
+		t.Errorf("main message carries %d screenshot images, want 1", n)
+	}
+}

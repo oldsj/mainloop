@@ -75,6 +75,11 @@ func (s *Server) taskTools() []Tool {
 				"evidence_refs": map[string]any{
 					"type": "array", "maxItems": 64, "default": []any{}, "items": stringSchema(1, 2048),
 				},
+				"screenshot_ids": map[string]any{
+					"type": "array", "maxItems": tasks.MaxReportScreenshots, "uniqueItems": true, "default": []any{},
+					"items":       stringSchema(1, 100),
+					"description": "Ids from preview_screenshot of your own workspace, shown to the owner with the report.",
+				},
 			}, "task_id", "attempt_id", "request_id", "summary", "outcome"),
 			Handle: s.report,
 		},
@@ -547,19 +552,20 @@ func str(s *string) string {
 
 func (s *Server) report(ctx context.Context, a agentauth.Actor, args json.RawMessage) (Result, error) {
 	var in struct {
-		TaskID       string   `json:"task_id"`
-		AttemptID    string   `json:"attempt_id"`
-		RequestID    string   `json:"request_id"`
-		Summary      string   `json:"summary"`
-		Outcome      string   `json:"outcome"`
-		OwnerAction  *string  `json:"owner_action"`
-		EvidenceRefs []string `json:"evidence_refs"`
+		TaskID        string   `json:"task_id"`
+		AttemptID     string   `json:"attempt_id"`
+		RequestID     string   `json:"request_id"`
+		Summary       string   `json:"summary"`
+		Outcome       string   `json:"outcome"`
+		OwnerAction   *string  `json:"owner_action"`
+		EvidenceRefs  []string `json:"evidence_refs"`
+		ScreenshotIDs []string `json:"screenshot_ids"`
 	}
 	if err := decode(args, &in); err != nil {
 		return Result{}, err
 	}
 	var err error
-	rep := tasks.ReportInput{OwnerAction: str(in.OwnerAction), EvidenceRefs: in.EvidenceRefs}
+	rep := tasks.ReportInput{OwnerAction: str(in.OwnerAction), EvidenceRefs: in.EvidenceRefs, ScreenshotIDs: in.ScreenshotIDs}
 	if rep.TaskID, err = text(in.TaskID, 1, 100); err != nil {
 		return Result{}, err
 	}
@@ -577,6 +583,14 @@ func (s *Server) report(ctx context.Context, a agentauth.Actor, args json.RawMes
 	}
 	for _, ref := range rep.EvidenceRefs {
 		if ref == "" || len(ref) > 2048 {
+			return Result{}, errValidation
+		}
+	}
+	if len(rep.ScreenshotIDs) > tasks.MaxReportScreenshots {
+		return Result{}, errValidation
+	}
+	for _, id := range rep.ScreenshotIDs {
+		if id == "" || len(id) > 100 {
 			return Result{}, errValidation
 		}
 	}
