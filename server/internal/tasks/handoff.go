@@ -155,6 +155,7 @@ func (s *Service) driveHandoff(ctx context.Context, c reconcile.Claim, op dbq.Ta
 			}
 			return reconcile.RetryAfter(wait), nil
 		}
+		s.retireSource(ctx, src)
 		return s.moveOp(ctx, c, op, dbstate.TaskOpSourceFencing)
 	case dbstate.TaskOpSourceFencing:
 		_, err = s.fence(ctx, src, func(q *dbq.Queries) ([]events.Draft, error) {
@@ -338,4 +339,27 @@ func codeStart(ctx context.Context, q *dbq.Queries, a, prev dbq.TaskAttempt, t d
 	}
 	return fmt.Sprintf("Attempt %d never pushed branch `%s`, so none of its work is in your workspace: it starts at %s, "+
 		"the head of %s. Push your work to `%s` as usual.", prev.Number, branch, sha, base, branch), nil
+}
+
+// retireSource deletes the native session of a handoff's source attempt once its stop is confirmed,
+// before the successor's runtime exists, when the attempt has no workspace (a supervisor or another
+// coordination attempt). Otherwise its actor keeps its place on the worker until kagent suspends it
+// idle (300 s), and on a full worker the successor's first send finds no room. Nothing runs in the
+// source any more and Mainloop never sends to it again, so this only removes a writer; the deleter
+// copies its finished turns to Mainloop's transcripts first. A code attempt keeps its actor: its
+// workspace may still be needed (a checkpoint). Best effort: a refusal is logged and the handoff goes
+// on, and the successor's send waits for room (docs/specs/sessions.md#runtime-capacity).
+func (s *Service) retireSource(ctx context.Context, srcID string) {
+	f, ok := s.StopObserver.(StopForcer)
+	if !ok {
+		return
+	}
+	a, err := dbq.New(s.Pool).GetTaskAttempt(ctx, srcID)
+	if err != nil || a.SessionID == nil || a.WorkspaceID != nil || a.StopState != stopConfirmed {
+		return
+	}
+	if _, err := f.ForceStop(ctx, *a.SessionID, ForceDelete); err != nil {
+		s.log().WarnContext(ctx, "tasks: could not retire a handed-off attempt's native session; its successor waits for room",
+			"attempt", a.ID, "session", *a.SessionID, "error", err)
+	}
 }
