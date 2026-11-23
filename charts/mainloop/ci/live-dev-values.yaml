@@ -50,7 +50,7 @@ server:
   command: [watchexec, --restart, --exts, 'go,sql', --stop-timeout, 5s, --, go, run, ./cmd/mainloop]
   workingDir: /src
   # `go run` compiles first. The startup probe allows up to 10 minutes for a cold build (one on
-  # worker-01 took 2.5 minutes and was killed by the old 3-minute liveness window), then liveness
+  # an arm64 node took 2.5 minutes and was killed by the old 3-minute liveness window), then liveness
   # takes over at its normal timing.
   startupProbe:
     periodSeconds: 5

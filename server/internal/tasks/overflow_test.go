@@ -132,7 +132,7 @@ func TestOverflowWaitGivesUp(t *testing.T) {
 func TestOverflowCodeChildRunsOnTheOverflowAgent(t *testing.T) {
 	r := newRig(t)
 	cfg := mustConfig(t)
-	cfg.Kagent.WorkspaceClaudeOverflowAgent = "claude-workspace-nzxt"
+	cfg.Kagent.WorkspaceClaudeOverflowAgent = "claude-workspace-overflow"
 	reg, err := providers.NewRegistry(cfg.Kagent)
 	if err != nil {
 		t.Fatal(err)
@@ -153,17 +153,17 @@ func TestOverflowCodeChildRunsOnTheOverflowAgent(t *testing.T) {
 	if got := agent(base); got != cfg.Kagent.WorkspaceClaudeAgent {
 		t.Fatalf("base child on %s", got)
 	}
-	if got := agent(over); got != "claude-workspace-nzxt" {
+	if got := agent(over); got != "claude-workspace-overflow" {
 		t.Fatalf("overflow child on %s", got)
 	}
-	if got := r.ws.agentFor(r.str(`SELECT workspace_request_id FROM task_attempts a JOIN tasks t ON t.current_attempt_id = a.id WHERE t.id = $1`, over)); got != "claude-workspace-nzxt" {
+	if got := r.ws.agentFor(r.str(`SELECT workspace_request_id FROM task_attempts a JOIN tasks t ON t.current_attempt_id = a.id WHERE t.id = $1`, over)); got != "claude-workspace-overflow" {
 		t.Fatalf("overflow workspace on %q", got)
 	}
 	if _, ok := reg.Profile("claude"); !ok {
 		t.Fatal("no claude profile")
 	}
 	p, _ := reg.Profile("claude")
-	if p.Agents[config.AgentOverflowRole].Name != "claude-workspace-nzxt" {
+	if p.Agents[config.AgentOverflowRole].Name != "claude-workspace-overflow" {
 		t.Fatalf("profile agents = %+v", p.Agents)
 	}
 }

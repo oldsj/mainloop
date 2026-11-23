@@ -224,7 +224,7 @@ measurement is in. The first implementation slice of the cache-archive mechanism
 until the new path is proven. Overlaps
 [#100](https://github.com/oldsj/mainloop/issues/100)'s personal dev-environment layer, which this
 spec treats as a per-person override on the same config rather than a second mechanism. Also
-touches a cross-repository registry allowlist drift (`oldsj/infrastructure#217`) that needs an
+touches a cross-repository registry allowlist drift (in the private deployment repository) that needs an
 owner decision outside this repository's scope.
 
 ## Delivery phases

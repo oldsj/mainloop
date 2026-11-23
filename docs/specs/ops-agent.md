@@ -2,7 +2,7 @@
 
 Status: slice 1 (read-only) is implemented in configuration and proven live on 2026-11-12 (task
 8c6ee58c answered a restart question; task d171cfb1 confirmed the private-namespace refusals). Its
-kagent and infrastructure parts are in oldsj/infrastructure; this spec covers how Mainloop reaches
+kagent and infrastructure parts are in the deployment repository; this spec covers how Mainloop reaches
 it.
 
 The ops agent answers questions about the owner's home cluster and homelab: pods, logs, events,

@@ -9,13 +9,13 @@ import (
 // deployedSourceRevision is the kagent revision the vendored protos are pinned to: the tip of
 // oldsj/kagent mainloop-substrate-1-0 when it was vendored (see SOURCE).
 // It is not yet a revision infra deploys. Update it, and SOURCE's commit, together when the fork
-// moves, and when infra pins the ported fork in oldsj/infrastructure's
+// moves, and when infra pins the ported fork in the deployment repository's
 // k8s/apps/kagent/source-lock.yaml.
 const deployedSourceRevision = "5d0a6c75d3aca207d117493f0e3d0e82ec84b1b9"
 
 // TestSourcePinnedToDeployedRevision fails if the vendored protos (and the generated clients built
 // from them) drift from the kagent commit actually deployed, which SOURCE and this test must agree
-// on by hand: nothing here can reach oldsj/infrastructure to check it live.
+// on by hand: nothing here can reach the deployment repository to check it live.
 func TestSourcePinnedToDeployedRevision(t *testing.T) {
 	raw, err := os.ReadFile("SOURCE")
 	if err != nil {

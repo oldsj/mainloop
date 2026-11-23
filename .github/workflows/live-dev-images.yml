@@ -96,7 +96,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Joins the two native builds into one multi-arch index under the plain tag, so pods pull the
-  # right one on arm64 (worker-01) and amd64 (k8s-worker-b550).
+  # right one on arm64 and amd64 nodes.
   merge:
     name: Publish ${{ matrix.image }} multi-arch index
     needs: publish
