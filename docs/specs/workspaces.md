@@ -333,7 +333,7 @@ full_page=false)` opens `<port>--<own workspace>--preview.<domain><path>` in a d
   that is discarded afterwards. The browser holds no other credential and keeps nothing between
   captures. The DevTools protocol has no authentication, so the chart's NetworkPolicy admits only
   the backend to the browser, and lets the browser reach only DNS and the preview gateway
-  (`screenshots.previewEgress`, port 443).
+  (`screenshots.previewEgress` on `screenshots.previewEgressPorts`, the gateway pods' own port).
 - **Retries and limits.** `request_id` makes a call idempotent: the same request returns the stored
   images (`replayed: true`) without opening the browser again, and the same id for another page or
   size is `request_conflict`. Each workspace may take `MAINLOOP_SCREENSHOTS_PER_MINUTE` (10)
