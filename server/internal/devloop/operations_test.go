@@ -26,6 +26,11 @@ import (
 // short Lease and Interval keep the test fast.
 func runOperations(t *testing.T, s *devloop.OperationsService, pool *testdb.DB) {
 	t.Helper()
+	t.Cleanup(startOperations(s, pool))
+}
+
+// startOperations runs the operations loop until the returned stop, which waits for it to return.
+func startOperations(s *devloop.OperationsService, pool *testdb.DB) (stop func()) {
 	log := slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil))
 	r := reconcile.NewRunner(pool.Pool, log, nil)
 	loop := s.Loop()
@@ -34,7 +39,7 @@ func runOperations(t *testing.T, s *devloop.OperationsService, pool *testdb.DB) 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); _ = r.Run(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
+	return func() { cancel(); <-done }
 }
 
 func newOperationsService(d *testdb.DB, pods devloop.PodClient, seed devloop.GitSeeder) *devloop.OperationsService {
@@ -723,19 +728,23 @@ func TestSyncDeadlineRunsFromTheRequest(t *testing.T) {
 	if _, err := d.Pool.Exec(ctx, `UPDATE devloop_operations SET created_at = now() - interval '20 minutes' WHERE id = $1`, stale.ID); err != nil {
 		t.Fatal(err)
 	}
-	runOperations(t, svc, d)
+	stop := startOperations(svc, d)
 	row := waitSync(t, svc, stale.ID)
 	if row.State != dbstate.DevloopFailed || row.Detail == nil || !strings.Contains(*row.Detail, "did not finish") || pods.Copies("backend") != 0 {
 		t.Fatalf("sync past its deadline = %s (%v) with %d copies, want failed without copying", row.State, row.Detail, pods.Copies("backend"))
 	}
 
-	// A copy that hangs until the deadline: it must fail, not come back as unknown.
+	// A copy that hangs until the deadline: it must fail, not come back as unknown. The request is
+	// moved 600ms before its deadline while no loop runs: a loop that claimed it first would read
+	// the original created_at, wait ten minutes, and the test would see it still pending (#511).
+	stop()
 	var hungTries atomic.Int32
 	pods.CopyHook = func(ctx context.Context, _ string) { hungTries.Add(1); <-ctx.Done() }
 	hung := startSync(t, svc, "session-a", "key-hung", sha)
 	if _, err := d.Pool.Exec(ctx, `UPDATE devloop_operations SET created_at = now() - interval '10 minutes' + interval '600 milliseconds' WHERE id = $1`, hung.ID); err != nil {
 		t.Fatal(err)
 	}
+	runOperations(t, svc, d)
 	row = waitSync(t, svc, hung.ID)
 	if row.State != dbstate.DevloopFailed || row.Detail == nil || !strings.Contains(*row.Detail, "did not finish") {
 		t.Fatalf("hung copy = %s (%v), want failed at the deadline", row.State, row.Detail)
