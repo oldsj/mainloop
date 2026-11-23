@@ -35,7 +35,7 @@ func TestAnonymousNavigationGoesToTheAppToSignIn(t *testing.T) {
 		if rec.Code != http.StatusSeeOther {
 			t.Fatalf("%v: got %d, want 303", headers, rec.Code)
 		}
-		want := "http://mainloop.test/previews/ws1/3000?path=%2Fa%2Fb%3Fx%3D1"
+		want := "https://mainloop.test/previews/ws1/3000?path=%2Fa%2Fb%3Fx%3D1"
 		if loc := rec.Header().Get("Location"); loc != want {
 			t.Fatalf("Location = %q, want %q", loc, want)
 		}
