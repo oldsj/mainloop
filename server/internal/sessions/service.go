@@ -639,6 +639,13 @@ func (s *Service) SendWithImages(ctx context.Context, messageID, conversationID,
 	return s.sendAsWithImages(ctx, SourceUser, messageID, conversationID, text, imageIDs)
 }
 
+// SendAsWithImages is SendAs with chat images already stored for this conversation (unclaimed)
+// attached to the message, the way the owner's own pasted images are: a task report delivers the
+// screenshots it shows the owner this way.
+func (s *Service) SendAsWithImages(ctx context.Context, source Source, messageID, conversationID, text string, imageIDs []string) (Sent, error) {
+	return s.sendAsWithImages(ctx, source, messageID, conversationID, text, imageIDs)
+}
+
 // sendAsWithImages is the shared body of Send, SendAs and SendWithImages.
 func (s *Service) sendAsWithImages(
 	ctx context.Context, source Source, messageID, conversationID, text string, imageIDs []string,

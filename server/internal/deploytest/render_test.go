@@ -39,6 +39,12 @@ var installs = map[string]struct {
 	"kind":       {"mainloop", "values-kind.yaml", nil},
 	// Production with its canary on, as the real production values have it.
 	"production-canary": {"mainloop", "ci/production-values.yaml", []string{"canary.enabled=true"}},
+	// Production with the preview screenshot browser on.
+	"production-screenshots": {"mainloop", "ci/production-values.yaml", []string{
+		"screenshots.enabled=true",
+		"screenshots.previewEgress[0].namespaceSelector.matchLabels.kubernetes\\.io/metadata\\.name=gateway-system",
+		"screenshots.previewEgress[0].podSelector.matchLabels.app=preview-gateway",
+	}},
 }
 
 // rendered is one install after `helm template`, split by kind.
@@ -966,4 +972,87 @@ func TestMachineCallersAuthenticate(t *testing.T) {
 			}
 		}
 	})
+}
+
+// The screenshot browser (docs/specs/workspaces.md, "Preview screenshots") speaks an
+// unauthenticated protocol, so it is off by default and, when on, only the backend reaches it and
+// it reaches only DNS and the configured preview gateway, holding no Kubernetes credential.
+func TestScreenshotBrowserIsFencedIn(t *testing.T) {
+	for _, path := range []string{"defaults", "production", "live-dev"} {
+		r := render(t, path)
+		if _, ok := r.deployments["mainloop-screenshots"]; ok {
+			t.Errorf("%s: the screenshot browser is on by default", path)
+		}
+		if url := r.configMaps["mainloop-config"].Data["MAINLOOP_SCREENSHOT_BROWSER_URL"]; url != "" {
+			t.Errorf("%s: MAINLOOP_SCREENSHOT_BROWSER_URL = %q without a browser", path, url)
+		}
+	}
+
+	r := render(t, "production-screenshots")
+	if got := r.configMaps["mainloop-config"].Data["MAINLOOP_SCREENSHOT_BROWSER_URL"]; got != "http://mainloop-screenshots.mainloop.svc.cluster.local:9222" {
+		t.Errorf("MAINLOOP_SCREENSHOT_BROWSER_URL = %q", got)
+	}
+	d, ok := r.deployments["mainloop-screenshots"]
+	if !ok {
+		t.Fatal("no mainloop-screenshots Deployment")
+	}
+	pod := d.Spec.Template.Spec
+	if pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
+		t.Error("the browser mounts a ServiceAccount token")
+	}
+	if pod.SecurityContext == nil || pod.SecurityContext.RunAsNonRoot == nil || !*pod.SecurityContext.RunAsNonRoot {
+		t.Error("the browser may run as root")
+	}
+	c := pod.Containers[0]
+	if !strings.Contains(c.Image, "@sha256:") {
+		t.Errorf("browser image %q is not pinned by digest", c.Image)
+	}
+	if sc := c.SecurityContext; sc == nil || sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem ||
+		sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+		t.Errorf("browser container security context: %+v", c.SecurityContext)
+	}
+	if len(c.EnvFrom) != 0 {
+		t.Errorf("the browser imports env: %+v", c.EnvFrom)
+	}
+	for _, e := range c.Env {
+		if e.ValueFrom != nil {
+			t.Errorf("the browser reads %s from %+v", e.Name, e.ValueFrom)
+		}
+	}
+
+	var policy *networkingv1.NetworkPolicy
+	for i, p := range r.policies {
+		if p.Spec.PodSelector.MatchLabels["app"] == "mainloop-screenshots" {
+			if policy != nil {
+				t.Fatalf("two policies select the browser: %s, %s", policy.Name, p.Name)
+			}
+			policy = &r.policies[i]
+		}
+	}
+	if policy == nil {
+		t.Fatal("no NetworkPolicy selects the browser")
+	}
+	if !slices.Equal(policy.Spec.PolicyTypes, []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress}) {
+		t.Errorf("policy types %v", policy.Spec.PolicyTypes)
+	}
+	in := policy.Spec.Ingress
+	if len(in) != 1 || len(in[0].From) != 1 || in[0].From[0].PodSelector == nil ||
+		in[0].From[0].NamespaceSelector != nil || in[0].From[0].PodSelector.MatchLabels["app"] != "mainloop-backend" ||
+		len(in[0].Ports) != 1 || in[0].Ports[0].Port.String() != "9222" {
+		t.Errorf("browser ingress: %+v", in)
+	}
+	out := policy.Spec.Egress
+	if len(out) != 2 {
+		t.Fatalf("browser egress has %d rules: %+v", len(out), out)
+	}
+	for _, p := range out[0].Ports {
+		if p.Port.String() != "53" {
+			t.Errorf("DNS rule opens port %s", p.Port)
+		}
+	}
+	gw := out[1]
+	if len(gw.Ports) != 1 || gw.Ports[0].Port.String() != "443" || len(gw.To) != 1 || gw.To[0].IPBlock != nil ||
+		gw.To[0].PodSelector == nil || gw.To[0].PodSelector.MatchLabels["app"] != "preview-gateway" {
+		t.Errorf("browser egress to the gateway: %+v", gw)
+	}
 }

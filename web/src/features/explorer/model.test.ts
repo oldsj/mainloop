@@ -282,7 +282,8 @@ describe('parent task progress', () => {
             summary: 'Older',
             outcome: 'progress',
             owner_action: null,
-            evidence_refs: []
+            evidence_refs: [],
+            screenshot_ids: []
           },
           {
             task_id: 'p1',
@@ -291,7 +292,8 @@ describe('parent task progress', () => {
             summary: 'Latest from the parent',
             outcome: 'progress',
             owner_action: null,
-            evidence_refs: []
+            evidence_refs: [],
+            screenshot_ids: []
           }
         ]
       }
@@ -318,7 +320,8 @@ describe('parent task progress', () => {
             summary: 'Older child report',
             outcome: 'progress',
             owner_action: null,
-            evidence_refs: []
+            evidence_refs: [],
+            screenshot_ids: []
           }
         ]
       }
@@ -340,7 +343,8 @@ describe('parent task progress', () => {
             summary: 'Newest child report',
             outcome: 'progress',
             owner_action: null,
-            evidence_refs: []
+            evidence_refs: [],
+            screenshot_ids: []
           }
         ]
       }

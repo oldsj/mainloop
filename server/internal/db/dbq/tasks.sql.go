@@ -1432,7 +1432,7 @@ func (q *Queries) GetTaskOperationByKey(ctx context.Context, arg GetTaskOperatio
 }
 
 const getTaskReport = `-- name: GetTaskReport :one
-SELECT id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at FROM task_reports WHERE id = $1
+SELECT id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at, screenshot_ids FROM task_reports WHERE id = $1
 `
 
 func (q *Queries) GetTaskReport(ctx context.Context, id string) (TaskReport, error) {
@@ -1450,12 +1450,13 @@ func (q *Queries) GetTaskReport(ctx context.Context, id string) (TaskReport, err
 		&i.EvidenceRefs,
 		&i.TaskVersion,
 		&i.CreatedAt,
+		&i.ScreenshotIds,
 	)
 	return i, err
 }
 
 const getTaskReportByRequest = `-- name: GetTaskReportByRequest :one
-SELECT id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at FROM task_reports WHERE attempt_id = $1 AND request_id = $2
+SELECT id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at, screenshot_ids FROM task_reports WHERE attempt_id = $1 AND request_id = $2
 `
 
 type GetTaskReportByRequestParams struct {
@@ -1478,6 +1479,7 @@ func (q *Queries) GetTaskReportByRequest(ctx context.Context, arg GetTaskReportB
 		&i.EvidenceRefs,
 		&i.TaskVersion,
 		&i.CreatedAt,
+		&i.ScreenshotIds,
 	)
 	return i, err
 }
@@ -1897,11 +1899,12 @@ func (q *Queries) InsertTaskOperation(ctx context.Context, arg InsertTaskOperati
 const insertTaskReport = `-- name: InsertTaskReport :one
 
 INSERT INTO task_reports (
-    id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version
+    id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version,
+    screenshot_ids
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::text[]
 )
-RETURNING id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at
+RETURNING id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at, screenshot_ids
 `
 
 type InsertTaskReportParams struct {
@@ -1915,6 +1918,7 @@ type InsertTaskReportParams struct {
 	OwnerAction   *string
 	EvidenceRefs  []string
 	TaskVersion   int32
+	ScreenshotIds []string
 }
 
 // Reports
@@ -1930,6 +1934,7 @@ func (q *Queries) InsertTaskReport(ctx context.Context, arg InsertTaskReportPara
 		arg.OwnerAction,
 		arg.EvidenceRefs,
 		arg.TaskVersion,
+		arg.ScreenshotIds,
 	)
 	var i TaskReport
 	err := row.Scan(
@@ -1944,6 +1949,7 @@ func (q *Queries) InsertTaskReport(ctx context.Context, arg InsertTaskReportPara
 		&i.EvidenceRefs,
 		&i.TaskVersion,
 		&i.CreatedAt,
+		&i.ScreenshotIds,
 	)
 	return i, err
 }
@@ -2043,7 +2049,7 @@ func (q *Queries) JoinTaskEventBatch(ctx context.Context, arg JoinTaskEventBatch
 }
 
 const latestAttemptReport = `-- name: LatestAttemptReport :one
-SELECT id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at FROM task_reports WHERE attempt_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1
+SELECT id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at, screenshot_ids FROM task_reports WHERE attempt_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1
 `
 
 func (q *Queries) LatestAttemptReport(ctx context.Context, attemptID string) (TaskReport, error) {
@@ -2061,12 +2067,13 @@ func (q *Queries) LatestAttemptReport(ctx context.Context, attemptID string) (Ta
 		&i.EvidenceRefs,
 		&i.TaskVersion,
 		&i.CreatedAt,
+		&i.ScreenshotIds,
 	)
 	return i, err
 }
 
 const latestTaskReport = `-- name: LatestTaskReport :one
-SELECT id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at FROM task_reports WHERE task_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1
+SELECT id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at, screenshot_ids FROM task_reports WHERE task_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1
 `
 
 // The latest report of any attempt of a task: what survives a standing supervisor's restart.
@@ -2085,6 +2092,7 @@ func (q *Queries) LatestTaskReport(ctx context.Context, taskID string) (TaskRepo
 		&i.EvidenceRefs,
 		&i.TaskVersion,
 		&i.CreatedAt,
+		&i.ScreenshotIds,
 	)
 	return i, err
 }
@@ -3341,7 +3349,7 @@ func (q *Queries) ListTaskOperations(ctx context.Context, taskIds []string) ([]T
 }
 
 const listTaskReports = `-- name: ListTaskReports :many
-SELECT id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at FROM task_reports WHERE task_id = ANY($1::text[]) ORDER BY task_id, created_at, id
+SELECT id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at, screenshot_ids FROM task_reports WHERE task_id = ANY($1::text[]) ORDER BY task_id, created_at, id
 `
 
 func (q *Queries) ListTaskReports(ctx context.Context, taskIds []string) ([]TaskReport, error) {
@@ -3365,6 +3373,7 @@ func (q *Queries) ListTaskReports(ctx context.Context, taskIds []string) ([]Task
 			&i.EvidenceRefs,
 			&i.TaskVersion,
 			&i.CreatedAt,
+			&i.ScreenshotIds,
 		); err != nil {
 			return nil, err
 		}
