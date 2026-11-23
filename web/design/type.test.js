@@ -14,7 +14,10 @@ describe('type', () => {
     expect(family.sans.$value.at(-1)).toBe('sans-serif');
     expect(family.mono.$value.at(-1)).toBe('monospace');
     expect(theme).toMatch(/--font-sans: system-ui, [^;]*sans-serif;/);
-    expect(theme).toMatch(/--font-mono: [^;]*monospace;/);
+    // The monospace is the system's own, SF Mono first on Apple platforms, with nothing downloaded.
+    // Its stack is long enough that the declaration wraps under its name.
+    expect(theme).toMatch(/--font-mono:\s+ui-monospace, 'SF Mono', [^;]*monospace;/);
+    expect(theme).not.toMatch(/JetBrains/);
   });
 
   it('makes the sans the page default', () => {
