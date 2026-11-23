@@ -4,6 +4,20 @@
 
 /* Class-based dark variants are not used: every theme redeclares the semantic variables. */
 
+/*
+ * Geist Mono, served by the app itself: the monospace for every browser that has no SF Mono to
+ * give (Chrome and Firefox everywhere, and anything off Apple platforms), so nobody installs a
+ * font. One variable file holds every weight. It is the official release, unmodified, under the
+ * SIL Open Font License 1.1; the licence is served at /licenses/GeistMono-OFL.txt.
+ */
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../assets/fonts/GeistMono-Variable.woff2') format('woff2');
+}
+
 @layer base {
   * {
     border-color: var(--border);

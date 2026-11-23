@@ -533,7 +533,7 @@ if (errors.length > 0 || !source) {
       '- Colours: `term-*` is the terminal palette (background, text, accent, status colours). Semantic names such as `background`, `primary`, `muted` and `border` follow shadcn/ui and map onto that palette.',
       '- Borders: `border` (3:1 against the background) marks fields and other controls. `border-subtle` is the quiet rule between regions and around secondary buttons.',
       '- Status: `status-working` (amber), `status-attention` and `status-failed` (red: needs you), `status-unseen` (teal: finished, not yet seen) and `status-idle` (drawn hollow). Use them for state, not the raw palette.',
-      '- Type: `font.family.sans` (the system UI font) for the chrome and `font.family.mono` (the system monospace: SF Mono on Apple platforms) for the shell, the transcript, its composer and code. Sizes are in `font.size` and line heights in `font.line-height`; the chrome defaults to `ui` (13px) and group headings to `2xs` (11px).',
+      '- Type: `font.family.sans` (the system UI font) for the chrome and `font.family.mono` (SF Mono where the browser has it, otherwise Geist Mono, which the app serves itself) for the shell, the transcript, its composer and code. Sizes are in `font.size` and line heights in `font.line-height`; the chrome defaults to `ui` (13px) and group headings to `2xs` (11px).',
       '- Control size: `size.control` is 44px on touch and narrow screens and 28px on a wide screen with a mouse or trackpad. Components use `min-h-control` and `w-control`.',
       '- Radius is 0 everywhere: no rounded corners, pills or circular avatars.',
       '',

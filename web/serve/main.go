@@ -18,6 +18,7 @@ import (
 	"flag"
 	"io/fs"
 	"log"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,6 +31,12 @@ const (
 	immutableCache = "public, max-age=31536000, immutable"
 	revalidate     = "no-cache"
 )
+
+// The app serves its own font. Go's built-in table has no entry for it and the image has no system
+// MIME table, so the type is named here rather than left to content sniffing.
+func init() {
+	_ = mime.AddExtensionType(".woff2", "font/woff2")
+}
 
 // contentSecurityPolicy returns the CSP for a build whose API lives at apiURL.
 func contentSecurityPolicy(apiURL string) string {

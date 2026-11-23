@@ -116,6 +116,35 @@ func TestStylesAndFontsAreSelfOnly(t *testing.T) {
 	}
 }
 
+// The app serves its own monospace font from the hashed assets. The response must say it is a font,
+// since nosniff is set and the base image has no MIME table to look the extension up in, and it is
+// cached for good like any other hashed asset.
+func TestServesItsOwnFontAsAFont(t *testing.T) {
+	files := testFS()
+	files["assets/GeistMono-Variable-abc.woff2"] = &fstest.MapFile{
+		Data: append([]byte("wOF2\x00\x01\x00\x00"), make([]byte, 64)...),
+	}
+	files["licenses/GeistMono-OFL.txt"] = &fstest.MapFile{Data: []byte("SIL OPEN FONT LICENSE Version 1.1")}
+	h := newHandler(files, "/api")
+
+	rec := get(t, h, http.MethodGet, "/assets/GeistMono-Variable-abc.woff2")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "font/woff2" {
+		t.Errorf("Content-Type = %q, want font/woff2", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != immutableCache {
+		t.Errorf("Cache-Control = %q, want %q", got, immutableCache)
+	}
+
+	// Its licence ships beside the app, as the Open Font License asks.
+	if rec := get(t, h, http.MethodGet, "/licenses/GeistMono-OFL.txt"); rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), "SIL OPEN FONT LICENSE") {
+		t.Errorf("licence: status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+}
+
 // GitHub serves the project avatars the API returns from avatars.githubusercontent.com; without it
 // in img-src every project page shows a broken image.
 func TestImagesAllowGitHubAvatarsOnly(t *testing.T) {
