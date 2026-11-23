@@ -295,7 +295,8 @@ func (p *Proxy) Visit(ctx context.Context, workspaceID string, port int, path st
 	exp := p.now().Add(VisitTTL)
 	return Visit{
 		URL: p.base.scheme + "://" + p.hostName(h) + path,
-		Cookie: &http.Cookie{
+		// Secure follows the base URL's scheme, as the owner's session cookie does.
+		Cookie: &http.Cookie{ //nolint:gosec // G124: Secure follows the base URL's scheme, see above.
 			Name: p.cookieName(), Value: p.mint(kindSession, h, exp), Path: "/", Expires: exp,
 			HttpOnly: true, Secure: p.base.scheme == "https", SameSite: http.SameSiteLaxMode,
 		},
