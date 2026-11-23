@@ -9,8 +9,10 @@ ALTER TABLE project_proposals
     ADD COLUMN claimed_until timestamptz,
     ADD COLUMN last_error text,
     ADD COLUMN finished_at timestamptz,
+    -- Finished exactly when the proposal is rejected, applied or failed (state's own CHECK holds
+    -- the five values, so only proposed and approved are open).
     ADD CONSTRAINT project_proposals_finished CHECK (
-        (state IN ('rejected', 'applied', 'failed')) = (finished_at IS NOT NULL)
+        (state <> 'proposed' AND state <> 'approved') = (finished_at IS NOT NULL)
     );
 
 CREATE INDEX project_proposals_due ON project_proposals (next_attempt_at, created_at)
