@@ -180,9 +180,25 @@ with no default branch yet stays listed.
 
 The project page opens on the work: Tasks first, then Open Pull Requests, then Sessions, Branch
 workspaces and Recent Commits. Settings comes last. It holds the instructions, the merge policy,
-the checks setting and the environment, and it is collapsed by default. The owner opens it with its heading button, which is keyboard
+the worker limit, the checks setting and the environment, and it is collapsed by default. The owner opens it with its heading button, which is keyboard
 operable and reports whether it is expanded. Its open or closed state is kept while the owner stays
 on the page.
+
+**Workers** (implemented, checked against fixtures, not live). The project's
+[worker limit](tasks.md#project-worker-limit) shows in two places. Beside the Tasks heading is one
+line, for example `2 of 6 workers running`: the workers holding a slot now, of the limit in force
+(the server's `effective_max_workers`, which is already the smaller of the project's limit and the
+owner-wide one). In Settings, the **Workers** section says the same, then where the limit comes
+from (`This project uses the default limit of 6.`, or `This project’s own limit is 10. The default
+is 6.`) and that the limit across all projects applies as well and is shared, so workers in other
+projects can hold this one back sooner; when the project asks for more than the owner-wide limit
+it says that limit is the lower one. A field, **Workers at once**, takes a whole number from 1 to
+100; **Save limit** sets the project's own limit and **Use the default (N)**, offered only while
+the project has its own, returns to the default. Anything else typed is not sent, and the field
+says what it accepts. The answer to a save is the new view, so nothing is read twice; a refused
+save keeps the old limit on screen with the server's reason. A lower limit stops nothing that is
+running. The count is read again when a task changes, when the owner comes back to the page, and
+every minute while any worker runs, since a slot can be freed with no event.
 
 A create that gets no reply, or a 5xx, may still have made a workspace. The form then locks, the
 raw error is hidden, and the owner sees recent workspaces to check against. The check lists the

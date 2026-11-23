@@ -19,7 +19,13 @@ import {
   providerRowSchema,
   pullRequestRowSchema,
   sessionRowSchema,
-  workspaceRowSchema
+  workspaceRowSchema,
+  parseWorkerLimit,
+  workerLimitGlobalText,
+  workerLimitSchema,
+  workerLimitSourceText,
+  workersRunningText,
+  type WorkerLimit
 } from './model';
 import { commit, policy, project, pullRequest, workspace } from './test/fixtures';
 
@@ -212,6 +218,62 @@ describe('project instructions', () => {
     );
     expect(instructionsStatus({ version: 2, text: 'Do.', updated_at: 'x' }, ago)).toBe(
       'Version 2, saved 3m ago.'
+    );
+  });
+});
+
+describe('the worker limit', () => {
+  const limit = (overrides: Partial<WorkerLimit> = {}): WorkerLimit => ({
+    project_id: 'project-a',
+    max_workers: null,
+    default_max_workers: 6,
+    effective_max_workers: 6,
+    global_max_workers: 20,
+    workers_running: 2,
+    ...overrides
+  });
+
+  it('counts the running workers against the limit in force', () => {
+    expect(workersRunningText(limit())).toBe('2 of 6 workers running');
+    expect(workersRunningText(limit({ effective_max_workers: 1, workers_running: 0 }))).toBe(
+      '0 of 1 worker running'
+    );
+  });
+
+  it('says whether the limit is the project’s own or the default', () => {
+    expect(workerLimitSourceText(limit())).toBe('This project uses the default limit of 6.');
+    expect(workerLimitSourceText(limit({ max_workers: 10, effective_max_workers: 10 }))).toBe(
+      'This project’s own limit is 10. The default is 6.'
+    );
+  });
+
+  it('says the owner-wide limit binds when the project asks for more than it', () => {
+    // The server already caps what is in force, so the project's own value is what is compared.
+    expect(workerLimitGlobalText(limit({ max_workers: 30, effective_max_workers: 20 }))).toMatch(
+      /^The limit across all projects is 20, which is lower, so at most 20 run here\./
+    );
+    expect(
+      workerLimitGlobalText(
+        limit({ default_max_workers: 6, effective_max_workers: 4, global_max_workers: 4 })
+      )
+    ).toMatch(/^The limit across all projects is 4, which is lower/);
+    expect(workerLimitGlobalText(limit())).toMatch(
+      /^The limit across all projects \(20\) applies as well\./
+    );
+  });
+
+  it('reads a typed limit only when it is a whole number from 1 to 100', () => {
+    expect(parseWorkerLimit('1')).toBe(1);
+    expect(parseWorkerLimit(' 100 ')).toBe(100);
+    for (const typed of ['0', '101', '2.5', '-3', '1e2', 'six', '']) {
+      expect(parseWorkerLimit(typed)).toBeNull();
+    }
+  });
+
+  it('accepts the contract’s view and refuses one with a field missing', () => {
+    expect(workerLimitSchema.safeParse(limit()).success).toBe(true);
+    expect(workerLimitSchema.safeParse({ ...limit(), workers_running: undefined }).success).toBe(
+      false
     );
   });
 });

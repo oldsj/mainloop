@@ -21,6 +21,7 @@ import { avatarUrl, httpsUrl } from '@/lib/url';
 import { InstructionsSection } from './InstructionsSection';
 import { MemorySection } from './MemorySection';
 import { MergePolicySection } from './MergePolicySection';
+import { WorkerLimitSection, WorkersRunning } from './WorkerLimitSection';
 import { VerificationSection } from './VerificationSection';
 import { WorkspaceServiceSection } from './WorkspaceServiceSection';
 import {
@@ -214,6 +215,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
           <h2 id="project-tasks-heading" className="text-lg font-medium">
             Tasks
           </h2>
+          <WorkersRunning projectId={id} />
         </div>
         {tasks ?? <p className="text-muted-foreground text-sm">No tasks for this project yet.</p>}
       </section>
@@ -347,6 +349,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
           <div className="gap-md flex flex-col">
             <InstructionsSection projectId={id} />
             <MergePolicySection projectId={id} />
+            <WorkerLimitSection projectId={id} />
             <VerificationSection projectId={id} />
             <EnvironmentSection projectId={id} />
             <WorkspaceServiceSection projectId={id} />

@@ -45,6 +45,8 @@ export const keys = {
   hitl: (requestId: string) => get('/hitl/{request_id}', { path: { request_id: requestId } }),
 
   projects: () => get('/projects'),
+  /** Every project's worker limit: the count in it moves with the tasks, so task events re-read it. */
+  workerLimits: (): QueryKey => ['get', '/projects/{project_id}/worker-limit'],
   projectDetail: (projectId: string) =>
     get('/projects/{project_id}/detail', { path: { project_id: projectId } }),
 

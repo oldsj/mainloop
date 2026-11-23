@@ -152,6 +152,20 @@ describe('createSseApplier', () => {
     expect(queryClient.getQueryState(keys.task('t1'))?.isInvalidated).toBe(true);
   });
 
+  it('re-reads a project’s worker limit with the task lists: its running count is the tasks’', () => {
+    // Given a project's worker limit is held, with two workers running
+    const { queryClient, apply } = setup(3);
+    const limitKey = [...keys.workerLimits(), { params: { path: { project_id: 'project-a' } } }];
+    queryClient.setQueryData(limitKey, { workers_running: 2 });
+
+    // When a task changes
+    apply(taskEvent(4));
+
+    // Then the held limit is stale, so the page showing it reads it again
+    expect(queryClient.getQueryState(limitKey)?.isInvalidated).toBe(true);
+    apply.stop();
+  });
+
   it('treats a malformed cached task as unknown instead of throwing', () => {
     for (const held of [{}, { task: null }, null]) {
       const queryClient = new QueryClient();
