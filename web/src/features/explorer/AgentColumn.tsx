@@ -12,7 +12,6 @@ import { SkeletonRows } from '@/components/shared/skeleton';
 import { StatusDot } from '@/components/shared/status-dot';
 import { cn } from '@/components/ui/cn';
 import { relativeAge } from '@/lib/taskState';
-import { badgeText } from '@/features/inbox/model';
 import { shortcutLabel } from '@/lib/platform';
 import {
   currentAgent,
@@ -51,8 +50,6 @@ export interface AgentColumnProps {
   onAsk: (text: string) => void;
   /** A control at the end of the first label's row: the button that hides the column. */
   action?: ReactNode;
-  /** How many things need the owner. The row between the lists carries it on **inbox**. */
-  needs?: number;
   /** Opens the command palette: the row's **menu**. Without it the row is not drawn. */
   onMenu?: () => void;
   /** The clock a row's age is measured from, in ms. Defaults to now. */
@@ -93,8 +90,7 @@ function bySpace(agents: AgentRow[]): { id: string; label: string; rows: AgentRo
  * the space that page belongs to is filled too.
  *
  * Between the lists is one row of words: **new** (start work in the current space, from the main
- * chat), **inbox** (with the Needs-you count) and **menu** (the command palette, which reaches
- * every other page and the themes).
+ * chat) and **menu** (the command palette, which reaches every page and the themes).
  *
  * The two lists are one stop for the Tab key: up and down move through every row, Home and End go
  * to the ends, Enter opens the row, and `a` on an agent asks Mainloop about it. A row's actions are
@@ -109,7 +105,6 @@ export function AgentColumn({
   onOpen,
   onAsk,
   action,
-  needs = 0,
   onMenu,
   now: fixedNow
 }: AgentColumnProps) {
@@ -331,8 +326,7 @@ export function AgentColumn({
         {/* The row of words is there from the start, so the menu works while the lists load. */}
         {onMenu ? (
           // Between the lists, as a terminal workspace manager has it: start something, and
-          // everything else. The Inbox is here too, with its count, since what needs the owner
-          // is the first thing to check.
+          // everything else. The Inbox and its count are on the activity bar (the phone's bottom bar).
           <div
             data-testid="column-actions"
             className="px-xs mt-sm flex items-center justify-between text-xs"
@@ -351,37 +345,16 @@ export function AgentColumn({
             >
               new
             </button>
-            <span className="flex items-center">
-              <button
-                type="button"
-                data-testid="column-inbox"
-                aria-label={needs > 0 ? `Inbox, ${needs} need you` : 'Inbox'}
-                aria-current={page?.to === 'needs' ? 'page' : undefined}
-                onClick={() => onOpen({ to: 'needs' })}
-                className={cn(ROW_BUTTON, 'gap-xs', page?.to === 'needs' && 'text-foreground')}
-              >
-                inbox
-                {needs > 0 ? (
-                  <span
-                    data-testid="column-needs"
-                    aria-hidden="true"
-                    className="text-status-attention font-semibold tabular-nums"
-                  >
-                    {badgeText(needs)}
-                  </span>
-                ) : null}
-              </button>
-              <button
-                type="button"
-                data-testid="column-menu"
-                aria-label="Menu"
-                title={`Search and commands (${shortcutLabel('k')})`}
-                onClick={onMenu}
-                className={ROW_BUTTON}
-              >
-                menu
-              </button>
-            </span>
+            <button
+              type="button"
+              data-testid="column-menu"
+              aria-label="Menu"
+              title={`Search and commands (${shortcutLabel('k')})`}
+              onClick={onMenu}
+              className={ROW_BUTTON}
+            >
+              menu
+            </button>
           </div>
         ) : null}
         {ready && !failed ? (

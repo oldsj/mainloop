@@ -48,7 +48,9 @@
   --color-status-idle: var(--status-idle);
 
   --font-sans: system-ui, 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', ui-monospace, monospace;
+  --font-mono:
+    ui-monospace, 'SF Mono', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono',
+    monospace;
   --text-2xs: 0.6875rem;
   --text-xs: 0.75rem;
   --text-ui: 0.8125rem;

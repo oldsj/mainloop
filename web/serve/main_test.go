@@ -102,6 +102,20 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
+// The app uses the system's fonts and its own stylesheet: nothing is loaded from a font service, so
+// none is allowed.
+func TestStylesAndFontsAreSelfOnly(t *testing.T) {
+	csp := contentSecurityPolicy("/api")
+	for _, want := range []string{"; style-src 'self' 'unsafe-inline';", "; font-src 'self';"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP %q missing %q", csp, want)
+		}
+	}
+	if strings.Contains(csp, "fonts.g") {
+		t.Errorf("CSP %q still allows a font service", csp)
+	}
+}
+
 // GitHub serves the project avatars the API returns from avatars.githubusercontent.com; without it
 // in img-src every project page shows a broken image.
 func TestImagesAllowGitHubAvatarsOnly(t *testing.T) {

@@ -208,41 +208,31 @@ describe('AgentColumn', () => {
     expect(onAsk).toHaveBeenCalledWith('About task Add retry button (a): ');
   });
 
-  it('has one row of words between the lists: new, inbox with its count, and menu', async () => {
+  it('has one row of words between the lists: new and menu', async () => {
     const user = userEvent.setup();
     const onMenu = vi.fn();
-    // Given two things need the owner, and the owner is in the widgets project
+    // Given the owner is in the widgets project
     const { onOpen, onAsk } = renderColumn({
-      needs: 2,
       onMenu,
       space: 'project-1',
       page: { to: 'project', id: 'project-1' }
     });
     const row = within(screen.getByTestId('column-actions'));
-
-    // Then inbox carries the count, in its name too
-    const inbox = row.getByRole('button', { name: 'Inbox, 2 need you' });
-    expect(within(inbox).getByTestId('column-needs')).toHaveTextContent('2');
-    expect(inbox).not.toHaveAttribute('aria-current');
+    expect(row.getAllByRole('button').map((button) => button.textContent)).toEqual(['new', 'menu']);
 
     // When the owner presses each word
     await user.click(row.getByRole('button', { name: 'New task in widgets' }));
-    await user.click(inbox);
     await user.click(row.getByRole('button', { name: 'Menu' }));
 
-    // Then new fills the main chat for this space, inbox opens the answer view, menu the palette
+    // Then new fills the main chat for this space, and menu opens the palette
     expect(onAsk).toHaveBeenCalledWith('Start a task in acme/widgets: ');
-    expect(onOpen).toHaveBeenCalledWith({ to: 'needs' });
+    expect(onOpen).not.toHaveBeenCalled();
     expect(onMenu).toHaveBeenCalledTimes(1);
   });
 
-  it('marks inbox while the answer view shows, and shows no count when nothing needs the owner', () => {
-    renderColumn({ onMenu: vi.fn(), page: { to: 'needs' } });
+  it('calls new a word with Mainloop in the main thread’s space', () => {
+    renderColumn({ onMenu: vi.fn() });
 
-    const inbox = screen.getByRole('button', { name: 'Inbox' });
-    expect(inbox).toHaveAttribute('aria-current', 'page');
-    expect(screen.queryByTestId('column-needs')).toBeNull();
-    // In the main thread's space, new is a word with Mainloop.
     expect(screen.getByRole('button', { name: 'New: ask Mainloop' })).toBeInTheDocument();
   });
 

@@ -93,8 +93,8 @@ default removes the row's default. The row says **Saving…**, then **Saved.**, 
 the server's reason, in which case the select returns to what was saved. A saved model the profile
 does not list stays selectable, and a saved effort the profile stopped offering is shown with a note
 that turns leave the effort to the provider. Below it, **Import a project** (`#import-project`)
-adds a repository as a project; see [projects](projects.md). Settings is reached from **menu**: in the sidebar on desktop, and under the spaces in the
-phone's lists.
+adds a repository as a project; see [projects](projects.md). Settings is on the activity bar on desktop, and in the command palette (the phone's **Search**)
+on both.
 
 **The composer says which default applies (implemented, checked against MSW).** A turn's model and
 effort each come from one of three places, in the order above: the session's own choice, the owner's

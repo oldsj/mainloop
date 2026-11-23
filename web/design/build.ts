@@ -294,6 +294,35 @@ function fontStack(value: Json): string {
     .join(', ');
 }
 
+/** How far a declaration sits inside its block. The line width is the formatter's, `PRINT_WIDTH`. */
+const BLOCK_INDENT = 2;
+
+/**
+ * One declaration as the formatter would write it, so formatting leaves the generated file alone.
+ * A declaration that fits is one line. A comma-separated value that does not (a long font stack)
+ * moves under its name, one step in, filled to the line width.
+ */
+function declaration(name: string, value: string): string[] {
+  const line = `${name}: ${value};`;
+  if (BLOCK_INDENT + line.length <= PRINT_WIDTH || !value.includes(', ')) return [line];
+  const room = PRINT_WIDTH - BLOCK_INDENT * 2;
+  const rows: string[] = [];
+  let row = '';
+  for (const item of value.split(', ')) {
+    const next = row ? `${row}, ${item}` : item;
+    // Each row ends in a comma or the semicolon, which has to fit as well.
+    if (row && next.length + 1 > room) {
+      rows.push(row);
+      row = item;
+    } else row = next;
+  }
+  rows.push(row);
+  return [
+    `${name}:`,
+    ...rows.map((text, index) => `  ${text}${index === rows.length - 1 ? ';' : ','}`)
+  ];
+}
+
 // CSS value for a token. An alias becomes var(--target) so a theme's semantic names follow its palette.
 function cssValueOf(path: string): string {
   const token = tokens.get(path)!;
@@ -440,10 +469,11 @@ if (errors.length > 0 || !source) {
       problem(path, 'no CSS mapping for this group');
       continue;
     }
-    const line = `${name}: ${cssValueOf(path)};`;
-    if (path.startsWith('size.') && path.endsWith('.pointer')) pointerRoot.push(line);
-    else if (/^--(font|text|spacing|max-width|radius|ease)-/.test(name)) themeNamespaced.push(line);
-    else sharedRoot.push(line);
+    const lines = declaration(name, cssValueOf(path));
+    if (path.startsWith('size.') && path.endsWith('.pointer')) pointerRoot.push(...lines);
+    else if (/^--(font|text|spacing|max-width|radius|ease)-/.test(name))
+      themeNamespaced.push(...lines);
+    else sharedRoot.push(...lines);
   }
   for (const message of await maxWidthProblems(['@theme {', ...themeNamespaced, '}'].join('\n')))
     problem('max-width', message);
@@ -503,7 +533,7 @@ if (errors.length > 0 || !source) {
       '- Colours: `term-*` is the terminal palette (background, text, accent, status colours). Semantic names such as `background`, `primary`, `muted` and `border` follow shadcn/ui and map onto that palette.',
       '- Borders: `border` (3:1 against the background) marks fields and other controls. `border-subtle` is the quiet rule between regions and around secondary buttons.',
       '- Status: `status-working` (amber), `status-attention` and `status-failed` (red: needs you), `status-unseen` (teal: finished, not yet seen) and `status-idle` (drawn hollow). Use them for state, not the raw palette.',
-      '- Type: `font.family.sans` (the system UI font) for the chrome and `font.family.mono` (JetBrains Mono) for the transcript, its composer and code. Sizes are in `font.size` and line heights in `font.line-height`; the chrome defaults to `ui` (13px) and group headings to `2xs` (11px).',
+      '- Type: `font.family.sans` (the system UI font) for the chrome and `font.family.mono` (the system monospace: SF Mono on Apple platforms) for the shell, the transcript, its composer and code. Sizes are in `font.size` and line heights in `font.line-height`; the chrome defaults to `ui` (13px) and group headings to `2xs` (11px).',
       '- Control size: `size.control` is 44px on touch and narrow screens and 28px on a wide screen with a mouse or trackpad. Components use `min-h-control` and `w-control`.',
       '- Radius is 0 everywhere: no rounded corners, pills or circular avatars.',
       '',

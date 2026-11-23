@@ -48,9 +48,10 @@ func contentSecurityPolicy(apiURL string) string {
 	return strings.Join([]string{
 		"default-src 'self'",
 		"script-src 'self'",
-		// Radix positions popovers with inline styles; the font CSS comes from Google Fonts.
-		"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-		"font-src 'self' https://fonts.gstatic.com",
+		// Radix positions popovers with inline styles. The fonts are the system's own, so no font or
+		// stylesheet is fetched from anywhere else.
+		"style-src 'self' 'unsafe-inline'",
+		"font-src 'self'",
 		// Project pages show the repository owner's GitHub avatar (the API's avatar_url); chat
 		// images are data: URLs.
 		"img-src 'self' data: https://avatars.githubusercontent.com",
