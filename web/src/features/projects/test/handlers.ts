@@ -19,6 +19,7 @@ import {
   memory,
   policy,
   project,
+  supervisorSettings,
   verification,
   workerLimit,
   type DetailFixture,
@@ -26,6 +27,7 @@ import {
   type MemoryFixture,
   type PolicyFixture,
   type ProjectFixture,
+  type SupervisorSettingsFixture,
   type VerificationFixture,
   type WorkerLimitFixture,
   type WorkspaceFixture
@@ -44,6 +46,12 @@ export const detailRead = (resolve: HttpResponseResolver) =>
 
 export const policyRead = (resolve: HttpResponseResolver) =>
   http.get(url('/projects/:project_id/merge-policy'), resolve);
+
+export const supervisorSettingsRead = (resolve: HttpResponseResolver) =>
+  http.get(url('/projects/:project_id/supervisor/settings'), resolve);
+
+export const supervisorSettingsWrite = (resolve: HttpResponseResolver) =>
+  http.put(url('/projects/:project_id/supervisor/settings'), resolve);
 
 export const workerLimitRead = (resolve: HttpResponseResolver) =>
   http.get(url('/projects/:project_id/worker-limit'), resolve);
@@ -109,6 +117,7 @@ export function serveProjectPage(
     policy?: PolicyFixture;
     verification?: VerificationFixture;
     workerLimit?: WorkerLimitFixture;
+    supervisorSettings?: SupervisorSettingsFixture;
     instructions?: InstructionsFixture;
     memory?: MemoryFixture;
     workspaces?: WorkspaceFixture[];
@@ -125,6 +134,9 @@ export function serveProjectPage(
     policyRead(() => HttpResponse.json(options.policy ?? policy())),
     verificationRead(() => HttpResponse.json(options.verification ?? verification())),
     workerLimitRead(() => HttpResponse.json(options.workerLimit ?? workerLimit())),
+    supervisorSettingsRead(() =>
+      HttpResponse.json(options.supervisorSettings ?? supervisorSettings())
+    ),
     instructionsRead(() => HttpResponse.json(options.instructions ?? instructions())),
     memoryRead(() => HttpResponse.json(options.memory ?? memory())),
     workspacesRead(options.workspaces ?? []),

@@ -8,7 +8,7 @@ import { delay, http, HttpResponse } from 'msw';
 import { API_URL } from '@/api/config';
 import { attentionItem, hitlAttentionItem, queueItem } from '@/features/inbox/test/fixtures';
 import { CLAUDE_PROFILE, CODEX_PROFILE } from '@/features/chat/handlers';
-import { project, workerLimit } from '@/features/projects/test/fixtures';
+import { project, supervisorSettings, workerLimit } from '@/features/projects/test/fixtures';
 import { serveProjectPage } from '@/features/projects/test/handlers';
 import { native, session } from '@/features/sessions/test/fixtures';
 import { approvalRequest, hitlView } from '@/test/fixtures/hitl';
@@ -374,6 +374,37 @@ export function reviewSeed() {
       HttpResponse.json(native({ session_id: gone.id, live: true }))
     ),
     http.get(url('/projects'), () => HttpResponse.json([repo, infra])),
+    // Every project's supervisor is on the default provider until the page saves another choice.
+    http.get(url('/projects/:project_id/supervisor/settings'), ({ params }) =>
+      HttpResponse.json(
+        supervisorSettings({
+          project_id: String(params.project_id),
+          effective_provider_profile_id: CLAUDE_PROFILE.id,
+          allowed_models: CLAUDE_PROFILE.models.map((model) => model.id),
+          allowed_effort_levels: [...CLAUDE_PROFILE.effort_levels]
+        })
+      )
+    ),
+    http.put(url('/projects/:project_id/supervisor/settings'), async ({ params, request }) => {
+      const choice = (await request.json()) as {
+        provider_profile_id: string | null;
+        model: string | null;
+        effort: 'low' | 'medium' | 'high' | null;
+      };
+      const codex = choice.provider_profile_id === CODEX_PROFILE.id;
+      const on = codex ? CODEX_PROFILE : CLAUDE_PROFILE;
+      return HttpResponse.json(
+        supervisorSettings({
+          project_id: String(params.project_id),
+          ...choice,
+          effective_provider_profile_id: on.id,
+          allowed_models: on.models.map((model) => model.id),
+          allowed_effort_levels: [...on.effort_levels],
+          // A change of provider starts a handoff.
+          operation_id: codex ? 'operation-seed-1' : null
+        })
+      );
+    }),
     // The first project is on the default limit; the second set its own.
     http.get(url('/projects/:project_id/worker-limit'), ({ params }) =>
       HttpResponse.json(
@@ -398,7 +429,18 @@ export function reviewSeed() {
       );
     }),
     // Both built-in profiles, so Settings has rows to show; one worker default is already set.
-    http.get(url('/providers'), () => HttpResponse.json([CLAUDE_PROFILE, CODEX_PROFILE])),
+    http.get(url('/providers'), () =>
+      HttpResponse.json(
+        // Both can run a supervisor here, so the project page's provider picker has a choice.
+        [CLAUDE_PROFILE, CODEX_PROFILE].map((each) => ({
+          ...each,
+          agents: {
+            child: { namespace: 'agents', name: `${each.id}-child` },
+            supervisor: { namespace: 'agents', name: `${each.id}-supervisor` }
+          }
+        }))
+      )
+    ),
     ...sessionDefaultsHandlers([
       { role: 'worker', provider: 'claude', model: 'claude-opus-5', effort: 'high' }
     ]),

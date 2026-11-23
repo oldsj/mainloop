@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError } from '@/api';
+import { ApiError, TaskApiError } from '@/api';
 import {
   agentKindOf,
   canSavePolicy,
@@ -25,8 +25,17 @@ import {
   workerLimitSchema,
   workerLimitSourceText,
   workersRunningText,
+  changesProvider,
+  draftProvider,
+  supervisorChanged,
+  supervisorOptions,
+  supervisorProfiles,
+  supervisorRefusalText,
+  supervisorSettingsSchema,
+  type SupervisorSettings,
   type WorkerLimit
 } from './model';
+import { CLAUDE_PROFILE, CODEX_PROFILE, profile } from '@/test/fixtures/tasks';
 import { commit, policy, project, pullRequest, workspace } from './test/fixtures';
 
 describe('boundary schemas', () => {
@@ -275,5 +284,114 @@ describe('the worker limit', () => {
     expect(workerLimitSchema.safeParse({ ...limit(), workers_running: undefined }).success).toBe(
       false
     );
+  });
+});
+
+describe('the supervisor’s settings', () => {
+  const settings = (overrides: Partial<SupervisorSettings> = {}): SupervisorSettings => ({
+    project_id: 'project-a',
+    provider_profile_id: null,
+    model: null,
+    effort: null,
+    effective_provider_profile_id: 'claude-default',
+    allowed_models: ['claude-sonnet-5', 'claude-opus-5'],
+    allowed_effort_levels: ['low', 'high'],
+    operation_id: null,
+    ...overrides
+  });
+  const profiles = [CLAUDE_PROFILE, CODEX_PROFILE];
+  const none = { provider_profile_id: null, model: null, effort: null };
+
+  it('offers only profiles that are enabled and have a supervisor agent', () => {
+    const list = [
+      CLAUDE_PROFILE,
+      profile({ id: 'off', enabled: false }),
+      profile({ id: 'child-only', agents: { child: { namespace: 'agents', name: 'x' } } })
+    ];
+    expect(supervisorProfiles(list).map((each) => each.id)).toEqual(['claude-default']);
+    expect(supervisorProfiles(undefined)).toEqual([]);
+  });
+
+  it('tells the draft’s provider only when it can be told', () => {
+    // On the default: the provider in force is the default.
+    expect(draftProvider(settings(), none)).toBe('claude-default');
+    // A provider chosen in the form is that provider.
+    expect(draftProvider(settings(), { ...none, provider_profile_id: 'codex-default' })).toBe(
+      'codex-default'
+    );
+    // A project with its own provider does not name its default, so "default" is not known.
+    expect(
+      draftProvider(
+        settings({
+          provider_profile_id: 'codex-default',
+          effective_provider_profile_id: 'codex-default'
+        }),
+        none
+      )
+    ).toBeNull();
+  });
+
+  it('lists the server’s own models for the provider in force, by the profile’s labels', () => {
+    const options = supervisorOptions(settings(), none, profiles);
+    expect(options.models).toEqual([
+      { id: 'claude-sonnet-5', label: 'Sonnet 5' },
+      { id: 'claude-opus-5', label: 'Opus 5' }
+    ]);
+    // The view's levels, not the profile's longer list: they are what a save is checked against.
+    expect(options.efforts).toEqual(['low', 'high']);
+  });
+
+  it('lists another provider’s profile before it is saved, and keeps a choice it lacks, marked', () => {
+    const draft = { provider_profile_id: 'codex-default', model: 'claude-opus-5', effort: null };
+    const options = supervisorOptions(settings(), draft, profiles);
+    expect(options.models).toEqual([
+      ...CODEX_PROFILE.models.map((model) => ({ id: model.id, label: model.label })),
+      { id: 'claude-opus-5', label: 'claude-opus-5 (not offered)' }
+    ]);
+    expect(options.efforts).toEqual(CODEX_PROFILE.effort_levels);
+  });
+
+  it('says a change needs saving, and when it would restart the supervisor', () => {
+    const view = settings();
+    expect(supervisorChanged(view, none)).toBe(false);
+    expect(supervisorChanged(view, { ...none, effort: 'high' })).toBe(true);
+    expect(changesProvider(view, { ...none, effort: 'high' })).toBe(false);
+    // Naming the provider already in force changes the choice but not the provider.
+    expect(changesProvider(view, { ...none, provider_profile_id: 'claude-default' })).toBe(false);
+    expect(changesProvider(view, { ...none, provider_profile_id: 'codex-default' })).toBe(true);
+    // Back to a default that cannot be told: assume it moves.
+    expect(
+      changesProvider(
+        settings({
+          provider_profile_id: 'codex-default',
+          effective_provider_profile_id: 'codex-default'
+        }),
+        none
+      )
+    ).toBe(true);
+  });
+
+  it('puts a refusal in words by its reason, and names the hourly limit', () => {
+    const refused = (detail: { reason: string; limit?: number }) =>
+      new TaskApiError(detail.reason, 409, detail.reason, detail as never);
+    expect(supervisorRefusalText(refused({ reason: 'task_settling' }))).toBe(
+      'The supervisor is still starting or stopping. Try again in a moment.'
+    );
+    expect(supervisorRefusalText(refused({ reason: 'handoff_limit', limit: 3 }))).toBe(
+      'The supervisor has been restarted 3 times in the last hour, which is the limit. Try again later.'
+    );
+    expect(supervisorRefusalText(refused({ reason: 'handoff_limit' }))).toMatch(
+      /as often as it may be in an hour/
+    );
+    // A reason this page does not know falls back to what the server sent.
+    expect(supervisorRefusalText(refused({ reason: 'something_new' }))).toBe('something_new');
+    expect(supervisorRefusalText(new Error('offline'))).toMatch(/Couldn.t reach Mainloop/);
+  });
+
+  it('accepts the contract’s view and refuses one with a field missing', () => {
+    expect(supervisorSettingsSchema.safeParse(settings()).success).toBe(true);
+    expect(
+      supervisorSettingsSchema.safeParse({ ...settings(), allowed_models: undefined }).success
+    ).toBe(false);
   });
 });

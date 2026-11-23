@@ -21,6 +21,7 @@ import { avatarUrl, httpsUrl } from '@/lib/url';
 import { InstructionsSection } from './InstructionsSection';
 import { MemorySection } from './MemorySection';
 import { MergePolicySection } from './MergePolicySection';
+import { SupervisorSettingsSection } from './SupervisorSettingsSection';
 import { WorkerLimitSection, WorkersRunning } from './WorkerLimitSection';
 import { VerificationSection } from './VerificationSection';
 import { WorkspaceServiceSection } from './WorkspaceServiceSection';
@@ -349,6 +350,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
           <div className="gap-md flex flex-col">
             <InstructionsSection projectId={id} />
             <MergePolicySection projectId={id} />
+            <SupervisorSettingsSection projectId={id} />
             <WorkerLimitSection projectId={id} />
             <VerificationSection projectId={id} />
             <EnvironmentSection projectId={id} />

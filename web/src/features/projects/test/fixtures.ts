@@ -62,6 +62,25 @@ export function commit(overrides: Partial<Schemas['CommitSummary']> = {}) {
   };
 }
 
+export type SupervisorSettingsFixture = Schemas['SupervisorSettings'];
+
+/** A project whose supervisor runs on the default provider (Claude), with nothing of its own set. */
+export function supervisorSettings(
+  overrides: Partial<SupervisorSettingsFixture> = {}
+): SupervisorSettingsFixture {
+  return {
+    project_id: 'project-a',
+    provider_profile_id: null,
+    model: null,
+    effort: null,
+    effective_provider_profile_id: 'claude-default',
+    allowed_models: ['claude-sonnet-5', 'claude-opus-5'],
+    allowed_effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    operation_id: null,
+    ...overrides
+  };
+}
+
 export type WorkerLimitFixture = Schemas['WorkerLimit'];
 
 /** A project on the default limit of 6, under an owner-wide 20, with two workers running. */

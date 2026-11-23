@@ -180,9 +180,35 @@ with no default branch yet stays listed.
 
 The project page opens on the work: Tasks first, then Open Pull Requests, then Sessions, Branch
 workspaces and Recent Commits. Settings comes last. It holds the instructions, the merge policy,
-the worker limit, the checks setting and the environment, and it is collapsed by default. The owner opens it with its heading button, which is keyboard
+the supervisor's settings, the worker limit, the checks setting and the environment, and it is
+collapsed by default. The owner opens it with its heading button, which is keyboard
 operable and reports whether it is expanded. Its open or closed state is kept while the owner stays
 on the page.
+
+**Supervisor** (implemented, checked against fixtures, not live). In Settings, the **Supervisor**
+section sets the [provider, model and effort](project-supervisor.md#settings) of the project's
+standing supervisor. It says what the supervisor runs on now (`Runs on Claude, the project’s
+default provider.` or `Runs on Codex, this project’s own choice.`), then has three pickers, each
+with a default choice that sends nothing of the project's own.
+
+- **Provider**: `Project default` (naming the provider while the project is on it), then the
+  providers that can run a supervisor: enabled, with a supervisor agent.
+- **Model** and **Effort**: `Default`, then what the chosen provider offers. For the provider in
+  force these are the server's own lists, the ones a save is checked against; for another provider
+  picked in the form they are that provider's profile from `GET /providers`. Picking another
+  provider puts a model or effort it does not offer back to the default. When the project has its
+  own provider and the owner picks `Project default`, the default provider is not known to the page,
+  so only `Default` can be chosen for the other two until that is saved.
+- The three are saved together with **Save**, which is offered only when something differs;
+  **Undo changes** puts the saved choice back. A change that would move the supervisor to another
+  provider says first that saving restarts it on the new provider and that its workers keep
+  running. When the answer names the handoff it started, the section says the supervisor is
+  restarting.
+- A refused save changes nothing and says why in words: a restart or handoff already running, the
+  supervisor still starting or stopping, the hourly restart limit (with its number), or a provider
+  that cannot run a supervisor. What the owner chose stays in the pickers.
+- The save's answer is the new view, so nothing is read twice; the tasks and projects are read
+  again, since a restart changes the supervisor's session.
 
 **Workers** (implemented, checked against fixtures, not live). The project's
 [worker limit](tasks.md#project-worker-limit) shows in two places. Beside the Tasks heading is one
