@@ -896,6 +896,29 @@ func (q *Queries) GetProjectMaxWorkers(ctx context.Context, arg GetProjectMaxWor
 	return max_workers, err
 }
 
+const getProjectSupervisorSettings = `-- name: GetProjectSupervisorSettings :one
+SELECT supervisor_profile_id, supervisor_model, supervisor_effort FROM projects WHERE id = $1 AND user_id = $2
+`
+
+type GetProjectSupervisorSettingsParams struct {
+	ID     string
+	UserID string
+}
+
+type GetProjectSupervisorSettingsRow struct {
+	SupervisorProfileID *string
+	SupervisorModel     *string
+	SupervisorEffort    *string
+}
+
+// The project's own provider, model and effort for its standing supervisor; NULL is the default.
+func (q *Queries) GetProjectSupervisorSettings(ctx context.Context, arg GetProjectSupervisorSettingsParams) (GetProjectSupervisorSettingsRow, error) {
+	row := q.db.QueryRow(ctx, getProjectSupervisorSettings, arg.ID, arg.UserID)
+	var i GetProjectSupervisorSettingsRow
+	err := row.Scan(&i.SupervisorProfileID, &i.SupervisorModel, &i.SupervisorEffort)
+	return i, err
+}
+
 const getStandingTask = `-- name: GetStandingTask :one
 SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason, capacity_tier, runtime_wait_since, standing FROM tasks
 WHERE project_id = $1 AND standing AND status NOT IN ('completed', 'cancelled', 'failed')
@@ -1493,6 +1516,44 @@ func (q *Queries) HasCompletedReport(ctx context.Context, taskID string) (bool, 
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const insertSupervisorSettingsAudit = `-- name: InsertSupervisorSettingsAudit :exec
+INSERT INTO project_supervisor_settings_audit (
+    project_id, owner_id, changed_by, session_id, old_profile_id, new_profile_id, old_model, new_model,
+    old_effort, new_effort, operation_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+`
+
+type InsertSupervisorSettingsAuditParams struct {
+	ProjectID    string
+	OwnerID      string
+	ChangedBy    string
+	SessionID    *string
+	OldProfileID *string
+	NewProfileID *string
+	OldModel     *string
+	NewModel     *string
+	OldEffort    *string
+	NewEffort    *string
+	OperationID  *string
+}
+
+func (q *Queries) InsertSupervisorSettingsAudit(ctx context.Context, arg InsertSupervisorSettingsAuditParams) error {
+	_, err := q.db.Exec(ctx, insertSupervisorSettingsAudit,
+		arg.ProjectID,
+		arg.OwnerID,
+		arg.ChangedBy,
+		arg.SessionID,
+		arg.OldProfileID,
+		arg.NewProfileID,
+		arg.OldModel,
+		arg.NewModel,
+		arg.OldEffort,
+		arg.NewEffort,
+		arg.OperationID,
+	)
+	return err
 }
 
 const insertTask = `-- name: InsertTask :one
@@ -3563,6 +3624,28 @@ func (q *Queries) LockProjectMaxWorkers(ctx context.Context, arg LockProjectMaxW
 	return max_workers, err
 }
 
+const lockProjectSupervisorSettings = `-- name: LockProjectSupervisorSettings :one
+SELECT supervisor_profile_id, supervisor_model, supervisor_effort FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE
+`
+
+type LockProjectSupervisorSettingsParams struct {
+	ID     string
+	UserID string
+}
+
+type LockProjectSupervisorSettingsRow struct {
+	SupervisorProfileID *string
+	SupervisorModel     *string
+	SupervisorEffort    *string
+}
+
+func (q *Queries) LockProjectSupervisorSettings(ctx context.Context, arg LockProjectSupervisorSettingsParams) (LockProjectSupervisorSettingsRow, error) {
+	row := q.db.QueryRow(ctx, lockProjectSupervisorSettings, arg.ID, arg.UserID)
+	var i LockProjectSupervisorSettingsRow
+	err := row.Scan(&i.SupervisorProfileID, &i.SupervisorModel, &i.SupervisorEffort)
+	return i, err
+}
+
 const lockTaskAttemptShared = `-- name: LockTaskAttemptShared :one
 SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at, progress_marker, progress_at, stop_requested_at, liveness_failing_since, model, effort, instructions_version, memory_seq, reopened_at FROM task_attempts WHERE id = $1 FOR SHARE
 `
@@ -4519,6 +4602,30 @@ func (q *Queries) SetProjectMaxWorkers(ctx context.Context, arg SetProjectMaxWor
 	return err
 }
 
+const setProjectSupervisorSettings = `-- name: SetProjectSupervisorSettings :exec
+UPDATE projects
+SET supervisor_profile_id = $1, supervisor_model = $2,
+    supervisor_effort = $3
+WHERE id = $4
+`
+
+type SetProjectSupervisorSettingsParams struct {
+	SupervisorProfileID *string
+	SupervisorModel     *string
+	SupervisorEffort    *string
+	ID                  string
+}
+
+func (q *Queries) SetProjectSupervisorSettings(ctx context.Context, arg SetProjectSupervisorSettingsParams) error {
+	_, err := q.db.Exec(ctx, setProjectSupervisorSettings,
+		arg.SupervisorProfileID,
+		arg.SupervisorModel,
+		arg.SupervisorEffort,
+		arg.ID,
+	)
+	return err
+}
+
 const setTaskAttempt = `-- name: SetTaskAttempt :one
 UPDATE tasks
 SET current_attempt_id = $1, status = $2, reason = $3,
@@ -4670,6 +4777,71 @@ type SetTaskHoldParams struct {
 
 func (q *Queries) SetTaskHold(ctx context.Context, arg SetTaskHoldParams) (Task, error) {
 	row := q.db.QueryRow(ctx, setTaskHold, arg.ID, arg.HeldUntil, arg.HeldReason)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.ProjectID,
+		&i.TopicID,
+		&i.ParentTaskID,
+		&i.RootTaskID,
+		&i.CreatorBindingID,
+		&i.Title,
+		&i.Brief,
+		&i.Mode,
+		&i.AssignedProfileID,
+		&i.SelectionSource,
+		&i.ProviderConstraint,
+		&i.AcceptedEnvironment,
+		&i.Status,
+		&i.Reason,
+		&i.DecisionAttemptID,
+		&i.DecisionReportID,
+		&i.DecisionAction,
+		&i.CurrentAttemptID,
+		&i.Version,
+		&i.CheckoutBranch,
+		&i.CheckoutRef,
+		&i.CheckoutDepth,
+		&i.PrNumber,
+		&i.PrUrl,
+		&i.PrHeadSha,
+		&i.PrRepository,
+		&i.PrDescription,
+		&i.PrState,
+		&i.CiState,
+		&i.CiHeadSha,
+		&i.ProjectedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.MergeProposalID,
+		&i.Model,
+		&i.Effort,
+		&i.HeldUntil,
+		&i.HeldReason,
+		&i.CapacityTier,
+		&i.RuntimeWaitSince,
+		&i.Standing,
+	)
+	return i, err
+}
+
+const setTaskModelEffort = `-- name: SetTaskModelEffort :one
+UPDATE tasks SET model = $1, effort = $2, updated_at = now()
+WHERE id = $3
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason, capacity_tier, runtime_wait_since, standing
+`
+
+type SetTaskModelEffortParams struct {
+	Model  *string
+	Effort *string
+	ID     string
+}
+
+// A standing supervisor's model and effort follow its project's settings: its next attempt starts
+// on them. The caller bumps the version in the same transaction.
+func (q *Queries) SetTaskModelEffort(ctx context.Context, arg SetTaskModelEffortParams) (Task, error) {
+	row := q.db.QueryRow(ctx, setTaskModelEffort, arg.Model, arg.Effort, arg.ID)
 	var i Task
 	err := row.Scan(
 		&i.ID,

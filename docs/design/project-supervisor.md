@@ -139,8 +139,9 @@ as uncounted root tasks.
   (no checkout, no repository or merge tools), on its provider profile's supervisor Agent. Its tools
   are a supervisor's (task reads and management over its children, loops, `report`, issue writes,
   `project_context`, `remember`/`forget`), not main's (`task_hold`, topics).
-- Provider, model and effort per project: `PUT /projects/{id}/supervisor`
-  `{provider_profile_id?, model?, effort?}`, validated as `delegate` validates them. Unset, it uses the
+- Provider, model and effort per project: `PUT /projects/{id}/supervisor/settings`
+  `{provider_profile_id, model, effort}` (implemented; see the
+  [spec](../specs/project-supervisor.md#settings)), validated as `delegate` validates them. Unset, it uses the
   project's default provider and the owner's `worker` [session default](../specs/chat.md#session-defaults)
   (which covers supervisors today). A model or effort change
   applies to the running session at once (the session's own `/model`/`/effort` override); a
@@ -165,7 +166,7 @@ children at depth 2 (reviewers) stay as they are: they cannot delegate today.
   so the space list needs no extra read.
 - `Task.standing: boolean`, so `GET /tasks` lets the agent list put the supervisor first in its space.
 - `POST /projects/{id}/supervisor` (ensure; 200 with the `ProjectSupervisor`), `.../restart`,
-  `PUT /projects/{id}/supervisor` (settings). Messages use the existing session composer and
+  `GET`/`PUT /projects/{id}/supervisor/settings`. Messages use the existing session composer and
   `POST /tasks/{id}/follow-up`.
 - Status-dot mapping: `waiting`/`idle` is hollow (at rest), `running` amber, `blocked` red.
 
@@ -180,8 +181,8 @@ Each is one pull request with its spec under `docs/specs/` and Given/When/Then t
    guidance and standing context name each project's supervisor.
 4. **Rolling handoff.** Children kept, child authority across a rollover, continuation, restart and
    reset endpoints, recovery from a gone session, the hourly limit.
-5. **Owner tasks and settings.** Owner project tasks under the supervisor (implemented); per-project
-   provider/model/effort.
+5. **Owner tasks and settings.** Owner project tasks under the supervisor and per-project
+   provider/model/effort (implemented).
 6. **Proof on mainloop-dev.** A project's supervisor started, sent work, spawning a worker, idling,
    killed and recovered with its child intact; everything labelled `[proof project-supervisor]` and
    cleaned up.

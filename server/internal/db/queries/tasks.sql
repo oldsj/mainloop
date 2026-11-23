@@ -929,3 +929,29 @@ UPDATE projects SET max_workers = sqlc.narg(max_workers) WHERE id = sqlc.arg(id)
 -- name: InsertWorkerLimitAudit :exec
 INSERT INTO project_worker_limit_audit (project_id, owner_id, changed_by, session_id, old_max_workers, new_max_workers)
 VALUES (sqlc.arg(project_id), sqlc.arg(owner_id), sqlc.arg(changed_by), sqlc.narg(session_id), sqlc.narg(old_max_workers), sqlc.narg(new_max_workers));
+
+-- name: GetProjectSupervisorSettings :one
+-- The project's own provider, model and effort for its standing supervisor; NULL is the default.
+SELECT supervisor_profile_id, supervisor_model, supervisor_effort FROM projects WHERE id = $1 AND user_id = $2;
+
+-- name: LockProjectSupervisorSettings :one
+SELECT supervisor_profile_id, supervisor_model, supervisor_effort FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE;
+
+-- name: SetProjectSupervisorSettings :exec
+UPDATE projects
+SET supervisor_profile_id = sqlc.narg(supervisor_profile_id), supervisor_model = sqlc.narg(supervisor_model),
+    supervisor_effort = sqlc.narg(supervisor_effort)
+WHERE id = sqlc.arg(id);
+
+-- name: InsertSupervisorSettingsAudit :exec
+INSERT INTO project_supervisor_settings_audit (
+    project_id, owner_id, changed_by, session_id, old_profile_id, new_profile_id, old_model, new_model,
+    old_effort, new_effort, operation_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
+
+-- name: SetTaskModelEffort :one
+-- A standing supervisor's model and effort follow its project's settings: its next attempt starts
+-- on them. The caller bumps the version in the same transaction.
+UPDATE tasks SET model = sqlc.narg(model), effort = sqlc.narg(effort), updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;

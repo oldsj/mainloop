@@ -228,6 +228,19 @@ func (s *Service) successor(ctx context.Context, q *dbq.Queries, c reconcile.Cla
 			if t, err = q.SetTaskProfile(ctx, dbq.SetTaskProfileParams{ID: t.ID, AssignedProfileID: target}); err != nil {
 				return nil, err
 			}
+			if t.Standing && t.ProjectID != nil {
+				// A standing supervisor moved to the provider its project's settings resolve to runs on
+				// their model and effort (docs/specs/project-supervisor.md#settings).
+				c, err := q.GetProjectSupervisorSettings(ctx, dbq.GetProjectSupervisorSettingsParams{ID: *t.ProjectID, UserID: t.OwnerID})
+				if err != nil {
+					return nil, err
+				}
+				if v, err := s.resolveSupervisor(ctx, q, *t.ProjectID, choiceOf(c)); err == nil && v.EffectiveProfileID == target {
+					if t, err = q.SetTaskModelEffort(ctx, dbq.SetTaskModelEffortParams{ID: t.ID, Model: v.Model, Effort: v.Effort}); err != nil {
+						return nil, err
+					}
+				}
+			}
 		}
 	}
 	att, err := s.insertAttempt(ctx, q, t, &src.ID)

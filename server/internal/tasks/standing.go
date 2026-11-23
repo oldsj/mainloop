@@ -75,11 +75,15 @@ func (s *Service) ensureStanding(ctx context.Context, q *dbq.Queries, owner, pro
 	if err != nil {
 		return dbq.Task{}, nil, err
 	}
-	in := CreateInput{
+	choice, err := q.GetProjectSupervisorSettings(ctx, dbq.GetProjectSupervisorSettingsParams{ID: projectID, UserID: owner})
+	if err != nil {
+		return dbq.Task{}, nil, err
+	}
+	in := standingInput(choiceOf(choice), CreateInput{
 		RequestID: standingRequestID(projectID, int(retired)), Title: "Supervisor of " + project.FullName,
 		Brief: StandingBrief(project.FullName), Mode: dbstate.TaskModeCoordination,
 		ProjectID: projectID, standing: true,
-	}
+	})
 	dig, payload, err := digest(dbstate.TaskOpCreate, "", in.payload())
 	if err != nil {
 		return dbq.Task{}, nil, err

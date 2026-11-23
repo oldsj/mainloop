@@ -234,6 +234,11 @@ func (Unimplemented) GetProjectSmokeObservations(context.Context, GetProjectSmok
 	return nil, apierr.NotImplemented
 }
 
+// GetProjectSupervisorSettings is not implemented yet.
+func (Unimplemented) GetProjectSupervisorSettings(context.Context, GetProjectSupervisorSettingsRequestObject) (GetProjectSupervisorSettingsResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetProjectVerification is not implemented yet.
 func (Unimplemented) GetProjectVerification(context.Context, GetProjectVerificationRequestObject) (GetProjectVerificationResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -581,6 +586,11 @@ func (Unimplemented) UpdateProjectDevloopTarget(context.Context, UpdateProjectDe
 
 // UpdateProjectInstructions is not implemented yet.
 func (Unimplemented) UpdateProjectInstructions(context.Context, UpdateProjectInstructionsRequestObject) (UpdateProjectInstructionsResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// UpdateProjectSupervisorSettings is not implemented yet.
+func (Unimplemented) UpdateProjectSupervisorSettings(context.Context, UpdateProjectSupervisorSettingsRequestObject) (UpdateProjectSupervisorSettingsResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

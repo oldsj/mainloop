@@ -688,6 +688,9 @@ type Project struct {
 	WorkspaceServiceCommand []string
 	WorkspaceServicePorts   json.RawMessage
 	MaxWorkers              *int32
+	SupervisorProfileID     *string
+	SupervisorModel         *string
+	SupervisorEffort        *string
 }
 
 type ProjectDotfilesSource struct {
@@ -775,6 +778,22 @@ type ProjectProviderPreference struct {
 	ProjectID string
 	ProfileID *string
 	Version   int64
+}
+
+type ProjectSupervisorSettingsAudit struct {
+	ID           int64
+	ProjectID    string
+	OwnerID      string
+	ChangedBy    string
+	SessionID    *string
+	OldProfileID *string
+	NewProfileID *string
+	OldModel     *string
+	NewModel     *string
+	OldEffort    *string
+	NewEffort    *string
+	OperationID  *string
+	CreatedAt    time.Time
 }
 
 type ProjectWorkerLimitAudit struct {

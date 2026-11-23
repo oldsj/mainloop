@@ -637,6 +637,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/projects/{project_id}/supervisor/settings': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get the project's supervisor settings
+     * @description The provider, model and effort of the project's standing supervisor: the project's own choices (null is the default) and what they resolve to. See docs/specs/project-supervisor.md#settings.
+     */
+    get: operations['getProjectSupervisorSettings'];
+    /**
+     * Set the project's supervisor settings
+     * @description Replaces the provider, model and effort of the project's standing supervisor (null returns one to the default). They are validated as delegate validates them, against the provider they resolve to. A running supervisor takes a model or effort change in its current session at once; a provider change is a reassign handoff that keeps its children, whose operation is in the answer. A supervisor started later starts on them. Setting the same values changes nothing. See docs/specs/project-supervisor.md#settings.
+     */
+    put: operations['updateProjectSupervisorSettings'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/projects/{project_id}/worker-limit': {
     parameters: {
       query?: never;
@@ -2881,6 +2905,29 @@ export interface components {
        * @default false
        */
       fresh: boolean;
+    };
+    /** @description The provider, model and effort of a project's standing supervisor (docs/specs/project-supervisor.md#settings). */
+    SupervisorSettings: {
+      project_id: string;
+      /** @description The project's own provider for its supervisor; null uses the project's default provider. */
+      provider_profile_id: string | null;
+      /** @description The project's own model for its supervisor; null uses the owner's worker session default for the provider, else the provider's own. */
+      model: string | null;
+      /** @description The project's own effort for its supervisor; null uses the owner's worker session default for the provider, else the provider's own. */
+      effort: components['schemas']['EffortLevel'] | null;
+      /** @description The provider the supervisor runs on, with the defaults applied. */
+      effective_provider_profile_id: string;
+      /** @description The models the effective provider offers. */
+      allowed_models: string[];
+      /** @description The effort levels the effective provider offers. */
+      allowed_effort_levels: string[];
+      /** @description The reassign operation a provider change started, on the answer to that change; otherwise null. */
+      operation_id: string | null;
+    };
+    SupervisorSettingsUpdate: {
+      provider_profile_id: string | null;
+      model: string | null;
+      effort: components['schemas']['EffortLevel'] | null;
     };
     SupervisorRetire: {
       request_id: string;
@@ -8593,6 +8640,94 @@ export interface operations {
         };
       };
       /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['TaskError'];
+        };
+      };
+    };
+  };
+  getProjectSupervisorSettings: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The project's supervisor settings. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SupervisorSettings'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description The project does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+    };
+  };
+  updateProjectSupervisorSettings: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SupervisorSettingsUpdate'];
+      };
+    };
+    responses: {
+      /** @description The project's supervisor settings after the change. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SupervisorSettings'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description The project does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Conflict: a provider change cannot hand the supervisor off now (an operation is pending, or the hourly restart limit for main is reached). Nothing was changed. */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Validation Error, or a provider, model or effort the resolved provider does not offer (provider_unknown, provider_role_unavailable, provider_disabled, model_unavailable with allowed_models, effort_unavailable with allowed_effort_levels). */
       422: {
         headers: {
           [name: string]: unknown;

@@ -294,7 +294,9 @@ func (s *Service) selectProfile(ctx context.Context, q *dbq.Queries, in CreateIn
 			return selection{}, err
 		}
 		sel := selection{profile: prof, source: dbstate.SelectionExplicit}
-		if parent == nil {
+		if parent == nil && !in.standing {
+			// A root's explicit provider binds its children too. A standing supervisor's is the
+			// project's choice for the supervisor alone: its workers choose their own.
 			sel.constraint = &prof.ID
 		}
 		return sel, nil
