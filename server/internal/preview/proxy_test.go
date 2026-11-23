@@ -280,6 +280,24 @@ func (e *env) seed(id, userID, kagentSession, ports string) {
 	}
 }
 
+// anon marks a request the test sends without the preview cookie handler adds.
+const anon = "X-Test-Anonymous"
+
+// handler is the proxy's Route handler behind a signed-in browser: a request to a preview host
+// gets a valid preview cookie for that host, added to any Cookie the test set, unless it carries
+// the anon header. The cookie is minted by the proxy itself, so every test also exercises sign-in.
+func (e *env) handler() http.Handler {
+	route := e.proxy.Route(e.next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(anon) != "" {
+			r.Header.Del(anon)
+		} else if h, ok := e.proxy.base.parse(r.Host); ok {
+			r.AddCookie(&http.Cookie{Name: e.proxy.cookieName(), Value: e.proxy.mint(kindSession, h, time.Now().Add(time.Hour))})
+		}
+		route.ServeHTTP(w, r)
+	})
+}
+
 // do sends one request through the proxy's Route handler.
 func (e *env) do(method, host, path string, body io.Reader, headers map[string]string) *httptest.ResponseRecorder {
 	e.t.Helper()
@@ -289,7 +307,7 @@ func (e *env) do(method, host, path string, body io.Reader, headers map[string]s
 		req.Header.Set(k, v)
 	}
 	rec := httptest.NewRecorder()
-	e.proxy.Route(e.next).ServeHTTP(rec, req)
+	e.handler().ServeHTTP(rec, req)
 	return rec
 }
 
@@ -457,7 +475,7 @@ func TestRequestBodyCap(t *testing.T) {
 	req.Host = wsHost
 	req.ContentLength = maxRequestBytes + 1
 	rec := httptest.NewRecorder()
-	e.proxy.Route(e.next).ServeHTTP(rec, req)
+	e.handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge || len(e.router.seen()) != 0 {
 		t.Fatalf("declared oversize: got %d with %d tunnels", rec.Code, len(e.router.seen()))
 	}
@@ -467,7 +485,7 @@ func TestRequestBodyCap(t *testing.T) {
 	req.Host = wsHost
 	req.ContentLength = -1
 	rec = httptest.NewRecorder()
-	e.proxy.Route(e.next).ServeHTTP(rec, req)
+	e.handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("over-cap chunked body: got %d, want 413", rec.Code)
 	}
@@ -479,7 +497,7 @@ func TestRequestBodyCap(t *testing.T) {
 	req.Host = wsHost
 	req.ContentLength = maxRequestBytes
 	rec = httptest.NewRecorder()
-	e.proxy.Route(e.next).ServeHTTP(rec, req)
+	e.handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || got.Load() != maxRequestBytes {
 		t.Fatalf("at the cap: got %d, dev server received %d", rec.Code, got.Load())
 	}
@@ -650,7 +668,7 @@ func TestWebSocketUpgradeIsRelayedAndHoldsALease(t *testing.T) {
 		line, _ := brw.ReadString('\n')
 		_, _ = io.WriteString(c, "echo:"+line)
 	})))
-	front := httptest.NewServer(e.proxy.Route(e.next))
+	front := httptest.NewServer(e.handler())
 	t.Cleanup(front.Close)
 
 	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", front.Listener.Addr().String())
@@ -773,7 +791,7 @@ func TestUpstreamCookieTrailersAreDropped(t *testing.T) {
 					w.Header().Set(http.TrailerPrefix+"Set-Cookie", "s=1; Domain=localhost")
 				}
 			})))
-			srv := httptest.NewServer(e.proxy.Route(e.next))
+			srv := httptest.NewServer(e.handler())
 			defer srv.Close()
 			req, _ := http.NewRequestWithContext(context.Background(), "GET", srv.URL, nil)
 			req.Host = wsHost

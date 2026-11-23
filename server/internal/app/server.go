@@ -64,6 +64,7 @@ type Server struct {
 	*devloop.DevloopAPI
 	*dotfiles.DotfilesAPI
 	*transcripts.TranscriptsAPI
+	*preview.GrantAPI
 
 	fallback
 
@@ -178,6 +179,7 @@ func New(d Deps) *Server {
 		DevloopAPI:      devloop.NewAPI(d.Devloop),
 		DotfilesAPI:     dotfiles.NewAPI(d.Pool, d.Config.Identity.OwnerID),
 		TranscriptsAPI:  transcripts.NewAPI(d.Transcripts),
+		GrantAPI:        &preview.GrantAPI{Proxy: d.Preview, AuthOff: d.Auth == nil || d.Auth.Mode == auth.ModeOff},
 		deps:            d,
 	}
 }

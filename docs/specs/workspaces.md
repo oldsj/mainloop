@@ -399,6 +399,54 @@ server's HMR WebSocket, pass. `GET`, `HEAD` and `OPTIONS` navigation is not chec
 handshake, so only a non-browser client (curl, a script) omits it, and a page cannot cause it. The
 dev server's own CSRF protection remains its own responsibility for same-origin pages.
 
+**Preview sign-in** (issue #415). Implemented and tested against fakes; not yet proven live. A
+preview host serves nothing without a **preview cookie**, a credential for that one host:
+
+- Checked right after the Origin check and before anything else: a request without a valid cookie
+  is never looked up, touched, woken or tunnelled. A page navigation (`Sec-Fetch-Mode: navigate`,
+  or a `GET`/`HEAD` accepting `text/html` from a browser that sends no fetch metadata) gets `303`
+  to the app's `/previews/<workspace>/<port>?path=<path and query>`. Everything else, a fetch, a
+  WebSocket handshake or curl, gets `401`.
+- The app page `/previews/<workspace>/<port>` calls `POST /workspaces/{id}/previews/{port}/grant`
+  with `{"path": ...}`. The API answers only a verified owner-scope principal (the Pocket ID owner, or
+  the break-glass operator ServiceAccount), **whatever the authentication mode**: `observe`
+  refuses nothing on its own, so the handler refuses an anonymous caller (`401`) or another scope
+  (`403`) itself. Only development with authentication `off` skips the check. It is an owner write,
+  so it also needs `X-Mainloop-Client`, which a preview page cannot send to the API. The workspace
+  must be the owner's with a live Session (else `404`) and the port declared (else `422`); `path`
+  must start with a single `/` (else `422`). Nothing is woken or touched.
+- The grant is good for 60 seconds and for one preview host (workspace and port). The API returns
+  `<preview origin>/__mainloop/preview-auth#t=<grant>&next=<path>`, and the app opens it with
+  `location.replace`. The grant rides in the **fragment**, which the browser never sends to a server,
+  so no grant lands in an access log or a `Referer`.
+- `GET /__mainloop/preview-auth` on the preview host is a small page (scripts pinned by a nonce
+  in its CSP, `no-referrer`, not frameable). It drops the fragment from the address bar and history,
+  posts the grant to the same path (same-origin; the Origin check refuses any other origin), and on
+  `204` opens `next`. The `POST` checks the grant's signature, host and expiry and sets the cookie:
+  `__Host-mainloop-preview` over HTTPS (`mainloop-preview` over plain-HTTP development),
+  host-only, `Path=/`, `HttpOnly`, `Secure` over HTTPS, `SameSite=Lax`, 8 hours. Every path under
+  `/__mainloop/` is the proxy's own and is never forwarded.
+- Grants and cookies are HMAC-SHA256 signed with a key derived from `AGENT_TOKEN_KEY` for this
+  purpose only, and name their kind, workspace, port and expiry. A cookie is refused on any other
+  preview host (another port or workspace), after it expires, and in place of a grant (and the
+  reverse). It is never usable on the owner API, which reads only the Pocket ID cookie and bearers,
+  and it never reaches the dev server: the proxy strips `Cookie` and drops the dev server's
+  `Set-Cookie`.
+- When the cookie expires, the next navigation goes through the app again, which grants at once
+  while the owner is signed in. A fetch or HMR socket gets `401` until the page is reloaded.
+- The app page stops after three opens of the same preview within a minute (a browser that refuses
+  the cookie would otherwise bounce forever) and says to allow cookies for the preview.
+
+**Ends with the workspace.** Every request resolves the workspace again, so a deleted or archived
+workspace, a finished or superseded task attempt or a lost writer claim answers `404` even with a
+valid cookie. An open WebSocket or long response holds a keep-awake lease; each renewal (every 20
+seconds) checks the workspace still resolves and closes the stream when it does not.
+
+Not covered: there is no server-side revocation of an unexpired cookie other than the workspace
+ending or rotating `AGENT_TOKEN_KEY` (which also rotates agent tokens). Signing out of the app does
+not end preview cookies already set. Agents test their own dev server on loopback inside the
+workspace, not through the preview host.
+
 The proxy replaces the client Host with exactly one upstream Host header. It does not forward `Cookie`, `Authorization`, `X-User-ID`, `Forwarded`, `X-Real-IP`,
 `X-Forwarded-*` or `Tailscale-*` headers to the dev server (the agent writes the page and runs the
 server, so anything forwarded is visible to it), nor hop-by-hop headers, on HTTP requests and
