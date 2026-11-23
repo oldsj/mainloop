@@ -156,7 +156,7 @@ func TestSetSessionEffortRejectsLevelNotOfferedByProvider(t *testing.T) {
 	e.withProviders()
 	id := e.newSession("start") // defaults to the Claude profile
 
-	// "minimal" is a Codex level, not one of Claude's.
+	// "minimal" is in the vocabulary but not one of Claude's levels.
 	if _, err := e.setEffort(id, effortp("minimal")); apierr.StatusOf(err) != 422 {
 		t.Fatalf("got %v", err)
 	}
@@ -320,4 +320,35 @@ func TestCreateWithModelNamesItOnTheFirstTurn(t *testing.T) {
 	e.run()
 	e.waitState(e.firstDelivery(id), dbstate.DeliveryCompleted)
 	wantMeta(t, "first turn", log.last(t), "claude-haiku-5-5", "")
+}
+
+// An effort the provider stopped offering (gpt-6.1-sol rejects minimal, so the built-in Codex
+// profile dropped it) is left out of the turn rather than failing every turn on that session.
+func TestTurnsLeaveOutAnEffortTheProviderNoLongerOffers(t *testing.T) {
+	// Given a Codex session whose stored effort override is minimal
+	var log metaLog
+	e := newEnv(t, metaOpt(t, &log))
+	e.withProviders()
+	id, err := e.svc.Create(context.Background(), sessions.NewSession{
+		Title: "Fix the thing", Description: "d", Prompt: "start", AgentKind: "codex",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	e.run()
+	e.waitState(e.firstDelivery(id), dbstate.DeliveryCompleted)
+	if _, err := e.pool.Exec(context.Background(), `UPDATE agent_bindings SET effort_override = 'minimal' WHERE session_id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+
+	// When the next turn is sent
+	e.sendTurn(id, "next")
+
+	// Then it names no effort, so kagent runs the provider's own
+	wantMeta(t, "unoffered override", log.last(t), "", "")
+
+	// And setting minimal again is refused
+	if _, err := e.setEffort(id, effortp("minimal")); apierr.StatusOf(err) != 422 {
+		t.Fatalf("set minimal = %v", err)
+	}
 }

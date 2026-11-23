@@ -43,8 +43,9 @@ function field(
 }
 
 /**
- * The source of each field. `efforts` is the provider's own levels when known: a default effort
- * the provider stopped offering is left out of the turn, so it reads as the provider's.
+ * The source of each field. `efforts` is the provider's own levels when known: an effort the
+ * provider stopped offering is left out of the turn, so a session's own falls back to the role
+ * default and a role default reads as the provider's.
  */
 export function runDefaults(
   session: SessionOverrides | null | undefined,
@@ -53,10 +54,11 @@ export function runDefaults(
   efforts?: readonly string[]
 ): RunDefaults {
   const row = defaults?.find((d) => d.role === role && d.provider === session?.kind);
-  const offered = row?.effort && (!efforts || efforts.includes(row.effort)) ? row.effort : null;
+  const offered = (effort: string | null | undefined) =>
+    effort && (!efforts || efforts.includes(effort)) ? effort : null;
   return {
     model: field(session?.model_override, row?.model),
-    effort: field(session?.effort_override, offered)
+    effort: field(offered(session?.effort_override), offered(row?.effort))
   };
 }
 
