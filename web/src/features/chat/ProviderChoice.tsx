@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ControlsHeading, SessionControls } from '@/components/shared/controls-sheet';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
+import { WebFetchSection } from '@/features/sessions/WebFetchSection';
 import {
   MAIN_PROVIDERS,
   providerLabel,
@@ -126,6 +127,7 @@ export function ChatControls({ info, provider }: Omit<ProviderChoiceProps, 'onDo
       <p className="text-muted-foreground text-xs">
         Model and effort: type <code>/model</code> or <code>/effort</code>.
       </p>
+      {info.native ? <WebFetchSection sessionId={info.native.session_id} /> : null}
     </SessionControls>
   );
 }

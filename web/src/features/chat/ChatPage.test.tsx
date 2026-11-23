@@ -1220,6 +1220,43 @@ const chooseProvider = async (provider: 'claude' | 'codex') => {
 const openDetails = () => userEvent.click(screen.getByTestId('mt-details-toggle'));
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+describe('web fetch in the session controls', () => {
+  const webFetch = (choice: 'on' | 'off') => screen.getByTestId(`web-fetch-${choice}`);
+
+  it('is off until the owner turns it on, and one choice posts once', async () => {
+    // Given a main thread whose session has web fetch off
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await openControls();
+    await waitFor(() => expect(webFetch('off')).toHaveAttribute('aria-checked', 'true'));
+    // When the owner turns it on
+    await userEvent.click(webFetch('on'));
+    // Then one write turns it on for that session, and the picker shows it on
+    await waitFor(() => expect(webFetch('on')).toHaveAttribute('aria-checked', 'true'));
+    expect(state.webFetchPosts).toEqual([{ sessionId: MAIN_SESSION_ID, body: { enabled: true } }]);
+    // And choosing what is already chosen sends nothing
+    await userEvent.click(webFetch('on'));
+    await pause(20);
+    expect(state.webFetchPosts).toHaveLength(1);
+  });
+
+  it("says when the session's task already gives the agent web fetch", async () => {
+    const initial = idleThread();
+    initial.mainThread = {
+      ...initial.mainThread!,
+      native: nativeFixture({
+        web_fetch: { session_id: MAIN_SESSION_ID, enabled: false, from_task: true }
+      })
+    };
+    setup(initial);
+    await screen.findByText('build it');
+    await openControls();
+    expect(await screen.findByTestId('web-fetch-from-task')).toHaveTextContent(
+      'Its task was created with web fetch'
+    );
+  });
+});
+
 describe('the main provider', () => {
   it('offers the choice from the composer with session info collapsed, and a confirmed Codex posts exactly one PUT', async () => {
     const { state } = setup(idleThread());

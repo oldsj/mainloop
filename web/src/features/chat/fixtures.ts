@@ -47,7 +47,11 @@ export function nativeFixture(overrides: Partial<NativeSessionInfo> = {}): Nativ
     model: 'claude-sonnet-5-5',
     model_override: null,
     effort_override: null,
-    web_fetch: { session_id: MAIN_SESSION_ID, enabled: false, from_task: false },
+    web_fetch: {
+      session_id: overrides.session_id ?? MAIN_SESSION_ID,
+      enabled: false,
+      from_task: false
+    },
     turns: 1,
     turn_in_flight: false,
     restartable: false,

@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { DotfilesRefresh } from '@/features/dotfiles/DotfilesRefresh';
 import { HITLCard } from '@/features/hitl';
 import { useSessionRequests } from '@/features/hitl/session-requests';
+import { WebFetchSection } from '@/features/sessions/WebFetchSection';
 import { LiveSession, liveForced, type LiveBar, type LiveProvider } from '@/features/live';
 import { MainLoops, useLiveMainLoopCount } from '@/features/tasks/TaskLoops';
 import { PanelBoundary } from '@/shell/PanelBoundary';
@@ -183,6 +184,7 @@ function LiveMain({
       pending={pending}
       renderBar={renderBar}
       provider={provider}
+      sections={() => <WebFetchSection sessionId={sessionId} />}
       notes={notes}
       prefill={prefill}
       onPrefillUsed={onPrefillUsed}

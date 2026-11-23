@@ -36,8 +36,12 @@ allowlist of hosts. That is why it is opt-in, guarded in code and recorded.
   - In `api/mcp-tools.json`, each visibility row has a `web_fetch_enabled` field.
 - **Implemented:** the tool needs a live role (main, supervisor, child or workspace agent). The
   actor of a completed task, which may only read merge status, never holds it.
-- **Proposed:** a toggle for the session flag on the session controls, and one for the task flag
-  on the new-task form, in the web app.
+- **Implemented:** in the web app, the session controls picker has a **Web fetch** section with
+  **Off** and **On**. It appears in the main thread's chat and live views and in a session's live view.
+  - Choosing sets the session's own flag. Choosing the current value sends nothing.
+  - When the session's task carries the flag, the section says the agent has the tool either way.
+  - React tests cover it against MSW, not a live backend.
+- The web app has no new-task form, so the task flag is set through the API or by `delegate`.
 
 ## The tool
 
