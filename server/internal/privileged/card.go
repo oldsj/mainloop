@@ -32,8 +32,8 @@ func card(r dbq.PrivilegedAction) (attention.NewQueueItem, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s asks: %s.\n\n%s\n", requesterName(r), title, body)
 	fmt.Fprintf(&b, "\nAgent's reason (its claim, not checked by Mainloop): %s\n", r.Reason)
-	fmt.Fprintf(&b, "\nExpires %s. Approve runs exactly this once, through Mainloop's GitHub App; nothing bypasses a branch rule. "+
-		"Deny, or reply with a note, refuses it and the note goes to the agent.\n", r.ExpiresAt.UTC().Format(time.RFC1123))
+	fmt.Fprintf(&b, "\nExpires %s. %s Deny, or reply with a note, refuses it and the note goes to the agent.\n",
+		r.ExpiresAt.UTC().Format(time.RFC1123), catalog[r.Type].how)
 	fmt.Fprintf(&b, "Action %s · digest %s", r.ID, (*r.Digest)[:16])
 
 	ctx[ContextActionID] = r.ID
@@ -100,6 +100,8 @@ func render(r dbq.PrivilegedAction) (string, string, map[string]any, error) {
 		}
 		ctx["repository"] = f.Repo
 		return title, b.String(), ctx, nil
+	case TypeItemToSecret:
+		return renderItemToSecret(r, ctx)
 	}
 	return "", "", nil, fmt.Errorf("privileged: no card for type %q", r.Type)
 }

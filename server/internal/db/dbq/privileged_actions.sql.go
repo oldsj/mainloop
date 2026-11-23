@@ -92,6 +92,7 @@ SET state = 'executing', attempts = attempts + 1, updated_at = now(),
 WHERE id = (
     SELECT c.id FROM privileged_actions c
     WHERE c.owner_id = $2 AND c.state IN ('approved', 'executing')
+      AND c.type = ANY ($3::text[])
       AND (c.next_attempt_at IS NULL OR c.next_attempt_at <= now())
       AND (c.claimed_until IS NULL OR c.claimed_until < now())
     ORDER BY c.decided_at, c.id
@@ -104,11 +105,12 @@ RETURNING id, owner_id, request_id, requester_role, requester_session_id, reques
 type ClaimPrivilegedActionParams struct {
 	LeaseSeconds float64
 	OwnerID      string
+	Types        []string
 }
 
 // Claims one approved action (or an executing one whose lease ran out) for an attempt.
 func (q *Queries) ClaimPrivilegedAction(ctx context.Context, arg ClaimPrivilegedActionParams) (PrivilegedAction, error) {
-	row := q.db.QueryRow(ctx, claimPrivilegedAction, arg.LeaseSeconds, arg.OwnerID)
+	row := q.db.QueryRow(ctx, claimPrivilegedAction, arg.LeaseSeconds, arg.OwnerID, arg.Types)
 	var i PrivilegedAction
 	err := row.Scan(
 		&i.ID,
@@ -386,6 +388,48 @@ func (q *Queries) FailPrivilegedPreflight(ctx context.Context, arg FailPrivilege
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const failUnpickedPrivilegedActions = `-- name: FailUnpickedPrivilegedActions :many
+UPDATE privileged_actions
+SET state = 'preflight_failed', last_error = $1, finished_at = now(), updated_at = now(),
+    delivery_state = 'pending', delivery_next_at = now()
+WHERE owner_id = $2 AND state = 'requested' AND type = ANY ($3::text[])
+  AND created_at < now() - make_interval(secs => $4::double precision)
+RETURNING id
+`
+
+type FailUnpickedPrivilegedActionsParams struct {
+	LastError     *string
+	OwnerID       string
+	Types         []string
+	PickupSeconds float64
+}
+
+// Ends requested actions of the given (executor) types that nobody preflighted in time.
+func (q *Queries) FailUnpickedPrivilegedActions(ctx context.Context, arg FailUnpickedPrivilegedActionsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, failUnpickedPrivilegedActions,
+		arg.LastError,
+		arg.OwnerID,
+		arg.Types,
+		arg.PickupSeconds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const finishPrivilegedAction = `-- name: FinishPrivilegedAction :execrows
@@ -749,23 +793,221 @@ func (q *Queries) ListPrivilegedActionEvents(ctx context.Context, actionID strin
 	return items, nil
 }
 
+const listRecentPrivilegedActions = `-- name: ListRecentPrivilegedActions :many
+SELECT id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at FROM privileged_actions WHERE owner_id = $1
+ORDER BY created_at DESC, id DESC
+LIMIT 100
+`
+
+// The owner's audit, newest first.
+func (q *Queries) ListRecentPrivilegedActions(ctx context.Context, ownerID string) ([]PrivilegedAction, error) {
+	rows, err := q.db.Query(ctx, listRecentPrivilegedActions, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PrivilegedAction{}
+	for rows.Next() {
+		var i PrivilegedAction
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.RequestID,
+			&i.RequesterRole,
+			&i.RequesterSessionID,
+			&i.RequesterTaskID,
+			&i.Type,
+			&i.Version,
+			&i.Args,
+			&i.ArgsKey,
+			&i.Reason,
+			&i.State,
+			&i.ExpiresAt,
+			&i.PreflightAttempts,
+			&i.FrozenFacts,
+			&i.Digest,
+			&i.DecidedAt,
+			&i.DecisionNote,
+			&i.ApprovedDigest,
+			&i.Attempts,
+			&i.ClaimedUntil,
+			&i.NextAttemptAt,
+			&i.Result,
+			&i.LastError,
+			&i.FinishedAt,
+			&i.DeliveryState,
+			&i.DeliveryAttempts,
+			&i.DeliveryNextAt,
+			&i.DeliveryDetail,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUncardedPrivilegedActions = `-- name: ListUncardedPrivilegedActions :many
+SELECT p.id, p.owner_id, p.request_id, p.requester_role, p.requester_session_id, p.requester_task_id, p.type, p.version, p.args, p.args_key, p.reason, p.state, p.expires_at, p.preflight_attempts, p.frozen_facts, p.digest, p.decided_at, p.decision_note, p.approved_digest, p.attempts, p.claimed_until, p.next_attempt_at, p.result, p.last_error, p.finished_at, p.delivery_state, p.delivery_attempts, p.delivery_next_at, p.delivery_detail, p.created_at, p.updated_at FROM privileged_actions p
+WHERE p.owner_id = $1 AND p.state = 'pending_approval'
+  AND NOT EXISTS (
+      SELECT 1 FROM attention_items a
+      WHERE a.owner_id = p.owner_id AND a.source_kind = 'queue' AND a.source_id = 'privileged_action_' || p.id
+  )
+ORDER BY p.created_at, p.id
+LIMIT 10
+`
+
+// Frozen actions waiting for the owner with no card yet: executor types, which serve-executor
+// froze without one.
+func (q *Queries) ListUncardedPrivilegedActions(ctx context.Context, ownerID string) ([]PrivilegedAction, error) {
+	rows, err := q.db.Query(ctx, listUncardedPrivilegedActions, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PrivilegedAction{}
+	for rows.Next() {
+		var i PrivilegedAction
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.RequestID,
+			&i.RequesterRole,
+			&i.RequesterSessionID,
+			&i.RequesterTaskID,
+			&i.Type,
+			&i.Version,
+			&i.Args,
+			&i.ArgsKey,
+			&i.Reason,
+			&i.State,
+			&i.ExpiresAt,
+			&i.PreflightAttempts,
+			&i.FrozenFacts,
+			&i.Digest,
+			&i.DecidedAt,
+			&i.DecisionNote,
+			&i.ApprovedDigest,
+			&i.Attempts,
+			&i.ClaimedUntil,
+			&i.NextAttemptAt,
+			&i.Result,
+			&i.LastError,
+			&i.FinishedAt,
+			&i.DeliveryState,
+			&i.DeliveryAttempts,
+			&i.DeliveryNextAt,
+			&i.DeliveryDetail,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUnpreflightedPrivilegedActions = `-- name: ListUnpreflightedPrivilegedActions :many
 SELECT id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at FROM privileged_actions
-WHERE owner_id = $1 AND state = 'requested'
-  AND updated_at < now() - make_interval(secs => $2::double precision)
+WHERE owner_id = $1 AND state = 'requested' AND type = ANY ($2::text[])
+  AND updated_at <= now() - make_interval(secs => CASE WHEN preflight_attempts = 0
+      THEN $3::double precision ELSE $4::double precision END)
 ORDER BY created_at, id
 LIMIT 5
 `
 
 type ListUnpreflightedPrivilegedActionsParams struct {
-	OwnerID     string
-	IdleSeconds float64
+	OwnerID      string
+	Types        []string
+	FirstSeconds float64
+	IdleSeconds  float64
 }
 
-// Requested actions whose preflight did not finish (the requesting call died, or GitHub was
-// unavailable), oldest first.
+// Requested actions of the given types to preflight, oldest first: untried ones once first_seconds
+// passed (serve-api gives its request call that long; serve-executor takes them at once), and ones
+// whose target could not be read idle_seconds after the last try.
 func (q *Queries) ListUnpreflightedPrivilegedActions(ctx context.Context, arg ListUnpreflightedPrivilegedActionsParams) ([]PrivilegedAction, error) {
-	rows, err := q.db.Query(ctx, listUnpreflightedPrivilegedActions, arg.OwnerID, arg.IdleSeconds)
+	rows, err := q.db.Query(ctx, listUnpreflightedPrivilegedActions,
+		arg.OwnerID,
+		arg.Types,
+		arg.FirstSeconds,
+		arg.IdleSeconds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PrivilegedAction{}
+	for rows.Next() {
+		var i PrivilegedAction
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.RequestID,
+			&i.RequesterRole,
+			&i.RequesterSessionID,
+			&i.RequesterTaskID,
+			&i.Type,
+			&i.Version,
+			&i.Args,
+			&i.ArgsKey,
+			&i.Reason,
+			&i.State,
+			&i.ExpiresAt,
+			&i.PreflightAttempts,
+			&i.FrozenFacts,
+			&i.Digest,
+			&i.DecidedAt,
+			&i.DecisionNote,
+			&i.ApprovedDigest,
+			&i.Attempts,
+			&i.ClaimedUntil,
+			&i.NextAttemptAt,
+			&i.Result,
+			&i.LastError,
+			&i.FinishedAt,
+			&i.DeliveryState,
+			&i.DeliveryAttempts,
+			&i.DeliveryNextAt,
+			&i.DeliveryDetail,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnraisedUncertainPrivilegedActions = `-- name: ListUnraisedUncertainPrivilegedActions :many
+SELECT p.id, p.owner_id, p.request_id, p.requester_role, p.requester_session_id, p.requester_task_id, p.type, p.version, p.args, p.args_key, p.reason, p.state, p.expires_at, p.preflight_attempts, p.frozen_facts, p.digest, p.decided_at, p.decision_note, p.approved_digest, p.attempts, p.claimed_until, p.next_attempt_at, p.result, p.last_error, p.finished_at, p.delivery_state, p.delivery_attempts, p.delivery_next_at, p.delivery_detail, p.created_at, p.updated_at FROM privileged_actions p
+WHERE p.owner_id = $1 AND p.state = 'uncertain'
+  AND NOT EXISTS (
+      SELECT 1 FROM attention_items a
+      WHERE a.owner_id = p.owner_id AND a.source_kind = 'queue'
+        AND a.source_id = 'privileged_action_uncertain_' || p.id
+  )
+ORDER BY p.finished_at, p.id
+LIMIT 10
+`
+
+// Uncertain actions the owner has no error item for yet.
+func (q *Queries) ListUnraisedUncertainPrivilegedActions(ctx context.Context, ownerID string) ([]PrivilegedAction, error) {
+	rows, err := q.db.Query(ctx, listUnraisedUncertainPrivilegedActions, ownerID)
 	if err != nil {
 		return nil, err
 	}

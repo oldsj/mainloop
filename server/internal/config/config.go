@@ -58,6 +58,9 @@ type Config struct {
 	// request tools, the approval cards and the executor. serve-api refuses to start with it on
 	// unless MAINLOOP_AUTH_MODE is enforce, since an approval must be attributable to the owner.
 	PrivilegedActionsEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_ACTIONS_ENABLED"`
+	// PrivilegedExecutorEnabled says a serve-executor is deployed beside this Mainloop, so the
+	// executor types (onepassword.*) are accepted. Without it they answer unavailable.
+	PrivilegedExecutorEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED"`
 
 	// WebFetchPerMinute bounds the open-web web_fetch tool's fetches per owner per minute, and
 	// WebFetchDenyCIDRs adds comma-separated ranges it never connects to, beyond the built-in

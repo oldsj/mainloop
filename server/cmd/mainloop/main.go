@@ -70,6 +70,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return exitFailure
 		}
 		return 0
+	case "serve-executor":
+		log := slog.New(slog.NewJSONHandler(stdout, nil))
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		defer stop()
+		if err := serveExecutor(ctx, log); err != nil {
+			log.Error("exiting", "command", cmd, "error", err.Error())
+			return exitFailure
+		}
+		return 0
 	case "migrate":
 		return runMigrate(args[1:], stdout, stderr)
 	case "kagent-probe":
@@ -101,6 +110,7 @@ commands:
   serve-api       owner API on :8000, Prometheus metrics on :9100 (MAINLOOP_METRICS_ADDR)
   serve-mcp       MCP listener on :8002
   serve-git       git transport: upload-pack on :8003, validated receive-pack on :8004
+  serve-executor  privileged actions that need the executor's credentials (no listener)
   migrate         up | status | reset the database schema
   sweep-orphans   list kagent Sessions Mainloop created and no longer references (--delete removes them;
                   --forget-agent ns/name drops an Agent from the swept set)

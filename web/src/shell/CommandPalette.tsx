@@ -120,6 +120,9 @@ function PaletteBody({
       case 'transcripts':
         void navigate({ to: '/transcripts', search: {} });
         break;
+      case 'privileged':
+        void navigate({ to: '/privileged' });
+        break;
       case 'theme':
         setTheme(action.theme);
         break;

@@ -4,10 +4,14 @@ An agent asks Mainloop to run a credentialed action it cannot run itself. The ow
 exact action from one Needs-you card, which is pushed to their phone. Mainloop then runs it once and
 sends the requesting session one message with the outcome.
 
-**Implemented (slice 1):** the mechanism, plus two catalog types, `github.pr_merge` and
-`github.pr_close`. They run through Mainloop's own GitHub App, in `serve-api`. Approved commands,
-1Password and Kubernetes types, and the separate executor are later slices. They are not described
-here.
+**Implemented:**
+
+- Slice 1: the mechanism, plus two catalog types, `github.pr_merge` and `github.pr_close`. They run
+  through Mainloop's own GitHub App, in `serve-api`.
+- Slice 2: `onepassword.item_to_secret`, run by a separate process, `serve-executor`, which holds a
+  1Password credential `serve-api` never sees. Also the owner's read-only audit page.
+
+Approved commands and other Kubernetes and LAN types are later slices. They are not described here.
 
 ## Enablement
 
@@ -15,6 +19,10 @@ Privileged actions are off unless `MAINLOOP_PRIVILEGED_ACTIONS_ENABLED` is exact
 chart pins it to `false`. With it on, `serve-api` refuses to start unless `MAINLOOP_AUTH_MODE` is
 `enforce`, because an approval has to be attributable to the owner. When privileged actions are off,
 or there is no GitHub App, the tools are still listed but answer `[unavailable]`.
+
+The executor types are accepted only when `MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED` is also exactly
+`true`. The chart sets it when `executor.enabled` deploys `serve-executor` (see
+[The executor](#the-executor)). Without it, a request of an executor type is `[invalid]`.
 
 ## Tools
 
@@ -54,6 +62,20 @@ that looks like it holds a secret is refused.
 
 Neither type bypasses a branch rule. GitHub's own protection still decides the merge.
 
+`onepassword.item_to_secret {vault, item, field, namespace, secret, key}` copies one field of a
+1Password item into one key of a Kubernetes Secret:
+
+- `vault`, `item` and `field` are each an id or an exact title. An ambiguous title is refused:
+  name it by id.
+- `namespace` must be in the executor's allowlist (`executor.secretNamespaces`). These are always
+  refused: `default`, and names starting with `kube-`, `mainloop`, `onepassword` or `argocd`.
+- An existing Secret is refused when a controller owns it, Argo CD tracks it, or its type is not
+  `Opaque`.
+- A field that is empty, or has a type 1Password does not expose, is refused.
+
+The value never leaves the executor: not in the facts, the card, the result, an event or an error.
+The 1Password service account is read-only, scoped to the vaults the owner chose.
+
 ## Preflight and the card
 
 Mainloop canonicalizes the arguments and writes the intent row. It then reads the target with no
@@ -80,8 +102,10 @@ A database trigger refuses any later change to the digest, facts, type, version 
 
 The card is a Needs-you `approval` item with high priority, so it gets an ntfy push. It has:
 
-- **Title:** "Merge owner/repo#N", "Close owner/repo#N", or "Close K pull requests in owner/repo".
-- **Content:** the rendered facts, risk tags (checks failing, pending or unread; not mergeable),
+- **Title:** "Merge owner/repo#N", "Close owner/repo#N", "Close K pull requests in owner/repo",
+  or `Copy 1Password "item › field" to Secret namespace/name`.
+- **Content:** the rendered facts, risk tags (checks failing, pending or unread; not mergeable;
+  overwrites an existing key; a Secret labelled managed-by),
   the labelled agent reason, the expiry, and the action id with the first 16 characters of the
   digest.
 - **Options:** `Approve` and `Deny`. The card also accepts a free-text reply.
@@ -101,6 +125,9 @@ records the decision:
   - An Approve with a missing or different digest, or one sent after expiry, is a denial with a
     note that says so.
   - A card closed without an answer is a denial.
+
+For `onepassword.item_to_secret` the frozen facts are the vault, item and field metadata, with
+the item's version, and the target Secret's uid, resourceVersion and key names, or its absence.
 
 An undecided action expires after 24 hours. An approved action that no executor claims within 5
 minutes also expires, so a backlog never runs an old approval late.
@@ -126,10 +153,62 @@ The executor claims an approved action with a 2-minute lease and then:
 4. Posts a best-effort comment on each pull request it changed, naming the action, plus the
    digest prefix for a merge.
 
+For `onepassword.item_to_secret` (in `serve-executor`):
+
+- **Observe.** A Secret annotated `mainloop.dev/privileged-action: <this action's id>` was
+  written by an earlier attempt, so the action `succeeded`. Otherwise the action is `stale` when
+  the Secret was deleted, changed (uid or resourceVersion) or created since preflight.
+- **Read the value.** The executor reads it by id. An item whose version differs from the frozen
+  one is `stale`.
+- **Write.** A missing Secret is created with this one key. An existing Secret gets a merge patch
+  of this one key, carrying the frozen resourceVersion, so a concurrent change is refused (`stale`)
+  and nothing is written. Other keys are left as they are. The field manager is
+  `mainloop-executor`.
+- **Failures.** A 403 is `failed`. Other errors are retried like a merge, and each retry observes
+  first.
+
 States: `requested`, `pending_approval`, `preflight_failed`, `approved`, `executing`, `succeeded`,
 `failed`, `stale`, `denied`, `expired`, `cancelled`, `uncertain`.
 
 Every step appends a row to `privileged_action_events`, which cannot be updated.
+
+## The executor
+
+`mainloop serve-executor` runs the executor types. It has no listener, and its namespace denies all
+ingress. It runs one replica, replaced rather than rolled. It polls PostgreSQL every 3 seconds as
+its own database role, `mainloop_executor`, which the database operator creates with a password
+the owner sets. `mainloop migrate up` grants that role its privileges once the role exists. The
+role can:
+
+- read `privileged_actions` and `privileged_action_events`
+- write the preflight and execution columns
+- append events
+
+It cannot record or change a decision, change what was asked, or read any other table. The
+executor refuses to start under a role that can read `attention_items`.
+
+The split of work:
+
+- **`serve-executor`** preflights an executor type and freezes its facts without opening a card.
+  It also claims and runs the approved action.
+- **`serve-api`** opens the card, records the decision, expires, delivers the outcome, and raises
+  an `uncertain` action to the owner.
+
+An executor type that nobody preflights within 10 minutes ends `preflight_failed`, with a note
+that the executor may be down.
+
+`serve-api`'s own database role can still write every column. A compromised `serve-api` could
+therefore forge an approval for an executor type. Binding approvals to the owner's passkey (a
+later slice) closes that gap.
+
+## Audit
+
+`GET /privileged-actions` lists the owner's 100 newest actions: type, state, the card's title, the
+requester, the reason, the times, the note and the error. `GET /privileged-actions/{action_id}`
+adds the arguments, the frozen facts, the digest, the card's text, the result and every event. The
+web app shows them at `/privileged`, reachable from the command palette. The page is read-only:
+the owner approves or denies from the Needs-you card. It reads the table directly, so the history
+stays readable when privileged actions are off.
 
 ## Delivery
 

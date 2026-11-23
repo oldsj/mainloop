@@ -36,14 +36,49 @@ SELECT * FROM privileged_actions
 WHERE requester_session_id = sqlc.arg(session_id) AND args_key = sqlc.arg(args_key)
   AND state IN ('requested', 'pending_approval');
 
--- Requested actions whose preflight did not finish (the requesting call died, or GitHub was
--- unavailable), oldest first.
+-- Requested actions of the given types to preflight, oldest first: untried ones once first_seconds
+-- passed (serve-api gives its request call that long; serve-executor takes them at once), and ones
+-- whose target could not be read idle_seconds after the last try.
 -- name: ListUnpreflightedPrivilegedActions :many
 SELECT * FROM privileged_actions
-WHERE owner_id = sqlc.arg(owner_id) AND state = 'requested'
-  AND updated_at < now() - make_interval(secs => sqlc.arg(idle_seconds)::double precision)
+WHERE owner_id = sqlc.arg(owner_id) AND state = 'requested' AND type = ANY (sqlc.arg(types)::text[])
+  AND updated_at <= now() - make_interval(secs => CASE WHEN preflight_attempts = 0
+      THEN sqlc.arg(first_seconds)::double precision ELSE sqlc.arg(idle_seconds)::double precision END)
 ORDER BY created_at, id
 LIMIT 5;
+
+-- Frozen actions waiting for the owner with no card yet: executor types, which serve-executor
+-- froze without one.
+-- name: ListUncardedPrivilegedActions :many
+SELECT p.* FROM privileged_actions p
+WHERE p.owner_id = sqlc.arg(owner_id) AND p.state = 'pending_approval'
+  AND NOT EXISTS (
+      SELECT 1 FROM attention_items a
+      WHERE a.owner_id = p.owner_id AND a.source_kind = 'queue' AND a.source_id = 'privileged_action_' || p.id
+  )
+ORDER BY p.created_at, p.id
+LIMIT 10;
+
+-- Ends requested actions of the given (executor) types that nobody preflighted in time.
+-- name: FailUnpickedPrivilegedActions :many
+UPDATE privileged_actions
+SET state = 'preflight_failed', last_error = sqlc.arg(last_error), finished_at = now(), updated_at = now(),
+    delivery_state = 'pending', delivery_next_at = now()
+WHERE owner_id = sqlc.arg(owner_id) AND state = 'requested' AND type = ANY (sqlc.arg(types)::text[])
+  AND created_at < now() - make_interval(secs => sqlc.arg(pickup_seconds)::double precision)
+RETURNING id;
+
+-- Uncertain actions the owner has no error item for yet.
+-- name: ListUnraisedUncertainPrivilegedActions :many
+SELECT p.* FROM privileged_actions p
+WHERE p.owner_id = sqlc.arg(owner_id) AND p.state = 'uncertain'
+  AND NOT EXISTS (
+      SELECT 1 FROM attention_items a
+      WHERE a.owner_id = p.owner_id AND a.source_kind = 'queue'
+        AND a.source_id = 'privileged_action_uncertain_' || p.id
+  )
+ORDER BY p.finished_at, p.id
+LIMIT 10;
 
 -- Records a preflight attempt that could not reach its facts; the row stays requested.
 -- name: BumpPrivilegedPreflight :execrows
@@ -140,6 +175,7 @@ SET state = 'executing', attempts = attempts + 1, updated_at = now(),
 WHERE id = (
     SELECT c.id FROM privileged_actions c
     WHERE c.owner_id = sqlc.arg(owner_id) AND c.state IN ('approved', 'executing')
+      AND c.type = ANY (sqlc.arg(types)::text[])
       AND (c.next_attempt_at IS NULL OR c.next_attempt_at <= now())
       AND (c.claimed_until IS NULL OR c.claimed_until < now())
     ORDER BY c.decided_at, c.id
@@ -191,3 +227,9 @@ VALUES (sqlc.arg(action_id), sqlc.arg(step), left(sqlc.arg(detail)::text, 4096))
 
 -- name: ListPrivilegedActionEvents :many
 SELECT * FROM privileged_action_events WHERE action_id = sqlc.arg(action_id) ORDER BY id;
+
+-- name: ListRecentPrivilegedActions :many
+-- The owner's audit, newest first.
+SELECT * FROM privileged_actions WHERE owner_id = sqlc.arg(owner_id)
+ORDER BY created_at DESC, id DESC
+LIMIT 100;

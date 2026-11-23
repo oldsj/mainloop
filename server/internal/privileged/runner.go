@@ -39,8 +39,10 @@ type Sender interface {
 	SendToWith(ctx context.Context, source sessions.Source, sessionID, messageID, text string, o sessions.SendOptions) (sessions.Sent, error)
 }
 
-// Runner records the owner's decisions, expires what waited too long, runs approved actions and
-// delivers outcomes. In slice 1 it runs in serve-api, which already holds the GitHub App key.
+// Runner runs in two processes. In serve-api it preflights and runs the GitHub types, opens every
+// card, records decisions, expires what waited too long, raises uncertain outcomes to the owner and
+// delivers outcomes. In serve-executor (Service.Executor) it only preflights and runs the executor
+// types: it writes nothing but privileged_actions and its events.
 type Runner struct {
 	*Service
 	Sender Sender
@@ -52,21 +54,35 @@ func (r *Runner) Sweep() reconcile.Sweep {
 }
 
 // Run does one pass. Each step is its own short transaction or a claimed attempt; no transaction
-// is open across a GitHub call.
+// is open across a remote call.
 func (r *Runner) Run(ctx context.Context) error {
-	if err := r.preflightStuck(ctx); err != nil {
-		return err
+	if r.Executor {
+		if err := r.preflightStuck(ctx); err != nil {
+			return err
+		}
+		return r.execute(ctx)
 	}
-	if err := r.decide(ctx); err != nil {
-		return err
+	for _, step := range []func(context.Context) error{
+		r.preflightStuck, r.openCards, r.failUnpicked, r.decide, r.expire, r.execute, r.raiseUncertain,
+	} {
+		if err := step(ctx); err != nil {
+			return err
+		}
 	}
-	if err := r.expire(ctx); err != nil {
-		return err
-	}
+	return r.deliverAll(ctx)
+}
+
+// types are the catalog types this process runs.
+func (r *Runner) types() []string { return TypesFor(r.Executor) }
+
+// execute claims and runs this process's approved actions.
+func (r *Runner) execute(ctx context.Context) error {
 	for range maxExecPerPass {
-		row, err := dbq.New(r.Pool).ClaimPrivilegedAction(ctx, dbq.ClaimPrivilegedActionParams{OwnerID: r.OwnerID, LeaseSeconds: execLease.Seconds()})
+		row, err := dbq.New(r.Pool).ClaimPrivilegedAction(ctx, dbq.ClaimPrivilegedActionParams{
+			OwnerID: r.OwnerID, LeaseSeconds: execLease.Seconds(), Types: r.types(),
+		})
 		if errors.Is(err, pgx.ErrNoRows) {
-			break
+			return nil
 		}
 		if err != nil {
 			return err
@@ -75,6 +91,10 @@ func (r *Runner) Run(ctx context.Context) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (r *Runner) deliverAll(ctx context.Context) error {
 	for range maxDeliveryPerPass {
 		row, err := dbq.New(r.Pool).ClaimPrivilegedDelivery(ctx, dbq.ClaimPrivilegedDeliveryParams{OwnerID: r.OwnerID, LeaseSeconds: 60})
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -90,16 +110,91 @@ func (r *Runner) Run(ctx context.Context) error {
 	return nil
 }
 
-// preflightStuck finishes the preflight of requests whose call died or could not reach GitHub.
+// preflightStuck preflights this process's requested actions: in serve-api, those whose request
+// call died or could not read GitHub; in serve-executor, every new one at once. A preflight that
+// could not read its target is retried after preflightIdle.
 func (r *Runner) preflightStuck(ctx context.Context) error {
+	first := preflightIdle
+	if r.Executor {
+		first = 0 // no request call preflights an executor type
+	}
 	rows, err := dbq.New(r.Pool).ListUnpreflightedPrivilegedActions(ctx, dbq.ListUnpreflightedPrivilegedActionsParams{
-		OwnerID: r.OwnerID, IdleSeconds: preflightIdle.Seconds(),
+		OwnerID: r.OwnerID, FirstSeconds: first.Seconds(), IdleSeconds: preflightIdle.Seconds(), Types: r.types(),
 	})
 	if err != nil {
 		return err
 	}
 	for _, row := range rows {
 		if _, err := r.preflight(ctx, row, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// openCards opens the card of every frozen action that has none: an executor type serve-executor
+// preflighted. (A GitHub type's card opens in the transaction that froze it.)
+func (r *Runner) openCards(ctx context.Context) error {
+	rows, err := dbq.New(r.Pool).ListUncardedPrivilegedActions(ctx, r.OwnerID)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		item, err := card(row)
+		if err != nil {
+			return err
+		}
+		err = events.InTxPublish(ctx, r.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+			return attention.Open(ctx, tx, r.OwnerID, item)
+		})
+		if err != nil {
+			return err
+		}
+		r.log().InfoContext(ctx, "privileged action awaits the owner", "action_id", row.ID, "type", row.Type)
+	}
+	return nil
+}
+
+// failUnpicked ends executor types serve-executor did not preflight in time: it is down or not
+// deployed, and the agent should hear so rather than wait a day.
+func (r *Runner) failUnpicked(ctx context.Context) error {
+	return pgx.BeginFunc(ctx, r.Pool, func(tx pgx.Tx) error {
+		q := dbq.New(tx)
+		msg := "Mainloop's executor did not preflight it within " + ExecutorPickup.String() + "; it may be down"
+		ids, err := q.FailUnpickedPrivilegedActions(ctx, dbq.FailUnpickedPrivilegedActionsParams{
+			OwnerID: r.OwnerID, Types: TypesFor(true), PickupSeconds: ExecutorPickup.Seconds(), LastError: &msg,
+		})
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err := q.InsertPrivilegedActionEvent(ctx, dbq.InsertPrivilegedActionEventParams{ActionID: id, Step: "preflight_failed", Detail: "the executor did not pick it up"}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// raiseUncertain gives the owner one error item per action whose outcome is unknown.
+func (r *Runner) raiseUncertain(ctx context.Context) error {
+	rows, err := dbq.New(r.Pool).ListUnraisedUncertainPrivilegedActions(ctx, r.OwnerID)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		detail := ""
+		if row.LastError != nil {
+			detail = *row.LastError + " "
+		}
+		err := events.InTxPublish(ctx, r.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+			return attention.Open(ctx, tx, r.OwnerID, attention.NewQueueItem{
+				ID: UncertainIDPrefix + row.ID, ItemType: api.QueueItemTypeError, Priority: api.QueueItemPriorityHigh,
+				Title:   "Privileged action " + row.ID + ": outcome unknown",
+				Content: "Mainloop could not tell whether " + row.Type + " ran. " + detail + "Check the target before asking again.",
+			})
+		})
+		if err != nil {
 			return err
 		}
 	}
@@ -184,6 +279,8 @@ func (r *Runner) attempt(ctx context.Context, row dbq.PrivilegedAction) error {
 			out = r.merge(ctx, row)
 		case TypePRClose:
 			out = r.close(ctx, row)
+		case TypeItemToSecret:
+			out = r.itemToSecret(ctx, row)
 		default:
 			out = outcome{state: StateFailed, err: "the type is no longer in the catalog"}
 		}
@@ -202,7 +299,7 @@ func (r *Runner) attempt(ctx context.Context, row dbq.PrivilegedAction) error {
 			return err
 		}
 		out.state = StateUncertain
-		out.err = "GitHub's answer was lost " + fmt.Sprint(MaxAttempts) + " times and the outcome could not be observed: " + out.err
+		out.err = "the remote's answer was lost " + fmt.Sprint(MaxAttempts) + " times and the outcome could not be observed: " + out.err
 	}
 	return r.finish(ctx, row, out)
 }
@@ -220,30 +317,21 @@ func (r *Runner) finish(ctx context.Context, row dbq.PrivilegedAction, out outco
 	if out.err != "" {
 		lastErr = &out.err
 	}
-	return events.InTxPublish(ctx, r.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+	return pgx.BeginFunc(ctx, r.Pool, func(tx pgx.Tx) error {
 		q := dbq.New(tx)
 		n, err := q.FinishPrivilegedAction(ctx, dbq.FinishPrivilegedActionParams{
 			ID: row.ID, Attempts: row.Attempts, State: out.state, Result: result, LastError: lastErr,
 		})
 		if err != nil || n == 0 {
-			return nil, err // n == 0: the lease was lost; the next holder observes
+			return err // n == 0: the lease was lost; the next holder observes
 		}
 		detail := out.state
 		if out.err != "" {
 			detail += ": " + out.err
 		}
-		if err := q.InsertPrivilegedActionEvent(ctx, dbq.InsertPrivilegedActionEventParams{ActionID: row.ID, Step: "executed", Detail: detail}); err != nil {
-			return nil, err
-		}
 		r.log().InfoContext(ctx, "privileged action finished", "action_id", row.ID, "state", out.state)
-		if out.state != StateUncertain {
-			return nil, nil
-		}
-		return attention.Open(ctx, tx, r.OwnerID, attention.NewQueueItem{
-			ID: "privileged_action_uncertain_" + row.ID, ItemType: api.QueueItemTypeError, Priority: api.QueueItemPriorityHigh,
-			Title:   "Privileged action " + row.ID + ": outcome unknown",
-			Content: "Mainloop could not tell whether " + row.Type + " ran. " + out.err + " Check the target before asking again.",
-		})
+		// An uncertain outcome reaches the owner through serve-api's raiseUncertain.
+		return q.InsertPrivilegedActionEvent(ctx, dbq.InsertPrivilegedActionEventParams{ActionID: row.ID, Step: "executed", Detail: detail})
 	})
 }
 

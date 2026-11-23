@@ -5,8 +5,10 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/oldsj/mainloop/server/internal/github"
+	"github.com/oldsj/mainloop/server/internal/privileged"
 )
 
 // GitHub holds pull requests by "owner/name#number" and records every write.
@@ -116,4 +118,70 @@ func (g *GitHub) CommentIssue(_ context.Context, repo github.Repo, n int, body s
 	defer g.mu.Unlock()
 	g.Comments = append(g.Comments, key(repo, n)+": "+body)
 	return &github.IssueWrite{Number: n, HTMLURL: fmt.Sprintf("https://github.com/%s/pull/%d#c", repo.FullName(), n)}, nil
+}
+
+// OnePassword is an in-memory privileged.OnePassword: one vault of items, each field addressed by
+// id or title.
+type OnePassword struct {
+	mu    sync.Mutex
+	items map[string]*opItem // by item title
+	// ValueErr, when set, fails the next Value calls.
+	ValueErr error
+	Reads    int
+}
+
+type opItem struct {
+	meta  privileged.OPItem
+	value string
+}
+
+// NewOnePassword returns an empty fake.
+func NewOnePassword() *OnePassword { return &OnePassword{items: map[string]*opItem{}} }
+
+// Put adds or replaces an item with one field, bumping its version.
+func (o *OnePassword) Put(vault, item, field, value string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	version := uint32(1)
+	if old, ok := o.items[item]; ok {
+		version = old.meta.Version + 1
+	}
+	o.items[item] = &opItem{value: value, meta: privileged.OPItem{
+		VaultID: "vault-" + vault, VaultTitle: vault, ItemID: "item-" + item, ItemTitle: item, Category: "Password",
+		Version: version, UpdatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), FieldID: "field-" + field,
+		FieldTitle: field, FieldType: "Concealed",
+	}}
+}
+
+// Lookup implements privileged.OnePassword.
+func (o *OnePassword) Lookup(_ context.Context, ref privileged.OPRef) (privileged.OPItem, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, it := range o.items {
+		m := it.meta
+		if (ref.Vault == m.VaultTitle || ref.Vault == m.VaultID) && (ref.Item == m.ItemTitle || ref.Item == m.ItemID) {
+			if ref.Field != m.FieldTitle && ref.Field != m.FieldID {
+				return privileged.OPItem{}, fmt.Errorf("%w: item %q has no field %q", privileged.ErrBadTarget, m.ItemTitle, ref.Field)
+			}
+			m.Empty = it.value == ""
+			return m, nil
+		}
+	}
+	return privileged.OPItem{}, fmt.Errorf("%w: vault %q has no item %q", privileged.ErrBadTarget, ref.Vault, ref.Item)
+}
+
+// Value implements privileged.OnePassword.
+func (o *OnePassword) Value(_ context.Context, want privileged.OPItem) (privileged.OPItem, []byte, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.Reads++
+	if o.ValueErr != nil {
+		return privileged.OPItem{}, nil, o.ValueErr
+	}
+	for _, it := range o.items {
+		if it.meta.ItemID == want.ItemID && it.meta.FieldID == want.FieldID {
+			return it.meta, []byte(it.value), nil
+		}
+	}
+	return privileged.OPItem{}, nil, fmt.Errorf("%w: gone", privileged.ErrBadTarget)
 }

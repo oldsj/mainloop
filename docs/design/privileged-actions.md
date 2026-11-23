@@ -269,7 +269,7 @@ In the cluster, never on the owner's Mac: no relay on the Mac and no new public 
 - **From slice 2.** `mainloop serve-executor`, its own Deployment in its own namespace
   (`mainloop-executor`) on internal-01, deployed through GitOps, with the first credential the API
   process must not hold (1Password). It has **no ingress** (no Service; a NetworkPolicy denies all
-  ingress): it takes work from PostgreSQL (`LISTEN` plus polling) and writes results back. No
+  ingress): it takes work from PostgreSQL by polling every 3 seconds and writes results back. No
   workspace, Session or MCP server can reach it. The executor's tools (`kubectl`, `talosctl`,
   `omnictl`, OpenSSH client) are pinned by version and checksum in its image.
 - **Network reach.** Two paths, because pod traffic leaving the cluster is masqueraded to the
@@ -319,13 +319,27 @@ the executor never falls back to another credential.
 
 ### Database and audit
 
-The executor has its own database role: `SELECT` on proposals and decisions, `UPDATE` only on the
-execution columns, `INSERT` on the event log. The API role cannot write execution state.
+The executor has its own database role, `mainloop_executor`. The database operator creates it,
+with a password the owner sets. The role has:
+
+- `SELECT` on the actions and their events
+- column `UPDATE` on the preflight and execution columns only
+- `INSERT` on the event log
+
+`mainloop migrate up` grants these privileges on every run once the role exists, through
+`privileged_executor_grants()`. It cannot write a decision, nor read any other table. The reverse
+does not hold (as built in slice 2): the API role still owns the tables and can write every column,
+so a compromised API process could forge a decision row. Slice 4's passkey-signed approvals are
+what close that.
 
 Results never contain a credential. For `onepassword.item_to_secret` the executor reads the field
-into memory, writes it into the Secret with server-side apply (field manager `mainloop-executor`,
-annotation `mainloop.dev/privileged-action: <id>`) and returns the Secret's name, key and
-resourceVersion, never the value or a hash of it. Error and command output go through the exact-
+into memory, by id, and writes it into the Secret only if the item's version equals the frozen
+one. A missing Secret is created. An existing one gets a JSON merge patch of the one key, carrying
+the frozen resourceVersion, so a concurrent change fails the write instead of being overwritten.
+Both write with field manager `mainloop-executor` and annotation
+`mainloop.dev/privileged-action: <id>`. The patch is not server-side apply, because a later apply by
+the same manager would drop keys that an earlier action wrote. The result is the Secret's name,
+key and resourceVersion, never the value or a hash of it. Error and command output go through the exact-
 value removal, the session redactor (`server/internal/sessions/redact.go`) and a length bound.
 
 An append-only `privileged_action_events` table records requested, preflighted (facts digest),

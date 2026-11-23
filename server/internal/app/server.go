@@ -26,6 +26,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/merge"
 	"github.com/oldsj/mainloop/server/internal/preview"
+	"github.com/oldsj/mainloop/server/internal/privileged"
 	"github.com/oldsj/mainloop/server/internal/projects"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/schedules"
@@ -65,6 +66,7 @@ type Server struct {
 	*dotfiles.DotfilesAPI
 	*transcripts.TranscriptsAPI
 	*preview.GrantAPI
+	*privileged.PrivilegedAPI
 
 	fallback
 
@@ -180,6 +182,7 @@ func New(d Deps) *Server {
 		DotfilesAPI:     dotfiles.NewAPI(d.Pool, d.Config.Identity.OwnerID),
 		TranscriptsAPI:  transcripts.NewAPI(d.Transcripts),
 		GrantAPI:        &preview.GrantAPI{Proxy: d.Preview, AuthOff: d.Auth == nil || d.Auth.Mode == auth.ModeOff},
+		PrivilegedAPI:   &privileged.PrivilegedAPI{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID},
 		deps:            d,
 	}
 }

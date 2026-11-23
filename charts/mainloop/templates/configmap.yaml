@@ -11,6 +11,9 @@ data:
   {{- if and .Values.auth.serviceAccounts.enabled (not (hasKey $data "MAINLOOP_AUTH_SERVICE_ACCOUNTS")) }}
   {{- $_ := set $data "MAINLOOP_AUTH_SERVICE_ACCOUNTS" (include "mainloop.authServiceAccounts" .) }}
   {{- end }}
+  {{- if .Values.executor.enabled }}
+  {{- $_ := set $data "MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED" "true" }}
+  {{- end }}
   {{- if not (hasKey $data "DB_HOST") }}
   {{- $_ := set $data "DB_HOST" (include "mainloop.dbHost" .) }}
   {{- end }}
