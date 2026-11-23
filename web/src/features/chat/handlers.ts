@@ -122,6 +122,8 @@ export interface ChatBackendState {
   modelPosts: { sessionId: string; body: Schemas['SessionModelRequest'] }[];
   /** Every `POST /sessions/{id}/effort` body the backend received, by session, in order. */
   effortPosts: { sessionId: string; body: Schemas['SessionEffortRequest'] }[];
+  /** Every `POST /sessions/{id}/web-fetch` body the backend received, by session, in order. */
+  webFetchPosts: { sessionId: string; body: Schemas['SessionWebFetchRequest'] }[];
 }
 
 /** The provider a completed selection leaves behind: chosen, prepared and confirmed. */
@@ -199,6 +201,7 @@ export function createChatBackend(
     providers: [CLAUDE_PROFILE, CODEX_PROFILE],
     modelPosts: [],
     effortPosts: [],
+    webFetchPosts: [],
     ...initial
   });
   const state = freshState();
@@ -363,6 +366,15 @@ export function createChatBackend(
       };
       return HttpResponse.json(response);
     }),
+    http.post(url('/sessions/:sessionId/web-fetch'), async ({ params, request }) => {
+      const sessionId = params.sessionId as string;
+      const body = (await request.json()) as Schemas['SessionWebFetchRequest'];
+      state.webFetchPosts = [...state.webFetchPosts, { sessionId, body }];
+      const native = nativeFor(sessionId) ?? sessionThread(sessionId).native;
+      const webFetch = { ...native.web_fetch, session_id: sessionId, enabled: body.enabled };
+      putNativeFor(sessionId, { ...native, web_fetch: webFetch });
+      return HttpResponse.json(webFetch);
+    }),
     http.get(url('/main-thread'), () => {
       state.mainThreadReads += 1;
       return HttpResponse.json(state.mainThread);
@@ -468,9 +480,10 @@ export function createChatBackend(
       };
       return HttpResponse.json(response);
     }),
-    http.get(url('/sessions/:sessionId/native'), ({ params }) =>
-      HttpResponse.json(sessionThread(params.sessionId as string).native)
-    ),
+    http.get(url('/sessions/:sessionId/native'), ({ params }) => {
+      const sessionId = params.sessionId as string;
+      return HttpResponse.json(nativeFor(sessionId) ?? sessionThread(sessionId).native);
+    }),
     http.get(url('/sessions/:sessionId/conversation'), ({ params }) => {
       const sessionId = params.sessionId as string;
       const body: Schemas['SessionConversationResponse'] = {

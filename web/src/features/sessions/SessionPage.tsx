@@ -40,6 +40,7 @@ import {
   useWorkspaces
 } from './queries';
 import { SessionChatSlot } from './SessionChatSlot';
+import { WebFetchSection } from './WebFetchSection';
 import { WorkspaceLifecycleBadge, WorkspacePublicationBadge } from './WorkspaceBadges';
 
 /**
@@ -65,6 +66,7 @@ function LiveWithRequests({
       requests={(skip) => <SessionRequests sessionId={sessionId} skip={skip} />}
       pending={pending}
       notes={notes}
+      sections={() => <WebFetchSection sessionId={sessionId} />}
     />
   );
 }

@@ -51,6 +51,7 @@ export function LiveSession({
   pending = [],
   renderBar,
   provider,
+  sections,
   notes,
   prefill,
   onPrefillUsed,
@@ -67,6 +68,8 @@ export function LiveSession({
   renderBar?: (bar: LiveBar) => ReactNode;
   /** The session's provider choice, where it has one (the main thread): first in the controls picker. */
   provider?: LiveProvider;
+  /** Sections after model and effort in the controls picker, such as web fetch. */
+  sections?: (close: () => void) => ReactNode;
   /** Whose choice the model and effort are, shown on the session controls chip. */
   notes?: LiveNotes;
   /** Leaves the live view for the regular one, offered when the live channel is unavailable. */
@@ -141,6 +144,7 @@ export function LiveSession({
       needsAnswer={pending.length > 0}
       renderBar={renderBar}
       provider={provider}
+      sections={sections}
       notes={notes}
       prefill={prefill}
       onPrefillUsed={onPrefillUsed}
@@ -168,6 +172,8 @@ export interface LiveSessionViewProps {
   /** Draws the row above the transcript. Without it the view draws its own. */
   renderBar?: (bar: LiveBar) => ReactNode;
   provider?: LiveProvider;
+  /** Sections after model and effort in the controls picker, such as web fetch. */
+  sections?: (close: () => void) => ReactNode;
   notes?: LiveNotes;
   /** Text for the composer, taken once; see `LiveSession`. */
   prefill?: string;
@@ -269,6 +275,7 @@ export function LiveSessionView({
   needsAnswer = false,
   renderBar,
   provider,
+  sections,
   notes,
   prefill,
   onPrefillUsed
@@ -357,6 +364,7 @@ export function LiveSessionView({
         interrupt={interrupt}
         cycleMode={cycleMode}
         provider={provider}
+        sections={sections}
         notes={notes}
         prefill={prefill}
         onPrefillUsed={onPrefillUsed}
@@ -671,6 +679,7 @@ function Composer({
   interrupt,
   cycleMode,
   provider,
+  sections,
   notes,
   prefill,
   onPrefillUsed,
@@ -690,6 +699,8 @@ function Composer({
   interrupt: () => void;
   cycleMode: () => void;
   provider?: LiveProvider;
+  /** Sections after model and effort in the controls picker, such as web fetch. */
+  sections?: (close: () => void) => ReactNode;
   notes?: LiveNotes;
   /** The controls picker, opened from the chip below the input and by `/model` or `/effort`. */
   controlsOpen: boolean;
@@ -925,6 +936,7 @@ function Composer({
               state={state}
               set={set}
               provider={provider}
+              sections={sections}
               close={() => setControlsOpen(false)}
             />
           </SessionControls>
@@ -953,16 +965,19 @@ function Composer({
   );
 }
 
-/** The picker's sections: the provider where the session has one, then model and effort. */
+/** The picker's sections: the provider where the session has one, then model and effort, then the rest. */
 function ControlsPicker({
   state,
   set,
   provider,
+  sections,
   close
 }: {
   state: LiveState;
   set: LiveSessionViewProps['set'];
   provider?: LiveProvider;
+  /** Sections after model and effort in the controls picker, such as web fetch. */
+  sections?: (close: () => void) => ReactNode;
   close: () => void;
 }) {
   const cur = state.models.find((m) => m.value === state.model);
@@ -1028,6 +1043,7 @@ function ControlsPicker({
           </button>
         ))}
       </div>
+      {sections ? sections(close) : null}
       <button
         type="button"
         onClick={close}
