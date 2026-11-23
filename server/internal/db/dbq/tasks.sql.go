@@ -3609,7 +3609,7 @@ func (q *Queries) LockParentCurrentAttemptShared(ctx context.Context, id string)
 }
 
 const lockProjectMaxWorkers = `-- name: LockProjectMaxWorkers :one
-SELECT max_workers FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE
+SELECT max_workers FROM projects WHERE id = $1 AND user_id = $2 FOR NO KEY UPDATE
 `
 
 type LockProjectMaxWorkersParams struct {
@@ -3617,6 +3617,8 @@ type LockProjectMaxWorkersParams struct {
 	UserID string
 }
 
+// FOR NO KEY UPDATE, not FOR UPDATE: it changes no key, so a task inserted in the project (whose
+// foreign key takes FOR KEY SHARE on this row) never waits for it, and cannot deadlock with it.
 func (q *Queries) LockProjectMaxWorkers(ctx context.Context, arg LockProjectMaxWorkersParams) (*int32, error) {
 	row := q.db.QueryRow(ctx, lockProjectMaxWorkers, arg.ID, arg.UserID)
 	var max_workers *int32
@@ -3625,7 +3627,7 @@ func (q *Queries) LockProjectMaxWorkers(ctx context.Context, arg LockProjectMaxW
 }
 
 const lockProjectSupervisorSettings = `-- name: LockProjectSupervisorSettings :one
-SELECT supervisor_profile_id, supervisor_model, supervisor_effort FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE
+SELECT supervisor_profile_id, supervisor_model, supervisor_effort FROM projects WHERE id = $1 AND user_id = $2 FOR NO KEY UPDATE
 `
 
 type LockProjectSupervisorSettingsParams struct {
@@ -3639,6 +3641,9 @@ type LockProjectSupervisorSettingsRow struct {
 	SupervisorEffort    *string
 }
 
+// FOR NO KEY UPDATE: a delegate holds its parent (the standing supervisor) and then inserts the
+// child, whose foreign key locks this row FOR KEY SHARE; the settings change locks this row and
+// then the supervisor's. FOR UPDATE here made those two deadlock.
 func (q *Queries) LockProjectSupervisorSettings(ctx context.Context, arg LockProjectSupervisorSettingsParams) (LockProjectSupervisorSettingsRow, error) {
 	row := q.db.QueryRow(ctx, lockProjectSupervisorSettings, arg.ID, arg.UserID)
 	var i LockProjectSupervisorSettingsRow

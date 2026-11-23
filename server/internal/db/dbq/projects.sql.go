@@ -454,7 +454,7 @@ func (q *Queries) ListProjectsNeedingMetadata(ctx context.Context, arg ListProje
 }
 
 const lockOwnedProject = `-- name: LockOwnedProject :one
-SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at, workspace_service_command, workspace_service_ports, max_workers, supervisor_profile_id, supervisor_model, supervisor_effort FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE
+SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at, workspace_service_command, workspace_service_ports, max_workers, supervisor_profile_id, supervisor_model, supervisor_effort FROM projects WHERE id = $1 AND user_id = $2 FOR NO KEY UPDATE
 `
 
 type LockOwnedProjectParams struct {
@@ -462,6 +462,7 @@ type LockOwnedProjectParams struct {
 	UserID string
 }
 
+// FOR NO KEY UPDATE: its callers change no key, so rows that reference the project are not blocked.
 func (q *Queries) LockOwnedProject(ctx context.Context, arg LockOwnedProjectParams) (Project, error) {
 	row := q.db.QueryRow(ctx, lockOwnedProject, arg.ID, arg.UserID)
 	var i Project

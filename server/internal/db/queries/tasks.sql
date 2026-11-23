@@ -921,7 +921,9 @@ WHERE t.owner_id = $1 AND t.project_id = $2 AND t.parent_task_id IS NOT NULL
 SELECT max_workers FROM projects WHERE id = $1 AND user_id = $2;
 
 -- name: LockProjectMaxWorkers :one
-SELECT max_workers FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE;
+-- FOR NO KEY UPDATE, not FOR UPDATE: it changes no key, so a task inserted in the project (whose
+-- foreign key takes FOR KEY SHARE on this row) never waits for it, and cannot deadlock with it.
+SELECT max_workers FROM projects WHERE id = $1 AND user_id = $2 FOR NO KEY UPDATE;
 
 -- name: SetProjectMaxWorkers :exec
 UPDATE projects SET max_workers = sqlc.narg(max_workers) WHERE id = sqlc.arg(id);
@@ -935,7 +937,10 @@ VALUES (sqlc.arg(project_id), sqlc.arg(owner_id), sqlc.arg(changed_by), sqlc.nar
 SELECT supervisor_profile_id, supervisor_model, supervisor_effort FROM projects WHERE id = $1 AND user_id = $2;
 
 -- name: LockProjectSupervisorSettings :one
-SELECT supervisor_profile_id, supervisor_model, supervisor_effort FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE;
+-- FOR NO KEY UPDATE: a delegate holds its parent (the standing supervisor) and then inserts the
+-- child, whose foreign key locks this row FOR KEY SHARE; the settings change locks this row and
+-- then the supervisor's. FOR UPDATE here made those two deadlock.
+SELECT supervisor_profile_id, supervisor_model, supervisor_effort FROM projects WHERE id = $1 AND user_id = $2 FOR NO KEY UPDATE;
 
 -- name: SetProjectSupervisorSettings :exec
 UPDATE projects
