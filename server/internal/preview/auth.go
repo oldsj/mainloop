@@ -181,7 +181,9 @@ func (p *Proxy) serveAuth(w http.ResponseWriter, r *http.Request, h Host) {
 			refuse(w, http.StatusUnauthorized, "Preview sign-in expired; open the preview from Mainloop again")
 			return
 		}
-		http.SetCookie(w, &http.Cookie{
+		// Secure whenever previews are HTTPS; only a plain-HTTP development base URL leaves it off,
+		// because the browser would drop a Secure cookie there. HttpOnly and SameSite are fixed.
+		http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure follows the base URL's scheme, see above.
 			Name: p.cookieName(), Value: p.mint(kindSession, h, p.now().Add(SessionTTL)), Path: "/",
 			MaxAge: int(SessionTTL.Seconds()), HttpOnly: true, Secure: p.base.scheme == "https", SameSite: http.SameSiteLaxMode,
 		})
