@@ -29,7 +29,7 @@ export function useExplorerPrefs() {
   return { prefs, update };
 }
 
-/** Desktop only: folds the sidebar away; the tab strip's button or the shortcut brings it back. */
+/** Desktop only: folds the sidebar away; the activity bar's button or the shortcut brings it back. */
 function HideSidebar({ onClick }: { onClick: () => void }) {
   return (
     <Button
@@ -52,17 +52,15 @@ export interface ExplorerSidebarProps {
   column: AgentColumnState;
   ready: boolean;
   failed: boolean;
-  /** How many things need the owner, for **inbox**. */
-  needs: number;
   /** Opens the command palette: **menu**. */
   onMenu: () => void;
 }
 
 /**
- * Desktop: the sidebar on the left, beside the page. It is the spaces and their agents, with **new**,
- * **inbox** and **menu** between the two lists. It is resizable from its right edge, and is hidden
- * with its own button or the sidebar shortcut (⌘B on a Mac; the prefix and B anywhere); the tab strip brings
- * it back. The shell owns the prefs and the data, since the tab strip and the status bar read them
+ * Desktop: the sidebar, between the activity bar and the page. It is the spaces and their agents,
+ * with **new** and **menu** between the two lists. It is resizable from its right edge, and is
+ * hidden with its own button, the activity bar's, or the sidebar shortcut (⌘B on a Mac; the prefix
+ * and B anywhere); the activity bar brings it back. The shell owns the prefs and the data, since the tab strip and the status bar read them
  * too.
  */
 export function ExplorerSidebar({
@@ -71,7 +69,6 @@ export function ExplorerSidebar({
   column,
   ready,
   failed,
-  needs,
   onMenu
 }: ExplorerSidebarProps) {
   const open = useOpenTarget();
@@ -124,7 +121,6 @@ export function ExplorerSidebar({
         failed={failed}
         onOpen={open}
         onAsk={ask}
-        needs={needs}
         onMenu={onMenu}
         action={<HideSidebar onClick={collapse} />}
       />

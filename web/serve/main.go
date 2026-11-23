@@ -18,6 +18,7 @@ import (
 	"flag"
 	"io/fs"
 	"log"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,6 +31,12 @@ const (
 	immutableCache = "public, max-age=31536000, immutable"
 	revalidate     = "no-cache"
 )
+
+// The app serves its own font. Go's built-in table has no entry for it and the image has no system
+// MIME table, so the type is named here rather than left to content sniffing.
+func init() {
+	_ = mime.AddExtensionType(".woff2", "font/woff2")
+}
 
 // contentSecurityPolicy returns the CSP for a build whose API lives at apiURL.
 func contentSecurityPolicy(apiURL string) string {
@@ -48,9 +55,10 @@ func contentSecurityPolicy(apiURL string) string {
 	return strings.Join([]string{
 		"default-src 'self'",
 		"script-src 'self'",
-		// Radix positions popovers with inline styles; the font CSS comes from Google Fonts.
-		"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-		"font-src 'self' https://fonts.gstatic.com",
+		// Radix positions popovers with inline styles. The fonts are the system's own, so no font or
+		// stylesheet is fetched from anywhere else.
+		"style-src 'self' 'unsafe-inline'",
+		"font-src 'self'",
 		// Project pages show the repository owner's GitHub avatar (the API's avatar_url); chat
 		// images are data: URLs.
 		"img-src 'self' data: https://avatars.githubusercontent.com",

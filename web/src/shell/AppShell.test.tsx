@@ -92,27 +92,41 @@ describe('shell switch', () => {
     expect(screen.queryByTestId('mobile-tab-bar')).not.toBeInTheDocument();
   });
 
-  it('lays the desktop out as a terminal workspace manager: sidebar, tabs over the page, status bar, and no icon bar', async () => {
+  it('lays the desktop out left to right: activity bar, sidebar, tabs over the page, and a status bar under them', async () => {
     setViewport(true);
     await renderAt('/');
+    const bar = screen.getByRole('navigation', { name: 'Primary' });
     const aside = screen.getByRole('complementary', { name: 'Sidebar' });
     const strip = screen.getByTestId('tab-strip');
     const main = screen.getByRole('main');
     const status = screen.getByTestId('status-bar');
     expect(await within(aside).findByRole('group', { name: 'agents' })).toBeInTheDocument();
     expect(main).not.toContainElement(aside);
-    // Left to right, then the status bar last.
     const follows = (a: Element, b: Element) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(bar, aside)).toBe(true);
     expect(follows(aside, strip)).toBe(true);
     expect(follows(strip, main)).toBe(true);
     expect(follows(main, status)).toBe(true);
-    // There is no header and no bar of icons: the sidebar is the first thing on the left.
+    // There is no top header: the bar of icons is the first thing on the left.
     expect(screen.queryByText('$ mainloop')).toBeNull();
-    expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
-    expect(screen.getByTestId('desktop-shell').firstElementChild?.firstElementChild).toBe(aside);
-    // What the bar held is one row of words between the sidebar's lists: start something, the
-    // Inbox, and the menu that reaches everything else.
+    expect(screen.getByTestId('desktop-shell').firstElementChild?.firstElementChild).toBe(bar);
+    // Mainloop's mark leads; then the Inbox, the sidebar's button and search; health, Settings and
+    // the theme are at the foot.
+    const home = within(bar).getByRole('link', { name: 'Mainloop home' });
+    expect(within(home).getByTestId('logo-mark')).toBeInTheDocument();
+    expect(
+      [...bar.querySelectorAll('a, button')].map((item) => item.getAttribute('aria-label'))
+    ).toEqual([
+      'Mainloop home',
+      'Inbox',
+      'Spaces and agents',
+      'Search',
+      'Orchestration health',
+      'Settings',
+      expect.stringMatching(/^Theme: /)
+    ]);
+    // The sidebar keeps its row of words between the lists: start something, and the menu.
     const row = within(aside).getByTestId('column-actions');
     expect(
       within(row)
@@ -120,7 +134,6 @@ describe('shell switch', () => {
         .map((button) => [button.textContent, button.getAttribute('aria-label')])
     ).toEqual([
       ['new', 'New: ask Mainloop'],
-      ['inbox', 'Inbox'],
       ['menu', 'Menu']
     ]);
   });
@@ -175,24 +188,48 @@ describe('shell switch', () => {
     );
   });
 
-  it('renders the compact shell on a narrow viewport: one row at the top, and no bar at the bottom', async () => {
+  it('renders the compact shell on a narrow viewport: the tabs on top, the page, and a bar at the bottom', async () => {
     setViewport(false);
     await renderAt('/');
     const shell = screen.getByTestId('compact-shell');
-    expect(screen.queryByTestId('mobile-tab-bar')).toBeNull();
     expect(screen.queryByTestId('status-bar')).toBeNull();
-    // The row is the shell's first thing: the spaces and agents, the space's tabs, the Inbox.
+    expect(screen.queryByTestId('activity-bar')).toBeNull();
+    // The row on top is the space's tabs alone.
     const strip = screen.getByTestId('tab-strip');
     expect(shell.firstElementChild).toBe(strip);
-    expect(
-      [...strip.children].map(
-        (child) => child.getAttribute('aria-label') ?? child.getAttribute('data-testid')
-      )
-    ).toEqual(['Spaces and agents', 'tab-scroller', 'Inbox']);
+    expect([...strip.children].map((child) => child.getAttribute('data-testid'))).toEqual([
+      'tab-scroller'
+    ]);
     expect(within(strip).getByRole('button', { current: 'page' })).toHaveTextContent('main');
-    // The page is under it, and the lists are not drawn until they are asked for.
+    // The bar at the bottom is the desktop's activity bar laid flat, with words under the icons.
+    const bar = screen.getByTestId('mobile-tab-bar');
+    expect(shell.lastElementChild).toBe(bar);
+    expect(
+      within(bar)
+        .getAllByRole('button')
+        .map((item) => [item.textContent, item.getAttribute('aria-label')])
+    ).toEqual([
+      ['Chat', 'Chat'],
+      ['Inbox', 'Inbox'],
+      ['Agents', 'Spaces and agents'],
+      ['Search', 'Search']
+    ]);
+    expect(within(bar).getByRole('button', { name: 'Chat' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
+    expect(within(bar).getByTestId('logo-mark')).toBeInTheDocument();
+    // The page is between them, and the lists are not drawn until they are asked for.
     expect(screen.getByRole('main')).not.toContainElement(strip);
     expect(screen.queryByTestId('agent-column')).toBeNull();
+  });
+
+  it('opens the command palette from the phone’s Search', async () => {
+    setViewport(false);
+    const user = userEvent.setup();
+    await renderAt('/');
+    await user.click(screen.getByTestId('tab-search'));
+    expect(await screen.findByRole('combobox')).toHaveFocus();
   });
 
   it('lets ?view=compact win on a wide viewport', async () => {
@@ -351,9 +388,9 @@ describe('theme selector', () => {
   it('sets data-theme on <html> and saves the choice', async () => {
     setViewport(true);
     const user = userEvent.setup();
-    // On desktop the theme menu is in Settings; the command palette lists the themes too.
-    await renderAt('/settings');
-    await user.click(await screen.findByTestId('theme-selector'));
+    // The theme menu is at the foot of the activity bar; Settings and the palette have the themes too.
+    await renderAt('/');
+    await user.click(within(screen.getByTestId('activity-bar')).getByTestId('theme-selector'));
     await user.click(await screen.findByTestId('theme-nord'));
     expect(document.documentElement).toHaveAttribute('data-theme', 'nord');
     expect(localStorage.getItem('mainloop-theme')).toBe('nord');
@@ -787,24 +824,25 @@ describe('explorer panel', () => {
     expect(within(bar).queryByTestId('status-counts-pending')).toBeNull();
   });
 
-  it('hides the sidebar, and brings it back from the tab strip', async () => {
+  it('hides the sidebar, and brings it back from the activity bar', async () => {
     setViewport(true);
     const user = userEvent.setup();
     await renderAt('/');
-    // While the sidebar shows, the strip has nothing before its first tab.
-    expect(screen.queryByRole('button', { name: 'Show sidebar' })).toBeNull();
+    const toggle = screen.getByRole('button', { name: 'Spaces and agents' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
     await user.click(screen.getByRole('button', { name: 'Hide sidebar' }));
     expect(screen.queryByTestId('explorer-aside')).toBeNull();
     expect(JSON.parse(localStorage.getItem('mainloop.explorer.v1') ?? '{}')).toMatchObject({
       collapsed: true
     });
-    // Hidden, the strip is the chrome that is left: its first control brings the sidebar back.
-    const show = within(screen.getByTestId('tab-strip')).getByRole('button', {
-      name: 'Show sidebar'
-    });
-    await user.click(show);
+    // The bar's button says the sidebar is away, and brings it back.
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await user.click(toggle);
     expect(await screen.findByTestId('explorer-aside')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Show sidebar' })).toBeNull();
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    // Pressing it while the sidebar shows hides it again.
+    await user.click(toggle);
+    expect(screen.queryByTestId('explorer-aside')).toBeNull();
   });
 
   describe('the sidebar shortcut', () => {
@@ -1031,16 +1069,17 @@ describe('explorer panel', () => {
     );
   });
 
-  it('keeps the Needs-you count on the sidebar’s inbox and the status bar, and on the bar when the sidebar is hidden', async () => {
+  it('keeps the Needs-you count on the activity bar and the status bar, with the sidebar hidden too', async () => {
     setViewport(true);
     server.use(tasksList(() => HttpResponse.json([view({ reason: 'owner_decision' })])));
     const user = userEvent.setup();
     await renderAt('/');
-    const inbox = await screen.findByRole('button', { name: 'Inbox, 1 need you' });
-    expect(within(inbox).getByTestId('column-needs')).toHaveTextContent('1');
+    const inbox = await screen.findByRole('link', { name: 'Inbox, 1 need you' });
+    expect(within(inbox).getByTestId('activity-needs')).toHaveTextContent('1');
     expect(screen.getByTestId('status-needs')).toHaveTextContent('1 needs you');
     await user.click(screen.getByRole('button', { name: 'Hide sidebar' }));
     expect(screen.queryByTestId('explorer-aside')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Inbox, 1 need you' })).toBeInTheDocument();
     expect(screen.getByTestId('status-needs')).toHaveTextContent('1 needs you');
     // The working count brings the sidebar back, where the working agents are.
     await user.click(screen.getByTestId('status-working'));
@@ -1204,7 +1243,7 @@ describe('answer view', () => {
     await waitFor(() => expect(bodies).toEqual([{ response: 'Ship it' }]));
   });
 
-  it('opens the answer view from the sidebar’s inbox, with Activity beside it', async () => {
+  it('opens the answer view from the activity bar’s Inbox, with Activity beside it', async () => {
     setViewport(true);
     const user = userEvent.setup();
     server.use(
@@ -1212,8 +1251,7 @@ describe('answer view', () => {
       activityRead(() => HttpResponse.json([]))
     );
     const router = await renderAt('/');
-    const inbox = await screen.findByRole('button', { name: 'Inbox, 1 need you' });
-    await user.click(inbox);
+    await user.click(await screen.findByRole('link', { name: 'Inbox, 1 need you' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/inbox'));
     await user.click(await screen.findByRole('button', { name: 'Activity' }));
     expect(router.state.location.search).toMatchObject({ show: 'activity' });
@@ -1510,7 +1548,7 @@ describe('answer view on desktop', () => {
     expect(await screen.findByTestId('main-thread')).toBeInTheDocument();
   });
 
-  it('shows the same Needs-you number on the sidebar’s inbox, the status bar and the Inbox', async () => {
+  it('shows the same Needs-you number on the activity bar, the status bar and the Inbox', async () => {
     setViewport(true);
     // One listed owner action, and one failed task that can be retried and that no item names.
     server.use(
@@ -1522,8 +1560,8 @@ describe('answer view on desktop', () => {
       )
     );
     await renderAt('/inbox');
-    const inbox = await screen.findByRole('button', { name: 'Inbox, 2 need you' });
-    // The owner is on the Inbox, so the sidebar's word for it is marked.
+    const inbox = await screen.findByRole('link', { name: 'Inbox, 2 need you' });
+    // The owner is on the Inbox, so the bar's item for it is marked.
     expect(inbox).toHaveAttribute('aria-current', 'page');
     expect(screen.getByTestId('status-needs')).toHaveTextContent('2 need you');
     // The column says it per agent: the failed task has the red dot, and so does the main thread.

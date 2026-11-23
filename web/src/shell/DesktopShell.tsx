@@ -1,8 +1,7 @@
 import { useRouterState } from '@tanstack/react-router';
-import { PanelLeftOpen } from 'lucide-react';
 import { useEffect, type ReactNode } from 'react';
 import { cn } from '@/components/ui/cn';
-import { isApplePlatform, isShortcut, sidebarShortcutLabel } from '@/lib/platform';
+import { isApplePlatform, isShortcut } from '@/lib/platform';
 import {
   ExplorerSidebar,
   loadingTabs,
@@ -16,6 +15,7 @@ import {
   useOpenTarget,
   workingCount
 } from '@/features/explorer';
+import { ActivityBar } from './ActivityBar';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
 import { COMMAND_KEYS, useShellCommands } from './commands';
@@ -35,14 +35,15 @@ function focusCurrentSpace(tries = 20): void {
 }
 
 /**
- * ≥1024 px, laid out as a terminal workspace manager is: the sidebar (spaces and their agents) on
- * the left, the page beside it under a strip of tabs (the current space's agents), and a status bar
- * along the bottom. There is no header and no icon bar: **menu** in the sidebar opens the command
- * palette, which reaches every page. On home the centre is the Mainloop chat alone, which owns the
- * only scroll; other pages scroll in the centre.
+ * ≥1024 px: an activity bar of icons down the left edge, as an editor has; beside it the sidebar
+ * (spaces and their agents), as a terminal workspace manager has; then the page under a strip of
+ * tabs (the current space's agents); and a status bar along the bottom. There is no top header. On
+ * home the centre is the Mainloop chat alone, which owns the only scroll; other pages scroll in the
+ * centre.
  *
- * The shell owns the explorer's counts and prefs, and the sidebar's spaces and agents, because three
- * things read them: the sidebar, the tab strip and the status bar (the counts).
+ * The shell owns the explorer's data and prefs, and the sidebar's spaces and agents, because four
+ * things read them: the activity bar (the Needs-you count, and whether the sidebar shows), the
+ * sidebar, the tab strip and the status bar (the counts).
  */
 export function DesktopShell({
   children,
@@ -107,6 +108,12 @@ export function DesktopShell({
   return (
     <div data-testid="desktop-shell" className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1">
+        <ActivityBar
+          collapsed={prefs.collapsed}
+          needs={explorer.needs}
+          onToggleSidebar={() => update((prev) => ({ ...prev, collapsed: !prev.collapsed }))}
+          onSearch={onSearch}
+        />
         {prefs.collapsed ? null : (
           <PanelBoundary name="Explorer">
             <ExplorerSidebar
@@ -115,7 +122,6 @@ export function DesktopShell({
               column={column}
               ready={listed}
               failed={explorer.failed}
-              needs={explorer.needs}
               onMenu={onSearch}
             />
           </PanelBoundary>
@@ -130,21 +136,6 @@ export function DesktopShell({
               onOpen={open}
               onAsk={ask}
               ready={listed}
-              leading={
-                // With the sidebar hidden, the strip is the only chrome left: it brings it back.
-                prefs.collapsed ? (
-                  <button
-                    type="button"
-                    data-testid="show-sidebar"
-                    aria-label="Show sidebar"
-                    title={`Show sidebar (${sidebarShortcutLabel()})`}
-                    onClick={show}
-                    className="text-muted-foreground hover:bg-accent hover:text-accent-foreground px-sm min-h-control focus-visible:ring-ring inline-flex shrink-0 items-center outline-none focus-visible:ring-1 focus-visible:ring-inset"
-                  >
-                    <PanelLeftOpen className="size-4" aria-hidden="true" />
-                  </button>
-                ) : null
-              }
             />
           </PanelBoundary>
           {/* Relative, so an absolutely placed descendant scrolls with it and never stretches the page. */}

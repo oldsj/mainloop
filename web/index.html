@@ -8,11 +8,13 @@
       content="Mainloop: attention, projects and agent sessions in one place"
     />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- The app's own monospace (Geist Mono), fetched early so text does not change face after it is drawn. -->
     <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
+      rel="preload"
+      href="/src/assets/fonts/GeistMono-Variable.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
     />
     <script src="/theme-init.js"></script>
     <title>Mainloop</title>

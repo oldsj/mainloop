@@ -1,5 +1,5 @@
 import { useNavigate, useRouterState } from '@tanstack/react-router';
-import { Inbox, Menu } from 'lucide-react';
+import { Inbox, ListTree, Search } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { cn } from '@/components/ui/cn';
 import {
@@ -16,26 +16,22 @@ import {
 import { badgeText } from '@/features/inbox/model';
 import { COMMAND_KEYS, useShellCommands } from './commands';
 import { prefixAction } from './prefixKeys';
+import { LogoMark } from './LogoMark';
 import { MAIN_ID } from './RouteFocus';
 import { PanelBoundary } from './PanelBoundary';
 import type { Tab } from './view';
 
-/** A control at either end of the top row: a 44 px touch target that does not scroll with the tabs. */
-const END =
-  'text-muted-foreground hover:text-foreground size-control focus-visible:ring-ring relative inline-flex shrink-0 items-center justify-center outline-none focus-visible:ring-1 focus-visible:ring-inset [&_svg]:size-4';
-
 /**
- * <1024 px: one agent, full screen, as a terminal workspace manager is on a narrow terminal. There
- * is no header and no bar at the bottom. One row at the top holds, left to right:
+ * <1024 px: one agent, full screen, between two bars.
  *
- * - the button for the **spaces and agents**, which opens them over the page (`?tab=explorer`, so
- *   Back closes them);
- * - the current space's **tabs**, which scroll sideways, with "+" at their end;
- * - the **Inbox**, with the Needs-you count, so attention keeps polling and is one tap away.
+ * - On top, the current space's **tabs**, which scroll sideways, with "+" at their end.
+ * - Under it the routed page. It is built the first time it shows and stays mounted while the
+ *   spaces and agents cover it, so a conversation keeps its place.
+ * - At the bottom, the desktop's activity bar laid flat: **Chat** (the main chat), **Inbox** with
+ *   the Needs-you count, **Agents** (the spaces and agents over the page: `?tab=explorer`, so Back
+ *   puts them away) and **Search** (the command palette, which reaches every other page).
  *
- * Under it is the routed page. It is built the first time it shows and stays mounted while the
- * spaces and agents cover it, so a conversation keeps its place. Choosing a space, an agent or a tab
- * goes to its page and puts the list away.
+ * Choosing a space, an agent or a tab goes to its page and puts the list away.
  */
 export function CompactShell({
   tab,
@@ -91,11 +87,7 @@ export function CompactShell({
   });
 
   return (
-    // The bottom inset is the shell's: there is no bar down there to take it.
-    <div
-      data-testid="compact-shell"
-      className="flex min-h-0 flex-1 flex-col pb-[env(safe-area-inset-bottom)]"
-    >
+    <div data-testid="compact-shell" className="flex min-h-0 flex-1 flex-col">
       <PanelBoundary name="Tabs">
         <TabStrip
           model={column.model}
@@ -105,39 +97,6 @@ export function CompactShell({
           onOpen={open}
           onAsk={ask}
           ready={listed}
-          leading={
-            <button
-              type="button"
-              data-testid="agents-toggle"
-              aria-label="Spaces and agents"
-              aria-expanded={listing}
-              onClick={toggle}
-              className={cn(END, listing && 'bg-accent text-accent-foreground')}
-            >
-              <Menu aria-hidden="true" />
-            </button>
-          }
-          trailing={
-            <button
-              type="button"
-              data-testid="inbox-link"
-              aria-label={needs > 0 ? `Inbox, ${needs} need you` : 'Inbox'}
-              aria-current={pathname === '/inbox' && !listing ? 'page' : undefined}
-              onClick={() => open({ to: 'needs' })}
-              className={cn(END, pathname === '/inbox' && !listing && 'text-foreground')}
-            >
-              <Inbox aria-hidden="true" />
-              {needs > 0 ? (
-                <span
-                  data-testid="needs-badge"
-                  aria-hidden="true"
-                  className="bg-destructive text-destructive-foreground text-2xs absolute top-1.5 right-1 inline-flex min-w-4 items-center justify-center px-0.5 leading-4 font-semibold tabular-nums"
-                >
-                  {badgeText(needs)}
-                </span>
-              ) : null}
-            </button>
-          }
         />
       </PanelBoundary>
       {/* The home chat owns its scroll, so the pane around it does not scroll as well. It is the
@@ -167,12 +126,98 @@ export function CompactShell({
               failed={explorer.failed}
               onOpen={open}
               onAsk={ask}
-              needs={needs}
               onMenu={onSearch}
             />
           </PanelBoundary>
         ) : null}
       </main>
+      {/* The desktop's activity bar, laid along the bottom where a thumb reaches: the same four
+          destinations, with words under the icons. It takes the bottom safe area. */}
+      <nav
+        data-testid="mobile-tab-bar"
+        aria-label="Primary"
+        className="border-border-subtle bg-card flex shrink-0 border-t pb-[env(safe-area-inset-bottom)]"
+      >
+        <BarItem
+          testId="tab-chat"
+          label="Chat"
+          on={onHome && !listing}
+          onClick={() => open({ to: 'chat' })}
+        >
+          <LogoMark className="size-4" />
+        </BarItem>
+        <BarItem
+          testId="inbox-link"
+          label="Inbox"
+          name={needs > 0 ? `Inbox, ${needs} need you` : 'Inbox'}
+          on={pathname === '/inbox' && !listing}
+          onClick={() => open({ to: 'needs' })}
+        >
+          <Inbox className="size-4" aria-hidden="true" />
+          {needs > 0 ? (
+            <span
+              data-testid="needs-badge"
+              aria-hidden="true"
+              className="bg-destructive text-destructive-foreground text-2xs absolute -top-1.5 left-3 inline-flex min-w-4 items-center justify-center px-0.5 leading-4 font-semibold tabular-nums"
+            >
+              {badgeText(needs)}
+            </span>
+          ) : null}
+        </BarItem>
+        <BarItem
+          testId="agents-toggle"
+          label="Agents"
+          name="Spaces and agents"
+          on={listing}
+          expanded={listing}
+          onClick={toggle}
+        >
+          <ListTree className="size-4" aria-hidden="true" />
+        </BarItem>
+        <BarItem testId="tab-search" label="Search" onClick={onSearch}>
+          <Search className="size-4" aria-hidden="true" />
+        </BarItem>
+      </nav>
     </div>
+  );
+}
+
+/** One item of the phone's bottom bar: an icon over a word, a 44 px touch target, lit while it is where the owner is. */
+function BarItem({
+  testId,
+  label,
+  name,
+  on = false,
+  expanded,
+  onClick,
+  children
+}: {
+  testId: string;
+  label: string;
+  /** The accessible name, when it says more than the word under the icon. */
+  name?: string;
+  on?: boolean;
+  /** For the item that opens the lists over the page: whether they are showing. */
+  expanded?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      aria-label={name ?? label}
+      // A page's item is marked as where the owner is; the lists' item says whether they are open.
+      aria-current={expanded === undefined && on ? 'page' : undefined}
+      aria-expanded={expanded}
+      onClick={onClick}
+      className={cn(
+        'gap-xs text-2xs flex min-h-11 flex-1 flex-col items-center justify-center',
+        on ? 'bg-accent text-accent-foreground font-semibold' : 'text-muted-foreground'
+      )}
+    >
+      <span className="relative inline-flex">{children}</span>
+      {label}
+    </button>
   );
 }
