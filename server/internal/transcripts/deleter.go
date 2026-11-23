@@ -2,6 +2,7 @@ package transcripts
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -42,6 +43,18 @@ func (k *FlushingKagent) DeleteSession(ctx context.Context, id string) (*kagenta
 // ForceDeleteSession copies the Session's finished turns, then force-deletes it.
 func (k *FlushingKagent) ForceDeleteSession(ctx context.Context, id string) (*kagentapi.Session, error) {
 	k.beforeDelete(ctx, id)
+	return k.deleter.ForceDeleteSession(ctx, id)
+}
+
+// RetireSession is ForceDeleteSession for a Session nothing forces out: it deletes only once the copy
+// succeeded, and otherwise returns the copy's error and leaves the Session to kagent, so no finished
+// turn is lost to a delete that could have waited.
+func (k *FlushingKagent) RetireSession(ctx context.Context, id string) (*kagentapi.Session, error) {
+	fctx, cancel := context.WithTimeout(ctx, k.timeout)
+	defer cancel()
+	if err := k.flush(fctx, id); err != nil {
+		return nil, fmt.Errorf("transcripts: copy before retire: %w", err)
+	}
 	return k.deleter.ForceDeleteSession(ctx, id)
 }
 

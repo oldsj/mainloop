@@ -345,12 +345,14 @@ func codeStart(ctx context.Context, q *dbq.Queries, a, prev dbq.TaskAttempt, t d
 // before the successor's runtime exists, when the attempt has no workspace (a supervisor or another
 // coordination attempt). Otherwise its actor keeps its place on the worker until kagent suspends it
 // idle (300 s), and on a full worker the successor's first send finds no room. Nothing runs in the
-// source any more and Mainloop never sends to it again, so this only removes a writer; the deleter
-// copies its finished turns to Mainloop's transcripts first. A code attempt keeps its actor: its
+// source any more (its stop is confirmed: every native task final, no admitted send unresolved) and
+// its session is ended, so nothing is sent to it again; this only removes a would-be writer. Its
+// finished turns, the cancelled one included, are copied to Mainloop's transcripts first, and a copy
+// that fails leaves the session in place ([SessionRetirer]). A code attempt keeps its actor: its
 // workspace may still be needed (a checkpoint). Best effort: a refusal is logged and the handoff goes
 // on, and the successor's send waits for room (docs/specs/sessions.md#runtime-capacity).
 func (s *Service) retireSource(ctx context.Context, srcID string) {
-	f, ok := s.StopObserver.(StopForcer)
+	f, ok := s.StopObserver.(SessionRetirer)
 	if !ok {
 		return
 	}
@@ -358,7 +360,7 @@ func (s *Service) retireSource(ctx context.Context, srcID string) {
 	if err != nil || a.SessionID == nil || a.WorkspaceID != nil || a.StopState != stopConfirmed {
 		return
 	}
-	if _, err := f.ForceStop(ctx, *a.SessionID, ForceDelete); err != nil {
+	if err := f.Retire(ctx, *a.SessionID); err != nil {
 		s.log().WarnContext(ctx, "tasks: could not retire a handed-off attempt's native session; its successor waits for room",
 			"attempt", a.ID, "session", *a.SessionID, "error", err)
 	}
