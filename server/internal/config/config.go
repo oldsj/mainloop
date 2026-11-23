@@ -296,7 +296,7 @@ type Auth struct {
 	// and a startup error for serve-api elsewhere.
 	Mode string `env:"MAINLOOP_AUTH_MODE"`
 	// OIDCIssuer is the Pocket ID issuer whose tokens identify the owner, such as
-	// https://id.olds.network. Its keys come from the issuer's discovery document.
+	// https://id.example.com. Its keys come from the issuer's discovery document.
 	OIDCIssuer string `env:"MAINLOOP_AUTH_OIDC_ISSUER"`
 	// OIDCAudience is the audience (the OIDC client id) an owner token must carry.
 	OIDCAudience string `env:"MAINLOOP_AUTH_OIDC_AUDIENCE"`

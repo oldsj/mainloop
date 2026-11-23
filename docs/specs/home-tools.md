@@ -1,7 +1,7 @@
 # Home tools (read-only)
 
 Status: **proposed, partly configured.** The tool servers and their kagent RemoteMCPServers are in
-oldsj/infrastructure#1089. They are not bound to the main thread's Agent yet. That binding comes
+the private deployment repository. They are not bound to the main thread's Agent yet. That binding comes
 after a live proof on mainloop-dev. Nothing here is proven live. Mainloop's code doesn't change:
 like the [ops agent](ops-agent.md), this is kagent and infrastructure configuration. This spec
 covers what main can do with it.

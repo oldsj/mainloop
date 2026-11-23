@@ -94,7 +94,7 @@ for #288, not evidence that Codex resume or fork behavior has been verified live
 
 An operator must apply the dev Harness manifests with `make dev-live` or `make dev-agents`.
 Task agents' `dev_sync` updates application source, not the Harness resources. Production
-Harnesses live in `oldsj/infrastructure` and are unchanged.
+Harnesses live in the private deployment repository and are unchanged.
 
 ### The devloop lease
 

@@ -287,8 +287,8 @@ age limit) works exactly as workspace creation does today, just without the warm
 Issue #288 names a real, already-observed failure mode: Mainloop's `ENVIRONMENT_REGISTRY_ALLOWLIST`
 (`server/internal/config/config.go:34`, `environments.md`), kagent's `developmentEnvironmentRegistries`,
 and zot's own access rules are three independently edited lists that drifted and broke every
-zot-image session with `PermissionDenied` (`oldsj/infrastructure#217`). Both kagent's control-auth
-config and zot's access rules live outside this repository (`oldsj/kagent`, `oldsj/infrastructure`),
+zot-image session with `PermissionDenied` (in the private deployment repository). Both kagent's control-auth
+config and zot's access rules live outside this repository (`oldsj/kagent`, the private deployment repository),
 so a fix is cross-repository and out of this spec's implementation scope; this spec records the
 requirement and the two options, for the owner to choose when an implementation slice touches it:
 either Mainloop becomes the one source for the allowlist and pushes it to kagent's config (and zot's)
@@ -327,7 +327,7 @@ The checked-in `mainloop-dev` Claude and Codex workspace Harness manifests both 
 `substrate.snapshotPolicy.onQuiesce: Data`, enabling checkpoint forks that kagent refuses
 for `Full` snapshots. Applying these manifests is an operator step (`make dev-live` or
 `make dev-agents`), not part of task-agent `dev_sync`. Production Harnesses are managed in
-`oldsj/infrastructure` and are unchanged by this dev configuration.
+the private deployment repository and are unchanged by this dev configuration.
 
 A Data restore starts the Actor fresh from its image and restores `/data`, not process
 state. In-memory processes, including Codex's app-server, do not survive suspend/resume.
@@ -342,12 +342,12 @@ kagent controller `a116401`, and Mainloop's API calls it (see "Checkpoint and fo
 The owner ran the live measurement issue #288 asked for, against `mainloop-dev`, but
 `mainloop-dev` refused to provision a workspace at all: it requires `git_transport_required`
 (`GIT_TRANSPORT_ENABLED` and `PUSH_GATE_ENABLED`), and dev has both off. The measurement below
-therefore ran on **production** (`mainloop-api.olds.network`) instead, not `mainloop-dev` as
+therefore ran on **production** instead, not `mainloop-dev` as
 #288 asked.
 
 **Measured 2026-10-21, production**, `oldsj/mainloop` project, cache environment
 (`36b25532`, version `2648b9fe`, image
-`registry.olds.network/local/mainloop-dev@sha256:889a94bb`, `linux/arm64`), `claude-workspace`
+the in-cluster registry's `local/mainloop-dev@sha256:889a94bb`, `linux/arm64`), `claude-workspace`
 agent, kagent controller `a116401`:
 
 - Time to running: task created 17:48:11.7Z, session active by 17:48:19 (10s poll) — **≤ 7.6 s**.
@@ -376,7 +376,7 @@ agent, kagent controller `a116401`:
 (`GIT_TRANSPORT_ENABLED` and `PUSH_GATE_ENABLED` in `mainloop-dev`), removing the
 `git_transport_required` refusal the production block above hit. The dev project used the same
 cache image as the production run above
-(`registry.olds.network/local/mainloop-dev@sha256:889a94bb`), selected as env `48157344`,
+(the in-cluster registry's `local/mainloop-dev@sha256:889a94bb`), selected as env `48157344`,
 version `c97e3803`.
 
 - Measured, session start: task created 02:52:21.1Z; the session was creating at 02:52:53 and
@@ -390,7 +390,7 @@ version `c97e3803`.
     It surfaced as "Current prepared runtime identity is unavailable" and was diagnosed through
     #47's logging. Fixed in `oldsj/kagent#48` (`b785c99`), which binds the MCP server to the
     session's own instance by URL origin. Production runs `b785c99`
-    (`oldsj/infrastructure#227`) and was verified with a task.
+    (in the private deployment repository) and was verified with a task.
 - Measured, source session (probe task `8e41c4f1`): task created 11:43:28.2Z, session active
   11:44:19.5Z (≈ 51 s, matching the earlier ≈ 52 s). The workspace prepared at `/data/workspace`
   on HEAD `3facbea`, with caches under `/opt/cache` (2.3 GB). `go build ./...` in `server/`: first
