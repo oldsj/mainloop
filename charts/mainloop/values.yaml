@@ -260,8 +260,10 @@ executor:
   # namespace.
   dbHost: ''
   # Keys username (mainloop_executor) and password.
+  # trunk-ignore(checkov/CKV_SECRET_6): the Secret's name, not a value
   dbSecret: mainloop-executor-db
   # Key token: a read-only 1Password Service Account token.
+  # trunk-ignore(checkov/CKV_SECRET_6): the Secret's name, not a value
   onePasswordSecret: mainloop-executor-1password
   # Namespaces onepassword.item_to_secret may write Secrets in; a Role is rendered in each. Some
   # (kube-*, mainloop*, onepassword*, argocd*, default) are always refused.
