@@ -1766,7 +1766,10 @@ export interface paths {
     /** List Tasks */
     get: operations['listTasks'];
     put?: never;
-    /** Create Task */
+    /**
+     * Create Task
+     * @description Records a task and its create operation. A task with a project_id runs under the project's standing supervisor, which this starts if the project has none: the task is its child, counts against its project's worker limit, and the supervisor is told in a message (docs/specs/project-supervisor.md#owner-tasks). A task with no project is a root task.
+     */
     post: operations['createTask'];
     delete?: never;
     options?: never;

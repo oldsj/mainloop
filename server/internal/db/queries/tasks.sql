@@ -172,6 +172,10 @@ SELECT EXISTS (SELECT 1 FROM task_reports WHERE task_id = $1 AND outcome = 'comp
 -- name: InsertTaskEventDelivery :exec
 INSERT INTO task_event_deliveries (id, report_id, recipient_key) VALUES ($1, $2, $3);
 
+-- name: InsertTaskNoticeDelivery :exec
+-- Tells a supervisor that the owner started a task under it (docs/specs/project-supervisor.md#owner-tasks).
+INSERT INTO task_event_deliveries (id, notice_task_id, recipient_key) VALUES ($1, $2, $3);
+
 -- name: ListTaskEventDeliveries :many
 SELECT * FROM task_event_deliveries WHERE report_id = $1 ORDER BY recipient_key;
 
@@ -487,13 +491,14 @@ WHERE id IN (
 )
 RETURNING *;
 
--- The reports and loop firings one message carries, oldest first.
+-- The reports, loop firings and notices one message carries, oldest first.
 -- name: ListTaskEventBatch :many
 SELECT d.* FROM task_event_deliveries d
 LEFT JOIN task_reports r ON r.id = d.report_id
 LEFT JOIN task_loop_firings f ON f.id = d.loop_firing_id
+LEFT JOIN tasks n ON n.id = d.notice_task_id
 WHERE d.delivery_id = $1
-ORDER BY coalesce(r.created_at, f.created_at), d.id;
+ORDER BY coalesce(r.created_at, f.created_at, n.created_at), d.id;
 
 -- A message the ledger gave up on is recorded again under a new id.
 -- name: ResendTaskEventDelivery :one

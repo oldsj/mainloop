@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/oldsj/mainloop/server/internal/api"
@@ -42,50 +43,84 @@ func StandingBrief(fullName string) string {
 func (s *Service) EnsureSupervisor(ctx context.Context, owner, projectID string) (api.TaskView, error) {
 	var id string
 	err := events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
-		q := dbq.New(tx)
-		if err := q.LockTaskRequest(ctx, "standing\x1f"+projectID); err != nil {
-			return nil, err
-		}
-		project, err := q.GetProject(ctx, projectID)
-		if errors.Is(err, pgx.ErrNoRows) || err == nil && project.UserID != owner {
-			return nil, refusal(404, ReasonProjectNotFound)
-		}
-		if err != nil {
-			return nil, err
-		}
-		existing, err := q.GetStandingTask(ctx, &projectID)
-		if err == nil {
-			id = existing.ID
-			return nil, nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return nil, err
-		}
-		retired, err := q.CountStandingTasks(ctx, &projectID)
-		if err != nil {
-			return nil, err
-		}
-		in := CreateInput{
-			RequestID: standingRequestID(projectID, int(retired)), Title: "Supervisor of " + project.FullName,
-			Brief: StandingBrief(project.FullName), Mode: dbstate.TaskModeCoordination,
-			ProjectID: projectID, standing: true,
-		}
-		dig, payload, err := digest(dbstate.TaskOpCreate, "", in.payload())
-		if err != nil {
-			return nil, err
-		}
-		_, t, err := s.createTx(ctx, q, OwnerPrincipal(owner), in, dig, payload)
-		if err != nil {
-			return nil, err
-		}
+		t, drafts, err := s.ensureStanding(ctx, dbq.New(tx), owner, projectID)
 		id = t.ID
-		return []events.Draft{s.updated(t)}, nil
+		return drafts, err
 	})
 	if err != nil {
 		s.noteRefusal(ctx, err)
 		return api.TaskView{}, err
 	}
 	return s.Get(ctx, OwnerPrincipal(owner), id)
+}
+
+// ensureStanding is [Service.EnsureSupervisor] in the caller's transaction: the project's standing
+// supervisor, created (with an update to publish) when it has none.
+func (s *Service) ensureStanding(ctx context.Context, q *dbq.Queries, owner, projectID string) (dbq.Task, []events.Draft, error) {
+	if err := q.LockTaskRequest(ctx, "standing\x1f"+projectID); err != nil {
+		return dbq.Task{}, nil, err
+	}
+	project, err := q.GetProject(ctx, projectID)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && project.UserID != owner {
+		return dbq.Task{}, nil, refusal(404, ReasonProjectNotFound)
+	}
+	if err != nil {
+		return dbq.Task{}, nil, err
+	}
+	existing, err := q.GetStandingTask(ctx, &projectID)
+	if err == nil || !errors.Is(err, pgx.ErrNoRows) {
+		return existing, nil, err
+	}
+	retired, err := q.CountStandingTasks(ctx, &projectID)
+	if err != nil {
+		return dbq.Task{}, nil, err
+	}
+	in := CreateInput{
+		RequestID: standingRequestID(projectID, int(retired)), Title: "Supervisor of " + project.FullName,
+		Brief: StandingBrief(project.FullName), Mode: dbstate.TaskModeCoordination,
+		ProjectID: projectID, standing: true,
+	}
+	dig, payload, err := digest(dbstate.TaskOpCreate, "", in.payload())
+	if err != nil {
+		return dbq.Task{}, nil, err
+	}
+	_, t, err := s.createTx(ctx, q, OwnerPrincipal(owner), in, dig, payload)
+	if err != nil {
+		return t, nil, err
+	}
+	return t, []events.Draft{s.updated(t)}, nil
+}
+
+// ownerTaskUnder records the owner's new project task as a child of the project's standing
+// supervisor, starting the supervisor if the project has none, and tells the supervisor in a
+// notice delivered with its children's reports (docs/specs/project-supervisor.md#owner-tasks).
+func (s *Service) ownerTaskUnder(ctx context.Context, q *dbq.Queries, p Principal, in CreateInput, dig string, payload json.RawMessage) (dbq.TaskOperation, []events.Draft, error) {
+	sup, drafts, err := s.ensureStanding(ctx, q, p.OwnerID, in.ProjectID)
+	if err != nil {
+		return dbq.TaskOperation{}, nil, err
+	}
+	in.parentID = sup.ID
+	op, t, err := s.createTx(ctx, q, p, in, dig, payload)
+	if err != nil {
+		return op, nil, err
+	}
+	id := uuid.NewString()
+	if err := q.InsertTaskNoticeDelivery(ctx, dbq.InsertTaskNoticeDeliveryParams{
+		ID: id, NoticeTaskID: &t.ID, RecipientKey: "parent-task:" + sup.ID,
+	}); err != nil {
+		return op, nil, err
+	}
+	if err := s.notify(ctx, q, EventChannel, id); err != nil {
+		return op, nil, err
+	}
+	return op, append(drafts, s.updated(t)), nil
+}
+
+// noticeText is what a supervisor reads when the owner starts a task under it.
+func noticeText(t dbq.Task) string {
+	return fmt.Sprintf("[the owner started child task %s under you]\n%s (%s): /tasks/%s\n"+
+		"It reports to you, and you manage it as one you delegated: read it with task_get, steer, follow up or cancel it.",
+		t.ID, t.Title, t.Mode, t.ID)
 }
 
 // checkStanding is the liveness check of a standing supervisor's attempt (see [Service.checkLiveness]

@@ -219,6 +219,9 @@ uses the owner REST listener.
 | `GET /projects/{id}/default-provider`         | Profile or null, preference version (initially 0)                                  |
 | `PUT /projects/{id}/default-provider`         | Compare-and-swap preference; null removes selection                                |
 
+The owner's `POST /tasks` with a `project_id` makes a child of the project's standing supervisor
+([owner tasks](project-supervisor.md#owner-tasks)); without one it makes a root task.
+
 Example create input:
 
 ```json

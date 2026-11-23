@@ -65,6 +65,27 @@ model settings, and retiring it.
 - Main uses `follow_up`, `steer`, `task_get` and `task_transcript` on the supervisor's task id as on
   any task, and `task_list` shows it with `standing: true`.
 
+## The owner's project tasks
+
+<a id="owner-tasks"></a>The owner's `POST /tasks` with a `project_id` (both modes) makes a child of
+the project's standing supervisor, not a root task:
+
+- The supervisor is started if the project has none, in the same transaction, as a first use does.
+  A project of another owner, or none, is `404 project_not_found`, and nothing is started.
+- The task is the supervisor's child (`parent_task_id` and `root_task_id` are the supervisor's;
+  `creator_binding_id` is null). It counts against the project's worker limit and the global limit
+  as the supervisor's own workers do. Over either, the create is refused
+  (`409 project_capacity` or `global_capacity`) and the supervisor is not told.
+- The supervisor is told in a message:
+  `[the owner started child task <id> under you]`, the task's title, mode and `/tasks/<id>`, and
+  that it reports to the supervisor and is managed as one it delegated. The message goes through
+  the same outbox as its children's reports: batched with them, sent when its session has no turn
+  open, and after its first brief when the create started it. A retry of the same `request_id` makes
+  no second task and no second message.
+- Its reports go to the supervisor, as any child's do. The owner sees and manages it as any task.
+- A task with no `project_id` is a root task, as before. Main's `delegate` with a `project_id` is still
+  refused (above).
+
 ## How many workers it runs
 
 Its workers are bounded by the project's [worker limit](tasks.md#project-worker-limit)
