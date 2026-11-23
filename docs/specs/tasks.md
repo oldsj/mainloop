@@ -487,8 +487,9 @@ client retries a not-accepted send for `KAGENT_SEND_RETRY_BUDGET_SECONDS` (30), 
 not sent. The "no worker has room" text does not reach Mainloop, so the wait keys on what does: a send
 kagent did not accept, for the current active attempt of a task that is waiting. Such a delivery is
 put back to `recorded` (detail `waiting for runtime capacity: ...`) and claimed again 15 s later,
-instead of failing; nothing was sent, so sending it again is safe. Any other task's not-accepted
-send still fails as before. A code task's workspace preparation already waits for a running actor
+instead of failing; nothing was sent, so sending it again is safe. Every session also waits so
+for its first runtime, and any send kagent says found no room waits too (see
+[sessions](sessions.md#runtime-capacity)); other not-accepted sends still fail as before. A code task's workspace preparation already waits for a running actor
 (`PrepareWorkspace` answers `FailedPrecondition` until there is one); its wait is bounded the same
 way, because the wait ends on acceptance, not on which error came back.
 

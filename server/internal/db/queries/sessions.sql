@@ -399,6 +399,14 @@ WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attemp
       AND s.status NOT IN ('cancelled', 'failed') AND s.archived_at IS NULL
   );
 
+-- name: SessionAwaitsFirstRuntime :one
+-- Whether the session is new: kagent has accepted none of its messages yet (no delivery has a kagent
+-- task id) and it started within the window. A send to it that kagent refuses is waiting for its
+-- first runtime, which Substrate places only when that send wakes the actor.
+SELECT (NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.session_id = sqlc.arg(session_id) AND d.task_id IS NOT NULL)
+    AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = sqlc.arg(session_id)
+                AND s.created_at > now() - make_interval(secs => sqlc.arg(window_seconds)::float8)))::boolean;
+
 -- name: RequeueDeliveryForCapacity :execrows
 -- Puts back a send kagent refused (nothing was sent) while its task waits for runtime capacity:
 -- the row is recorded again and the next claim sends it again. Fenced on the claim; the caller

@@ -135,6 +135,28 @@ func SteerRefusal(err error) string {
 	return n.Metadata["steer"]
 }
 
+// causeRuntimeCapacity is the cause kagent gives a not-accepted send when no worker had room for
+// the session's runtime (Substrate's ResourceExhausted at the router), with retryAfterMs.
+const causeRuntimeCapacity = "runtime_capacity"
+
+// NoCapacity reports whether kagent refused a send because no worker had room for the session's
+// runtime: a not-accepted refusal whose metadata says cause=runtime_capacity. A kagent that does not
+// say so answers a plain not-accepted, and this is false.
+func NoCapacity(err error) bool {
+	var n *SendNotAccepted
+	return errors.As(err, &n) && n.Metadata["cause"] == causeRuntimeCapacity
+}
+
+// RetryAfterHint is kagent's retryAfterMs on a not-accepted refusal, or 0 when err is not one or
+// carries none.
+func RetryAfterHint(err error) time.Duration {
+	var n *SendNotAccepted
+	if !errors.As(err, &n) || n.Metadata["retryAfterMs"] == "" {
+		return 0
+	}
+	return n.RetryAfter()
+}
+
 // SendNotAccepted means kagent did not accept the message. Sending the same message again
 // is safe.
 type SendNotAccepted struct{ A2AError }
