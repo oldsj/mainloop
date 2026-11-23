@@ -14,9 +14,16 @@ export const READ_TIMEOUT_MS = 10_000;
 export const READS_PER_SECOND = 4;
 export const READ_BURST = 4;
 
-/** Routes whose failures carry the task error shape. A task's loops are task routes too. */
+/**
+ * Routes whose failures carry the task error shape. A task's loops are task routes too, and so are
+ * a project's standing supervisor and its worker limit, which the task service answers.
+ */
 const isTaskPath = (path: string) =>
-  path.startsWith('/tasks') || path.startsWith('/task-operations') || path.startsWith('/loops/');
+  path.startsWith('/tasks') ||
+  path.startsWith('/task-operations') ||
+  path.startsWith('/loops/') ||
+  path.startsWith('/projects/{project_id}/supervisor') ||
+  path === '/projects/{project_id}/worker-limit';
 /** Routes that deliver a chat message; their failures are SendErrors. */
 const isSendPath = (path: string) => path === '/chat' || path === '/sessions/{session_id}/message';
 

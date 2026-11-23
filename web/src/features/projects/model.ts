@@ -4,7 +4,7 @@
  * test without a router or a query client.
  */
 import { z } from 'zod';
-import { ApiError, type components } from '@/api';
+import { ApiError, TaskApiError, type components } from '@/api';
 import { contractEnum } from '@/lib/contractEnum';
 
 type Schemas = components['schemas'];
@@ -159,6 +159,158 @@ export function parseWorkerLimit(input: string): number | null {
   if (!/^\d+$/.test(typed)) return null;
   const value = Number(typed);
   return value >= WORKER_LIMIT_MIN && value <= WORKER_LIMIT_MAX ? value : null;
+}
+
+export type SupervisorSettings = Schemas['SupervisorSettings'];
+export type SupervisorChoice = Schemas['SupervisorSettingsUpdate'];
+type Profile = Schemas['ProviderProfile'];
+
+/** One object, not a list, so a bad one fails the section rather than being shown half-read. */
+export const supervisorSettingsSchema = z.object({
+  project_id: text,
+  provider_profile_id: text.nullable(),
+  model: text.nullable(),
+  effort: text.nullable(),
+  effective_provider_profile_id: text,
+  allowed_models: z.array(text),
+  allowed_effort_levels: z.array(text),
+  operation_id: text.nullable()
+});
+
+/** The project's own three choices, as the form starts from them. */
+export function supervisorChoice(view: SupervisorSettings): SupervisorChoice {
+  return {
+    provider_profile_id: view.provider_profile_id,
+    model: view.model,
+    effort: view.effort
+  };
+}
+
+/** A provider's name as the owner knows it, or its id before the profiles have been read. */
+export function providerName(profiles: readonly Profile[], id: string): string {
+  return profiles.find((profile) => profile.id === id)?.display_name ?? id;
+}
+
+/**
+ * The provider a draft would run on, when it can be told: the one chosen, or with none chosen the
+ * project's default. The view names the default only while the project is on it (then it is the
+ * provider in force), so for a project with its own provider the default is not known here.
+ */
+export function draftProvider(view: SupervisorSettings, draft: SupervisorChoice): string | null {
+  if (draft.provider_profile_id !== null) return draft.provider_profile_id;
+  return view.provider_profile_id === null ? view.effective_provider_profile_id : null;
+}
+
+export interface SupervisorOptions {
+  /** Null when the draft's provider cannot be told: only "Default" can be chosen then. */
+  models: { id: string; label: string }[] | null;
+  efforts: string[] | null;
+}
+
+/**
+ * The models and effort levels the draft's provider offers. For the provider in force they are the
+ * server's own lists, the ones a save is checked against. For another provider chosen in the form
+ * and not yet saved they are that provider's profile. A choice the lists do not have is kept in its
+ * own picker, marked, so it is never dropped unseen.
+ */
+export function supervisorOptions(
+  view: SupervisorSettings,
+  draft: SupervisorChoice,
+  profiles: readonly Profile[]
+): SupervisorOptions {
+  const provider = draftProvider(view, draft);
+  if (provider === null) return { models: null, efforts: null };
+  const profile = profiles.find((candidate) => candidate.id === provider);
+  const inForce = provider === view.effective_provider_profile_id;
+  const modelIds = inForce ? view.allowed_models : (profile?.models.map((model) => model.id) ?? []);
+  const efforts = inForce ? view.allowed_effort_levels : (profile?.effort_levels ?? []);
+  const label = (id: string) => profile?.models.find((model) => model.id === id)?.label ?? id;
+  const models = modelIds.map((id) => ({ id, label: label(id) }));
+  if (draft.model !== null && !modelIds.includes(draft.model)) {
+    models.push({ id: draft.model, label: `${draft.model} (not offered)` });
+  }
+  return {
+    models,
+    efforts:
+      draft.effort !== null && !efforts.includes(draft.effort)
+        ? [...efforts, draft.effort]
+        : [...efforts]
+  };
+}
+
+/**
+ * The draft after the owner picks another provider: a model or effort the new provider does not
+ * offer goes back to the default, since the server would refuse it.
+ */
+export function withProvider(
+  view: SupervisorSettings,
+  draft: SupervisorChoice,
+  providerId: string | null,
+  profiles: readonly Profile[]
+): SupervisorChoice {
+  const next: SupervisorChoice = { ...draft, provider_profile_id: providerId };
+  const provider = draftProvider(view, next);
+  if (provider === null) return { ...next, model: null, effort: null };
+  const profile = profiles.find((candidate) => candidate.id === provider);
+  const inForce = provider === view.effective_provider_profile_id;
+  const models = inForce ? view.allowed_models : (profile?.models.map((model) => model.id) ?? []);
+  const efforts: readonly string[] = inForce
+    ? view.allowed_effort_levels
+    : (profile?.effort_levels ?? []);
+  return {
+    ...next,
+    model: next.model !== null && models.includes(next.model) ? next.model : null,
+    effort: next.effort !== null && efforts.includes(next.effort) ? next.effort : null
+  };
+}
+
+/** The profiles a supervisor can run on: enabled, with a supervisor agent. Any other is refused. */
+export function supervisorProfiles(profiles: readonly Profile[] | undefined): Profile[] {
+  return (profiles ?? []).filter((profile) => profile.enabled && profile.agents.supervisor);
+}
+
+/** Why a change to the supervisor's settings was refused, in words, by the server's reason code. */
+const SUPERVISOR_REFUSALS: Record<string, string> = {
+  operation_pending:
+    'The supervisor is already restarting or changing provider. Try again when that has finished.',
+  task_settling: 'The supervisor is still starting or stopping. Try again in a moment.',
+  model_unavailable: 'That provider does not offer the model chosen.',
+  effort_unavailable: 'That provider does not offer the effort chosen.',
+  provider_unknown: 'That provider is not one Mainloop knows.',
+  provider_disabled: 'That provider is disabled.',
+  provider_role_unavailable: 'That provider cannot run a supervisor.',
+  project_not_found: 'This project no longer exists.'
+};
+
+/** What a refused save says. The hourly limit names its number when the server sent it. */
+export function supervisorRefusalText(error: unknown): string {
+  if (error instanceof TaskApiError && error.reason) {
+    if (error.reason === 'handoff_limit') {
+      const limit = error.detail && 'limit' in error.detail ? error.detail.limit : undefined;
+      return typeof limit === 'number'
+        ? `The supervisor has been restarted ${limit} times in the last hour, which is the limit. Try again later.`
+        : 'The supervisor has been restarted as often as it may be in an hour. Try again later.';
+    }
+    const known = SUPERVISOR_REFUSALS[error.reason];
+    if (known) return known;
+  }
+  return failureText(error);
+}
+
+/** Whether the draft differs from what the project has saved. */
+export function supervisorChanged(view: SupervisorSettings, draft: SupervisorChoice): boolean {
+  return (
+    draft.provider_profile_id !== view.provider_profile_id ||
+    draft.model !== view.model ||
+    draft.effort !== view.effort
+  );
+}
+
+/** Whether saving the draft would move the supervisor to another provider, which restarts it. */
+export function changesProvider(view: SupervisorSettings, draft: SupervisorChoice): boolean {
+  if (draft.provider_profile_id === view.provider_profile_id) return false;
+  const provider = draftProvider(view, draft);
+  return provider === null || provider !== view.effective_provider_profile_id;
 }
 
 export const pullRequestRowSchema = z.object({

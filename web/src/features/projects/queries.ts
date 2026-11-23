@@ -80,6 +80,33 @@ export function useUpdateWorkerLimit(projectId: string) {
   });
 }
 
+/** The provider, model and effort of the project's standing supervisor. */
+export function useSupervisorSettings(projectId: string) {
+  return $api.useQuery('get', '/projects/{project_id}/supervisor/settings', {
+    params: { path: { project_id: projectId } }
+  });
+}
+
+/**
+ * Replaces all three. The answer is the new view. A provider change restarts the supervisor, so
+ * the tasks and the projects (which carry the supervisor's session) are read again.
+ */
+export function useUpdateSupervisorSettings(projectId: string) {
+  const queryClient = useQueryClient();
+  const key = $api.queryOptions('get', '/projects/{project_id}/supervisor/settings', {
+    params: { path: { project_id: projectId } }
+  }).queryKey;
+  return $api.useMutation('put', '/projects/{project_id}/supervisor/settings', {
+    onSuccess: (data) => {
+      queryClient.setQueryData(key, data);
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: keys.projects() }),
+        queryClient.invalidateQueries({ queryKey: keys.tasks() })
+      ]);
+    }
+  });
+}
+
 export function useVerification(projectId: string) {
   return $api.useQuery('get', '/projects/{project_id}/verification', {
     params: { path: { project_id: projectId } }

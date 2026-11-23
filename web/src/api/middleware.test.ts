@@ -89,6 +89,31 @@ describe('error mapping', () => {
     expect(error).toMatchObject({ status: 409, reason: 'loop_state_conflict' });
   });
 
+  it('uses TaskApiError on a project’s supervisor and worker-limit routes, which the task service answers', async () => {
+    // Given a provider change refused at the hourly restart limit, with the numbers in the detail
+    const { client } = setup(() =>
+      json(409, { detail: { reason: 'handoff_limit', handoffs: 3, limit: 3, window: '1h' } })
+    );
+    const error = await client
+      .PUT('/projects/{project_id}/supervisor/settings', {
+        params: { path: { project_id: 'p1' } },
+        body: { provider_profile_id: 'codex-default', model: null, effort: null }
+      })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TaskApiError);
+    expect(error).toMatchObject({ status: 409, reason: 'handoff_limit', detail: { limit: 3 } });
+
+    const limit = await client
+      .GET('/projects/{project_id}/worker-limit', { params: { path: { project_id: 'p1' } } })
+      .catch((e: unknown) => e);
+    expect(limit).toBeInstanceOf(TaskApiError);
+    // Another project route keeps the plain error.
+    const detail = await client
+      .GET('/projects/{project_id}/detail', { params: { path: { project_id: 'p1' } } })
+      .catch((e: unknown) => e);
+    expect(detail).not.toBeInstanceOf(TaskApiError);
+  });
+
   it('uses SendError when a message send is refused', async () => {
     const { client } = setup(() => json(503, { detail: 'Session is not running' }));
     const error = await client
