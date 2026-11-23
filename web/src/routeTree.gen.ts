@@ -22,6 +22,7 @@ import { Route as SchedulesNewRouteImport } from './routes/schedules.new';
 import { Route as SessionsIdRouteImport } from './routes/sessions.$id';
 import { Route as TasksIdRouteImport } from './routes/tasks.$id';
 import { Route as WorkspacesIdRouteImport } from './routes/workspaces.$id';
+import { Route as PreviewsWorkspacePortRouteImport } from './routes/previews.$workspace.$port';
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -88,6 +89,11 @@ const WorkspacesIdRoute = WorkspacesIdRouteImport.update({
   path: '/workspaces/$id',
   getParentRoute: () => rootRouteImport,
 } as any);
+const PreviewsWorkspacePortRoute = PreviewsWorkspacePortRouteImport.update({
+  id: '/previews/$workspace/$port',
+  path: '/previews/$workspace/$port',
+  getParentRoute: () => rootRouteImport,
+} as any);
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute;
@@ -103,6 +109,7 @@ export interface FileRoutesByFullPath {
   '/tasks/$id': typeof TasksIdRoute;
   '/workspaces/$id': typeof WorkspacesIdRoute;
   '/schedules/': typeof SchedulesIndexRoute;
+  '/previews/$workspace/$port': typeof PreviewsWorkspacePortRoute;
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute;
@@ -118,6 +125,7 @@ export interface FileRoutesByTo {
   '/tasks/$id': typeof TasksIdRoute;
   '/workspaces/$id': typeof WorkspacesIdRoute;
   '/schedules': typeof SchedulesIndexRoute;
+  '/previews/$workspace/$port': typeof PreviewsWorkspacePortRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
@@ -134,6 +142,7 @@ export interface FileRoutesById {
   '/tasks/$id': typeof TasksIdRoute;
   '/workspaces/$id': typeof WorkspacesIdRoute;
   '/schedules/': typeof SchedulesIndexRoute;
+  '/previews/$workspace/$port': typeof PreviewsWorkspacePortRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
@@ -150,7 +159,8 @@ export interface FileRouteTypes {
     | '/sessions/$id'
     | '/tasks/$id'
     | '/workspaces/$id'
-    | '/schedules/';
+    | '/schedules/'
+    | '/previews/$workspace/$port';
   fileRoutesByTo: FileRoutesByTo;
   to:
     | '/'
@@ -165,7 +175,8 @@ export interface FileRouteTypes {
     | '/sessions/$id'
     | '/tasks/$id'
     | '/workspaces/$id'
-    | '/schedules';
+    | '/schedules'
+    | '/previews/$workspace/$port';
   id:
     | '__root__'
     | '/'
@@ -180,7 +191,8 @@ export interface FileRouteTypes {
     | '/sessions/$id'
     | '/tasks/$id'
     | '/workspaces/$id'
-    | '/schedules/';
+    | '/schedules/'
+    | '/previews/$workspace/$port';
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -197,6 +209,7 @@ export interface RootRouteChildren {
   TasksIdRoute: typeof TasksIdRoute;
   WorkspacesIdRoute: typeof WorkspacesIdRoute;
   SchedulesIndexRoute: typeof SchedulesIndexRoute;
+  PreviewsWorkspacePortRoute: typeof PreviewsWorkspacePortRoute;
 }
 
 declare module '@tanstack/react-router' {
@@ -292,6 +305,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspacesIdRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    '/previews/$workspace/$port': {
+      id: '/previews/$workspace/$port';
+      path: '/previews/$workspace/$port';
+      fullPath: '/previews/$workspace/$port';
+      preLoaderRoute: typeof PreviewsWorkspacePortRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
   }
 }
 
@@ -309,6 +329,7 @@ const rootRouteChildren: RootRouteChildren = {
   TasksIdRoute: TasksIdRoute,
   WorkspacesIdRoute: WorkspacesIdRoute,
   SchedulesIndexRoute: SchedulesIndexRoute,
+  PreviewsWorkspacePortRoute: PreviewsWorkspacePortRoute,
 };
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

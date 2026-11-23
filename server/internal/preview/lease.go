@@ -2,10 +2,12 @@ package preview
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
@@ -47,6 +49,8 @@ type lease struct {
 	p           *Proxy
 	id          string
 	workspaceID string
+	// cancel ends the stream the lease keeps awake.
+	cancel context.CancelFunc
 
 	mu     sync.Mutex
 	held   bool
@@ -58,9 +62,11 @@ type lease struct {
 
 // holdLease starts a lease for a stream on the workspace. A WebSocket takes it at once; an HTTP
 // request only if it is still running after HTTPLeaseWait, so short requests cost no writes
-// beyond the touch. Call release when the stream ends.
-func (p *Proxy) holdLease(workspaceID string, immediate bool) *lease {
-	l := &lease{p: p, id: uuid.NewString(), workspaceID: workspaceID, stop: make(chan struct{}), done: make(chan struct{})}
+// beyond the touch. cancel ends the stream: a renewal that finds the workspace gone (deleted,
+// archived, or its task attempt no longer owning it) calls it, so an open WebSocket or stream dies
+// with the workspace. Call release when the stream ends.
+func (p *Proxy) holdLease(workspaceID string, immediate bool, cancel context.CancelFunc) *lease {
+	l := &lease{p: p, id: uuid.NewString(), workspaceID: workspaceID, cancel: cancel, stop: make(chan struct{}), done: make(chan struct{})}
 	if immediate {
 		l.acquire()
 	} else {
@@ -92,7 +98,8 @@ func (l *lease) write() error {
 }
 
 // renew extends the lease until release. A failed renewal is logged and retried at the next
-// tick; the lease only lapses if the database stays unreachable for the whole TTL.
+// tick; the lease only lapses if the database stays unreachable for the whole TTL. Each tick also
+// checks that the workspace still has a preview, and ends the stream when it does not.
 func (l *lease) renew() {
 	defer close(l.done)
 	t := time.NewTicker(l.p.RenewEvery)
@@ -102,11 +109,25 @@ func (l *lease) renew() {
 		case <-l.stop:
 			return
 		case <-t.C:
+			if l.gone() {
+				l.p.Log.Info("preview stream closed: workspace has no preview", "workspace", l.workspaceID)
+				l.cancel()
+				return
+			}
 			if err := l.write(); err != nil {
 				l.p.Log.Warn("preview lease renewal failed", "workspace", l.workspaceID, "error", err)
 			}
 		}
 	}
+}
+
+// gone reports that the workspace no longer resolves to a preview target. A database error is
+// not gone: the stream keeps running and the next tick checks again.
+func (l *lease) gone() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
+	defer cancel()
+	_, err := l.p.resolve(ctx, l.workspaceID)
+	return errors.Is(err, pgx.ErrNoRows)
 }
 
 // release ends the lease and deletes its row.

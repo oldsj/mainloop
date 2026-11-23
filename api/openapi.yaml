@@ -6185,6 +6185,72 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /workspaces/{workspace_id}/previews/{port}/grant:
+    post:
+      tags:
+        - workspaces
+      summary: Grant Workspace Preview Sign-In
+      description: >-
+        Mints a one-minute sign-in for one preview host (the workspace's declared port) and returns
+        the URL that exchanges it for that host's preview cookie, then opens `path` on it. The sign-in
+        rides in the URL fragment, which the browser never sends to a server. Only the signed-in owner
+        (owner scope) may call it, whatever the authentication mode, except in development with
+        authentication off. Nothing is woken or touched. See docs/specs/workspaces.md, "Preview sign-in".
+      operationId: grantWorkspacePreview
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Workspace Id
+        - name: port
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 65535
+            title: Port
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreviewGrantRequest'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreviewGrant'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /workspaces/{workspace_id}/refresh:
     post:
       tags:
@@ -10805,6 +10871,27 @@ components:
         - port
         - name
         - url
+      additionalProperties: false
+    PreviewGrantRequest:
+      type: object
+      properties:
+        path:
+          type: string
+          maxLength: 2048
+          description: Path (with query) on the preview host to open after sign-in. Must start with a single `/`. Defaults to `/`.
+      additionalProperties: false
+    PreviewGrant:
+      type: object
+      properties:
+        url:
+          type: string
+          description: The preview host's sign-in URL, carrying the one-minute sign-in in its fragment. Open it as a top-level navigation.
+        expires_at:
+          type: string
+          format: date-time
+      required:
+        - url
+        - expires_at
       additionalProperties: false
     WorkspacePortsResponse:
       type: object

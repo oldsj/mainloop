@@ -47,12 +47,31 @@ func TestLeaseIsRenewedWhileHeld(t *testing.T) {
 	e := newEnv(t)
 	e.proxy.LeaseTTL = 300 * time.Millisecond
 	e.proxy.RenewEvery = 20 * time.Millisecond
-	l := e.proxy.holdLease("ws1", true)
+	l := e.proxy.holdLease("ws1", true, func() { t.Error("stream cancelled while the workspace has a preview") })
 	t.Cleanup(l.release)
 	e.waitLeases(1)
 	time.Sleep(600 * time.Millisecond) // two TTLs: only renewal keeps it alive
 	if n := e.activeLeases(); n != 1 {
 		t.Fatalf("leases after two TTLs = %d, want 1 (renewed)", n)
+	}
+}
+
+// A workspace that loses its preview (archived here; deleted works the same) ends the streams
+// that hold a lease on it at the next renewal.
+func TestLeaseEndsTheStreamWhenTheWorkspaceIsGone(t *testing.T) {
+	e := newEnv(t)
+	e.proxy.RenewEvery = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	l := e.proxy.holdLease("ws1", true, cancel)
+	t.Cleanup(l.release)
+	e.waitLeases(1)
+	if _, err := e.pool.Exec(context.Background(), `UPDATE sessions SET archived_at = now() WHERE id = 'ws1'`); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("stream still open after the workspace lost its preview")
 	}
 }
 

@@ -314,6 +314,11 @@ func (Unimplemented) GrantEnvironmentToProject(context.Context, GrantEnvironment
 	return nil, apierr.NotImplemented
 }
 
+// GrantWorkspacePreview is not implemented yet.
+func (Unimplemented) GrantWorkspacePreview(context.Context, GrantWorkspacePreviewRequestObject) (GrantWorkspacePreviewResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // HealthEvents is not implemented yet.
 func (Unimplemented) HealthEvents(context.Context, HealthEventsRequestObject) (HealthEventsResponseObject, error) {
 	return nil, apierr.NotImplemented

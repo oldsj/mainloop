@@ -17,8 +17,9 @@ and is not yet proven live.
 | Pocket ID login at the admin gateway (Envoy SecurityPolicy) for dev, then prod                 | proposed (deployment repository) |
 | `enforce` on dev, then prod; `mainloop-api.<domain>` route removed                             | proposed                         |
 
-Workspace previews (`*.preview.<domain>`) are routed ahead of this layer and stay unauthenticated
-for now; see issue #415.
+Workspace previews (`*.preview.<domain>`) are routed ahead of this layer. They have their own
+sign-in, a per-host preview cookie granted by `POST /workspaces/{id}/previews/{port}/grant` to the
+verified owner in every mode but `off` (see [workspaces](workspaces.md), "Preview sign-in").
 
 ## Modes
 

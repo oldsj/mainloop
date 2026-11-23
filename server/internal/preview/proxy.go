@@ -70,6 +70,11 @@ type Proxy struct {
 	// reloads itself, so a slow cold start reads as one wait.
 	ServiceHold time.Duration
 
+	// authKey signs preview grants and cookies (auth.go); frontend is the app's origin, where a
+	// navigation without a preview cookie is sent to sign in.
+	authKey  []byte
+	frontend string
+
 	holder string
 	rp     *httputil.ReverseProxy
 	now    func() time.Time
@@ -95,7 +100,11 @@ func New(cfg *config.Config, pool *pgxpool.Pool, w Waker, sessions SessionObserv
 		atespace:  cfg.Kagent.ActorAtespace, connect: cfg.Preview.ConnectTimeout.Duration(),
 		LeaseTTL: 60 * time.Second, RenewEvery: 20 * time.Second, HTTPLeaseWait: 10 * time.Second,
 		ServiceHold: 10 * time.Second,
+		authKey:     previewKey([]byte(cfg.Identity.AgentTokenKey.Reveal())),
 		holder:      uuid.NewString(), now: time.Now, awake: map[string]time.Time{},
+	}
+	if cfg.Server.FrontendDomain != "" {
+		p.frontend = cfg.FrontendOrigin()
 	}
 	p.rp = p.reverseProxy()
 	return p, nil
@@ -160,6 +169,16 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, h Host) {
 		refuse(w, http.StatusForbidden, "Cross-origin preview request refused")
 		return
 	}
+	// Sign-in comes next, and is just as final: without a valid preview cookie for this host the
+	// workspace is not looked up, touched or woken.
+	if strings.HasPrefix(r.URL.Path, authPrefix) {
+		p.serveAuth(w, r, h)
+		return
+	}
+	if !p.signedIn(r, h) {
+		p.unauthenticated(w, r, h)
+		return
+	}
 	t, err := p.resolve(r.Context(), h.WorkspaceID)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -195,10 +214,12 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, h Host) {
 		return
 	}
 
-	lease := p.holdLease(h.WorkspaceID, upgrade)
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	lease := p.holdLease(h.WorkspaceID, upgrade, cancel)
 	defer lease.release()
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
-	p.rp.ServeHTTP(w, r.WithContext(withHop(r.Context(), h, t.service)))
+	p.rp.ServeHTTP(w, r.WithContext(withHop(ctx, h, t.service)))
 }
 
 func safeMethod(m string) bool {

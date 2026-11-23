@@ -1971,6 +1971,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/workspaces/{workspace_id}/previews/{port}/grant': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Grant Workspace Preview Sign-In
+     * @description Mints a one-minute sign-in for one preview host (the workspace's declared port) and returns the URL that exchanges it for that host's preview cookie, then opens `path` on it. The sign-in rides in the URL fragment, which the browser never sends to a server. Only the signed-in owner (owner scope) may call it, whatever the authentication mode, except in development with authentication off. Nothing is woken or touched. See docs/specs/workspaces.md, "Preview sign-in".
+     */
+    post: operations['grantWorkspacePreview'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/workspaces/{workspace_id}/refresh': {
     parameters: {
       query?: never;
@@ -4549,6 +4569,16 @@ export interface components {
       port: number;
       name: string;
       url: string;
+    };
+    PreviewGrantRequest: {
+      /** @description Path (with query) on the preview host to open after sign-in. Must start with a single `/`. Defaults to `/`. */
+      path?: string;
+    };
+    PreviewGrant: {
+      /** @description The preview host's sign-in URL, carrying the one-minute sign-in in its fragment. Open it as a top-level navigation. */
+      url: string;
+      /** Format: date-time */
+      expires_at: string;
     };
     WorkspacePortsResponse: {
       ports: components['schemas']['WorkspacePreviewPort'][];
@@ -13757,6 +13787,70 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['WorkspacePortsResponse'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  grantWorkspacePreview: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        workspace_id: string;
+        port: number;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PreviewGrantRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PreviewGrant'];
         };
       };
       401: components['responses']['Unauthorized'];
