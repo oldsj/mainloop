@@ -161,3 +161,52 @@ func TestTheOwnerSetsSupervisorSettingsOverREST(t *testing.T) {
 	r.do("PUT", "/projects/missing/supervisor/settings", map[string]any{"provider_profile_id": nil, "model": nil, "effort": nil}, 404)
 	r.do("GET", "/projects/foreign/supervisor/settings", nil, 404)
 }
+
+// TestASettingsChangeAndADelegateInTheProjectDoNotDeadlock: a delegate holds its parent's row and
+// then inserts the child, whose foreign key takes a key-share lock on the project row. A settings
+// change locks the project row and then the standing supervisor's. The project row is locked only
+// against other changes to its own columns (FOR NO KEY UPDATE), so the insert never waits for the
+// settings change, and the two cannot deadlock.
+func TestASettingsChangeAndADelegateInTheProjectDoNotDeadlock(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	ctx := context.Background()
+	id, _, _ := r.runningStanding()
+	r.eventually("supervisor provisioned", func() bool { return r.opState(id) == "completed" })
+
+	// Given the standing supervisor is delegating: its row is held, as insertTask holds it
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, id); err != nil {
+		t.Fatal(err)
+	}
+
+	// When the owner changes its settings meanwhile, which waits for that row
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.svc.SetSupervisorSettings(ctx, owner, "p1", choice(nil, nil, sp("low")), tasks.LimitChanger{})
+		done <- err
+	}()
+	r.eventually("the settings change waits for the supervisor's row", func() bool {
+		return r.count(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+		                AND wait_event_type = 'Lock' AND query LIKE '%FROM tasks WHERE id = $1 AND owner_id = $2 FOR UPDATE%'`) == 1
+	})
+
+	// Then the delegate's child insert takes its foreign-key lock on the project row at once (the
+	// lock the insert's RI check takes), and both commit
+	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '5s'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM ONLY projects x WHERE id = 'p1' FOR KEY SHARE OF x`); err != nil {
+		t.Fatalf("the delegate's project key-share lock: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("settings change: %v", err)
+	}
+}

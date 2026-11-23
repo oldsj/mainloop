@@ -11,7 +11,8 @@ RETURNING *;
 SELECT * FROM projects WHERE id = $1 AND user_id = $2;
 
 -- name: LockOwnedProject :one
-SELECT * FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE;
+-- FOR NO KEY UPDATE: its callers change no key, so rows that reference the project are not blocked.
+SELECT * FROM projects WHERE id = $1 AND user_id = $2 FOR NO KEY UPDATE;
 
 -- name: ListOwnedProjects :many
 SELECT * FROM projects WHERE user_id = $1 ORDER BY last_used_at DESC, id LIMIT $2;
