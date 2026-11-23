@@ -281,6 +281,10 @@ func (r *Runner) attempt(ctx context.Context, row dbq.PrivilegedAction) error {
 			out = r.close(ctx, row)
 		case TypeItemToSecret:
 			out = r.itemToSecret(ctx, row)
+		case TypeRolloutRestart, TypeScale:
+			out = r.workload(ctx, row)
+		case TypeDelete:
+			out = r.deleteObject(ctx, row)
 		default:
 			out = outcome{state: StateFailed, err: "the type is no longer in the catalog"}
 		}

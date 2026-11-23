@@ -52,6 +52,8 @@ type entry struct {
 	// executor types hold a credential serve-api must not have: serve-executor preflights and
 	// runs them. The others run in serve-api.
 	executor bool
+	// kube types also need the executor's Kubernetes access (executor.kubernetes in the chart).
+	kube bool
 	// how is the card's line on what Approve does and through which credential.
 	how string
 	// normalize validates raw arguments and returns their canonical value.
@@ -71,6 +73,18 @@ var catalog = map[string]entry{
 		how: "Approve copies exactly this field once, through Mainloop's executor; the value never reaches an agent, " +
 			"the API process or this card.",
 		normalize: normalizeItemToSecret, preflight: preflightItemToSecret,
+	},
+	TypeRolloutRestart: {
+		version: 1, expiry: UndecidedExpiry, executor: true, kube: true, how: kubeHow,
+		normalize: normalizeRestart, preflight: preflightRestart,
+	},
+	TypeScale: {
+		version: 1, expiry: UndecidedExpiry, executor: true, kube: true, how: kubeHow,
+		normalize: normalizeScale, preflight: preflightScale,
+	},
+	TypeDelete: {
+		version: 1, expiry: DeleteExpiry, executor: true, kube: true, how: kubeHow,
+		normalize: normalizeDelete, preflight: preflightDelete,
 	},
 }
 

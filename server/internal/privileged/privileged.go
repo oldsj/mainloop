@@ -6,9 +6,10 @@
 // remote before any retry, and the outcome goes back to the requesting session as one message.
 //
 // github.pr_merge and github.pr_close run in serve-api through Mainloop's own GitHub App; nothing
-// bypasses a branch rule. onepassword.item_to_secret runs in serve-executor, the only process that
-// holds the 1Password service account: it preflights and runs executor types, and serve-api opens
-// their cards, records decisions and delivers outcomes.
+// bypasses a branch rule. onepassword.item_to_secret and the k8s.* types run in serve-executor, the
+// only process that holds the 1Password service account and may mint Kubernetes credentials: it
+// preflights and runs executor types, and serve-api opens their cards, records decisions and
+// delivers outcomes.
 package privileged
 
 import (
@@ -151,12 +152,20 @@ type Service struct {
 	Now     func() time.Time
 	// ExecutorOn, in serve-api, accepts executor types: a serve-executor is deployed.
 	ExecutorOn bool
+	// KubernetesOn, in serve-api, accepts the k8s.* types: the executor has Kubernetes access.
+	KubernetesOn bool
 	// Executor marks serve-executor's service: it freezes facts without opening the card, which
 	// serve-api opens.
 	Executor         bool
 	OnePassword      OnePassword
 	Secrets          Secrets
 	SecretNamespaces []string
+	// Kube is serve-executor's access for the k8s.* types; nil without it.
+	Kube Kube
+	// ExecutorNamespace is serve-executor's own namespace: the k8s.* types never change it.
+	ExecutorNamespace string
+	// Cluster names the cluster the executor acts on, for the card.
+	Cluster string
 }
 
 func (s *Service) now() time.Time {
@@ -184,6 +193,8 @@ func (s *Service) Request(ctx context.Context, by Requester, typ string, rawArgs
 	switch {
 	case entry.executor && !s.ExecutorOn:
 		return Action{}, fmt.Errorf("%w: %s needs Mainloop's executor, which this Mainloop does not run", ErrUnsupported, typ)
+	case entry.kube && !s.KubernetesOn:
+		return Action{}, fmt.Errorf("%w: %s needs Kubernetes access for Mainloop's executor, which this Mainloop does not have", ErrUnsupported, typ)
 	case !entry.executor && s.GitHub == nil:
 		return Action{}, fmt.Errorf("%w: this Mainloop has no GitHub App", ErrUnsupported)
 	}
