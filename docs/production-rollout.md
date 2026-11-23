@@ -56,7 +56,7 @@ permission the App lacks makes only the calls that need it fail: without Issues 
 and `comment_issue` fail and the rest work. Adding a permission to an existing
 App needs the owner of each installation to accept it on GitHub before tokens carry it.
 
-The frontend image bakes the API URL at build time (`VITE_API_URL`); the runtime `ORIGIN` does not change it. Build it for the deployment's API domain.
+The frontend image bakes the API URL at build time (`VITE_API_URL`); the runtime `ORIGIN` does not change it. The published image uses `/api`, the app's own origin: route `/api` on the frontend host to `mainloop-backend:8000` with the prefix stripped, ahead of the frontend. Same-origin, the gateway's sign-in covers the API calls ([authentication](specs/authentication.md#the-web-app)). For a separate API domain, build the image with that URL instead.
 
 Cross-namespace pieces are owned by the cluster repository, not this chart: the kagent Agents named in `mainloop-config`, the Role granting `mainloop-backend` namespace-wide Secret `get/create/delete` in `kagent`, the MCP `RemoteMCPServer` (source in `k8s/integrations/kagent/`, alongside that Role; the chart does not render it), policies that let the backend reach kagent `:8083` and the Substrate router's CONNECT-over-TLS port `:8444`, and the backend's SPIFFE ID (`spiffe://cluster.local/ns/mainloop/sa/mainloop-backend`) in the router's `atenetRouter.ingressAllowedSPIFFEIDs`. Mainloop creates runtime-owned `mainloop-mcp-<binding-id>` Secrets labeled `mainloop.dev/actor-egress=true` and `mainloop.dev/purpose=mcp`. RBAC cannot constrain dynamic creates by name or label; admission policy can restrict writes, while prefix-scoped reads require a separate broker or authorization boundary.
 
