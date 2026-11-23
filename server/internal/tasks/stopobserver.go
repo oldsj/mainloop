@@ -271,16 +271,10 @@ func (k *KagentStops) ForceStop(ctx context.Context, sessionID string, level For
 	if k.Deleter == nil {
 		return false, nil
 	}
-	if _, err := k.Deleter.ForceDeleteSession(ctx, *b.KagentSessionID); err != nil {
-		var se *kagent.SessionError
-		if !errors.As(err, &se) || !se.Wire || se.Code != connect.CodeNotFound {
-			return false, fmt.Errorf("delete session: %w", err)
-		}
+	if _, err := k.Deleter.ForceDeleteSession(ctx, *b.KagentSessionID); err != nil && !nativeGone(err) {
+		return false, fmt.Errorf("delete session: %w", err)
 	}
-	if err := q.MarkAttemptNativeDeleted(ctx, &sessionID); err != nil {
-		return false, err
-	}
-	if err := q.MarkBindingKagentDeleted(ctx, sessionID); err != nil {
+	if err := markNativeDeleted(ctx, q, sessionID); err != nil {
 		return false, err
 	}
 	live, err = k.Liveness.ObserveLiveness(ctx, *b.KagentSessionID)
@@ -292,4 +286,65 @@ func (k *KagentStops) ForceStop(ctx context.Context, sessionID string, level For
 // yet; it may list a task that needs cancelling.
 func runtimeStopped(live kagent.SessionLiveness) bool {
 	return !live.Exists || (live.Terminal && !live.Deleting) || live.Asleep
+}
+
+// nativeGone reports whether kagent answered a delete with NotFound: the session is already gone.
+func nativeGone(err error) bool {
+	var se *kagent.SessionError
+	return errors.As(err, &se) && se.Wire && se.Code == connect.CodeNotFound
+}
+
+// markNativeDeleted records on the attempt and the binding that kagent accepted the session's
+// delete, so nothing reuses it.
+func markNativeDeleted(ctx context.Context, q *dbq.Queries, sessionID string) error {
+	if err := q.MarkAttemptNativeDeleted(ctx, &sessionID); err != nil {
+		return err
+	}
+	return q.MarkBindingKagentDeleted(ctx, sessionID)
+}
+
+// KagentSessionRetirer deletes a kagent Session only after its finished turns were copied to
+// Mainloop's transcripts, and refuses when the copy fails. transcripts.FlushingKagent satisfies it.
+type KagentSessionRetirer interface {
+	RetireSession(ctx context.Context, id string) (*kagentapi.Session, error)
+}
+
+// SessionRetirer is implemented by an observer that can delete the native session of an attempt
+// whose stop is confirmed, so its actor gives its place on the worker back. Unlike [StopForcer] it is
+// never needed for a stop to settle, so it never deletes a session whose record was not copied.
+type SessionRetirer interface {
+	Retire(ctx context.Context, sessionID string) error
+}
+
+// Retire implements [SessionRetirer]. It deletes only through a Deleter that is a
+// [KagentSessionRetirer], so the session's finished turns are copied first; with any other Deleter,
+// or none, it does nothing. A session kagent has no record of, is already deleting or is asleep holds
+// no place, and is left alone. A refused copy or delete is an error and nothing is marked.
+func (k *KagentStops) Retire(ctx context.Context, sessionID string) error {
+	r, ok := k.Deleter.(KagentSessionRetirer)
+	if !ok || k.Liveness == nil {
+		return nil
+	}
+	q := dbq.New(k.Pool)
+	b, err := q.GetOwnedSessionBinding(ctx, dbq.GetOwnedSessionBindingParams{ID: sessionID, UserID: k.OwnerID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if b.KagentSessionID == nil || *b.KagentSessionID == "" {
+		return nil
+	}
+	live, err := k.Liveness.ObserveLiveness(ctx, *b.KagentSessionID)
+	if err != nil {
+		return err
+	}
+	if !live.Exists || live.Deleting || live.Asleep {
+		return nil
+	}
+	if _, err := r.RetireSession(ctx, *b.KagentSessionID); err != nil && !nativeGone(err) {
+		return fmt.Errorf("retire session: %w", err)
+	}
+	return markNativeDeleted(ctx, q, sessionID)
 }

@@ -66,3 +66,37 @@ func TestFlushingKagentBoundsTheCopy(t *testing.T) {
 		t.Fatalf("delete after %v, calls %v", time.Since(start), calls)
 	}
 }
+
+func TestRetireDeletesOnlyAfterACopy(t *testing.T) {
+	var calls []string
+	failing := true
+	k := &FlushingKagent{
+		flush: func(_ context.Context, id string) error {
+			calls = append(calls, "flush "+id)
+			if failing {
+				return errors.New("kagent hiccup")
+			}
+			return nil
+		},
+		deleter: recordingDeleter{&calls}, timeout: time.Second, log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	// When the copy fails, Then nothing is deleted
+	if _, err := k.RetireSession(context.Background(), "a"); err == nil {
+		t.Fatal("a retire whose copy failed reported success")
+	}
+	// When it succeeds, Then the Session is force-deleted after it
+	failing = false
+	if _, err := k.RetireSession(context.Background(), "b"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"flush a", "flush b", "force b"}
+	if len(calls) != len(want) {
+		t.Fatalf("calls %v, want %v", calls, want)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Fatalf("calls %v, want %v", calls, want)
+		}
+	}
+}

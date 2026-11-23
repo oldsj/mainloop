@@ -45,7 +45,18 @@ the `task-operations` loop. Every step is idempotent on stored state, so a crash
      is recorded `requested`.
 2. **Stop** (`draining`). The old session is ended `cancelled`, and the operation waits for the stop
    observer to confirm the runtime stopped, exactly as a [cancel](tasks.md) does, with the same
-   forced suspend and delete graces and the same `unresolved` bound. Then `source_fencing`.
+   forced suspend and delete graces and the same `unresolved` bound. Once it is confirmed, an
+   attempt with no workspace (a supervisor, a project's standing supervisor, a coordination child)
+   has its kagent Session deleted, so its actor gives up its place on the worker before the
+   successor's is woken: otherwise it holds it until kagent suspends it idle (300 s), and on a full
+   worker the successor's first send finds no room. Its finished turns, the cancelled one included,
+   are copied to Mainloop's transcripts first, and the delete happens only if that copy succeeds.
+   Confirmation means every native task in it is final and no admitted send is unresolved, and the
+   session is ended, so nothing is sent to it again: the delete removes no running writer. This is
+   best effort: if the copy or the delete fails, it is logged, the Session is left to kagent, the
+   handoff goes on, and the successor's send waits for room
+   ([sessions](sessions.md#runtime-capacity)). A code attempt keeps its actor,
+   whose workspace may still be needed. Then `source_fencing`.
 3. **Fence and successor** (`source_fencing`, or `requested` for a failed task), in one transaction:
    the old attempt's credentials are revoked and its capacity slot released (`fenced`); the
    successor attempt is inserted with `predecessor_id` set, taking the slot back; the old attempt
