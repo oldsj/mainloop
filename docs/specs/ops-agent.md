@@ -43,9 +43,18 @@ The agent's tool server, `ops-tools`, is read-only. It reads Kubernetes objects 
 ConfigMaps (never pod or workload specs), events, pod logs, VictoriaLogs and VictoriaMetrics
 queries, firing alerts, Argo CD application status and which resources are out of sync, and node
 health. It refuses logs and content-bearing metrics from the private namespaces, and it redacts
-secret-looking strings. It has no exec, port-forward, apply, sync, Talos or 1Password access.
+secret-looking strings. It has no exec, port-forward, apply, sync or 1Password access.
 Kubernetes RBAC (a read-only ClusterRole without Secrets) is the boundary, and the server enforces
 the rest.
+
+It also reads Omni and Talos (oldsj/infrastructure#1112, **implemented in configuration, not yet
+proven live**): the cluster as Omni sees it (`omni_cluster`), every machine with its stage and
+errors (`omni_machines`), node join progress (`node_join_progress`), a machine's Talos services
+(`talos_services`) and etcd status (`etcd_status`). Their credential is an Omni service account
+with role Reader, which Omni forwards to Talos as `os:reader`. The owner creates it as the
+1Password item `ops-tools-omni-read`; until then those tools say so and the rest work. Only the
+tool server holds it. The server reads only the Omni types it lists and returns only the fields each
+tool picks, never join tokens, config patches or a machine's kernel command line.
 
 The tool server authenticates the ops Agent's Sessions with a bearer that kagent's egress gateway
 injects from a Secret. The native agent sees only a placeholder. Mainloop names no credential for
