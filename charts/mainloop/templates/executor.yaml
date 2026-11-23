@@ -1,0 +1,144 @@
+{{- with .Values.executor }}
+{{- if .enabled }}
+{{- if not .namespace }}{{ fail "executor.namespace is required when executor.enabled" }}{{ end }}
+{{- if eq .namespace $.Release.Namespace }}{{ fail "executor.namespace must not be the release namespace" }}{{ end }}
+{{- if $.Values.database.local.enabled }}{{ fail "the executor cannot reach the local database" }}{{ end }}
+{{- $image := $.Values.images.backend }}
+{{- if .image.repository }}{{ $image = .image }}{{ end }}
+# serve-executor (docs/specs/privileged-actions.md): runs the privileged actions that need a
+# credential serve-api must not hold. Its own namespace, created outside the chart; no Service, and
+# ingress is denied. One replica, replaced rather than rolled, so two never hold one action.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mainloop-executor
+  namespace: {{ .namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-executor
+  namespace: {{ .namespace }}
+  labels:
+    app: mainloop-executor
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mainloop-executor
+  template:
+    metadata:
+      labels:
+        app: mainloop-executor
+      {{- with .podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: mainloop-executor
+      securityContext:
+        fsGroup: 1000
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: executor
+          image: {{ include "mainloop.image" (dict "image" $image "root" $) }}
+          {{- include "mainloop.pullPolicy" $ | nindent 10 }}
+          args: [serve-executor]
+          {{- include "mainloop.securityContext" $ | nindent 10 }}
+            readOnlyRootFilesystem: true
+          env:
+            - name: DB_HOST
+              value: {{ .dbHost | default (include "mainloop.dbHost" $) | quote }}
+            - name: DB_PORT
+              value: {{ $.Values.config.DB_PORT | default "5432" | quote }}
+            - name: DB_NAME
+              value: {{ $.Values.config.DB_NAME | default "mainloop" | quote }}
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .dbSecret }}
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .dbSecret }}
+                  key: password
+            - name: MAINLOOP_OWNER_ID
+              value: {{ $.Values.config.MAINLOOP_OWNER_ID | default "local-dev-user" | quote }}
+            - name: MAINLOOP_EXECUTOR_OP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .onePasswordSecret }}
+                  key: token
+            - name: MAINLOOP_EXECUTOR_SECRET_NAMESPACES
+              value: {{ join "," .secretNamespaces | quote }}
+            # The root filesystem is read-only; /tmp is the only writable path.
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          {{- with .resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+---
+# Nothing connects to the executor.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mainloop-executor-deny-ingress
+  namespace: {{ .namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+{{- range .secretNamespaces }}
+---
+# onepassword.item_to_secret may read and write Secrets here, and nowhere else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mainloop-executor-secrets
+  namespace: {{ . }}
+rules:
+  - apiGroups: ['']
+    resources: [secrets]
+    verbs: [get, create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mainloop-executor-secrets
+  namespace: {{ . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mainloop-executor-secrets
+subjects:
+  - kind: ServiceAccount
+    name: mainloop-executor
+    namespace: {{ $.Values.executor.namespace }}
+{{- end }}
+{{- end }}
+{{- end }}

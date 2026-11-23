@@ -44,6 +44,8 @@ config:
   # Privileged actions (docs/specs/privileged-actions.md): off unless a deployment turns them on,
   # and serve-api refuses them unless MAINLOOP_AUTH_MODE is enforce.
   MAINLOOP_PRIVILEGED_ACTIONS_ENABLED: 'false'
+  # Accepts the executor types (onepassword.*). The chart sets it true with executor.enabled.
+  MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED: 'false'
   # Owner API authentication (docs/specs/authentication.md): observe verifies and logs what enforce
   # would refuse, and refuses nothing. serve-api will not start outside development without a mode.
   # A deployment sets enforce once it has MAINLOOP_AUTH_OIDC_* and its machine callers carry tokens.
@@ -267,3 +269,41 @@ networkPolicy:
   # Peers (NetworkPolicy "from" entries) let in to the metrics listener on 9100, such as the
   # cluster's Prometheus scraper. Empty, the default, adds no policy, so no one is let in.
   metricsIngress: []
+
+# serve-executor (docs/specs/privileged-actions.md): runs the privileged actions whose credential
+# serve-api must not hold (onepassword.item_to_secret). Off by default. It needs, outside the
+# chart: its namespace; a database role mainloop_executor (`mainloop migrate up` grants it its
+# privileges once it exists); and in its namespace the Secrets named below.
+executor:
+  enabled: false
+  # Its own namespace, never the release's.
+  namespace: ''
+  # Its image; empty uses images.backend. It runs the compiled binary, so a deployment whose
+  # backend image is a -dev (go run) image points this at a published mainloop-backend image.
+  image:
+    repository: ''
+    tag: ''
+    digest: ''
+  # DB_HOST, fully qualified; empty uses the server's, which must then resolve from another
+  # namespace.
+  dbHost: ''
+  # Keys username (mainloop_executor) and password.
+  # trunk-ignore(checkov/CKV_SECRET_6): the Secret's name, not a value
+  dbSecret: mainloop-executor-db
+  # Key token: a read-only 1Password Service Account token.
+  # trunk-ignore(checkov/CKV_SECRET_6): the Secret's name, not a value
+  onePasswordSecret: mainloop-executor-1password
+  # Namespaces onepassword.item_to_secret may write Secrets in; a Role is rendered in each. Some
+  # (kube-*, mainloop*, onepassword*, argocd*, default) are always refused.
+  secretNamespaces: []
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+  # E.g. a Multus network for a dedicated source address.
+  podAnnotations: {}
+  resources:
+    requests:
+      cpu: 20m
+      memory: 128Mi
+    limits:
+      memory: 512Mi

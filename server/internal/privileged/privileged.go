@@ -5,8 +5,10 @@
 // Approve must carry that digest. The executor then runs exactly that action once, observing the
 // remote before any retry, and the outcome goes back to the requesting session as one message.
 //
-// Slice 1 has two types, github.pr_merge and github.pr_close, run through Mainloop's own GitHub
-// App. Nothing bypasses a branch rule.
+// github.pr_merge and github.pr_close run in serve-api through Mainloop's own GitHub App; nothing
+// bypasses a branch rule. onepassword.item_to_secret runs in serve-executor, the only process that
+// holds the 1Password service account: it preflights and runs executor types, and serve-api opens
+// their cards, records decisions and delivers outcomes.
 package privileged
 
 import (
@@ -69,8 +71,12 @@ const (
 	AnswerDeny    = "Deny"
 )
 
-// QueueIDPrefix starts the Needs-you queue item id of an action's card; the rest is the action id.
-const QueueIDPrefix = "privileged_action_"
+// QueueIDPrefix starts the Needs-you queue item id of an action's card, and UncertainIDPrefix the
+// owner's error item for an outcome Mainloop could not observe; the rest is the action id.
+const (
+	QueueIDPrefix     = "privileged_action_"
+	UncertainIDPrefix = "privileged_action_uncertain_"
+)
 
 // Limits.
 const (
@@ -84,8 +90,11 @@ const (
 	// UnclaimedExpiry is how long an approved action waits for the executor before it expires,
 	// so a backlog never runs old approvals late.
 	UnclaimedExpiry = 5 * time.Minute
-	// MaxPreflightAttempts is how often a preflight that could not reach GitHub is tried.
+	// MaxPreflightAttempts is how often a preflight that could not read its target is tried.
 	MaxPreflightAttempts = 5
+	// ExecutorPickup is how long an executor type waits for serve-executor's preflight before
+	// serve-api ends it: the executor is down or not deployed.
+	ExecutorPickup = 10 * time.Minute
 )
 
 var (
@@ -132,13 +141,22 @@ type Action struct {
 	Replayed bool
 }
 
-// Service takes requests. Its GitHub reads run the preflight.
+// Service takes requests and runs preflights through its clients. serve-api's has GitHub;
+// serve-executor's (Executor set) has OnePassword and Secrets.
 type Service struct {
 	Pool    *pgxpool.Pool
 	OwnerID string
 	GitHub  GitHub
 	Log     *slog.Logger
 	Now     func() time.Time
+	// ExecutorOn, in serve-api, accepts executor types: a serve-executor is deployed.
+	ExecutorOn bool
+	// Executor marks serve-executor's service: it freezes facts without opening the card, which
+	// serve-api opens.
+	Executor         bool
+	OnePassword      OnePassword
+	Secrets          Secrets
+	SecretNamespaces []string
 }
 
 func (s *Service) now() time.Time {
@@ -159,12 +177,15 @@ func (s *Service) log() *slog.Logger {
 // requestID or with the same arguments, and otherwise writes the intent row, runs the preflight
 // with no transaction open and, when it passes, freezes the facts and opens the owner's card.
 func (s *Service) Request(ctx context.Context, by Requester, typ string, rawArgs json.RawMessage, reason, requestID string) (Action, error) {
-	if s.GitHub == nil {
-		return Action{}, fmt.Errorf("%w: this Mainloop has no GitHub App", ErrUnsupported)
-	}
 	entry, ok := catalog[typ]
 	if !ok {
 		return Action{}, fmt.Errorf("%w: %q is not in the catalog (%s)", ErrUnsupported, typ, strings.Join(Types(), ", "))
+	}
+	switch {
+	case entry.executor && !s.ExecutorOn:
+		return Action{}, fmt.Errorf("%w: %s needs Mainloop's executor, which this Mainloop does not run", ErrUnsupported, typ)
+	case !entry.executor && s.GitHub == nil:
+		return Action{}, fmt.Errorf("%w: this Mainloop has no GitHub App", ErrUnsupported)
 	}
 	args, err := entry.normalize(rawArgs)
 	if err != nil {
@@ -229,6 +250,9 @@ func (s *Service) Request(ctx context.Context, by Requester, typ string, rawArgs
 		return Action{}, errors.New("privileged: the request conflicted but no action was found")
 	}
 	s.log().InfoContext(ctx, "privileged action requested", "action_id", row.ID, "type", typ, "role", by.Role)
+	if entry.executor {
+		return fromRow(row), nil // serve-executor preflights it; its card opens when it has
+	}
 	row, err = s.preflight(ctx, row, false)
 	if err != nil {
 		return Action{}, err
@@ -277,13 +301,13 @@ func (s *Service) preflight(ctx context.Context, row dbq.PrivilegedAction, deliv
 	if !ok {
 		return s.failPreflight(ctx, row, "the type is no longer in the catalog", deliver)
 	}
-	facts, err := entry.preflight(ctx, s.GitHub, row.Args, s.now().UTC())
+	facts, err := entry.preflight(ctx, s, row.Args, s.now().UTC())
 	var refused *refusal
 	switch {
 	case errors.As(err, &refused):
 		return s.failPreflight(ctx, row, refused.msg, deliver)
 	case err != nil:
-		msg := "GitHub could not be read: " + safeError(err)
+		msg := "the target could not be read: " + safeError(err)
 		if row.PreflightAttempts+1 >= MaxPreflightAttempts {
 			return s.failPreflight(ctx, row, msg, deliver)
 		}
@@ -317,6 +341,9 @@ func (s *Service) preflight(ctx context.Context, row dbq.PrivilegedAction, deliv
 			ActionID: r.ID, Step: "preflighted", Detail: "facts frozen under digest " + digest,
 		}); err != nil {
 			return nil, err
+		}
+		if s.Executor {
+			return nil, nil // serve-api opens the card; the executor writes no attention
 		}
 		item, err := card(r)
 		if err != nil {

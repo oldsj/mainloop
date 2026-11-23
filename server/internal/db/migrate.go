@@ -107,6 +107,17 @@ func (m *Migrator) Up(ctx context.Context) (int, error) {
 	return len(results), nil
 }
 
+// GrantExecutor gives the executor's database role, if it exists, the privileges serve-executor
+// needs (migration 00890). Roles are created outside Mainloop, possibly after the migration ran,
+// so migrate up calls this every time. It reports whether the role exists.
+func (m *Migrator) GrantExecutor(ctx context.Context) (bool, error) {
+	var ok bool
+	if err := m.sqlDB.QueryRowContext(ctx, "SELECT privileged_executor_grants()").Scan(&ok); err != nil {
+		return false, fmt.Errorf("db: executor grants: %w", err)
+	}
+	return ok, nil
+}
+
 // Status lists every migration file in version order.
 func (m *Migrator) Status(ctx context.Context) ([]MigrationStatus, error) {
 	rows, err := m.current().Status(ctx)

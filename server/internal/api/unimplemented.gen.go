@@ -189,6 +189,11 @@ func (Unimplemented) GetMergePolicy(context.Context, GetMergePolicyRequestObject
 	return nil, apierr.NotImplemented
 }
 
+// GetPrivilegedAction is not implemented yet.
+func (Unimplemented) GetPrivilegedAction(context.Context, GetPrivilegedActionRequestObject) (GetPrivilegedActionResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetProject is not implemented yet.
 func (Unimplemented) GetProject(context.Context, GetProjectRequestObject) (GetProjectResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -356,6 +361,11 @@ func (Unimplemented) ListEnvironments(context.Context, ListEnvironmentsRequestOb
 
 // ListMainLoops is not implemented yet.
 func (Unimplemented) ListMainLoops(context.Context, ListMainLoopsRequestObject) (ListMainLoopsResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// ListPrivilegedActions is not implemented yet.
+func (Unimplemented) ListPrivilegedActions(context.Context, ListPrivilegedActionsRequestObject) (ListPrivilegedActionsResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

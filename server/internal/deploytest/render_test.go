@@ -39,6 +39,10 @@ var installs = map[string]struct {
 	"kind":       {"mainloop", "values-kind.yaml", nil},
 	// Production with its canary on, as the real production values have it.
 	"production-canary": {"mainloop", "ci/production-values.yaml", []string{"canary.enabled=true"}},
+	// Production with serve-executor on (docs/specs/privileged-actions.md).
+	"production-executor": {"mainloop", "ci/production-values.yaml", []string{
+		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.secretNamespaces={widgets,billing}",
+	}},
 	// Production with the preview screenshot browser on.
 	"production-screenshots": {"mainloop", "ci/production-values.yaml", []string{
 		"screenshots.enabled=true",
@@ -572,7 +576,7 @@ func TestNoClusterScopedSecretAccess(t *testing.T) {
 }
 
 func TestFeatureFlagsDefaultOff(t *testing.T) {
-	flags := []string{"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_MERGE_TOOLS_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED", "MAINLOOP_OWNER_POLICY_WRITES_ENABLED", "MAINLOOP_PRIVILEGED_ACTIONS_ENABLED"}
+	flags := []string{"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_MERGE_TOOLS_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED", "MAINLOOP_OWNER_POLICY_WRITES_ENABLED", "MAINLOOP_PRIVILEGED_ACTIONS_ENABLED", "MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED"}
 	// The live dev instance is a single-owner prototype, so it may turn HITL answers, Git transport
 	// and the push gate on (through its own proxies). Every other install keeps every flag off.
 	allowed := map[string][]string{

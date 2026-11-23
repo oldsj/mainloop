@@ -27,7 +27,8 @@ export type PaletteAction =
   | { do: 'theme'; theme: ThemeId }
   | { do: 'ask'; text: string }
   | { do: 'command'; command: ShellCommand }
-  | { do: 'transcripts' };
+  | { do: 'transcripts' }
+  | { do: 'privileged' };
 
 export interface PaletteItem {
   /** Unique in the list. */
@@ -73,6 +74,12 @@ const PAGES: PaletteItem[] = [
     label: 'Search transcripts',
     kind: 'Page',
     action: { do: 'transcripts' }
+  },
+  {
+    id: 'page:privileged',
+    label: 'Privileged actions',
+    kind: 'Page',
+    action: { do: 'privileged' }
   },
   { id: 'page:settings', label: 'Settings', kind: 'Page', action: { do: 'settings' } },
   {

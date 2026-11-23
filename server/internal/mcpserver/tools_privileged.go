@@ -27,7 +27,10 @@ func (s *Server) privilegedTools() []Tool {
 			"denied with the owner's note, expired or uncertain). End your turn after requesting; do not poll. Types: " +
 			"github.pr_merge {repo: \"owner/name\", pr, expected_head_sha} squash-merges exactly that head through Mainloop's " +
 			"GitHub App and never bypasses a branch rule; github.pr_close {repo, prs: [numbers, at most 20], comment?} closes " +
-			"open pull requests without merging. Reuse request_id to read the same request back. At most 3 requests per session " +
+			"open pull requests without merging; onepassword.item_to_secret {vault, item, field (each an id or exact title), " +
+			"namespace, secret, key} copies one 1Password field into one key of a Kubernetes Secret through Mainloop's executor " +
+			"(you never see the value; only the namespaces the executor allows; answers unavailable where no executor runs). " +
+			"An executor type returns state requested; its card opens once the executor has checked the target. Reuse request_id to read the same request back. At most 3 requests per session " +
 			"and 10 in all wait for the owner.",
 		InputSchema: objectSchema(map[string]any{
 			"request_id": str(1, privileged.MaxRequestIDLen),

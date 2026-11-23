@@ -515,6 +515,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/privileged-actions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Privileged Actions
+     * @description The owner's privileged actions, newest first (docs/specs/privileged-actions.md). Read-only; approvals happen on the Needs-you card.
+     */
+    get: operations['listPrivilegedActions'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/privileged-actions/{action_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Privileged Action
+     * @description One privileged action with what was asked, the facts the owner approved, the outcome and every step taken.
+     */
+    get: operations['getPrivilegedAction'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/projects': {
     parameters: {
       query?: never;
@@ -2077,6 +2117,76 @@ export interface components {
        * @description True when the owner may dismiss this row (an input notice with no structured request). The server decides; clients do not copy the rule.
        */
       dismissible: boolean;
+    };
+    /**
+     * PrivilegedActionState
+     * @enum {string}
+     */
+    PrivilegedActionState:
+      | 'requested'
+      | 'pending_approval'
+      | 'preflight_failed'
+      | 'approved'
+      | 'executing'
+      | 'succeeded'
+      | 'failed'
+      | 'stale'
+      | 'denied'
+      | 'expired'
+      | 'cancelled'
+      | 'uncertain';
+    /** PrivilegedActionSummary */
+    PrivilegedActionSummary: {
+      id: string;
+      /** @description The catalog type, e.g. github.pr_merge or onepassword.item_to_secret. */
+      type: string;
+      state: components['schemas']['PrivilegedActionState'];
+      /** @description The card's title once the facts are frozen; the type before. */
+      title: string;
+      requester_role: string;
+      requester_session_id: string;
+      requester_task_id: string | null;
+      /** @description The agent's claim, never checked by Mainloop. */
+      reason: string;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      expires_at: string;
+      decided_at: string | null;
+      finished_at: string | null;
+      decision_note: string | null;
+      last_error: string | null;
+    };
+    /** PrivilegedActionDetail */
+    PrivilegedActionDetail: {
+      action: components['schemas']['PrivilegedActionSummary'];
+      /** @description The card's text as the owner saw it; empty before the facts are frozen. */
+      body: string;
+      /** @description The canonical arguments. */
+      args: {
+        [key: string]: unknown;
+      };
+      /** @description What preflight read, which the approval's digest covers. Never a secret value. */
+      frozen_facts: {
+        [key: string]: unknown;
+      } | null;
+      digest: string | null;
+      result: {
+        [key: string]: unknown;
+      } | null;
+      attempts: number;
+      /** @enum {string} */
+      delivery_state: 'none' | 'pending' | 'delivered' | 'undeliverable';
+      events: components['schemas']['PrivilegedActionEvent'][];
+    };
+    /** PrivilegedActionEvent */
+    PrivilegedActionEvent: {
+      /** Format: int64 */
+      id: number;
+      step: string;
+      detail: string;
+      /** Format: date-time */
+      created_at: string;
     };
     /** AskUserAnswer */
     AskUserAnswer: {
@@ -8303,6 +8413,86 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HealthEvents'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  listPrivilegedActions: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PrivilegedActionSummary'][];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  getPrivilegedAction: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        action_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PrivilegedActionDetail'];
         };
       };
       401: components['responses']['Unauthorized'];

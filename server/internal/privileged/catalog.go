@@ -49,16 +49,41 @@ type GitHub interface {
 type entry struct {
 	version int32
 	expiry  time.Duration
+	// executor types hold a credential serve-api must not have: serve-executor preflights and
+	// runs them. The others run in serve-api.
+	executor bool
+	// how is the card's line on what Approve does and through which credential.
+	how string
 	// normalize validates raw arguments and returns their canonical value.
 	normalize func(raw json.RawMessage) (any, error)
-	// preflight reads the facts the card shows and the executor's preconditions. A *refusal means
-	// the action cannot go to the owner as asked.
-	preflight func(ctx context.Context, gh GitHub, args json.RawMessage, now time.Time) (any, error)
+	// preflight reads the facts the card shows and the executor's preconditions through the
+	// service's clients. A *refusal means the action cannot go to the owner as asked.
+	preflight func(ctx context.Context, s *Service, args json.RawMessage, now time.Time) (any, error)
 }
 
+const githubHow = "Approve runs exactly this once, through Mainloop's GitHub App; nothing bypasses a branch rule."
+
 var catalog = map[string]entry{
-	TypePRMerge: {version: 1, expiry: UndecidedExpiry, normalize: normalizeMerge, preflight: preflightMerge},
-	TypePRClose: {version: 1, expiry: UndecidedExpiry, normalize: normalizeClose, preflight: preflightClose},
+	TypePRMerge: {version: 1, expiry: UndecidedExpiry, how: githubHow, normalize: normalizeMerge, preflight: preflightMerge},
+	TypePRClose: {version: 1, expiry: UndecidedExpiry, how: githubHow, normalize: normalizeClose, preflight: preflightClose},
+	TypeItemToSecret: {
+		version: 1, expiry: UndecidedExpiry, executor: true,
+		how: "Approve copies exactly this field once, through Mainloop's executor; the value never reaches an agent, " +
+			"the API process or this card.",
+		normalize: normalizeItemToSecret, preflight: preflightItemToSecret,
+	},
+}
+
+// TypesFor lists the types one process runs, sorted: the executor's, or serve-api's.
+func TypesFor(executor bool) []string {
+	var out []string
+	for t, e := range catalog {
+		if e.executor == executor {
+			out = append(out, t)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Types lists the catalog's types, sorted.
@@ -237,7 +262,8 @@ func readPR(ctx context.Context, gh GitHub, repo github.Repo, n int) (*github.Pu
 	return p, nil
 }
 
-func preflightMerge(ctx context.Context, gh GitHub, raw json.RawMessage, now time.Time) (any, error) {
+func preflightMerge(ctx context.Context, s *Service, raw json.RawMessage, now time.Time) (any, error) {
+	gh := s.GitHub
 	var a MergeArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return nil, err
@@ -311,7 +337,8 @@ func readChecks(ctx context.Context, gh GitHub, repo github.Repo, sha string) Ch
 	return c
 }
 
-func preflightClose(ctx context.Context, gh GitHub, raw json.RawMessage, now time.Time) (any, error) {
+func preflightClose(ctx context.Context, s *Service, raw json.RawMessage, now time.Time) (any, error) {
+	gh := s.GitHub
 	var a CloseArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return nil, err

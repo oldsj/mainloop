@@ -15,6 +15,8 @@ import { Route as HealthRouteImport } from './routes/health';
 import { Route as InboxRouteImport } from './routes/inbox';
 import { Route as SettingsRouteImport } from './routes/settings';
 import { Route as TranscriptsRouteImport } from './routes/transcripts';
+import { Route as PrivilegedIndexRouteImport } from './routes/privileged.index';
+import { Route as PrivilegedIdRouteImport } from './routes/privileged.$id';
 import { Route as ProjectsIdRouteImport } from './routes/projects.$id';
 import { Route as SchedulesIndexRouteImport } from './routes/schedules.index';
 import { Route as SchedulesIdRouteImport } from './routes/schedules.$id';
@@ -52,6 +54,16 @@ const SettingsRoute = SettingsRouteImport.update({
 const TranscriptsRoute = TranscriptsRouteImport.update({
   id: '/transcripts',
   path: '/transcripts',
+  getParentRoute: () => rootRouteImport,
+} as any);
+const PrivilegedIndexRoute = PrivilegedIndexRouteImport.update({
+  id: '/privileged/',
+  path: '/privileged/',
+  getParentRoute: () => rootRouteImport,
+} as any);
+const PrivilegedIdRoute = PrivilegedIdRouteImport.update({
+  id: '/privileged/$id',
+  path: '/privileged/$id',
   getParentRoute: () => rootRouteImport,
 } as any);
 const ProjectsIdRoute = ProjectsIdRouteImport.update({
@@ -102,12 +114,14 @@ export interface FileRoutesByFullPath {
   '/inbox': typeof InboxRoute;
   '/settings': typeof SettingsRoute;
   '/transcripts': typeof TranscriptsRoute;
+  '/privileged/$id': typeof PrivilegedIdRoute;
   '/projects/$id': typeof ProjectsIdRoute;
   '/schedules/$id': typeof SchedulesIdRoute;
   '/schedules/new': typeof SchedulesNewRoute;
   '/sessions/$id': typeof SessionsIdRoute;
   '/tasks/$id': typeof TasksIdRoute;
   '/workspaces/$id': typeof WorkspacesIdRoute;
+  '/privileged/': typeof PrivilegedIndexRoute;
   '/schedules/': typeof SchedulesIndexRoute;
   '/previews/$workspace/$port': typeof PreviewsWorkspacePortRoute;
 }
@@ -118,12 +132,14 @@ export interface FileRoutesByTo {
   '/inbox': typeof InboxRoute;
   '/settings': typeof SettingsRoute;
   '/transcripts': typeof TranscriptsRoute;
+  '/privileged/$id': typeof PrivilegedIdRoute;
   '/projects/$id': typeof ProjectsIdRoute;
   '/schedules/$id': typeof SchedulesIdRoute;
   '/schedules/new': typeof SchedulesNewRoute;
   '/sessions/$id': typeof SessionsIdRoute;
   '/tasks/$id': typeof TasksIdRoute;
   '/workspaces/$id': typeof WorkspacesIdRoute;
+  '/privileged': typeof PrivilegedIndexRoute;
   '/schedules': typeof SchedulesIndexRoute;
   '/previews/$workspace/$port': typeof PreviewsWorkspacePortRoute;
 }
@@ -135,12 +151,14 @@ export interface FileRoutesById {
   '/inbox': typeof InboxRoute;
   '/settings': typeof SettingsRoute;
   '/transcripts': typeof TranscriptsRoute;
+  '/privileged/$id': typeof PrivilegedIdRoute;
   '/projects/$id': typeof ProjectsIdRoute;
   '/schedules/$id': typeof SchedulesIdRoute;
   '/schedules/new': typeof SchedulesNewRoute;
   '/sessions/$id': typeof SessionsIdRoute;
   '/tasks/$id': typeof TasksIdRoute;
   '/workspaces/$id': typeof WorkspacesIdRoute;
+  '/privileged/': typeof PrivilegedIndexRoute;
   '/schedules/': typeof SchedulesIndexRoute;
   '/previews/$workspace/$port': typeof PreviewsWorkspacePortRoute;
 }
@@ -153,12 +171,14 @@ export interface FileRouteTypes {
     | '/inbox'
     | '/settings'
     | '/transcripts'
+    | '/privileged/$id'
     | '/projects/$id'
     | '/schedules/$id'
     | '/schedules/new'
     | '/sessions/$id'
     | '/tasks/$id'
     | '/workspaces/$id'
+    | '/privileged/'
     | '/schedules/'
     | '/previews/$workspace/$port';
   fileRoutesByTo: FileRoutesByTo;
@@ -169,12 +189,14 @@ export interface FileRouteTypes {
     | '/inbox'
     | '/settings'
     | '/transcripts'
+    | '/privileged/$id'
     | '/projects/$id'
     | '/schedules/$id'
     | '/schedules/new'
     | '/sessions/$id'
     | '/tasks/$id'
     | '/workspaces/$id'
+    | '/privileged'
     | '/schedules'
     | '/previews/$workspace/$port';
   id:
@@ -185,12 +207,14 @@ export interface FileRouteTypes {
     | '/inbox'
     | '/settings'
     | '/transcripts'
+    | '/privileged/$id'
     | '/projects/$id'
     | '/schedules/$id'
     | '/schedules/new'
     | '/sessions/$id'
     | '/tasks/$id'
     | '/workspaces/$id'
+    | '/privileged/'
     | '/schedules/'
     | '/previews/$workspace/$port';
   fileRoutesById: FileRoutesById;
@@ -202,12 +226,14 @@ export interface RootRouteChildren {
   InboxRoute: typeof InboxRoute;
   SettingsRoute: typeof SettingsRoute;
   TranscriptsRoute: typeof TranscriptsRoute;
+  PrivilegedIdRoute: typeof PrivilegedIdRoute;
   ProjectsIdRoute: typeof ProjectsIdRoute;
   SchedulesIdRoute: typeof SchedulesIdRoute;
   SchedulesNewRoute: typeof SchedulesNewRoute;
   SessionsIdRoute: typeof SessionsIdRoute;
   TasksIdRoute: typeof TasksIdRoute;
   WorkspacesIdRoute: typeof WorkspacesIdRoute;
+  PrivilegedIndexRoute: typeof PrivilegedIndexRoute;
   SchedulesIndexRoute: typeof SchedulesIndexRoute;
   PreviewsWorkspacePortRoute: typeof PreviewsWorkspacePortRoute;
 }
@@ -254,6 +280,20 @@ declare module '@tanstack/react-router' {
       path: '/transcripts';
       fullPath: '/transcripts';
       preLoaderRoute: typeof TranscriptsRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    '/privileged/': {
+      id: '/privileged/';
+      path: '/privileged';
+      fullPath: '/privileged/';
+      preLoaderRoute: typeof PrivilegedIndexRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    '/privileged/$id': {
+      id: '/privileged/$id';
+      path: '/privileged/$id';
+      fullPath: '/privileged/$id';
+      preLoaderRoute: typeof PrivilegedIdRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     '/projects/$id': {
@@ -322,12 +362,14 @@ const rootRouteChildren: RootRouteChildren = {
   InboxRoute: InboxRoute,
   SettingsRoute: SettingsRoute,
   TranscriptsRoute: TranscriptsRoute,
+  PrivilegedIdRoute: PrivilegedIdRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   SchedulesIdRoute: SchedulesIdRoute,
   SchedulesNewRoute: SchedulesNewRoute,
   SessionsIdRoute: SessionsIdRoute,
   TasksIdRoute: TasksIdRoute,
   WorkspacesIdRoute: WorkspacesIdRoute,
+  PrivilegedIndexRoute: PrivilegedIndexRoute,
   SchedulesIndexRoute: SchedulesIndexRoute,
   PreviewsWorkspacePortRoute: PreviewsWorkspacePortRoute,
 };

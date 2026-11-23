@@ -49,6 +49,8 @@ tags:
     description: The one live-sync lease on the shared mainloop-dev instance.
   - name: transcripts
     description: Stored session transcripts and their search.
+  - name: privileged
+    description: The owner's audit of privileged actions agents asked for.
 paths:
   /activity:
     get:
@@ -1391,6 +1393,73 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthEvents'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /privileged-actions:
+    get:
+      tags:
+        - privileged
+      summary: List Privileged Actions
+      description: The owner's privileged actions, newest first (docs/specs/privileged-actions.md). Read-only; approvals happen on the Needs-you card.
+      operationId: listPrivilegedActions
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 100
+                items:
+                  $ref: '#/components/schemas/PrivilegedActionSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+  /privileged-actions/{action_id}:
+    get:
+      tags:
+        - privileged
+      summary: Get Privileged Action
+      description: One privileged action with what was asked, the facts the owner approved, the outcome and every step taken.
+      operationId: getPrivilegedAction
+      parameters:
+        - name: action_id
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 200
+            title: Action Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrivilegedActionDetail'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -6508,6 +6577,152 @@ components:
         - queue_item_id
         - dismissible
       title: ActivityItem
+    PrivilegedActionState:
+      type: string
+      enum:
+        - requested
+        - pending_approval
+        - preflight_failed
+        - approved
+        - executing
+        - succeeded
+        - failed
+        - stale
+        - denied
+        - expired
+        - cancelled
+        - uncertain
+      title: PrivilegedActionState
+    PrivilegedActionSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          description: The catalog type, e.g. github.pr_merge or onepassword.item_to_secret.
+        state:
+          $ref: '#/components/schemas/PrivilegedActionState'
+        title:
+          type: string
+          description: The card's title once the facts are frozen; the type before.
+        requester_role:
+          type: string
+        requester_session_id:
+          type: string
+        requester_task_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+        reason:
+          type: string
+          description: The agent's claim, never checked by Mainloop.
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        decided_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        finished_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        decision_note:
+          anyOf:
+            - type: string
+            - type: 'null'
+        last_error:
+          anyOf:
+            - type: string
+            - type: 'null'
+      required:
+        - id
+        - type
+        - state
+        - title
+        - requester_role
+        - requester_session_id
+        - requester_task_id
+        - reason
+        - created_at
+        - expires_at
+        - decided_at
+        - finished_at
+        - decision_note
+        - last_error
+      title: PrivilegedActionSummary
+    PrivilegedActionDetail:
+      type: object
+      properties:
+        action:
+          $ref: '#/components/schemas/PrivilegedActionSummary'
+        body:
+          type: string
+          description: The card's text as the owner saw it; empty before the facts are frozen.
+        args:
+          type: object
+          additionalProperties: true
+          description: The canonical arguments.
+        frozen_facts:
+          anyOf:
+            - type: object
+              additionalProperties: true
+            - type: 'null'
+          description: What preflight read, which the approval's digest covers. Never a secret value.
+        digest:
+          anyOf:
+            - type: string
+            - type: 'null'
+        result:
+          anyOf:
+            - type: object
+              additionalProperties: true
+            - type: 'null'
+        attempts:
+          type: integer
+        delivery_state:
+          type: string
+          enum: [none, pending, delivered, undeliverable]
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/PrivilegedActionEvent'
+      required:
+        - action
+        - body
+        - args
+        - frozen_facts
+        - digest
+        - result
+        - attempts
+        - delivery_state
+        - events
+      title: PrivilegedActionDetail
+    PrivilegedActionEvent:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        step:
+          type: string
+        detail:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - step
+        - detail
+        - created_at
+      title: PrivilegedActionEvent
     AskUserAnswer:
       properties:
         answer:

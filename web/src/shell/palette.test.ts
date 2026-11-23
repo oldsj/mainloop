@@ -26,7 +26,7 @@ const source = (overrides: Partial<ExplorerSource> = {}): ExplorerSource => ({
 });
 
 const at = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
-const PAGES = Array.from({ length: 8 }, () => 'Page');
+const PAGES = Array.from({ length: 9 }, () => 'Page');
 const kinds = (items: ReturnType<typeof paletteItems>) => items.map((item) => item.kind);
 
 /** A question with no task, a failed task in a project that can be retried, and a running task. */
@@ -268,6 +268,15 @@ describe('transcript search', () => {
     expect(filterItems(paletteItems(EMPTY), 'transcripts')[0]).toMatchObject({
       label: 'Search transcripts',
       action: { do: 'transcripts' }
+    });
+  });
+});
+
+describe('privileged actions', () => {
+  it('is a page the palette jumps to', () => {
+    expect(filterItems(paletteItems(EMPTY), 'privileged')[0]).toMatchObject({
+      label: 'Privileged actions',
+      action: { do: 'privileged' }
     });
   });
 });

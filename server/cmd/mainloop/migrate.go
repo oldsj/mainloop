@@ -56,6 +56,14 @@ func runMigrate(args []string, stdout, stderr io.Writer) int {
 			return exitFailure
 		}
 		_, _ = fmt.Fprintf(stdout, "applied %d migration(s)\n", n)
+		granted, err := m.GrantExecutor(ctx)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "migrate: %v\n", err)
+			return exitFailure
+		}
+		if granted {
+			_, _ = fmt.Fprintln(stdout, "granted the executor role its privileges")
+		}
 	case "reset":
 		if err := m.Reset(ctx); err != nil {
 			_, _ = fmt.Fprintf(stderr, "migrate: %v\n", err)
