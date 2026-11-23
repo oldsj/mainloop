@@ -43,6 +43,7 @@ type AgentBinding struct {
 	GuidanceDeliveryID         *string
 	ModelOverride              *string
 	EffortOverride             *string
+	WebFetch                   bool
 }
 
 type AttentionItem struct {
@@ -1015,6 +1016,7 @@ type Task struct {
 	CapacityTier        string
 	RuntimeWaitSince    *time.Time
 	Standing            bool
+	WebFetch            bool
 }
 
 type TaskArtifact struct {
@@ -1263,6 +1265,19 @@ type TranscriptTask struct {
 	TaskAt          *time.Time
 	IngestedAt      time.Time
 	PrunedAt        *time.Time
+}
+
+type WebFetch struct {
+	ID         string
+	OwnerID    string
+	SessionID  *string
+	Url        string
+	FinalUrl   *string
+	Status     *int32
+	Bytes      *int32
+	ErrorCode  *string
+	CreatedAt  time.Time
+	FinishedAt *time.Time
 }
 
 type Workspace struct {

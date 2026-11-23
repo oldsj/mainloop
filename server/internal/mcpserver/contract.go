@@ -41,12 +41,15 @@ type ContractTool struct {
 // ContractRow lists what one kind of actor sees. A row with a nil role, depth and grant is the
 // actor of a completed task that may only read merge status.
 type ContractRow struct {
-	Role            *string  `json:"role"`
-	Depth           *int     `json:"depth"`
-	Grant           *string  `json:"grant"`
-	MergeStatusOnly bool     `json:"merge_status_only"`
-	MergeEnabled    bool     `json:"merge_tools_enabled"`
-	DevLoopEnabled  bool     `json:"devloop_enabled"`
+	Role            *string `json:"role"`
+	Depth           *int    `json:"depth"`
+	Grant           *string `json:"grant"`
+	MergeStatusOnly bool    `json:"merge_status_only"`
+	MergeEnabled    bool    `json:"merge_tools_enabled"`
+	DevLoopEnabled  bool    `json:"devloop_enabled"`
+	// WebFetchEnabled is the actor's own opt-in (agent_bindings.web_fetch or tasks.web_fetch), not
+	// a deployment flag.
+	WebFetchEnabled bool     `json:"web_fetch_enabled"`
 	Ordinary        []string `json:"ordinary"`
 	Approval        []string `json:"approval"`
 }
@@ -94,9 +97,11 @@ func BuildContract() (Contract, error) {
 			for _, grant := range grants {
 				for _, merge := range []bool{false, true} {
 					for _, dev := range []bool{false, true} {
-						role, depth, grant := string(role), depth, string(grant)
-						add(ContractRow{Role: &role, Depth: &depth, Grant: &grant, MergeEnabled: merge, DevLoopEnabled: dev},
-							agentauth.Actor{Role: dbstate.BindingRole(role), Depth: depth, Grant: dbstate.MCPGrantKind(grant)})
+						for _, fetch := range []bool{false, true} {
+							role, depth, grant := string(role), depth, string(grant)
+							add(ContractRow{Role: &role, Depth: &depth, Grant: &grant, MergeEnabled: merge, DevLoopEnabled: dev, WebFetchEnabled: fetch},
+								agentauth.Actor{Role: dbstate.BindingRole(role), Depth: depth, Grant: dbstate.MCPGrantKind(grant), WebFetch: fetch})
+						}
 					}
 				}
 			}

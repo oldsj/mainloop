@@ -55,6 +55,12 @@ type Config struct {
 	// Off by default; see docs/specs/devloop.md.
 	DevloopEnabled ExactTrue `env:"MAINLOOP_DEVLOOP_ENABLED"`
 
+	// WebFetchPerMinute bounds the open-web web_fetch tool's fetches per owner per minute, and
+	// WebFetchDenyCIDRs adds comma-separated ranges it never connects to, beyond the built-in
+	// non-public ones. The tool is on only for agents the owner opted in (docs/specs/web-fetch.md).
+	WebFetchPerMinute int    `env:"MAINLOOP_WEB_FETCH_PER_MINUTE" envDefault:"30"`
+	WebFetchDenyCIDRs string `env:"MAINLOOP_WEB_FETCH_DENY_CIDRS"`
+
 	// MergeConfigurations is the operator allowlist of protected merge tool mappings.
 	MergeConfigurations MergeConfigurations `env:"MAINLOOP_MERGE_CONFIGURATIONS"`
 

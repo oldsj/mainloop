@@ -175,6 +175,15 @@ CI settles), reuse the same App credential; see
 [GitHub issue, pull request and Dependabot alert reads](docs/specs/github-reads.md),
 [GitHub issue and pull request comments](docs/specs/issue-writes.md) and [CI checks](docs/specs/ci.md).
 
+## Web fetch
+
+The `web_fetch` MCP tool reads one public web page as text, from any public host. It is off for
+every agent until the owner turns it on for a session (`POST /sessions/{id}/web-fetch`) or creates
+a task with `web_fetch`. The server refuses private, loopback, link-local and metadata addresses
+when it dials them, on every redirect. It records each fetch and limits each owner to
+`MAINLOOP_WEB_FETCH_PER_MINUTE` fetches a minute (default 30). `MAINLOOP_WEB_FETCH_DENY_CIDRS`
+adds ranges to refuse. See [Web fetch](docs/specs/web-fetch.md).
+
 ## Production Deployment
 
 The [Helm chart](charts/mainloop) deploys Mainloop. Supply environment-specific domains, credentials, and storage through your own values file, and apply production changes through your GitOps workflow ([details](docs/production-rollout.md)).

@@ -52,6 +52,7 @@ export function native(overrides: Partial<NativeFixture> = {}): NativeFixture {
     model: 'claude-sonnet-5-5',
     model_override: null,
     effort_override: null,
+    web_fetch: { session_id: 's1', enabled: false, from_task: false },
     turns: 2,
     turn_in_flight: false,
     restartable: false,

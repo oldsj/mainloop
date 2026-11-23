@@ -22,6 +22,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/topics"
 	"github.com/oldsj/mainloop/server/internal/transcripts"
+	"github.com/oldsj/mainloop/server/internal/webfetch"
 )
 
 // serveMCP runs the MCP listener. It reads the database and never touches Kubernetes: the API
@@ -49,29 +50,35 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	prSvc, mergeSvc := newPullRequestServices(cfg, pool, gh, kc, log)
 	issuesSvc := newIssuesService(pool, gh, log)
 	q := dbq.New(pool)
+	deny, err := webfetch.ParseDeny(cfg.WebFetchDenyCIDRs)
+	if err != nil {
+		return err
+	}
 	// The lease is DB-only and the operations service here carries no Kubernetes client or GitHub
 	// seeder: this process only inserts and polls devloop_operations rows (see
 	// internal/devloop's package doc); serve-api's instance, built in newDevloopOperations, is the
 	// one that actually reaches Kubernetes and GitHub.
 	srv := &mcpserver.Server{
-		PRs:          prSvc,
-		Merge:        mergeSvc,
-		Issues:       issuesSvc,
-		CI:           newCIService(pool, gh),
-		DevLease:     &devloop.LeaseService{Pool: pool},
-		DevOps:       &devloop.OperationsService{Pool: pool},
-		DevTargets:   &devloop.TargetService{Pool: pool},
-		Auth:         &agentauth.Authenticator{Q: q, Depth: taskSvc.AuthDepth},
-		Tasks:        taskSvc,
-		Transcripts:  transcripts.NewService(cfg, pool, transcripts.FromClient(kc), nil, log), // reads only; serve-api ingests
-		Policy:       agentauth.Policy{MergeTools: bool(cfg.MergeToolsEnabled), DevLoop: bool(cfg.DevloopEnabled)},
-		Queries:      q,
-		Topics:       topics.NewService(pool),
-		Pool:         pool,
-		Onboarding:   newOnboarding(cfg, pool, gh, log),
-		Log:          log,
-		AllowedHosts: cfg.AllowedMCPHosts(),
-		Dev:          cfg.IsDev(),
+		PRs:               prSvc,
+		Merge:             mergeSvc,
+		Issues:            issuesSvc,
+		CI:                newCIService(pool, gh),
+		DevLease:          &devloop.LeaseService{Pool: pool},
+		DevOps:            &devloop.OperationsService{Pool: pool},
+		DevTargets:        &devloop.TargetService{Pool: pool},
+		Auth:              &agentauth.Authenticator{Q: q, Depth: taskSvc.AuthDepth},
+		Tasks:             taskSvc,
+		Transcripts:       transcripts.NewService(cfg, pool, transcripts.FromClient(kc), nil, log), // reads only; serve-api ingests
+		Policy:            agentauth.Policy{MergeTools: bool(cfg.MergeToolsEnabled), DevLoop: bool(cfg.DevloopEnabled)},
+		Queries:           q,
+		Topics:            topics.NewService(pool),
+		Pool:              pool,
+		Onboarding:        newOnboarding(cfg, pool, gh, log),
+		WebFetch:          &webfetch.Fetcher{Deny: deny},
+		WebFetchPerMinute: cfg.WebFetchPerMinute,
+		Log:               log,
+		AllowedHosts:      cfg.AllowedMCPHosts(),
+		Dev:               cfg.IsDev(),
 	}
 	handler, err := srv.Handler()
 	if err != nil {

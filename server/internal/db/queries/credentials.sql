@@ -13,7 +13,12 @@ SELECT
     s.user_id AS user_id,
     s.status AS session_status,
     s.archived_at AS session_archived_at,
-    s.project_id AS project_id
+    s.project_id AS project_id,
+    -- The open-web web_fetch tool: the session's own flag, or its task's (docs/specs/web-fetch.md).
+    (b.web_fetch OR EXISTS (
+        SELECT 1 FROM task_attempts AS a JOIN tasks AS t ON t.id = a.task_id
+        WHERE a.binding_id = b.session_id AND t.web_fetch
+    ))::boolean AS web_fetch
 FROM credentials AS c
 JOIN agent_bindings AS b ON b.session_id = c.binding_id
 JOIN sessions AS s ON s.id = c.binding_id

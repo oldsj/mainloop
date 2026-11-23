@@ -207,6 +207,11 @@ func TestPolicyTable(t *testing.T) {
 		{"main at depth 1", join(on, agentauth.Actor{Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination, Depth: 1}, ord), ""},
 		{"merge status only off", join(off, agentauth.Actor{MergeStatusOnly: true, Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace}, ord), ""},
 		{"merge status only on", join(on, agentauth.Actor{MergeStatusOnly: true, Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace}, ord), want("whoami", "task_get", "report", "get_pull_request_merge_status")},
+		// web_fetch is the agent's own opt-in, on any live role, and never without one.
+		{"child with web fetch", join(off, agentauth.Actor{Role: dbstate.RoleChild, Grant: dbstate.GrantCoordination, Depth: 2, WebFetch: true}, ord), want("whoami", "get_issue", "get_pull_request", "create_issue", "comment_issue", "comment_pull_request", "project_context", "remember", "forget", "task_get", "task_list", "task_history", "task_transcript", "transcript_search", "report", "web_fetch")},
+		{"workspace agent with web fetch", join(off, agentauth.Actor{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace, WebFetch: true}, ord), want("whoami", "open_pull_request", "get_issue", "get_pull_request", "comment_pull_request", "list_dependabot_alerts", "check_status", "watch_checks", "get_verification", "project_context", "remember", "forget", "web_fetch")},
+		{"web fetch without a live role", join(on, agentauth.Actor{Role: dbstate.RoleMain, Grant: dbstate.GrantNone, WebFetch: true}, ord), ""},
+		{"web fetch on a completed task", join(on, agentauth.Actor{MergeStatusOnly: true, Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace, WebFetch: true}, ord), want("whoami", "task_get", "report", "get_pull_request_merge_status")},
 	}
 	for _, c := range cases {
 		if c.got != c.want {

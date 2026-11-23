@@ -199,6 +199,10 @@ type CreateInput struct {
 	Model    string
 	Effort   string
 	Checkout *Checkout
+	// WebFetch gives every attempt of the task the open-web web_fetch MCP tool
+	// (docs/specs/web-fetch.md). The caller decides who may set it: the owner, or an agent that
+	// holds the tool itself.
+	WebFetch bool
 	// standing marks a project's standing supervisor; only [Service.EnsureSupervisor] sets it.
 	standing bool
 	// UnderSupervisor puts the owner's project task under the project's standing supervisor,
@@ -225,6 +229,10 @@ func (in CreateInput) payload() map[string]any {
 	}
 	if in.Checkout != nil {
 		m["checkout"] = map[string]any{"branch": in.Checkout.Branch, "ref": in.Checkout.Ref, "depth": in.Checkout.Depth}
+	}
+	// Only when set, so a request without it digests as it did before the flag existed.
+	if in.WebFetch {
+		m["web_fetch"] = true
 	}
 	return m
 }
@@ -525,7 +533,7 @@ func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, i
 		ID: id, OwnerID: p.OwnerID, ProjectID: project, TopicID: topic, ParentTaskID: parentID, RootTaskID: root,
 		CreatorBindingID: ptr(p.BindingID), Title: in.Title, Brief: in.Brief, Mode: in.Mode,
 		AssignedProfileID: sel.profile.ID, SelectionSource: sel.source, ProviderConstraint: sel.constraint,
-		Model: ptr(in.Model), Effort: ptr(in.Effort), Standing: in.standing,
+		Model: ptr(in.Model), Effort: ptr(in.Effort), Standing: in.standing, WebFetch: in.WebFetch,
 	}
 	if c := in.Checkout; c != nil {
 		depth := int32(c.Depth) //nolint:gosec // validate bounds it to 0..1000

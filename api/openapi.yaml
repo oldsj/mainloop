@@ -4421,6 +4421,54 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/HTTPValidationError'
                   - $ref: '#/components/schemas/HTTPError'
+  /sessions/{session_id}/web-fetch:
+    post:
+      tags:
+        - sessions
+      summary: Set Session Web Fetch
+      description: >-
+        Turn the open-web `web_fetch` MCP tool on or off for this session's agent
+        (docs/specs/web-fetch.md). Off by default for every session. An agent also has the tool when
+        the task it runs was created with `web_fetch` (`from_task`); this call changes only the
+        session's own flag. Turning it off takes effect at the agent's next tool call; turning it on,
+        when the agent next lists its tools. The main thread is a session like any other here.
+      operationId: setSessionWebFetch
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Session Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionWebFetchRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionWebFetch'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
   /sessions/{session_id}/live:
     get:
       tags:
@@ -7786,6 +7834,8 @@ components:
             - type: 'null'
           title: Effort Override
           description: The owner's /effort override, null for the provider's default.
+        web_fetch:
+          $ref: '#/components/schemas/SessionWebFetch'
         turns:
           type: integer
           title: Turns
@@ -7839,6 +7889,7 @@ components:
         - model
         - model_override
         - effort_override
+        - web_fetch
         - turns
         - turn_in_flight
         - deliveries
@@ -9463,6 +9514,38 @@ components:
         - effort
       title: SessionModelEffort
       description: A session's model and reasoning-effort override state, after a write.
+    SessionWebFetchRequest:
+      properties:
+        enabled:
+          type: boolean
+          title: Enabled
+      additionalProperties: false
+      type: object
+      required:
+        - enabled
+      title: SessionWebFetchRequest
+    SessionWebFetch:
+      properties:
+        session_id:
+          type: string
+          title: Session Id
+        enabled:
+          type: boolean
+          title: Enabled
+          description: The session's own flag, which POST /sessions/{session_id}/web-fetch sets.
+        from_task:
+          type: boolean
+          title: From Task
+          description: The task this session runs was created with web_fetch, which this flag cannot turn off.
+      type: object
+      required:
+        - session_id
+        - enabled
+        - from_task
+      title: SessionWebFetch
+      description: >-
+        Whether a session's agent holds the open-web web_fetch tool: it does when either flag is
+        set (docs/specs/web-fetch.md).
     SessionDotfiles:
       properties:
         status:
@@ -9803,6 +9886,13 @@ components:
           anyOf:
             - $ref: '#/components/schemas/TaskCheckout'
             - type: 'null'
+        web_fetch:
+          type: boolean
+          default: false
+          title: Web Fetch
+          description: >-
+            Give every attempt of this task the open-web web_fetch MCP tool
+            (docs/specs/web-fetch.md). Its child tasks do not inherit it.
       additionalProperties: false
       type: object
       required:
@@ -11549,6 +11639,11 @@ components:
           description: >-
             True for a project's standing supervisor: a root coordination task, one per project, that
             never completes (docs/specs/project-supervisor.md).
+        web_fetch:
+          type: boolean
+          default: false
+          title: Web Fetch
+          description: Every attempt of this task holds the open-web web_fetch MCP tool (docs/specs/web-fetch.md).
         status:
           default: queued
           enum:

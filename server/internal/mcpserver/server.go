@@ -75,7 +75,11 @@ type Server struct {
 	// Onboarding serves project_propose; its OwnerID is set per call from the actor. With none,
 	// the tool answers that proposals are unavailable.
 	Onboarding *onboarding.Service
-	Log        *slog.Logger
+	// WebFetch serves the web_fetch tool, at most WebFetchPerMinute fetches a minute per owner.
+	// With none, the tool answers that it is unavailable.
+	WebFetch          PageFetcher
+	WebFetchPerMinute int
+	Log               *slog.Logger
 	// AllowedHosts are the Host names the listener answers to; Dev also allows loopback.
 	AllowedHosts map[string]bool
 	Dev          bool
@@ -85,7 +89,7 @@ type Server struct {
 // later adds its function here and nothing else changes.
 func (s *Server) tools() map[string]Tool {
 	all := map[string]Tool{}
-	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.transcriptTools(), s.loopTools(), s.pullRequestTools(), s.issueTools(), s.checkTools(), s.devLoopTools(), s.projectTools(), s.onboardingTools()} {
+	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.transcriptTools(), s.loopTools(), s.pullRequestTools(), s.issueTools(), s.checkTools(), s.devLoopTools(), s.projectTools(), s.onboardingTools(), s.webFetchTools()} {
 		for _, t := range domain {
 			all[t.Name] = t
 		}

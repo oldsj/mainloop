@@ -57,7 +57,12 @@ SELECT
     s.user_id AS user_id,
     s.status AS session_status,
     s.archived_at AS session_archived_at,
-    s.project_id AS project_id
+    s.project_id AS project_id,
+    -- The open-web web_fetch tool: the session's own flag, or its task's (docs/specs/web-fetch.md).
+    (b.web_fetch OR EXISTS (
+        SELECT 1 FROM task_attempts AS a JOIN tasks AS t ON t.id = a.task_id
+        WHERE a.binding_id = b.session_id AND t.web_fetch
+    ))::boolean AS web_fetch
 FROM credentials AS c
 JOIN agent_bindings AS b ON b.session_id = c.binding_id
 JOIN sessions AS s ON s.id = c.binding_id
@@ -75,6 +80,7 @@ type GetMCPActorRow struct {
 	SessionStatus     dbstate.SessionStatus
 	SessionArchivedAt *time.Time
 	ProjectID         *string
+	WebFetch          bool
 }
 
 // Credentials: authentication lookups and the revoke/cleanup lifecycle. The row CRUD is in core.sql.
@@ -94,12 +100,13 @@ func (q *Queries) GetMCPActor(ctx context.Context, tokenHash string) (GetMCPActo
 		&i.SessionStatus,
 		&i.SessionArchivedAt,
 		&i.ProjectID,
+		&i.WebFetch,
 	)
 	return i, err
 }
 
 const lockAgentBinding = `-- name: LockAgentBinding :one
-SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override FROM agent_bindings WHERE session_id = $1 FOR SHARE
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override, web_fetch FROM agent_bindings WHERE session_id = $1 FOR SHARE
 `
 
 // The binding row, locked FOR SHARE until the credential plan commits. A main-provider switch
@@ -140,6 +147,7 @@ func (q *Queries) LockAgentBinding(ctx context.Context, sessionID string) (Agent
 		&i.GuidanceDeliveryID,
 		&i.ModelOverride,
 		&i.EffortOverride,
+		&i.WebFetch,
 	)
 	return i, err
 }
@@ -379,7 +387,7 @@ func (q *Queries) RevokeStalePlannedCredentials(ctx context.Context, olderThanSe
 }
 
 const setBindingGrant = `-- name: SetBindingGrant :one
-UPDATE agent_bindings SET mcp_grant_kind = $2, updated_at = now() WHERE session_id = $1 RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override
+UPDATE agent_bindings SET mcp_grant_kind = $2, updated_at = now() WHERE session_id = $1 RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at, guidance_version, guidance_delivery_id, model_override, effort_override, web_fetch
 `
 
 type SetBindingGrantParams struct {
@@ -422,6 +430,7 @@ func (q *Queries) SetBindingGrant(ctx context.Context, arg SetBindingGrantParams
 		&i.GuidanceDeliveryID,
 		&i.ModelOverride,
 		&i.EffortOverride,
+		&i.WebFetch,
 	)
 	return i, err
 }
