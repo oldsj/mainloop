@@ -13,6 +13,9 @@ server:
     # mainloop-site is read through envFrom, so editing it does not restart the backend. Change
     # this value with each site-config change to roll the backend through GitOps.
     example.test/site-config: example-1
+  # The backend is one replica (live turn progress is in memory), so give it a class above ordinary
+  # apps: on a drain it preempts one of them instead of staying Pending.
+  priorityClassName: mainloop-critical
   # Only the keys the server needs, not the whole mainloop-secrets item.
   importSecretEnv: false
   # FRONTEND_DOMAIN, API_DOMAIN, MAINLOOP_OWNER_ID, SUBSTRATE_PREVIEW_BASE_URL and feature flags.

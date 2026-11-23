@@ -89,6 +89,9 @@ server:
   # Pod-level settings for Deployment mainloop-backend.
   strategy: {}
   podAnnotations: {}
+  # An existing PriorityClass for the backend pod. The chart does not create it (it is cluster-wide).
+  # The backend is one replica, so with none it waits behind any app when its node is drained or full.
+  priorityClassName: ''
   # Imports every key of mainloop-secrets as env vars. Turn off to read only the keys named below.
   importSecretEnv: true
   # Added after mainloop-config in every server container's envFrom (e.g. a site ConfigMap).
