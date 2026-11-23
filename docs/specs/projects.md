@@ -94,10 +94,52 @@ a proposal that is proposed or approved and not yet applied, proposing it again 
 carries the proposal id, its state, the queue item id, `/inbox?item=<queue item id>` and the facts
 above.
 
-**Not built yet:** applying an approved proposal. The apply step will import the repository
-through the project APIs, apply the settings idempotently and audit each step. Until then an answer
-is recorded on the card and nothing reads it. Proven by Postgres tests with a fake GitHub App and a
-fake image check; not proven against live GitHub or a registry.
+### Applying an approved proposal
+
+The `project-proposals` sweep in serve-api runs every five seconds.
+
+**Recording the decision.** The sweep reads answered cards. **Approve** approves the proposal. Any
+other answer rejects it and applies nothing, and the audit records the exact answer when it was not
+**Reject**. A rejected proposal is finished, so the repository can be proposed again.
+
+**Applying.** The sweep claims each due approved proposal with a two-minute lease and applies it
+through the same services the owner's routes use. No transaction stays open across a step, and each
+step reads the current state first:
+
+1. **Import** (`POST /projects`'s path). This is idempotent per repository and returns the existing
+   project when there is one.
+2. **GitHub App.** It checks the installation again and records the result. A missing App does
+   not stop the import; the audit line carries the install hint.
+3. **Environment**, when an image was proposed. It reuses the owner's statically validated
+   environment version for the same registry, repository, architecture and digest (index or
+   platform manifest), or registers a new environment named after the repository. It then selects
+   that version for the project, unless the project already uses it.
+4. **Checks mode** (`verification_mode`), when one was proposed.
+5. **Workspace service**, when one was proposed. It replaces the project's service and ports.
+
+**Ending.** A proposal that applies is `applied` with its `project_id`.
+
+- **Refused requests.** A request the API refuses (a 4xx other than 409 or 429, for example a
+  registry that no longer serves the image) fails at once.
+- **Other errors.** Any other error is retried after 30 s, doubling each time, for five attempts
+  in all.
+- **Failure.** A failed proposal opens a high-priority error item in Needs you ("Onboarding
+  owner/name failed") with the reason.
+
+**Audit.** Every step appends a line to `project_proposal_events`: the decision, import, GitHub App,
+environment, checks, workspace service, each retry, and the end.
+
+**Reading the outcome.** The proposer reads it back by calling `project_propose` again with the same
+`request_id`: the state, the project id, attempts and the last error.
+
+**Not built:**
+
+- A web view of a proposal's audit.
+- Telling the proposer when applying ends (it reads the outcome back instead).
+- Declared services and workspace sizes.
+
+Proven by Postgres tests with a fake GitHub App, a fake registry and the real project, environment
+and checks services. Not proven against live GitHub or a registry.
 
 Project detail lists unarchived project sessions and excludes bindings with the `main` role.
 Unbound sessions remain visible.

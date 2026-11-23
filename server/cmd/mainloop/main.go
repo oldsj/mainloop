@@ -254,6 +254,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		gate.Register(runner)
 	}
 	runner.AddSweep(projectSvc.MetadataSweep())
+	runner.AddSweep(newProposalApplier(cfg, pool, projectSvc, ciSvc, gh, log).Sweep())
 	runner.AddSweep(events.PruneSweep(pool, time.Duration(cfg.Events.RetentionHours)*time.Hour))
 	wsSvc.Register(runner)
 	registerCredentials(cfg, creds, runner)

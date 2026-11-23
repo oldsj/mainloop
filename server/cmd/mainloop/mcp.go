@@ -12,13 +12,10 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/devloop"
-	"github.com/oldsj/mainloop/server/internal/environments"
-	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/k8ssecrets"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/mcpserver"
-	"github.com/oldsj/mainloop/server/internal/onboarding"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/sessions"
@@ -124,21 +121,4 @@ func registerCredentials(cfg *config.Config, creds *agentauth.Credentials, runne
 	if cfg.InCluster() {
 		creds.Register(runner)
 	}
-}
-
-// newOnboarding builds the project_propose service over the same GitHub App (nil when this
-// Mainloop has none: proposals then say the installation was not checked) and the anonymous
-// registry reader environment registration uses.
-func newOnboarding(cfg *config.Config, pool *pgxpool.Pool, gh *github.App, log *slog.Logger) *onboarding.Service {
-	svc := &onboarding.Service{
-		Pool: pool, OwnerID: cfg.Identity.OwnerID, Log: log,
-		Images: &environments.Validator{
-			Client: &environments.AnonymousRegistry{}, Allowlist: cfg.EnvironmentRegistryAllowlist,
-			Budgets: environments.DefaultBudgets(),
-		},
-	}
-	if gh != nil {
-		svc.GitHub = gh
-	}
-	return svc
 }

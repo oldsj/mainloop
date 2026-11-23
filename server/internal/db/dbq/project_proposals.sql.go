@@ -10,8 +10,165 @@ import (
 	"encoding/json"
 )
 
+const claimDueProjectProposal = `-- name: ClaimDueProjectProposal :one
+UPDATE project_proposals
+SET claimed_until = now() + make_interval(secs => $1::double precision),
+    attempts = attempts + 1
+WHERE id = (
+    SELECT d.id FROM project_proposals d
+    WHERE d.owner_id = $2 AND d.state = 'approved'
+      AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= now())
+      AND (d.claimed_until IS NULL OR d.claimed_until < now())
+    ORDER BY d.created_at, d.id
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, owner_id, request_id, repository, repo_key, spec, facts, state, proposer_role, proposer_session_id, proposer_task_id, project_id, created_at, decided_at, attempts, next_attempt_at, claimed_until, last_error, finished_at
+`
+
+type ClaimDueProjectProposalParams struct {
+	LeaseSeconds float64
+	OwnerID      string
+}
+
+// Claims the oldest due approved proposal for one apply attempt, for lease_seconds.
+func (q *Queries) ClaimDueProjectProposal(ctx context.Context, arg ClaimDueProjectProposalParams) (ProjectProposal, error) {
+	row := q.db.QueryRow(ctx, claimDueProjectProposal, arg.LeaseSeconds, arg.OwnerID)
+	var i ProjectProposal
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.RequestID,
+		&i.Repository,
+		&i.RepoKey,
+		&i.Spec,
+		&i.Facts,
+		&i.State,
+		&i.ProposerRole,
+		&i.ProposerSessionID,
+		&i.ProposerTaskID,
+		&i.ProjectID,
+		&i.CreatedAt,
+		&i.DecidedAt,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.ClaimedUntil,
+		&i.LastError,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
+const decideAnsweredProjectProposals = `-- name: DecideAnsweredProjectProposals :many
+UPDATE project_proposals p
+SET state = CASE WHEN a.detail->>'response' = 'Approve' THEN 'approved' ELSE 'rejected' END,
+    decided_at = now(),
+    finished_at = CASE WHEN a.detail->>'response' = 'Approve' THEN NULL ELSE now() END,
+    next_attempt_at = CASE WHEN a.detail->>'response' = 'Approve' THEN now() END
+FROM attention_items a
+WHERE p.owner_id = $1 AND p.state = 'proposed'
+  AND a.owner_id = p.owner_id AND a.source_kind = 'queue' AND a.source_id = 'project_proposal_' || p.id
+  AND a.detail ? 'response'
+RETURNING p.id, p.state, (a.detail->>'response')::text AS response
+`
+
+type DecideAnsweredProjectProposalsRow struct {
+	ID       string
+	State    string
+	Response string
+}
+
+// Records the owner's answer on each proposal whose card was answered: Approve approves it, any
+// other answer rejects it. Approved proposals are due at once.
+func (q *Queries) DecideAnsweredProjectProposals(ctx context.Context, ownerID string) ([]DecideAnsweredProjectProposalsRow, error) {
+	rows, err := q.db.Query(ctx, decideAnsweredProjectProposals, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DecideAnsweredProjectProposalsRow{}
+	for rows.Next() {
+		var i DecideAnsweredProjectProposalsRow
+		if err := rows.Scan(&i.ID, &i.State, &i.Response); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const findOwnedEnvironmentVersionByImage = `-- name: FindOwnedEnvironmentVersionByImage :one
+SELECT v.environment_id, v.id AS version_id
+FROM environment_versions v
+JOIN dev_environments e ON e.id = v.environment_id
+WHERE e.owner_id = $1 AND v.validation_status = 'static_validated'
+  AND v.registry = $2 AND v.repository = $3
+  AND v.architecture = $4
+  AND (v.index_digest = $5 OR v.platform_manifest_digest = $5)
+ORDER BY v.created_at, v.id
+LIMIT 1
+`
+
+type FindOwnedEnvironmentVersionByImageParams struct {
+	OwnerID      string
+	Registry     *string
+	Repository   *string
+	Architecture *string
+	Digest       *string
+}
+
+type FindOwnedEnvironmentVersionByImageRow struct {
+	EnvironmentID string
+	VersionID     string
+}
+
+// The owner's statically validated environment version of an image: same registry, repository
+// and architecture, and the digest is the version's index or platform manifest digest.
+func (q *Queries) FindOwnedEnvironmentVersionByImage(ctx context.Context, arg FindOwnedEnvironmentVersionByImageParams) (FindOwnedEnvironmentVersionByImageRow, error) {
+	row := q.db.QueryRow(ctx, findOwnedEnvironmentVersionByImage,
+		arg.OwnerID,
+		arg.Registry,
+		arg.Repository,
+		arg.Architecture,
+		arg.Digest,
+	)
+	var i FindOwnedEnvironmentVersionByImageRow
+	err := row.Scan(&i.EnvironmentID, &i.VersionID)
+	return i, err
+}
+
+const finishProjectProposal = `-- name: FinishProjectProposal :execrows
+UPDATE project_proposals
+SET state = $1, project_id = $2, last_error = $3,
+    finished_at = now(), claimed_until = NULL, next_attempt_at = NULL
+WHERE id = $4 AND state = 'approved'
+`
+
+type FinishProjectProposalParams struct {
+	State     string
+	ProjectID *string
+	LastError *string
+	ID        string
+}
+
+func (q *Queries) FinishProjectProposal(ctx context.Context, arg FinishProjectProposalParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishProjectProposal,
+		arg.State,
+		arg.ProjectID,
+		arg.LastError,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getOpenProjectProposalForRepo = `-- name: GetOpenProjectProposalForRepo :one
-SELECT id, owner_id, request_id, repository, repo_key, spec, facts, state, proposer_role, proposer_session_id, proposer_task_id, project_id, created_at, decided_at FROM project_proposals
+SELECT id, owner_id, request_id, repository, repo_key, spec, facts, state, proposer_role, proposer_session_id, proposer_task_id, project_id, created_at, decided_at, attempts, next_attempt_at, claimed_until, last_error, finished_at FROM project_proposals
 WHERE owner_id = $1 AND repo_key = lower($2::text) AND state IN ('proposed', 'approved')
 `
 
@@ -38,6 +195,11 @@ func (q *Queries) GetOpenProjectProposalForRepo(ctx context.Context, arg GetOpen
 		&i.ProjectID,
 		&i.CreatedAt,
 		&i.DecidedAt,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.ClaimedUntil,
+		&i.LastError,
+		&i.FinishedAt,
 	)
 	return i, err
 }
@@ -60,7 +222,7 @@ func (q *Queries) GetOwnedProjectIDByRepo(ctx context.Context, arg GetOwnedProje
 }
 
 const getProjectProposal = `-- name: GetProjectProposal :one
-SELECT id, owner_id, request_id, repository, repo_key, spec, facts, state, proposer_role, proposer_session_id, proposer_task_id, project_id, created_at, decided_at FROM project_proposals WHERE owner_id = $1 AND id = $2
+SELECT id, owner_id, request_id, repository, repo_key, spec, facts, state, proposer_role, proposer_session_id, proposer_task_id, project_id, created_at, decided_at, attempts, next_attempt_at, claimed_until, last_error, finished_at FROM project_proposals WHERE owner_id = $1 AND id = $2
 `
 
 type GetProjectProposalParams struct {
@@ -86,12 +248,17 @@ func (q *Queries) GetProjectProposal(ctx context.Context, arg GetProjectProposal
 		&i.ProjectID,
 		&i.CreatedAt,
 		&i.DecidedAt,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.ClaimedUntil,
+		&i.LastError,
+		&i.FinishedAt,
 	)
 	return i, err
 }
 
 const getProjectProposalByRequest = `-- name: GetProjectProposalByRequest :one
-SELECT id, owner_id, request_id, repository, repo_key, spec, facts, state, proposer_role, proposer_session_id, proposer_task_id, project_id, created_at, decided_at FROM project_proposals WHERE owner_id = $1 AND request_id = $2
+SELECT id, owner_id, request_id, repository, repo_key, spec, facts, state, proposer_role, proposer_session_id, proposer_task_id, project_id, created_at, decided_at, attempts, next_attempt_at, claimed_until, last_error, finished_at FROM project_proposals WHERE owner_id = $1 AND request_id = $2
 `
 
 type GetProjectProposalByRequestParams struct {
@@ -117,6 +284,11 @@ func (q *Queries) GetProjectProposalByRequest(ctx context.Context, arg GetProjec
 		&i.ProjectID,
 		&i.CreatedAt,
 		&i.DecidedAt,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.ClaimedUntil,
+		&i.LastError,
+		&i.FinishedAt,
 	)
 	return i, err
 }
@@ -132,7 +304,7 @@ INSERT INTO project_proposals (
     $7, $8, $9
 )
 ON CONFLICT DO NOTHING
-RETURNING id, owner_id, request_id, repository, repo_key, spec, facts, state, proposer_role, proposer_session_id, proposer_task_id, project_id, created_at, decided_at
+RETURNING id, owner_id, request_id, repository, repo_key, spec, facts, state, proposer_role, proposer_session_id, proposer_task_id, project_id, created_at, decided_at, attempts, next_attempt_at, claimed_until, last_error, finished_at
 `
 
 type InsertProjectProposalParams struct {
@@ -178,6 +350,78 @@ func (q *Queries) InsertProjectProposal(ctx context.Context, arg InsertProjectPr
 		&i.ProjectID,
 		&i.CreatedAt,
 		&i.DecidedAt,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.ClaimedUntil,
+		&i.LastError,
+		&i.FinishedAt,
 	)
 	return i, err
+}
+
+const insertProjectProposalEvent = `-- name: InsertProjectProposalEvent :exec
+INSERT INTO project_proposal_events (proposal_id, step, detail)
+VALUES ($1, $2, left($3::text, 2048))
+`
+
+type InsertProjectProposalEventParams struct {
+	ProposalID string
+	Step       string
+	Detail     string
+}
+
+func (q *Queries) InsertProjectProposalEvent(ctx context.Context, arg InsertProjectProposalEventParams) error {
+	_, err := q.db.Exec(ctx, insertProjectProposalEvent, arg.ProposalID, arg.Step, arg.Detail)
+	return err
+}
+
+const listProjectProposalEvents = `-- name: ListProjectProposalEvents :many
+SELECT id, proposal_id, step, detail, created_at FROM project_proposal_events WHERE proposal_id = $1 ORDER BY id
+`
+
+func (q *Queries) ListProjectProposalEvents(ctx context.Context, proposalID string) ([]ProjectProposalEvent, error) {
+	rows, err := q.db.Query(ctx, listProjectProposalEvents, proposalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ProjectProposalEvent{}
+	for rows.Next() {
+		var i ProjectProposalEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProposalID,
+			&i.Step,
+			&i.Detail,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const retryProjectProposal = `-- name: RetryProjectProposal :execrows
+UPDATE project_proposals
+SET last_error = $1, claimed_until = NULL,
+    next_attempt_at = now() + make_interval(secs => $2::double precision)
+WHERE id = $3 AND state = 'approved'
+`
+
+type RetryProjectProposalParams struct {
+	LastError    *string
+	AfterSeconds float64
+	ID           string
+}
+
+func (q *Queries) RetryProjectProposal(ctx context.Context, arg RetryProjectProposalParams) (int64, error) {
+	result, err := q.db.Exec(ctx, retryProjectProposal, arg.LastError, arg.AfterSeconds, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
