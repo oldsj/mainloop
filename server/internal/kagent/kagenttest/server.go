@@ -74,6 +74,14 @@ func NotAccepted(retryAfterMs int) *RPCError {
 	}
 }
 
+// NoCapacity is kagent's not-accepted refusal of a send that found no worker with room for the
+// session's actor.
+func NoCapacity(retryAfterMs int) *RPCError {
+	e := NotAccepted(retryAfterMs)
+	e.Metadata["cause"] = "runtime_capacity"
+	return e
+}
+
 // NotReady is kagent's refusal of a send to a Session that is suspended or changing: no marker, so
 // the client recognises it by code and text.
 func NotReady() *RPCError {

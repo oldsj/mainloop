@@ -137,6 +137,24 @@ the conversation's old attention flag. An unavailable session disables message i
 - A message still `recorded` after a backend restart was never sent, so it is delivered then; this is its first send, not a replay. A `sending` message with no task after 60 seconds, including when the lookup itself keeps failing, becomes `uncertain`.
 - A failed or uncertain delivery stores a short reason with best-effort redaction (see [chat](chat.md)). The session chat shows it next to the message and the identity strip shows the last problem, and the same Retry rule applies: a new message with a new id, offered only for the newest failed user message with nothing in flight.
 - An uncertain delivery is never replayed automatically. A message sent while another turn is in flight is recorded as `queued` rather than rejected (see above); it is admitted, not resent, once that turn ends. A message for a suspended workspace resumes it first; one that arrives while the workspace is being suspended waits for the suspend to finish, then resumes it.
+- <a id="runtime-capacity"></a>**Runtime capacity.** kagent places a Session's actor on a worker only
+  when a send wakes it, and answers a send "not accepted" (A2A -32004, nothing ran) when no worker
+  has room; room comes back when Substrate suspends an idle actor (after 300 s). Mainloop's kagent
+  client retries such a send for `KAGENT_SEND_RETRY_BUDGET_SECONDS` (30); after that the delivery
+  is put back to `recorded` (detail `waiting for runtime capacity: ...`) and tried again after
+  15 s, or after kagent's `retryAfterMs` when that is longer, instead of failing, when:
+  - the session is new: kagent has accepted none of its messages and it started less than
+    `SESSION_CAPACITY_WAIT_SECONDS` (720) ago. A task's first brief, a restarted supervisor's
+    successor, and a new main or native session all wake a new actor, and a handoff needs one while
+    the old actor still holds its place;
+  - kagent says the refusal is for lack of room (`cause=runtime_capacity` in its ErrorInfo): any
+    session's send waits, for `SESSION_CAPACITY_WAIT_SECONDS` from the message's record;
+  - the session's task waits for an overflow slot's runtime ([tasks](tasks.md#capacity)).
+
+  Past the wait, or for any other not-accepted send, the delivery fails `not sent: ...` as before.
+  Measured on mainloop-dev: one worker with room for four 4 GiB actors refused a restarted
+  supervisor's new session for about four minutes, until idle actors were suspended.
+
 - Session conversations mirror the user's messages and each completed task's reply. The reply id is derived from the task id, so a repeated observation mirrors it once. The transaction that ends a delivery also stores the health observations of the task it holds ([orchestration health](orchestration-health.md)); if that fails, the delivery still ends and the health sweep collects it later.
 
 ## Cancelling and clearing

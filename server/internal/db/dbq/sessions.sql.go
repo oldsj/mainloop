@@ -2911,6 +2911,27 @@ func (q *Queries) RotateCreateRequest(ctx context.Context, arg RotateCreateReque
 	return result.RowsAffected(), nil
 }
 
+const sessionAwaitsFirstRuntime = `-- name: SessionAwaitsFirstRuntime :one
+SELECT (NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.session_id = $1 AND d.task_id IS NOT NULL)
+    AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = $1
+                AND s.created_at > now() - make_interval(secs => $2::float8)))::boolean
+`
+
+type SessionAwaitsFirstRuntimeParams struct {
+	SessionID     string
+	WindowSeconds float64
+}
+
+// Whether the session is new: kagent has accepted none of its messages yet (no delivery has a kagent
+// task id) and it started within the window. A send to it that kagent refuses is waiting for its
+// first runtime, which Substrate places only when that send wakes the actor.
+func (q *Queries) SessionAwaitsFirstRuntime(ctx context.Context, arg SessionAwaitsFirstRuntimeParams) (bool, error) {
+	row := q.db.QueryRow(ctx, sessionAwaitsFirstRuntime, arg.SessionID, arg.WindowSeconds)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const setBindingAgentRef = `-- name: SetBindingAgentRef :exec
 UPDATE agent_bindings
 SET kagent_agent_namespace = $2, kagent_agent_name = $3, updated_at = now()

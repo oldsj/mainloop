@@ -331,10 +331,12 @@ func TestNotAcceptedIsRetriedWithTheSameMessageID(t *testing.T) {
 func TestRefusalsEndInFailedAndTheOwnerMaySendAgain(t *testing.T) {
 	t.Run("not accepted past the budget is not sent", func(t *testing.T) {
 		e := newEnv(t, func(_ *sessions.Options, k *kagent.Config) { k.SendRetryBudget = 40 * time.Millisecond })
+		e.run()
+		// A session kagent has taken a message of: a refusal is not its first runtime waking.
+		e.waitState(e.send("hello"), dbstate.DeliveryCompleted)
 		for range 8 {
 			e.srv.FailNext("SendStreamingMessage", kagenttest.Fault{RPC: kagenttest.NotAccepted(15)})
 		}
-		e.run()
 		id := e.send("hi")
 		d := e.waitState(id, dbstate.DeliveryFailed)
 		if !strings.HasPrefix(deref(d.Detail), "not sent:") {

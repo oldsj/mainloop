@@ -38,6 +38,11 @@ type Sessions struct {
 	// StallToolAfter replaces StallAfter while the last event started a tool call with no result yet:
 	// a web search or a long build emits nothing until it ends.
 	StallToolAfter Seconds `env:"SESSION_STALL_TOOL_SECONDS" envDefault:"3600"`
+	// CapacityWait is how long a send kagent refuses for lack of runtime room is put back and tried
+	// again instead of failed: from a new session's start, until kagent first accepts one of its
+	// messages, or from a send kagent says found no worker with room. Longer than the time Substrate
+	// takes to suspend an idle actor (300 s), which frees its room.
+	CapacityWait Seconds `env:"SESSION_CAPACITY_WAIT_SECONDS" envDefault:"720"`
 }
 
 // IsLiveAgent reports whether the named Agent runs the Agent SDK runner.

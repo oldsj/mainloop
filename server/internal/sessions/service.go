@@ -232,6 +232,9 @@ type Options struct {
 	// CapacityRecheck is the delay before a send kagent did not accept is tried again while its
 	// task waits for runtime capacity (see turn.awaitRuntimeCapacity).
 	CapacityRecheck time.Duration
+	// CapacityWait bounds the wait of a new session for its first runtime, and of a send kagent says
+	// found no worker with room (see turn.awaitRuntimeCapacity).
+	CapacityWait time.Duration
 }
 
 // OptionsFrom reads the settings.
@@ -247,6 +250,7 @@ func OptionsFrom(c config.Sessions) Options {
 		EnsureEvery:       c.EnsureEvery.Duration(),
 		StallAfter:        c.StallAfter.Duration(),
 		StallToolAfter:    c.StallToolAfter.Duration(),
+		CapacityWait:      c.CapacityWait.Duration(),
 		LiveAgents:        c.LiveAgents,
 		SteerAgents:       c.SteerAgents,
 	}
@@ -274,6 +278,7 @@ func (o Options) withDefaults() Options {
 	def(&o.StallEvery, 30*time.Second)
 	def(&o.ActivityWriteEvery, 30*time.Second)
 	def(&o.CapacityRecheck, 15*time.Second)
+	def(&o.CapacityWait, 12*time.Minute)
 	if o.Concurrency <= 0 {
 		o.Concurrency = 16
 	}

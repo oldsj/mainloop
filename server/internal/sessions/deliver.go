@@ -717,15 +717,27 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 	return t.undecided(ctx, "the send may have reached kagent: "+sendErr.Error())
 }
 
-// awaitRuntimeCapacity handles a send kagent did not accept when the session is the current attempt
-// of a task given an overflow slot that still waits for runtime capacity (docs/specs/tasks.md#capacity):
-// kagent answers "not accepted" while Substrate has no free worker for the session's actor, and the
-// spare worker may still be waking. The delivery is put back to recorded and tried again later
-// instead of failed. The tasks runtime-wait sweep bounds the wait: it fails the task, which stops the
-// attempt, and the next try finds the attempt stopped. ok is false when the session is not waiting.
+// awaitRuntimeCapacity handles a send kagent did not accept because Substrate may have no free worker
+// for the session's actor (docs/specs/sessions.md#runtime-capacity). The delivery is put back to
+// recorded and tried again later instead of failed, when:
+//   - the session is the current attempt of a task given an overflow slot that still waits for
+//     runtime capacity (docs/specs/tasks.md#capacity); the tasks runtime-wait sweep bounds that wait;
+//   - the session is new (kagent has accepted none of its messages) and started within CapacityWait:
+//     its first send wakes its actor, and a full worker frees room once an idle actor is suspended;
+//   - kagent says the send found no worker with room (cause runtime_capacity), for CapacityWait from the
+//     message's record.
+//
+// ok is false when the session is not waiting.
 func (t *turn) awaitRuntimeCapacity(ctx context.Context, sendErr error) (reconcile.Outcome, bool, error) {
 	q := dbq.New(t.s.Pool)
 	waiting, err := q.SessionAwaitsRuntimeCapacity(ctx, &t.d.SessionID)
+	if err == nil && !waiting {
+		wait := t.s.opts().CapacityWait
+		waiting, err = q.SessionAwaitsFirstRuntime(ctx, dbq.SessionAwaitsFirstRuntimeParams{SessionID: t.d.SessionID, WindowSeconds: wait.Seconds()})
+		if err == nil && !waiting && kagent.NoCapacity(sendErr) {
+			waiting = time.Since(t.d.CreatedAt) < wait
+		}
+	}
 	if err != nil {
 		return reconcile.Retry(), false, err
 	}
@@ -743,7 +755,8 @@ func (t *turn) awaitRuntimeCapacity(ctx context.Context, sendErr error) (reconci
 	t.s.Progress.EndMessage(t.c.ID)
 	t.s.log().InfoContext(ctx, "send not accepted while the task waits for runtime capacity; it is tried again",
 		"session_id", t.d.SessionID, "message_id", t.c.ID, "error", sendErr)
-	return reconcile.RetryAfter(t.s.opts().CapacityRecheck), true, nil
+	// kagent's hint, when it gives one, says when room may be back.
+	return reconcile.RetryAfter(max(t.s.opts().CapacityRecheck, kagent.RetryAfterHint(sendErr))), true, nil
 }
 
 // decideSend locks the attempt before the delivery and commits before native I/O. The session's
