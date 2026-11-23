@@ -132,6 +132,9 @@ type Tasks struct {
 	DefaultProviderProfileID string `env:"TASK_DEFAULT_PROVIDER_PROFILE_ID" envDefault:"claude"`
 	MaxChildrenPerParent     int    `env:"TASK_MAX_CHILDREN_PER_PARENT" envDefault:"3"`
 	MaxChildrenGlobal        int    `env:"TASK_MAX_CHILDREN_GLOBAL" envDefault:"6"`
+	// MaxWorkersPerProject caps a project's worker tasks (its child tasks) holding a slot, for a
+	// project that sets no limit of its own (projects.max_workers).
+	MaxWorkersPerProject int `env:"TASK_MAX_WORKERS_PER_PROJECT" envDefault:"6"`
 
 	// MaxChildrenOverflow is the overflow tier above MaxChildrenGlobal: with it above 0, admission
 	// takes children up to MaxChildrenGlobal+MaxChildrenOverflow, and a child given an overflow slot
@@ -479,6 +482,9 @@ func (c *Config) validate() error {
 	}
 	if c.Tasks.MaxChildrenPerParent < 1 || c.Tasks.MaxChildrenGlobal < 1 {
 		fail("TASK_MAX_CHILDREN_PER_PARENT and TASK_MAX_CHILDREN_GLOBAL must be at least 1")
+	}
+	if c.Tasks.MaxWorkersPerProject < 1 || c.Tasks.MaxWorkersPerProject > 100 {
+		fail("TASK_MAX_WORKERS_PER_PROJECT must be between 1 and 100")
 	}
 	if c.Tasks.MaxChildrenOverflow < 0 {
 		fail("TASK_MAX_CHILDREN_OVERFLOW must be at least 0")

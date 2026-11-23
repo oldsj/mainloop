@@ -172,7 +172,7 @@ func (s *Service) driveHandoff(ctx context.Context, c reconcile.Claim, op dbq.Ta
 	}
 	var e *Error
 	switch {
-	case errors.Is(err, errWriterHeld), errors.As(err, &e) && (e.Reason == ReasonChildCapacity || e.Reason == ReasonGlobalCapacity):
+	case errors.Is(err, errWriterHeld), errors.As(err, &e) && (e.Reason == ReasonChildCapacity || e.Reason == ReasonProjectCapacity || e.Reason == ReasonGlobalCapacity):
 		return s.waitForSlot(ctx, c, op)
 	case err != nil:
 		return reconcile.Outcome{}, err

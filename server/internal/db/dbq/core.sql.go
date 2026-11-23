@@ -215,7 +215,7 @@ const createProject = `-- name: CreateProject :one
 INSERT INTO projects (
     id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at, workspace_service_command, workspace_service_ports
+RETURNING id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at, workspace_service_command, workspace_service_ports, max_workers
 `
 
 type CreateProjectParams struct {
@@ -266,6 +266,7 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.CiDetectedAt,
 		&i.WorkspaceServiceCommand,
 		&i.WorkspaceServicePorts,
+		&i.MaxWorkers,
 	)
 	return i, err
 }
@@ -571,7 +572,7 @@ func (q *Queries) GetCredential(ctx context.Context, id string) (Credential, err
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at, workspace_service_command, workspace_service_ports FROM projects WHERE id = $1
+SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at, workspace_service_command, workspace_service_ports, max_workers FROM projects WHERE id = $1
 `
 
 func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
@@ -599,12 +600,13 @@ func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
 		&i.CiDetectedAt,
 		&i.WorkspaceServiceCommand,
 		&i.WorkspaceServicePorts,
+		&i.MaxWorkers,
 	)
 	return i, err
 }
 
 const getProjectByFullName = `-- name: GetProjectByFullName :one
-SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at, workspace_service_command, workspace_service_ports FROM projects WHERE user_id = $1 AND lower(full_name) = lower($2)
+SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at, workspace_service_command, workspace_service_ports, max_workers FROM projects WHERE user_id = $1 AND lower(full_name) = lower($2)
 `
 
 type GetProjectByFullNameParams struct {
@@ -637,6 +639,7 @@ func (q *Queries) GetProjectByFullName(ctx context.Context, arg GetProjectByFull
 		&i.CiDetectedAt,
 		&i.WorkspaceServiceCommand,
 		&i.WorkspaceServicePorts,
+		&i.MaxWorkers,
 	)
 	return i, err
 }
@@ -817,7 +820,7 @@ func (q *Queries) ListCredentialsByBinding(ctx context.Context, bindingID string
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at, workspace_service_command, workspace_service_ports FROM projects WHERE user_id = $1 ORDER BY last_used_at DESC, id
+SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at, workspace_service_command, workspace_service_ports, max_workers FROM projects WHERE user_id = $1 ORDER BY last_used_at DESC, id
 `
 
 func (q *Queries) ListProjects(ctx context.Context, userID string) ([]Project, error) {
@@ -851,6 +854,7 @@ func (q *Queries) ListProjects(ctx context.Context, userID string) ([]Project, e
 			&i.CiDetectedAt,
 			&i.WorkspaceServiceCommand,
 			&i.WorkspaceServicePorts,
+			&i.MaxWorkers,
 		); err != nil {
 			return nil, err
 		}
@@ -1133,7 +1137,7 @@ const setProjectMergePolicy = `-- name: SetProjectMergePolicy :one
 UPDATE projects
 SET merge_policy = $2, merge_policy_version = merge_policy_version + 1
 WHERE id = $1
-RETURNING id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at, workspace_service_command, workspace_service_ports
+RETURNING id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at, workspace_service_command, workspace_service_ports, max_workers
 `
 
 type SetProjectMergePolicyParams struct {
@@ -1166,6 +1170,7 @@ func (q *Queries) SetProjectMergePolicy(ctx context.Context, arg SetProjectMerge
 		&i.CiDetectedAt,
 		&i.WorkspaceServiceCommand,
 		&i.WorkspaceServicePorts,
+		&i.MaxWorkers,
 	)
 	return i, err
 }
@@ -1311,7 +1316,7 @@ UPDATE projects
 SET description = $2, default_branch = $3, avatar_url = $4, open_pr_count = $5,
     open_issue_count = $6, metadata_updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at, workspace_service_command, workspace_service_ports
+RETURNING id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at, verification_mode, ci_detection, ci_detected_at, workspace_service_command, workspace_service_ports, max_workers
 `
 
 type UpdateProjectMetadataParams struct {
@@ -1355,6 +1360,7 @@ func (q *Queries) UpdateProjectMetadata(ctx context.Context, arg UpdateProjectMe
 		&i.CiDetectedAt,
 		&i.WorkspaceServiceCommand,
 		&i.WorkspaceServicePorts,
+		&i.MaxWorkers,
 	)
 	return i, err
 }

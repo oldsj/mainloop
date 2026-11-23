@@ -211,8 +211,16 @@ const (
 )
 
 // Capacity refusal reasons counted in task_capacity_refusals; the same strings as the task error
-// reasons child_capacity and global_capacity.
+// reasons child_capacity, project_capacity and global_capacity.
 const (
-	CapacityRefusalChild  = "child_capacity"
-	CapacityRefusalGlobal = "global_capacity"
+	CapacityRefusalChild   = "child_capacity"
+	CapacityRefusalProject = "project_capacity"
+	CapacityRefusalGlobal  = "global_capacity"
+)
+
+// Who changed a project's worker limit (project_worker_limit_audit.changed_by): the owner through
+// the API, or the main session through the project_settings tool.
+const (
+	WorkerLimitByOwner = "owner"
+	WorkerLimitByMain  = "main"
 )

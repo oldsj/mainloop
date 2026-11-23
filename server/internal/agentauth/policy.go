@@ -42,6 +42,7 @@ const (
 	ToolSteer                     = "steer"
 	ToolFollowUp                  = "follow_up"
 	ToolSupervisorSend            = "supervisor_send"
+	ToolProjectSettings           = "project_settings"
 	ToolReport                    = "report"
 	ToolLoopArm                   = "loop_arm"
 	ToolLoopList                  = "loop_list"
@@ -63,7 +64,7 @@ var AllTools = []string{
 	ToolGetIssue, ToolGetPullRequest, ToolCreateIssue, ToolCommentIssue, ToolCommentPullRequest, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
 	ToolProjectContext, ToolRemember, ToolForget, ToolProjectPropose,
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolTaskTranscript, ToolTranscriptSearch, ToolDelegate, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign,
-	ToolTaskHold, ToolSteer, ToolFollowUp, ToolSupervisorSend, ToolReport, ToolLoopArm, ToolLoopList, ToolLoopStop,
+	ToolTaskHold, ToolSteer, ToolFollowUp, ToolSupervisorSend, ToolProjectSettings, ToolReport, ToolLoopArm, ToolLoopList, ToolLoopStop,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
 	ToolDevLeaseAcquire, ToolDevLeaseRelease, ToolDevSync, ToolDevStatus,
@@ -190,8 +191,9 @@ func (p Policy) actorTools(a Actor) []string {
 		tools = append(tools, taskManagement...)
 		tools = append(tools, loopTools...)
 		// Only the main thread holds a task: it is the owner's view that a hold changes. Only main
-		// sends to a project's standing supervisor: it is the top of the three layers.
-		tools = append(tools, ToolTaskHold, ToolSupervisorSend)
+		// sends to a project's standing supervisor: it is the top of the three layers. Only main
+		// changes a project's settings for the owner: a supervisor must not raise its own limit.
+		tools = append(tools, ToolTaskHold, ToolSupervisorSend, ToolProjectSettings)
 		// Main and supervisors propose new projects; the owner approves each one.
 		tools = append(tools, ToolProjectPropose)
 	case (a.Role == dbstate.RoleSupervisor && a.Depth == 1) || (a.Role == dbstate.RoleChild && a.Depth == 2):

@@ -46,8 +46,16 @@ func toProject(p dbq.Project) api.Project {
 		LastUsedAt: p.LastUsedAt, MergePolicy: api.MergePolicy(p.MergePolicy),
 		MergePolicyVersion: int(p.MergePolicyVersion), MetadataUpdatedAt: p.MetadataUpdatedAt,
 		Name: p.Name, OpenIssueCount: int(p.OpenIssueCount), OpenPrCount: int(p.OpenPRCount),
-		Owner: p.Owner, UserId: p.UserID,
+		Owner: p.Owner, UserId: p.UserID, MaxWorkers: maxWorkers(p.MaxWorkers),
 	}
+}
+
+func maxWorkers(v *int32) *int {
+	if v == nil {
+		return nil
+	}
+	n := int(*v)
+	return &n
 }
 
 func (a *ProjectsAPI) view(m MergePolicy) api.MergePolicyView {

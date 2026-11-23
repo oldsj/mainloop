@@ -64,6 +64,14 @@ model settings, and retiring it.
 - Main uses `follow_up`, `steer`, `task_get` and `task_transcript` on the supervisor's task id as on
   any task, and `task_list` shows it with `standing: true`.
 
+## How many workers it runs
+
+Its workers are bounded by the project's [worker limit](tasks.md#project-worker-limit)
+(`max_workers`, default 6), not by the per-parent limit, and by the owner-wide global limit. A
+delegate past it is refused `409 project_capacity`; the supervisor waits for a worker to end. The
+owner sets the limit on the project (`PUT /projects/{id}/worker-limit`), or main does for the owner
+with `project_settings`. The supervisor cannot change it.
+
 ## Restart and reset
 
 A restart replaces its attempt with a new one, on the same task, in a new native session. It runs

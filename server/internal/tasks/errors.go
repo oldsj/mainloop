@@ -53,6 +53,7 @@ const (
 	ReasonInvalidCheckout      = "invalid_checkout"
 	ReasonBriefTooLong         = "brief_too_long"
 	ReasonChildCapacity        = "child_capacity"
+	ReasonProjectCapacity      = "project_capacity"
 	ReasonHoldNotLive          = "hold_task_not_live"
 	ReasonHoldNeedsOwner       = "hold_task_needs_owner"
 	ReasonGlobalCapacity       = "global_capacity"

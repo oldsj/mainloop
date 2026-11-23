@@ -687,6 +687,7 @@ type Project struct {
 	CiDetectedAt            *time.Time
 	WorkspaceServiceCommand []string
 	WorkspaceServicePorts   json.RawMessage
+	MaxWorkers              *int32
 }
 
 type ProjectDotfilesSource struct {
@@ -774,6 +775,17 @@ type ProjectProviderPreference struct {
 	ProjectID string
 	ProfileID *string
 	Version   int64
+}
+
+type ProjectWorkerLimitAudit struct {
+	ID            int64
+	ProjectID     string
+	OwnerID       string
+	ChangedBy     string
+	SessionID     *string
+	OldMaxWorkers *int32
+	NewMaxWorkers *int32
+	CreatedAt     time.Time
 }
 
 type PushFloor struct {

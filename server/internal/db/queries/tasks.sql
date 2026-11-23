@@ -898,3 +898,23 @@ SELECT * FROM task_operations WHERE target_attempt_id = $1 ORDER BY created_at D
 
 -- name: LatestAttemptReport :one
 SELECT * FROM task_reports WHERE attempt_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1;
+
+-- name: CountProjectCapacity :one
+-- The project's worker tasks (child tasks) that hold a slot, counted as CountGlobalCapacity is.
+SELECT count(*) FROM tasks t
+WHERE t.owner_id = $1 AND t.project_id = $2 AND t.parent_task_id IS NOT NULL
+  AND (EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id AND a.capacity_held)
+       OR (t.status NOT IN ('completed', 'failed', 'cancelled') AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id)));
+
+-- name: GetProjectMaxWorkers :one
+SELECT max_workers FROM projects WHERE id = $1 AND user_id = $2;
+
+-- name: LockProjectMaxWorkers :one
+SELECT max_workers FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE;
+
+-- name: SetProjectMaxWorkers :exec
+UPDATE projects SET max_workers = sqlc.narg(max_workers) WHERE id = sqlc.arg(id);
+
+-- name: InsertWorkerLimitAudit :exec
+INSERT INTO project_worker_limit_audit (project_id, owner_id, changed_by, session_id, old_max_workers, new_max_workers)
+VALUES (sqlc.arg(project_id), sqlc.arg(owner_id), sqlc.arg(changed_by), sqlc.narg(session_id), sqlc.narg(old_max_workers), sqlc.narg(new_max_workers));

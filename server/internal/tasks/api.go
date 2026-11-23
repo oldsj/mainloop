@@ -298,3 +298,38 @@ func (a *TasksAPI) RestartProjectSupervisor(ctx context.Context, req api.Restart
 	}
 	return api.RestartProjectSupervisor202JSONResponse(op), nil
 }
+
+func workerLimitView(w WorkerLimit) api.WorkerLimit {
+	return api.WorkerLimit{
+		ProjectId: w.ProjectID, MaxWorkers: w.Max, DefaultMaxWorkers: w.Default,
+		EffectiveMaxWorkers: w.Effective, GlobalMaxWorkers: w.Global, WorkersRunning: w.Running,
+	}
+}
+
+// GetProjectWorkerLimit implements api.StrictServerInterface.
+func (a *TasksAPI) GetProjectWorkerLimit(ctx context.Context, req api.GetProjectWorkerLimitRequestObject) (api.GetProjectWorkerLimitResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	w, err := a.Svc.WorkerLimit(ctx, a.OwnerID, req.ProjectId)
+	if err != nil {
+		return nil, taskReply(err, http.StatusNotFound)
+	}
+	return api.GetProjectWorkerLimit200JSONResponse(workerLimitView(w)), nil
+}
+
+// UpdateProjectWorkerLimit implements api.StrictServerInterface: the owner sets the project's own
+// worker limit, or with null returns it to the default.
+func (a *TasksAPI) UpdateProjectWorkerLimit(ctx context.Context, req api.UpdateProjectWorkerLimitRequestObject) (api.UpdateProjectWorkerLimitResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	if req.Body == nil {
+		return nil, apierr.Invalid("Request body is required")
+	}
+	w, err := a.Svc.SetWorkerLimit(ctx, a.OwnerID, req.ProjectId, req.Body.MaxWorkers, LimitChanger{})
+	if err != nil {
+		return nil, taskReply(err, http.StatusNotFound, http.StatusUnprocessableEntity)
+	}
+	return api.UpdateProjectWorkerLimit200JSONResponse(workerLimitView(w)), nil
+}
