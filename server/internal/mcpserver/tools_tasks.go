@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"time"
 	"strings"
+	"time"
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/api"
@@ -32,9 +32,8 @@ func (s *Server) taskTools() []Tool {
 				"Mechanical or bounded, easily-reversible work takes the cheapest model and lowest effort likely to " +
 				"succeed; design, debugging, security-sensitive review, or anything hard to undo takes the strongest " +
 				"model and highest effort the profile offers. When re-delegating a failed attempt, prefer a higher " +
-				"tier over repeating the same one. Read the resolved provider profile's own models and effort_levels " +
-				"(see the providers list) rather than assuming any provider's names; leaving both unset keeps the " +
-				"profile's defaults.",
+				"tier over repeating the same one. model and effort must be exact IDs the provider offers: list_models " +
+				"lists them; do not guess names. Leaving both unset keeps the defaults.",
 			InputSchema: objectSchema(map[string]any{
 				"request_id": id,
 				"title":      stringSchema(1, 200),
@@ -84,6 +83,14 @@ func (s *Server) taskTools() []Tool {
 			Name:        agentauth.ToolTaskHistory,
 			Description: "Read stored attempts, operations and reports.",
 			InputSchema: taskOnly, Handle: s.taskRead,
+		},
+		{
+			Name: agentauth.ToolListModels,
+			Description: "List the providers delegate and task_reassign accept, each with the exact model IDs and effort " +
+				"levels it offers, its defaults and the roles it runs (supervisor: a root task; child: a supervisor's " +
+				"task). Pass these IDs as delegate's provider_profile_id, model and effort exactly. Read-only.",
+			InputSchema: objectSchema(map[string]any{}),
+			Handle:      s.listModels,
 		},
 		{
 			Name:        agentauth.ToolTaskList,
@@ -614,6 +621,56 @@ func (s *Server) taskRead(ctx context.Context, a agentauth.Actor, args json.RawM
 	line := fmt.Sprintf("%s: %s", v.Task.Title, v.Task.Status)
 	m["text"] = line
 	return Result{Text: line, Structured: m}, nil
+}
+
+func (s *Server) listModels(_ context.Context, _ agentauth.Actor, args json.RawMessage) (Result, error) {
+	if err := decode(args, &struct{}{}); err != nil {
+		return Result{}, err
+	}
+	if s.Tasks == nil {
+		return Result{}, failure("unavailable", "tasks are not available")
+	}
+	choices := s.Tasks.ModelChoices()
+	out := make([]map[string]any, len(choices))
+	var b strings.Builder
+	for i, c := range choices {
+		models := make([]map[string]any, len(c.Models))
+		ids := make([]string, len(c.Models))
+		for j, m := range c.Models {
+			models[j] = map[string]any{"id": m.ID, "label": m.Label}
+			ids[j] = m.ID
+		}
+		out[i] = map[string]any{
+			"provider_profile_id": c.ProviderProfileID, "display_name": c.DisplayName, "aliases": nonNil(c.Aliases),
+			"roles": c.Roles, "models": models, "default_model": c.DefaultModel,
+			"effort_levels": nonNil(c.EffortLevels), "default_effort": c.DefaultEffort, "default": c.Default,
+		}
+		def := ""
+		if c.Default {
+			def = " (default provider)"
+		}
+		fmt.Fprintf(&b, "%s%s, roles %s\n  models: %s (default %s)\n  effort: %s (default %s)\n",
+			c.ProviderProfileID, def, strings.Join(c.Roles, ", "), orNone(strings.Join(ids, ", ")), orNone(c.DefaultModel),
+			orNone(strings.Join(c.EffortLevels, ", ")), orNone(c.DefaultEffort))
+	}
+	if len(choices) == 0 {
+		b.WriteString("No provider is enabled for tasks.")
+	}
+	return Result{Text: strings.TrimRight(b.String(), "\n"), Structured: map[string]any{"providers": out}}, nil
+}
+
+func nonNil(v []string) []string {
+	if v == nil {
+		return []string{}
+	}
+	return v
+}
+
+func orNone(v string) string {
+	if v == "" {
+		return "none"
+	}
+	return v
 }
 
 func (s *Server) taskList(ctx context.Context, a agentauth.Actor, args json.RawMessage) (Result, error) {

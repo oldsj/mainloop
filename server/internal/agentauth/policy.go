@@ -35,6 +35,7 @@ const (
 	ToolTaskTranscript            = "task_transcript"
 	ToolTranscriptSearch          = "transcript_search"
 	ToolDelegate                  = "delegate"
+	ToolListModels                = "list_models"
 	ToolTaskCancel                = "task_cancel"
 	ToolTaskRetry                 = "task_retry"
 	ToolTaskReassign              = "task_reassign"
@@ -63,7 +64,7 @@ var AllTools = []string{
 	ToolOpenPullRequest,
 	ToolGetIssue, ToolGetPullRequest, ToolCreateIssue, ToolCommentIssue, ToolCommentPullRequest, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
 	ToolProjectContext, ToolRemember, ToolForget, ToolProjectPropose,
-	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolTaskTranscript, ToolTranscriptSearch, ToolDelegate, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign,
+	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolTaskTranscript, ToolTranscriptSearch, ToolDelegate, ToolListModels, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign,
 	ToolTaskHold, ToolSteer, ToolFollowUp, ToolSupervisorSend, ToolProjectSettings, ToolReport, ToolLoopArm, ToolLoopList, ToolLoopStop,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
 	ToolGetPullRequestMergeStatus,
@@ -125,8 +126,10 @@ type Policy struct {
 }
 
 var (
-	taskRead       = []string{ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolTaskTranscript, ToolTranscriptSearch}
-	taskManagement = []string{ToolDelegate, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign, ToolSteer, ToolFollowUp}
+	taskRead = []string{ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolTaskTranscript, ToolTranscriptSearch}
+	// list_models goes with delegate and task_reassign: it lists the exact providers, models and
+	// effort levels they accept.
+	taskManagement = []string{ToolDelegate, ToolListModels, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign, ToolSteer, ToolFollowUp}
 	// loopTools are main's and supervisors' wake-ups: what fires is a message to them.
 	loopTools      = []string{ToolLoopArm, ToolLoopList, ToolLoopStop}
 	workspaceTools = []string{ToolWhoami, ToolOpenPullRequest}

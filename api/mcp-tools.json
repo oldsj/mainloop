@@ -825,7 +825,7 @@
     },
     {
       "name": "delegate",
-      "description": "Create a durable task and scoped attempt. Reuse request_id for lost or uncertain responses. After a confirmed terminal blocked create, use a NEW request_id for a new create; reusing the old id returns the blocked operation. Role and tool guidance prefixes the brief. Main does not delegate in a project (refused project_supervisor): it sends the work to the project's supervisor with supervisor_send. Choosing model and effort: match the tier to the task's scope, risk and reversibility, not habit. Mechanical or bounded, easily-reversible work takes the cheapest model and lowest effort likely to succeed; design, debugging, security-sensitive review, or anything hard to undo takes the strongest model and highest effort the profile offers. When re-delegating a failed attempt, prefer a higher tier over repeating the same one. Read the resolved provider profile's own models and effort_levels (see the providers list) rather than assuming any provider's names; leaving both unset keeps the profile's defaults.",
+      "description": "Create a durable task and scoped attempt. Reuse request_id for lost or uncertain responses. After a confirmed terminal blocked create, use a NEW request_id for a new create; reusing the old id returns the blocked operation. Role and tool guidance prefixes the brief. Main does not delegate in a project (refused project_supervisor): it sends the work to the project's supervisor with supervisor_send. Choosing model and effort: match the tier to the task's scope, risk and reversibility, not habit. Mechanical or bounded, easily-reversible work takes the cheapest model and lowest effort likely to succeed; design, debugging, security-sensitive review, or anything hard to undo takes the strongest model and highest effort the profile offers. When re-delegating a failed attempt, prefer a higher tier over repeating the same one. model and effort must be exact IDs the provider offers: list_models lists them; do not guess names. Leaving both unset keeps the defaults.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -945,6 +945,16 @@
           }
         },
         "required": ["request_id", "title", "brief", "mode"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_models",
+      "description": "List the providers delegate and task_reassign accept, each with the exact model IDs and effort levels it offers, its defaults and the roles it runs (supervisor: a root task; child: a supervisor's task). Pass these IDs as delegate's provider_profile_id, model and effort exactly. Read-only.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
         "type": "object"
       }
     },
@@ -1670,6 +1680,7 @@
         "get_pull_request",
         "get_verification",
         "list_dependabot_alerts",
+        "list_models",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -1723,6 +1734,7 @@
         "get_pull_request",
         "get_verification",
         "list_dependabot_alerts",
+        "list_models",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -1773,6 +1785,7 @@
         "get_pull_request_merge_status",
         "get_verification",
         "list_dependabot_alerts",
+        "list_models",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -1829,6 +1842,7 @@
         "get_pull_request_merge_status",
         "get_verification",
         "list_dependabot_alerts",
+        "list_models",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -1876,6 +1890,7 @@
         "forget",
         "get_issue",
         "get_pull_request",
+        "list_models",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -1912,6 +1927,7 @@
         "forget",
         "get_issue",
         "get_pull_request",
+        "list_models",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -1948,6 +1964,7 @@
         "forget",
         "get_issue",
         "get_pull_request",
+        "list_models",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -1984,6 +2001,7 @@
         "forget",
         "get_issue",
         "get_pull_request",
+        "list_models",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -2021,6 +2039,7 @@
         "get_pull_request",
         "get_verification",
         "list_dependabot_alerts",
+        "list_models",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -2063,6 +2082,7 @@
         "get_pull_request",
         "get_verification",
         "list_dependabot_alerts",
+        "list_models",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -2102,6 +2122,7 @@
         "get_pull_request_merge_status",
         "get_verification",
         "list_dependabot_alerts",
+        "list_models",
         "loop_arm",
         "loop_list",
         "loop_stop",
@@ -2147,6 +2168,7 @@
         "get_pull_request_merge_status",
         "get_verification",
         "list_dependabot_alerts",
+        "list_models",
         "loop_arm",
         "loop_list",
         "loop_stop",
