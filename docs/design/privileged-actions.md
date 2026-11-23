@@ -272,13 +272,21 @@ In the cluster, never on the owner's Mac: no relay on the Mac and no new public 
   ingress): it takes work from PostgreSQL (`LISTEN` plus polling) and writes results back. No
   workspace, Session or MCP server can reach it. The executor's tools (`kubectl`, `talosctl`,
   `omnictl`, OpenSSH client) are pinned by version and checksum in its image.
-- **Network reach.** Egress is an allowlist in the infrastructure repository's CiliumNetworkPolicy:
-  PostgreSQL, the Kubernetes API, `api.github.com`, the 1Password API, the Omni endpoint by name,
-  the Talos API port on the cluster's node addresses, and **one `/32` and port per allowlisted
-  home-network host** (22 for `ssh`, 443 for the UniFi console). Pods already reach home-network
-  addresses this way (the UniFi firmware job egresses to the console by `toCIDR`), so no relay or
-  VPN is added. Hosts on a VLAN the cluster cannot route to are out of reach until the router allows
-  that one flow, which is a router change the owner makes.
+- **Network reach.** Two paths, because pod traffic leaving the cluster is masqueraded to the
+  node's address, so the router sees the whole cluster zone and cannot tell the executor apart.
+  - *Pod network* (from the node's address): PostgreSQL, the Kubernetes API, `api.github.com`,
+    the 1Password API and the Omni endpoint. A CiliumNetworkPolicy in the infrastructure repository
+    allows only these.
+  - *Its own source address* for home-network hosts (`ssh`, the UniFi console). This follows Home
+    Assistant's VLAN 41 pattern: a Multus macvlan interface `net1` with one static address, pinned
+    to the worker that has the VLAN link, with routes only to the allowlisted hosts' subnets. The
+    address is a `network.nix` host, and `policy.nix` gets an address zone for it with one rule per
+    allowlisted host and port (22 to the NAS, the router, the Windows host and the UTM VM; 443 to
+    the UniFi console). The cluster zone gains nothing. Whether the address sits on the cluster
+    VLAN or on a small VLAN of its own, and every router rule, is a network change the owner
+    approves. Until then the `ssh` and `http.unifi` types answer `unreachable`. The read-side
+    infra tools (Omni/Talos reads, `lan_check`) get a separate address zone with read-only ports,
+    so reads and writes never share a source identity.
 
 ### Host allowlist
 
@@ -301,8 +309,8 @@ creates every item; agents never create or read them.**
 | 1Password            | Item `mainloop-executor-1password`, field `token`: a 1Password Service Account, **read-only**, scoped to named vaults (not the Connect operator's token)                                                                                                                      | `onepassword.*`            | 2     |
 | Kubernetes, typed    | No item. The executor's ServiceAccount may only `create serviceaccounts/token` for narrow ServiceAccounts (`executor-workloads`, `executor-delete`, `executor-secret-writer`, `executor-argo`); each run mints a 10-minute token                                              | `k8s.*`, `argocd.sync`     | 3     |
 | Kubernetes, commands | No item. The same token minting for `executor-admin`, bound to `cluster-admin`, used only by `command.kubectl`                                                                                                                                                                | `command.kubectl`          | 3     |
-| Talos                | No item. A `talos.dev/v1alpha1` ServiceAccount `mainloop-executor-talos` with role `os:admin`, issued by Talos into a Secret. The control plane's `kubernetesTalosAPIAccess` must allow `os:admin` from `mainloop-executor`: a control-plane config change the owner approves | `command.talosctl`         | 3b    |
-| Omni                 | Item `mainloop-executor-omni`, field `service-account-key`: an Omni service account (role Operator, or Admin if the owner wants cluster creation)                                                                                                                             | `command.omnictl`          | 3b    |
+| Talos                | Preferred: no item. `talosctl` goes through Omni with a talosconfig from the Omni service account below, so Talos grants follow the Omni role (Operator → `os:operator`; Admin → `os:admin`, to confirm against Omni's docs) and the control plane needs no change. Fallback: a `talos.dev/v1alpha1` ServiceAccount `mainloop-executor-talos` with `os:admin`, which needs a `kubernetesTalosAPIAccess` control-plane change the owner approves | `command.talosctl`         | 3b    |
+| Omni                 | Item `mainloop-executor-omni`, field `service-account-key`: an Omni service account (role Operator, or Admin if the owner wants cluster creation or Talos `os:admin`). Write-side only; the read tools use a separate Reader account.                                                                                                                             | `command.omnictl`          | 3b    |
 | SSH, per host        | Item `mainloop-executor-ssh-<host>` per host (`nas`, `router`, `windows-host`, `utm-vm`), fields `private-key` (a new ed25519 key for this executor only, public half installed for that host's admin user), `user` and `known-hosts` (the host's key line)                   | `command.ssh` to that host | 3b    |
 | UniFi                | Item `mainloop-executor-unifi`, field `api-key`: a UniFi local API key from the console                                                                                                                                                                                       | `http.unifi`               | 3b    |
 
@@ -407,7 +415,8 @@ Deployment with its own database role; the audit page.
 ServiceAccounts. The ops agent requests writes through these.
 
 **Slice 3b: home-network hosts.** `command.talosctl`, `command.omnictl`, `command.ssh` and
-`http.unifi`, the host allowlist and the egress policy, once the owner has created the items in §3.
+`http.unifi`, the host allowlist and the egress policy, once the owner has created the items in §3
+and approved the executor's source address and its router rules (§3, Network reach).
 
 **Slice 4: policy and stronger approvals.** Owner-written auto rules and "allow this target for
 24 h" (never for floor types); passkey-signed approvals, so a compromised API process cannot forge
