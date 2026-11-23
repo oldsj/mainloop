@@ -840,6 +840,24 @@ type ReportInput struct {
 	Outcome      dbstate.ReportOutcome
 	OwnerAction  string
 	EvidenceRefs []string
+	// ScreenshotIDs are preview screenshots of the attempt's own workspace that the report shows the
+	// owner (docs/specs/workspaces.md "Preview screenshots").
+	ScreenshotIDs []string
+}
+
+// MaxReportScreenshots is how many screenshots one report may show.
+const MaxReportScreenshots = 8
+
+// distinct reports whether no id appears twice.
+func distinct(ids []string) bool {
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if seen[id] {
+			return false
+		}
+		seen[id] = true
+	}
+	return true
 }
 
 // Reported is the answer to a report.
@@ -865,10 +883,23 @@ func (s *Service) Report(ctx context.Context, p Principal, in ReportInput) (Repo
 	if refs == nil {
 		refs = []string{}
 	}
-	dig, _, err := digest("report", in.TaskID, map[string]any{
+	if len(in.ScreenshotIDs) > MaxReportScreenshots {
+		return Reported{}, refusal(422, ReasonReportScreenshots)
+	}
+	fields := map[string]any{
 		"attempt_id": in.AttemptID, "summary": in.Summary, "outcome": in.Outcome,
 		"owner_action": nilIfEmpty(in.OwnerAction), "evidence_refs": refs,
-	})
+	}
+	shots := in.ScreenshotIDs
+	if shots == nil {
+		shots = []string{}
+	}
+	// Only a report with screenshots digests them, so a report recorded before they existed still
+	// replays as the same request.
+	if len(shots) > 0 {
+		fields["screenshot_ids"] = shots
+	}
+	dig, _, err := digest("report", in.TaskID, fields)
 	if err != nil {
 		return Reported{}, err
 	}
@@ -903,6 +934,18 @@ func (s *Service) Report(ctx context.Context, p Principal, in ReportInput) (Repo
 		if err := ensureActive(ctx, q, p); err != nil {
 			return nil, err
 		}
+		if len(shots) > 0 {
+			n, err := q.CountAttemptScreenshots(ctx, dbq.CountAttemptScreenshotsParams{
+				AttemptID: in.AttemptID, Ids: shots, OwnerID: p.OwnerID,
+			})
+			if err != nil {
+				return nil, err
+			}
+			if int(n) != len(shots) || !distinct(shots) {
+				return nil, refusal(422, ReasonReportScreenshots)
+			}
+		}
+		in.ScreenshotIDs = shots
 		after, report, err := s.applyReport(ctx, q, t, in, dig, refs)
 		if err != nil {
 			return nil, err
@@ -947,7 +990,7 @@ func (s *Service) applyReport(ctx context.Context, q *dbq.Queries, t dbq.Task, i
 	report, err := q.InsertTaskReport(ctx, dbq.InsertTaskReportParams{
 		ID: reportID, TaskID: t.ID, AttemptID: in.AttemptID, RequestID: in.RequestID, RequestDigest: dig,
 		Summary: in.Summary, Outcome: in.Outcome, OwnerAction: ptr(in.OwnerAction), EvidenceRefs: refs,
-		TaskVersion: t.Version + 1,
+		TaskVersion: t.Version + 1, ScreenshotIds: in.ScreenshotIDs,
 	})
 	if err != nil {
 		return t, report, err

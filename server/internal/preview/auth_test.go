@@ -216,8 +216,38 @@ func TestGrantRefusals(t *testing.T) {
 		if _, _, err := e.proxy.Grant(ctx, c.ws, c.port, c.path); !errors.Is(err, c.want) {
 			t.Errorf("Grant(%s, %d, %q) = %v, want %v", c.ws, c.port, c.path, err, c.want)
 		}
+		// A screenshot visit refuses exactly what a grant refuses.
+		if _, err := e.proxy.Visit(ctx, c.ws, c.port, c.path); !errors.Is(err, c.want) {
+			t.Errorf("Visit(%s, %d, %q) = %v, want %v", c.ws, c.port, c.path, err, c.want)
+		}
 	}
 	e.nothingHappened("refused grants")
+}
+
+func TestVisitSignsTheBrowserInToOneHostBriefly(t *testing.T) {
+	e := newEnv(t)
+	v, err := e.proxy.Visit(context.Background(), "ws1", 3000, "/a?b=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "http://" + wsHost + "/a?b=1"; v.URL != want {
+		t.Errorf("URL = %q, want %q", v.URL, want)
+	}
+	c := v.Cookie
+	if c.Name != e.proxy.cookieName() || c.Path != "/" || c.Domain != "" || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode {
+		t.Errorf("cookie = %+v", c)
+	}
+	if ttl := time.Until(c.Expires); ttl <= 0 || ttl > VisitTTL {
+		t.Errorf("cookie lasts %v, want at most %v", ttl, VisitTTL)
+	}
+	// The preview host accepts it, and no other host does.
+	if !e.proxy.valid(c.Value, kindSession, Host{Port: 3000, WorkspaceID: "ws1"}) || e.proxy.valid(c.Value, kindSession, Host{Port: 8080, WorkspaceID: "ws1"}) {
+		t.Error("the visit cookie is not scoped to its host")
+	}
+	rec := e.do("GET", wsHost, "/", nil, map[string]string{anon: "1", "Cookie": c.Name + "=" + c.Value})
+	if rec.Code != http.StatusOK || rec.Body.String() != "dev" {
+		t.Errorf("visit cookie: got %d %q", rec.Code, rec.Body.String())
+	}
 }
 
 func TestCookieNameIsHostPrefixedOverHTTPS(t *testing.T) {

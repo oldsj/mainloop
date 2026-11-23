@@ -1361,6 +1361,18 @@
             "minLength": 1,
             "type": "string"
           },
+          "screenshot_ids": {
+            "default": [],
+            "description": "Ids from preview_screenshot of your own workspace, shown to the owner with the report.",
+            "items": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 8,
+            "type": "array",
+            "uniqueItems": true
+          },
           "summary": {
             "maxLength": 4000,
             "minLength": 1,
@@ -1722,6 +1734,50 @@
           }
         },
         "required": ["url"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "preview_screenshot",
+      "description": "Screenshot your workspace's running preview, as the owner would see it on a phone (mobile, 390x844 at 2x) or a laptop (desktop, 1440x900). Mainloop's own headless browser opens the preview of a declared port through its signed-in preview host and returns PNG images you can look at. Each screenshot has an id: pass the ids as screenshot_ids to report to show them to the owner in the task view and their conversation. Reuse request_id when retrying; a new request_id takes new screenshots. The dev server must be running on the port.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "full_page": {
+            "default": false,
+            "description": "Capture the whole page down to 4000 CSS pixels instead of the first screen.",
+            "type": "boolean"
+          },
+          "path": {
+            "default": "/",
+            "description": "Path on the preview, starting with a single /, with any query.",
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "port": {
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "request_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "viewports": {
+            "default": ["mobile"],
+            "items": {
+              "enum": ["mobile", "desktop"],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": ["request_id", "port"],
         "type": "object"
       }
     }

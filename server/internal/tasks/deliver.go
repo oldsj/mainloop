@@ -82,6 +82,9 @@ func reportText(r dbq.TaskReport, t dbq.Task, attempt int32) string {
 	if r.OwnerAction != nil && *r.OwnerAction != "" {
 		text += "\nOwner action needed: " + *r.OwnerAction
 	}
+	if n := len(r.ScreenshotIds); n > 0 {
+		text += fmt.Sprintf("\nScreenshots: %d (in the task view)", n)
+	}
 	return text
 }
 
@@ -120,20 +123,27 @@ func (s *Service) prepareBatch(ctx context.Context, c reconcile.Claim, d dbq.Tas
 // batchText is the message for a ledger message id: the text of each report and loop firing it
 // carries, oldest first. It is read from rows that do not change once they have a message id, not
 // from the claim, so whichever claimer sends the message sends the same text.
-func (s *Service) batchText(ctx context.Context, mid string) (string, error) {
+// batchText is the text of the message that delivers batch mid, and the reports in it that show
+// screenshots.
+func (s *Service) batchText(ctx context.Context, mid string) (string, []reportShots, error) {
 	q := dbq.New(s.Pool)
 	ds, err := q.ListTaskEventBatch(ctx, &mid)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	parts := make([]string, 0, len(ds)+1)
 	reports := 0
+	var shots []reportShots
 	for _, d := range ds {
 		var text string
 		switch {
 		case d.ReportID != nil:
 			reports++
-			text, err = s.reportItemText(ctx, q, *d.ReportID)
+			var ids []string
+			text, ids, err = s.reportItemText(ctx, q, *d.ReportID)
+			if len(ids) > 0 {
+				shots = append(shots, reportShots{reportID: *d.ReportID, ids: ids})
+			}
 		case d.NoticeTaskID != nil:
 			var t dbq.Task
 			if t, err = q.GetTaskByID(ctx, *d.NoticeTaskID); err == nil {
@@ -143,35 +153,67 @@ func (s *Service) batchText(ctx context.Context, mid string) (string, error) {
 			text, err = s.firingText(ctx, q, deref(d.LoopFiringID))
 		}
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		parts = append(parts, text)
 	}
 	switch {
 	case len(parts) == 1:
-		return parts[0], nil
+		return parts[0], shots, nil
 	case reports == len(parts):
 		parts = append([]string{fmt.Sprintf("[%d reports]", len(parts))}, parts...)
 	default:
 		parts = append([]string{fmt.Sprintf("[%d updates]", len(parts))}, parts...)
 	}
-	return strings.Join(parts, "\n\n"), nil
+	return strings.Join(parts, "\n\n"), shots, nil
 }
 
-func (s *Service) reportItemText(ctx context.Context, q *dbq.Queries, reportID string) (string, error) {
+// reportShots is a report of a batch and the screenshots it shows.
+type reportShots struct {
+	reportID string
+	ids      []string
+}
+
+// reportImages copies the screenshots of the batch's reports into chat images of the main
+// conversation and returns their ids, at most sessions.MaxImagesPerMessage, in report order. The
+// ids derive from the message, so a replay of the same send finds the images it copied before.
+func (s *Service) reportImages(ctx context.Context, mid, mainID string, shots []reportShots) ([]string, error) {
+	if len(shots) == 0 {
+		return nil, nil
+	}
+	reportIDs := make([]string, 0, len(shots))
+	var images []string
+	for _, r := range shots {
+		reportIDs = append(reportIDs, r.reportID)
+		for _, id := range r.ids {
+			if len(images) < sessions.MaxImagesPerMessage {
+				images = append(images, mid+":"+id)
+			}
+		}
+	}
+	err := dbq.New(s.Pool).CopyReportScreenshotsToMessage(ctx, dbq.CopyReportScreenshotsToMessageParams{
+		MessageID: mid, SessionID: mainID, ReportIds: reportIDs,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("copy report screenshots: %w", err)
+	}
+	return images, nil
+}
+
+func (s *Service) reportItemText(ctx context.Context, q *dbq.Queries, reportID string) (string, []string, error) {
 	r, err := q.GetTaskReport(ctx, reportID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	t, err := q.GetTaskByID(ctx, r.TaskID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	a, err := q.GetTaskAttempt(ctx, r.AttemptID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return reportText(r, t, a.Number), nil
+	return reportText(r, t, a.Number), r.ScreenshotIds, nil
 }
 
 // readyAt is when a pending delivery may first be sent: a report after the batch window, a loop
@@ -298,12 +340,16 @@ func (s *Service) sendReport(ctx context.Context, c reconcile.Claim, d dbq.TaskE
 		if ended {
 			return s.setDelivery(ctx, c, dbstate.TaskDeliveryCancelled)
 		}
-		text, err := s.batchText(ctx, mid)
+		text, shots, err := s.batchText(ctx, mid)
 		if err != nil {
 			return reconcile.Outcome{}, err
 		}
 		if d.RecipientKey == "main" {
-			_, err = s.Sessions.SendAs(ctx, sessions.SourceMainloop, mid, "", text)
+			var images []string
+			if images, err = s.reportImages(ctx, mid, sessionID, shots); err != nil {
+				return reconcile.Outcome{}, err
+			}
+			_, err = s.Sessions.SendAsWithImages(ctx, sessions.SourceMainloop, mid, "", text, images)
 		} else {
 			_, err = s.Sessions.SendToAs(ctx, sessions.SourceMainloop, sessionID, mid, text)
 		}

@@ -16,8 +16,10 @@ import (
 	"github.com/oldsj/mainloop/server/internal/k8ssecrets"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/mcpserver"
+	"github.com/oldsj/mainloop/server/internal/preview"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
+	"github.com/oldsj/mainloop/server/internal/screenshot"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/topics"
@@ -59,27 +61,37 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	// internal/devloop's package doc); serve-api's instance, built in newDevloopOperations, is the
 	// one that actually reaches Kubernetes and GitHub.
 	srv := &mcpserver.Server{
-		PRs:               prSvc,
-		Merge:             mergeSvc,
-		Issues:            issuesSvc,
-		CI:                newCIService(pool, gh),
-		DevLease:          &devloop.LeaseService{Pool: pool},
-		DevOps:            &devloop.OperationsService{Pool: pool},
-		DevTargets:        &devloop.TargetService{Pool: pool},
-		Auth:              &agentauth.Authenticator{Q: q, Depth: taskSvc.AuthDepth},
-		Tasks:             taskSvc,
-		Transcripts:       transcripts.NewService(cfg, pool, transcripts.FromClient(kc), nil, log), // reads only; serve-api ingests
-		Policy:            agentauth.Policy{MergeTools: bool(cfg.MergeToolsEnabled), DevLoop: bool(cfg.DevloopEnabled)},
-		Queries:           q,
-		Topics:            topics.NewService(pool),
-		Pool:              pool,
-		Onboarding:        newOnboarding(cfg, pool, gh, log),
-		Privileged:        newPrivileged(cfg, pool, gh, log),
-		WebFetch:          &webfetch.Fetcher{Deny: deny},
-		WebFetchPerMinute: cfg.WebFetchPerMinute,
-		Log:               log,
-		AllowedHosts:      cfg.AllowedMCPHosts(),
-		Dev:               cfg.IsDev(),
+		PRs:                  prSvc,
+		Merge:                mergeSvc,
+		Issues:               issuesSvc,
+		CI:                   newCIService(pool, gh),
+		DevLease:             &devloop.LeaseService{Pool: pool},
+		DevOps:               &devloop.OperationsService{Pool: pool},
+		DevTargets:           &devloop.TargetService{Pool: pool},
+		Auth:                 &agentauth.Authenticator{Q: q, Depth: taskSvc.AuthDepth},
+		Tasks:                taskSvc,
+		Transcripts:          transcripts.NewService(cfg, pool, transcripts.FromClient(kc), nil, log), // reads only; serve-api ingests
+		Policy:               agentauth.Policy{MergeTools: bool(cfg.MergeToolsEnabled), DevLoop: bool(cfg.DevloopEnabled)},
+		Queries:              q,
+		Topics:               topics.NewService(pool),
+		Pool:                 pool,
+		Onboarding:           newOnboarding(cfg, pool, gh, log),
+		Privileged:           newPrivileged(cfg, pool, gh, log),
+		WebFetch:             &webfetch.Fetcher{Deny: deny},
+		WebFetchPerMinute:    cfg.WebFetchPerMinute,
+		Log:                  log,
+		AllowedHosts:         cfg.AllowedMCPHosts(),
+		Dev:                  cfg.IsDev(),
+		ScreenshotsPerMinute: cfg.Preview.ScreenshotsPerMinute,
+	}
+	// Preview screenshots need the headless browser and the preview hosts it signs in to.
+	if cfg.Preview.ScreenshotBrowserURL != "" {
+		signer, err := preview.NewSigner(cfg, pool)
+		if err != nil {
+			return err
+		}
+		srv.Previews, srv.Screenshots = signer, &screenshot.CDP{URL: cfg.Preview.ScreenshotBrowserURL}
+		srv.Policy.Screenshots = true
 	}
 	handler, err := srv.Handler()
 	if err != nil {

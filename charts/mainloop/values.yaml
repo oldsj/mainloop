@@ -91,6 +91,9 @@ server:
   # Pod-level settings for Deployment mainloop-backend.
   strategy: {}
   podAnnotations: {}
+  # An existing PriorityClass for the backend pod. The chart does not create it (it is cluster-wide).
+  # The backend is one replica, so with none it waits behind any app when its node is drained or full.
+  priorityClassName: ''
   # Imports every key of mainloop-secrets as env vars. Turn off to read only the keys named below.
   importSecretEnv: true
   # Added after mainloop-config in every server container's envFrom (e.g. a site ConfigMap).
@@ -216,6 +219,31 @@ canary:
   # MAINLOOP_NTFY_URL, MAINLOOP_NTFY_TOPIC and MAINLOOP_NTFY_TOKEN (from a Secret). No ntfy: the
   # run only logs and exits non-zero on failure.
   env: []
+
+# A headless Chromium for the preview_screenshot MCP tool (docs/specs/workspaces.md, "Preview
+# screenshots"). Needs the preview host (SUBSTRATE_PREVIEW_BASE_URL). Enabling it sets
+# MAINLOOP_SCREENSHOT_BROWSER_URL, which offers the tool to workspace agents.
+screenshots:
+  enabled: false
+  image:
+    repository: docker.io/chromedp/headless-shell
+    tag: 159.0.8154.13
+    digest: sha256:381353d3530ab9d579d2fe8b9c0f4519c995617f5a71daf6bb649e2d12005bd9
+  # Required when enabled: NetworkPolicy "to" peers for the preview host's gateway. The browser
+  # may reach these on previewEgressPorts, and DNS, and nothing else. In-cluster traffic to a
+  # load-balancer IP is translated to the gateway's pods before the policy applies (kube-proxy and
+  # Cilium alike), so name those pods (namespaceSelector plus podSelector) rather than the IP.
+  previewEgress: []
+  # The ports the gateway's pods listen on for the preview listener: the Service's targetPort, not
+  # its port, for the same reason (Envoy Gateway's 443 listener is 10443 on the pod).
+  previewEgressPorts: [443]
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 1Gi
+      cpu: 1000m
 
 networkPolicy:
   # Ingress to the REST and MCP listeners. The git listeners have their own fixed policy, open only

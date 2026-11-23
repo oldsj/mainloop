@@ -193,7 +193,8 @@ The [Publish images workflow](.github/workflows/images.yml) builds and pushes
 `ubuntu-24.04-arm` runners. It can also be started with `workflow_dispatch` for a
 selected ref. The `backend` image is the Go server (`server/Dockerfile`, target `prod`,
 context `server/`). The `frontend` image is the React app (`web/Dockerfile`, repository-root
-context); it receives `VITE_API_URL=https://mainloop-api.olds.network` at build time.
+context); it is built with `VITE_API_URL=/api`, so it calls the API on its own origin, where the
+gateway routes `/api` to the backend.
 
 Images are published to `ghcr.io/oldsj/mainloop-backend` and
 `ghcr.io/oldsj/mainloop-frontend`, tagged with the first seven characters of the

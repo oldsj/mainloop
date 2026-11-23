@@ -310,6 +310,40 @@ Session that is not `READY` shows the waking page and the router is not contacte
 not survive sleep, so a preview of a just-woken workspace can fail until the agent has started the
 dev server again, unless the project declares a workspace service (below).
 
+## Preview screenshots
+
+**Implemented** (issue #249): a workspace agent can photograph its own preview with the MCP tool
+`preview_screenshot`, so the owner sees the change without opening the preview.
+
+- **Who holds it.** Only a workspace agent with the pull-request tools (a code task's supervisor or
+  child, or a workspace session), and only when the deployment runs the screenshot browser
+  (`MAINLOOP_SCREENSHOT_BROWSER_URL`, set by the chart's `screenshots.enabled`). The main thread
+  and coordination agents do not have it.
+- **What it does.** `preview_screenshot(request_id, port, path="/", viewports=["mobile"],
+full_page=false)` opens `<port>--<own workspace>--preview.<domain><path>` in a dedicated headless
+  Chromium and returns one PNG per viewport: `mobile` (390×844 CSS pixels at 2×, touch, portrait)
+  and `desktop` (1440×900 at 1×). `full_page` captures down to the end of the page, at most 4000
+  CSS pixels. The page gets 750 ms after its load event to settle; a capture takes at most 30 s and
+  an image over 5 MB is refused. The agent can only name a port; the workspace is always its own,
+  and the same checks as the owner's preview apply (the workspace is the owner's, live, and
+  declares the port), refused as `not_previewable` or `port_not_declared`.
+- **How the browser signs in.** The browser goes through the preview host and its sign-in like the
+  owner's phone does; nothing bypasses it. For each capture the MCP server mints a preview session
+  cookie for that one host, valid for 2 minutes, and puts it in a fresh incognito browser context
+  that is discarded afterwards. The browser holds no other credential and keeps nothing between
+  captures. The DevTools protocol has no authentication, so the chart's NetworkPolicy admits only
+  the backend to the browser, and lets the browser reach only DNS and the preview gateway
+  (`screenshots.previewEgress` on `screenshots.previewEgressPorts`, the gateway pods' own port).
+- **Retries and limits.** `request_id` makes a call idempotent: the same request returns the stored
+  images (`replayed: true`) without opening the browser again, and the same id for another page or
+  size is `request_conflict`. Each workspace may take `MAINLOOP_SCREENSHOTS_PER_MINUTE` (10)
+  captures a minute; more are `rate_limited`.
+- **Showing the owner.** Each image is stored with its workspace (deleted with it) and returned
+  to the agent with its `screenshot_id`. The agent shows the owner by naming up to 8 ids in a
+  task `report` (`screenshot_ids`, [delegation](delegation.md)); a report may name only screenshots
+  taken in its own attempt's workspace. The report's message to the main thread carries them as
+  images, and the task page shows them under the report.
+
 ## Workspace service
 
 A project can declare a workspace service: the argv of a long-running process, such as a

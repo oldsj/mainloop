@@ -60,6 +60,7 @@ const (
 	ToolDevSync                   = "dev_sync"
 	ToolDevStatus                 = "dev_status"
 	ToolWebFetch                  = "web_fetch"
+	ToolPreviewScreenshot         = "preview_screenshot"
 )
 
 // AllTools lists every tool, in the order api/mcp-tools.json lists them.
@@ -75,6 +76,7 @@ var AllTools = []string{
 	ToolGetPullRequestMergeStatus,
 	ToolDevLeaseAcquire, ToolDevLeaseRelease, ToolDevSync, ToolDevStatus,
 	ToolWebFetch,
+	ToolPreviewScreenshot,
 }
 
 // Surface is one of the two MCP endpoints. The approval-gated merge tool is served alone on its
@@ -132,6 +134,9 @@ type Policy struct {
 	// DevLoop turns the devloop tools on (MAINLOOP_DEVLOOP_ENABLED=true). A handler-level check
 	// further limits them to tasks of the one allowed project; the flag alone decides visibility.
 	DevLoop bool
+	// Screenshots turns preview_screenshot on for workspace agents: set when a headless browser and
+	// a preview base URL are configured.
+	Screenshots bool
 }
 
 var (
@@ -250,6 +255,10 @@ func (p Policy) actorTools(a Actor) []string {
 	}
 	if p.DevLoop && slices.Contains(tools, ToolOpenPullRequest) {
 		tools = append(tools, devLoopTools...)
+	}
+	// A workspace agent screenshots its own workspace's preview; nobody else has one.
+	if p.Screenshots && a.Grant == dbstate.GrantWorkspace && slices.Contains(tools, ToolOpenPullRequest) {
+		tools = append(tools, ToolPreviewScreenshot)
 	}
 	// web_fetch is opt-in per agent, never by role: any live actor the owner turned it on for.
 	if a.WebFetch && len(tools) > 0 {

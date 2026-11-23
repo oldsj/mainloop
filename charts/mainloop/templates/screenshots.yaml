@@ -1,0 +1,134 @@
+{{- if .Values.screenshots.enabled }}
+{{- $egress := .Values.screenshots.previewEgress }}
+{{- if or (not $egress) (not .Values.screenshots.previewEgressPorts) }}
+{{- fail "screenshots.previewEgress and previewEgressPorts must name the preview gateway's pods and ports" }}
+{{- end }}
+# The headless browser behind the preview_screenshot tool (docs/specs/workspaces.md, "Preview
+# screenshots"). serve-mcp drives it over the DevTools protocol, which has no authentication, so
+# only the backend may reach it and it reaches only DNS and the preview gateway. It holds no
+# credential: each capture brings one short-lived preview cookie in a fresh browser context.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-screenshots
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mainloop-screenshots
+  template:
+    metadata:
+      labels:
+        app: mainloop-screenshots
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: browser
+          image: {{ include "mainloop.image" (dict "image" .Values.screenshots.image "root" .) }}
+          {{- include "mainloop.pullPolicy" . | nindent 10 }}
+          env:
+            - name: HOME
+              value: /tmp
+          ports:
+            - name: devtools
+              containerPort: 9222
+          readinessProbe:
+            tcpSocket:
+              port: devtools
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: devtools
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: shm
+              mountPath: /dev/shm
+          resources:
+            {{- toYaml .Values.screenshots.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 512Mi
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mainloop-screenshots
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: mainloop-screenshots
+  ports:
+    - name: devtools
+      protocol: TCP
+      port: 9222
+      targetPort: devtools
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mainloop-screenshots
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: mainloop-screenshots
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: mainloop-backend
+      ports:
+        - protocol: TCP
+          port: 9222
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        {{- toYaml $egress | nindent 8 }}
+      ports:
+        {{- range .Values.screenshots.previewEgressPorts }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+{{- end }}

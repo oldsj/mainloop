@@ -14,6 +14,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/onboarding"
 	"github.com/oldsj/mainloop/server/internal/privileged"
 	"github.com/oldsj/mainloop/server/internal/projectcontext"
+	"github.com/oldsj/mainloop/server/internal/screenshot"
 	"github.com/oldsj/mainloop/server/internal/testdb"
 	"github.com/oldsj/mainloop/server/internal/transcripts"
 )
@@ -236,6 +237,7 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"sessions", "agent_cancel_outcome", strs(
 			string(api.SessionCancelResponseAgentStopped), string(api.SessionCancelResponseAgentNotRunning),
 			string(api.SessionCancelResponseAgentUnknown))},
+		{"preview_screenshots", "viewport", strs(screenshot.Mobile.Name, screenshot.Desktop.Name)},
 	}
 	// Every enumerated CHECK in the schema needs a case above, so a new state column cannot be
 	// added without constants that are held to it.

@@ -1878,6 +1878,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/tasks/{task_id}/screenshots/{screenshot_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Task Screenshot
+     * @description One preview screenshot that a report of the task shows. A screenshot no report of this task names is not found.
+     */
+    get: operations['getTaskScreenshot'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/tasks/{task_id}/cancel': {
     parameters: {
       query?: never;
@@ -5617,6 +5637,36 @@ export interface components {
        * @default []
        */
       evidence_refs: string[];
+      /**
+       * Screenshot Ids
+       * @description Preview screenshots the report shows the owner, oldest first. Read each with GET /tasks/{task_id}/screenshots/{screenshot_id}.
+       * @default []
+       */
+      screenshot_ids: string[];
+    };
+    /**
+     * TaskScreenshot
+     * @description A screenshot of a workspace preview that Mainloop's headless browser took for the task's agent (docs/specs/workspaces.md, "Preview screenshots").
+     */
+    TaskScreenshot: {
+      id: string;
+      /** @enum {string} */
+      media_type: 'image/png';
+      /**
+       * Format: byte
+       * @description Base64-encoded image bytes.
+       */
+      data: string;
+      /** @enum {string} */
+      viewport: 'mobile' | 'desktop';
+      port: number;
+      path: string;
+      /** @description Width in device pixels. */
+      width: number;
+      /** @description Height in device pixels. */
+      height: number;
+      /** Format: date-time */
+      created_at: string;
     };
     /** TaskView */
     TaskView: {
@@ -13317,6 +13367,58 @@ export interface operations {
           'application/json':
             | components['schemas']['TaskError']
             | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  getTaskScreenshot: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        task_id: string;
+        screenshot_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          'Cache-Control'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskScreenshot'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */

@@ -309,6 +309,11 @@ func (Unimplemented) GetTaskOperation(context.Context, GetTaskOperationRequestOb
 	return nil, apierr.NotImplemented
 }
 
+// GetTaskScreenshot is not implemented yet.
+func (Unimplemented) GetTaskScreenshot(context.Context, GetTaskScreenshotRequestObject) (GetTaskScreenshotResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetWorkspace is not implemented yet.
 func (Unimplemented) GetWorkspace(context.Context, GetWorkspaceRequestObject) (GetWorkspaceResponseObject, error) {
 	return nil, apierr.NotImplemented

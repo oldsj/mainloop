@@ -189,9 +189,14 @@ func toReport(r dbq.TaskReport) api.TaskReport {
 	if refs == nil {
 		refs = []string{}
 	}
+	shots := r.ScreenshotIds
+	if shots == nil {
+		shots = []string{}
+	}
 	return api.TaskReport{
 		AttemptId: r.AttemptID, EvidenceRefs: refs, Outcome: api.TaskReportOutcome(r.Outcome),
 		OwnerAction: r.OwnerAction, RequestId: r.RequestID, Summary: r.Summary, TaskId: r.TaskID,
+		ScreenshotIds: shots,
 	}
 }
 

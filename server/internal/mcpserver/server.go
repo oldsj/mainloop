@@ -32,6 +32,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/onboarding"
 	"github.com/oldsj/mainloop/server/internal/privileged"
 	"github.com/oldsj/mainloop/server/internal/prs"
+	"github.com/oldsj/mainloop/server/internal/screenshot"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/topics"
 	"github.com/oldsj/mainloop/server/internal/transcripts"
@@ -83,7 +84,13 @@ type Server struct {
 	// With none, the tool answers that it is unavailable.
 	WebFetch          PageFetcher
 	WebFetchPerMinute int
-	Log               *slog.Logger
+	// Previews signs the headless browser in to a workspace preview and Screenshots captures it, at
+	// most ScreenshotsPerMinute a minute per workspace. With either missing, preview_screenshot
+	// answers that it is unavailable.
+	Previews             PreviewSigner
+	Screenshots          screenshot.Capturer
+	ScreenshotsPerMinute int
+	Log                  *slog.Logger
 	// AllowedHosts are the Host names the listener answers to; Dev also allows loopback.
 	AllowedHosts map[string]bool
 	Dev          bool
@@ -93,7 +100,7 @@ type Server struct {
 // later adds its function here and nothing else changes.
 func (s *Server) tools() map[string]Tool {
 	all := map[string]Tool{}
-	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.transcriptTools(), s.loopTools(), s.pullRequestTools(), s.issueTools(), s.checkTools(), s.devLoopTools(), s.projectTools(), s.onboardingTools(), s.webFetchTools(), s.privilegedTools()} {
+	for _, domain := range [][]Tool{s.coordinationTools(), s.taskTools(), s.transcriptTools(), s.loopTools(), s.pullRequestTools(), s.issueTools(), s.checkTools(), s.devLoopTools(), s.projectTools(), s.onboardingTools(), s.webFetchTools(), s.privilegedTools(), s.screenshotTools()} {
 		for _, t := range domain {
 			all[t.Name] = t
 		}
@@ -255,10 +262,11 @@ func (s *Server) call(actor agentauth.Actor, t Tool) mcp.ToolHandler {
 			structured = map[string]any{}
 		}
 		structured["text"] = res.Text
-		return &mcp.CallToolResult{
-			Content:           []mcp.Content{&mcp.TextContent{Text: res.Text}},
-			StructuredContent: structured,
-		}, nil
+		content := []mcp.Content{&mcp.TextContent{Text: res.Text}}
+		for _, img := range res.Images {
+			content = append(content, &mcp.ImageContent{Data: img.Data, MIMEType: img.MediaType})
+		}
+		return &mcp.CallToolResult{Content: content, StructuredContent: structured}, nil
 	}
 }
 

@@ -666,6 +666,24 @@ type PreviewLease struct {
 	CreatedAt   time.Time
 }
 
+type PreviewScreenshot struct {
+	ID         string
+	OwnerID    string
+	SessionID  string
+	RequestID  string
+	Port       int32
+	Path       string
+	Viewport   string
+	FullPage   bool
+	MediaType  string
+	Width      int32
+	Height     int32
+	PageStatus *int32
+	Data       []byte
+	SizeBytes  int32
+	CreatedAt  time.Time
+}
+
 type PrivilegedAction struct {
 	ID                 string
 	OwnerID            string
@@ -1234,6 +1252,7 @@ type TaskReport struct {
 	EvidenceRefs  []string
 	TaskVersion   int32
 	CreatedAt     time.Time
+	ScreenshotIds []string
 }
 
 type TaskSeen struct {

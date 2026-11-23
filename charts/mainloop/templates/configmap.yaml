@@ -14,6 +14,9 @@ data:
   {{- if .Values.executor.enabled }}
   {{- $_ := set $data "MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED" "true" }}
   {{- end }}
+  {{- if and .Values.screenshots.enabled (not (hasKey $data "MAINLOOP_SCREENSHOT_BROWSER_URL")) }}
+  {{- $_ := set $data "MAINLOOP_SCREENSHOT_BROWSER_URL" (printf "http://mainloop-screenshots.%s.svc.cluster.local:9222" .Release.Namespace) }}
+  {{- end }}
   {{- if not (hasKey $data "DB_HOST") }}
   {{- $_ := set $data "DB_HOST" (include "mainloop.dbHost" .) }}
   {{- end }}

@@ -152,9 +152,10 @@ ORDER BY o.task_id, a.created_at, a.id;
 
 -- name: InsertTaskReport :one
 INSERT INTO task_reports (
-    id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version
+    id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version,
+    screenshot_ids
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, sqlc.arg(screenshot_ids)::text[]
 )
 RETURNING *;
 
