@@ -130,10 +130,16 @@ func (s *Service) batchText(ctx context.Context, mid string) (string, error) {
 	reports := 0
 	for _, d := range ds {
 		var text string
-		if d.ReportID != nil {
+		switch {
+		case d.ReportID != nil:
 			reports++
 			text, err = s.reportItemText(ctx, q, *d.ReportID)
-		} else {
+		case d.NoticeTaskID != nil:
+			var t dbq.Task
+			if t, err = q.GetTaskByID(ctx, *d.NoticeTaskID); err == nil {
+				text = noticeText(t)
+			}
+		default:
 			text, err = s.firingText(ctx, q, deref(d.LoopFiringID))
 		}
 		if err != nil {
@@ -178,6 +184,13 @@ func (s *Service) readyAt(ctx context.Context, q *dbq.Queries, d dbq.TaskEventDe
 		}
 		return r.CreatedAt.Add(s.Limits.ReportBatchWindow), nil
 	}
+	if d.NoticeTaskID != nil {
+		t, err := q.GetTaskByID(ctx, *d.NoticeTaskID)
+		if err != nil {
+			return time.Time{}, err
+		}
+		return t.CreatedAt.Add(s.Limits.ReportBatchWindow), nil
+	}
 	f, err := q.GetLoopFiring(ctx, deref(d.LoopFiringID))
 	if err != nil {
 		return time.Time{}, err
@@ -208,8 +221,13 @@ func (s *Service) target(ctx context.Context, key string) (attemptID *string, se
 	if err != nil {
 		return nil, "", false, err
 	}
-	if TaskFinal(p.Status) || p.CurrentAttemptID == nil {
+	if TaskFinal(p.Status) {
 		return nil, "", true, nil
+	}
+	if p.CurrentAttemptID == nil {
+		// A standing supervisor with no attempt yet is being started (an owner's task can start it):
+		// its first attempt gets the delivery. Another parent with none has ended.
+		return nil, "", !p.Standing, nil
 	}
 	a, err := q.GetTaskAttempt(ctx, *p.CurrentAttemptID)
 	if err != nil {
@@ -371,8 +389,8 @@ func (s *Service) giveUp(ctx context.Context, c reconcile.Claim, d dbq.TaskEvent
 		detail = *row.Detail
 	}
 	if d.ReportID == nil {
-		// A loop firing has no task to block: the delivery ends uncertain, which the loop's
-		// firings show.
+		// A loop firing or a notice has no report to block on: the delivery ends uncertain, which
+		// the loop's firings show.
 		return s.setDelivery(ctx, c, dbstate.TaskDeliveryUncertain)
 	}
 	note := fmt.Sprintf("native-delivery-failed:%s: %s", row.ID, detail)

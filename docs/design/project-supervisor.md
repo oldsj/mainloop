@@ -180,7 +180,7 @@ Each is one pull request with its spec under `docs/specs/` and Given/When/Then t
    guidance and standing context name each project's supervisor.
 4. **Rolling handoff.** Children kept, child authority across a rollover, continuation, restart and
    reset endpoints, recovery from a gone session, the hourly limit.
-5. **Owner tasks and settings.** Owner project tasks under the supervisor; per-project
+5. **Owner tasks and settings.** Owner project tasks under the supervisor (implemented); per-project
    provider/model/effort.
 6. **Proof on mainloop-dev.** A project's supervisor started, sent work, spawning a worker, idling,
    killed and recovered with its child intact; everything labelled `[proof project-supervisor]` and

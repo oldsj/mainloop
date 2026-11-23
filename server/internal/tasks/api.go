@@ -91,7 +91,7 @@ func (a *TasksAPI) CreateTask(ctx context.Context, req api.CreateTaskRequestObje
 	in := CreateInput{
 		RequestID: body.RequestId, Title: body.Title, Brief: body.Brief, Mode: dbstate.TaskMode(body.Mode),
 		ProjectID: deref(body.ProjectId), TopicID: deref(body.TopicId), ProviderProfileID: deref(body.ProviderProfileId),
-		Model: deref(body.Model), Effort: derefEffort(body.Effort),
+		Model: deref(body.Model), Effort: derefEffort(body.Effort), UnderSupervisor: true,
 	}
 	if c := body.Checkout; c != nil {
 		in.Checkout = &Checkout{Branch: c.Branch, Ref: deref(c.Ref)}

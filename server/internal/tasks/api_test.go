@@ -173,8 +173,18 @@ func TestRESTTaskLifecycle(t *testing.T) {
 	}
 
 	var list []map[string]any
-	if err := json.Unmarshal([]byte(r.do("GET", "/tasks?project_id=p1", nil, 200)["list"].(string)), &list); err != nil || len(list) != 1 {
+	// The owner's project task ran under the project's standing supervisor, which it started
+	if err := json.Unmarshal([]byte(r.do("GET", "/tasks?project_id=p1", nil, 200)["list"].(string)), &list); err != nil || len(list) != 2 {
 		t.Fatalf("list = %v, %v", list, err)
+	}
+	for _, v := range list {
+		task := v["task"].(map[string]any)
+		if task["id"] == id && (task["parent_task_id"] == nil || task["root_task_id"] == id) {
+			t.Fatalf("the owner's project task is not under its supervisor: %v", task)
+		}
+		if task["id"] != id && task["standing"] != true {
+			t.Fatalf("other task = %v", task)
+		}
 	}
 	r.do("POST", "/tasks/"+id+"/cancel", nil, 422)
 }

@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -200,6 +201,12 @@ type CreateInput struct {
 	Checkout *Checkout
 	// standing marks a project's standing supervisor; only [Service.EnsureSupervisor] sets it.
 	standing bool
+	// UnderSupervisor puts the owner's project task under the project's standing supervisor,
+	// starting it if needed (docs/specs/project-supervisor.md#owner-tasks). The owner's POST /tasks
+	// sets it; it changes nothing for other principals or a task with no project.
+	UnderSupervisor bool
+	// parentID is the parent of an owner's project task: the project's standing supervisor.
+	parentID string
 }
 
 // Checkout is the repository position a code task starts from.
@@ -365,6 +372,12 @@ func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (api.
 		if p.Role == dbstate.RoleMain && in.ProjectID != "" {
 			return nil, refusal(409, ReasonProjectSupervisor)
 		}
+		// The owner's project work runs under the project's standing supervisor too.
+		if in.UnderSupervisor && p.Role == "" && !p.Recovery && in.ProjectID != "" {
+			var drafts []events.Draft
+			op, drafts, err = s.ownerTaskUnder(ctx, q, p, in, dig, payload)
+			return drafts, err
+		}
 		var t dbq.Task
 		op, t, err = s.createTx(ctx, q, p, in, dig, payload)
 		if err != nil {
@@ -432,8 +445,9 @@ func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, i
 	var parent *dbq.Task
 	tier := tierBase
 	var err error
-	if p.Role == dbstate.RoleSupervisor {
-		t, err := q.GetTaskForUpdate(ctx, dbq.GetTaskForUpdateParams{ID: p.TaskID, OwnerID: p.OwnerID})
+	if p.Role == dbstate.RoleSupervisor || in.parentID != "" {
+		parentID := cmp.Or(in.parentID, p.TaskID)
+		t, err := q.GetTaskForUpdate(ctx, dbq.GetTaskForUpdateParams{ID: parentID, OwnerID: p.OwnerID})
 		if err != nil {
 			return dbq.Task{}, notFoundOr(err, ReasonTaskNotFound)
 		}

@@ -1077,6 +1077,7 @@ type TaskEventDelivery struct {
 	LeaseUntil      *time.Time
 	UpdatedAt       time.Time
 	LoopFiringID    *string
+	NoticeTaskID    *string
 }
 
 type TaskLoop struct {
