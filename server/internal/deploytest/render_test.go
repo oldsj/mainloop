@@ -296,6 +296,25 @@ func TestProbesAreHTTPOrTCP(t *testing.T) {
 
 // A startup probe is opt-in (server.startupProbe): the default install starts a prebuilt binary
 // and needs none.
+// The backend is one replica, so when its node is drained it must be able to preempt an ordinary
+// app instead of staying Pending: a production values file names a PriorityClass and the pod gets
+// it. The chart leaves it unset by default, since the class is cluster-wide and not the chart's.
+func TestBackendPriorityClass(t *testing.T) {
+	for path, want := range map[string]string{"defaults": "", "kind": "", "production": "mainloop-critical"} {
+		t.Run(path, func(t *testing.T) {
+			r := render(t, path)
+			if got := r.backend(t).PriorityClassName; got != want {
+				t.Errorf("backend priorityClassName = %q, want %q", got, want)
+			}
+			for _, o := range r.objects {
+				if strings.HasPrefix(o, "PriorityClass/") {
+					t.Errorf("chart renders %s; the PriorityClass belongs to the cluster owner", o)
+				}
+			}
+		})
+	}
+}
+
 func TestNoStartupProbeByDefault(t *testing.T) {
 	for _, path := range []string{"defaults", "production"} {
 		t.Run(path, func(t *testing.T) {

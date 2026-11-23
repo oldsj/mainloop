@@ -18,6 +18,8 @@ Native sessions run as kagent harness Agents on Substrate, so the cluster needs 
 
 The production values add `strategy: Recreate` (one pod at a time, no surge), read `mainloop-config` and `mainloop-site` only (`importSecretEnv: false`, no whole-Secret import), take the frontend `ORIGIN` from `mainloop-site`, and replace the backend ingress list so only `ate-system` `atenet-egress` reaches `:8002`.
 
+The backend runs as one replica. Live turn progress is held in memory and shared by the delivery loop and the API (`server/internal/progress`), so a second replica would need a channel between them first. Production therefore sets `server.priorityClassName` to a PriorityClass that ranks above ordinary apps. When the backend's node is drained or full, the pod can then preempt one of those apps instead of staying Pending. The chart does not create the class: it is cluster-wide, and the deployment repository owns it.
+
 There is no replica hold, archive, backup or staged-promotion machinery.
 
 ## Site contract

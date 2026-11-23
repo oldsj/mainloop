@@ -27,6 +27,9 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: mainloop-backend
+      {{- with .Values.server.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       securityContext:
         fsGroup: 1000
       {{- with .Values.imagePullSecrets }}
