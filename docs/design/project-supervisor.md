@@ -30,8 +30,10 @@ one layer-2 agent and that main no longer puts work into a project except throug
   `project_id`. Being a task gives it, unchanged, everything a supervisor already has: children
   whose reports route to it, `steer`/`follow_up`/`task_cancel`/`task_retry` over them, loops,
   transcripts, liveness, a task page and a session page.
-- **One per project, for the life of the project.** A partial unique index on
-  `tasks (project_id) WHERE standing` makes a second one impossible. The task id never changes; a
+- **One per project, until the owner retires it.** A partial unique index on
+  `tasks (project_id) WHERE standing` and not ended makes a second one impossible
+  (`POST /projects/{id}/supervisor/retire` cancels it with its children; the next first use starts a
+  new one). The task id never changes; a
   restart or a crash replaces its _attempt_, not the task.
 - **Created on first use**, not at registration (most registered repositories never need an idle
   session): the first `supervisor_send` from main, the owner's `POST /projects/{id}/supervisor`
@@ -74,7 +76,7 @@ one layer-2 agent and that main no longer puts work into a project except throug
   session; the delivery that starts a turn moves the task to `running` and sets the attempt's
   `reopened_at`, so `TASK_MAX_RUNTIME` bounds a **wake**, not the supervisor's whole life.
 - **Cancel is refused** (409 `standing_supervisor`) for main, supervisors and the owner: the
-  owner's levers are restart and reset (below). Removing the project cancels it with its children.
+  owner's levers are restart and reset (below), and retire, which cancels it with its children.
 
 ## Rolling handoff
 

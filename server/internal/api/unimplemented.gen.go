@@ -489,6 +489,11 @@ func (Unimplemented) ResumeLoop(context.Context, ResumeLoopRequestObject) (Resum
 	return nil, apierr.NotImplemented
 }
 
+// RetireProjectSupervisor is not implemented yet.
+func (Unimplemented) RetireProjectSupervisor(context.Context, RetireProjectSupervisorRequestObject) (RetireProjectSupervisorResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // RetryTask is not implemented yet.
 func (Unimplemented) RetryTask(context.Context, RetryTaskRequestObject) (RetryTaskResponseObject, error) {
 	return nil, apierr.NotImplemented

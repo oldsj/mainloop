@@ -617,6 +617,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/projects/{project_id}/supervisor/retire': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Retire the project's standing supervisor
+     * @description Owner only. Ends the project's standing supervisor: its open children are cancelled now, and the supervisor is cancelled once its session is stopped (the operation drains until then). The project then has no supervisor; its next first use (POST /projects/{project_id}/supervisor, or main's supervisor_send) starts a new one, with no continuation. Reuse request_id to retry. See docs/specs/project-supervisor.md.
+     */
+    post: operations['retireProjectSupervisor'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/projects/{project_id}/worker-limit': {
     parameters: {
       query?: never;
@@ -2858,6 +2878,9 @@ export interface components {
        * @default false
        */
       fresh: boolean;
+    };
+    SupervisorRetire: {
+      request_id: string;
     };
     /** @description A project's limit on worker tasks (every child task of the project, the standing supervisor's included) holding a slot at once (docs/specs/tasks.md#capacity). */
     WorkerLimit: {
@@ -8502,6 +8525,62 @@ export interface operations {
         };
       };
       /** @description Conflict (an operation is pending, the supervisor is settling, or the request id was used with another body). */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['TaskError'];
+        };
+      };
+    };
+  };
+  retireProjectSupervisor: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SupervisorRetire'];
+      };
+    };
+    responses: {
+      /** @description The retire's task operation (kind cancel). */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskOperation'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description The project does not exist, or has no standing supervisor that is not already retired. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Conflict (the request id was used with another body). */
       409: {
         headers: {
           [name: string]: unknown;

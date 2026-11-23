@@ -299,6 +299,22 @@ func (a *TasksAPI) RestartProjectSupervisor(ctx context.Context, req api.Restart
 	return api.RestartProjectSupervisor202JSONResponse(op), nil
 }
 
+// RetireProjectSupervisor implements api.StrictServerInterface: the owner ends the project's
+// standing supervisor and its children.
+func (a *TasksAPI) RetireProjectSupervisor(ctx context.Context, req api.RetireProjectSupervisorRequestObject) (api.RetireProjectSupervisorResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	if req.Body == nil {
+		return nil, apierr.Invalid("Request body is required")
+	}
+	op, err := a.Svc.RetireSupervisor(ctx, a.OwnerID, req.ProjectId, req.Body.RequestId)
+	if err != nil {
+		return nil, taskReply(err, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity)
+	}
+	return api.RetireProjectSupervisor202JSONResponse(op), nil
+}
+
 func workerLimitView(w WorkerLimit) api.WorkerLimit {
 	return api.WorkerLimit{
 		ProjectId: w.ProjectID, MaxWorkers: w.Max, DefaultMaxWorkers: w.Default,

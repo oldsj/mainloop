@@ -1747,6 +1747,60 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/HTTPValidationError'
                   - $ref: '#/components/schemas/TaskError'
+  /projects/{project_id}/supervisor/retire:
+    post:
+      tags:
+        - projects
+      summary: Retire the project's standing supervisor
+      description: >-
+        Owner only. Ends the project's standing supervisor: its open children are cancelled now, and
+        the supervisor is cancelled once its session is stopped (the operation drains until then).
+        The project then has no supervisor; its next first use (POST /projects/{project_id}/supervisor,
+        or main's supervisor_send) starts a new one, with no continuation. Reuse request_id to retry.
+        See docs/specs/project-supervisor.md.
+      operationId: retireProjectSupervisor
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SupervisorRetire'
+      responses:
+        '202':
+          description: The retire's task operation (kind cancel).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskOperation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The project does not exist, or has no standing supervisor that is not already retired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
+        '409':
+          description: Conflict (the request id was used with another body).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/TaskError'
   /projects/{project_id}/worker-limit:
     get:
       tags:
@@ -7709,6 +7763,16 @@ components:
           type: boolean
           default: false
           description: Reset rather than restart; the new session is not given the last report or messages.
+    SupervisorRetire:
+      type: object
+      additionalProperties: false
+      required:
+        - request_id
+      properties:
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 100
     WorkerLimit:
       type: object
       additionalProperties: false
