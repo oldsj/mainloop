@@ -315,6 +315,52 @@ func (a *TasksAPI) RetireProjectSupervisor(ctx context.Context, req api.RetirePr
 	return api.RetireProjectSupervisor202JSONResponse(op), nil
 }
 
+func supervisorSettingsView(v SupervisorSettings) api.SupervisorSettings {
+	out := api.SupervisorSettings{
+		ProjectId: v.ProjectID, ProviderProfileId: v.ProviderProfileID, Model: v.Model,
+		EffectiveProviderProfileId: v.EffectiveProfileID, OperationId: v.OperationID,
+		AllowedModels: append([]string{}, v.AllowedModels...), AllowedEffortLevels: append([]string{}, v.AllowedEffortLevels...),
+	}
+	if v.Effort != nil {
+		e := api.EffortLevel(*v.Effort)
+		out.Effort = &e
+	}
+	return out
+}
+
+// GetProjectSupervisorSettings implements api.StrictServerInterface.
+func (a *TasksAPI) GetProjectSupervisorSettings(ctx context.Context, req api.GetProjectSupervisorSettingsRequestObject) (api.GetProjectSupervisorSettingsResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	v, err := a.Svc.SupervisorSettings(ctx, a.OwnerID, req.ProjectId)
+	if err != nil {
+		return nil, taskReply(err, http.StatusNotFound)
+	}
+	return api.GetProjectSupervisorSettings200JSONResponse(supervisorSettingsView(v)), nil
+}
+
+// UpdateProjectSupervisorSettings implements api.StrictServerInterface: the owner replaces the
+// project's supervisor provider, model and effort.
+func (a *TasksAPI) UpdateProjectSupervisorSettings(ctx context.Context, req api.UpdateProjectSupervisorSettingsRequestObject) (api.UpdateProjectSupervisorSettingsResponseObject, error) {
+	if a.Svc == nil {
+		return nil, errUnavailable
+	}
+	if req.Body == nil {
+		return nil, apierr.Invalid("Request body is required")
+	}
+	c := SupervisorChoice{ProviderProfileID: req.Body.ProviderProfileId, Model: req.Body.Model}
+	if e := req.Body.Effort; e != nil {
+		v := string(*e)
+		c.Effort = &v
+	}
+	v, err := a.Svc.SetSupervisorSettings(ctx, a.OwnerID, req.ProjectId, c, LimitChanger{})
+	if err != nil {
+		return nil, taskReply(err, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity)
+	}
+	return api.UpdateProjectSupervisorSettings200JSONResponse(supervisorSettingsView(v)), nil
+}
+
 func workerLimitView(w WorkerLimit) api.WorkerLimit {
 	return api.WorkerLimit{
 		ProjectId: w.ProjectID, MaxWorkers: w.Max, DefaultMaxWorkers: w.Default,

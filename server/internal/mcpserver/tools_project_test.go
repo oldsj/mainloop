@@ -94,11 +94,25 @@ func TestProjectSettingsIsMainsAlone(t *testing.T) {
 		t.Fatalf("audit = %q, want %q", by, want)
 	}
 
-	// Both at once, out of range, or someone else's project is refused
+	// Main sets the supervisor's effort, and the change records main's session
+	if r := call(main.Token, map[string]any{"project_id": "p1", "supervisor": map[string]any{
+		"provider_profile_id": nil, "model": nil, "effort": "high",
+	}}); r.Result.IsError || r.Result.StructuredContent["supervisor"].(map[string]any)["effort"] != "high" { //nolint:forcetypeassert // a failed assertion fails the test
+		t.Fatalf("supervisor = %v %q", r.Result.StructuredContent, r.text())
+	}
+	if err := h.pool.QueryRow(context.Background(), `SELECT changed_by || ':' || session_id FROM project_supervisor_settings_audit`).Scan(&by); err != nil {
+		t.Fatal(err)
+	}
+	if by != "main:"+main.SessionID {
+		t.Fatalf("supervisor audit = %q", by)
+	}
+
+	// Both at once, out of range, an effort the provider does not offer, or someone else's project is refused
 	for _, args := range []map[string]any{
 		{"project_id": "p1", "max_workers": 3, "reset_max_workers": true},
 		{"project_id": "p1", "max_workers": 0},
 		{"project_id": "missing", "max_workers": 3},
+		{"project_id": "p1", "supervisor": map[string]any{"provider_profile_id": nil, "model": "no-such-model", "effort": nil}},
 	} {
 		if r := call(main.Token, args); !r.Result.IsError && r.Error == nil {
 			t.Errorf("%v was accepted: %v", args, r.Result.StructuredContent)

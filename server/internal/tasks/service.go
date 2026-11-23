@@ -294,7 +294,9 @@ func (s *Service) selectProfile(ctx context.Context, q *dbq.Queries, in CreateIn
 			return selection{}, err
 		}
 		sel := selection{profile: prof, source: dbstate.SelectionExplicit}
-		if parent == nil {
+		if parent == nil && !in.standing {
+			// A root's explicit provider binds its children too. A standing supervisor's is the
+			// project's choice for the supervisor alone: its workers choose their own.
 			sel.constraint = &prof.ID
 		}
 		return sel, nil
@@ -747,8 +749,9 @@ func (s *Service) act(ctx context.Context, p Principal, kind dbstate.TaskOpKind,
 // actOn records a cancel, retry or reassign of a locked task the principal manages.
 func (s *Service) actOn(ctx context.Context, q *dbq.Queries, p Principal, kind dbstate.TaskOpKind, in ActionInput, t dbq.Task, dig string, payload json.RawMessage) (dbq.TaskOperation, []events.Draft, error) {
 	if t.Standing && kind != dbstate.TaskOpRetry {
-		// A standing supervisor is never cancelled, and a reassign waits on its project's settings;
-		// its retry is a restart that keeps its children (docs/specs/project-supervisor.md).
+		// A standing supervisor is never cancelled (it is retired), and it is reassigned only by a change
+		// of its project's settings (supervisor_settings.go); its retry is a restart that keeps its
+		// children (docs/specs/project-supervisor.md).
 		return dbq.TaskOperation{}, nil, refusal(409, ReasonStandingSupervisor)
 	}
 	return s.record(ctx, q, p, kind, in, t, dig, payload)

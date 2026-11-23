@@ -1183,7 +1183,7 @@
     },
     {
       "name": "project_settings",
-      "description": "Read or change a project's settings for the owner. Today that is max_workers: how many of the project's worker tasks (every task delegated in it, its supervisor's included) may hold a slot at once. Give max_workers to set the project's own limit (1-100), reset_max_workers to return it to the default, or neither to read. The owner-wide limit (global_max_workers) applies as well. Running workers are not stopped by a lower limit. Every change is recorded. Change it only when the owner asks.",
+      "description": "Read or change a project's settings for the owner. max_workers: how many of the project's worker tasks (every task delegated in it, its supervisor's included) may hold a slot at once. Give max_workers to set the project's own limit (1-100), reset_max_workers to return it to the default. The owner-wide limit (global_max_workers) applies as well. Running workers are not stopped by a lower limit. supervisor: the provider, model and effort of the project's standing supervisor; give all three (null for the default) to replace them, validated against the provider they resolve to (allowed_models, allowed_effort_levels). A running supervisor takes a new model or effort at once; a new provider restarts it on that provider, keeping its workers. Give nothing to read. Every change is recorded. Change settings only when the owner asks.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -1208,6 +1208,35 @@
           "reset_max_workers": {
             "default": false,
             "type": "boolean"
+          },
+          "supervisor": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "effort": {
+                    "enum": ["minimal", "low", "medium", "high", "xhigh", "max", null],
+                    "type": ["string", "null"]
+                  },
+                  "model": {
+                    "pattern": "^[A-Za-z0-9._:/-]{1,200}$",
+                    "type": ["string", "null"]
+                  },
+                  "provider_profile_id": {
+                    "maxLength": 80,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]*$",
+                    "type": ["string", "null"]
+                  }
+                },
+                "required": ["provider_profile_id", "model", "effort"],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": ["project_id"],

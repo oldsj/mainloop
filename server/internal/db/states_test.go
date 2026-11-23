@@ -102,6 +102,7 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"tasks", "capacity_tier", strs(dbstate.CapacityTierBase, dbstate.CapacityTierOverflow)},
 		{"task_capacity_refusals", "reason", strs(dbstate.CapacityRefusalChild, dbstate.CapacityRefusalGlobal, dbstate.CapacityRefusalProject)},
 		{"project_worker_limit_audit", "changed_by", strs(dbstate.WorkerLimitByOwner, dbstate.WorkerLimitByMain)},
+		{"project_supervisor_settings_audit", "changed_by", strs(dbstate.WorkerLimitByOwner, dbstate.WorkerLimitByMain)},
 		{"task_attempts", "native_provider", strs(string(dbstate.ProviderClaude), string(dbstate.ProviderCodex))},
 		{"task_attempts", "role", strs(string(dbstate.AttemptSupervisor), string(dbstate.AttemptChild))},
 		{"task_attempts", "stop_state", strs("none", "requested", "confirmed", "unresolved")},

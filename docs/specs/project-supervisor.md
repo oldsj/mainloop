@@ -94,6 +94,35 @@ delegate past it is refused `409 project_capacity`; the supervisor waits for a w
 owner sets the limit on the project (`PUT /projects/{id}/worker-limit`), or main does for the owner
 with `project_settings`. The supervisor cannot change it.
 
+## Provider, model and effort
+
+<a id="settings"></a>Each project chooses its supervisor's provider, model and effort:
+`GET /projects/{project_id}/supervisor/settings` reads them, and `PUT` replaces all three
+(`{provider_profile_id, model, effort}`, each `null` for the default). The owner sets them on the
+project, or main does for the owner with `project_settings` (`supervisor`). The supervisor cannot.
+
+- **Defaults.** A null provider is the project's default provider, else the installation's. A null
+  model or effort is the owner's `worker` [session default](chat.md#session-defaults) for that
+  provider, else the provider's own.
+- **Validation.** They are checked as `delegate` checks them, against the provider they resolve to:
+  `422 provider_unknown`, `provider_role_unavailable` or `provider_disabled`, `model_unavailable`
+  (with `allowed_models`) or `effort_unavailable` (with `allowed_effort_levels`). A refusal changes
+  nothing. The answer is the same view as the GET: the project's choice, the
+  `effective_provider_profile_id`, and its `allowed_models` and `allowed_effort_levels`.
+- **A supervisor that starts later** starts on them.
+- **A running supervisor** takes a new model or effort at once: its current session's own
+  `/model` and `/effort` override is set (cleared for null), so its next turn runs on them, and its
+  task carries them for its next attempt.
+- **A new provider** is a [reassign handoff](task-handoff.md) of the supervisor on the same task.
+  Its workers are kept, and the answer's `operation_id` is that operation. When it cannot hand off
+  now (an operation pending, or the hourly restart limit), the change is refused `409` and nothing
+  changes. A supervisor with no attempt yet simply starts on the new provider.
+- **Its workers are not bound by it.** A standing supervisor's provider is not a provider
+  constraint: its workers choose their own, as `delegate` does without one.
+- Setting what the project already has changes nothing. Every change is recorded in
+  `project_supervisor_settings_audit`: who (`owner`, or `main` with its session), the old and new
+  values, and the reassign it started.
+
 ## Restart and reset
 
 A restart replaces its attempt with a new one, on the same task, in a new native session. It runs
@@ -180,5 +209,6 @@ attempt.
   made).
 - `POST /projects/{project_id}/supervisor`: see above.
 - `POST /projects/{project_id}/supervisor/retire`: see [Retire](#retire).
+- `GET`/`PUT /projects/{project_id}/supervisor/settings`: see [Provider, model and effort](#settings).
 - Task reason `idle` joins the `TaskReason` enum.
 - Owner questions from it (`report` `blocked` with `owner_action`) reach Needs you as any task's do.

@@ -194,16 +194,29 @@ func (s *Server) taskTools() []Tool {
 		},
 		{
 			Name: agentauth.ToolProjectSettings,
-			Description: "Read or change a project's settings for the owner. Today that is max_workers: how many of the " +
+			Description: "Read or change a project's settings for the owner. max_workers: how many of the " +
 				"project's worker tasks (every task delegated in it, its supervisor's included) may hold a slot at " +
 				"once. Give max_workers to set the project's own limit (1-" + strconv.Itoa(tasks.MaxWorkerLimit) +
-				"), reset_max_workers to return it to the default, or neither to read. The owner-wide limit " +
-				"(global_max_workers) applies as well. Running workers are not stopped by a lower limit. Every " +
-				"change is recorded. Change it only when the owner asks.",
+				"), reset_max_workers to return it to the default. The owner-wide limit (global_max_workers) " +
+				"applies as well. Running workers are not stopped by a lower limit. supervisor: the provider, " +
+				"model and effort of the project's standing supervisor; give all three (null for the default) to " +
+				"replace them, validated against the provider they resolve to (allowed_models, " +
+				"allowed_effort_levels). A running supervisor takes a new model or effort at once; a new provider " +
+				"restarts it on that provider, keeping its workers. Give nothing to read. Every change is " +
+				"recorded. Change settings only when the owner asks.",
 			InputSchema: objectSchema(map[string]any{
 				"project_id":        id,
 				"max_workers":       optional(map[string]any{"type": "integer", "minimum": 1, "maximum": tasks.MaxWorkerLimit}),
 				"reset_max_workers": map[string]any{"type": "boolean", "default": false},
+				"supervisor": optional(objectSchema(map[string]any{
+					"provider_profile_id": map[string]any{
+						"type": []any{"string", "null"}, "minLength": 1, "maxLength": 80, "pattern": "^[a-z][a-z0-9_-]*$",
+					},
+					"model": map[string]any{"type": []any{"string", "null"}, "pattern": "^[A-Za-z0-9._:/-]{1,200}$"},
+					"effort": map[string]any{
+						"type": []any{"string", "null"}, "enum": []any{"minimal", "low", "medium", "high", "xhigh", "max", nil},
+					},
+				}, "provider_profile_id", "model", "effort")),
 			}, "project_id"),
 			Handle: s.projectSettings,
 		},
@@ -215,6 +228,11 @@ func (s *Server) projectSettings(ctx context.Context, a agentauth.Actor, args js
 		ProjectID       string `json:"project_id"`
 		MaxWorkers      *int   `json:"max_workers"`
 		ResetMaxWorkers bool   `json:"reset_max_workers"`
+		Supervisor      *struct {
+			ProviderProfileID *string `json:"provider_profile_id"`
+			Model             *string `json:"model"`
+			Effort            *string `json:"effort"`
+		} `json:"supervisor"`
 	}
 	if err := decode(args, &in); err != nil {
 		return Result{}, err
@@ -229,11 +247,22 @@ func (s *Server) projectSettings(ctx context.Context, a agentauth.Actor, args js
 	if s.Tasks == nil {
 		return Result{}, failure("unavailable", "tasks are not available")
 	}
+	by := tasks.LimitChanger{SessionID: a.BindingID}
 	var w tasks.WorkerLimit
 	if in.MaxWorkers != nil || in.ResetMaxWorkers {
-		w, err = s.Tasks.SetWorkerLimit(ctx, a.UserID, project, in.MaxWorkers, tasks.LimitChanger{SessionID: a.BindingID})
+		w, err = s.Tasks.SetWorkerLimit(ctx, a.UserID, project, in.MaxWorkers, by)
 	} else {
 		w, err = s.Tasks.WorkerLimit(ctx, a.UserID, project)
+	}
+	if err != nil {
+		return Result{}, taskFailure(err)
+	}
+	var sup tasks.SupervisorSettings
+	if c := in.Supervisor; c != nil {
+		sup, err = s.Tasks.SetSupervisorSettings(ctx, a.UserID, project,
+			tasks.SupervisorChoice{ProviderProfileID: c.ProviderProfileID, Model: c.Model, Effort: c.Effort}, by)
+	} else {
+		sup, err = s.Tasks.SupervisorSettings(ctx, a.UserID, project)
 	}
 	if err != nil {
 		return Result{}, taskFailure(err)
@@ -243,11 +272,27 @@ func (s *Server) projectSettings(ctx context.Context, a agentauth.Actor, args js
 	if w.Max != nil {
 		own, maxWorkers = "its own", *w.Max
 	}
-	line := fmt.Sprintf("project %s: max_workers %d (%s; default %d, owner-wide %d), %d running",
-		project, w.Effective, own, w.Default, w.Global, w.Running)
+	or := func(v *string, def string) string {
+		if v == nil {
+			return def
+		}
+		return *v
+	}
+	line := fmt.Sprintf("project %s: max_workers %d (%s; default %d, owner-wide %d), %d running; supervisor on %s, model %s, effort %s",
+		project, w.Effective, own, w.Default, w.Global, w.Running, sup.EffectiveProfileID,
+		or(sup.Model, "default"), or(sup.Effort, "default"))
+	if sup.OperationID != nil {
+		line += "; the provider change restarts it (operation " + *sup.OperationID + ")"
+	}
 	return Result{Text: line, Structured: map[string]any{
 		"project_id": project, "max_workers": maxWorkers, "default_max_workers": w.Default,
-		"effective_max_workers": w.Effective, "global_max_workers": w.Global, "workers_running": w.Running, "text": line,
+		"effective_max_workers": w.Effective, "global_max_workers": w.Global, "workers_running": w.Running,
+		"supervisor": map[string]any{
+			"provider_profile_id": sup.ProviderProfileID, "model": sup.Model, "effort": sup.Effort,
+			"effective_provider_profile_id": sup.EffectiveProfileID, "allowed_models": sup.AllowedModels,
+			"allowed_effort_levels": sup.AllowedEffortLevels, "operation_id": sup.OperationID,
+		},
+		"text": line,
 	}}, nil
 }
 
