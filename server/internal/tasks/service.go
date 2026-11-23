@@ -737,6 +737,12 @@ func (s *Service) actOn(ctx context.Context, q *dbq.Queries, p Principal, kind d
 		// its retry is a restart that keeps its children (docs/specs/project-supervisor.md).
 		return dbq.TaskOperation{}, nil, refusal(409, ReasonStandingSupervisor)
 	}
+	return s.record(ctx, q, p, kind, in, t, dig, payload)
+}
+
+// record records a cancel, retry or reassign of a locked task the caller may act on, and moves the
+// task when it can be moved at once.
+func (s *Service) record(ctx context.Context, q *dbq.Queries, p Principal, kind dbstate.TaskOpKind, in ActionInput, t dbq.Task, dig string, payload json.RawMessage) (dbq.TaskOperation, []events.Draft, error) {
 	newOp := dbq.InsertTaskOperationParams{
 		ID: uuid.NewString(), OwnerID: p.OwnerID, PrincipalKey: p.Key(), RequestID: in.RequestID,
 		RequestDigest: dig, RequestPayload: payload, Kind: kind, TaskID: &t.ID,

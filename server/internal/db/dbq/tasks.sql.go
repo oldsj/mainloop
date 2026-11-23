@@ -595,6 +595,18 @@ func (q *Queries) CountSessionPendingDeliveries(ctx context.Context, sessionID s
 	return count, err
 }
 
+const countStandingTasks = `-- name: CountStandingTasks :one
+SELECT count(*)::integer FROM tasks WHERE project_id = $1 AND standing
+`
+
+// How many standing supervisors the project has had, retired ones included.
+func (q *Queries) CountStandingTasks(ctx context.Context, projectID *string) (int32, error) {
+	row := q.db.QueryRow(ctx, countStandingTasks, projectID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countTaskHandoffs = `-- name: CountTaskHandoffs :one
 SELECT count(*) FROM task_attempts WHERE task_id = $1 AND predecessor_id IS NOT NULL
 `
@@ -885,10 +897,11 @@ func (q *Queries) GetProjectMaxWorkers(ctx context.Context, arg GetProjectMaxWor
 }
 
 const getStandingTask = `-- name: GetStandingTask :one
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason, capacity_tier, runtime_wait_since, standing FROM tasks WHERE project_id = $1 AND standing
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_repository, pr_description, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at, merge_proposal_id, model, effort, held_until, held_reason, capacity_tier, runtime_wait_since, standing FROM tasks
+WHERE project_id = $1 AND standing AND status NOT IN ('completed', 'cancelled', 'failed')
 `
 
-// The project's standing supervisor, whatever its state (docs/specs/project-supervisor.md).
+// The project's standing supervisor, in any state but retired (docs/specs/project-supervisor.md).
 func (q *Queries) GetStandingTask(ctx context.Context, projectID *string) (Task, error) {
 	row := q.db.QueryRow(ctx, getStandingTask, projectID)
 	var i Task
@@ -2920,7 +2933,7 @@ SELECT t.project_id::text AS project_id, t.id AS task_id, t.status, t.reason, t.
        a.session_id
 FROM tasks t
 LEFT JOIN task_attempts a ON a.id = t.current_attempt_id AND a.state = 'active'
-WHERE t.owner_id = $1 AND t.standing
+WHERE t.owner_id = $1 AND t.standing AND t.status NOT IN ('completed', 'cancelled', 'failed')
 `
 
 type ListStandingSupervisorsRow struct {
@@ -2932,7 +2945,8 @@ type ListStandingSupervisorsRow struct {
 	SessionID *string
 }
 
-// Every standing supervisor of the owner's projects, with the session of its current attempt
+// Every standing supervisor of the owner's projects that is not retired, with the session of its
+// current attempt
 // (NULL before the attempt has one, or while a successor is being made).
 func (q *Queries) ListStandingSupervisors(ctx context.Context, ownerID string) ([]ListStandingSupervisorsRow, error) {
 	rows, err := q.db.Query(ctx, listStandingSupervisors, ownerID)

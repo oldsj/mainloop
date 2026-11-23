@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,8 +19,15 @@ import (
 )
 
 // standingRequestID is the create request of a project's standing supervisor. It is the owner's,
-// whoever's first use made it, so the supervisor belongs to the project and not to a caller.
-func standingRequestID(projectID string) string { return "standing-supervisor:" + projectID }
+// whoever's first use made it, so the supervisor belongs to the project and not to a caller. The
+// project's first has the plain id; one started after n retired ones has n+1 appended.
+func standingRequestID(projectID string, retired int) string {
+	id := "standing-supervisor:" + projectID
+	if retired > 0 {
+		id += ":" + strconv.Itoa(retired+1)
+	}
+	return id
+}
 
 // StandingBrief is the stored brief of a project's standing supervisor. What it is and how it
 // works is rendered around it on every attempt (see [DelegatedBrief]), so a change of wording
@@ -53,8 +61,12 @@ func (s *Service) EnsureSupervisor(ctx context.Context, owner, projectID string)
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
+		retired, err := q.CountStandingTasks(ctx, &projectID)
+		if err != nil {
+			return nil, err
+		}
 		in := CreateInput{
-			RequestID: standingRequestID(projectID), Title: "Supervisor of " + project.FullName,
+			RequestID: standingRequestID(projectID, int(retired)), Title: "Supervisor of " + project.FullName,
 			Brief: StandingBrief(project.FullName), Mode: dbstate.TaskModeCoordination,
 			ProjectID: projectID, standing: true,
 		}
@@ -339,6 +351,68 @@ func (s *Service) RestartSupervisor(ctx context.Context, owner, projectID, reque
 		var drafts []events.Draft
 		op, drafts, err = s.actOn(ctx, q, p, dbstate.TaskOpRetry, in, t, dig, payload)
 		return drafts, err
+	})
+	if err != nil {
+		s.noteRefusal(ctx, err)
+		return api.TaskOperation{}, err
+	}
+	return toOperation(op)
+}
+
+// RetireSupervisor ends the project's standing supervisor, for the owner only
+// (docs/specs/project-supervisor.md#retire). Its open children are cancelled now; the supervisor
+// is cancelled as any task is, once its session's stop is confirmed. The project's next first use
+// starts a new one.
+func (s *Service) RetireSupervisor(ctx context.Context, owner, projectID, requestID string) (api.TaskOperation, error) {
+	if n := len(requestID); n == 0 || n > 100 {
+		return api.TaskOperation{}, refusal(422, ReasonInvalidRequest)
+	}
+	p := OwnerPrincipal(owner)
+	dig, payload, err := digest(dbstate.TaskOpCancel, "standing:"+projectID, map[string]any{"retire": true})
+	if err != nil {
+		return api.TaskOperation{}, err
+	}
+	var op dbq.TaskOperation
+	err = events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+		q := dbq.New(tx)
+		stored, replay, err := request(ctx, q, p, requestID, dig)
+		if err != nil {
+			return nil, err
+		}
+		if replay {
+			op = stored
+			return nil, nil
+		}
+		// The same lock as a first use, so a retire and a start of the next supervisor are ordered.
+		if err := q.LockTaskRequest(ctx, "standing\x1f"+projectID); err != nil {
+			return nil, err
+		}
+		project, err := q.GetProject(ctx, projectID)
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && project.UserID != owner {
+			return nil, refusal(404, ReasonProjectNotFound)
+		}
+		if err != nil {
+			return nil, err
+		}
+		st, err := q.GetStandingTask(ctx, &projectID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, refusal(404, ReasonTaskNotFound)
+		}
+		if err != nil {
+			return nil, err
+		}
+		t, err := q.GetTaskForUpdate(ctx, dbq.GetTaskForUpdateParams{ID: st.ID, OwnerID: owner})
+		if err != nil {
+			return nil, err
+		}
+		drafts, err := s.cancelOpenChildren(ctx, q, t)
+		if err != nil {
+			return nil, err
+		}
+		in := ActionInput{RequestID: requestID, TaskID: t.ID}
+		var more []events.Draft
+		op, more, err = s.record(ctx, q, p, dbstate.TaskOpCancel, in, t, dig, payload)
+		return append(drafts, more...), err
 	})
 	if err != nil {
 		s.noteRefusal(ctx, err)

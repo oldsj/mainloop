@@ -15,9 +15,9 @@ model settings, and retiring it.
 - A **task**: a root coordination task of the project with `standing: true`. It has what any
   supervisor task has: children whose reports route to it, the task tools over them, loops,
   transcripts, a task page and a session page. Its title is `Supervisor of <owner/repo>`.
-- **One per project, for the life of the project.** The database refuses a second standing task
-  for a project (a partial unique index), and a standing task that is not a root coordination task
-  of a project.
+- **One per project, until the owner retires it** ([below](#retire)). The database refuses a second
+  standing task for a project while one has not ended (a partial unique index), and a standing task
+  that is not a root coordination task of a project.
 - **Created on first use.** `POST /projects/{project_id}/supervisor` answers the project's standing
   supervisor as a `TaskView`, creating it the first time: a create operation provisions its first
   attempt as for any task. Concurrent first uses make one task. A project of another owner, or none,
@@ -44,6 +44,7 @@ model settings, and retiring it.
 - Cancel and reassign are refused, `409 standing_supervisor`, for the owner, main and any other
   caller, and its view says so: `actions.cancel` and `reassign` are unavailable with reason
   `standing_supervisor`. `retry` is a restart (below). `follow_up` is available as on any open task.
+  The owner ends it with a retire ([below](#retire)).
 
 ## How main reaches it
 
@@ -93,6 +94,25 @@ before the successor exists, so there is never a second writer), with these diff
 - **Limits.** No `TASK_MAX_HANDOFFS` cap. Main may restart it three times in a rolling hour; the
   fourth is `409 handoff_limit` (detail `handoffs`, `limit`, `window`). The owner is not limited.
 
+## Retire
+
+<a id="retire"></a>`POST /projects/{project_id}/supervisor/retire` (`{request_id}`) ends the project's
+standing supervisor, for the owner only: there is no MCP tool for it, so main and supervisors cannot.
+It is for a project that is done with (archived, or a dev project being cleaned up).
+
+- Its open children are cancelled at once, in the same transaction, as a regular supervisor's are when
+  it stops. Their attempts are stopped by the settle sweep.
+- The answer is `202` with a `cancel` task operation. The supervisor is then cancelled as any task is:
+  its session is stopped, and the task becomes `cancelled` once the stop is confirmed. A child created
+  meanwhile is cancelled with it.
+- A repeat of the same `request_id` answers the same operation. With no standing supervisor that
+  has not ended, the answer is `404 task_not_found`; a project of another owner, or none, is
+  `404 project_not_found`.
+- Afterwards the project has no supervisor: `Project.supervisor` is null, and restart and retire are
+  `404 task_not_found`. Its next first use (the owner's `POST /projects/{project_id}/supervisor`, or
+  main's `supervisor_send`) starts a new standing supervisor with a new task, no continuation and no
+  children. The retired task stays, `cancelled`, with its history.
+
 ## Recovery
 
 When its native session is gone (kagent has no such Session, or it is terminal and not one kagent
@@ -138,5 +158,6 @@ attempt.
   of the task's current active attempt, null while there is none (before its first attempt is
   made).
 - `POST /projects/{project_id}/supervisor`: see above.
+- `POST /projects/{project_id}/supervisor/retire`: see [Retire](#retire).
 - Task reason `idle` joins the `TaskReason` enum.
 - Owner questions from it (`report` `blocked` with `owner_action`) reach Needs you as any task's do.
