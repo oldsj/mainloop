@@ -20,7 +20,8 @@ type WorkerLimit struct {
 	ProjectID string
 	// Max is the project's own limit; nil uses Default.
 	Max *int
-	// Default is the limit of a project that sets none; Effective is the one admission applies.
+	// Default is the limit of a project that sets none. Effective is the most workers the project
+	// can have: its own limit or the default, capped by Global.
 	Default, Effective int
 	// Global is the owner-wide limit on child tasks, which applies as well.
 	Global int
@@ -74,6 +75,9 @@ func (s *Service) WorkerLimit(ctx context.Context, owner, project string) (Worke
 	if m != nil {
 		v := int(*m)
 		w.Max, w.Effective = &v, v
+	}
+	if w.Global > 0 {
+		w.Effective = min(w.Effective, w.Global)
 	}
 	return w, nil
 }

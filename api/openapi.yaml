@@ -7732,13 +7732,16 @@ components:
         effective_max_workers:
           type: integer
           minimum: 1
-          description: The limit admission applies, max_workers or else the default.
+          description: >-
+            The most workers the project can have: max_workers or else the default, capped by
+            global_max_workers.
         global_max_workers:
           type: integer
           minimum: 1
           description: >-
             The owner-wide limit on child tasks across all projects (TASK_MAX_CHILDREN_GLOBAL). It
-            applies as well, so a project limit above it is never reached.
+            applies as well; effective_max_workers is already capped by it. Other projects' workers
+            count against it too.
         workers_running:
           type: integer
           minimum: 0

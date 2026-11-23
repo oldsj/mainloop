@@ -2866,9 +2866,9 @@ export interface components {
       max_workers: number | null;
       /** @description The limit of a project that sets none (TASK_MAX_WORKERS_PER_PROJECT). */
       default_max_workers: number;
-      /** @description The limit admission applies, max_workers or else the default. */
+      /** @description The most workers the project can have: max_workers or else the default, capped by global_max_workers. */
       effective_max_workers: number;
-      /** @description The owner-wide limit on child tasks across all projects (TASK_MAX_CHILDREN_GLOBAL). It applies as well, so a project limit above it is never reached. */
+      /** @description The owner-wide limit on child tasks across all projects (TASK_MAX_CHILDREN_GLOBAL). It applies as well; effective_max_workers is already capped by it. Other projects' workers count against it too. */
       global_max_workers: number;
       /** @description The project's worker tasks holding a slot now. */
       workers_running: number;

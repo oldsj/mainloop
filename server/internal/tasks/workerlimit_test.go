@@ -94,7 +94,7 @@ func TestTheGlobalLimitStillApplies(t *testing.T) {
 
 	// Then it is the global limit that refuses
 	wantRefusal(t, err, 409, tasks.ReasonGlobalCapacity)
-	if w, err := r.svc.WorkerLimit(context.Background(), owner, "p1"); err != nil || w.Global != 2 || w.Effective != 5 || w.Running != 2 {
+	if w, err := r.svc.WorkerLimit(context.Background(), owner, "p1"); err != nil || w.Global != 2 || w.Effective != 2 || w.Running != 2 {
 		t.Fatalf("view = %+v, %v", w, err)
 	}
 }
@@ -156,13 +156,18 @@ func TestTheOwnerSetsTheWorkerLimitOverREST(t *testing.T) {
 		t.Fatalf("unset = %v", got)
 	}
 
-	// When the owner sets 9, Then the view and the project both carry it
-	got = r.do("PUT", "/projects/p1/worker-limit", map[string]any{"max_workers": 9}, 200)
-	if got["max_workers"] != float64(9) || got["effective_max_workers"] != float64(9) {
+	// When the owner sets 4, Then the view and the project both carry it
+	got = r.do("PUT", "/projects/p1/worker-limit", map[string]any{"max_workers": 4}, 200)
+	if got["max_workers"] != float64(4) || got["effective_max_workers"] != float64(4) {
 		t.Fatalf("set = %v", got)
 	}
-	if p := r.do("GET", "/projects/p1", nil, 200); p["max_workers"] != float64(9) {
+	if p := r.do("GET", "/projects/p1", nil, 200); p["max_workers"] != float64(4) {
 		t.Fatalf("project = %v", p)
+	}
+
+	// When the owner sets 9, above the global limit of 6, Then 6 is what the project can have
+	if got = r.do("PUT", "/projects/p1/worker-limit", map[string]any{"max_workers": 9}, 200); got["max_workers"] != float64(9) || got["effective_max_workers"] != float64(6) {
+		t.Fatalf("set above global = %v", got)
 	}
 
 	// When the owner sends null, Then it is back on the default

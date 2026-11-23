@@ -463,7 +463,9 @@ per-parent, project, global.
 
 The owner reads and changes it with `GET`/`PUT /projects/{id}/worker-limit` (`max_workers`, or
 `null` to return to the default). The answer gives the project's own value, the default, the
-effective limit, the global limit and `workers_running`, the project's workers holding a slot now.
+effective limit (the smaller of the project's limit and the global one; other projects' workers
+count against the global one too), the global limit and `workers_running`, the project's workers
+holding a slot now. The `PUT` answers the same view after the change.
 `Project.max_workers` carries the project's own value. Main changes it for the owner with the MCP
 tool `project_settings(project_id, max_workers | reset_max_workers)`, which with neither only
 reads; no supervisor or worker has the tool. A lower limit stops nothing that runs: it only
