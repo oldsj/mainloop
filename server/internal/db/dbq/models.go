@@ -740,6 +740,23 @@ type ProjectMergePolicyAudit struct {
 	CreatedAt time.Time
 }
 
+type ProjectProposal struct {
+	ID                string
+	OwnerID           string
+	RequestID         string
+	Repository        string
+	RepoKey           string
+	Spec              json.RawMessage
+	Facts             json.RawMessage
+	State             string
+	ProposerRole      string
+	ProposerSessionID *string
+	ProposerTaskID    *string
+	ProjectID         *string
+	CreatedAt         time.Time
+	DecidedAt         *time.Time
+}
+
 type ProjectProviderPreference struct {
 	ProjectID string
 	ProfileID *string

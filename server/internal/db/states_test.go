@@ -11,6 +11,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/dotfiles"
+	"github.com/oldsj/mainloop/server/internal/onboarding"
 	"github.com/oldsj/mainloop/server/internal/projectcontext"
 	"github.com/oldsj/mainloop/server/internal/testdb"
 	"github.com/oldsj/mainloop/server/internal/transcripts"
@@ -196,6 +197,9 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"project_memory_entries", "state", strs(
 			projectcontext.StateProposed, projectcontext.StateActive, projectcontext.StateRejected,
 			projectcontext.StateWithdrawn, projectcontext.StateForgotten, projectcontext.StateReplaced)},
+		{"project_proposals", "state", strs(
+			onboarding.StateProposed, onboarding.StateApproved, onboarding.StateRejected,
+			onboarding.StateApplied, onboarding.StateFailed)},
 		{"project_memory_entries", "author", strs(
 			string(projectcontext.AuthorMain), string(projectcontext.AuthorTask), string(projectcontext.AuthorAgent))},
 		// No state machine, so no dbstate type: the contract enum is the constant the CHECK must match.

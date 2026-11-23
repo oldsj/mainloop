@@ -28,6 +28,7 @@ const (
 	ToolProjectContext            = "project_context"
 	ToolRemember                  = "remember"
 	ToolForget                    = "forget"
+	ToolProjectPropose            = "project_propose"
 	ToolTaskGet                   = "task_get"
 	ToolTaskList                  = "task_list"
 	ToolTaskHistory               = "task_history"
@@ -60,7 +61,7 @@ var AllTools = []string{
 	ToolWhoami, ToolTopics, ToolTopicOpen, ToolNote, ToolDecide, ToolPendingAdd, ToolPendingDone,
 	ToolOpenPullRequest,
 	ToolGetIssue, ToolGetPullRequest, ToolCreateIssue, ToolCommentIssue, ToolCommentPullRequest, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
-	ToolProjectContext, ToolRemember, ToolForget,
+	ToolProjectContext, ToolRemember, ToolForget, ToolProjectPropose,
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolTaskTranscript, ToolTranscriptSearch, ToolDelegate, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign,
 	ToolTaskHold, ToolSteer, ToolFollowUp, ToolSupervisorSend, ToolReport, ToolLoopArm, ToolLoopList, ToolLoopStop,
 	ToolPreparePullRequestMerge, ToolMergePullRequest, ToolMergePullRequestApproval,
@@ -191,12 +192,19 @@ func (p Policy) actorTools(a Actor) []string {
 		// Only the main thread holds a task: it is the owner's view that a hold changes. Only main
 		// sends to a project's standing supervisor: it is the top of the three layers.
 		tools = append(tools, ToolTaskHold, ToolSupervisorSend)
+		// Main and supervisors propose new projects; the owner approves each one.
+		tools = append(tools, ToolProjectPropose)
 	case (a.Role == dbstate.RoleSupervisor && a.Depth == 1) || (a.Role == dbstate.RoleChild && a.Depth == 2):
 		tools = append(tools, ToolWhoami, ToolReport)
 		tools = append(tools, taskRead...)
 		if a.Role == dbstate.RoleSupervisor {
 			tools = append(tools, taskManagement...)
 			tools = append(tools, loopTools...)
+			// A coordinating supervisor (a project's standing one, or an ad-hoc one) may propose a
+			// project; a root code task, which also runs as a supervisor, may not.
+			if a.Grant == dbstate.GrantCoordination {
+				tools = append(tools, ToolProjectPropose)
+			}
 		}
 		if a.Grant == dbstate.GrantWorkspace {
 			tools = append(tools, workspaceTools...)
