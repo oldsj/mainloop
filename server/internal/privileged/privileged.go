@@ -312,7 +312,9 @@ func (s *Service) preflight(ctx context.Context, row dbq.PrivilegedAction, deliv
 	if !ok {
 		return s.failPreflight(ctx, row, "the type is no longer in the catalog", deliver)
 	}
-	facts, err := entry.preflight(ctx, s, row.Args, s.now().UTC())
+	rctx, cancel := context.WithTimeout(ctx, RemoteTimeout)
+	facts, err := entry.preflight(rctx, s, row.Args, s.now().UTC())
+	cancel()
 	var refused *refusal
 	switch {
 	case errors.As(err, &refused):

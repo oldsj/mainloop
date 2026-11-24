@@ -132,18 +132,28 @@ func normalizeDelete(raw json.RawMessage) (any, error) {
 	if err := decodeStrict(raw, &a); err != nil {
 		return nil, err
 	}
-	a.Kind = strings.TrimSpace(a.Kind)
-	name, group, _ := strings.Cut(a.Kind, ".")
-	switch {
-	case name == "" || len(a.Kind) > maxKindLen || strings.ContainsAny(name, "/ ") ||
-		(group != "" && !dnsSubdomainRE.MatchString(group)):
-		return nil, fmt.Errorf("%w: kind must be a kind or resource, optionally with its API group (Pod, Job.batch)", ErrInvalid)
-	case a.Namespace != "" && !dnsLabelRE.MatchString(a.Namespace):
-		return nil, fmt.Errorf("%w: namespace must be a Kubernetes namespace name, or empty for a cluster-scoped object", ErrInvalid)
-	case !validObjectName(a.Name):
-		return nil, fmt.Errorf("%w: name must be a Kubernetes object name", ErrInvalid)
+	kind, err := normalizeRef(a.Namespace, a.Kind, a.Name)
+	if err != nil {
+		return nil, err
 	}
+	a.Kind = kind
 	return a, nil
+}
+
+// normalizeRef validates an object reference by kind and returns the trimmed kind.
+func normalizeRef(namespace, kind, name string) (string, error) {
+	kind = strings.TrimSpace(kind)
+	k, group, _ := strings.Cut(kind, ".")
+	switch {
+	case k == "" || len(kind) > maxKindLen || strings.ContainsAny(k, "/ ") ||
+		(group != "" && !dnsSubdomainRE.MatchString(group)):
+		return "", fmt.Errorf("%w: kind must be a kind or resource, optionally with its API group (Pod, Job.batch)", ErrInvalid)
+	case namespace != "" && !dnsLabelRE.MatchString(namespace):
+		return "", fmt.Errorf("%w: namespace must be a Kubernetes namespace name, or empty for a cluster-scoped object", ErrInvalid)
+	case !validObjectName(name):
+		return "", fmt.Errorf("%w: name must be a Kubernetes object name", ErrInvalid)
+	}
+	return kind, nil
 }
 
 // validObjectName accepts the names the API server allows for most kinds: a DNS subdomain, or the
@@ -371,10 +381,15 @@ func renderDelete(r dbq.PrivilegedAction, ctx map[string]any) (string, string, m
 		fmt.Fprintf(&b, "Labelled managed-by %s.\n", o.ManagedBy)
 	}
 	tags := []string{"destructive", "irreversible"}
-	if f.Resource.Kind == "Namespace" && f.Resource.Group == "" {
+	switch {
+	case f.Resource.Kind == "Namespace" && f.Resource.Group == "":
 		tags = append(tags, "deletes everything in the namespace")
 		tags = append(tags, namespaceTags(f.Name)...)
-	} else {
+	case f.Resource.Kind == "CustomResourceDefinition" && f.Resource.Group == "apiextensions.k8s.io":
+		tags = append(tags, "deletes every "+f.Name+" object in the cluster, in every namespace")
+	case f.Resource.Kind == "APIService" && f.Resource.Group == "apiregistration.k8s.io":
+		tags = append(tags, "the API it serves ("+f.Name+") goes away for every client and controller")
+	default:
 		tags = append(tags, namespaceTags(f.Namespace)...)
 	}
 	if o.Controller != "" {
@@ -444,10 +459,10 @@ func (r *Runner) workload(ctx context.Context, row dbq.PrivilegedAction) outcome
 	return outcome{state: StateSucceeded, result: res}
 }
 
-// kubeFailure ends an attempt that a Kubernetes call failed: forbidden fails the action, anything
-// else retries, observing first.
+// kubeFailure ends an attempt that a Kubernetes call failed: forbidden or rejected fails the
+// action, anything else (a timeout, a lost answer, a conflict) retries, observing first.
 func kubeFailure(err error) outcome {
-	if errors.Is(err, ErrForbidden) {
+	if errors.Is(err, ErrForbidden) || errors.Is(err, ErrRejected) {
 		return outcome{state: StateFailed, err: safeError(err)}
 	}
 	return retry(err)

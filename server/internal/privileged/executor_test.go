@@ -202,6 +202,7 @@ func TestItemToSecretRefusals(t *testing.T) {
 		{ObjectMeta: metav1.ObjectMeta{Name: "argo", Namespace: appNS, Annotations: map[string]string{"argocd.argoproj.io/tracking-id": "app:/Secret:widgets/argo"}}},
 		{ObjectMeta: metav1.ObjectMeta{Name: "owned", Namespace: appNS, OwnerReferences: []metav1.OwnerReference{{Kind: "OnePasswordItem", Name: "owned", Controller: ptr(true)}}}},
 		{ObjectMeta: metav1.ObjectMeta{Name: "tls", Namespace: appNS}, Type: corev1.SecretTypeTLS},
+		{ObjectMeta: metav1.ObjectMeta{Name: "frozen", Namespace: appNS}, Immutable: ptr(true)},
 	} {
 		if _, err := e.kube.CoreV1().Secrets(appNS).Create(ctx, s, metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)
@@ -213,6 +214,7 @@ func TestItemToSecretRefusals(t *testing.T) {
 		"argo":          copyArgs(appNS, "argo", "k"),
 		"owned":         copyArgs(appNS, "owned", "k"),
 		"tls":           copyArgs(appNS, "tls", "k"),
+		"immutable":     copyArgs(appNS, "frozen", "k"),
 		"no such item":  json.RawMessage(`{"vault":"Apps","item":"nope","field":"password","namespace":"widgets","secret":"x","key":"k"}`),
 		"empty field":   json.RawMessage(`{"vault":"Apps","item":"blank","field":"password","namespace":"widgets","secret":"x","key":"k"}`),
 		"no such field": json.RawMessage(`{"vault":"Apps","item":"widgets-db","field":"pin","namespace":"widgets","secret":"x","key":"k"}`),

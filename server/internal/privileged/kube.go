@@ -8,6 +8,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	authv1 "k8s.io/api/authentication/v1"
@@ -19,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
@@ -126,6 +129,19 @@ type Kube interface {
 	// Delete deletes the object only if its UID is still uid: a replaced one is ErrTargetChanged,
 	// a missing one ErrGone.
 	Delete(ctx context.Context, r Resource, namespace, name, uid string) error
+
+	// ResolveObject maps a manifest's apiVersion and kind to its resource.
+	ResolveObject(ctx context.Context, apiVersion, kind string) (Resource, error)
+	// Get reads a whole object (never a Secret: the types that call it refuse them first); a
+	// missing one is nil.
+	Get(ctx context.Context, r Resource, namespace, name string) (map[string]any, error)
+	// Patch patches an object, or with dryRun returns what the API server would store. A
+	// resourceVersion in the patch is its precondition: a changed object is ErrTargetChanged.
+	Patch(ctx context.Context, r Resource, namespace, name string, pt types.PatchType, body []byte, dryRun bool) (map[string]any, error)
+	// Apply server-side applies obj, or with dryRun returns what the API server would store. A
+	// resourceVersion in obj is its precondition; fields another manager owns are
+	// ErrFieldConflict unless force.
+	Apply(ctx context.Context, r Resource, obj map[string]any, force, dryRun bool) (map[string]any, error)
 }
 
 // ErrGone is a target that no longer exists.
@@ -163,34 +179,86 @@ type KubeActions struct {
 	// Deleter returns a metadata client authenticated as AccountDelete, and a mapper over the API
 	// server's discovery.
 	Deleter func(ctx context.Context) (metadata.Interface, meta.RESTMapper, error)
+	// Writer returns a dynamic client authenticated as AccountWriter, and a mapper over the API
+	// server's discovery.
+	Writer writerFunc
 }
 
-// NewKubeActions mints a token per use through c.
+// NewKubeActions mints tokens through c. Each client, with its discovery cache, is reused for
+// tokenReuse, well inside the token's 10 minutes, so an attempt over many objects mints one token
+// per account rather than one per call.
 func NewKubeActions(c KubeClients) KubeActions {
+	workloads := &minted[kubernetes.Interface]{make: func(ctx context.Context) (kubernetes.Interface, error) {
+		cfg, err := c.Config(ctx, AccountWorkloads)
+		if err != nil {
+			return nil, err
+		}
+		return kubernetes.NewForConfig(cfg)
+	}}
+	type deleter struct {
+		mc     metadata.Interface
+		mapper meta.RESTMapper
+	}
+	deleters := &minted[deleter]{make: func(ctx context.Context) (deleter, error) {
+		cfg, err := c.Config(ctx, AccountDelete)
+		if err != nil {
+			return deleter{}, err
+		}
+		mc, err := metadata.NewForConfig(cfg)
+		if err != nil {
+			return deleter{}, err
+		}
+		dc, err := discovery.NewDiscoveryClientForConfig(cfg)
+		if err != nil {
+			return deleter{}, err
+		}
+		return deleter{mc, restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(dc))}, nil
+	}}
+	type writer struct {
+		dc     dynamic.Interface
+		mapper meta.RESTMapper
+	}
+	writers := &minted[writer]{make: func(ctx context.Context) (writer, error) {
+		dc, mapper, err := newWriter(c)(ctx)
+		return writer{dc, mapper}, err
+	}}
 	return KubeActions{
-		Workloads: func(ctx context.Context) (kubernetes.Interface, error) {
-			cfg, err := c.Config(ctx, AccountWorkloads)
-			if err != nil {
-				return nil, err
-			}
-			return kubernetes.NewForConfig(cfg)
-		},
+		Workloads: workloads.get,
 		Deleter: func(ctx context.Context) (metadata.Interface, meta.RESTMapper, error) {
-			cfg, err := c.Config(ctx, AccountDelete)
-			if err != nil {
-				return nil, nil, err
-			}
-			mc, err := metadata.NewForConfig(cfg)
-			if err != nil {
-				return nil, nil, err
-			}
-			dc, err := discovery.NewDiscoveryClientForConfig(cfg)
-			if err != nil {
-				return nil, nil, err
-			}
-			return mc, restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(dc)), nil
+			d, err := deleters.get(ctx)
+			return d.mc, d.mapper, err
+		},
+		Writer: func(ctx context.Context) (dynamic.Interface, meta.RESTMapper, error) {
+			w, err := writers.get(ctx)
+			return w.dc, w.mapper, err
 		},
 	}
+}
+
+// tokenReuse is how long a client on a minted token is reused.
+const tokenReuse = 5 * time.Minute
+
+// minted holds one client built on a minted token until tokenReuse passes.
+type minted[T any] struct {
+	make  func(ctx context.Context) (T, error)
+	mu    sync.Mutex
+	value T
+	until time.Time
+}
+
+func (m *minted[T]) get(ctx context.Context) (T, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if time.Now().Before(m.until) {
+		return m.value, nil
+	}
+	v, err := m.make(ctx)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	m.value, m.until = v, time.Now().Add(tokenReuse)
+	return v, nil
 }
 
 // WorkloadKinds are the kinds k8s.rollout_restart accepts; k8s.scale takes the first two.

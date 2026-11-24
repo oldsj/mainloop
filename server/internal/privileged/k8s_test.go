@@ -11,6 +11,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -20,6 +21,7 @@ import (
 	"k8s.io/client-go/metadata"
 	metadatafake "k8s.io/client-go/metadata/fake"
 	"k8s.io/client-go/restmapper"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/oldsj/mainloop/server/internal/privileged"
 )
@@ -397,4 +399,153 @@ func (l *lostDelete) Delete(ctx context.Context, r privileged.Resource, ns, name
 		return err
 	}
 	return errors.New("connection reset by peer")
+}
+
+// enforceDeleteUID makes the fake metadata client honour a delete's UID precondition, as the API
+// server does: the fake ignores it.
+func (e *kubeEnv) enforceDeleteUID() {
+	e.meta.PrependReactor("delete", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		d := a.(k8stesting.DeleteActionImpl)
+		pre := d.GetDeleteOptions().Preconditions
+		if pre == nil || pre.UID == nil {
+			return false, nil, nil
+		}
+		live, err := e.meta.Tracker().Get(podsGVR, d.GetNamespace(), d.GetName())
+		if err != nil {
+			return false, nil, nil
+		}
+		if m, _ := meta.Accessor(live); m.GetUID() != *pre.UID {
+			return true, nil, apierrors.NewConflict(podsGVR.GroupResource(), d.GetName(), errors.New("the UID in the precondition does not match"))
+		}
+		return false, nil, nil
+	})
+}
+
+// raceDelete replaces the pod with a new one of the same name between the executor's observation
+// and its delete: only the UID precondition can catch it.
+type raceDelete struct {
+	privileged.Kube
+	e *kubeEnv
+}
+
+func (r raceDelete) Delete(ctx context.Context, res privileged.Resource, ns, name, uid string) error {
+	if err := r.e.meta.Tracker().Delete(podsGVR, ns, name); err != nil {
+		return err
+	}
+	if err := r.e.meta.Tracker().Add(pod(ns, name, "pod-uid-2", "")); err != nil {
+		return err
+	}
+	return r.Kube.Delete(ctx, res, ns, name, uid)
+}
+
+// Given an approved delete, when the pod is replaced after the executor looked but before it
+// deletes, then the UID precondition stops the delete: the action is stale and the new pod stays.
+func TestDeleteHoldsItsUIDPrecondition(t *testing.T) {
+	e := newKubeEnv(t, pod(appNS, "worker", "pod-uid-1", ""))
+	e.enforceDeleteUID()
+	a := e.request(t, privileged.TypeDelete, "delete-1", map[string]any{"namespace": appNS, "kind": "Pod", "name": "worker"})
+	a, _ = e.preflighted(t, a.ID)
+	e.approve(t, a.ID)
+	e.ex.Kube = raceDelete{Kube: e.ex.Kube, e: e}
+	e.runExecutor(t)
+	if a = e.get(t, a.ID); a.State != privileged.StateStale || !strings.Contains(deref(a.LastError), "nothing was deleted") {
+		t.Fatalf("action = %+v (%v)", a, deref(a.LastError))
+	}
+	live, err := e.meta.Resource(podsGVR).Namespace(appNS).Get(context.Background(), "worker", metav1.GetOptions{})
+	if err != nil || live.UID != "pod-uid-2" {
+		t.Fatalf("the new pod: %v %v", live, err)
+	}
+}
+
+// enforceResourceVersion makes the fake clientset refuse a Deployment patch whose
+// metadata.resourceVersion is not the stored one, as the API server does.
+func (e *kubeEnv) enforceResourceVersion() {
+	e.kube.PrependReactor("patch", "deployments", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		p := a.(k8stesting.PatchActionImpl)
+		var body struct {
+			Metadata struct {
+				ResourceVersion string `json:"resourceVersion"`
+			} `json:"metadata"`
+		}
+		if json.Unmarshal(p.GetPatch(), &body) != nil || body.Metadata.ResourceVersion == "" {
+			return false, nil, nil
+		}
+		live, err := e.kube.Tracker().Get(appsv1.SchemeGroupVersion.WithResource("deployments"), p.GetNamespace(), p.GetName())
+		if err != nil {
+			return false, nil, nil
+		}
+		if m, _ := meta.Accessor(live); m.GetResourceVersion() != body.Metadata.ResourceVersion {
+			return true, nil, apierrors.NewConflict(appsv1.Resource("deployments"), p.GetName(), errors.New("the object has been modified"))
+		}
+		return false, nil, nil
+	})
+}
+
+// raceScale has someone else write the Deployment (a label, so its generation stays) once,
+// between the executor's observation and its write: only the resourceVersion precondition can
+// catch it.
+type raceScale struct {
+	privileged.Kube
+	e     *kubeEnv
+	raced bool
+}
+
+func (r *raceScale) Scale(ctx context.Context, w privileged.Workload, replicas int32, actionID string) (string, error) {
+	if !r.raced {
+		r.raced = true
+		d, err := r.e.kube.AppsV1().Deployments(w.Namespace).Get(ctx, w.Name, metav1.GetOptions{})
+		if err != nil {
+			return "", err
+		}
+		d.Labels = map[string]string{"team": "platform"}
+		d.ResourceVersion = "58"
+		if _, err := r.e.kube.AppsV1().Deployments(w.Namespace).Update(ctx, d, metav1.UpdateOptions{}); err != nil {
+			return "", err
+		}
+	}
+	return r.Kube.Scale(ctx, w, replicas, actionID)
+}
+
+// Given an approved scale, when someone else writes the Deployment after the executor looked but
+// before it writes, then the resourceVersion precondition refuses the write and the next attempt
+// observes again and scales.
+func TestScaleHoldsItsResourceVersionPrecondition(t *testing.T) {
+	e := newKubeEnv(t)
+	e.enforceResourceVersion()
+	e.addDeployment(t, deployment(appNS, "api", 3, 4))
+	a := e.request(t, privileged.TypeScale, "scale-1", map[string]any{"namespace": appNS, "kind": "deployments", "name": "api", "replicas": 5})
+	a, _ = e.preflighted(t, a.ID)
+	e.approve(t, a.ID)
+	e.ex.Kube = &raceScale{Kube: e.ex.Kube, e: e}
+	e.runExecutor(t)
+	if a = e.get(t, a.ID); a.State != privileged.StateExecuting || !strings.Contains(deref(a.LastError), "changed") {
+		t.Fatalf("after the race: %+v (%v)", a, deref(a.LastError))
+	}
+	if d := e.deployment(t, appNS, "api"); *d.Spec.Replicas != 3 {
+		t.Fatalf("the raced write went through: replicas %d", *d.Spec.Replicas)
+	}
+	e.exec(t, `UPDATE privileged_actions SET next_attempt_at = now() WHERE id = $1`, a.ID)
+	e.runExecutor(t)
+	if a = e.get(t, a.ID); a.State != privileged.StateSucceeded {
+		t.Fatalf("after the retry: %+v (%v)", a, deref(a.LastError))
+	}
+	if d := e.deployment(t, appNS, "api"); *d.Spec.Replicas != 5 || d.Labels["team"] != "platform" {
+		t.Fatalf("deployment = %+v", d)
+	}
+}
+
+// Given an approved delete an admission webhook denies, then the action fails at once: asking
+// again gets the same answer, so it does not retry into an uncertain outcome.
+func TestDeleteDeniedByAWebhookFails(t *testing.T) {
+	e := newKubeEnv(t, pod(appNS, "worker", "pod-uid-1", ""))
+	e.meta.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewBadRequest(`admission webhook "policy.example.com" denied the request`)
+	})
+	a := e.request(t, privileged.TypeDelete, "delete-1", map[string]any{"namespace": appNS, "kind": "Pod", "name": "worker"})
+	a, _ = e.preflighted(t, a.ID)
+	e.approve(t, a.ID)
+	e.runExecutor(t)
+	if a = e.get(t, a.ID); a.State != privileged.StateFailed || !strings.Contains(deref(a.LastError), "400") {
+		t.Fatalf("action = %+v (%v)", a, deref(a.LastError))
+	}
 }

@@ -323,7 +323,11 @@ delete any object), with cluster roles named after the executor's namespace. RBA
 "everything but Secrets", so the delete account can read Secrets; the executor only ever reads
 through it with metadata-only requests, and the guard on its own namespace and roles is in the
 executor. `onepassword.item_to_secret` kept slice 2's Role in each allowed namespace instead of a
-minted `executor-secret-writer` token.
+minted `executor-secret-writer` token. `k8s.patch` and `k8s.apply` use a third account,
+`mainloop-executor-writer` (get, create and patch any object; escalate and bind on roles), and
+refuse Secrets. Their binding is the dry-run diff: the executor re-runs the dry run immediately
+before writing and writes only if the diff is unchanged, then writes at the resourceVersion it just
+observed.
 
 ### Database and audit
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
@@ -35,6 +36,8 @@ type SecretMeta struct {
 	ManagedBy   string `json:"managed_by,omitempty"`
 	// Action is the privileged action that last wrote it, if any.
 	Action string `json:"action,omitempty"`
+	// Immutable Secrets cannot be patched.
+	Immutable bool `json:"immutable,omitempty"`
 }
 
 // Secrets reads and writes the target Secrets of onepassword.item_to_secret.
@@ -68,6 +71,7 @@ func (k KubeSecrets) Inspect(ctx context.Context, namespace, name string) (Secre
 		Exists: true, UID: string(s.UID), ResourceVersion: s.ResourceVersion, Type: string(s.Type),
 		ManagedBy: s.Labels["app.kubernetes.io/managed-by"], Action: s.Annotations[AnnotationAction],
 		ArgoTracked: s.Annotations["argocd.argoproj.io/tracking-id"] != "" || s.Labels["argocd.argoproj.io/instance"] != "",
+		Immutable:   s.Immutable != nil && *s.Immutable,
 	}
 	if m.Type == "" {
 		m.Type = string(corev1.SecretTypeOpaque)
@@ -130,7 +134,11 @@ func kubeError(err error) error {
 		return fmt.Errorf("%w: Kubernetes refused (forbidden)", ErrForbidden)
 	}
 	if s, ok := err.(apierrors.APIStatus); ok {
-		return fmt.Errorf("kubernetes answered %d %s", s.Status().Code, s.Status().Reason)
+		code := s.Status().Code
+		if code >= 400 && code < 500 && !slices.Contains([]int32{401, 404, 408, 409, 429}, code) {
+			return fmt.Errorf("%w: kubernetes answered %d %s", ErrRejected, code, s.Status().Reason)
+		}
+		return fmt.Errorf("kubernetes answered %d %s", code, s.Status().Reason)
 	}
 	return err
 }

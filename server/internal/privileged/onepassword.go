@@ -26,6 +26,11 @@ var ErrTargetChanged = errors.New("privileged: the target changed")
 // ErrForbidden is a write the executor's credential is not allowed to make.
 var ErrForbidden = errors.New("privileged: the executor may not do that")
 
+// ErrRejected is a call the remote refused for what it asks (a 4xx other than a timeout, a rate
+// limit or a conflict): an immutable field, an admission webhook's denial. Asking again gets the
+// same answer, so the action fails rather than retrying into uncertain.
+var ErrRejected = errors.New("privileged: the remote rejected the request")
+
 // OnePassword reads items through the executor's read-only 1Password service account.
 type OnePassword interface {
 	// Lookup finds the vault, item and field by id or exact title and returns their metadata only.
@@ -171,6 +176,8 @@ func preflightItemToSecret(ctx context.Context, s *Service, raw json.RawMessage,
 			return nil, refuse("Secret %s/%s is managed by Argo CD; change it in Git", a.Namespace, a.Secret)
 		case target.Type != "Opaque":
 			return nil, refuse("Secret %s/%s has type %s; only Opaque Secrets are written", a.Namespace, a.Secret, target.Type)
+		case target.Immutable:
+			return nil, refuse("Secret %s/%s is immutable; delete it first, or name a new Secret", a.Namespace, a.Secret)
 		}
 	}
 	return ItemToSecretFacts{Item: item, Target: target, CheckedAt: now}, nil
@@ -267,7 +274,7 @@ func (r *Runner) itemToSecret(ctx context.Context, row dbq.PrivilegedAction) out
 	switch {
 	case errors.Is(err, ErrTargetChanged):
 		return outcome{state: StateStale, err: "the Secret changed while it was written; nothing was written"}
-	case errors.Is(err, ErrForbidden):
+	case errors.Is(err, ErrForbidden) || errors.Is(err, ErrRejected):
 		return outcome{state: StateFailed, err: safeError(scrubbed(err, value))}
 	case err != nil:
 		return retry(scrubbed(err, value)) // unknown whether it was written; the next attempt observes

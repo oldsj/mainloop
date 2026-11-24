@@ -86,6 +86,14 @@ var catalog = map[string]entry{
 		version: 1, expiry: DeleteExpiry, executor: true, kube: true, how: kubeHow,
 		normalize: normalizeDelete, preflight: preflightDelete,
 	},
+	TypePatch: {
+		version: 1, expiry: UndecidedExpiry, executor: true, kube: true, how: kubeHow,
+		normalize: normalizePatch, preflight: preflightPatch,
+	},
+	TypeApply: {
+		version: 1, expiry: UndecidedExpiry, executor: true, kube: true, how: kubeHow,
+		normalize: normalizeApply, preflight: preflightApply,
+	},
 }
 
 // TypesFor lists the types one process runs, sorted: the executor's, or serve-api's.
