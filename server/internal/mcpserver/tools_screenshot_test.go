@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/agentauth/authtest"
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/mcpserver"
 	"github.com/oldsj/mainloop/server/internal/preview"
@@ -357,6 +358,110 @@ func TestPreviewScreenshotReplaysAnExpiredRequestWithoutItsImage(t *testing.T) {
 	for _, c := range r.Result.Content {
 		if c["type"] == "image" {
 			t.Error("an expired screenshot came back with an image")
+		}
+	}
+}
+
+// A workspace's images, reported ones included, fit a byte budget: reported ones are kept first,
+// then the newest unreported ones.
+func TestScreenshotImagesFitAByteBudget(t *testing.T) {
+	h := newTaskHarness(t, false)
+	ctx := context.Background()
+	main := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination})
+	const mb = 1 // the budget below is 100 bytes, as the sweep's is 100 MB
+	shot := func(a authtest.Seeded, age time.Duration, size int) string {
+		t.Helper()
+		id := seedScreenshot(t, h, a)
+		if _, err := h.env.Pool.Exec(ctx, `UPDATE preview_screenshots SET created_at = now() - make_interval(secs => $2), size_bytes = $3
+			WHERE id = $1`, id, age.Seconds(), size); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	reportAll := func(a authtest.Seeded, ids ...string) {
+		t.Helper()
+		task, attempt := h.seedTask(t, nil, dbstate.AttemptSupervisor, dbstate.AttemptActive, a)
+		if _, r := h.call(ordinary, a.Token, "report", map[string]any{
+			"task_id": task, "attempt_id": attempt, "request_id": uuid.NewString(), "summary": "the menu page",
+			"outcome": "progress", "screenshot_ids": ids,
+		}); r.Result.IsError {
+			t.Fatalf("report = %q", r.text())
+		}
+	}
+	// Reported 60 + 30, then unreported 5 (newer) and 10 (older): the oldest unreported passes 100.
+	a := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleSupervisor, Grant: dbstate.GrantCoordination, Parent: main.SessionID})
+	aNew, aOld := shot(a, 3*time.Hour, 60*mb), shot(a, 4*time.Hour, 30*mb)
+	reportAll(a, aNew, aOld)
+	aFresh, aStale := shot(a, time.Hour, 5*mb), shot(a, 2*time.Hour, 10*mb)
+	// Reported ones count too: two reported images of 60 and 50 do not both fit.
+	b := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleSupervisor, Grant: dbstate.GrantCoordination, Parent: main.SessionID})
+	bNew, bOld := shot(b, time.Hour, 60*mb), shot(b, 2*time.Hour, 50*mb)
+	reportAll(b, bNew, bOld)
+
+	if _, err := dbq.New(h.env.Pool).ExpireScreenshotImages(ctx, dbq.ExpireScreenshotImagesParams{
+		MaxAgeSeconds: screenshot.MaxImageAge.Seconds(), Keep: screenshot.KeepUnreported, MaxBytes: 100 * mb,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]bool{aNew: true, aOld: true, aFresh: true, aStale: false, bNew: true, bOld: false} {
+		var held bool
+		if err := h.env.Pool.QueryRow(ctx, `SELECT data IS NOT NULL FROM preview_screenshots WHERE id = $1`, id).Scan(&held); err != nil {
+			t.Fatal(err)
+		}
+		if held != want {
+			t.Errorf("screenshot %s held = %v, want %v", id, held, want)
+		}
+	}
+}
+
+// The chat copies of report screenshots go on the screenshots' schedule; pasted images stay.
+func TestScreenshotCopiesInTheChatExpire(t *testing.T) {
+	h := newTaskHarness(t, false)
+	ctx := context.Background()
+	main := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination})
+	ws := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := h.env.Pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	held, expired := seedScreenshot(t, h, ws), seedScreenshot(t, h, ws)
+	exec(`UPDATE preview_screenshots SET data = NULL, expired_at = now() WHERE id = $1`, expired)
+	msg := uuid.NewString()
+	exec(`INSERT INTO session_messages (id, session_id, role, content) VALUES ($1, $2, 'user', '[report from a fictional task]')`, msg, main.SessionID)
+	const mb = 1 << 20
+	image := func(name string, claimed bool, shot *string, age time.Duration, size int) string {
+		t.Helper()
+		var m *string
+		if claimed {
+			m = &msg
+		}
+		exec(`INSERT INTO message_images (id, session_id, message_id, media_type, data, size_bytes, screenshot_id, created_at)
+			VALUES ($1, $2, $3, 'image/png', $4, $5, $6, now() - make_interval(secs => $7))`,
+			name, main.SessionID, m, fakePNG, size, shot, age.Seconds())
+		return name
+	}
+	keep := map[string]bool{
+		image("old", true, &held, screenshot.MaxImageAge+time.Hour, 1):  false,
+		image("of-expired", true, &expired, 2*time.Hour, 1):             false,
+		image("in-flight", true, &expired, 10*time.Minute, 1):           true, // a send may still be attaching it
+		image("orphan", false, &held, 2*time.Hour, 1):                   false,
+		image("held", true, &held, 90*time.Minute, 1):                   true,
+		image("big-newer", true, &held, 2*time.Hour, 60*mb):             true,
+		image("big-older", true, &held, 3*time.Hour, 50*mb):             false, // past the budget
+		image("pasted", true, nil, screenshot.MaxImageAge+time.Hour, 1): true,
+	}
+	if err := screenshot.RetainSweep(h.env.Pool).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range keep {
+		var n int
+		if err := h.env.Pool.QueryRow(ctx, `SELECT count(*) FROM message_images WHERE id = $1`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if (n == 1) != want {
+			t.Errorf("chat image %q kept = %v, want %v", id, n == 1, want)
 		}
 	}
 }

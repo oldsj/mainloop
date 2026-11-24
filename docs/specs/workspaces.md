@@ -349,8 +349,12 @@ full_page=false)` opens `<port>--<own workspace>--preview.<domain><path>` in a d
   shared browser runs at most two captures at once; a call that waits more than 30 s for room is
   `busy`.
 - **Retention.** A screenshot's image is dropped after 7 days, and a workspace keeps the images of
-  at most 50 screenshots that no report names (its oldest go first); a reported one expires by age
-  only. The row stays: a replay lists it with `expired: true` and no image, and the task page shows
+  at most 50 screenshots that no report names (its oldest go first). A workspace also holds at most
+  100 MB of images, reported ones included: past that, unreported images go before reported ones,
+  and older before newer. The copies a delivered report put in the main thread's conversation go
+  on the same schedule: with their screenshot's image, after 7 days, and past 100 MB of copies in
+  one conversation (oldest first); a copy no message claimed goes after an hour. The message stays
+  without its image. Images pasted into the chat are not affected. The screenshot's row stays: a replay lists it with `expired: true` and no image, and the task page shows
   it as expired with its viewport, port and path (`GET /tasks/{id}/screenshots/{id}` answers
   `expired_at` and no `data`).
 - **Showing the owner.** Each image is stored with its workspace (deleted with it) and returned
