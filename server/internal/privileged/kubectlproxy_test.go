@@ -391,3 +391,21 @@ func TestFencedOutrunsTheText(t *testing.T) {
 		}
 	}
 }
+
+// serve-api checks requests concurrently, and kubectl's command tree touches package-level cobra
+// and pflag state as it is built and parsed: under -race, parallel parses must not race.
+func TestParseKubectlConcurrently(t *testing.T) {
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			argv := []string{"kubectl", "get", "pods", "-n", "widgets", "--show_labels"}
+			if i%2 == 1 {
+				argv = []string{"kubectl", "rollout", "restart", "deployment/api", "-n", "widgets"}
+			}
+			if _, err := parseKubectl(argv); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+}
