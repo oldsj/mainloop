@@ -50,6 +50,10 @@ supervises them.
 - A repeat with the same arguments under a new `request_id`, while the first action is undecided,
   also returns the first action.
 - At most 3 undecided actions per session, and 10 per owner (`[too_many_pending]`).
+- A session whose requests a preflight refused 5 times in the last hour gets `[too_many_refused]`
+  until the hour passes. A refusal opens no card, and whether a request is refused, and why, says
+  something about the target, so a session must not probe it unseen. A request refused before any
+  read (`[validation]`) does not count.
 - `reason` is shown on the card as the agent's claim, set apart from the facts. It is not part of
   the digest.
 
@@ -120,17 +124,22 @@ YAML, live against the dry run's answer, without status and the metadata the API
 refused, and an apply skips the objects it would leave as they are. The card shows every diff whole:
 diffs over 16 KiB together are refused, never cut.
 
-A diff that shows what looks like a credential is refused (`contains_secret`), naming the field's
-path but not its value. That is a value of the objects the diff shows (whole, or a line of it) that
-holds a credential shape the session redactor knows (a private key block, a bearer token, a JWT, a
-known token prefix, credentials in a URL, an assignment such as `password: …`), or a `data` or
-`stringData` value that is one long word of high entropy, as a random key is. Long names, checksums
-and CA bundles pass.
+A patch or manifest that sets what looks like a credential is invalid before any read of the
+cluster (`contains_secret`), naming the field. Checked only after the dry run, a credential-named
+field set to a guess would end as "changes nothing" when the guess is right and `contains_secret`
+when it is wrong, with no card either way. A diff that shows what looks like a credential is refused
+too, naming the field's path but not its value, or only the object when the value is folded or
+escaped in the diff's YAML. What looks like a credential is a value holding a shape the session
+redactor knows (a private key block, a bearer token, a JWT, a known token prefix, credentials in a
+URL, an assignment such as `password: …`, also inside one-line JSON), or a `data` or `stringData`
+value that is one long word of high entropy, as a random key is. Long names, checksums and CA
+bundles pass. Neither this refusal nor the size refusal gives a figure an agent could compare
+between guesses.
 
 The dry run runs twice; a value on which the answers differ is one the API server generates on each
 write (a Job's controller-uid, a Pod's token volume name, a webhook's timestamp), and the diff and
 the check before the write show it as `<server-generated>`, with the card naming its paths. A value
-the request itself sets is never masked: if it differs between the runs, the request is refused.
+the request itself sets is never masked: if it differs between the runs, the request is refused: the API server generates it, so the request must leave it out.
 
 Both refuse Secrets, since a dry run's answer would carry the value. Copy one from 1Password with
 `onepassword.item_to_secret`.

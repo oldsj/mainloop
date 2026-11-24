@@ -17,6 +17,7 @@ import (
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/redact"
 )
 
 // The Kubernetes types that change arbitrary objects. The card shows the server dry-run's diff;
@@ -148,6 +149,9 @@ func normalizePatch(raw json.RawMessage) (any, error) {
 				return nil, err
 			}
 		}
+		if at := requestCredential(ops); at != "" {
+			return nil, fmt.Errorf("%w: the patch sets what looks like a credential at %s (contains_secret); %s", ErrInvalid, at, secretAdvice)
+		}
 		canonical = ops
 	} else {
 		var m map[string]any
@@ -156,6 +160,9 @@ func normalizePatch(raw json.RawMessage) (any, error) {
 		}
 		if field := protectedField(m, false); field != "" {
 			return nil, fmt.Errorf("%w: the patch may not set %s: the card's diff does not show it, or the executor binds it", ErrInvalid, field)
+		}
+		if at := requestCredential(m); at != "" {
+			return nil, fmt.Errorf("%w: the patch sets what looks like a credential at %s (contains_secret); %s", ErrInvalid, at, secretAdvice)
 		}
 		canonical = m
 	}
@@ -246,10 +253,17 @@ func normalizeApply(raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, o := range objs {
+	for i, o := range objs {
 		if ns := (&unstructured.Unstructured{Object: o}).GetNamespace(); ns != "" && a.Namespace != "" && ns != a.Namespace {
 			return nil, fmt.Errorf("%w: an object names namespace %s, not %s", ErrInvalid, ns, a.Namespace)
 		}
+		if at := requestCredential(o); at != "" {
+			return nil, fmt.Errorf("%w: object %d of the manifests sets what looks like a credential at %s (contains_secret); %s",
+				ErrInvalid, i+1, at, secretAdvice)
+		}
+	}
+	if redact.Credential(a.Manifests) {
+		return nil, fmt.Errorf("%w: the manifests hold what looks like a credential (contains_secret); %s", ErrInvalid, secretAdvice)
 	}
 	return a, nil
 }
@@ -434,8 +448,8 @@ func dryRunChange(r Resource, namespace, name string, live map[string]any, sets 
 	for _, g := range gen {
 		for _, p := range sets {
 			if g == p || strings.HasPrefix(g, p+"/") || strings.HasPrefix(p, g+"/") {
-				return ObjectChange{}, refuse("%s: the value at %s, which the request sets, came out differently on two dry runs; "+
-					"request again once it settles", target, g)
+				return ObjectChange{}, refuse("%s: the value at %s, which the request sets, came out differently on two dry runs: "+
+					"the API server generates it (or adds to it) on each write, so the request cannot set it; leave it out", target, g)
 			}
 		}
 	}
@@ -444,9 +458,13 @@ func dryRunChange(r Resource, namespace, name string, live map[string]any, sets 
 	if err != nil {
 		return ObjectChange{}, err
 	}
+	// The walk names the field; the diff's text catches a value YAML folded or escaped there, which
+	// the walk cannot match to the diff.
 	if at := credentialAt(diff, comparable(live), comparable(after)); at != "" {
-		return ObjectChange{}, refuse("the change to %s shows what looks like a credential at %s (contains_secret); a secret "+
-			"belongs in a Secret, through onepassword.item_to_secret", target, at)
+		return ObjectChange{}, refuse("the change to %s shows what looks like a credential at %s (contains_secret); %s", target, at, secretAdvice)
+	}
+	if redact.Credential(diff) {
+		return ObjectChange{}, refuse("the change to %s shows what looks like a credential in its diff (contains_secret); %s", target, secretAdvice)
 	}
 	c := newChange(r, namespace, name, live, diff)
 	c.Generated = gen
@@ -460,7 +478,8 @@ func (f ChangeFacts) check() error {
 		total += len(c.Diff)
 	}
 	if total > MaxDiffBytes {
-		return refuse("the change is %d KiB as a diff, over the %d KiB a card shows whole; split it", (total+1023)>>10, MaxDiffBytes>>10)
+		// No size: it would tell the agent how much a guess changed the diff.
+		return refuse("the change as a diff is over the %d KiB a card shows whole; split it", MaxDiffBytes>>10)
 	}
 	return nil
 }

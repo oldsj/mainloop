@@ -13,6 +13,9 @@ import (
 	"github.com/oldsj/mainloop/server/internal/redact"
 )
 
+// secretAdvice ends a contains_secret refusal.
+const secretAdvice = "a secret belongs in a Secret, through onepassword.item_to_secret"
+
 // opaqueData is a value of a data or stringData map that is one long base64 or token-shaped word.
 var opaqueData = regexp.MustCompile(`^[A-Za-z0-9+/=_-]{32,}$`)
 
@@ -146,3 +149,31 @@ func patchPointers(pt types.PatchType, patch json.RawMessage) ([]string, error) 
 }
 
 func escapePointer(k string) string { return strings.NewReplacer("~", "~0", "/", "~1").Replace(k) }
+
+// requestCredential is the JSON pointer of the first value a patch (a merge patch object, or JSON
+// patch operations) or a manifest sets that looks like a credential, or "". It is checked before
+// any read of the cluster: a credential-named field set to a guess would otherwise be refused as
+// "changes nothing" when the guess is right and contains_secret when it is wrong, without a card.
+func requestCredential(v any) string {
+	var found []string
+	check := func(pointer, key, value string) {
+		if looksLikeCredential(pointer, key, value) {
+			found = append(found, pointer)
+		}
+	}
+	if ops, ok := v.([]map[string]any); ok {
+		for _, op := range ops {
+			path, _ := op["path"].(string)
+			key := path[strings.LastIndex(path, "/")+1:]
+			key = strings.NewReplacer("~1", "/", "~0", "~").Replace(key)
+			walkStrings(op["value"], path, key, check)
+		}
+	} else {
+		walkStrings(v, "", "", check)
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	sort.Strings(found)
+	return found[0]
+}
