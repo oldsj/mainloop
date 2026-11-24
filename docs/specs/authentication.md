@@ -110,11 +110,11 @@ so this path gives nobody new access. The token expires on its own.
 
 ## Scopes
 
-| Scope    | May call                                                                                                                                        |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scope    | May call                                                                                                                                                 |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `owner`  | everything (Pocket ID owner; a registered device; the break-glass operator ServiceAccount), except that only a fresh Pocket ID bearer registers a device |
-| `read`   | `GET`/`HEAD` operations except `GET /sessions/{id}/live` (`mainloop-backend`: in-pod `smoke --read-only`)                                       |
-| `canary` | list and create sessions, send a message, read the conversation and native strip, stop the turn, restart, cancel, archive ([canary](canary.md)) |
+| `read`   | `GET`/`HEAD` operations except `GET /sessions/{id}/live` (`mainloop-backend`: in-pod `smoke --read-only`)                                                |
+| `canary` | list and create sessions, send a message, read the conversation and native strip, stop the turn, restart, cancel, archive ([canary](canary.md))          |
 
 ## Owner writes
 

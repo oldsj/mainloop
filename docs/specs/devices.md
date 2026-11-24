@@ -39,19 +39,19 @@ key again is `409`, and a phone that signed out makes a new key.
 
 Every other request carries a fresh token in `Authorization: Bearer`, a JWT the request key signs:
 
-| Part             | Value                                                                                     |
-| ---------------- | ----------------------------------------------------------------------------------------- |
-| header `alg`     | `ES256`                                                                                   |
-| header `typ`     | `mainloop-device+jwt`                                                                     |
-| header `kid`     | the device id                                                                             |
-| `iss`            | `mainloop-device`                                                                         |
-| `sub`            | the device id (must equal `kid`)                                                          |
-| `aud`            | `mainloop-api`                                                                            |
-| `iat`, `exp`     | required; `exp` after `iat` and at most 60 seconds after it                               |
-| `jti`            | 16 to 128 characters, unique per request                                                  |
-| `htm`            | the request method                                                                        |
-| `htu`            | the path and query the API sees: behind the gateway, without the `/api` prefix            |
-| `bh`             | the unpadded base64url SHA-256 of the request body (of the empty string when there is none) |
+| Part         | Value                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------- |
+| header `alg` | `ES256`                                                                                     |
+| header `typ` | `mainloop-device+jwt`                                                                       |
+| header `kid` | the device id                                                                               |
+| `iss`        | `mainloop-device`                                                                           |
+| `sub`        | the device id (must equal `kid`)                                                            |
+| `aud`        | `mainloop-api`                                                                              |
+| `iat`, `exp` | required; `exp` after `iat` and at most 60 seconds after it                                 |
+| `jti`        | 16 to 128 characters, unique per request                                                    |
+| `htm`        | the request method                                                                          |
+| `htu`        | the path and query the API sees: behind the gateway, without the `/api` prefix              |
+| `bh`         | the unpadded base64url SHA-256 of the request body (of the empty string when there is none) |
 
 The server:
 
@@ -69,11 +69,11 @@ rule](authentication.md#owner-writes): the app sends `X-Mainloop-Client: ios` an
 
 ## Managing devices
 
-| Operation                    | Who                                                                        |
-| ---------------------------- | -------------------------------------------------------------------------- |
-| `GET /devices`               | the owner and devices: newest first, revoked ones included; `current` marks the calling device |
-| `GET /devices/current`       | a device: itself; `404` for anyone else                                    |
-| `DELETE /devices/{device_id}` | the owner, any device; a device, only itself (signing out). Idempotent   |
+| Operation                     | Who                                                                                            |
+| ----------------------------- | ---------------------------------------------------------------------------------------------- |
+| `GET /devices`                | the owner and devices: newest first, revoked ones included; `current` marks the calling device |
+| `GET /devices/current`        | a device: itself; `404` for anyone else                                                        |
+| `DELETE /devices/{device_id}` | the owner, any device; a device, only itself (signing out). Idempotent                         |
 
 Revoking stops the device's key at once and keeps the row for the audit. A revoked device can't be
 brought back, and a device's key and identity can't change (a database trigger refuses both).
