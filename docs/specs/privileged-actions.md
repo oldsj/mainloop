@@ -193,10 +193,10 @@ one fits: it observes its target and retries, and this does neither.
   `api-versions`, `version`, `cluster-info`, `wait`, `auth can-i|whoami|reconcile`, `apply`,
   `create`, `replace`, `patch`, `label`, `annotate`, `scale`, `set`, `autoscale`, `expose`, `run`,
   `taint`, `rollout restart|undo|pause|resume|status|history`, `delete`, `drain`, `cordon`,
-  `uncordon` and `exec` (whose command follows `--`). A single-letter flag outside `-n -f -o -l -c
-  -L -e -p -r` and `-A -i -q -h` is refused: it goes in long form, so nothing is guessed. Argv or
-  stdin that looks like a credential is refused (`contains_secret`), as is a manifest in stdin that
-  sets one.
+  `uncordon` and `exec` (whose command follows `--`). A single-letter flag other than
+  `-n -f -o -l -c -L -e -p -r` and `-A -i -q -h` is refused: it goes in long form, so nothing is
+  guessed. Argv or stdin that looks like a credential is refused (`contains_secret`), as is a
+  manifest in stdin that sets one.
 - Preflight refuses a command that names the executor's namespace anywhere in argv or stdin, then
   previews it by its verb:
   - A change (`apply`, `create`, `replace`, `patch`, `label`, `annotate`, `scale`, `set`,
