@@ -213,6 +213,10 @@ func (s *Service) Request(ctx context.Context, by Requester, typ string, rawArgs
 		return Action{}, err
 	}
 	argsKey := hashHex(append([]byte(typ+"\x00"), argsJSON...))
+	expiry := entry.expiry
+	if entry.expiryFor != nil {
+		expiry = entry.expiryFor(args)
+	}
 	q := dbq.New(s.Pool)
 	if a, ok, err := s.existing(ctx, q, by.SessionID, requestID, typ, argsJSON, argsKey); ok || err != nil {
 		return a, err
@@ -238,7 +242,7 @@ func (s *Service) Request(ctx context.Context, by Requester, typ string, rawArgs
 			RequesterSessionID: by.SessionID, RequesterTaskID: by.TaskID, Type: typ, Version: entry.version,
 			Args: argsJSON, ArgsKey: argsKey, Reason: reason,
 			// Stored at the database's precision, so the digest reads back the same instant.
-			ExpiresAt: s.now().Add(entry.expiry).UTC().Truncate(time.Microsecond),
+			ExpiresAt: s.now().Add(expiry).UTC().Truncate(time.Microsecond),
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil // a concurrent request won; read it below

@@ -2,6 +2,8 @@ package deploytest
 
 import (
 	"maps"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -113,7 +115,7 @@ func TestExecutorKubernetes(t *testing.T) {
 		t.Errorf("executor env = %+v", c.Env)
 	}
 
-	for _, name := range []string{"mainloop-executor-workloads", "mainloop-executor-delete", "mainloop-executor-writer"} {
+	for _, name := range []string{"mainloop-executor-workloads", "mainloop-executor-delete", "mainloop-executor-writer", "mainloop-executor-argo"} {
 		a, ok := r.accounts[name]
 		if !ok || a.Namespace != "mainloop-executor" || a.AutomountServiceAccountToken == nil || *a.AutomountServiceAccountToken {
 			t.Errorf("account %s = %+v", name, a)
@@ -142,7 +144,7 @@ func TestExecutorKubernetes(t *testing.T) {
 	}
 	if !maps.Equal(bound, map[string]string{
 		"mainloop-executor-workloads": "mainloop-executor-workloads", "mainloop-executor-delete": "mainloop-executor-delete",
-		"mainloop-executor-writer": "mainloop-executor-writer",
+		"mainloop-executor-writer": "mainloop-executor-writer", "mainloop-executor-argo": "mainloop-executor-argo",
 	}) {
 		t.Errorf("bindings = %v", bound)
 	}
@@ -162,6 +164,11 @@ func TestExecutorKubernetes(t *testing.T) {
 	if len(writer) != 2 || !slices.Equal(writer[0].Verbs, []string{"get", "create", "patch"}) ||
 		!slices.Equal(writer[1].Resources, []string{"roles", "clusterroles"}) || !slices.Equal(writer[1].Verbs, []string{"escalate", "bind"}) {
 		t.Errorf("writer rules = %+v", writer)
+	}
+	argo := roles["mainloop-executor-argo"].Rules
+	if len(argo) != 1 || !slices.Equal(argo[0].APIGroups, []string{"argoproj.io"}) || !slices.Equal(argo[0].Resources, []string{"applications"}) ||
+		!slices.Equal(argo[0].Verbs, []string{"get", "patch"}) {
+		t.Errorf("argo rules = %+v", argo)
 	}
 	for _, rule := range append(slices.Clone(del), writer...) {
 		if slices.Contains(rule.Verbs, "*") || slices.ContainsFunc(rule.Verbs, func(v string) bool { return v == "update" || v == "deletecollection" || v == "impersonate" }) {
@@ -186,7 +193,25 @@ func TestExecutorKubernetes(t *testing.T) {
 		}
 	}
 	if len(tokens) != 1 || !slices.Equal(tokens[0].Resources, []string{"serviceaccounts/token"}) || !slices.Equal(tokens[0].Verbs, []string{"create"}) ||
-		!slices.Equal(tokens[0].ResourceNames, []string{"mainloop-executor-delete", "mainloop-executor-workloads", "mainloop-executor-writer"}) {
+		!slices.Equal(tokens[0].ResourceNames, []string{"mainloop-executor-argo", "mainloop-executor-delete", "mainloop-executor-workloads", "mainloop-executor-writer"}) {
 		t.Errorf("token rules = %+v", tokens)
+	}
+}
+
+// The chart refuses to let onepassword.item_to_secret write Secrets in the executor's own namespace
+// or the release's: the executor's database and 1Password credentials, and serve-api's, live there.
+func TestExecutorSecretNamespacesRefuseItsOwn(t *testing.T) {
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm is not installed")
+	}
+	for _, ns := range []string{"mainloop-executor", "mainloop"} {
+		cmd := exec.CommandContext(t.Context(), helm, "template", "mainloop", chart, "--namespace", "mainloop",
+			"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true",
+			"--set", "executor.namespace=mainloop-executor", "--set", "executor.secretNamespaces={widgets,"+ns+"}")
+		out, err := cmd.CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "executor.secretNamespaces must not hold the executor's or the release's namespace ("+ns+")") {
+			t.Errorf("%s: err = %v\n%s", ns, err, out)
+		}
 	}
 }

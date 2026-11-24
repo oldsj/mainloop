@@ -49,6 +49,9 @@ type GitHub interface {
 type entry struct {
 	version int32
 	expiry  time.Duration
+	// expiryFor, if set, gives the expiry from the canonical arguments instead: a sync that may
+	// prune is a delete.
+	expiryFor func(args any) time.Duration
 	// executor types hold a credential serve-api must not have: serve-executor preflights and
 	// runs them. The others run in serve-api.
 	executor bool
@@ -93,6 +96,10 @@ var catalog = map[string]entry{
 	TypeApply: {
 		version: 1, expiry: UndecidedExpiry, executor: true, kube: true, how: kubeHow,
 		normalize: normalizeApply, preflight: preflightApply,
+	},
+	TypeArgoSync: {
+		version: 1, expiry: UndecidedExpiry, expiryFor: argoExpiry, executor: true, kube: true, how: kubeHow,
+		normalize: normalizeArgoSync, preflight: preflightArgoSync,
 	},
 }
 

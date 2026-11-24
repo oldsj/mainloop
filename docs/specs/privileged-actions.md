@@ -11,10 +11,10 @@ sends the requesting session one message with the outcome.
 - Slice 2: `onepassword.item_to_secret`, run by a separate process, `serve-executor`, which holds a
   1Password credential `serve-api` never sees. Also the owner's read-only audit page.
 - Slice 3, first part: the typed Kubernetes actions `k8s.rollout_restart`, `k8s.scale`,
-  `k8s.delete`, `k8s.patch` and `k8s.apply`, run by `serve-executor` with short-lived credentials
-  it mints per run.
+  `k8s.delete`, `k8s.patch` and `k8s.apply`, and `argocd.sync`, run by `serve-executor` with
+  short-lived credentials it mints per run.
 
-`argocd.sync`, approved commands and the home-network types are later
+Approved commands and the home-network types are later
 parts. They are not described here.
 
 ## Enablement
@@ -28,7 +28,7 @@ The executor types are accepted only when `MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED`
 `true`. The chart sets it when `executor.enabled` deploys `serve-executor` (see
 [The executor](#the-executor)). Without it, a request of an executor type is `[unsupported_action]`.
 
-The `k8s.*` types also need `MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED`, exactly `true`. The
+The `k8s.*` types and `argocd.sync` also need `MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED`, exactly `true`. The
 chart sets it with `executor.kubernetes.enabled`, which is off by default.
 
 ## Tools
@@ -77,7 +77,8 @@ Neither type bypasses a branch rule. GitHub's own protection still decides the m
 - `vault`, `item` and `field` are each an id or an exact title. An ambiguous title is refused:
   name it by id.
 - `namespace` must be in the executor's allowlist (`executor.secretNamespaces`). These are always
-  refused: `default`, and names starting with `kube-`, `mainloop`, `onepassword` or `argocd`.
+  refused: `default`, and names starting with `kube-`, `mainloop`, `onepassword` or `argocd`. The
+  chart refuses to render an allowlist that holds the executor's or the release's namespace.
 - An existing Secret is refused when a controller owns it, Argo CD tracks it, it is immutable, or
   its type is not `Opaque`.
 - A field that is empty, or has a type 1Password does not expose, is refused.
@@ -127,6 +128,18 @@ Both refuse Secrets, since a dry run's answer would carry the value. Copy one fr
 
 All five refuse the executor's own namespace, and the cluster-scoped objects named after it (its
 roles). Those change only through GitOps.
+
+- `argocd.sync {app, namespace, prune}` starts an Argo CD sync of one Application (`namespace`
+  defaults to `argocd`) at the revision Argo CD has resolved, as `argocd app sync --revision` does.
+  It pins every source's revision for a multi-source Application. With `prune`, resources no longer
+  in Git are deleted, so the request waits 1 hour for the owner, as a delete does.
+  - Refused: an Application that is missing, has a sync pending or running, has no resolved
+    revision yet, or deploys the executor's own namespace, and an Application in the executor's
+    namespace.
+  - The card shows the revision(s), sync and health status, the destination, and the resources out
+    of sync or to prune (the first 50 by name, with a count). Tags: destructive when it prunes,
+    auto-sync on, and Mainloop's, system or Argo CD namespaces.
+  - The sync's own outcome is Argo CD's: the action succeeds once the sync is started.
 
 ## Preflight and the card
 
@@ -247,6 +260,16 @@ For `k8s.delete` (in `serve-executor`):
   `kubectl delete` does. A replaced object is `stale` and nothing is deleted. The result says when
   finalizers still hold the object.
 
+For `argocd.sync` (in `serve-executor`):
+
+- **Observe.** An Application annotated with this action's id had its sync started by an earlier
+  attempt, so the action `succeeded`. One deleted or replaced, whose resolved revision moved, or
+  with another set of resources out of sync, is `stale`. A sync pending or running is waited for:
+  the attempt is retried.
+- **Write.** A merge patch of the Application's `operation`, as the argocd CLI writes it, pinned
+  to the frozen revision(s), with `initiatedBy` `mainloop/<action id>`, the action annotation and
+  the resourceVersion just observed. A concurrent write is retried, observing first.
+
 For `k8s.patch` and `k8s.apply` (in `serve-executor`), every object is checked before anything is
 written:
 
@@ -287,7 +310,7 @@ role can:
 It cannot record or change a decision, change what was asked, or read any other table. The
 executor refuses to start under a role that can read `attention_items`.
 
-**Kubernetes credentials.** With `executor.kubernetes.enabled`, the chart renders three
+**Kubernetes credentials.** With `executor.kubernetes.enabled`, the chart renders four
 ServiceAccounts in the executor's namespace. No pod runs as any of them:
 
 - `mainloop-executor-workloads`: get and patch Deployments, StatefulSets and DaemonSets, and list
@@ -295,8 +318,10 @@ ServiceAccounts in the executor's namespace. No pod runs as any of them:
 - `mainloop-executor-delete`: get and delete any object, cluster-wide
 - `mainloop-executor-writer`: get, create and patch any object, cluster-wide, and `escalate` and
   `bind` on roles, so an approved change can write roles and bindings as an admin's would
+- `mainloop-executor-argo`: get and patch Argo CD Applications, cluster-wide, and nothing else of
+  Argo CD
 
-The executor's own account may only create tokens for those three. Each run of a `k8s.*` type mints
+The executor's own account may only create tokens for those four. Each run of a `k8s.*` type or `argocd.sync` mints
 a 10-minute token for the one it needs. The delete and writer accounts can read every object,
 Secrets included, because RBAC cannot grant "everything but Secrets". The executor reads through
 delete with metadata-only requests, so no object's data reaches it, and refuses Secrets for the
