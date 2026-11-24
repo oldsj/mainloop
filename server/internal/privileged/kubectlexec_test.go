@@ -17,12 +17,13 @@ import (
 	"github.com/oldsj/mainloop/server/internal/privileged"
 )
 
-// stand-in kubectl: prints its environment, its kubeconfig's mode, its args and stdin, then exits
-// as the first arg asks.
+// stand-in kubectl: prints its environment, its kubeconfig's mode and whether it holds the token
+// (it must not), its args and stdin, then exits as the first arg asks.
 const fakeKubectlScript = `#!/bin/sh
 echo "env: $(env | sort | tr '\n' ' ')"
 echo "mode: $(stat -c %a "$KUBECONFIG" 2>/dev/null || stat -f %Lp "$KUBECONFIG")"
-grep -q "token: ` + executorToken + `" "$KUBECONFIG" && echo "token in config"
+grep -q "` + executorToken + `" "$KUBECONFIG" && echo "token in config"
+grep -q "server: https://127.0.0.1:" "$KUBECONFIG" && echo "server is the proxy"
 echo "args: $*"
 case "$1" in
   stdin) cat ;;
@@ -60,22 +61,23 @@ func execKubectl(t *testing.T) (privileged.ExecKubectl, *int64, string) {
 	}, &ttl, runs
 }
 
-func TestExecKubectlRunsWithItsOwnKubeconfig(t *testing.T) {
+func TestExecKubectlRunsWithAKubeconfigWithoutTheToken(t *testing.T) {
 	k, ttl, runs := execKubectl(t)
 	out, err := k.Run(context.Background(), privileged.KubectlRun{Args: []string{"stdin", "-f", "-"}, Stdin: "kind: ConfigMap\n", Timeout: 20 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
 	stdout := string(out.Stdout)
-	for _, want := range []string{"mode: 600", "token in config", "args: stdin -f -", "kind: ConfigMap", "KUBERC=off", "KUBECTL_NO_PLUGINS=true"} {
+	for _, want := range []string{"mode: 600", "server is the proxy", "args: stdin -f -", "kind: ConfigMap", "KUBERC=off", "KUBECTL_NO_PLUGINS=true"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, stdout)
 		}
 	}
-	if strings.Contains(stdout, "MAINLOOP") || strings.Contains(stdout, "GOFLAGS") || out.ExitCode != 0 || out.TimedOut {
+	if strings.Contains(stdout, "token in config") || strings.Contains(stdout, "MAINLOOP") || strings.Contains(stdout, "GOFLAGS") || out.ExitCode != 0 || out.TimedOut {
 		t.Errorf("run = %+v\n%s", out, stdout)
 	}
-	if len(out.Credentials) != 1 || out.Credentials[0] != executorToken {
+	// Both tokens are redacted from what is kept: the real one, and the run's own for the proxy.
+	if len(out.Credentials) != 2 || out.Credentials[0] != executorToken || len(out.Credentials[1]) != 64 {
 		t.Errorf("credentials = %v", out.Credentials)
 	}
 	if *ttl < int64((20*time.Second + 2*time.Minute).Seconds()) || *ttl < 600 {

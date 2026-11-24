@@ -564,7 +564,7 @@ func renderChange(r dbq.PrivilegedAction, ctx map[string]any) (string, string, m
 		} else {
 			fmt.Fprintf(&b, "\n%s (uid %s):\n", c.target(), c.UID)
 		}
-		b.WriteString("```diff\n" + strings.TrimSuffix(c.Diff, "\n") + "\n```\n")
+		b.WriteString(fenced("diff", c.Diff))
 		if len(c.Generated) > 0 {
 			fmt.Fprintf(&b, "%s marks values the API server generates on each run (%s).\n", GeneratedValue, strings.Join(c.Generated, ", "))
 		}

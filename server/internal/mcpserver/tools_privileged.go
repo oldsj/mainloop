@@ -44,10 +44,12 @@ func (s *Server) privilegedTools() []Tool {
 			"at most 64 words, 8 KiB), stdin (for -f - or exec -i; 64 KiB), timeout_seconds (default 60, at most 600)} runs that " +
 			"one command once as cluster-admin, for what no typed action covers: the card shows the exact command and, for a change, " +
 			"the API server's dry-run diff (or a delete's dry-run text), run again before the command; you get the objects' names, not " +
-			"the diff, and the output, redacted. Refused: other targets or credentials (--kubeconfig, --context, --token, --as, " +
-			"--server), local files (-f other than -, -k, --from-file), get/describe/wait of Secrets, create secret or token, " +
-			"--raw, --prune, watches, -A or --all on a change, and edit, cp, proxy, port-forward, attach, debug, config and plugins; " +
-			"single-letter flags beyond -n -f -o -l -c -L -e -p -r and -A -i -q -h go in long form. A lost answer is uncertain, never " +
+			"the diff, and the output, redacted. argv is read by kubectl's own parser; each allowed command has its own allowed flags and " +
+			"the refusal names them. Refused: other targets or credentials, impersonation, local files (-f takes only -), Secrets, " +
+			"create secret or token, --raw, --dry-run, --prune, watches, -A or --all on a change, admission policies and webhooks, a " +
+			"flag value starting with -, and edit, cp, proxy, port-forward, attach, debug, config and plugins. kubectl never holds the " +
+			"credential: the executor's proxy does, and refuses those whatever kubectl sends. A failed dry run gives its reason " +
+			"(NotFound), not its text. A lost answer is uncertain, never " +
 			"run again; a delete's card expires in an hour. The k8s.* types, argocd.sync and command.kubectl run through the " +
 			"executor on the cluster it runs in, never in its own namespace, and answer unavailable where it has no Kubernetes " +
 			"access; prefer a Git change for anything Argo CD manages, and a typed action where one fits. " +

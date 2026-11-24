@@ -8,8 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -55,252 +55,6 @@ func (a KubectlArgs) timeout() time.Duration {
 	return time.Duration(a.TimeoutSeconds) * time.Second
 }
 
-// Preview kinds: what preflight shows of a command before it runs.
-const (
-	// PreviewChange is a server dry run whose objects are diffed against the live ones.
-	PreviewChange = "change"
-	// PreviewDryRun is a server dry run whose text is shown as kubectl prints it.
-	PreviewDryRun = "dry_run"
-	// PreviewRead is a command that only reads: it has nothing to preview.
-	PreviewRead = "read"
-	// PreviewNone is a command nothing can preview (exec runs inside a container).
-	PreviewNone = "none"
-)
-
-// kubectlVerbs maps each allowed verb to its preview. A verb with subcommands that differ is in
-// kubectlSubverbs; any other verb (edit, cp, proxy, port-forward, attach, debug, config, plugin,
-// kustomize, certificate, a plugin's name) is refused.
-var kubectlVerbs = map[string]string{
-	"get": PreviewRead, "describe": PreviewRead, "logs": PreviewRead, "top": PreviewRead, "events": PreviewRead,
-	"explain": PreviewRead, "api-resources": PreviewRead, "api-versions": PreviewRead, "version": PreviewRead,
-	"cluster-info": PreviewRead, "wait": PreviewRead,
-	"apply": PreviewChange, "create": PreviewChange, "replace": PreviewChange, "patch": PreviewChange, "label": PreviewChange,
-	"annotate": PreviewChange, "scale": PreviewChange, "set": PreviewChange, "autoscale": PreviewChange, "expose": PreviewChange,
-	"run": PreviewChange, "taint": PreviewChange,
-	"delete": PreviewDryRun, "drain": PreviewDryRun, "cordon": PreviewDryRun, "uncordon": PreviewDryRun,
-	"exec":    PreviewNone,
-	"rollout": "", "auth": "",
-}
-
-var kubectlSubverbs = map[string]map[string]string{
-	"rollout": {"restart": PreviewChange, "undo": PreviewChange, "pause": PreviewChange, "resume": PreviewChange,
-		"status": PreviewRead, "history": PreviewRead},
-	"auth": {"can-i": PreviewRead, "whoami": PreviewRead, "reconcile": PreviewChange},
-}
-
-// refusedLongFlags choose another cluster, identity or credential, read a local file or directory
-// of the executor's, or print what the executor holds. The executor fills in the target and the
-// credential itself.
-var refusedLongFlags = map[string]string{
-	"kubeconfig": "the executor sets the target", "context": "the executor sets the target", "cluster": "the executor sets the target",
-	"server": "the executor sets the target", "user": "the executor sets the credential", "token": "the executor sets the credential",
-	"username": "the executor sets the credential", "password": "the executor sets the credential",
-	"as": "no impersonation", "as-group": "no impersonation", "as-uid": "no impersonation", "as-user-extra": "no impersonation",
-	"certificate-authority": "the executor sets the target", "client-certificate": "the executor sets the credential",
-	"client-key": "the executor sets the credential", "insecure-skip-tls-verify": "the executor sets the target",
-	"tls-server-name": "the executor sets the target", "cache-dir": "it names a local path",
-	"kustomize": "it reads a local directory", "from-file": "it reads a local file", "from-env-file": "it reads a local file",
-	"env-file": "it reads a local file", "output-directory": "it writes local files", "recursive": "it reads local directories",
-	"raw": "it reads or writes any API path, Secrets included", "resolve": "it prints Secret values",
-	"profile": "it writes local files", "profile-output": "it writes local files", "log-file": "it writes local files",
-	"log-dir": "it writes local files", "v": "verbose logs print requests", "vmodule": "verbose logs print requests",
-	"watch": "it never ends", "watch-only": "it never ends", "tty": "there is no terminal",
-	"prune": "it deletes objects the card cannot show; use argocd.sync with prune, or delete them",
-}
-
-// valueLongFlags take the next word as their value when given without "=". Any other long flag
-// is taken as a switch.
-var valueLongFlags = map[string]bool{
-	"namespace": true, "filename": true, "output": true, "selector": true, "field-selector": true, "container": true,
-	"template": true, "type": true, "patch": true, "replicas": true, "image": true, "port": true, "timeout": true,
-	"grace-period": true, "from-literal": true, "field-manager": true, "subresource": true, "sort-by": true,
-	"label-columns": true, "revision": true, "to-revision": true, "current-replicas": true, "resource-version": true,
-	"for": true, "since": true, "since-time": true, "tail": true, "limit-bytes": true, "dry-run": true, "chunk-size": true,
-	"max-log-requests": true, "pod-running-timeout": true, "min": true, "max": true, "cpu-percent": true, "name": true,
-	"target-port": true, "protocol": true, "env": true, "from": true, "containers": true, "requests": true, "limits": true,
-	"serviceaccount": true, "role": true, "clusterrole": true, "verb": true, "resource": true, "resource-name": true,
-	"group": true, "schedule": true, "restart": true, "overrides": true, "labels": true, "annotations": true,
-	"external-ip": true, "load-balancer-ip": true, "session-affinity": true, "cluster-ip": true, "path": true,
-	"subresources": true, "pod-selector": true, "delete-emptydir-data": false, "request-timeout": true,
-}
-
-// kubectlCommand is a parsed argv.
-type kubectlCommand struct {
-	verb, sub string
-	preview   string
-	// words are the positional arguments before "--"; flags holds each flag's values ("" for a
-	// switch).
-	words []string
-	flags map[string][]string
-	// stdin says whether the command reads stdin: `-f -` or `exec -i`.
-	stdin bool
-}
-
-func (c kubectlCommand) has(flag string) bool { _, ok := c.flags[flag]; return ok }
-
-func (c kubectlCommand) value(flag string) string {
-	if v := c.flags[flag]; len(v) > 0 {
-		return v[len(v)-1]
-	}
-	return ""
-}
-
-// shortValueFlags take a value (attached, -nfoo, or the next word); shortSwitches do not.
-var (
-	shortValueFlags = map[byte]string{'n': "namespace", 'f': "filename", 'o': "output", 'l': "selector", 'c': "container",
-		'L': "label-columns", 'e': "env", 'p': "patch", 'r': "replicas"}
-	shortSwitches = map[byte]string{'A': "all-namespaces", 'i': "stdin", 'q': "quiet", 'h': "help", 'w': "watch", 't': "tty", 'R': "recursive"}
-)
-
-func invalidf(format string, a ...any) error {
-	return fmt.Errorf("%w: "+format, append([]any{ErrInvalid}, a...)...)
-}
-
-// parseKubectl reads argv as kubectl would, closely enough to refuse what must not run: another
-// target or credential, a local file, a command that prints Secrets.
-func parseKubectl(argv []string) (kubectlCommand, error) {
-	if len(argv) < 2 || argv[0] != "kubectl" {
-		return kubectlCommand{}, invalidf("argv is the command's words, starting with kubectl and then its verb (kubectl get pods -n widgets)")
-	}
-	c := kubectlCommand{verb: argv[1], flags: map[string][]string{}}
-	preview, ok := kubectlVerbs[c.verb]
-	if !ok {
-		return c, invalidf("kubectl %s is not allowed (allowed: %s); flags go after the verb", c.verb, strings.Join(sortedKeys(kubectlVerbs), ", "))
-	}
-	rest := argv[2:]
-	if subs, ok := kubectlSubverbs[c.verb]; ok {
-		if len(rest) == 0 || subs[rest[0]] == "" {
-			return c, invalidf("kubectl %s takes one of: %s", c.verb, strings.Join(sortedKeys(subs), ", "))
-		}
-		c.sub, preview, rest = rest[0], subs[rest[0]], rest[1:]
-	}
-	c.preview = preview
-	for i := 0; i < len(rest); i++ {
-		w := rest[i]
-		next := func() (string, error) {
-			if i+1 >= len(rest) {
-				return "", invalidf("%s needs a value", w)
-			}
-			i++
-			return rest[i], nil
-		}
-		switch {
-		case w == "--":
-			i = len(rest) // the container's command (exec, run): not kubectl's
-		case strings.HasPrefix(w, "--"):
-			name, val, hasVal := strings.Cut(w[2:], "=")
-			if why, refused := refusedLongFlags[name]; refused {
-				return c, invalidf("--%s is refused: %s", name, why)
-			}
-			if !hasVal && valueLongFlags[name] {
-				v, err := next()
-				if err != nil {
-					return c, err
-				}
-				val = v
-			}
-			c.flags[name] = append(c.flags[name], val)
-		case len(w) > 1 && w[0] == '-' && !isNumber(w):
-			if err := c.short(w, next); err != nil {
-				return c, err
-			}
-		default:
-			c.words = append(c.words, w)
-		}
-	}
-	for _, f := range c.flags["filename"] {
-		if f != "-" {
-			return c, invalidf("-f takes only - (stdin): the command runs on the executor, whose files are not yours to read")
-		}
-		c.stdin = true
-	}
-	for _, o := range c.flags["output"] {
-		if strings.Contains(o, "-file") {
-			return c, invalidf("-o %s reads a local file", o)
-		}
-	}
-	if c.verb == "exec" {
-		c.stdin = c.has("stdin")
-		if !slices.Contains(argv, "--") {
-			return c, invalidf("kubectl exec takes its command after --")
-		}
-	}
-	reads := slices.Contains([]string{"apply", "create", "replace", "delete", "label", "annotate", "patch"}, c.verb) ||
-		c.verb == "auth" && c.sub == "reconcile"
-	if c.has("filename") && !reads {
-		return c, invalidf("-f - is for apply, create, replace, delete, label, annotate, patch and auth reconcile")
-	}
-	if c.preview != PreviewRead {
-		for _, f := range []string{"all-namespaces", "all"} {
-			if c.has(f) {
-				return c, invalidf("--%s is refused for kubectl %s: name the objects, or select them with -l in one namespace", f, c.verb)
-			}
-		}
-	}
-	return c, c.secretReader()
-}
-
-// short reads a single-dash word: one value flag (-n widgets, -nwidgets, -f-) or a cluster of
-// switches (-it). A letter outside both sets is refused, not guessed at.
-func (c *kubectlCommand) short(w string, next func() (string, error)) error {
-	if name, ok := shortValueFlags[w[1]]; ok {
-		val := w[2:]
-		if val == "" {
-			v, err := next()
-			if err != nil {
-				return err
-			}
-			val = v
-		}
-		c.flags[name] = append(c.flags[name], val)
-		return nil
-	}
-	for i := 1; i < len(w); i++ {
-		name, ok := shortSwitches[w[i]]
-		if !ok {
-			return invalidf("%s: give that flag in its long form (--name=value)", w)
-		}
-		if why, refused := refusedLongFlags[name]; refused {
-			return invalidf("-%c (--%s) is refused: %s", w[i], name, why)
-		}
-		c.flags[name] = append(c.flags[name], "")
-	}
-	return nil
-}
-
-// secretReader refuses commands that print Secret values: kubectl get or describe of Secrets (or
-// wait on one, which confirms a guessed value), and
-// creating a Secret or a token (the value would be in the request or the output). This list is
-// best-effort; output redaction still applies to whatever runs.
-func (c kubectlCommand) secretReader() error {
-	if c.verb == "create" && len(c.words) > 0 && (c.words[0] == "secret" || c.words[0] == "token") {
-		return invalidf("kubectl create %s is refused: a secret comes from 1Password, through onepassword.item_to_secret", c.words[0])
-	}
-	if c.verb != "get" && c.verb != "describe" && c.verb != "events" && c.verb != "wait" {
-		return nil
-	}
-	for _, w := range c.words {
-		for _, part := range strings.Split(w, ",") {
-			kind, _, _ := strings.Cut(strings.ToLower(part), "/")
-			kind, _, _ = strings.Cut(kind, ".")
-			if kind == "secret" || kind == "secrets" {
-				return invalidf("kubectl %s of Secrets is refused: it prints their values", c.verb)
-			}
-		}
-	}
-	return nil
-}
-
-func isNumber(s string) bool { _, err := strconv.Atoi(s); return err == nil }
-
-func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.Sort(out)
-	return out
-}
 
 func normalizeKubectl(raw json.RawMessage) (any, error) {
 	var a KubectlArgs
@@ -350,6 +104,9 @@ func normalizeKubectl(raw json.RawMessage) (any, error) {
 			return nil, err
 		}
 		for i, o := range objs {
+			if group, _, _ := strings.Cut(fmt.Sprint(o["apiVersion"]), "/"); group == "admissionregistration.k8s.io" {
+				return nil, invalidf("object %d of stdin is an admission policy or webhook: change those through GitOps", i+1)
+			}
 			if at := requestCredential(o); at != "" {
 				return nil, invalidf("object %d of stdin sets what looks like a credential at %s (contains_secret); %s", i+1, at, secretAdvice)
 			}
@@ -377,7 +134,7 @@ func kubectlDestructive(c kubectlCommand) string {
 		return "deletes objects"
 	case c.verb == "drain":
 		return "evicts every pod of the node"
-	case c.has("force"):
+	case c.on("force"):
 		return "--force deletes and recreates, or skips graceful deletion"
 	case c.value("grace-period") == "0":
 		return "--grace-period=0 kills without a graceful stop"
@@ -423,6 +180,9 @@ type KubectlRun struct {
 	Args    []string
 	Stdin   string
 	Timeout time.Duration
+	// Preflight is the dry run before the owner approves: the executor's proxy makes every write
+	// a server dry run and refuses streams, whatever the command asks.
+	Preflight bool
 }
 
 // KubectlOutput is what one invocation printed. Credentials are the exact values the run held
@@ -512,7 +272,7 @@ func (s *Service) dryRun(ctx context.Context, a KubectlArgs, c kubectlCommand, e
 		at = len(args)
 	}
 	args = slices.Insert(args, at, append([]string{"--dry-run=server"}, extra...)...)
-	out, err := s.Kubectl.Run(ctx, KubectlRun{Args: args, Stdin: a.Stdin, Timeout: RemoteTimeout / 2})
+	out, err := s.Kubectl.Run(ctx, KubectlRun{Args: args, Stdin: a.Stdin, Timeout: RemoteTimeout / 2, Preflight: true})
 	if err != nil {
 		return nil, err
 	}
@@ -520,10 +280,27 @@ func (s *Service) dryRun(ctx context.Context, a KubectlArgs, c kubectlCommand, e
 		return nil, errors.New("the dry run timed out")
 	}
 	if out.ExitCode != 0 {
-		msg := boundText(cleanOutput(out.Stderr, out.Credentials), 1<<10)
-		return nil, refuse("the server dry run of kubectl %s failed (exit %d): %s", c.verb, out.ExitCode, msg)
+		// What kubectl printed is cluster state read before anyone approved: the requester gets
+		// its reason only, and the executor's log keeps the text.
+		text := cleanOutput(out.Stderr, out.Credentials)
+		s.log().Info("kubectl dry run failed", "command", c.path, "exit", out.ExitCode, "stderr", boundText(text, 4<<10))
+		return nil, refuse("the server dry run of kubectl %s failed (exit %d%s); the executor's log has kubectl's message", c.path, out.ExitCode, errorReason(text))
 	}
 	return cleanOutput(out.Stdout, out.Credentials), nil
+}
+
+var reasonRE = regexp.MustCompile(`Error from server \(([A-Za-z]{1,40})\)`)
+
+// errorReason is the Kubernetes reason of kubectl's first error (", NotFound"), which tells the
+// requester what kind of failure it was and nothing of the cluster, or "".
+func errorReason(stderr []byte) string {
+	switch m := reasonRE.FindSubmatch(stderr); {
+	case m != nil:
+		return ", " + string(m[1])
+	case bytes.Contains(stderr, []byte("refused by the executor")):
+		return ", refused by the executor's proxy"
+	}
+	return ""
 }
 
 // dryRunObjects runs a change's server dry run with -o json and reads the objects it prints.
@@ -580,6 +357,8 @@ func (s *Service) kubectlChanges(ctx context.Context, f KubectlFacts, first, sec
 			return f, refuse("%s: commands that change a Secret are refused: the dry run would print its value. Use onepassword.item_to_secret", target)
 		case s.selfTarget(ns, r.Kind, name, r.Namespaced):
 			return f, refuse("%s is the executor's own; it changes only through GitOps", target)
+		case r.Group == "admissionregistration.k8s.io":
+			return f, refuse("%s is an admission policy or webhook; those change only through GitOps", target)
 		}
 		live, err := s.Kube.Get(ctx, r, ns, name)
 		if err != nil {
@@ -665,6 +444,22 @@ func shellQuote(argv []string) string {
 	return strings.Join(out, " ")
 }
 
+// fenced puts text in a code block whose fence is longer than any run of backticks in it, so
+// nothing in the text can end the block early.
+func fenced(lang, text string) string {
+	longest, run := 0, 0
+	for _, ch := range text {
+		if ch == '`' {
+			run++
+			longest = max(longest, run)
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat("`", max(3, longest+1))
+	return fence + lang + "\n" + strings.TrimSuffix(text, "\n") + "\n" + fence + "\n"
+}
+
 func renderKubectl(r dbq.PrivilegedAction, ctx map[string]any) (string, string, map[string]any, error) {
 	var f KubectlFacts
 	var a KubectlArgs
@@ -675,16 +470,13 @@ func renderKubectl(r dbq.PrivilegedAction, ctx map[string]any) (string, string, 
 	if err != nil {
 		return "", "", nil, err
 	}
-	verb := c.verb
-	if c.sub != "" {
-		verb += " " + c.sub
-	}
+	verb := c.path
 	title := "Run kubectl " + verb + onCluster(f.Cluster) + " as cluster-admin"
 	var b strings.Builder
 	fmt.Fprintf(&b, "Runs exactly this, once, as cluster-admin on %s (no shell; the executor sets the target and credential):\n", f.Cluster)
-	b.WriteString("```sh\n" + shellQuote(a.Argv) + "\n```\n")
+	b.WriteString(fenced("sh", shellQuote(a.Argv)))
 	if a.Stdin != "" {
-		b.WriteString("With this on stdin:\n```yaml\n" + strings.TrimSuffix(a.Stdin, "\n") + "\n```\n")
+		b.WriteString("With this on stdin:\n" + fenced("yaml", a.Stdin))
 	}
 	var tags []string
 	switch f.Preview {
@@ -696,7 +488,7 @@ func renderKubectl(r dbq.PrivilegedAction, ctx map[string]any) (string, string, 
 			} else {
 				fmt.Fprintf(&b, "\n%s (uid %s):\n", ch.target(), ch.UID)
 			}
-			b.WriteString("```diff\n" + strings.TrimSuffix(ch.Diff, "\n") + "\n```\n")
+			b.WriteString(fenced("diff", ch.Diff))
 			if len(ch.Generated) > 0 {
 				fmt.Fprintf(&b, "%s marks values the API server generates on each run (%s).\n", GeneratedValue, strings.Join(ch.Generated, ", "))
 			}
@@ -706,7 +498,7 @@ func renderKubectl(r dbq.PrivilegedAction, ctx map[string]any) (string, string, 
 			fmt.Fprintf(&b, "\nLeft as they are: %s.\n", strings.Join(f.Unchanged, ", "))
 		}
 	case PreviewDryRun:
-		b.WriteString("\nThe API server's dry run of it says:\n```\n" + f.Output + "\n```\n")
+		b.WriteString("\nThe API server's dry run of it says:\n" + fenced("", f.Output))
 	case PreviewRead:
 		b.WriteString("\nIt only reads. Its output goes back to the requesting session, redacted.\n")
 	case PreviewNone:
@@ -723,7 +515,7 @@ func renderKubectl(r dbq.PrivilegedAction, ctx map[string]any) (string, string, 
 	for _, ns := range c.flags["namespace"] {
 		tags = append(tags, namespaceTags(ns)...)
 	}
-	if c.has("all-namespaces") {
+	if c.on("all-namespaces") {
 		tags = append(tags, "every namespace")
 	}
 	tags = append(tags, "cluster-admin")

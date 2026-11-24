@@ -179,24 +179,42 @@ one fits: it observes its target and retries, and this does neither.
   `argv` is the command's words, starting with `kubectl` and then its verb, run as is without a
   shell: at most 64 words and 8 KiB. `stdin` is what `-f -` or `exec -i` reads, up to 64 KiB.
   `timeout_seconds` is 1 to 600, default 60.
-- The executor writes its own kubeconfig, with a token minted for `mainloop-executor-admin` that
-  outlives the deadline, in a fresh directory, and runs the pinned kubectl with only `PATH`, `HOME`
-  and `KUBECONFIG` set. The token is removed from the output (plain and base64), the session
-  redactor runs over it, and each stream is kept to 64 KiB.
-- Refused when requested (`[validation]`): flags that choose another target, identity or credential
-  (`--kubeconfig`, `--context`, `--cluster`, `--server`, `--user`, `--token`, `--as…`, the
-  certificate flags); flags that read or write the executor's files (`-f` other than `-`, `-k`,
-  `--from-file`, `--from-env-file`, `-o …-file=`, `--log-file`, `--profile-output`, `--cache-dir`);
-  `--raw`, `--resolve`, `--prune`, `-v`, watches and `--tty`; `-A` or `--all` on anything but a
-  read; `get`, `describe`, `events` or `wait` of Secrets, and `create secret` or `create token`; and
-  every verb but `get`, `describe`, `logs`, `top`, `events`, `explain`, `api-resources`,
-  `api-versions`, `version`, `cluster-info`, `wait`, `auth can-i|whoami|reconcile`, `apply`,
-  `create`, `replace`, `patch`, `label`, `annotate`, `scale`, `set`, `autoscale`, `expose`, `run`,
-  `taint`, `rollout restart|undo|pause|resume|status|history`, `delete`, `drain`, `cordon`,
-  `uncordon` and `exec` (whose command follows `--`). A single-letter flag other than
-  `-n -f -o -l -c -L -e -p -r` and `-A -i -q -h` is refused: it goes in long form, so nothing is
-  guessed. Argv or stdin that looks like a credential is refused (`contains_secret`), as is a
-  manifest in stdin that sets one.
+- kubectl never holds the cluster-admin token. The executor mints one for
+  `mainloop-executor-admin` that outlives the deadline and keeps it in a proxy of its own on
+  loopback, for the one run. kubectl's kubeconfig, in a fresh directory, names only that proxy (TLS
+  with a certificate made for the run) and a token made for the run, which the proxy checks and
+  swaps for the real one. A flag or kubeconfig that sent kubectl elsewhere would send nothing of
+  value. kubectl, at the version the image pins, runs with only `PATH`, `HOME`, `KUBECONFIG`,
+  `KUBERC=off` and plugins off. Both tokens are removed from the output (plain and base64), the
+  session redactor runs over it, and each stream is kept to 64 KiB.
+- The proxy refuses, for every command, approved or not, with `refused by the executor`:
+  impersonation headers; Secrets; anything in the executor's namespace, and that Namespace;
+  `serviceaccounts/token` and the `proxy` subresources; writes to `admissionregistration.k8s.io`;
+  writes to roles and bindings named `<namespace>-…`, and deleting every role or binding of a
+  kind; deleting every Namespace; streams but `exec`; writes outside the resource API; and paths
+  with escapes or dot segments.
+- Before approval the command runs only as the preview's server dry run, and the proxy makes sure
+  of that whatever kubectl sends: every create, update and patch gets `dryRun=All`, a DELETE's or
+  an eviction's options are rewritten with it, a body it cannot read is refused, and so are
+  streams.
+- Refused when requested (`[validation]`): argv is read by kubectl's own parser, from the
+  `k8s.io/kubectl` module of the release the image pins, so it reads every word as the binary
+  will: an underscore spelling, a value taken from the next word, a short-flag cluster. Then an
+  allowlist holds: the commands `get`, `describe`, `logs`, `top pod|node`, `events`, `explain`,
+  `api-resources`, `api-versions`, `version`, `cluster-info`, `wait`, `auth can-i|whoami|reconcile`,
+  `apply`, `create` (manifests, and `create deployment|job|cronjob|configmap|namespace|
+  serviceaccount|role|clusterrole|rolebinding|clusterrolebinding|quota|priorityclass|
+  poddisruptionbudget|ingress|service …`), `replace`, `patch`, `label`, `annotate`, `scale`,
+  `set image|env|resources|selector|serviceaccount|subject`, `autoscale`, `expose`, `run`, `taint`,
+  `rollout restart|undo|pause|resume|status|history`, `delete`, `drain`, `cordon`, `uncordon` and
+  `exec` (whose command follows `--`), each with its own list of flags; every other command and
+  flag is refused. No list holds a flag that chooses the target, identity or credential, reads or
+  writes a local file (`-f` takes only `-`), `--raw`, `--dry-run`, `--prune`, a watch, `-A` or
+  `--all` on a write. Also refused: a flag value that starts with `-`; words after `--` but for
+  `exec`, `run` and `create`; control and bidirectional characters; `get`, `describe`, `events` or
+  `wait` of Secrets, `create secret` and `create token`; a write naming admission policies or
+  webhooks, in argv or as a stdin manifest. Argv or stdin that looks like a credential is refused
+  (`contains_secret`), as is a manifest in stdin that sets one.
 - Preflight refuses a command that names the executor's namespace anywhere in argv or stdin, then
   previews it by its verb:
   - A change (`apply`, `create`, `replace`, `patch`, `label`, `annotate`, `scale`, `set`,
@@ -210,7 +228,9 @@ one fits: it observes its target and retries, and this does neither.
     refused.
   - A read has nothing to preview. `exec` cannot be previewed: the card says it runs inside a
     container and can do anything that container can.
-  - A dry run that fails is refused with kubectl's error.
+  - A dry run that fails is refused with its exit code and the error's reason (`NotFound`,
+    `Forbidden`), not kubectl's message: that is cluster state read before anyone approved. The
+    executor's log keeps the message.
 - The card shows the exact command, the stdin, the preview, and tags: destructive (a delete, a
   drain, `--force`, `--grace-period=0`, scaling to zero), the namespaces it names, every namespace,
   runs inside a container, and always cluster-admin, plus the change tags of `k8s.apply`. A command
@@ -420,9 +440,19 @@ that outlives its deadline.
 
 A ValidatingAdmissionPolicy, `<namespace>-guard`, denies every write by those five accounts (not
 the executor's own) to the executor's namespace and anything in it, to that Namespace, and to the
-roles, bindings and admission policies named `<namespace>-…`, itself included: an admission policy
-applies to policies too. It holds even for a command nothing can preview (`exec` aside, which runs
-as the container). Reads are not admitted, so the executor refuses commands that name its namespace
+roles and bindings named `<namespace>-…`. It is a safety net against a mistaken command, not a
+boundary against an approved one:
+
+- The API server exempts admission policies and their bindings from every policy made through the
+  API, so the guard cannot protect itself. Only the executor's checks and its proxy keep the
+  accounts off admission objects.
+- It matches the requesting user, so impersonation would change what it sees. The proxy refuses
+  impersonation.
+- A cluster-admin command can start a workload that writes as another account. The card shows that
+  manifest; the guard does not stop it.
+
+What holds is the executor's: the parser's allowlist, the namespace checks on argv, stdin and the
+dry run, the preview's object checks, and the proxy, which holds the token. Reads are not admitted, so the executor refuses commands that name its namespace
 or read Secrets before they run. The delete and writer accounts can read every object,
 Secrets included, because RBAC cannot grant "everything but Secrets". The executor reads through
 delete with metadata-only requests, so no object's data reaches it, and refuses Secrets for the

@@ -118,6 +118,16 @@ jobs:
           go-version-file: server/go.mod
           cache: false
       - uses: ./.github/actions/go-cache
+      # command.kubectl's tests run the kubectl the prod image pins, against a stand-in API
+      # server: the version and checksum come from the Dockerfile, so the two cannot drift.
+      - name: Install the pinned kubectl
+        run: |
+          ver=$(sed -n 's/^ARG KUBECTL_VERSION=//p' Dockerfile)
+          sum=$(sed -n 's/^ARG KUBECTL_SHA256_AMD64=//p' Dockerfile)
+          curl -fsSLo "$RUNNER_TEMP/kubectl" "https://dl.k8s.io/release/${ver}/bin/linux/amd64/kubectl"
+          echo "${sum}  $RUNNER_TEMP/kubectl" | sha256sum -c -
+          chmod 0555 "$RUNNER_TEMP/kubectl"
+          echo "MAINLOOP_TEST_KUBECTL=$RUNNER_TEMP/kubectl" >> "$GITHUB_ENV"
       - name: go test -race (excluding the sharded-out packages)
         run: |
           pkgs=$(go list ./... | grep -vE '/internal/(tasks|sessions|workspaces|deploytest)$')

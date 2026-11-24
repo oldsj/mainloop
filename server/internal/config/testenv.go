@@ -12,3 +12,7 @@ func RequireTestDatabase() bool { return os.Getenv("CI") == "true" }
 
 // TestChrome names the Chrome binary the screenshot fence tests drive; empty lets them look for one.
 func TestChrome() string { return os.Getenv("MAINLOOP_TEST_CHROME") }
+
+// TestKubectl is the kubectl binary command.kubectl's tests run, the one the prod image pins; CI
+// installs it. Empty means kubectl on PATH, when it is that release.
+func TestKubectl() string { return os.Getenv("MAINLOOP_TEST_KUBECTL") }

@@ -27,7 +27,10 @@ type fakeKubectl struct {
 
 func (f *fakeKubectl) Run(_ context.Context, run privileged.KubectlRun) (privileged.KubectlOutput, error) {
 	f.runs = append(f.runs, run)
-	out := f.handle(run, slices.Contains(run.Args, "--dry-run=server"))
+	if run.Preflight != slices.Contains(run.Args, "--dry-run=server") {
+		return privileged.KubectlOutput{}, fmt.Errorf("preflight %v but args %v: the proxy must know a dry run", run.Preflight, run.Args)
+	}
+	out := f.handle(run, run.Preflight)
 	out.Credentials = []string{executorToken}
 	return out, nil
 }
@@ -36,7 +39,7 @@ func (f *fakeKubectl) Run(_ context.Context, run privileged.KubectlRun) (privile
 func (f *fakeKubectl) real() int {
 	n := 0
 	for _, r := range f.runs {
-		if !slices.Contains(r.Args, "--dry-run=server") {
+		if !r.Preflight {
 			n++
 		}
 	}
@@ -234,12 +237,12 @@ func TestKubectlRequestRefusals(t *testing.T) {
 		{[]string{"get", "pods", "--context", "prod"}, "--context is refused"},
 		{[]string{"get", "pods", "--token=abc"}, "--token is refused"},
 		{[]string{"get", "pods", "--as=system:admin"}, "--as is refused"},
-		{[]string{"get", "pods", "-s", "https://example.test"}, "give that flag in its long form"},
+		{[]string{"get", "pods", "-s", "https://example.test"}, "--server is refused"},
 		{[]string{"get", "--raw", "/api/v1/secrets"}, "--raw is refused"},
-		{[]string{"get", "pods", "-v=9"}, "give that flag in its long form"},
-		{[]string{"get", "pods", "--v=9"}, "--v is refused"},
+		{[]string{"get", "pods", "-v=9"}, "unknown shorthand flag"},
+		{[]string{"get", "pods", "--v=9"}, "unknown flag: --v"},
 		{[]string{"apply", "-f", "/etc/passwd"}, "-f takes only -"},
-		{[]string{"apply", "-k", "."}, "give that flag in its long form"},
+		{[]string{"apply", "-k", "."}, "--kustomize is refused"},
 		{[]string{"apply", "--prune", "-f", "-"}, "--prune is refused"},
 		{[]string{"get", "secrets", "-n", appNS}, "of Secrets is refused"},
 		{[]string{"describe", "Secret/db", "-n", appNS}, "of Secrets is refused"},
@@ -247,16 +250,33 @@ func TestKubectlRequestRefusals(t *testing.T) {
 		{[]string{"wait", "--for=jsonpath={.data.password}=Z3Vlc3M=", "secret/db"}, "of Secrets is refused"},
 		{[]string{"create", "secret", "generic", "db"}, "a secret comes from 1Password"},
 		{[]string{"create", "token", "default"}, "kubectl create token is refused"},
-		{[]string{"config", "view"}, "kubectl config is not allowed"},
+		{[]string{"config", "view"}, "kubectl config view is not allowed"},
 		{[]string{"cp", "widgets/api-1:/etc/x", "x"}, "kubectl cp is not allowed"},
 		{[]string{"edit", "deployment/api"}, "kubectl edit is not allowed"},
 		{[]string{"exec", "api-1", "-n", appNS, "ls"}, "takes its command after --"},
 		{[]string{"delete", "pods", "--all-namespaces", "-l", "app=widgets"}, "--all-namespaces is refused"},
 		{[]string{"delete", "pods", "--all", "-n", appNS}, "--all is refused"},
-		{[]string{"rollout", "undo-all"}, "kubectl rollout takes one of"},
+		{[]string{"rollout", "undo-all"}, "kubectl rollout is not allowed"},
 		{[]string{"get", "pods", "-o", "go-template-file=/etc/x"}, "reads a local file"},
 		{[]string{"annotate", "deploy/api", "note=password=hunter2hunter2"}, "looks like a credential"},
-		{[]string{"get", "pods", "-w"}, "-w (--watch) is refused"},
+		{[]string{"get", "pods", "-w"}, "--watch is refused"},
+		// kubectl reads _ in a flag name as -, takes values from the next word only for flags that
+		// take one, and clusters short switches: the parser is kubectl's own, so each reads the same.
+		{[]string{"get", "pods", "--as_group=system:masters"}, "--as-group is refused"},
+		{[]string{"get", "pods", "--insecure_skip_tls_verify"}, "--insecure-skip-tls-verify is refused"},
+		{[]string{"delete", "pods", "--all_namespaces", "-l", "app=x"}, "--all-namespaces is refused"},
+		{[]string{"get", "pods", "--show-labels", "--server=https://example.test"}, "--server is refused"},
+		{[]string{"logs", "api-1", "--previous", "--kubeconfig=/dev/stdin"}, "--kubeconfig is refused"},
+		{[]string{"delete", "pod", "api-1", "--wait", "--raw=/api"}, "--raw is refused"},
+		{[]string{"get", "pods", "-Aw"}, "--watch is refused"},
+		{[]string{"get", "pods", "-n=" + appNS, "-s=https://example.test"}, "--server is refused"},
+		{[]string{"get", "pods", "-l", "--server=https://example.test"}, "a value may not start with -"},
+		{[]string{"label", "pods", "api-1", "a=b", "--dry-run=none"}, "--dry-run is refused"},
+		{[]string{"get", "pods", "--", "--server=https://example.test"}, "takes nothing after --"},
+		{[]string{"get", "pods\u202e"}, "control or bidirectional"},
+		{[]string{"delete", "validatingadmissionpolicybinding", "guard"}, "admission policies and webhooks is refused"},
+		{[]string{"label", "validatingwebhookconfigurations.admissionregistration.k8s.io/x", "a=b"}, "admission policies and webhooks"},
+		{[]string{"create", "configmap", "x", "--from-file=/etc/passwd"}, "--from-file is not allowed"},
 	} {
 		_, err := e.svc.Request(context.Background(), mainSession, privileged.TypeKubectl, jsonArgs(kubectlArgs(tc.argv...)), "r", fmt.Sprintf("r%d", i))
 		if !errors.Is(err, privileged.ErrInvalid) || !strings.Contains(err.Error(), tc.want) {
@@ -269,6 +289,8 @@ func TestKubectlRequestRefusals(t *testing.T) {
 		{"target": cluster, "argv": []string{"kubectl", "get", "pods"}, "timeout_seconds": 601},
 		{"target": cluster, "argv": []string{"kubectl", "get", "pods"}, "stdin": "x"},
 		{"target": cluster, "argv": []string{"kubectl", "apply", "-f", "-"}},
+		{"target": cluster, "argv": []string{"kubectl", "apply", "-f", "-"},
+			"stdin": "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\nmetadata:\n  name: x\n"},
 	} {
 		if _, err := e.svc.Request(context.Background(), mainSession, privileged.TypeKubectl, jsonArgs(args), "r", fmt.Sprintf("s%d", i)); !errors.Is(err, privileged.ErrInvalid) {
 			t.Errorf("%v: err = %v", args, err)
@@ -283,7 +305,7 @@ func TestKubectlPreflightRefusals(t *testing.T) {
 		return privileged.KubectlOutput{Stdout: []byte(`{"apiVersion":"v1","kind":"Secret","metadata":{"name":"db","namespace":"widgets"},"data":{"a":"Yg=="}}`)}
 	}
 	ownText := func(_ *memKube, _ privileged.KubectlRun, _ bool) privileged.KubectlOutput {
-		return privileged.KubectlOutput{Stdout: []byte(`validatingadmissionpolicybinding.admissionregistration.k8s.io "` + executorNS + `-guard" deleted (server dry run)`)}
+		return privileged.KubectlOutput{Stdout: []byte(`clusterrolebinding.rbac.authorization.k8s.io "` + executorNS + `-admin" deleted (server dry run)`)}
 	}
 	for name, tc := range map[string]struct {
 		args   map[string]any
@@ -293,12 +315,12 @@ func TestKubectlPreflightRefusals(t *testing.T) {
 		"own namespace": {kubectlArgs("get", "pods", "-n", executorNS), labelSettings, "the executor's own namespace"},
 		"own namespace in stdin": {map[string]any{"target": cluster, "argv": []string{"kubectl", "apply", "-f", "-"},
 			"stdin": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n  namespace: " + executorNS + "\n"}, labelSettings, "the executor's own namespace"},
-		"dry run reaches own": {kubectlArgs("delete", "validatingadmissionpolicybindings", "-l", "app=x"), ownText, "the executor's own"},
+		"dry run reaches own": {kubectlArgs("delete", "clusterrolebindings", "-l", "app=x"), ownText, "the executor's own"},
 		"changes a Secret":    {kubectlArgs("label", "secret", "db", "-n", appNS, "a=b"), secret, "change a Secret are refused"},
 		"another cluster":     {map[string]any{"target": "prod-02", "argv": []string{"kubectl", "get", "pods"}}, labelSettings, "not this executor's cluster"},
 		"dry run fails": {kubectlArgs("scale", "deploy/api", "--replicas=2", "-n", appNS), func(*memKube, privileged.KubectlRun, bool) privileged.KubectlOutput {
 			return privileged.KubectlOutput{ExitCode: 1, Stderr: []byte(`Error from server (NotFound): deployments.apps "api" not found`)}
-		}, "the server dry run of kubectl scale failed (exit 1)"},
+		}, "the server dry run of kubectl scale failed (exit 1, NotFound); the executor's log has kubectl's message"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e, _, k := newKubectlEnv(t, tc.handle)

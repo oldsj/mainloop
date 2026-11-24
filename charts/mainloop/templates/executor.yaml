@@ -177,8 +177,9 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  # command.kubectl runs an owner-approved command as cluster-admin; the policy below keeps it off
-  # the executor's own namespace and objects.
+  # command.kubectl runs an owner-approved command as cluster-admin. The executor holds the token
+  # in its own proxy and refuses its own namespace and objects there; the policy below is a safety
+  # net, not the boundary.
   name: {{ if eq $role "admin" }}cluster-admin{{ else }}{{ $ns }}-{{ $role }}{{ end }}
 subjects:
   - kind: ServiceAccount
@@ -186,12 +187,13 @@ subjects:
     namespace: {{ $ns }}
 {{- end }}
 ---
-# The executor's accounts never change the executor: its namespace and anything in it (its pods,
-# Secrets, tokens), that Namespace, and the cluster-wide roles, bindings and admission policies
-# named after it, this one included (an admission policy applies to policies too; only webhooks are
-# exempt). The executor checks this too before it asks; this holds even when a command it cannot
-# preview reaches further. Reads are not admission requests: the executor refuses commands naming
-# its namespace, and Secrets, before they run.
+# A safety net, not a boundary: it denies the executor's accounts writes to the executor's namespace
+# and anything in it (its pods, Secrets, tokens), that Namespace, and the cluster-wide roles and
+# bindings named after it. The API server exempts admission policies and bindings from policies made
+# through the API, so this one cannot protect itself, and it matches the requesting user, which
+# impersonation changes. The executor's own checks hold those lines: its kubectl proxy refuses
+# admission writes and impersonation. Reads are not admission requests: the executor refuses
+# commands naming its namespace, and Secrets, before they run.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -213,8 +215,9 @@ spec:
       message: the executor's own namespace changes only through GitOps
     - expression: "!(request.resource.group == '' && request.resource.resource == 'namespaces' && request.name == '{{ $ns }}')"
       message: the executor's own namespace changes only through GitOps
+    # admissionregistration covers webhook configurations; policies and bindings are exempt.
     - expression: "!(request.resource.group in ['rbac.authorization.k8s.io', 'admissionregistration.k8s.io'] && request.name.startsWith('{{ $ns }}-'))"
-      message: the executor's own roles, bindings and policies change only through GitOps
+      message: the executor's own roles, bindings and webhooks change only through GitOps
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

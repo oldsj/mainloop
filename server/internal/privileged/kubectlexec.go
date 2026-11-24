@@ -3,8 +3,13 @@ package privileged
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,8 +23,9 @@ import (
 // MaxCommandOutput: a command that prints without end cannot fill the executor's memory.
 const maxCaptured = 1 << 20
 
-// ExecKubectl runs the kubectl binary with a token minted for AccountAdmin, written to a kubeconfig
-// of its own in a fresh directory that is removed after the run.
+// ExecKubectl runs the kubectl binary against a proxy of the executor's own, on loopback, which
+// holds the token minted for AccountAdmin (see kubeProxy). kubectl's kubeconfig, in a fresh
+// directory removed after the run, names only the proxy and a token for this run.
 type ExecKubectl struct {
 	Clients KubeClients
 	// Binary is kubectl's path; "kubectl" finds it on PATH.
@@ -35,18 +41,29 @@ func (k ExecKubectl) Run(ctx context.Context, run KubectlRun) (KubectlOutput, er
 		return KubectlOutput{}, err
 	}
 	creds := []string{cfg.BearerToken}
+	proxy, err := newKubeProxy(cfg, k.Clients.Namespace, run.Preflight)
+	if err != nil {
+		return KubectlOutput{Credentials: creds}, err
+	}
+	creds = append(creds, proxy.runToken)
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		return KubectlOutput{Credentials: creds}, fmt.Errorf("kubectl proxy: %w", err)
+	}
+	srv := &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second, ErrorLog: log.New(io.Discard, "", 0)}
+	go func() { _ = srv.Serve(tls.NewListener(ln, proxy.tls)) }()
+	defer func() { _ = srv.Close() }()
+
 	dir, err := os.MkdirTemp(k.Dir, "kubectl-")
 	if err != nil {
 		return KubectlOutput{Credentials: creds}, err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	kc := clientcmdapi.NewConfig()
-	kc.Clusters["target"] = &clientcmdapi.Cluster{
-		Server: cfg.Host, CertificateAuthority: cfg.CAFile, CertificateAuthorityData: cfg.CAData,
-		TLSServerName: cfg.ServerName,
-	}
-	kc.AuthInfos["executor"] = &clientcmdapi.AuthInfo{Token: cfg.BearerToken}
-	kc.Contexts["target"] = &clientcmdapi.Context{Cluster: "target", AuthInfo: "executor", Namespace: "default"}
+	kc.Clusters["target"] = &clientcmdapi.Cluster{Server: "https://" + ln.Addr().String(), CertificateAuthorityData: proxy.caPEM}
+	kc.AuthInfos["run"] = &clientcmdapi.AuthInfo{Token: proxy.runToken}
+	kc.Contexts["target"] = &clientcmdapi.Context{Cluster: "target", AuthInfo: "run", Namespace: "default"}
 	kc.CurrentContext = "target"
 	path := filepath.Join(dir, "config")
 	if err := clientcmd.WriteToFile(*kc, path); err != nil {

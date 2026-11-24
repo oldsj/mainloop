@@ -104,7 +104,7 @@ var catalog = map[string]entry{
 	TypeKubectl: {
 		version: 1, expiry: UndecidedExpiry, expiryFor: kubectlExpiry, executor: true, kube: true,
 		how: "Approve runs exactly this command once, as cluster-admin, through Mainloop's executor. " +
-			"An admission policy keeps it off the executor's own namespace and access.",
+			"kubectl never holds the credential: the executor's proxy does, and refuses its own namespace, Secrets, impersonation and admission policies.",
 		normalize: normalizeKubectl, preflight: preflightKubectl,
 	},
 }
