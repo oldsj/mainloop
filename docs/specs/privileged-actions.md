@@ -295,6 +295,7 @@ account, whose role is Admin: for Omni resources (config patches, clusters) and 
   hold a secret, `get` in the `secrets` namespace, a resource in stdin of such a type or with no
   type, and argv or stdin that looks like a credential (`contains_secret`). A type alias the rule
   does not catch is caught by the proxy, which sees the full type.
+
 - Preflight previews `omnictl apply` and `omnictl cluster delete` by running them with
   `--dry-run`, through the proxy forwarding reads only, and the card shows what they printed, 16
   KiB at most. A dry run that fails is refused with its exit code and the gRPC code, or that the
