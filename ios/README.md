@@ -16,6 +16,7 @@ A native iPhone app for Mainloop's owner, laid out for iPhone Duo. See
 | `Packages/APIGen`                    | Pins swift-openapi-generator, and `PrepareContract`, which rewrites a temporary copy of the contract into a form the generator reads (nullable `anyOf: [X, null]` becomes an optional `X`; integer bounds beyond Int64 are dropped). |
 | `scripts/generate-api.sh`            | Regenerates the client. Add an operation to `Packages/APIGen/openapi-generator-config.yaml` first.                                                                                                                                   |
 | `scripts/ci.sh`                      | What CI runs: the generated-client drift check, `swift test`, then the simulator build and tests.                                                                                                                                    |
+| `Design/make-app-icon.py`            | Draws the placeholder app icon (standard library only).                                                                                                                                                                              |
 
 ## Build
 

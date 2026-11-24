@@ -38,6 +38,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(MAINLOOP_BUNDLE_ID)
         PRODUCT_NAME: Mainloop
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
     info:
       path: App/Info.plist
