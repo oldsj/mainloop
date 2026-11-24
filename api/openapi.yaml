@@ -7148,9 +7148,6 @@ components:
           default: 0
         dev:
           $ref: '#/components/schemas/WorkspaceDev'
-          default:
-            ports: []
-            idle_timeout_minutes: 30
         agent_kind:
           type: string
           maxLength: 80
@@ -10344,12 +10341,14 @@ components:
     WorkspaceDev:
       properties:
         ports:
-          # no cap in the code: ports are unique per workspace, but their number is not limited
+          # no cap in the code: ports are unique per workspace, but their number is not limited.
+          # No default: the request validator fills defaults in, and an empty list would replace
+          # the project's ports.
           items:
             $ref: '#/components/schemas/WorkspacePort'
           type: array
           title: Ports
-          default: []
+          description: The workspace's preview ports. Absent, the workspace takes its project's workspace-service ports; an empty list declares none.
         idle_timeout_minutes:
           type: integer
           description: Recorded only. kagent decides when an idle runtime sleeps; Mainloop no longer suspends a workspace after this time.
