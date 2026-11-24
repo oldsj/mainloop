@@ -132,18 +132,28 @@ func normalizeDelete(raw json.RawMessage) (any, error) {
 	if err := decodeStrict(raw, &a); err != nil {
 		return nil, err
 	}
-	a.Kind = strings.TrimSpace(a.Kind)
-	name, group, _ := strings.Cut(a.Kind, ".")
-	switch {
-	case name == "" || len(a.Kind) > maxKindLen || strings.ContainsAny(name, "/ ") ||
-		(group != "" && !dnsSubdomainRE.MatchString(group)):
-		return nil, fmt.Errorf("%w: kind must be a kind or resource, optionally with its API group (Pod, Job.batch)", ErrInvalid)
-	case a.Namespace != "" && !dnsLabelRE.MatchString(a.Namespace):
-		return nil, fmt.Errorf("%w: namespace must be a Kubernetes namespace name, or empty for a cluster-scoped object", ErrInvalid)
-	case !validObjectName(a.Name):
-		return nil, fmt.Errorf("%w: name must be a Kubernetes object name", ErrInvalid)
+	kind, err := normalizeRef(a.Namespace, a.Kind, a.Name)
+	if err != nil {
+		return nil, err
 	}
+	a.Kind = kind
 	return a, nil
+}
+
+// normalizeRef validates an object reference by kind and returns the trimmed kind.
+func normalizeRef(namespace, kind, name string) (string, error) {
+	kind = strings.TrimSpace(kind)
+	k, group, _ := strings.Cut(kind, ".")
+	switch {
+	case k == "" || len(kind) > maxKindLen || strings.ContainsAny(k, "/ ") ||
+		(group != "" && !dnsSubdomainRE.MatchString(group)):
+		return "", fmt.Errorf("%w: kind must be a kind or resource, optionally with its API group (Pod, Job.batch)", ErrInvalid)
+	case namespace != "" && !dnsLabelRE.MatchString(namespace):
+		return "", fmt.Errorf("%w: namespace must be a Kubernetes namespace name, or empty for a cluster-scoped object", ErrInvalid)
+	case !validObjectName(name):
+		return "", fmt.Errorf("%w: name must be a Kubernetes object name", ErrInvalid)
+	}
+	return kind, nil
 }
 
 // validObjectName accepts the names the API server allows for most kinds: a DNS subdomain, or the

@@ -94,11 +94,12 @@ func TestExecutor(t *testing.T) {
 	}
 }
 
-// With executor.kubernetes, the executor's own account may only mint tokens for two narrow
-// accounts; neither runs a pod. The workloads account may patch workloads and nothing holding a
-// Secret. The delete account is the only cluster-wide grant over every resource, Secrets included
-// (RBAC cannot say "all but"): the executor reads through it with metadata-only requests and
-// refuses its own namespace and roles. Both roles are named after the executor's namespace.
+// With executor.kubernetes, the executor's own account may only mint tokens for three narrow
+// accounts; none runs a pod. The workloads account may patch workloads and nothing holding a
+// Secret. The delete and writer accounts are the only cluster-wide grants over every resource,
+// Secrets included (RBAC cannot say "all but"): the executor reads through delete with
+// metadata-only requests, refuses Secrets through writer, and refuses its own namespace and roles.
+// The roles are named after the executor's namespace.
 func TestExecutorKubernetes(t *testing.T) {
 	r := render(t, "production-executor-kubernetes")
 	cfg := r.configMaps["mainloop-config"].Data
@@ -112,14 +113,14 @@ func TestExecutorKubernetes(t *testing.T) {
 		t.Errorf("executor env = %+v", c.Env)
 	}
 
-	for _, name := range []string{"mainloop-executor-workloads", "mainloop-executor-delete"} {
+	for _, name := range []string{"mainloop-executor-workloads", "mainloop-executor-delete", "mainloop-executor-writer"} {
 		a, ok := r.accounts[name]
 		if !ok || a.Namespace != "mainloop-executor" || a.AutomountServiceAccountToken == nil || *a.AutomountServiceAccountToken {
 			t.Errorf("account %s = %+v", name, a)
 		}
 	}
 	for _, d := range r.deployments {
-		if sa := d.Spec.Template.Spec.ServiceAccountName; sa == "mainloop-executor-workloads" || sa == "mainloop-executor-delete" {
+		if sa := d.Spec.Template.Spec.ServiceAccountName; strings.HasPrefix(sa, "mainloop-executor-") {
 			t.Errorf("Deployment %s runs as %s", d.Name, sa)
 		}
 	}
@@ -141,6 +142,7 @@ func TestExecutorKubernetes(t *testing.T) {
 	}
 	if !maps.Equal(bound, map[string]string{
 		"mainloop-executor-workloads": "mainloop-executor-workloads", "mainloop-executor-delete": "mainloop-executor-delete",
+		"mainloop-executor-writer": "mainloop-executor-writer",
 	}) {
 		t.Errorf("bindings = %v", bound)
 	}
@@ -156,8 +158,18 @@ func TestExecutorKubernetes(t *testing.T) {
 	if len(del) != 1 || !slices.Equal(del[0].Verbs, []string{"get", "delete"}) {
 		t.Errorf("delete rules = %+v", del)
 	}
+	writer := roles["mainloop-executor-writer"].Rules
+	if len(writer) != 2 || !slices.Equal(writer[0].Verbs, []string{"get", "create", "patch"}) ||
+		!slices.Equal(writer[1].Resources, []string{"roles", "clusterroles"}) || !slices.Equal(writer[1].Verbs, []string{"escalate", "bind"}) {
+		t.Errorf("writer rules = %+v", writer)
+	}
+	for _, rule := range append(slices.Clone(del), writer...) {
+		if slices.Contains(rule.Verbs, "*") || slices.ContainsFunc(rule.Verbs, func(v string) bool { return v == "update" || v == "deletecollection" || v == "impersonate" }) {
+			t.Errorf("rule grants more than its type needs: %+v", rule)
+		}
+	}
 	for name, role := range roles {
-		if name == "mainloop-executor-delete" {
+		if name == "mainloop-executor-delete" || name == "mainloop-executor-writer" {
 			continue
 		}
 		for _, rule := range role.Rules {
@@ -174,7 +186,7 @@ func TestExecutorKubernetes(t *testing.T) {
 		}
 	}
 	if len(tokens) != 1 || !slices.Equal(tokens[0].Resources, []string{"serviceaccounts/token"}) || !slices.Equal(tokens[0].Verbs, []string{"create"}) ||
-		!slices.Equal(tokens[0].ResourceNames, []string{"mainloop-executor-delete", "mainloop-executor-workloads"}) {
+		!slices.Equal(tokens[0].ResourceNames, []string{"mainloop-executor-delete", "mainloop-executor-workloads", "mainloop-executor-writer"}) {
 		t.Errorf("token rules = %+v", tokens)
 	}
 }

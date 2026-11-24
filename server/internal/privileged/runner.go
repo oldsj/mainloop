@@ -285,6 +285,8 @@ func (r *Runner) attempt(ctx context.Context, row dbq.PrivilegedAction) error {
 			out = r.workload(ctx, row)
 		case TypeDelete:
 			out = r.deleteObject(ctx, row)
+		case TypePatch, TypeApply:
+			out = r.change(ctx, row)
 		default:
 			out = outcome{state: StateFailed, err: "the type is no longer in the catalog"}
 		}

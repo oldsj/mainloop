@@ -152,7 +152,7 @@ subjects:
 {{- end }}
 {{- if .kubernetes.enabled }}
 {{- $ns := .namespace }}
-{{- $accounts := dict "workloads" "mainloop-executor-workloads" "delete" "mainloop-executor-delete" }}
+{{- $accounts := dict "workloads" "mainloop-executor-workloads" "delete" "mainloop-executor-delete" "writer" "mainloop-executor-writer" }}
 {{- range $role, $account := $accounts }}
 ---
 # The k8s.* types' narrow ServiceAccounts. Nothing runs as them: the executor mints a 10-minute
@@ -203,6 +203,22 @@ rules:
   - apiGroups: ['*']
     resources: ['*']
     verbs: [get, delete]
+---
+# k8s.patch and k8s.apply: read, create and patch any object, server-side dry runs included. The
+# executor refuses Secrets (a dry run would read the value), its own namespace and these roles.
+# escalate and bind let an approved change write roles and bindings beyond this role's own rights,
+# as an admin's would.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $ns }}-writer
+rules:
+  - apiGroups: ['*']
+    resources: ['*']
+    verbs: [get, create, patch]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, clusterroles]
+    verbs: [escalate, bind]
 ---
 # The executor's own account may mint tokens for the narrow accounts, and nothing else here.
 apiVersion: rbac.authorization.k8s.io/v1

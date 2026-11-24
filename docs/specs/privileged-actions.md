@@ -10,10 +10,11 @@ sends the requesting session one message with the outcome.
   through Mainloop's own GitHub App, in `serve-api`.
 - Slice 2: `onepassword.item_to_secret`, run by a separate process, `serve-executor`, which holds a
   1Password credential `serve-api` never sees. Also the owner's read-only audit page.
-- Slice 3, first part: the typed Kubernetes actions `k8s.rollout_restart`, `k8s.scale` and
-  `k8s.delete`, run by `serve-executor` with short-lived credentials it mints per run.
+- Slice 3, first part: the typed Kubernetes actions `k8s.rollout_restart`, `k8s.scale`,
+  `k8s.delete`, `k8s.patch` and `k8s.apply`, run by `serve-executor` with short-lived credentials
+  it mints per run.
 
-`k8s.patch`, `k8s.apply`, `argocd.sync`, approved commands and the home-network types are later
+`argocd.sync`, approved commands and the home-network types are later
 parts. They are not described here.
 
 ## Enablement
@@ -94,7 +95,26 @@ The Kubernetes types act on the cluster the executor runs in, named on the card 
   empty for a cluster-scoped object. An object already being deleted is refused. A delete waits
   1 hour for the owner, not 24.
 
-All three refuse the executor's own namespace, and the cluster-scoped objects named after it (its
+- `k8s.patch {namespace, kind, name, patch_type, patch}` patches one object as `kubectl patch`
+  does. `patch_type` is `merge`, `strategic` or `json`; `patch` is an object, or for `json` an array
+  of operations. A patch may not touch `metadata.resourceVersion`, `metadata.uid` or the
+  `mainloop.dev/privileged-action` annotation, and a JSON patch may not replace `/metadata` whole.
+- `k8s.apply {manifests, namespace, force_conflicts}` server-side applies YAML or JSON manifests
+  (up to 50 objects, 64 KiB) as `mainloop-executor`, as `kubectl apply --server-side` does.
+  `namespace` is the default for namespaced objects that name none; an object naming another is
+  invalid. Each object needs a name (no `generateName`), and a `List` is given object by object.
+  Without `force_conflicts`, fields another manager owns are refused with the conflicts.
+
+Preflight runs the patch or apply as a server dry run, and the card shows each object's diff: its
+YAML, live against the dry run's answer, without status and the metadata the API server keeps
+(resourceVersion, generation, uid, creation time, managed fields). A change that alters nothing is
+refused, and an apply skips the objects it would leave as they are. Diffs over 64 KiB together are
+refused; the card shows the first 16 KiB.
+
+Both refuse Secrets, since a dry run's answer would carry the value. Copy one from 1Password with
+`onepassword.item_to_secret`.
+
+All five refuse the executor's own namespace, and the cluster-scoped objects named after it (its
 roles). Those change only through GitOps.
 
 ## Preflight and the card
@@ -130,7 +150,8 @@ The card is a Needs-you `approval` item with high priority, so it gets an ntfy p
 - **Content:** the rendered facts, risk tags (checks failing, pending or unread; not mergeable;
   overwrites an existing key; a Secret labelled managed-by; destructive, irreversible, scales to
   zero; Argo-managed; an autoscaler or an owner that may undo it; a paused Deployment; a namespace
-  that is Mainloop's, the cluster's or Argo CD's),
+  that is Mainloop's, the cluster's or Argo CD's; cluster-scoped; access rights; a
+  CustomResourceDefinition; creates objects; force_conflicts),
   the labelled agent reason, the expiry, and the action id with the first 16 characters of the
   digest.
 - **Options:** `Approve` and `Deny`. The card also accepts a free-text reply.
@@ -155,7 +176,9 @@ For `onepassword.item_to_secret` the frozen facts are the vault, item and field 
 the item's version, and the target Secret's uid, resourceVersion and key names, or its absence.
 For a workload they are its uid, generation, resourceVersion, replicas and their status, images,
 last restart, Argo tracking and autoscaler. For a delete they are the resolved kind, the object's
-uid, creation time, owners, finalizers and Argo tracking.
+uid, creation time, owners, finalizers and Argo tracking. For a patch or an apply they are each
+changed object's resolved kind, uid (none for a creation), resourceVersion, Argo tracking and
+diff.
 
 An undecided action expires after 24 hours. An approved action that no executor claims within 5
 minutes also expires, so a backlog never runs an old approval late.
@@ -212,6 +235,19 @@ For `k8s.delete` (in `serve-executor`):
   `kubectl delete` does. A replaced object is `stale` and nothing is deleted. The result says when
   finalizers still hold the object.
 
+For `k8s.patch` and `k8s.apply` (in `serve-executor`), every object is checked before anything is
+written:
+
+- **Observe.** A patched object annotated with this action's id was written by an earlier attempt.
+  An applied object carries no annotation (it would conflict with the manager that owns the
+  annotation), so on a later attempt an object whose approved change is now no change is this
+  action's own earlier write. On the first attempt it is `stale`: someone else made the change.
+- **Check.** The object is the one the owner saw (the same uid, or still absent for a creation), and
+  a fresh dry run gives exactly the approved diff. Anything else is `stale`, naming what an earlier
+  attempt already wrote.
+- **Write.** The patch, with the resourceVersion just observed and the action annotation added; or
+  the apply, with the resourceVersion just observed. A concurrent write is retried, checking again.
+
 A 403 from Kubernetes is `failed`; other errors are retried like a merge.
 
 States: `requested`, `pending_approval`, `preflight_failed`, `approved`, `executing`, `succeeded`,
@@ -234,18 +270,21 @@ role can:
 It cannot record or change a decision, change what was asked, or read any other table. The
 executor refuses to start under a role that can read `attention_items`.
 
-**Kubernetes credentials.** With `executor.kubernetes.enabled`, the chart renders two
-ServiceAccounts in the executor's namespace. No pod runs as either:
+**Kubernetes credentials.** With `executor.kubernetes.enabled`, the chart renders three
+ServiceAccounts in the executor's namespace. No pod runs as any of them:
 
 - `mainloop-executor-workloads`: get and patch Deployments, StatefulSets and DaemonSets, and list
   HorizontalPodAutoscalers, cluster-wide
 - `mainloop-executor-delete`: get and delete any object, cluster-wide
+- `mainloop-executor-writer`: get, create and patch any object, cluster-wide, and `escalate` and
+  `bind` on roles, so an approved change can write roles and bindings as an admin's would
 
-The executor's own account may only create tokens for those two. Each run of a `k8s.*` type mints a
-10-minute token for the one it needs. The delete account can read every object, Secrets included,
-because RBAC cannot grant "everything but Secrets". The executor reads through it with
-metadata-only requests, so no object's data reaches it. The guard on the executor's own namespace
-and roles is the executor's, not RBAC's.
+The executor's own account may only create tokens for those three. Each run of a `k8s.*` type mints
+a 10-minute token for the one it needs. The delete and writer accounts can read every object,
+Secrets included, because RBAC cannot grant "everything but Secrets". The executor reads through
+delete with metadata-only requests, so no object's data reaches it, and refuses Secrets for the
+types that use writer. The guards on Secrets and on the executor's own namespace and roles are the
+executor's, not RBAC's.
 
 The split of work:
 

@@ -33,7 +33,11 @@ func (s *Server) privilegedTools() []Tool {
 			"k8s.rollout_restart {namespace, kind: Deployment|StatefulSet|DaemonSet, name} restarts its pods as kubectl rollout " +
 			"restart does; k8s.scale {namespace, kind: Deployment|StatefulSet, name, replicas: 0-100} sets its replicas; " +
 			"k8s.delete {namespace (empty for a cluster-scoped object), kind (Pod, Job.batch, Certificate.cert-manager.io), name} " +
-			"deletes that one object (its card expires in an hour). The k8s.* types run through the executor on the cluster it " +
+			"deletes that one object (its card expires in an hour); k8s.patch {namespace, kind, name, patch_type: merge|strategic|json, " +
+			"patch (an object, or an array of JSON patch operations)} patches one object as kubectl patch does; k8s.apply " +
+			"{manifests (YAML or JSON, up to 50 objects, 64 KiB), namespace (the default for objects naming none), force_conflicts} " +
+			"server-side applies them. Patch and apply show the API server's dry-run diff and write only while it still holds; " +
+			"they refuse Secrets (use onepassword.item_to_secret). The k8s.* types run through the executor on the cluster it " +
 			"runs in, never in its own namespace, and answer unavailable where it has no Kubernetes access; prefer a Git change " +
 			"for anything Argo CD manages. " +
 			"An executor type returns state requested; its card opens once the executor has checked the target. Reuse request_id to read the same request back. At most 3 requests per session " +
