@@ -129,6 +129,11 @@ func (Unimplemented) GetConversation(context.Context, GetConversationRequestObje
 	return nil, apierr.NotImplemented
 }
 
+// GetCurrentDevice is not implemented yet.
+func (Unimplemented) GetCurrentDevice(context.Context, GetCurrentDeviceRequestObject) (GetCurrentDeviceResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetDevloopLease is not implemented yet.
 func (Unimplemented) GetDevloopLease(context.Context, GetDevloopLeaseRequestObject) (GetDevloopLeaseResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -344,6 +349,11 @@ func (Unimplemented) ListActivity(context.Context, ListActivityRequestObject) (L
 	return nil, apierr.NotImplemented
 }
 
+// ListDevices is not implemented yet.
+func (Unimplemented) ListDevices(context.Context, ListDevicesRequestObject) (ListDevicesResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // ListDevloopOperations is not implemented yet.
 func (Unimplemented) ListDevloopOperations(context.Context, ListDevloopOperationsRequestObject) (ListDevloopOperationsResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -479,6 +489,11 @@ func (Unimplemented) RefreshWorkspace(context.Context, RefreshWorkspaceRequestOb
 	return nil, apierr.NotImplemented
 }
 
+// RegisterDevice is not implemented yet.
+func (Unimplemented) RegisterDevice(context.Context, RegisterDeviceRequestObject) (RegisterDeviceResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // RegisterEnvironment is not implemented yet.
 func (Unimplemented) RegisterEnvironment(context.Context, RegisterEnvironmentRequestObject) (RegisterEnvironmentResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -521,6 +536,11 @@ func (Unimplemented) RetireProjectSupervisor(context.Context, RetireProjectSuper
 
 // RetryTask is not implemented yet.
 func (Unimplemented) RetryTask(context.Context, RetryTaskRequestObject) (RetryTaskResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// RevokeDevice is not implemented yet.
+func (Unimplemented) RevokeDevice(context.Context, RevokeDeviceRequestObject) (RevokeDeviceResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

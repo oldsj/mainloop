@@ -238,7 +238,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		ciSvc.Sender = svc
 	}
 
-	authn, err := newAuthenticator(cfg, log)
+	authn, err := newAuthenticator(cfg, pool, log)
 	if err != nil {
 		return err
 	}

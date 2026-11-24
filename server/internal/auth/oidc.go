@@ -44,8 +44,11 @@ type OwnerClaims struct {
 type OIDC struct {
 	Issuer   string
 	Audience string
-	Client   *http.Client
-	Now      func() time.Time
+	// DeviceAudience, when set, is also accepted: the native app's own OIDC client, whose tokens
+	// the Authenticator lets register a device and nothing else.
+	DeviceAudience string
+	Client         *http.Client
+	Now            func() time.Time
 
 	mu      sync.Mutex
 	jwksURI string
@@ -81,7 +84,7 @@ func (o *OIDC) Verify(ctx context.Context, raw string) (*OwnerClaims, error) {
 	switch {
 	case claims.Issuer != o.Issuer:
 		return nil, errors.New("token: wrong issuer")
-	case !claims.VerifyAudience(o.Audience, true):
+	case !claims.VerifyAudience(o.Audience, true) && (o.DeviceAudience == "" || !claims.VerifyAudience(o.DeviceAudience, true)):
 		return nil, errors.New("token: wrong audience")
 	case claims.ExpiresAt == nil:
 		return nil, errors.New("token: no expiry")

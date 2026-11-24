@@ -70,6 +70,23 @@ func TestOwnerAPIRequiresAnIdentity(t *testing.T) {
 			t.Fatalf("got %d %s", r.status, r.body)
 		}
 	})
+	t.Run("a device's signed write reaches the handler with its body intact", func(t *testing.T) {
+		store := &authtest.DeviceStore{}
+		phone := authtest.NewDevice(t, "dev_aaaaaaaaaaaaaaaaaaaaaaaaaa")
+		store.Add(phone)
+		a.Devices = &auth.Devices{Store: store, MaxBody: app.MaxBodyBytes}
+		t.Cleanup(func() { a.Devices = nil })
+		body := `{"request_id":"r1","agent":{"namespace":"kagent","name":"a1"},"config":{"schedule":"0 * * * *","prompt":"go"}}`
+		tok := phone.Token(t, "POST", "/schedules", []byte(body), nil)
+		r := send(h, "POST", "/schedules", body, map[string]string{"Authorization": "Bearer " + tok, auth.ClientHeader: "ios"})
+		if r.status != http.StatusServiceUnavailable { // validated, so the body arrived whole
+			t.Fatalf("got %d %s", r.status, r.body)
+		}
+		r = send(h, "POST", "/schedules", body, map[string]string{"Authorization": "Bearer " + tok, auth.ClientHeader: "ios"})
+		if r.status != http.StatusUnauthorized {
+			t.Fatalf("replay: got %d %s", r.status, r.body)
+		}
+	})
 	t.Run("loopback is not identity", func(t *testing.T) {
 		r := send(h, "GET", "/schedules", "", map[string]string{"Host": "api.test", "X-Forwarded-For": "127.0.0.1"})
 		if r.status != http.StatusUnauthorized {

@@ -17,6 +17,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/buildinfo"
 	"github.com/oldsj/mainloop/server/internal/ci"
 	"github.com/oldsj/mainloop/server/internal/config"
+	"github.com/oldsj/mainloop/server/internal/devices"
 	"github.com/oldsj/mainloop/server/internal/devloop"
 	"github.com/oldsj/mainloop/server/internal/dotfiles"
 	"github.com/oldsj/mainloop/server/internal/environments"
@@ -67,6 +68,7 @@ type Server struct {
 	*transcripts.TranscriptsAPI
 	*preview.GrantAPI
 	*privileged.PrivilegedAPI
+	*devices.DevicesAPI
 
 	fallback
 
@@ -160,7 +162,11 @@ func (d Deps) missing() error {
 // so the cap has to sit in this chain. Sized for POST /chat/images: a base64 image up to
 // sessions.MaxImageBytes (5MiB raw, Anthropic's own per-image limit) inflates by about a third,
 // plus room for the JSON envelope.
-const maxBodyBytes = 8 << 20
+const maxBodyBytes = MaxBodyBytes
+
+// MaxBodyBytes is the request body cap, exported for the device verifier, which hashes the body
+// before the cap's middleware runs.
+const MaxBodyBytes = 8 << 20
 
 // New builds the Server from services the caller has already built.
 func New(d Deps) *Server {
@@ -183,6 +189,7 @@ func New(d Deps) *Server {
 		TranscriptsAPI:  transcripts.NewAPI(d.Transcripts),
 		GrantAPI:        &preview.GrantAPI{Proxy: d.Preview, AuthOff: d.Auth == nil || d.Auth.Mode == auth.ModeOff},
 		PrivilegedAPI:   &privileged.PrivilegedAPI{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID},
+		DevicesAPI:      &devices.DevicesAPI{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID},
 		deps:            d,
 	}
 }

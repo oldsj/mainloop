@@ -614,6 +614,20 @@ type MessageImage struct {
 	CreatedAt time.Time
 }
 
+type OwnerDevice struct {
+	ID            string
+	OwnerID       string
+	Name          string
+	Platform      string
+	RequestKeyX   string
+	RequestKeyY   string
+	KeyThumbprint string
+	RegisteredBy  string
+	CreatedAt     time.Time
+	LastSeenAt    *time.Time
+	RevokedAt     *time.Time
+}
+
 type OwnerDotfilesSource struct {
 	OwnerID    string
 	Repository *string

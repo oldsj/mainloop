@@ -98,6 +98,70 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/devices': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Devices
+     * @description The owner's registered devices, newest first, revoked ones included. A device sees itself marked `current`.
+     */
+    get: operations['listDevices'];
+    put?: never;
+    /**
+     * Register Device
+     * @description Registers a phone and its request key (docs/specs/devices.md). Only the owner's own Pocket ID token sent as a bearer may call this, issued within the last 10 minutes: the native app signs in once with its own OIDC client (MAINLOOP_AUTH_DEVICE_CLIENT_ID), whose tokens are good for this operation only. A device key, the login cookie or a ServiceAccount is refused with 403. The response's `id` is the `kid` and `sub` of the device's request tokens.
+     */
+    post: operations['registerDevice'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/devices/current': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Current Device
+     * @description The device whose key signed this request. 404 when the request was not signed by a device.
+     */
+    get: operations['getCurrentDevice'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/devices/{device_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Revoke Device
+     * @description Revokes a device: its request key stops working at once. The owner may revoke any device; a device may revoke only itself (signing out). Revoking a revoked device succeeds and changes nothing.
+     */
+    delete: operations['revokeDevice'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/devloop/lease': {
     parameters: {
       query?: never;
@@ -4715,6 +4779,36 @@ export interface components {
       message_id: string;
       state: string;
     };
+    /** @description A registered device. Only public facts; no key material beyond the key's thumbprint. */
+    Device: {
+      id: string;
+      name: string;
+      /** @enum {string} */
+      platform: 'ios';
+      /** @description RFC 7638 SHA-256 thumbprint of the request key, unpadded base64url. */
+      key_thumbprint: string;
+      /** Format: date-time */
+      created_at: string;
+      last_seen_at: string | null;
+      revoked_at: string | null;
+      /** @description True when this request was signed by this device. */
+      current: boolean;
+    };
+    /** @description A P-256 public key as a JWK (RFC 7517), coordinates unpadded base64url. */
+    DeviceKey: {
+      /** @enum {string} */
+      kty: 'EC';
+      /** @enum {string} */
+      crv: 'P-256';
+      x: string;
+      y: string;
+    };
+    DeviceRegistration: {
+      name: string;
+      /** @enum {string} */
+      platform: 'ios';
+      request_key: components['schemas']['DeviceKey'];
+    };
     DevloopLease: {
       /** @enum {string} */
       status: 'free' | 'acquired' | 'queued';
@@ -7118,6 +7212,175 @@ export interface operations {
         content: {
           'application/json': components['schemas']['ConversationResponse'];
         };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  listDevices: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Device'][];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  registerDevice: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['DeviceRegistration'];
+      };
+    };
+    responses: {
+      /** @description Registered */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Device'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description This request key is already registered */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  getCurrentDevice: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Device'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  revokeDevice: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        device_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Revoked */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       401: components['responses']['Unauthorized'];
       /** @description Forbidden */
