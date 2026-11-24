@@ -295,11 +295,12 @@ executor:
   # trunk-ignore(checkov/CKV_SECRET_6): the Secret's name, not a value
   onePasswordSecret: mainloop-executor-1password
   # Namespaces onepassword.item_to_secret may write Secrets in; a Role is rendered in each. Some
-  # (kube-*, mainloop*, onepassword*, argocd*, default) are always refused.
+  # (kube-*, mainloop*, onepassword*, argocd*, default) are always refused, and the chart fails on
+  # the executor's or the release's namespace.
   secretNamespaces: []
-  # The typed Kubernetes actions (k8s.rollout_restart, k8s.scale, k8s.delete). On, it renders two
-  # narrow ServiceAccounts with cluster-wide roles (named after the executor's namespace) and lets
-  # the executor mint 10-minute tokens for them.
+  # The typed Kubernetes actions (k8s.rollout_restart, k8s.scale, k8s.delete, k8s.patch,
+  # k8s.apply) and argocd.sync. On, it renders their narrow ServiceAccounts with cluster-wide roles
+  # (named after the executor's namespace) and lets the executor mint 10-minute tokens for them.
   kubernetes:
     enabled: false
     # Shown on the cards, e.g. internal-01.

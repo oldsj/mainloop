@@ -316,6 +316,8 @@ func (r *Runner) run(ctx context.Context, row dbq.PrivilegedAction) outcome {
 		return r.deleteObject(ctx, row)
 	case TypePatch, TypeApply:
 		return r.change(ctx, row)
+	case TypeArgoSync:
+		return r.argoSync(ctx, row)
 	default:
 		return outcome{state: StateFailed, err: "the type is no longer in the catalog"}
 	}

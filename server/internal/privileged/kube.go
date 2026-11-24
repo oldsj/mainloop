@@ -142,6 +142,12 @@ type Kube interface {
 	// resourceVersion in obj is its precondition; fields another manager owns are
 	// ErrFieldConflict unless force.
 	Apply(ctx context.Context, r Resource, obj map[string]any, force, dryRun bool) (map[string]any, error)
+
+	// App reads an Argo CD Application; a missing one has Exists false.
+	App(ctx context.Context, namespace, name string) (ArgoApp, error)
+	// Sync starts a sync of app at its revisions, only at its ResourceVersion: a changed
+	// Application is ErrTargetChanged.
+	Sync(ctx context.Context, app ArgoApp, prune bool, actionID string) error
 }
 
 // ErrGone is a target that no longer exists.
@@ -182,6 +188,8 @@ type KubeActions struct {
 	// Writer returns a dynamic client authenticated as AccountWriter, and a mapper over the API
 	// server's discovery.
 	Writer writerFunc
+	// Argo returns a dynamic client authenticated as AccountArgo.
+	Argo func(ctx context.Context) (dynamic.Interface, error)
 }
 
 // NewKubeActions mints tokens through c. Each client, with its discovery cache, is reused for
@@ -232,6 +240,7 @@ func NewKubeActions(c KubeClients) KubeActions {
 			w, err := writers.get(ctx)
 			return w.dc, w.mapper, err
 		},
+		Argo: (&minted[dynamic.Interface]{make: newArgo(c)}).get,
 	}
 }
 

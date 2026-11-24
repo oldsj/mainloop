@@ -212,17 +212,19 @@ SELECT count(*)::int
 FROM privileged_action_events e
 JOIN privileged_actions a ON a.id = e.action_id
 WHERE a.owner_id = $1 AND a.requester_session_id = $2
+  AND a.type = ANY ($3::text[])
   AND e.step = 'preflight_refused' AND e.created_at > now() - interval '1 hour'
 `
 
 type CountRefusedPrivilegedPreflightsParams struct {
 	OwnerID   string
 	SessionID string
+	Types     []string
 }
 
-// Counts the session's requests that a preflight refused in the last hour.
+// Counts the session's requests of the given types that a preflight refused in the last hour.
 func (q *Queries) CountRefusedPrivilegedPreflights(ctx context.Context, arg CountRefusedPrivilegedPreflightsParams) (int32, error) {
-	row := q.db.QueryRow(ctx, countRefusedPrivilegedPreflights, arg.OwnerID, arg.SessionID)
+	row := q.db.QueryRow(ctx, countRefusedPrivilegedPreflights, arg.OwnerID, arg.SessionID, arg.Types)
 	var column_1 int32
 	err := row.Scan(&column_1)
 	return column_1, err

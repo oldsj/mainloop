@@ -38,7 +38,9 @@ func (s *Server) privilegedTools() []Tool {
 			"{manifests (YAML or JSON, up to 50 objects, 64 KiB), namespace (the default for objects naming none), force_conflicts} " +
 			"server-side applies them. Patch and apply show the owner the API server's dry-run diff (16 KiB at most, never status " +
 			"or server-kept metadata, which they may not set) and write only while it still holds; you get the objects' names, " +
-			"not the diff (no JSON patch test ops; setting or showing a credential is refused, naming the field; 5 refused preflights an hour per session, then too_many_refused). They refuse Secrets (use onepassword.item_to_secret). The k8s.* types run through the executor on the cluster it " +
+			"not the diff (no JSON patch test ops; setting or showing a credential is refused, naming the field; 5 refused preflights an hour per session, then too_many_refused). They refuse Secrets (use onepassword.item_to_secret). argocd.sync {app, namespace (default argocd), prune} starts " +
+			"an Argo CD sync of that Application at the revision Argo CD resolved, with its own sync options and retry, only while Git, its spec and the out-of-sync set stay as the " +
+			"owner saw them (refused for an app with resources in the executor's namespace; with prune its card expires in an hour); it succeeds once the sync starts. The k8s.* types and argocd.sync run through the executor on the cluster it " +
 			"runs in, never in its own namespace, and answer unavailable where it has no Kubernetes access; prefer a Git change " +
 			"for anything Argo CD manages. " +
 			"An executor type returns state requested; its card opens once the executor has checked the target. Reuse request_id to read the same request back. At most 3 requests per session " +

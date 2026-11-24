@@ -819,6 +819,18 @@ func changeStale(err error, res ChangeResult) outcome {
 // anyone approved, so the session gets each object's name only: not the diff, nor its size or
 // hash, which would let it confirm a guess. The owner sees the diff on the card and the audit page.
 func AgentFacts(typ string, facts json.RawMessage) json.RawMessage {
+	if typ == TypeArgoSync && len(facts) > 0 {
+		var f ArgoFacts
+		if err := json.Unmarshal(facts, &f); err != nil {
+			return nil
+		}
+		f.App.Sources = nil // inline Helm values can hold anything; the card summarises the sources
+		b, err := json.Marshal(f)
+		if err != nil {
+			return nil
+		}
+		return b
+	}
 	if typ != TypePatch && typ != TypeApply || len(facts) == 0 {
 		return facts
 	}

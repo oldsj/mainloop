@@ -108,6 +108,8 @@ func render(r dbq.PrivilegedAction) (string, string, map[string]any, error) {
 		return renderDelete(r, ctx)
 	case TypePatch, TypeApply:
 		return renderChange(r, ctx)
+	case TypeArgoSync:
+		return renderArgoSync(r, ctx)
 	}
 	return "", "", nil, fmt.Errorf("privileged: no card for type %q", r.Type)
 }

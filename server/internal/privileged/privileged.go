@@ -85,11 +85,14 @@ const (
 	MaxReasonLen    = 2000
 	// MaxPendingPerSession and MaxPendingTotal bound undecided requests: each costs owner attention.
 	MaxPendingPerSession = 3
-	// MaxRefusedPerHour bounds a session's requests that a preflight refused in the last hour. A
-	// refusal reaches no card, and whether a request is refused, and why, says something about the
-	// target: unbounded, a session could probe it, guess by guess, without the owner seeing.
+	// MaxRefusedPerHour bounds a session's requests of the executor's types (the cluster and
+	// 1Password targets) that a preflight refused in the last hour. A refusal reaches no card, and
+	// whether a request is refused, and why, says something about the target: unbounded, a session
+	// could probe it, guess by guess, without the owner seeing. GitHub merges and closes are not
+	// counted: their refusals (a moved head, a closed PR) say nothing the session cannot read on
+	// GitHub, and main must not lock itself out of merging.
 	MaxRefusedPerHour = 5
-	MaxPendingTotal      = 10
+	MaxPendingTotal   = 10
 	// UndecidedExpiry is how long a request waits for the owner.
 	UndecidedExpiry = 24 * time.Hour
 	// UnclaimedExpiry is how long an approved action waits for the executor before it expires,
@@ -219,6 +222,10 @@ func (s *Service) Request(ctx context.Context, by Requester, typ string, rawArgs
 		return Action{}, err
 	}
 	argsKey := hashHex(append([]byte(typ+"\x00"), argsJSON...))
+	expiry := entry.expiry
+	if entry.expiryFor != nil {
+		expiry = entry.expiryFor(args)
+	}
 	q := dbq.New(s.Pool)
 	if a, ok, err := s.existing(ctx, q, by.SessionID, requestID, typ, argsJSON, argsKey); ok || err != nil {
 		return a, err
@@ -239,9 +246,13 @@ func (s *Service) Request(ctx context.Context, by Requester, typ string, rawArgs
 			return nil, fmt.Errorf("%w: at most %d per session and %d in all wait for the owner; wait for an outcome or cancel one",
 				ErrTooManyPending, MaxPendingPerSession, MaxPendingTotal)
 		}
-		refused, err := tq.CountRefusedPrivilegedPreflights(ctx, dbq.CountRefusedPrivilegedPreflightsParams{OwnerID: s.OwnerID, SessionID: by.SessionID})
-		if err != nil {
-			return nil, err
+		var refused int32
+		if entry.executor {
+			if refused, err = tq.CountRefusedPrivilegedPreflights(ctx, dbq.CountRefusedPrivilegedPreflightsParams{
+				OwnerID: s.OwnerID, SessionID: by.SessionID, Types: TypesFor(true),
+			}); err != nil {
+				return nil, err
+			}
 		}
 		if refused >= MaxRefusedPerHour {
 			return nil, fmt.Errorf("%w: %d requests of this session were refused at preflight in the last hour; "+
@@ -252,7 +263,7 @@ func (s *Service) Request(ctx context.Context, by Requester, typ string, rawArgs
 			RequesterSessionID: by.SessionID, RequesterTaskID: by.TaskID, Type: typ, Version: entry.version,
 			Args: argsJSON, ArgsKey: argsKey, Reason: reason,
 			// Stored at the database's precision, so the digest reads back the same instant.
-			ExpiresAt: s.now().Add(entry.expiry).UTC().Truncate(time.Microsecond),
+			ExpiresAt: s.now().Add(expiry).UTC().Truncate(time.Microsecond),
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil // a concurrent request won; read it below
