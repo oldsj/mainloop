@@ -22,13 +22,15 @@ func TestATokenTheIPhoneAppSignedVerifies(t *testing.T) {
 		t.Fatal(err)
 	}
 	var f struct {
-		DeviceID string `json:"device_id"`
-		X, Y     string
-		Method   string
-		Target   string
-		Body     string
-		IAT      int64
-		Token    string
+		DeviceID   string `json:"device_id"`
+		X, Y       string
+		Thumbprint string
+		Audience   string
+		Method     string
+		Target     string
+		Body       string
+		IAT        int64
+		Token      string
 	}
 	if err := json.Unmarshal(raw, &f); err != nil {
 		t.Fatal(err)
@@ -37,10 +39,17 @@ func TestATokenTheIPhoneAppSignedVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The app's sign-in nonce is its key's thumbprint; the server must compute the same one.
+	if got := devices.Thumbprint(f.X, f.Y); got != f.Thumbprint {
+		t.Fatalf("thumbprint: server %q, app %q", got, f.Thumbprint)
+	}
+	if f.Audience != authtest.DeviceOrigin {
+		t.Fatalf("fixture signed for %q, want %q", f.Audience, authtest.DeviceOrigin)
+	}
 	verify := func(method, target, body string) (string, error) {
 		store := &authtest.DeviceStore{}
 		store.AddKey(f.DeviceID, key)
-		d := &auth.Devices{Store: store, MaxBody: 1 << 20, Now: func() time.Time { return time.Unix(f.IAT+5, 0) }}
+		d := &auth.Devices{Store: store, MaxBody: 1 << 20, Audience: authtest.DeviceOrigin, Now: func() time.Time { return time.Unix(f.IAT+5, 0) }}
 		r := httptest.NewRequestWithContext(context.Background(), method, "https://mainloop.test"+target, strings.NewReader(body))
 		return d.Verify(r, f.Token)
 	}

@@ -15,7 +15,7 @@ import (
 // with Approve.
 const (
 	ContextActionID = "privileged_action_id"
-	ContextDigest   = "privileged_action_digest"
+	ContextDigest   = attention.PrivilegedDigestKey
 	ContextType     = "privileged_action_type"
 )
 

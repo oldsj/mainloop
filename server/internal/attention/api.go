@@ -57,6 +57,8 @@ func (a *AttentionAPI) RespondToQueueItem(ctx context.Context, r api.RespondToQu
 		return nil, apierr.Conflict(message(err, ErrConflict))
 	case errors.Is(err, ErrInvalid):
 		return nil, apierr.Invalid(message(err, ErrInvalid))
+	case errors.Is(err, ErrForbidden):
+		return nil, apierr.Forbidden(message(err, ErrForbidden))
 	case err != nil:
 		return nil, err
 	}

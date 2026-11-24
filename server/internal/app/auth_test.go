@@ -74,7 +74,7 @@ func TestOwnerAPIRequiresAnIdentity(t *testing.T) {
 		store := &authtest.DeviceStore{}
 		phone := authtest.NewDevice(t, "dev_aaaaaaaaaaaaaaaaaaaaaaaaaa")
 		store.Add(phone)
-		a.Devices = &auth.Devices{Store: store, MaxBody: app.MaxBodyBytes}
+		a.Devices = &auth.Devices{Store: store, MaxBody: app.MaxBodyBytes, Audience: authtest.DeviceOrigin}
 		t.Cleanup(func() { a.Devices = nil })
 		body := `{"request_id":"r1","agent":{"namespace":"kagent","name":"a1"},"config":{"schedule":"0 * * * *","prompt":"go"}}`
 		tok := phone.Token(t, "POST", "/schedules", []byte(body), nil)

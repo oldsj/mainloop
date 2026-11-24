@@ -294,7 +294,16 @@ func (l *Live) relay(ctx context.Context, w http.ResponseWriter, r *http.Request
 			}
 		}
 	}()
-	<-done
+	select {
+	case <-done:
+	case <-ctx.Done():
+		// The request ended under the relay: its device was revoked, or the server is stopping.
+		// Say so to both ends; the deferred Closes then end the two readers.
+		mu.Lock()
+		closeWith(down, &websocket.CloseError{Code: websocket.CloseGoingAway, Text: "access ended"})
+		mu.Unlock()
+		closeWith(up, nil)
+	}
 }
 
 // refuseClientFrame returns the err frame that answers a browser frame the runner must not get, or

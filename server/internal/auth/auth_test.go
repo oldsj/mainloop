@@ -55,7 +55,7 @@ func newFixture(t *testing.T, mode auth.Mode) *fixture {
 	f := &fixture{iss: authtest.NewIssuer(t), devices: &authtest.DeviceStore{}, rev: &reviewer{users: map[string]string{}}, logs: &bytes.Buffer{}}
 	a := &auth.Authenticator{
 		Mode: mode, OIDC: &auth.OIDC{Issuer: f.iss.URL(), Audience: "mainloop", DeviceAudience: "mainloop-ios", Client: f.iss.Client()},
-		Devices:      &auth.Devices{Store: f.devices, MaxBody: 1 << 20},
+		Devices:      &auth.Devices{Store: f.devices, MaxBody: 1 << 20, Audience: authtest.DeviceOrigin},
 		OwnerSubject: ownerSub, Cookie: "mainloop-id",
 		ServiceAccounts: &auth.ServiceAccounts{Audience: saAud, Reviewer: f.rev},
 		Scopes: map[string]auth.Scope{

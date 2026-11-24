@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,10 +31,15 @@ func newAuthenticator(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) 
 		return nil, err
 	}
 	if pool != nil {
-		a.Devices = &auth.Devices{Store: &devices.Store{Pool: pool, OwnerID: cfg.Identity.OwnerID}, MaxBody: app.MaxBodyBytes}
+		// A device token names the instance it is for: the frontend origin, where the app reaches
+		// the API under /api.
+		a.Devices = &auth.Devices{
+			Store: &devices.Store{Pool: pool, OwnerID: cfg.Identity.OwnerID}, MaxBody: app.MaxBodyBytes,
+			Audience: strings.ToLower(cfg.FrontendOrigin()),
+		}
 	}
 	log.Info("auth configured", "mode", string(a.Mode), "owner_tokens", a.OIDC != nil,
 		"service_accounts", a.ServiceAccounts != nil, "devices", a.Devices != nil,
-		"device_registration", a.OIDC != nil && a.OIDC.DeviceAudience != "")
+		"device_registration", a.OIDC != nil && a.OIDC.DeviceAudience != "", "device_audience", cfg.FrontendOrigin())
 	return a, nil
 }

@@ -318,3 +318,37 @@ func TestLiveSleepingNeedsWake(t *testing.T) {
 		t.Fatalf("runner query %q", runner.wsQuery)
 	}
 }
+
+// A request whose context ends under the relay (its device revoked) closes both sockets.
+func TestLiveClosesWhenTheRequestEnds(t *testing.T) {
+	_, l := newTestLive(t, &fakeRunner{}, nil)
+	end := make(chan struct{})
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		go func() {
+			select {
+			case <-end:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		l.Route(http.NotFoundHandler()).ServeHTTP(w, r.WithContext(ctx))
+	}))
+	t.Cleanup(front.Close)
+	conn := attach(t, front.URL, "/sessions/s1/live", http.Header{"Origin": {"https://app.example"}})
+	mode := `{"k":"mode","mode":"acceptEdits"}`
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(mode)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatal(err)
+	}
+	close(end)
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, err := conn.ReadMessage()
+	var ce *websocket.CloseError
+	if !errors.As(err, &ce) || ce.Code != websocket.CloseGoingAway {
+		t.Fatalf("after the request ended: %v, want a going-away close", err)
+	}
+}

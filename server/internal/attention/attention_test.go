@@ -16,6 +16,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/attention"
+	"github.com/oldsj/mainloop/server/internal/auth"
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/testdb"
 )
@@ -579,6 +580,66 @@ func TestRespondIsIdempotentAndFenced(t *testing.T) {
 	last := evs[len(evs)-1]
 	if unread(t, last) != 1 || last.ItemId == nil || *last.ItemId != "attn_queue_q1" {
 		t.Fatalf("%+v", last)
+	}
+}
+
+// Until approvals are signed with the device's Touch ID key, a privileged action is approved from
+// the web app only: a device's Approve is refused, while it may still deny, and answer other cards.
+func TestADeviceCantApproveAPrivilegedAction(t *testing.T) {
+	e := newEnv(t)
+	phone := auth.WithPrincipal(context.Background(), auth.Principal{Kind: auth.KindDevice, Name: "dev_aaaaaaaaaaaaaaaaaaaaaaaaaa", Scope: auth.ScopeOwner, Via: "device"})
+	owner := auth.WithPrincipal(context.Background(), auth.Principal{Kind: auth.KindOwner, Name: "owner-sub", Scope: auth.ScopeOwner, Via: "cookie"})
+	card := func(id string) {
+		e.open(t, attention.NewQueueItem{ID: id, ItemType: api.QueueItemTypeApproval, Title: "Run it?", Content: "C",
+			Context: map[string]any{attention.PrivilegedDigestKey: "sha256:abc"}, Options: []string{"Approve", "Deny"}})
+	}
+	card("privileged_action_1")
+	for _, answer := range []string{"Approve", " approve "} {
+		if err := e.svc.Respond(phone, "privileged_action_1", api.QueueItemResponse{Response: answer}); !errors.Is(err, attention.ErrForbidden) {
+			t.Fatalf("a device answering %q: %v", answer, err)
+		}
+	}
+	if err := e.svc.Respond(owner, "privileged_action_1", api.QueueItemResponse{Response: "Approve"}); err != nil {
+		t.Fatalf("the owner's Approve: %v", err)
+	}
+	card("privileged_action_2")
+	if err := e.svc.Respond(phone, "privileged_action_2", api.QueueItemResponse{Response: "Deny"}); err != nil {
+		t.Fatalf("a device's Deny: %v", err)
+	}
+	e.open(t, attention.NewQueueItem{ID: "q1", Title: "Ship it?", Content: "C", Options: []string{"Approve", "Wait"}})
+	if err := e.svc.Respond(phone, "q1", api.QueueItemResponse{Response: "Approve"}); err != nil {
+		t.Fatalf("a device approving an ordinary card: %v", err)
+	}
+}
+
+// An item's answer hook runs in the answer's transaction: its error refuses the answer.
+func TestAnswerHooks(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	var got []string
+	e.svc.OnAnswer("hooked_", func(_ context.Context, _ pgx.Tx, id, response string) error {
+		got = append(got, id+"="+response)
+		if response == "No" {
+			return fmt.Errorf("%w: not that", attention.ErrInvalid)
+		}
+		return nil
+	})
+	e.open(t, attention.NewQueueItem{ID: "hooked_1", Title: "T", Content: "C"})
+	e.open(t, attention.NewQueueItem{ID: "plain", Title: "T", Content: "C"})
+	if err := e.svc.Respond(ctx, "hooked_1", api.QueueItemResponse{Response: "No"}); !errors.Is(err, attention.ErrInvalid) {
+		t.Fatalf("refused by the hook: %v", err)
+	}
+	if snap, _ := e.svc.Snapshot(ctx); snap.Count != 2 {
+		t.Fatalf("a refused answer closed the item: %+v", snap.Items)
+	}
+	if err := e.svc.Respond(ctx, "hooked_1", api.QueueItemResponse{Response: "Yes"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.Respond(ctx, "plain", api.QueueItemResponse{Response: "Yes"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "hooked_1=No,hooked_1=Yes" {
+		t.Fatalf("hook calls = %v", got)
 	}
 }
 

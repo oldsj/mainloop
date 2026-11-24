@@ -35,6 +35,16 @@ public struct SecureEnclaveSigner: RequestSigner {
     public func sign(_ data: Data) throws -> Data { try key.signature(for: data).rawRepresentation }
 }
 
+public extension RequestSigner {
+    /// The key's RFC 7638 thumbprint: base64url SHA-256 of its canonical JWK. The sign-in that
+    /// registers the key carries it as the nonce, so that sign-in registers this key only.
+    var thumbprint: String {
+        let jwk = publicJWK
+        let canonical = #"{"crv":"P-256","kty":"EC","x":"\#(jwk.x)","y":"\#(jwk.y)"}"#
+        return Base64URL.encode(Data(SHA256.hash(data: Data(canonical.utf8))))
+    }
+}
+
 /// x and y from a P-256 raw public key (64 bytes, x‖y).
 func jwkCoordinates(_ raw: Data) -> (x: String, y: String) {
     (Base64URL.encode(raw.prefix(32)), Base64URL.encode(raw.suffix(32)))
@@ -58,15 +68,26 @@ public enum Base64URL {
 /// A device request token: an ES256 JWT bound to one request (docs/specs/devices.md).
 public enum DeviceToken {
     public static let issuer = "mainloop-device"
-    public static let audience = "mainloop-api"
     public static let type = "mainloop-device+jwt"
     /// The token's lifetime; the server refuses more than 60 seconds.
     public static let lifetime: TimeInterval = 60
 
+    /// The audience for an instance: its origin, `scheme://host[:port]`, lowercased, the way the
+    /// server names itself. A token signed for one instance is refused by another.
+    public static func audience(for origin: URL) -> String {
+        var c = URLComponents()
+        c.scheme = origin.scheme?.lowercased()
+        c.host = origin.host?.lowercased()
+        c.port = origin.port
+        return c.string ?? origin.absoluteString.lowercased()
+    }
+
     /// - Parameters:
+    ///   - audience: the instance's origin (`audience(for:)`).
     ///   - target: the path and query the API sees, relative to its base URL (`/attention?x=1`).
     public static func make(
         deviceID: String,
+        audience: String,
         method: String,
         target: String,
         body: Data,
@@ -104,11 +125,14 @@ public struct DeviceSigningMiddleware: ClientMiddleware {
     public static let maxBody = 8 << 20
 
     let deviceID: String
+    let audience: String
     let signer: any RequestSigner
     let now: @Sendable () -> Date
 
-    public init(deviceID: String, signer: any RequestSigner, now: @escaping @Sendable () -> Date = { Date() }) {
+    /// - Parameter origin: the instance the device is registered with; tokens name it.
+    public init(deviceID: String, origin: URL, signer: any RequestSigner, now: @escaping @Sendable () -> Date = { Date() }) {
         self.deviceID = deviceID
+        self.audience = DeviceToken.audience(for: origin)
         self.signer = signer
         self.now = now
     }
@@ -123,7 +147,7 @@ public struct DeviceSigningMiddleware: ClientMiddleware {
         var request = request
         let data: Data = if let body { try await Data(collecting: body, upTo: Self.maxBody) } else { Data() }
         let token = try DeviceToken.make(
-            deviceID: deviceID, method: request.method.rawValue, target: request.path ?? "/",
+            deviceID: deviceID, audience: audience, method: request.method.rawValue, target: request.path ?? "/",
             body: data, signer: signer, now: now()
         )
         request.headerFields[.authorization] = "Bearer " + token

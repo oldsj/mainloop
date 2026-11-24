@@ -170,6 +170,14 @@ const MaxBodyBytes = 8 << 20
 
 // New builds the Server from services the caller has already built.
 func New(d Deps) *Server {
+	devicesAPI := &devices.DevicesAPI{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID}
+	if d.Auth != nil && d.Auth.Devices != nil {
+		devicesAPI.OnRevoke = d.Auth.Devices.Revoked
+	}
+	if d.Attention != nil {
+		// A registration's Needs-you item: Revoke revokes the device.
+		d.Attention.OnAnswer(devices.RegistrationItemPrefix, devicesAPI.AnswerRegistration)
+	}
 	return &Server{
 		HealthAPI:       &HealthAPI{DB: d.DB, Log: d.Log, Revision: buildinfo.Revision},
 		ProjectsAPI:     &projects.ProjectsAPI{Svc: d.Projects, Devloop: d.DevloopTargets, CI: d.CI},
@@ -189,7 +197,7 @@ func New(d Deps) *Server {
 		TranscriptsAPI:  transcripts.NewAPI(d.Transcripts),
 		GrantAPI:        &preview.GrantAPI{Proxy: d.Preview, AuthOff: d.Auth == nil || d.Auth.Mode == auth.ModeOff},
 		PrivilegedAPI:   &privileged.PrivilegedAPI{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID},
-		DevicesAPI:      &devices.DevicesAPI{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID},
+		DevicesAPI:      devicesAPI,
 		deps:            d,
 	}
 }

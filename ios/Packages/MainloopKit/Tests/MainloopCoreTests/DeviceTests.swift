@@ -67,8 +67,8 @@ func bearer(_ sent: FakeTransport.Sent) throws -> String {
         let signer = SoftwareSigner()
         let now = Date(timeIntervalSince1970: 1_790_000_000)
         let token = try DeviceToken.make(
-            deviceID: deviceID, method: "POST", target: "/queue/q-1/respond?x=1", body: Data("{}".utf8),
-            signer: signer, now: now, jti: "0123456789abcdef0123"
+            deviceID: deviceID, audience: "https://mainloop.example.test", method: "POST", target: "/queue/q-1/respond?x=1",
+            body: Data("{}".utf8), signer: signer, now: now, jti: "0123456789abcdef0123"
         )
         let decoded = try DecodedToken(token, key: signer.key.publicKey)
         #expect(decoded.header["alg"] as? String == "ES256")
@@ -76,13 +76,29 @@ func bearer(_ sent: FakeTransport.Sent) throws -> String {
         #expect(decoded.header["kid"] as? String == deviceID)
         #expect(decoded.claims["iss"] as? String == "mainloop-device")
         #expect(decoded.claims["sub"] as? String == deviceID)
-        #expect(decoded.claims["aud"] as? String == "mainloop-api")
+        #expect(decoded.claims["aud"] as? String == "https://mainloop.example.test")
         #expect(decoded.claims["iat"] as? Int == 1_790_000_000)
         #expect(decoded.claims["exp"] as? Int == 1_790_000_060)
         #expect(decoded.claims["jti"] as? String == "0123456789abcdef0123")
         #expect(decoded.claims["htm"] as? String == "POST")
         #expect(decoded.claims["htu"] as? String == "/queue/q-1/respond?x=1")
         #expect(decoded.claims["bh"] as? String == bodyHash(Data("{}".utf8)))
+    }
+
+    @Test func theAudienceIsTheInstancesOrigin() {
+        #expect(DeviceToken.audience(for: URL(string: "https://Mainloop.Example.TEST/")!) == "https://mainloop.example.test")
+        #expect(DeviceToken.audience(for: URL(string: "http://localhost:5173/api")!) == "http://localhost:5173")
+    }
+
+    @Test func theThumbprintIsRFC7638() throws {
+        // RFC 7638's own example is RSA; this is the same construction over a P-256 key, with the
+        // value computed independently (Python: sha256 of the canonical JSON, base64url).
+        let x = "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU", y = "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+        struct Fixed: RequestSigner {
+            let publicJWK: (x: String, y: String)
+            func sign(_: Data) throws -> Data { Data() }
+        }
+        #expect(Fixed(publicJWK: (x, y)).thumbprint == "oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U")
     }
 
     @Test func everyTokenGetsItsOwnID() {
@@ -122,7 +138,7 @@ func bearer(_ sent: FakeTransport.Sent) throws -> String {
         let transport = FakeTransport(json: #"{"status":"ok"}"#)
         let signer = SoftwareSigner()
         let client = MainloopAPI.client(
-            origin: origin, middlewares: [DeviceSigningMiddleware(deviceID: deviceID, signer: signer)], transport: transport
+            origin: origin, middlewares: [DeviceSigningMiddleware(deviceID: deviceID, origin: origin, signer: signer)], transport: transport
         )
 
         _ = try? await client.respondToQueueItem(path: .init(itemId: "q-0001"), body: .json(.init(response: "Approve")))
@@ -140,7 +156,7 @@ func bearer(_ sent: FakeTransport.Sent) throws -> String {
         let transport = FakeTransport(json: "[]")
         let signer = SoftwareSigner()
         let client = MainloopAPI.client(
-            origin: origin, middlewares: [DeviceSigningMiddleware(deviceID: deviceID, signer: signer)], transport: transport
+            origin: origin, middlewares: [DeviceSigningMiddleware(deviceID: deviceID, origin: origin, signer: signer)], transport: transport
         )
         _ = try await client.listDevices()
         _ = try await client.listDevices()
@@ -273,6 +289,9 @@ func bearer(_ sent: FakeTransport.Sent) throws -> String {
 /// Writes a token this code signed for the Go verifier's interop test
 /// (server/internal/auth/testdata/swift-device-token.json). Runs only when asked:
 /// `MAINLOOP_WRITE_DEVICE_FIXTURE=<path> swift test --filter writeTheGoInteropFixture`.
+/// The Go tests' instance origin (authtest.DeviceOrigin).
+let fixtureOrigin = URL(string: "https://mainloop.test")!
+
 @Suite struct InteropFixture {
     @Test func writeTheGoInteropFixture() throws {
         guard let path = ProcessInfo.processInfo.environment["MAINLOOP_WRITE_DEVICE_FIXTURE"] else { return }
@@ -280,12 +299,14 @@ func bearer(_ sent: FakeTransport.Sent) throws -> String {
         let body = #"{"response":"Approve"}"#
         let iat = 1_790_000_000
         let token = try DeviceToken.make(
-            deviceID: deviceID, method: "POST", target: "/queue/q-0001/respond?wait=1", body: Data(body.utf8),
+            deviceID: deviceID, audience: DeviceToken.audience(for: fixtureOrigin), method: "POST",
+            target: "/queue/q-0001/respond?wait=1", body: Data(body.utf8),
             signer: signer, now: Date(timeIntervalSince1970: TimeInterval(iat)), jti: "fixture-jti-0000000001"
         )
         let fixture: [String: Any] = [
             "comment": "Signed by ios/Packages/MainloopKit DeviceToken with a throwaway software key; only the public key is kept.",
-            "device_id": deviceID, "x": signer.publicJWK.x, "y": signer.publicJWK.y,
+            "device_id": deviceID, "x": signer.publicJWK.x, "y": signer.publicJWK.y, "thumbprint": signer.thumbprint,
+            "audience": DeviceToken.audience(for: fixtureOrigin),
             "method": "POST", "target": "/queue/q-0001/respond?wait=1", "body": body, "iat": iat, "token": token,
         ]
         let data = try JSONSerialization.data(withJSONObject: fixture, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])

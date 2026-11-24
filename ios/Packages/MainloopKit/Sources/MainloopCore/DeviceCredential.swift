@@ -123,7 +123,8 @@ public final class MemoryCredentialStore: CredentialStore, @unchecked Sendable {
     public func delete() throws { lock.withLock { value = nil } }
 }
 
-/// Registers a new key with the server, with the owner's fresh Pocket ID token.
+/// Registers a new key with the server, with the owner's fresh Pocket ID token, whose nonce is
+/// the key's thumbprint (`RequestSigner.thumbprint`).
 public enum DeviceEnrollment {
     public static func register(
         origin: URL,
@@ -156,11 +157,19 @@ public enum DeviceEnrollment {
 
     /// The API client that signs every request with the device's key.
     public static func client(for credential: DeviceCredential, transport: (any ClientTransport)? = nil) throws -> Client {
-        let signing = DeviceSigningMiddleware(deviceID: credential.deviceID, signer: try credential.signer())
+        let signing = DeviceSigningMiddleware(deviceID: credential.deviceID, origin: credential.origin, signer: try credential.signer())
         if let transport {
             return MainloopAPI.client(origin: credential.origin, middlewares: [signing], transport: transport)
         }
         return MainloopAPI.client(origin: credential.origin, middlewares: [signing])
+    }
+
+    /// Revokes a device the phone could not keep (its keychain refused the credential), with the key
+    /// still in memory. Best effort.
+    public static func revoke(_ credential: DeviceCredential, transport: (any ClientTransport)? = nil) async {
+        if let client = try? client(for: credential, transport: transport) {
+            _ = try? await client.revokeDevice(path: .init(deviceId: credential.deviceID))
+        }
     }
 
     /// Signing out: revoke on the server (best effort; a phone offline still forgets its key),
@@ -227,7 +236,7 @@ public struct AccountSigningMiddleware: ClientMiddleware {
         guard let (credential, signer) = account.signing(), credential.origin == origin else {
             return try await next(request, body, baseURL)
         }
-        return try await DeviceSigningMiddleware(deviceID: credential.deviceID, signer: signer)
+        return try await DeviceSigningMiddleware(deviceID: credential.deviceID, origin: credential.origin, signer: signer)
             .intercept(request, body: body, baseURL: baseURL, operationID: operationID, next: next)
     }
 }

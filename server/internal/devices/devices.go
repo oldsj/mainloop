@@ -9,6 +9,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base32"
 	"encoding/base64"
 	"errors"
@@ -21,8 +22,19 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/apierr"
+	"github.com/oldsj/mainloop/server/internal/attention"
 	"github.com/oldsj/mainloop/server/internal/auth"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/events"
+)
+
+// RegistrationItemPrefix starts the id of the Needs-you item each registration opens.
+const RegistrationItemPrefix = "device_registered_"
+
+// Answers to a registration's Needs-you item.
+const (
+	AnswerKeep   = "Keep"
+	AnswerRevoke = "Revoke"
 )
 
 // DevicesAPI serves /devices.
@@ -30,6 +42,9 @@ type DevicesAPI struct {
 	Pool    *pgxpool.Pool
 	OwnerID string
 	Now     func() time.Time
+	// OnRevoke is told of each revocation, to end the device's open requests in this process
+	// (auth.Devices.Revoked). Other processes notice within a few seconds on their own.
+	OnRevoke func(id string)
 }
 
 func (a *DevicesAPI) now() time.Time {
@@ -68,10 +83,23 @@ func (s *Store) Touch(ctx context.Context, id string) error {
 	return dbq.New(s.Pool).TouchOwnerDevice(ctx, id)
 }
 
+// UseToken implements auth.DeviceStore.
+func (s *Store) UseToken(ctx context.Context, id, jti string, until time.Time) (bool, error) {
+	n, err := dbq.New(s.Pool).UseDeviceToken(ctx, dbq.UseDeviceTokenParams{DeviceID: id, Jti: jti, ExpiresAt: until})
+	return n == 1, err
+}
+
+// PruneTokenUses implements auth.DeviceStore.
+func (s *Store) PruneTokenUses(ctx context.Context) error {
+	_, err := dbq.New(s.Pool).PruneDeviceTokenUses(ctx)
+	return err
+}
+
 // PublicKey decodes JWK coordinates into a P-256 key, refusing a point that is not on the curve.
 func PublicKey(x, y string) (*ecdsa.PublicKey, error) {
-	xb, err1 := base64.RawURLEncoding.DecodeString(x)
-	yb, err2 := base64.RawURLEncoding.DecodeString(y)
+	// Strict: one encoding per key, so one key can't be registered again under another thumbprint.
+	xb, err1 := base64.RawURLEncoding.Strict().DecodeString(x)
+	yb, err2 := base64.RawURLEncoding.Strict().DecodeString(y)
 	if err1 != nil || err2 != nil || len(xb) != 32 || len(yb) != 32 {
 		return nil, errors.New("coordinates must be 32 bytes of unpadded base64url each")
 	}
@@ -137,17 +165,22 @@ func (a *DevicesAPI) ListDevices(ctx context.Context, _ api.ListDevicesRequestOb
 	return out, nil
 }
 
-// RegisterDevice implements api.StrictServerInterface. The auth layer has already required a
-// recent Pocket ID bearer of the owner (auth.authorize); this checks it again, so the handler
-// never registers a device for anything else, in observe mode (which refuses nothing) included.
-// With auth off there is no principal, so no device can be registered.
+// RegisterDevice implements api.StrictServerInterface. The auth layer has already required the
+// owner's recent Pocket ID sign-in through the app's own client (auth.CanRegisterDevice); this
+// checks it again, so the handler never registers a device for anything else, in observe mode
+// (which refuses nothing) included. With auth off there is no principal, so nothing registers.
+// The token's nonce must be the new key's thumbprint: a token registers the key it was minted for
+// and, since a key registers once, only once. Every registration opens a Needs-you item.
 func (a *DevicesAPI) RegisterDevice(ctx context.Context, r api.RegisterDeviceRequestObject) (api.RegisterDeviceResponseObject, error) {
 	if err := a.ready(); err != nil {
 		return nil, err
 	}
 	p, ok := auth.FromContext(ctx)
-	if !ok || p.Kind != auth.KindOwner || p.Via != "bearer" || p.IssuedAt.IsZero() || a.now().Sub(p.IssuedAt) > auth.RegistrationMaxAge {
-		return api.RegisterDevice403JSONResponse{Detail: "Registering a device needs the owner's Pocket ID sign-in from the last 10 minutes"}, nil
+	if !ok {
+		return api.RegisterDevice403JSONResponse{Detail: "Registering a device needs the owner's Pocket ID sign-in"}, nil
+	}
+	if err := auth.CanRegisterDevice(p, a.now()); err != nil {
+		return api.RegisterDevice403JSONResponse{Detail: "Registering a device needs the owner's Pocket ID sign-in in the app, from the last 10 minutes"}, nil
 	}
 	body := r.Body
 	name := strings.TrimSpace(body.Name)
@@ -157,23 +190,79 @@ func (a *DevicesAPI) RegisterDevice(ctx context.Context, r api.RegisterDeviceReq
 	if _, err := PublicKey(body.RequestKey.X, body.RequestKey.Y); err != nil {
 		return nil, apierr.Invalid("request_key: " + err.Error())
 	}
+	thumb := Thumbprint(body.RequestKey.X, body.RequestKey.Y)
+	if subtle.ConstantTimeCompare([]byte(thumb), []byte(p.Nonce)) != 1 {
+		return api.RegisterDevice403JSONResponse{Detail: "The sign-in was not made for this key"}, nil
+	}
 	id, err := newID()
 	if err != nil {
 		return nil, err
 	}
-	row, err := dbq.New(a.Pool).InsertOwnerDevice(ctx, dbq.InsertOwnerDeviceParams{
-		ID: id, OwnerID: a.OwnerID, Name: name, Platform: string(body.Platform),
-		RequestKeyX: body.RequestKey.X, RequestKeyY: body.RequestKey.Y,
-		KeyThumbprint: Thumbprint(body.RequestKey.X, body.RequestKey.Y), RegisteredBy: p.Name,
+	var jti *string
+	if p.TokenID != "" {
+		jti = &p.TokenID
+	}
+	var row dbq.OwnerDevice
+	err = events.InTxPublish(ctx, a.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+		var err error
+		row, err = dbq.New(tx).InsertOwnerDevice(ctx, dbq.InsertOwnerDeviceParams{
+			ID: id, OwnerID: a.OwnerID, Name: name, Platform: string(body.Platform),
+			RequestKeyX: body.RequestKey.X, RequestKeyY: body.RequestKey.Y, KeyThumbprint: thumb,
+			RegisteredBy: p.Name, RegistrationJti: jti, RegistrationAuthTime: p.AuthTime,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return attention.Open(ctx, tx, a.OwnerID, registrationItem(row))
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		// A key is registered once, ever: a phone that signs out makes a new key.
-		return api.RegisterDevice409JSONResponse{Detail: "This request key is already registered"}, nil
+		// A key, and a sign-in, registers once, ever: a phone that signs out makes a new key.
+		return api.RegisterDevice409JSONResponse{Detail: "This request key or sign-in is already registered"}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	return api.RegisterDevice201JSONResponse(toAPI(row, "")), nil
+}
+
+// registrationItem tells the owner a device was registered, so one they didn't register is seen
+// and revoked: the request key outlives the sign-in that registered it.
+func registrationItem(r dbq.OwnerDevice) attention.NewQueueItem {
+	content := fmt.Sprintf("A device named %q was registered at %s, with a Pocket ID sign-in of %s.\n\n"+
+		"Device %s · key %s\n\n"+
+		"If you didn't register it, answer Revoke: its key stops working at once. Keep closes this. "+
+		"Answer from the web app: a device can't answer this.",
+		r.Name, r.CreatedAt.UTC().Format(time.RFC1123), r.RegisteredBy, r.ID, r.KeyThumbprint[:16])
+	return attention.NewQueueItem{
+		ID: RegistrationItemPrefix + r.ID, ItemType: api.QueueItemTypeQuestion, Priority: api.QueueItemPriorityHigh,
+		Title: "New device registered: " + r.Name, Content: content, Needed: "New device " + r.Name + ": keep or revoke?",
+		Context: map[string]any{"device_id": r.ID}, Options: []string{AnswerKeep, AnswerRevoke},
+	}
+}
+
+// AnswerRegistration is the attention hook for a registration's Needs-you item: Revoke revokes
+// the device in the answer's transaction, Keep closes the item. Only the owner's Pocket ID sign-in
+// answers it, never a device: a device registered by someone else could otherwise keep itself.
+func (a *DevicesAPI) AnswerRegistration(ctx context.Context, tx pgx.Tx, sourceID, response string) error {
+	if p, ok := auth.FromContext(ctx); ok && p.Kind == auth.KindDevice {
+		return fmt.Errorf("%w: a device can't answer a device registration; answer from the web app", attention.ErrForbidden)
+	}
+	id := strings.TrimPrefix(sourceID, RegistrationItemPrefix)
+	switch strings.TrimSpace(response) {
+	case AnswerKeep:
+		return nil
+	case AnswerRevoke:
+		_, err := dbq.New(tx).RevokeOwnerDevice(ctx, dbq.RevokeOwnerDeviceParams{ID: id, OwnerID: a.OwnerID})
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if a.OnRevoke != nil {
+			a.OnRevoke(id)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: answer %s or %s", attention.ErrInvalid, AnswerKeep, AnswerRevoke)
+	}
 }
 
 // GetCurrentDevice implements api.StrictServerInterface.
@@ -212,6 +301,9 @@ func (a *DevicesAPI) RevokeDevice(ctx context.Context, r api.RevokeDeviceRequest
 	}
 	if err != nil {
 		return nil, err
+	}
+	if a.OnRevoke != nil {
+		a.OnRevoke(r.DeviceId)
 	}
 	return api.RevokeDevice204Response{}, nil
 }

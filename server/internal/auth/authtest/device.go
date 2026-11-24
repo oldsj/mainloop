@@ -56,7 +56,7 @@ func (d *Device) Token(t testing.TB, method, target string, body []byte, mutate 
 	jti := make([]byte, 16)
 	_, _ = rand.Read(jti)
 	c := jwt.MapClaims{
-		"iss": auth.DeviceIssuer, "sub": d.ID, "aud": auth.DeviceAudience,
+		"iss": auth.DeviceIssuer, "sub": d.ID, "aud": DeviceOrigin,
 		"iat": now.Unix(), "exp": now.Add(60 * time.Second).Unix(), "jti": hex.EncodeToString(jti),
 		"htm": method, "htu": target, "bh": BodyHash(body),
 	}
@@ -77,7 +77,35 @@ func (d *Device) Token(t testing.TB, method, target string, body []byte, mutate 
 type DeviceStore struct {
 	mu      sync.Mutex
 	devices map[string]auth.DeviceRecord
+	uses    map[string]time.Time
 	Touched map[string]int
+	// Pruned counts PruneTokenUses calls.
+	Pruned int
+}
+
+// DeviceOrigin is the instance origin device tokens are signed for in tests (Devices.Audience).
+const DeviceOrigin = "https://mainloop.test"
+
+// UseToken implements auth.DeviceStore: a write's token is good once, as in the database.
+func (s *DeviceStore) UseToken(_ context.Context, id, jti string, until time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.uses == nil {
+		s.uses = map[string]time.Time{}
+	}
+	if _, used := s.uses[id+"|"+jti]; used {
+		return false, nil
+	}
+	s.uses[id+"|"+jti] = until
+	return true, nil
+}
+
+// PruneTokenUses implements auth.DeviceStore.
+func (s *DeviceStore) PruneTokenUses(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Pruned++
+	return nil
 }
 
 // Add registers d.

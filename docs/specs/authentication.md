@@ -58,8 +58,9 @@ present but invalid is refused; it is never treated as absent.
 
 **The app's own sign-in.** With `MAINLOOP_AUTH_DEVICE_CLIENT_ID` set (the iPhone app's public
 OIDC client; it must differ from the web audience), a token whose audience is that client also
-passes the checks above, but it may only call `POST /devices`. Registering a device further needs
-a bearer (not the cookie) issued within the last 10 minutes. See [devices](devices.md).
+passes the checks above, but it may only call `POST /devices`. Only such a token registers a
+device: a bearer (not the cookie) whose `auth_time` is within the last 10 minutes and whose `nonce`
+is the new key's thumbprint. See [devices](devices.md).
 
 **A device.** A JWT signed by a registered phone's Secure Enclave key (`iss` `mainloop-device`),
 bound to one request's method, path and body, at most 60 seconds long and good once. It is checked

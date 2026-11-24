@@ -32,15 +32,21 @@ final class AccountModel {
         }
     }
 
-    /// Signs in with Pocket ID in a private browser session, makes a new request key and
-    /// registers it. The Pocket ID token is used once and never stored.
+    /// Makes a new request key, signs in with Pocket ID in a private browser session for that key
+    /// (the nonce is its thumbprint) and registers it. The Pocket ID token is used once and never
+    /// stored.
     func register(using session: WebAuthenticationSession) async {
         guard let origin, let signIn, phase == .signedOut else { return }
         phase = .working
         lastError = nil
         do {
+            #if targetEnvironment(simulator)
+                let key = try NewDeviceKey.make(allowSoftware: true)
+            #else
+                let key = try NewDeviceKey.make(allowSoftware: false)
+            #endif
             let endpoints = try await signIn.discover()
-            let attempt = PocketIDSignIn.Attempt()
+            let attempt = PocketIDSignIn.Attempt(nonce: key.signer.thumbprint)
             let callback = try await session.authenticate(
                 using: signIn.authorizationURL(endpoints, attempt),
                 callback: .customScheme(PocketIDSignIn.callbackScheme),
@@ -49,15 +55,16 @@ final class AccountModel {
             )
             let code = try signIn.code(from: callback, attempt)
             let idToken = try await signIn.exchange(code: code, endpoints, attempt)
-            #if targetEnvironment(simulator)
-                let key = try NewDeviceKey.make(allowSoftware: true)
-            #else
-                let key = try NewDeviceKey.make(allowSoftware: false)
-            #endif
             let credential = try await DeviceEnrollment.register(
                 origin: origin, idToken: idToken, name: UIDevice.current.name, key: key
             )
-            try account.save(credential)
+            do {
+                try account.save(credential)
+            } catch {
+                // Registered, but the phone can't keep it: revoke it while the key is in hand.
+                await DeviceEnrollment.revoke(credential)
+                throw error
+            }
             phase = .signedIn(deviceID: credential.deviceID)
         } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
             phase = .signedOut

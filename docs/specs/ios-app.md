@@ -31,9 +31,10 @@ to build it.
   without archived ones. A session shows its status and summary, takes a message (each message
   carries a `message_id`, kept while the text is unchanged so a retry is one message), and opens its transcript in the web
   app in Safari's in-app browser.
-- **Signing in** (Settings, **This iPhone**): **Sign in with Pocket ID** opens Pocket ID in a
-  private browser session (no shared cookies; it always asks), makes a new request key in the
-  Secure Enclave and registers the phone ([devices](devices.md)). From then on every request is
+- **Signing in** (Settings, **This iPhone**): **Sign in with Pocket ID** makes a new request key
+  in the Secure Enclave, opens Pocket ID in a private browser session (no shared cookies; it always
+  asks) for that key, and registers the phone ([devices](devices.md)). Mainloop then shows a
+  Needs-you item for the new device, answered from the web app. From then on every request is
   signed with that key. The section shows the device id and **Sign out**, which revokes the device
   on the server and deletes the key; offline, the key is still deleted. It needs
   `MAINLOOP_OIDC_ISSUER` and `MAINLOOP_OIDC_CLIENT_ID` in the build; without them it reads "Not

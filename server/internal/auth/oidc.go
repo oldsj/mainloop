@@ -37,6 +37,11 @@ var signingMethods = []string{"RS256", "RS384", "RS512", "PS256", "PS384", "PS51
 type OwnerClaims struct {
 	jwt.RegisteredClaims
 	Groups []string `json:"groups,omitempty"`
+	// Nonce is the authorization request's nonce. The phone sends its new key's thumbprint, so the
+	// token can register that key only.
+	Nonce string `json:"nonce,omitempty"`
+	// AuthTime is when the owner signed in to the issuer, unlike iat, which a refresh renews.
+	AuthTime *jwt.NumericDate `json:"auth_time,omitempty"`
 }
 
 // OIDC verifies tokens an OpenID Connect issuer signed, with the keys its discovery document names.

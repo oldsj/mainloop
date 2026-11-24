@@ -55,6 +55,7 @@ func TestDeviceTokens(t *testing.T) {
 		{"signed for another query", req{method: "GET", path: "/sessions?limit=500", bearer: tok("GET", "/sessions?limit=5", nil)}, 401},
 		{"signed for another body", req{method: "POST", path: "/sessions", bearer: tok("POST", "/sessions", func(c jwt.MapClaims, _ map[string]any) { c["bh"] = authtest.BodyHash([]byte(`{"x":1}`)) }), headers: native}, 401},
 		{"wrong audience", req{method: "GET", path: "/attention", bearer: tok("GET", "/attention", func(c jwt.MapClaims, _ map[string]any) { c["aud"] = "mainloop" })}, 401},
+		{"signed for another instance", req{method: "GET", path: "/attention", bearer: tok("GET", "/attention", func(c jwt.MapClaims, _ map[string]any) { c["aud"] = "https://other.test" })}, 401},
 		{"sub is not kid", req{method: "GET", path: "/attention", bearer: tok("GET", "/attention", func(c jwt.MapClaims, _ map[string]any) { c["sub"] = otherID })}, 401},
 		{"kid names another device", req{method: "GET", path: "/attention", bearer: tok("GET", "/attention", func(c jwt.MapClaims, h map[string]any) { h["kid"] = revoked.ID; c["sub"] = revoked.ID })}, 401},
 		{"no typ", req{method: "GET", path: "/attention", bearer: tok("GET", "/attention", func(_ jwt.MapClaims, h map[string]any) { delete(h, "typ") })}, 401},
@@ -118,7 +119,7 @@ func TestTheHandlerStillReadsTheBody(t *testing.T) {
 	store := &authtest.DeviceStore{}
 	phone := authtest.NewDevice(t, phoneID)
 	store.Add(phone)
-	d := &auth.Devices{Store: store, MaxBody: 64}
+	d := &auth.Devices{Store: store, MaxBody: 64, Audience: authtest.DeviceOrigin}
 	payload := []byte(`{"message":"hello"}`)
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "https://mainloop.test/sessions/s1/message", strings.NewReader(string(payload)))
 	if _, err := d.Verify(r, phone.Token(t, "POST", "/sessions/s1/message", payload, nil)); err != nil {
@@ -142,32 +143,87 @@ func TestTheHandlerStillReadsTheBody(t *testing.T) {
 
 func TestRegistration(t *testing.T) {
 	f := newFixture(t, auth.ModeEnforce)
-	app := func(iat time.Time) string {
-		return f.owner(t, authtest.Claims{"aud": "mainloop-ios", "iat": iat.Unix()})
+	const nonce = "the-new-keys-thumbprint"
+	app := func(authTime time.Time, extra authtest.Claims) string {
+		c := authtest.Claims{"aud": "mainloop-ios", "auth_time": authTime.Unix(), "nonce": nonce, "jti": "sign-in-1"}
+		for k, v := range extra {
+			c[k] = v
+		}
+		return f.owner(t, c)
 	}
-	web := f.owner(t, nil)
-	stale := app(time.Now().Add(-20 * time.Minute))
-	operator := f.sa(t, "mainloop/mainloop-operator")
 	write := func(bearer, cookie string) req {
 		return req{method: "POST", path: "/devices", bearer: bearer, cookie: cookie, headers: native}
 	}
 
-	if f.do(write(app(time.Now()), "")); !f.called || !f.seen.RegistrationOnly || f.seen.Kind != auth.KindOwner {
+	if f.do(write(app(time.Now(), nil), "")); !f.called || !f.seen.RegistrationOnly || !f.seen.DeviceClient ||
+		f.seen.Nonce != nonce || f.seen.TokenID != "sign-in-1" || f.seen.AuthTime.IsZero() {
 		t.Fatalf("the app's fresh sign-in may register: passed=%v principal=%+v; logs:\n%s", f.called, f.seen, f.logs)
 	}
-	if f.do(write(web, "")); !f.called || f.seen.RegistrationOnly {
-		t.Fatalf("the owner's web-audience bearer may register too: passed=%v principal=%+v", f.called, f.seen)
-	}
+	// A refresh renews iat but not auth_time: an old sign-in stays old.
+	refreshed := app(time.Now().Add(-20*time.Minute), authtest.Claims{"iat": time.Now().Unix()})
+	web := f.owner(t, authtest.Claims{"auth_time": time.Now().Unix(), "nonce": nonce})
 	for name, r := range map[string]req{
-		"stale sign-in":               write(stale, ""),
+		"stale sign-in, fresh token":  write(refreshed, ""),
+		"no auth_time":                write(app(time.Now(), authtest.Claims{"auth_time": nil}), ""),
+		"auth_time in the future":     write(app(time.Now().Add(10*time.Minute), nil), ""),
+		"no nonce":                    write(app(time.Now(), authtest.Claims{"nonce": ""}), ""),
+		"the web app's bearer":        write(web, ""),
 		"login cookie":                write("", web),
-		"operator ServiceAccount":     write(operator, ""),
-		"app token on another route":  {method: "GET", path: "/sessions", bearer: app(time.Now())},
-		"app token writing elsewhere": {method: "POST", path: "/sessions", bearer: app(time.Now()), headers: native},
+		"operator ServiceAccount":     write(f.sa(t, "mainloop/mainloop-operator"), ""),
+		"app token on another route":  {method: "GET", path: "/sessions", bearer: app(time.Now(), nil)},
+		"app token writing elsewhere": {method: "POST", path: "/sessions", bearer: app(time.Now(), nil), headers: native},
 	} {
 		if w := f.do(r); f.called || w.Code != 403 {
 			t.Errorf("%s: status %d, passed=%v", name, w.Code, f.called)
 		}
+	}
+}
+
+func TestRevocationEndsOpenRequests(t *testing.T) {
+	store := &authtest.DeviceStore{}
+	phone := authtest.NewDevice(t, phoneID)
+	store.Add(phone)
+	d := &auth.Devices{Store: store, MaxBody: 1 << 20, Audience: authtest.DeviceOrigin, RecheckEvery: 10 * time.Millisecond}
+
+	// Revoked here: Revoked ends it at once.
+	ctx, stop := d.Watch(context.Background(), phoneID)
+	defer stop()
+	d.Revoked(phoneID)
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("a request stayed open after its device was revoked here")
+	}
+
+	// Revoked by another process: the recheck ends it.
+	other := authtest.NewDevice(t, otherID)
+	store.Add(other)
+	ctx2, stop2 := d.Watch(context.Background(), otherID)
+	defer stop2()
+	store.Revoke(otherID)
+	select {
+	case <-ctx2.Done():
+	case <-time.After(time.Second):
+		t.Fatal("a request stayed open after its device was revoked elsewhere")
+	}
+}
+
+func TestAWriteTokenIsGoodOnceAcrossProcesses(t *testing.T) {
+	store := &authtest.DeviceStore{}
+	phone := authtest.NewDevice(t, phoneID)
+	store.Add(phone)
+	// Two verifiers share the store, as two replicas share the database.
+	a := &auth.Devices{Store: store, MaxBody: 1 << 20, Audience: authtest.DeviceOrigin}
+	b := &auth.Devices{Store: store, MaxBody: 1 << 20, Audience: authtest.DeviceOrigin}
+	tok := phone.Token(t, "POST", "/sessions", body, nil)
+	post := func() *http.Request {
+		return httptest.NewRequestWithContext(context.Background(), http.MethodPost, "https://mainloop.test/sessions", bytes.NewReader(body))
+	}
+	if _, err := a.Verify(post(), tok); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Verify(post(), tok); err == nil {
+		t.Fatal("another replica accepted a write token already used")
 	}
 }
 
