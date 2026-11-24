@@ -5,7 +5,6 @@ package devices
 
 import (
 	"context"
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -14,7 +13,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"math/big"
 	"strings"
 	"time"
 
@@ -77,11 +75,12 @@ func PublicKey(x, y string) (*ecdsa.PublicKey, error) {
 	if err1 != nil || err2 != nil || len(xb) != 32 || len(yb) != 32 {
 		return nil, errors.New("coordinates must be 32 bytes of unpadded base64url each")
 	}
-	// crypto/ecdh checks the point is on the curve and not the identity.
-	if _, err := ecdh.P256().NewPublicKey(append(append([]byte{4}, xb...), yb...)); err != nil {
+	// ParseUncompressedPublicKey refuses a point that is not on the curve.
+	key, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), append(append([]byte{4}, xb...), yb...))
+	if err != nil {
 		return nil, errors.New("not a P-256 point")
 	}
-	return &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(xb), Y: new(big.Int).SetBytes(yb)}, nil
+	return key, nil
 }
 
 // Thumbprint is the RFC 7638 SHA-256 thumbprint of a P-256 JWK, unpadded base64url.

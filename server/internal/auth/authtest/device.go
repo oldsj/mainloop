@@ -35,8 +35,11 @@ func NewDevice(t testing.TB, id string) *Device {
 
 // JWK returns the public key's coordinates as unpadded base64url.
 func (d *Device) JWK() (x, y string) {
-	return base64.RawURLEncoding.EncodeToString(d.Key.X.FillBytes(make([]byte, 32))),
-		base64.RawURLEncoding.EncodeToString(d.Key.Y.FillBytes(make([]byte, 32)))
+	raw, err := d.Key.PublicKey.Bytes() // 0x04 ‖ x ‖ y
+	if err != nil {
+		panic(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw[1:33]), base64.RawURLEncoding.EncodeToString(raw[33:])
 }
 
 // BodyHash is the bh claim for body.
