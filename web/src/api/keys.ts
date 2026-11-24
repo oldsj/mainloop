@@ -70,7 +70,10 @@ export const keys = {
   scheduleExecutions: (scheduleId: string) =>
     get('/schedules/{schedule_id}/executions', { path: { schedule_id: scheduleId } }),
 
-  orchestrationHealth: () => get('/orchestration-health')
+  orchestrationHealth: () => get('/orchestration-health'),
+
+  /** The owner's registered phones, revoked ones included. */
+  devices: () => get('/devices')
 } as const;
 
 /** Matches every query. */
