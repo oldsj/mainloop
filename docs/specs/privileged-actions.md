@@ -50,6 +50,11 @@ supervises them.
 - A repeat with the same arguments under a new `request_id`, while the first action is undecided,
   also returns the first action.
 - At most 3 undecided actions per session, and 10 per owner (`[too_many_pending]`).
+- A session whose requests of the executor's types (`onepassword.*`, `k8s.*`, `argocd.*`) a
+  preflight refused 5 times in the last hour gets `[too_many_refused]` for those types until the
+  hour passes. GitHub merges and closes are neither counted nor limited. A refusal opens no card, and whether a request is refused, and why, says
+  something about the target, so a session must not probe it unseen. A request refused before any
+  read (`[validation]`) does not count.
 - `reason` is shown on the card as the agent's claim, set apart from the facts. It is not part of
   the digest.
 
@@ -57,8 +62,9 @@ The tool returns at once with the action's state. The agent ends its turn. When 
 the session gets one message, whose id is the action id, naming the final state, the owner's note
 (if any) and the result. `get_privileged_action` returns the full record, including the audit
 events, except the diffs of `k8s.patch` and `k8s.apply`: they hold the objects' contents, read with
-the executor's credential before anyone approved, so the agent gets each object's name, the diff's
-size and its SHA-256, and only the owner sees the diff. `cancel_privileged_action` withdraws an undecided action and closes its card.
+the executor's credential before anyone approved, so the agent gets each object's name and whether
+it is created, not the diff, its size or a hash of it (any of which would confirm a guess), and only
+the owner sees the diff. `cancel_privileged_action` withdraws an undecided action and closes its card.
 
 ## Types
 
@@ -103,7 +109,8 @@ The Kubernetes types act on the cluster the executor runs in, named on the card 
   of operations. A patch may not set what the diff does not show or the executor binds: `status`,
   the metadata the API server keeps (resourceVersion, uid, generation, creation and deletion
   times, managed fields, selfLink) or the `mainloop.dev/privileged-action` annotation. A JSON patch
-  may not replace `/metadata` whole, and a merge patch may not null `metadata` or
+  may not replace `/metadata` whole or use `test` (refused or not, a test would confirm a guess
+  about the object without an approval), and a merge patch may not null `metadata` or
   `metadata.annotations` (remove annotations one by one).
 - `k8s.apply {manifests, namespace, force_conflicts}` server-side applies YAML or JSON manifests
   (up to 50 objects, 64 KiB) as `mainloop-executor`, as `kubectl apply --server-side` does.
@@ -117,11 +124,24 @@ Preflight runs the patch or apply as a server dry run, and the card shows each o
 YAML, live against the dry run's answer, without status and the metadata the API server keeps
 (resourceVersion, generation, uid, creation time, managed fields). A change that alters nothing is
 refused, and an apply skips the objects it would leave as they are. The card shows every diff whole:
-diffs over 16 KiB together are refused, never cut, and so is a diff the redactor would change
-(`contains_secret`). The dry run runs twice; a value on which the answers differ is one the API
-server generates on each write (a Job's controller-uid, a Pod's token volume name, a webhook's
-timestamp), and the diff and the check before the write show it as `<server-generated>`, with the
-card naming its paths.
+diffs over 16 KiB together are refused, never cut.
+
+A patch or manifest that sets what looks like a credential is invalid before any read of the
+cluster (`contains_secret`), naming the field. Checked only after the dry run, a credential-named
+field set to a guess would end as "changes nothing" when the guess is right and `contains_secret`
+when it is wrong, with no card either way. A diff that shows what looks like a credential is refused
+too, naming the field's path but not its value, or only the object when the value is folded or
+escaped in the diff's YAML. What looks like a credential is a value holding a shape the session
+redactor knows (a private key block, a bearer token, a JWT, a known token prefix, credentials in a
+URL, an assignment such as `password: …`, also inside one-line JSON), or a `data` or `stringData`
+value that is one long word of high entropy, as a random key is. Long names, checksums and CA
+bundles pass. Neither this refusal nor the size refusal gives a figure an agent could compare
+between guesses.
+
+The dry run runs twice; a value on which the answers differ is one the API server generates on each
+write (a Job's controller-uid, a Pod's token volume name, a webhook's timestamp), and the diff and
+the check before the write show it as `<server-generated>`, with the card naming its paths. A value
+the request itself sets is never masked: if it differs between the runs, the request is refused: the API server generates it, so the request must leave it out.
 
 Both refuse Secrets, since a dry run's answer would carry the value. Copy one from 1Password with
 `onepassword.item_to_secret`.

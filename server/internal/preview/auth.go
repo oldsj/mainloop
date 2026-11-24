@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/config"
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
 )
 
 // Preview sign-in (issue #415). A preview host serves nothing without a preview cookie: a
@@ -82,24 +83,33 @@ func (p *Proxy) mac(payload string) []byte {
 
 // valid reports whether tok is an unexpired credential of kind for h.
 func (p *Proxy) valid(tok, kind string, h Host) bool {
+	_, _, ok := p.parse(tok, kind, h)
+	return ok
+}
+
+// parse checks that tok is an unexpired credential of kind for h and returns its nonce and expiry.
+func (p *Proxy) parse(tok, kind string, h Host) (nonce string, exp time.Time, ok bool) {
 	enc, sig, ok := strings.Cut(tok, ".")
 	if !ok || len(tok) > 512 {
-		return false
+		return "", time.Time{}, false
 	}
 	got, err := base64.RawURLEncoding.DecodeString(sig)
 	if err != nil || !hmac.Equal(got, p.mac(enc)) {
-		return false
+		return "", time.Time{}, false
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(enc)
 	if err != nil {
-		return false
+		return "", time.Time{}, false
 	}
 	f := strings.Split(string(raw), "|")
-	if len(f) != 6 || f[0] != "v1" || f[1] != kind || f[2] != h.WorkspaceID || f[3] != strconv.Itoa(h.Port) {
-		return false
+	if len(f) != 6 || f[0] != "v1" || f[1] != kind || f[2] != h.WorkspaceID || f[3] != strconv.Itoa(h.Port) || f[5] == "" {
+		return "", time.Time{}, false
 	}
-	exp, err := strconv.ParseInt(f[4], 10, 64)
-	return err == nil && p.now().Before(time.Unix(exp, 0))
+	unix, err := strconv.ParseInt(f[4], 10, 64)
+	if err != nil || !p.now().Before(time.Unix(unix, 0)) {
+		return "", time.Time{}, false
+	}
+	return f[5], time.Unix(unix, 0), true
 }
 
 // cookieName is host-only by construction: the __Host- prefix makes the browser refuse it with a
@@ -191,8 +201,25 @@ func (p *Proxy) serveAuth(w http.ResponseWriter, r *http.Request, h Host) {
 		signInPage(w)
 	case http.MethodPost:
 		r.Body = http.MaxBytesReader(w, r.Body, maxGrantBody)
-		if err := r.ParseForm(); err != nil || !p.valid(r.PostForm.Get("t"), kindGrant, h) {
+		if err := r.ParseForm(); err != nil {
 			refuse(w, http.StatusUnauthorized, "Preview sign-in expired; open the preview from Mainloop again")
+			return
+		}
+		nonce, exp, ok := p.parse(r.PostForm.Get("t"), kindGrant, h)
+		if !ok {
+			refuse(w, http.StatusUnauthorized, "Preview sign-in expired; open the preview from Mainloop again")
+			return
+		}
+		// A grant signs in once: a copy of the link that leaked (history, a log, a shared screen)
+		// is no good after the owner's own sign-in.
+		n, err := dbq.New(p.Pool).UsePreviewGrant(r.Context(), dbq.UsePreviewGrantParams{Nonce: nonce, ExpiresAt: exp})
+		if err != nil {
+			p.Log.ErrorContext(r.Context(), "preview grant use not recorded", "error", err)
+			refuse(w, http.StatusServiceUnavailable, "Preview sign-in is unavailable; try again")
+			return
+		}
+		if n == 0 {
+			refuse(w, http.StatusUnauthorized, "This preview sign-in link was already used; open the preview from Mainloop again")
 			return
 		}
 		// Secure whenever previews are HTTPS; only a plain-HTTP development base URL leaves it off,

@@ -85,6 +85,13 @@ const (
 	MaxReasonLen    = 2000
 	// MaxPendingPerSession and MaxPendingTotal bound undecided requests: each costs owner attention.
 	MaxPendingPerSession = 3
+	// MaxRefusedPerHour bounds a session's requests of the executor's types (the cluster and
+	// 1Password targets) that a preflight refused in the last hour. A refusal reaches no card, and
+	// whether a request is refused, and why, says something about the target: unbounded, a session
+	// could probe it, guess by guess, without the owner seeing. GitHub merges and closes are not
+	// counted: their refusals (a moved head, a closed PR) say nothing the session cannot read on
+	// GitHub, and main must not lock itself out of merging.
+	MaxRefusedPerHour = 5
 	MaxPendingTotal      = 10
 	// UndecidedExpiry is how long a request waits for the owner.
 	UndecidedExpiry = 24 * time.Hour
@@ -105,6 +112,8 @@ var (
 	ErrConflict = errors.New("privileged: request_id was used for a different action")
 	// ErrTooManyPending is a request over the pending limits.
 	ErrTooManyPending = errors.New("privileged: too many undecided requests")
+	// ErrTooManyRefused is a request of a session whose requests were refused too often lately.
+	ErrTooManyRefused = errors.New("privileged: too many refused requests")
 	// ErrNotFound is an action the caller cannot see.
 	ErrNotFound = errors.New("privileged: no such action")
 	// ErrNotCancellable is a cancel of an action the owner already decided.
@@ -237,6 +246,18 @@ func (s *Service) Request(ctx context.Context, by Requester, typ string, rawArgs
 			return nil, fmt.Errorf("%w: at most %d per session and %d in all wait for the owner; wait for an outcome or cancel one",
 				ErrTooManyPending, MaxPendingPerSession, MaxPendingTotal)
 		}
+		var refused int32
+		if entry.executor {
+			if refused, err = tq.CountRefusedPrivilegedPreflights(ctx, dbq.CountRefusedPrivilegedPreflightsParams{
+				OwnerID: s.OwnerID, SessionID: by.SessionID, Types: TypesFor(true),
+			}); err != nil {
+				return nil, err
+			}
+		}
+		if refused >= MaxRefusedPerHour {
+			return nil, fmt.Errorf("%w: %d requests of this session were refused at preflight in the last hour; "+
+				"stop and report blocked with what you meant to do, for the owner", ErrTooManyRefused, MaxRefusedPerHour)
+		}
 		r, err := tq.InsertPrivilegedAction(ctx, dbq.InsertPrivilegedActionParams{
 			ID: "pa_" + uuid.NewString(), OwnerID: s.OwnerID, RequestID: requestID, RequesterRole: by.Role,
 			RequesterSessionID: by.SessionID, RequesterTaskID: by.TaskID, Type: typ, Version: entry.version,
@@ -314,7 +335,7 @@ func (s *Service) existing(ctx context.Context, q *dbq.Queries, sessionID, reque
 func (s *Service) preflight(ctx context.Context, row dbq.PrivilegedAction, deliver bool) (dbq.PrivilegedAction, error) {
 	entry, ok := catalog[row.Type]
 	if !ok {
-		return s.failPreflight(ctx, row, "the type is no longer in the catalog", deliver)
+		return s.failPreflight(ctx, row, "preflight_failed", "the type is no longer in the catalog", deliver)
 	}
 	rctx, cancel := context.WithTimeout(ctx, RemoteTimeout)
 	facts, err := entry.preflight(rctx, s, row.Args, s.now().UTC())
@@ -322,11 +343,11 @@ func (s *Service) preflight(ctx context.Context, row dbq.PrivilegedAction, deliv
 	var refused *refusal
 	switch {
 	case errors.As(err, &refused):
-		return s.failPreflight(ctx, row, refused.msg, deliver)
+		return s.failPreflight(ctx, row, "preflight_refused", refused.msg, deliver)
 	case err != nil:
 		msg := "the target could not be read: " + safeError(err)
 		if row.PreflightAttempts+1 >= MaxPreflightAttempts {
-			return s.failPreflight(ctx, row, msg, deliver)
+			return s.failPreflight(ctx, row, "preflight_failed", msg, deliver)
 		}
 		if _, err := dbq.New(s.Pool).BumpPrivilegedPreflight(ctx, dbq.BumpPrivilegedPreflightParams{ID: row.ID, LastError: &msg}); err != nil {
 			return row, err
@@ -378,7 +399,10 @@ func (s *Service) preflight(ctx context.Context, row dbq.PrivilegedAction, deliv
 	return out, nil
 }
 
-func (s *Service) failPreflight(ctx context.Context, row dbq.PrivilegedAction, msg string, deliver bool) (dbq.PrivilegedAction, error) {
+// failPreflight ends the action as preflight_failed. step is the audit event's: preflight_refused
+// for a target the action cannot apply to (counted against MaxRefusedPerHour), else
+// preflight_failed.
+func (s *Service) failPreflight(ctx context.Context, row dbq.PrivilegedAction, step, msg string, deliver bool) (dbq.PrivilegedAction, error) {
 	var out dbq.PrivilegedAction
 	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
 		tq := dbq.New(tx)
@@ -390,7 +414,7 @@ func (s *Service) failPreflight(ctx context.Context, row dbq.PrivilegedAction, m
 			return err
 		}
 		out = r
-		return tq.InsertPrivilegedActionEvent(ctx, dbq.InsertPrivilegedActionEventParams{ActionID: r.ID, Step: "preflight_failed", Detail: msg})
+		return tq.InsertPrivilegedActionEvent(ctx, dbq.InsertPrivilegedActionEventParams{ActionID: r.ID, Step: step, Detail: msg})
 	})
 	if err != nil {
 		return row, err

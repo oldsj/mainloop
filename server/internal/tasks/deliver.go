@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -191,13 +192,20 @@ func (s *Service) reportImages(ctx context.Context, mid, mainID string, shots []
 			}
 		}
 	}
-	err := dbq.New(s.Pool).CopyReportScreenshotsToMessage(ctx, dbq.CopyReportScreenshotsToMessageParams{
+	q := dbq.New(s.Pool)
+	err := q.CopyReportScreenshotsToMessage(ctx, dbq.CopyReportScreenshotsToMessageParams{
 		MessageID: mid, SessionID: mainID, ReportIds: reportIDs,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("copy report screenshots: %w", err)
 	}
-	return images, nil
+	// A screenshot whose image expired before the report went out has nothing to copy; the message
+	// carries the rest.
+	held, err := q.ListMessageImageIDs(ctx, dbq.ListMessageImageIDsParams{SessionID: mainID, Ids: images})
+	if err != nil {
+		return nil, fmt.Errorf("copy report screenshots: %w", err)
+	}
+	return slices.DeleteFunc(images, func(id string) bool { return !slices.Contains(held, id) }), nil
 }
 
 func (s *Service) reportItemText(ctx context.Context, q *dbq.Queries, reportID string) (string, []string, error) {

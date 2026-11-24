@@ -1,0 +1,14 @@
+# swift-openapi-generator config, used by ios/scripts/generate-api.sh on api/openapi.yaml (the wire
+# contract). Add an operation to this filter when the app starts calling it, then regenerate.
+generate:
+  - types
+  - client
+accessModifier: public
+namingStrategy: idiomatic
+filter:
+  operations:
+    - getHealth
+    - getAttention
+    - respondToQueueItem
+    - listSessions
+    - sendSessionMessage

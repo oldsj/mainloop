@@ -37,6 +37,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/pushgate"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/schedules"
+	"github.com/oldsj/mainloop/server/internal/screenshot"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/transcripts"
@@ -275,6 +276,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		runner.AddSweep((&privileged.Runner{Service: p, Sender: svc}).Sweep())
 	}
 	runner.AddSweep(events.PruneSweep(pool, time.Duration(cfg.Events.RetentionHours)*time.Hour))
+	runner.AddSweep(screenshot.RetainSweep(pool))
 	wsSvc.Register(runner)
 	registerCredentials(cfg, creds, runner)
 	if cfg.InCluster() {

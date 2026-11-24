@@ -8,6 +8,7 @@ package dbq
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 const deletePreviewLease = `-- name: DeletePreviewLease :exec
@@ -107,6 +108,19 @@ func (q *Queries) PruneExpiredPreviewLeases(ctx context.Context, keepSeconds flo
 	return result.RowsAffected(), nil
 }
 
+const pruneUsedPreviewGrants = `-- name: PruneUsedPreviewGrants :execrows
+DELETE FROM preview_grant_uses WHERE expires_at < now()
+`
+
+// A used grant past its expiry is refused for that reason alone.
+func (q *Queries) PruneUsedPreviewGrants(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneUsedPreviewGrants)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const upsertPreviewLease = `-- name: UpsertPreviewLease :exec
 INSERT INTO preview_leases (id, workspace_id, holder, expires_at)
 VALUES ($1, $2, $3, now() + make_interval(secs => $4::float8))
@@ -129,4 +143,22 @@ func (q *Queries) UpsertPreviewLease(ctx context.Context, arg UpsertPreviewLease
 		arg.TtlSeconds,
 	)
 	return err
+}
+
+const usePreviewGrant = `-- name: UsePreviewGrant :execrows
+INSERT INTO preview_grant_uses (nonce, expires_at) VALUES ($1, $2) ON CONFLICT (nonce) DO NOTHING
+`
+
+type UsePreviewGrantParams struct {
+	Nonce     string
+	ExpiresAt time.Time
+}
+
+// Records a grant's exchange; no row when it was exchanged before.
+func (q *Queries) UsePreviewGrant(ctx context.Context, arg UsePreviewGrantParams) (int64, error) {
+	result, err := q.db.Exec(ctx, usePreviewGrant, arg.Nonce, arg.ExpiresAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

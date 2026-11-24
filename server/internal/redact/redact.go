@@ -51,6 +51,19 @@ func Text(text string) string {
 	return redactOpaque(text)
 }
 
+// Credential reports whether text holds a credential shape the patterns know: a private key
+// block, a cookie, an authorization header or bearer token, an assignment to a credential-named
+// field, credentials in a URL, a JWT or a known token prefix. Unlike [Text] it does not take every
+// long opaque word for a token, so names and checksums pass.
+func Credential(text string) bool {
+	for _, p := range secretPatterns {
+		if p.re.MatchString(text) {
+			return true
+		}
+	}
+	return false
+}
+
 // Line returns text as one line of at most max runes, with credentials redacted. It returns ""
 // when nothing is left.
 func Line(text string, max int) string {

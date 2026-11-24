@@ -1,9 +1,33 @@
 -- Preview screenshots (docs/specs/workspaces.md "Preview screenshots").
 
--- name: CountRecentPreviewScreenshots :one
--- A session's captures in the last minute, for the per-session rate limit.
-SELECT count(*) FROM preview_screenshots
+-- name: CountRecentScreenshotAttempts :one
+-- The captures a session tried in the last minute, stored or not, for the per-session rate limit.
+SELECT coalesce(sum(captures), 0)::integer FROM preview_screenshot_attempts
 WHERE session_id = $1 AND created_at > now() - interval '1 minute';
+
+-- name: InsertScreenshotAttempt :exec
+INSERT INTO preview_screenshot_attempts (session_id, captures) VALUES ($1, $2);
+
+-- name: PruneScreenshotAttempts :execrows
+-- Attempts older than the limit's window count for nothing.
+DELETE FROM preview_screenshot_attempts WHERE created_at < now() - interval '1 hour';
+
+-- name: ExpireScreenshotImages :execrows
+-- Drops the image of every screenshot older than max_age, and of a workspace's screenshots that no
+-- report names beyond its newest keep; the row stays. A report's screenshots expire by age only.
+UPDATE preview_screenshots s SET data = NULL, expired_at = now()
+WHERE s.expired_at IS NULL AND (
+    s.created_at < now() - make_interval(secs => sqlc.arg(max_age_seconds)::float8)
+    OR s.id IN (
+        SELECT k.id FROM (
+            SELECT u.id, row_number() OVER (PARTITION BY u.session_id ORDER BY u.created_at DESC, u.id) AS n
+            FROM preview_screenshots u
+            WHERE u.expired_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM task_reports r WHERE u.id = ANY(r.screenshot_ids))
+        ) k
+        WHERE k.n > sqlc.arg(keep)::integer
+    )
+);
 
 -- name: ListPreviewScreenshotsByRequest :many
 -- What a request already stored, so a retry returns it instead of capturing again.
@@ -45,5 +69,10 @@ SELECT sqlc.arg(message_id)::text || ':' || s.id, sqlc.arg(session_id)::text, NU
 FROM task_reports r
 CROSS JOIN LATERAL unnest(r.screenshot_ids) AS u(id)
 JOIN preview_screenshots s ON s.id = u.id
-WHERE r.id = ANY(sqlc.arg(report_ids)::text[])
+WHERE r.id = ANY(sqlc.arg(report_ids)::text[]) AND s.data IS NOT NULL
 ON CONFLICT (id) DO NOTHING;
+
+-- name: ListMessageImageIDs :many
+-- Which of ids a session holds as chat images: the report screenshots that were copied (an expired
+-- one is not).
+SELECT id FROM message_images WHERE session_id = sqlc.arg(session_id)::text AND id = ANY(sqlc.arg(ids)::text[]);

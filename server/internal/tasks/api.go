@@ -414,14 +414,19 @@ func (a *TasksAPI) GetTaskScreenshot(ctx context.Context, req api.GetTaskScreens
 	if err != nil {
 		return nil, err
 	}
-	// A screenshot never changes once stored.
+	// A screenshot never changes once stored, except that its image expires. A browser that cached
+	// the image keeps it; the server holds it no longer.
 	cache := "private, max-age=31536000, immutable"
+	body := api.TaskScreenshot{
+		Id: s.ID, MediaType: api.TaskScreenshotMediaType(s.MediaType), ExpiredAt: s.ExpiredAt,
+		Viewport: api.TaskScreenshotViewport(s.Viewport), Port: int(s.Port), Path: s.Path,
+		Width: int(s.Width), Height: int(s.Height), CreatedAt: s.CreatedAt,
+	}
+	if s.ExpiredAt == nil {
+		body.Data = &s.Data
+	}
 	return api.GetTaskScreenshot200JSONResponse{
-		Body: api.TaskScreenshot{
-			Id: s.ID, MediaType: api.TaskScreenshotMediaType(s.MediaType), Data: s.Data,
-			Viewport: api.TaskScreenshotViewport(s.Viewport), Port: int(s.Port), Path: s.Path,
-			Width: int(s.Width), Height: int(s.Height), CreatedAt: s.CreatedAt,
-		},
+		Body: body,
 		Headers: api.GetTaskScreenshot200ResponseHeaders{CacheControl: &cache},
 	}, nil
 }
