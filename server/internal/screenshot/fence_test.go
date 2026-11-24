@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/screenshot"
 )
 
@@ -25,7 +25,7 @@ import (
 // when no browser is installed, unless MAINLOOP_TEST_CHROME names one (CI does).
 func chrome(t *testing.T) string {
 	t.Helper()
-	bin := os.Getenv("MAINLOOP_TEST_CHROME")
+	bin := config.TestChrome()
 	required := bin != ""
 	candidates := []string{bin}
 	if !required {
@@ -45,7 +45,7 @@ func chrome(t *testing.T) string {
 		}
 		t.Skip("no Chrome to drive; set MAINLOOP_TEST_CHROME to run the fence tests")
 	}
-	cmd := exec.Command(path, //nolint:gosec // G204: the test's own browser
+	cmd := exec.CommandContext(t.Context(), path, //nolint:gosec // G204: the test's own browser
 		"--headless=new", "--remote-debugging-port=0", "--user-data-dir="+t.TempDir(),
 		"--no-first-run", "--no-default-browser-check", "--disable-gpu", "--no-sandbox",
 		"--host-resolver-rules=MAP *.test 127.0.0.1", "about:blank")
