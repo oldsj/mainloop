@@ -13,9 +13,10 @@ sends the requesting session one message with the outcome.
 - Slice 3, first part: the typed Kubernetes actions `k8s.rollout_restart`, `k8s.scale`,
   `k8s.delete`, `k8s.patch` and `k8s.apply`, `argocd.sync`, and the approved command
   `command.kubectl`, run by `serve-executor` with short-lived credentials it mints per run.
+- Slice 3, second part: the approved commands `command.omnictl` and `command.talosctl`, run by
+  `serve-executor` through a proxy of its own that holds its Omni service account.
 
-The other approved commands (`talosctl`, `omnictl`, ssh to LAN hosts) and the home-network types
-are later parts. They are not described here.
+ssh to LAN hosts and the home-network types are later parts. They are not described here.
 
 ## Enablement
 
@@ -31,6 +32,10 @@ The executor types are accepted only when `MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED`
 The `k8s.*` types, `argocd.sync` and `command.kubectl` also need
 `MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED`, exactly `true`. The chart sets it with
 `executor.kubernetes.enabled`, which is off by default.
+
+`command.omnictl` and `command.talosctl` need `MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED`, exactly
+`true`; the chart sets it with `executor.omni.enabled`, which is off by default. Without it they are
+`[unavailable]`.
 
 ## Tools
 
@@ -62,7 +67,7 @@ supervises them.
 The tool returns at once with the action's state. The agent ends its turn. When the action ends,
 the session gets one message, whose id is the action id, naming the final state, the owner's note
 (if any) and the result. `get_privileged_action` returns the full record, including the audit
-events, except the diffs of `k8s.patch`, `k8s.apply` and `command.kubectl`: they hold the objects' contents, read with
+events, except the diffs of `k8s.patch`, `k8s.apply` and `command.kubectl`, and the dry runs of `command.omnictl`: they hold the objects' contents, read with
 the executor's credential before anyone approved, so the agent gets each object's name and whether
 it is created, not the diff, its size or a hash of it (any of which would confirm a guess), and only
 the owner sees the diff. `cancel_privileged_action` withdraws an undecided action and closes its card.
@@ -246,6 +251,65 @@ one fits: it observes its target and retries, and this does neither.
 - The agent's view of the facts has the preview kind and the changed objects' names, not the diffs
   or the dry run's text.
 
+`command.omnictl {argv, stdin, timeout_seconds}` and `command.talosctl {target, argv,
+timeout_seconds}` run one omnictl or talosctl command through Omni as the executor's Omni service
+account, whose role is Admin: for Omni resources (config patches, clusters) and for Talos nodes
+(reboots, upgrades, etcd).
+
+- `argv` starts with `omnictl` or `talosctl` and then its command, run as is without a shell: at
+  most 64 words and 8 KiB. `stdin` is what `omnictl apply --file=-` reads, up to 64 KiB.
+  `timeout_seconds` is 1 to 600, default 60. talosctl's `target` is an Omni cluster from
+  `executor.omni.clusters`; another is refused at preflight. omnictl takes no target.
+- Neither tool holds the service account's key. For each run the executor makes a key of its own
+  and a proxy on loopback (TLS with a certificate made for the run) that checks each call is signed
+  by that key, then signs it again with the real one and forwards it to Omni with only the routing
+  headers. The tool gets the run's key, a configuration naming only the proxy, a CA file holding
+  only the proxy's certificate, and `PATH`, `HOME` and its config paths, in a fresh directory. A
+  flag or configuration that sent it elsewhere would send nothing Omni accepts. The run's key is
+  removed from the output, the session redactor runs over it, and each stream is kept to 64 KiB.
+- The proxy refuses, for every command, with `refused by the executor`: any method but the reads
+  and writes the allowed commands use (no kubeconfig, talosconfig, service account, support
+  bundle, file read, client certificate, config apply or etcd snapshot); a resource type that may
+  hold a secret (Omni's cluster secrets, machine configs, kubeconfigs, talosconfigs, join tokens,
+  identities, users, access policies, backups, encryption and BMC settings; Talos's machine
+  configs and its `secrets` namespace), named in a request or in a resource it writes; a request
+  that repeats or retypes the fields naming them; an `authorization` header; Talos routing headers
+  on an omnictl run; and a talosctl call to Omni itself, or for another cluster than the target.
+  Before approval it forwards reads only.
+- Refused when requested (`[validation]`): argv is read by a strict subset of both tools' grammar,
+  so it reads every word as the binary will: the command's words, then long flags only, as
+  `--name` or `--name=value`, and words that do not start with `-`. Short flags, `--`, a flag
+  given twice, a value starting with `-`, a flag name with `_` or capitals, and control or
+  invisible characters are refused. Then an allowlist holds, each command with its own flags:
+  - omnictl: `get`, `cluster status`, `machine-logs` (reads); `apply --file=-` and `cluster delete`
+    (changes with a dry run); `delete`.
+  - talosctl, which always needs `--nodes=`: `version`, `get`, `service`, `logs`, `dmesg`,
+    `etcd members|status|alarm list`, `containers`, `stats`, `memory`, `processes`, `mounts`,
+    `netstat`, `time`, `list` (reads); `reboot`, `shutdown`, `reset` and `upgrade` (each with
+    `--wait=false`: the command returns once the node accepts it), `rollback`,
+    `service <id> start|stop|restart`, `etcd defrag|forfeit-leadership|alarm disarm|leave|remove-member`.
+
+  No list holds a flag that chooses the endpoint, cluster, configuration or credential
+  (`--omniconfig`, `--talosconfig`, `--context`, `--cluster`, `--endpoints`, `--insecure*`), a
+  watch or follow, `--dry-run` or `--debug`. Also refused: `get` or `delete` of a type that may
+  hold a secret, `get` in the `secrets` namespace, a resource in stdin of such a type or with no
+  type, and argv or stdin that looks like a credential (`contains_secret`). A type alias the rule
+  does not catch is caught by the proxy, which sees the full type.
+- Preflight previews `omnictl apply` and `omnictl cluster delete` by running them with
+  `--dry-run`, through the proxy forwarding reads only, and the card shows what they printed, 16
+  KiB at most. A dry run that fails is refused with its exit code and the gRPC code, or that the
+  proxy refused it, not the tool's message; the executor's log keeps it. A read has nothing to
+  preview. Every other change cannot be previewed, and the card says so.
+- The card shows the exact command, the stdin, the preview, and tags: what it changes, destructive
+  (`delete`, `cluster delete`, `shutdown`, `reset`, `etcd leave`, `etcd remove-member`), the
+  number of nodes, no preview, and always Omni Admin. A destructive command waits 1 hour for the
+  owner.
+- The agent's view of the facts has the preview kind, not the dry run's text.
+
+Not allowed in this part: `talosctl patch` and `apply-config` (their preview would read the
+machine config, which holds secrets), `image pull`, `upgrade-k8s`, and every command that makes
+or reads a kubeconfig, talosconfig or service account.
+
 ## Preflight and the card
 
 Mainloop canonicalizes the arguments and writes the intent row. It then reads the target with no
@@ -390,6 +454,9 @@ For `command.kubectl` (in `serve-executor`):
   at its deadline is stopped and `uncertain`; one that could not be run to its end is `uncertain`.
   The result is the exit code, stdout and stderr.
 
+`command.omnictl` and `command.talosctl` run the same way: once, after the dry run (where there is
+one) gives exactly what the owner saw.
+
 For `k8s.patch` and `k8s.apply` (in `serve-executor`), every object is checked before anything is
 written:
 
@@ -409,7 +476,7 @@ written before it. A token, discovery or network failure is retried like a merge
 
 Each preflight and each attempt has 90 seconds for its remote calls, well inside the 2-minute
 lease, so one hung call cannot stall the executor: the attempt is retried, observing first. A
-`command.kubectl` attempt has its command's deadline on top.
+`command.*` attempt has its command's deadline on top.
 
 States: `requested`, `pending_approval`, `preflight_failed`, `approved`, `executing`, `succeeded`,
 `failed`, `stale`, `denied`, `expired`, `cancelled`, `uncertain`.
@@ -459,6 +526,10 @@ boundary against an approved one:
   impersonation.
 - A cluster-admin command can start a workload that writes as another account. The card shows that
   manifest; the guard does not stop it.
+
+**Omni credentials.** With `executor.omni.enabled`, the executor reads an Omni service account's
+key (role Admin) from the Secret `executor.omni.keySecret`, key `service-account-key`, and dials
+`executor.omni.endpoint`. Only its proxy holds the key; see `command.omnictl` above.
 
 What holds is the executor's: the parser's allowlist, the namespace checks on argv, stdin and the
 dry run, the preview's object checks, and the proxy, which holds the token. Reads are not admitted, so the executor refuses commands that name its namespace

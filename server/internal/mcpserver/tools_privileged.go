@@ -53,6 +53,17 @@ func (s *Server) privilegedTools() []Tool {
 			"run again; a delete's card expires in an hour. The k8s.* types, argocd.sync and command.kubectl run through the " +
 			"executor on the cluster it runs in, never in its own namespace, and answer unavailable where it has no Kubernetes " +
 			"access; prefer a Git change for anything Argo CD manages, and a typed action where one fits. " +
+			"command.omnictl {argv, stdin (for apply --file=-), timeout_seconds} and command.talosctl {target (an Omni cluster the " +
+			"executor may act on), argv (with --nodes=<node>), timeout_seconds} run one omnictl or talosctl command once through Omni " +
+			"as the executor's service account (role Admin). Allowed: omnictl get, cluster status, machine-logs, apply (the card shows " +
+			"its --dry-run diff, run again before it), delete and cluster delete; talosctl version, get, service, logs, dmesg, etcd " +
+			"members|status|alarm list, containers, stats, memory, processes, mounts, netstat, time, list, and (no preview) reboot, " +
+			"shutdown, reset, upgrade (--wait=false on these four), rollback, service <id> start|stop|restart, etcd defrag|" +
+			"forfeit-leadership|leave|remove-member|alarm disarm. Flags are long only, as --name or --name=value; the refusal names " +
+			"the allowed ones. Refused: endpoint, config, context, cluster and credential flags, watches and follows, and every " +
+			"resource type or namespace that may hold a secret (configs, secrets, tokens, kubeconfigs, talosconfigs, identities, " +
+			"keys). The tools never hold the Omni key: the executor's proxy signs each request and refuses those whatever they send. " +
+			"Deletes, resets, shutdowns and etcd removals expire in an hour; they answer unavailable where the executor has no Omni access. " +
 			"An executor type returns state requested; its card opens once the executor has checked the target. Reuse request_id to read the same request back. At most 3 requests per session " +
 			"and 10 in all wait for the owner.",
 		InputSchema: objectSchema(map[string]any{

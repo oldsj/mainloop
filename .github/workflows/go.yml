@@ -128,6 +128,20 @@ jobs:
           echo "${sum}  $RUNNER_TEMP/kubectl" | sha256sum -c -
           chmod 0555 "$RUNNER_TEMP/kubectl"
           echo "MAINLOOP_TEST_KUBECTL=$RUNNER_TEMP/kubectl" >> "$GITHUB_ENV"
+      # command.omnictl's and command.talosctl's tests run the pinned binaries through the
+      # executor's proxy against a stand-in Omni; versions and checksums come from the Dockerfile.
+      - name: Install the pinned omnictl and talosctl
+        run: |
+          for tool in omnictl talosctl; do
+            up=$(echo "$tool" | tr a-z A-Z)
+            repo=$([ "$tool" = omnictl ] && echo omni || echo talos)
+            ver=$(sed -n "s/^ARG ${up}_VERSION=//p" Dockerfile)
+            sum=$(sed -n "s/^ARG ${up}_SHA256_AMD64=//p" Dockerfile)
+            curl -fsSLo "$RUNNER_TEMP/$tool" "https://github.com/siderolabs/${repo}/releases/download/${ver}/${tool}-linux-amd64"
+            echo "${sum}  $RUNNER_TEMP/$tool" | sha256sum -c -
+            chmod 0555 "$RUNNER_TEMP/$tool"
+            echo "MAINLOOP_TEST_${up}=$RUNNER_TEMP/$tool" >> "$GITHUB_ENV"
+          done
       - name: go test -race (excluding the sharded-out packages)
         run: |
           pkgs=$(go list ./... | grep -vE '/internal/(tasks|sessions|workspaces|deploytest)$')

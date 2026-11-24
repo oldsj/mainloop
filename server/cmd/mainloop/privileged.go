@@ -21,5 +21,6 @@ func newPrivileged(cfg *config.Config, pool *pgxpool.Pool, gh *github.App, log *
 	return &privileged.Service{
 		Pool: pool, OwnerID: cfg.Identity.OwnerID, GitHub: gh, Log: log, ExecutorOn: bool(cfg.PrivilegedExecutorEnabled),
 		KubernetesOn: bool(cfg.PrivilegedExecutorEnabled) && bool(cfg.PrivilegedKubernetesEnabled),
+		OmniOn:       bool(cfg.PrivilegedExecutorEnabled) && bool(cfg.PrivilegedOmniEnabled),
 	}
 }
