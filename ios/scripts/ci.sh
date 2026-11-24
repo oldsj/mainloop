@@ -16,9 +16,12 @@ derived=build/DerivedData
 xcodebuild -version
 
 # The build and tests below always use a client freshly generated from api/openapi.yaml.
-# A committed copy that differs is a warning, not a failure: a contract change made in a
+# On a pull request a committed copy that differs is a warning: a contract change made in a
 # workspace without Swift can't regenerate it. The patch is written to build/ and CI uploads it
 # as the `ios-generated-client` artifact, to apply with `git apply` (see AGENTS.md).
+# With STRICT_GENERATED=1 (CI on pushes to main) it fails the run, after the build and tests,
+# so main never keeps a stale copy unnoticed.
+strict=${STRICT_GENERATED:-0}
 scripts/generate-api.sh
 generated=Packages/MainloopKit/Sources/MainloopAPI/Generated
 mkdir -p build
@@ -30,10 +33,11 @@ if [[ -n ${drift} ]]; then
     # Intent-to-add, so new generated files are in the patch too (CI's checkout only).
     git add -N -- "${generated}"
     git diff -- "${generated}" >build/generated-client.patch
-    echo "::warning title=Swift API client::${msg}"
+    if [[ ${strict} == 1 ]]; then level=error; else level=warning; fi
+    echo "::${level} title=Swift API client::${msg}"
   else
     echo "${drift}" >&2
-    echo "warning: ${msg}" >&2
+    echo "${msg}" >&2
   fi
 fi
 
@@ -72,4 +76,8 @@ xcodebuild -project Mainloop.xcodeproj -scheme Mainloop -destination "${dest}" \
 
 # One simulator at a time: don't leave it running.
 xcrun simctl shutdown all || true
+if [[ ${status} == 0 && ${strict} == 1 && -n ${drift} ]]; then
+  echo "Failing: the committed Swift API client is out of date (STRICT_GENERATED=1)." >&2
+  status=1
+fi
 exit "${status}"
