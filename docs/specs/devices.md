@@ -6,7 +6,8 @@ server stores only the public key, so nothing in the database or its backups let
 device. Implemented in `server/internal/auth` (the verifier) and `server/internal/devices` (the
 routes and store), and in the iPhone app ([iOS app](ios-app.md)).
 
-Status: tested with software keys and fixtures; not yet proven against a real phone or Pocket ID.
+Status: tested with software keys and fixtures, and a token signed by the app's code verifies in the
+server's tests. Not yet proven against a real phone or Pocket ID.
 
 ## Registering a phone
 
@@ -18,7 +19,9 @@ Status: tested with software keys and fixtures; not yet proven against a real ph
 3. It calls `POST /devices` with the Pocket ID ID token as `Authorization: Bearer`, a name, the
    platform and the key's public JWK. The response's `id` (`dev_` and 26 characters) names the
    device from then on.
-4. The app then forgets the Pocket ID token. It keeps only the device id and the key.
+4. The app then forgets the Pocket ID token. It keeps the device id, the origin and the key's
+   Secure Enclave handle in one keychain item (this device only, never synced), and signs only for
+   that origin.
 
 `POST /devices` is refused (`403`) unless the token:
 

@@ -1,0 +1,11 @@
+{
+  "body" : "{\"response\":\"Approve\"}",
+  "comment" : "Signed by ios/Packages/MainloopKit DeviceToken with a throwaway software key; only the public key is kept.",
+  "device_id" : "dev_0123456789abcdefghijklmnop",
+  "iat" : 1790000000,
+  "method" : "POST",
+  "target" : "/queue/q-0001/respond?wait=1",
+  "token" : "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRldl8wMTIzNDU2Nzg5YWJjZGVmZ2hpamtsbW5vcCIsInR5cCI6Im1haW5sb29wLWRldmljZStqd3QifQ.eyJhdWQiOiJtYWlubG9vcC1hcGkiLCJiaCI6ImFOOGFPYlh6TFN2cW5Ec2Jrb2RnZENXcEMzZ0JMOXZJaGNQWm5qcDVhX2ciLCJleHAiOjE3OTAwMDAwNjAsImh0bSI6IlBPU1QiLCJodHUiOiIvcXVldWUvcS0wMDAxL3Jlc3BvbmQ_d2FpdD0xIiwiaWF0IjoxNzkwMDAwMDAwLCJpc3MiOiJtYWlubG9vcC1kZXZpY2UiLCJqdGkiOiJmaXh0dXJlLWp0aS0wMDAwMDAwMDAxIiwic3ViIjoiZGV2XzAxMjM0NTY3ODlhYmNkZWZnaGlqa2xtbm9wIn0.3cG9mxjJNmYQNaB69gmhlG-YbSDLiCU5Yr0PSqfUG0R_uMHv8WAiCQMtRiYLSHDPgXJ6xHEuWcFIoPs-taAT6A",
+  "x" : "mCiiBvZ0A5RUg5H29UXp-yaJkuj9861gIiWoa7-ksQo",
+  "y" : "buXVZu3bj9aByR8sGNW6O39SuBGDI3C7O3NRe4IHSGw"
+}

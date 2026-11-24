@@ -56,6 +56,9 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         # The one origin the app talks to. A placeholder origin means sample data.
         MainloopOrigin: $(MAINLOOP_ORIGIN)
+        # Pocket ID, for registering this phone (docs/specs/devices.md). Empty: no sign-in.
+        MainloopOIDCIssuer: $(MAINLOOP_OIDC_ISSUER)
+        MainloopOIDCClientID: $(MAINLOOP_OIDC_CLIENT_ID)
 
   MainloopTests:
     type: bundle.unit-test

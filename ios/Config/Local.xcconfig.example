@@ -2,3 +2,5 @@
 DEVELOPMENT_TEAM = YOURTEAMID
 MAINLOOP_BUNDLE_ID = com.yourdomain.mainloop
 MAINLOOP_ORIGIN = https:/$()/mainloop.yourdomain.example
+MAINLOOP_OIDC_ISSUER = https:/$()/id.yourdomain.example
+MAINLOOP_OIDC_CLIENT_ID = mainloop-ios

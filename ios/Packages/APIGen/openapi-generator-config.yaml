@@ -12,3 +12,7 @@ filter:
     - respondToQueueItem
     - listSessions
     - sendSessionMessage
+    - registerDevice
+    - listDevices
+    - getCurrentDevice
+    - revokeDevice

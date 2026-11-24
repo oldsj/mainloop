@@ -38,8 +38,10 @@ open Mainloop.xcodeproj
 
 The app builds with the placeholder origin and shows sample data. To run it on a phone, copy
 `Config/Local.xcconfig.example` to `Config/Local.xcconfig` and set your team ID, bundle ID and
-Mainloop origin. Nothing in `Local.xcconfig` is committed. Until sign-in lands, a real origin
-shows "Signed out".
+Mainloop origin. Nothing in `Local.xcconfig` is committed. To sign in, also set the Pocket ID
+issuer and the app's OIDC client: a public client (PKCE, no secret) with the redirect URI
+`mainloop-ios://oauth/callback`, whose id the server lists in `MAINLOOP_AUTH_DEVICE_CLIENT_ID`
+(see `docs/specs/devices.md`).
 
 ## Rules
 

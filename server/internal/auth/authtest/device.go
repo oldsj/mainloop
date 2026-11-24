@@ -87,6 +87,16 @@ func (s *DeviceStore) Add(d *Device) {
 	s.devices[d.ID] = auth.DeviceRecord{Key: &d.Key.PublicKey}
 }
 
+// AddKey registers a device by its public key alone.
+func (s *DeviceStore) AddKey(id string, key *ecdsa.PublicKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.devices == nil {
+		s.devices = map[string]auth.DeviceRecord{}
+	}
+	s.devices[id] = auth.DeviceRecord{Key: key}
+}
+
 // Revoke revokes id.
 func (s *DeviceStore) Revoke(id string) {
 	s.mu.Lock()

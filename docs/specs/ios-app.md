@@ -31,6 +31,14 @@ to build it.
   without archived ones. A session shows its status and summary, takes a message (each message
   carries a `message_id`, kept while the text is unchanged so a retry is one message), and opens its transcript in the web
   app in Safari's in-app browser.
+- **Signing in** (Settings, **This iPhone**): **Sign in with Pocket ID** opens Pocket ID in a
+  private browser session (no shared cookies; it always asks), makes a new request key in the
+  Secure Enclave and registers the phone ([devices](devices.md)). From then on every request is
+  signed with that key. The section shows the device id and **Sign out**, which revokes the device
+  on the server and deletes the key; offline, the key is still deleted. It needs
+  `MAINLOOP_OIDC_ISSUER` and `MAINLOOP_OIDC_CLIENT_ID` in the build; without them it reads "Not
+  configured". The simulator, which has no Secure Enclave, uses a software key; a phone never
+  does.
 - **Sample data.** A build whose origin is a placeholder (`*.example.test`, `*.example`) or empty
   runs on fictional fixtures. Answers and messages then change only the app's copy.
 
@@ -38,8 +46,8 @@ to build it.
 
 These are planned (see the iOS plan in the pull request that added `ios/`). None is live:
 
-- signing in with Pocket ID and registering the phone's Secure Enclave keys, so a real origin
-  works (today every call from the app would be refused);
+- a second, Touch ID-gated key for approvals (the request key needs no Touch ID);
+- through the admin gateway once its login lands (see [devices](devices.md), "Through the gateway");
 - push notifications through APNs, alongside ntfy;
 - approving privileged actions with a Touch ID signature that the executor verifies;
 - native task views and chat;
@@ -47,5 +55,7 @@ These are planned (see the iOS plan in the pull request that added `ios/`). None
 
 ## Not proven
 
-The app's tests run on the simulator in CI, with sample data. Nothing has run on an iPhone Duo or
-against a Mainloop server.
+The app's tests run on the simulator in CI, with sample data. Request signing is tested with
+software keys, and a token the app's code signed is checked by the server's verifier in Go
+(`server/internal/auth/testdata`). Nothing has run on an iPhone Duo, against Pocket ID or against a
+Mainloop server.

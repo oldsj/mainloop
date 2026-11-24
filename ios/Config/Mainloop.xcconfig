@@ -6,6 +6,10 @@ MAINLOOP_BUNDLE_ID = org.example.mainloop
 // https://host of the Mainloop web app. The `//` is escaped as `/$()/` because xcconfig
 // treats `//` as a comment. A placeholder host means the app shows sample data.
 MAINLOOP_ORIGIN = https:/$()/mainloop.example.test
+// Pocket ID: the issuer URL (escaped like the origin) and the app's own public OIDC client
+// (PKCE, no secret, redirect mainloop-ios://oauth/callback). Empty means no sign-in.
+MAINLOOP_OIDC_ISSUER =
+MAINLOOP_OIDC_CLIENT_ID =
 DEVELOPMENT_TEAM =
 CODE_SIGN_STYLE = Automatic
 

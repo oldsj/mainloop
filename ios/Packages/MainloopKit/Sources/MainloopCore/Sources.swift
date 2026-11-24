@@ -2,7 +2,7 @@ import Foundation
 import MainloopAPI
 
 /// Where the app's data comes from: the live API, or fictional fixtures (previews, the
-/// simulator, and until sign-in lands, every build).
+/// simulator, and any build without a real origin).
 public protocol MainloopSource: Sendable {
     func needsYou() async throws -> [NeedsYouItem]
     func respond(to item: NeedsYouItem, with answer: Answer) async throws
@@ -18,8 +18,8 @@ public enum SourceError: Error, Equatable, Sendable {
     case alreadyAnswered
 }
 
-/// The generated client against one Mainloop origin. Auth middleware arrives with device
-/// registration; until then every call is answered 401 by an instance that enforces sign-in.
+/// The generated client against one Mainloop origin. The app adds `AccountSigningMiddleware`, so
+/// a registered phone signs every call (docs/specs/devices.md); an unregistered one gets 401.
 public struct LiveSource: MainloopSource {
     let client: Client
 
