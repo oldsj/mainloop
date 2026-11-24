@@ -1,0 +1,64 @@
+name: iOS
+
+# Regenerates the Swift API client from api/openapi.yaml (a stale committed copy is a warning
+# with the patch as the ios-generated-client artifact, see AGENTS.md), runs MainloopKit's tests on
+# macOS, builds the app for the simulator without signing and runs its tests on an iPhone Duo
+# simulator when the image has one (ios/scripts/ci.sh, which also runs locally).
+#
+# Public repository: GitHub-hosted runners only, never self-hosted. No secrets and no signing.
+# `xcode-27` is GitHub's image with Xcode 27 (a preview label); iPhone Duo needs the iOS 27.1 SDK.
+
+on:
+  push:
+    branches: [main]
+    paths: [ios/**, api/openapi.yaml, .github/workflows/ios.yml]
+  pull_request:
+    paths: [ios/**, api/openapi.yaml, .github/workflows/ios.yml]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  simulator:
+    name: Simulator build and tests
+    runs-on: xcode-27
+    timeout-minutes: 40
+    env:
+      XCODEGEN_VERSION: 2.48.0
+      XCODEGEN_SHA256: 620c9f0dc10849f94728ab5df52d225ebab8187439dd6fee1925e59e80dff892
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install XcodeGen (pinned, checksum verified)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          echo "${XCODEGEN_SHA256}  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP/xcodegen"
+          echo "$RUNNER_TEMP/xcodegen/xcodegen/bin" >> "$GITHUB_PATH"
+      - name: Show Xcode and simulators
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes
+          xcrun simctl list devicetypes | grep -i iphone
+      - run: ios/scripts/ci.sh
+      - name: Upload the regenerated API client, if the committed one is stale
+        if: always() && hashFiles('ios/build/generated-client.patch') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-generated-client
+          path: ios/build/generated-client.patch
+          retention-days: 14
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-test-results
+          path: ios/build/Tests.xcresult
+          retention-days: 7
