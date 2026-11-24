@@ -16,7 +16,8 @@ DELETE FROM preview_screenshot_attempts WHERE created_at < now() - interval '1 h
 -- Drops a screenshot's image, keeping the row, when it is older than max_age; when it is one of a
 -- workspace's screenshots that no report names beyond its newest keep; or when the workspace's
 -- held images pass max_bytes. The byte budget counts reported images too and spends itself on
--- them first, newest first, then on the unreported ones, newest first.
+-- them first, newest first, then on the unreported ones, newest first. The two caps leave images
+-- younger than grace alone and do not count them, so an agent can report what it just captured.
 WITH reported AS (
     SELECT DISTINCT u.id FROM task_reports r CROSS JOIN LATERAL unnest(r.screenshot_ids) AS u(id)
 ),
@@ -30,6 +31,7 @@ held AS (
         FROM preview_screenshots p LEFT JOIN reported r ON r.id = p.id
         WHERE p.expired_at IS NULL
           AND p.created_at >= now() - make_interval(secs => sqlc.arg(max_age_seconds)::float8)
+          AND p.created_at < now() - make_interval(secs => sqlc.arg(grace_seconds)::float8)
     ) s
 )
 UPDATE preview_screenshots s SET data = NULL, expired_at = now()
@@ -44,7 +46,7 @@ WHERE s.expired_at IS NULL AND (
 -- name: PruneScreenshotCopies :execrows
 -- Deletes the chat copies of report screenshots on the screenshots' schedule: older than max_age,
 -- copied from a screenshot whose image expired, or past max_bytes of copies in one conversation
--- (oldest first). A copy younger than an hour is left alone, so a send in flight still finds the
+-- (oldest first). A copy younger than grace is left alone, so a send in flight still finds the
 -- images it copied; past that, a copy no message claimed is an orphan of a failed send.
 WITH ranked AS (
     SELECT m.id, sum(m.size_bytes) OVER (PARTITION BY m.session_id ORDER BY m.created_at DESC, m.id DESC) AS bytes
@@ -52,7 +54,7 @@ WITH ranked AS (
     WHERE m.screenshot_id IS NOT NULL AND m.message_id IS NOT NULL
 )
 DELETE FROM message_images m
-WHERE m.screenshot_id IS NOT NULL AND m.created_at < now() - interval '1 hour' AND (
+WHERE m.screenshot_id IS NOT NULL AND m.created_at < now() - make_interval(secs => sqlc.arg(grace_seconds)::float8) AND (
     m.message_id IS NULL
     OR m.created_at < now() - make_interval(secs => sqlc.arg(max_age_seconds)::float8)
     OR EXISTS (SELECT 1 FROM preview_screenshots s WHERE s.id = m.screenshot_id AND s.expired_at IS NOT NULL)

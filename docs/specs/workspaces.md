@@ -351,7 +351,8 @@ full_page=false)` opens `<port>--<own workspace>--preview.<domain><path>` in a d
 - **Retention.** A screenshot's image is dropped after 7 days, and a workspace keeps the images of
   at most 50 screenshots that no report names (its oldest go first). A workspace also holds at most
   100 MB of images, reported ones included: past that, unreported images go before reported ones,
-  and older before newer. The copies a delivered report put in the main thread's conversation go
+  and older before newer. Neither cap counts or drops an image less than an hour old, so an agent
+  can report what it just captured. The copies a delivered report put in the main thread's conversation go
   on the same schedule: with their screenshot's image, after 7 days, and past 100 MB of copies in
   one conversation (oldest first); a copy no message claimed goes after an hour. The message stays
   without its image. Images pasted into the chat are not affected. The screenshot's row stays: a replay lists it with `expired: true` and no image, and the task page shows

@@ -307,10 +307,11 @@ func TestScreenshotImagesExpire(t *testing.T) {
 		t.Fatalf("report = %q", r.text())
 	}
 	oldest := seedScreenshot(t, h, sup)
-	age(oldest, time.Hour)
+	age(oldest, 3*time.Hour)
 	for range screenshot.KeepUnreported {
-		seedScreenshot(t, h, sup)
+		age(seedScreenshot(t, h, sup), 2*time.Hour) // past the grace period, so the cap counts them
 	}
+	fresh := seedScreenshot(t, h, sup) // within it: neither counted nor expired
 
 	if err := screenshot.RetainSweep(h.env.Pool).Run(ctx); err != nil {
 		t.Fatal(err)
@@ -332,12 +333,15 @@ func TestScreenshotImagesExpire(t *testing.T) {
 	if !held(reported) {
 		t.Error("a reported image was dropped by the cap")
 	}
+	if !held(fresh) {
+		t.Error("an image within the grace period was dropped by the cap")
+	}
 	var rows, images int
 	if err := h.env.Pool.QueryRow(ctx, `SELECT count(*), count(data) FROM preview_screenshots WHERE session_id = $1`, sup.SessionID).Scan(&rows, &images); err != nil {
 		t.Fatal(err)
 	}
-	if rows != screenshot.KeepUnreported+3 || images != screenshot.KeepUnreported+1 {
-		t.Errorf("rows %d, images %d; want %d rows, %d images", rows, images, screenshot.KeepUnreported+3, screenshot.KeepUnreported+1)
+	if rows != screenshot.KeepUnreported+4 || images != screenshot.KeepUnreported+2 {
+		t.Errorf("rows %d, images %d; want %d rows, %d images", rows, images, screenshot.KeepUnreported+4, screenshot.KeepUnreported+2)
 	}
 }
 
@@ -363,7 +367,8 @@ func TestPreviewScreenshotReplaysAnExpiredRequestWithoutItsImage(t *testing.T) {
 }
 
 // A workspace's images, reported ones included, fit a byte budget: reported ones are kept first,
-// then the newest unreported ones.
+// then the newest unreported ones. An image within the grace period is not counted or dropped, so a
+// workspace whose reported images fill the budget can still report a new one.
 func TestScreenshotImagesFitAByteBudget(t *testing.T) {
 	h := newTaskHarness(t, false)
 	ctx := context.Background()
@@ -392,18 +397,20 @@ func TestScreenshotImagesFitAByteBudget(t *testing.T) {
 	a := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleSupervisor, Grant: dbstate.GrantCoordination, Parent: main.SessionID})
 	aNew, aOld := shot(a, 3*time.Hour, 60*mb), shot(a, 4*time.Hour, 30*mb)
 	reportAll(a, aNew, aOld)
-	aFresh, aStale := shot(a, time.Hour, 5*mb), shot(a, 2*time.Hour, 10*mb)
+	aFresh, aStale := shot(a, 90*time.Minute, 5*mb), shot(a, 2*time.Hour, 10*mb)
 	// Reported ones count too: two reported images of 60 and 50 do not both fit.
 	b := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleSupervisor, Grant: dbstate.GrantCoordination, Parent: main.SessionID})
-	bNew, bOld := shot(b, time.Hour, 60*mb), shot(b, 2*time.Hour, 50*mb)
+	bNew, bOld := shot(b, 90*time.Minute, 60*mb), shot(b, 2*time.Hour, 50*mb)
 	reportAll(b, bNew, bOld)
+	bYoung := shot(b, 10*time.Minute, 50*mb)
 
 	if _, err := dbq.New(h.env.Pool).ExpireScreenshotImages(ctx, dbq.ExpireScreenshotImagesParams{
 		MaxAgeSeconds: screenshot.MaxImageAge.Seconds(), Keep: screenshot.KeepUnreported, MaxBytes: 100 * mb,
+		GraceSeconds: screenshot.Grace.Seconds(),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for id, want := range map[string]bool{aNew: true, aOld: true, aFresh: true, aStale: false, bNew: true, bOld: false} {
+	for id, want := range map[string]bool{aNew: true, aOld: true, aFresh: true, aStale: false, bNew: true, bOld: false, bYoung: true} {
 		var held bool
 		if err := h.env.Pool.QueryRow(ctx, `SELECT data IS NOT NULL FROM preview_screenshots WHERE id = $1`, id).Scan(&held); err != nil {
 			t.Fatal(err)

@@ -16,11 +16,14 @@ import (
 // at most MaxHeldBytes of images, reported ones included, dropping unreported ones before
 // reported ones and older before newer. The row stays, so a report still says what it showed; the
 // image reads as expired. The chat copies a delivered report made go on the same schedule: with
-// their screenshot's image, after MaxImageAge, and past MaxHeldBytes in one conversation.
+// their screenshot's image, after MaxImageAge, and past MaxHeldBytes in one conversation. Neither
+// cap touches an image younger than Grace: an agent has that long to report what it captured, and
+// a send in flight to attach what it copied.
 const (
 	MaxImageAge    = 7 * 24 * time.Hour
 	KeepUnreported = 50
 	MaxHeldBytes   = 100 << 20
+	Grace          = time.Hour
 )
 
 // RetainSweep expires screenshot images, prunes their chat copies and the rate limit's old
@@ -33,10 +36,11 @@ func RetainSweep(pool *pgxpool.Pool) reconcile.Sweep {
 			q := dbq.New(pool)
 			_, expireErr := q.ExpireScreenshotImages(ctx, dbq.ExpireScreenshotImagesParams{
 				MaxAgeSeconds: MaxImageAge.Seconds(), Keep: KeepUnreported, MaxBytes: MaxHeldBytes,
+				GraceSeconds: Grace.Seconds(),
 			})
 			// After the expiry, so a copy goes in the same pass as its screenshot's image.
 			_, copiesErr := q.PruneScreenshotCopies(ctx, dbq.PruneScreenshotCopiesParams{
-				MaxAgeSeconds: MaxImageAge.Seconds(), MaxBytes: MaxHeldBytes,
+				MaxAgeSeconds: MaxImageAge.Seconds(), MaxBytes: MaxHeldBytes, GraceSeconds: Grace.Seconds(),
 			})
 			_, pruneErr := q.PruneScreenshotAttempts(ctx)
 			return errors.Join(expireErr, copiesErr, pruneErr)
