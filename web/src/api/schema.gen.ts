@@ -2463,13 +2463,7 @@ export interface components {
        * @default 0
        */
       depth: number;
-      /**
-       * @default {
-       *       "ports": [],
-       *       "idle_timeout_minutes": 30
-       *     }
-       */
-      dev: components['schemas']['WorkspaceDev'];
+      dev?: components['schemas']['WorkspaceDev'];
       /**
        * Agent Kind
        * @default claude
@@ -4353,9 +4347,9 @@ export interface components {
     WorkspaceDev: {
       /**
        * Ports
-       * @default []
+       * @description The workspace's preview ports. Absent, the workspace takes its project's workspace-service ports; an empty list declares none.
        */
-      ports: components['schemas']['WorkspacePort'][];
+      ports?: components['schemas']['WorkspacePort'][];
       /**
        * Idle Timeout Minutes
        * @description Recorded only. kagent decides when an idle runtime sleeps; Mainloop no longer suspends a workspace after this time.
