@@ -197,6 +197,14 @@ one fits: it observes its target and retries, and this does neither.
   of that whatever kubectl sends: every create, update and patch gets `dryRun=All`, a DELETE's or
   an eviction's options are rewritten with it, a body it cannot read is refused, and so are
   streams.
+- Known limits:
+  - A read across every namespace (`-A`) lists the executor's namespace too. The proxy refuses
+    paths that name that namespace, not cluster-wide lists, so the executor's objects other than
+    Secrets (its pods, ConfigMaps, events) can reach the output of an approved read. Secrets are
+    refused everywhere.
+  - An aggregated API (an APIService served by a server other than the API server) gets the same
+    `dryRun=All`, but honoring it is up to that server. One that ignores it would apply a preflight
+    write before the owner approves. Built-in resources and custom resources honor it.
 - Refused when requested (`[validation]`): argv is read by kubectl's own parser, from the
   `k8s.io/kubectl` module of the release the image pins, so it reads every word as the binary
   will: an underscore spelling, a value taken from the next word, a short-flag cluster. Then an

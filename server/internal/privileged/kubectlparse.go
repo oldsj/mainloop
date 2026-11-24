@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/spf13/pflag"
@@ -173,6 +174,18 @@ func unprintable(r rune) bool {
 // takes as the next word, short-flag clusters. Then only the allowed commands and their allowed
 // flags pass.
 func parseKubectl(argv []string) (kubectlCommand, error) {
+	// Building kubectl's command tree writes package-level flag variables (its profiling flags),
+	// and serve-api checks requests concurrently: one parse at a time. A parse takes a millisecond
+	// or two.
+	kubectlParseMu.Lock()
+	defer kubectlParseMu.Unlock()
+	return parseKubectlLocked(argv)
+}
+
+// kubectlParseMu serializes parseKubectl; see there.
+var kubectlParseMu sync.Mutex
+
+func parseKubectlLocked(argv []string) (kubectlCommand, error) {
 	if len(argv) < 2 || argv[0] != "kubectl" {
 		return kubectlCommand{}, invalidf("argv is the command's words, starting with kubectl and then its verb (kubectl get pods -n widgets)")
 	}
