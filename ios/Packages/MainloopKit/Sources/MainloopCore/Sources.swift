@@ -76,6 +76,7 @@ public actor FixtureSource: MainloopSource {
     private var items: [NeedsYouItem]
     private var rows: [SessionRow]
     public private(set) var sent: [(sessionID: String, message: String)] = []
+    public private(set) var sentIDs: [String] = []
 
     public init() throws {
         items = try Fixtures.attention().items.map(NeedsYouItem.init)
@@ -95,6 +96,7 @@ public actor FixtureSource: MainloopSource {
 
     public func send(_ message: String, to sessionID: String, messageID: String) async throws {
         sent.append((sessionID, message))
+        sentIDs.append(messageID)
     }
 }
 

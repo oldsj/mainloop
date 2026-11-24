@@ -107,6 +107,20 @@ pnpm build:design && pnpm check:design    # CI also installs Chromium first
 
 `web/` has a Playwright config and an `e2e` script, but no CI job runs it. Run browser tests only when a task asks for them, and only against a known target.
 
+The iOS app (`ios/`) builds only on macOS: CI's `iOS` workflow runs `ios/scripts/ci.sh` on a
+GitHub-hosted Xcode runner, for changes under `ios/` or to `api/openapi.yaml`. It always builds and
+tests against a Swift client freshly generated from the contract. The committed copy
+(`ios/Packages/MainloopKit/Sources/MainloopAPI/Generated`) can lag behind:
+
+- After a contract change, a stale copy is a warning on the iOS check, not a failure, and the run
+  uploads the regenerated files as the `ios-generated-client` artifact.
+- Apply it in the same pull request when you can:
+  `gh run download <run id> -n ios-generated-client && git apply generated-client.patch`, from the
+  repository root.
+- On a Mac with Xcode, run `ios/scripts/generate-api.sh` instead.
+- If the iOS check fails rather than warns, the contract change broke the app's own code. Say so
+  in the pull request; do not weaken the check.
+
 CI (`.github/workflows/go.yml`) runs the checks above at full breadth on every PR push and again on
 merge: lint, the full `go test -race ./...` (sharded into two jobs so neither runs close to its
 timeout), the chart render tests uncached (`charts/**` also triggers it), `go generate`/`go mod tidy`

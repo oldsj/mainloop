@@ -9,7 +9,9 @@ struct NeedsYouScreen: View {
         ListDetail(title: "Needs you", selection: $model.selection) {
             NeedsYouList()
         } detail: {
-            if let item = model.selected { NeedsYouDetail(item: item) }
+            // A new identity per card, so no view state carries over when the selection
+            // changes in the split layout (where the detail stays in place).
+            if let item = model.selected { NeedsYouDetail(item: item).id(item.id) }
         } placeholder: {
             ContentUnavailableView("Nothing open", systemImage: "tray", description: Text("Pick an item to answer it."))
         }

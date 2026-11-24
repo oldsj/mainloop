@@ -30,27 +30,31 @@ public struct NeedsYouItem: Identifiable, Hashable, Sendable {
 
 /// The privileged-action facts a card carries in its context (docs/specs/privileged-actions.md,
 /// "Preflight and the card").
+///
+/// A card is privileged when its context names any `privileged_action_*` key, even if the
+/// values are missing or malformed: such a card must never get an unsigned Approve. The facts
+/// themselves are shown only when they are well-formed.
 public struct PrivilegedCard: Hashable, Sendable {
+    public static let keyPrefix = "privileged_action_"
     public static let contextActionID = "privileged_action_id"
     public static let contextDigest = "privileged_action_digest"
     public static let contextType = "privileged_action_type"
 
-    public let actionID: String
-    /// SHA-256 of the frozen action, 64 lowercase hex characters.
-    public let digest: String
-    public let type: String
+    public let actionID: String?
+    /// SHA-256 of the frozen action, 64 lowercase hex characters; nil if the context's is not.
+    public let digest: String?
+    public let type: String?
 
     /// The first 16 characters, as the card shows them.
-    public var digestPrefix: String { String(digest.prefix(16)) }
+    public var digestPrefix: String? { digest.map { String($0.prefix(16)) } }
 
     public init?(context: [String: (any Sendable)?]) {
-        guard let actionID = context[Self.contextActionID] as? String, !actionID.isEmpty,
-              let digest = context[Self.contextDigest] as? String,
-              digest.count == 64, digest.allSatisfy({ $0.isHexDigit && !$0.isUppercase })
-        else { return nil }
-        self.actionID = actionID
-        self.digest = digest
-        type = (context[Self.contextType] as? String) ?? ""
+        guard context.keys.contains(where: { $0.hasPrefix(Self.keyPrefix) }) else { return nil }
+        actionID = (context[Self.contextActionID] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        digest = (context[Self.contextDigest] as? String).flatMap {
+            $0.count == 64 && $0.allSatisfy { $0.isHexDigit && !$0.isUppercase } ? $0 : nil
+        }
+        type = (context[Self.contextType] as? String).flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 
@@ -112,7 +116,10 @@ public enum AnswerBody {
     public static func make(for item: NeedsYouItem, answer: Answer) throws -> Components.Schemas.QueueItemResponse {
         let response = answer.response.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !response.isEmpty else { throw AnswerError.empty }
-        if item.privileged != nil, answer == .option(Answer.approve) {
+        // On a privileged card the server records anything but a signed Approve with the
+        // card's digest as a denial. Refuse an Approve here, typed or tapped, so the owner
+        // doesn't deny by accident.
+        if item.privileged != nil, response.caseInsensitiveCompare(Answer.approve) == .orderedSame {
             throw AnswerError.privilegedApproveNeedsSignature
         }
         return .init(response: response)

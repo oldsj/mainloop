@@ -19,16 +19,18 @@ public enum ServerOrigin: Equatable, Sendable {
         if lower.hasSuffix(".example.test") || lower.hasSuffix(".example") || lower == "example.test" {
             return .fixtures
         }
-        let loopback = lower == "localhost" || lower == "127.0.0.1" || lower == "::1"
+        let loopback = lower == "localhost" || lower == "127.0.0.1" || lower == "::1" || lower == "[::1]"
         switch url.scheme?.lowercased() {
         case "https": break
         case "http" where loopback: break
         default: return .fixtures
         }
-        var parts = URLComponents()
-        parts.scheme = url.scheme?.lowercased()
-        parts.host = lower
-        parts.port = url.port
+        // Rebuild from the parsed parts, keeping the host as written (an IPv6 literal keeps
+        // its brackets), lowercased.
+        guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return .fixtures }
+        parts.scheme = parts.scheme?.lowercased()
+        parts.percentEncodedHost = parts.percentEncodedHost?.lowercased()
+        parts.path = ""
         return parts.url.map(ServerOrigin.live) ?? .fixtures
     }
 }

@@ -7,7 +7,11 @@ import SwiftUI
 struct NeedsYouDetail: View {
     @Environment(NeedsYouModel.self) private var model
     let item: NeedsYouItem
-    @State private var reply = ""
+
+    /// The note belongs to this card in the model, never to whichever card is open.
+    private var reply: Binding<String> {
+        Binding(get: { model.replies[item.id] ?? "" }, set: { model.replies[item.id] = $0 })
+    }
 
     private var busy: Bool { model.answering.contains(item.id) }
 
@@ -25,9 +29,9 @@ struct NeedsYouDetail: View {
             }
             if let card = item.privileged {
                 Section {
-                    LabeledContent("Action", value: card.type.isEmpty ? "Privileged action" : card.type)
-                    LabeledContent("Action id", value: card.actionID)
-                    LabeledContent("Digest", value: card.digestPrefix).monospaced()
+                    LabeledContent("Action", value: card.type ?? "Privileged action")
+                    LabeledContent("Action id", value: card.actionID ?? "Missing")
+                    LabeledContent("Digest", value: card.digestPrefix ?? "Missing").monospaced()
                 } header: {
                     Text("Privileged action")
                 } footer: {
@@ -45,10 +49,10 @@ struct NeedsYouDetail: View {
                         Button(option) { send(.option(option)) }
                             .disabled(busy || isUnsignedApprove(option))
                     }
-                    TextField(item.privileged != nil ? "Deny with a note" : "Reply", text: $reply, axis: .vertical)
+                    TextField(item.privileged != nil ? "Deny with a note" : "Reply", text: reply, axis: .vertical)
                         .lineLimit(1...6)
-                    Button(item.privileged != nil ? "Deny with note" : "Send reply") { send(.text(reply)) }
-                        .disabled(busy || reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button(item.privileged != nil ? "Deny with note" : "Send reply") { send(.text(reply.wrappedValue)) }
+                        .disabled(busy || reply.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
@@ -67,10 +71,7 @@ struct NeedsYouDetail: View {
     }
 
     private func send(_ answer: Answer) {
-        Task {
-            await model.answer(item, with: answer)
-            reply = ""
-        }
+        Task { await model.answer(item, with: answer) }
     }
 }
 

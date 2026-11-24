@@ -17,12 +17,19 @@ to build it.
   [the inbox](inbox.md). A card shows its details, options and expiry, and takes an option or a
   free-text reply. Problems can't be answered.
 - **Privileged cards** (see [privileged actions](privileged-actions.md)) show the action type, the
-  action id and the first 16 characters of the digest. The phone does not offer **Approve** for
-  them: approving needs a Touch ID signature, which is not built yet. **Deny** and a note (a denial
-  with that text) are offered.
+  action id and the first 16 characters of the digest.
+  - A card counts as privileged when its context has any `privileged_action_*` key. If those facts
+    are malformed, the card shows them as missing.
+  - The phone never sends an Approve on a privileged card, whether tapped or typed (in any letter
+    case): approving needs a Touch ID signature, which is not built yet. The server would record
+    an unsigned Approve as a denial.
+  - **Deny** and a note (a denial with that text) are offered.
+- **Drafts stay with their item.** A note typed on a card, or a message typed to a session, belongs
+  to that card or session. Changing the selection in the side-by-side layout shows the other item's
+  own draft, never carries text over, and coming back restores it.
 - **Sessions** lists sessions that need the owner first, then live ones, then the rest, newest first,
   without archived ones. A session shows its status and summary, takes a message (each message
-  carries a `message_id`, kept for retries of the same text), and opens its transcript in the web
+  carries a `message_id`, kept while the text is unchanged so a retry is one message), and opens its transcript in the web
   app in Safari's in-app browser.
 - **Sample data.** A build whose origin is a placeholder (`*.example.test`, `*.example`) or empty
   runs on fictional fixtures. Answers and messages then change only the app's copy.

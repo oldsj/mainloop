@@ -10,6 +10,7 @@ import Testing
         ("https://mainloop.example.org:8443", "https://mainloop.example.org:8443"),
         ("http://localhost:5173", "http://localhost:5173"),
         ("http://127.0.0.1:8000", "http://127.0.0.1:8000"),
+        ("http://[::1]:8000", "http://[::1]:8000"),
     ])
     func acceptsOneHTTPSOrigin(_ raw: String, _ expected: String) {
         #expect(ServerOrigin.parse(raw) == .live(URL(string: expected)!))
@@ -25,9 +26,17 @@ import Testing
         #expect(ServerOrigin.parse(raw) == .fixtures)
     }
 
-    @Test func apiLivesUnderSlashAPI() {
-        let url = MainloopAPI.apiBaseURL(origin: URL(string: "https://mainloop.example.org")!)
-        #expect(url.absoluteString == "https://mainloop.example.org/api")
+    @Test(arguments: [
+        ("https://mainloop.example.org", "https://mainloop.example.org/api"),
+        ("https://mainloop.example.org:8443", "https://mainloop.example.org:8443/api"),
+        ("http://[::1]:8000", "http://[::1]:8000/api"),
+    ])
+    func apiLivesUnderSlashAPI(_ origin: String, _ expected: String) throws {
+        guard case .live(let url) = ServerOrigin.parse(origin) else {
+            Issue.record("\(origin) did not parse")
+            return
+        }
+        #expect(MainloopAPI.apiBaseURL(origin: url).absoluteString == expected)
     }
 }
 

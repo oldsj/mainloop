@@ -24,15 +24,19 @@ public enum MainloopAPI {
         )
     }
 
-    /// `https://host` becomes `https://host/api`. A path or query on the origin is dropped: the
-    /// app talks to exactly one origin.
+    /// `https://host` becomes `https://host/api`. A path, query or user on the origin is
+    /// dropped: the app talks to exactly one origin. The host is kept as written, so an IPv6
+    /// literal keeps its brackets.
     public static func apiBaseURL(origin: URL) -> URL {
-        var parts = URLComponents()
-        parts.scheme = origin.scheme
-        parts.host = origin.host()
-        parts.port = origin.port
+        guard var parts = URLComponents(url: origin, resolvingAgainstBaseURL: false) else {
+            return origin.appending(path: "api")
+        }
+        parts.user = nil
+        parts.password = nil
+        parts.query = nil
+        parts.fragment = nil
         parts.path = "/api"
-        return parts.url!
+        return parts.url ?? origin.appending(path: "api")
     }
 }
 

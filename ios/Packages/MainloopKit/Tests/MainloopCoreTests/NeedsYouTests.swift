@@ -54,10 +54,17 @@ import Testing
         ["privileged_action_id": "pa-1", "privileged_action_digest": "abc"],
         ["privileged_action_id": "pa-1", "privileged_action_digest": String(repeating: "A", count: 64)],
         ["privileged_action_id": "", "privileged_action_digest": String(repeating: "a", count: 64)],
-        ["privileged_action_digest": String(repeating: "a", count: 64)],
+        ["privileged_action_type": "k8s.delete"],
     ] as [[String: String]])
-    func rejectsAMalformedPrivilegedContext(_ context: [String: String]) {
-        #expect(PrivilegedCard(context: context) == nil)
+    func aMalformedPrivilegedContextIsStillPrivileged(_ context: [String: String]) throws {
+        let card = try #require(PrivilegedCard(context: context))
+        // Malformed facts are not shown as if they were real.
+        #expect(card.digestPrefix == nil || card.actionID == nil)
+    }
+
+    @Test func aContextWithoutPrivilegedKeysIsOrdinary() {
+        #expect(PrivilegedCard(context: ["repository": "example/lighthouse"]) == nil)
+        #expect(PrivilegedCard(context: [:]) == nil)
     }
 }
 
@@ -69,6 +76,31 @@ import Testing
         #expect(throws: AnswerError.privilegedApproveNeedsSignature) {
             try AnswerBody.make(for: item, answer: .option(Answer.approve))
         }
+    }
+
+    @Test(arguments: ["Approve", "approve", "  APPROVE \n"])
+    func typedApproveOnAPrivilegedCardIsRefusedToo(_ text: String) throws {
+        let item = try items()[0]
+        #expect(throws: AnswerError.privilegedApproveNeedsSignature) {
+            try AnswerBody.make(for: item, answer: .text(text))
+        }
+    }
+
+    @Test func approveOnAPrivilegedCardWithAMalformedContextIsRefused() throws {
+        let base = try items()[0]
+        let item = NeedsYouItem(
+            id: base.id, kind: base.kind, title: base.title, needed: base.needed, content: nil,
+            options: ["Approve", "Deny"], taskID: nil, queueItemID: base.queueItemID, createdAt: nil, expiresAt: nil,
+            privileged: PrivilegedCard(context: ["privileged_action_id": "pa-9"])
+        )
+        #expect(throws: AnswerError.privilegedApproveNeedsSignature) {
+            try AnswerBody.make(for: item, answer: .option(Answer.approve))
+        }
+    }
+
+    @Test func ordinaryCardsMayBeApproved() throws {
+        let merge = try items()[2]
+        #expect(try AnswerBody.make(for: merge, answer: .text("Approve")).response == "Approve")
     }
 
     @Test func privilegedDenyAndNoteAreSent() throws {
@@ -118,6 +150,37 @@ import Testing
         #expect(model.rows[0].status.label == "Waiting on you")
     }
 
+    @Test func repliesBelongToTheirCard() async throws {
+        let model = NeedsYouModel(source: try FixtureSource())
+        await model.load()
+        model.replies["attn-0001"] = "not on a Friday"
+        model.replies["attn-0002"] = "either is fine"
+        let question = try #require(model.items.first { $0.id == "attn-0002" })
+        await model.answer(question, with: .text(model.replies["attn-0002"] ?? ""))
+        #expect(model.replies["attn-0002"] == nil)
+        #expect(model.replies["attn-0001"] == "not on a Friday")
+    }
+
+    @Test func draftsBelongToTheirSessionAndKeepTheirMessageIDForRetries() async throws {
+        let source = try FixtureSource()
+        let counter = Counter()
+        let model = SessionsModel(source: source, newMessageID: { "m\(counter.next())" })
+        model.setDraft("for main", for: "sess-main-0001")
+        model.setDraft("for orchard", for: "sess-sup-0002")
+        // Switching sessions (the split layout's selection) shows each session's own draft.
+        #expect(model.draft(for: "sess-main-0001") == "for main")
+        #expect(model.draft(for: "sess-sup-0002") == "for orchard")
+        #expect(model.draft(for: "sess-task-0003") == "")
+        model.setDraft("for orchard", for: "sess-sup-0002") // same text: same message id
+        #expect(await model.sendDraft(to: "sess-sup-0002"))
+        let sent = await source.sent
+        #expect(sent.map(\.sessionID) == ["sess-sup-0002"])
+        #expect(sent.map(\.message) == ["for orchard"])
+        #expect(await source.sentIDs == ["m2"])
+        #expect(model.draft(for: "sess-sup-0002") == "")
+        #expect(model.draft(for: "sess-main-0001") == "for main")
+    }
+
     @Test func sendTrimsAndSkipsEmpty() async throws {
         let source = try FixtureSource()
         let model = SessionsModel(source: source)
@@ -126,4 +189,10 @@ import Testing
         let sent = await source.sent
         #expect(sent.map(\.message) == ["hello"])
     }
+}
+
+final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func next() -> Int { lock.withLock { value += 1; return value } }
 }

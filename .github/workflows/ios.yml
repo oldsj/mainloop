@@ -1,6 +1,7 @@
 name: iOS
 
-# Checks the generated Swift API client against api/openapi.yaml, runs MainloopKit's tests on
+# Regenerates the Swift API client from api/openapi.yaml (a stale committed copy is a warning
+# with the patch as the ios-generated-client artifact, see AGENTS.md), runs MainloopKit's tests on
 # macOS, builds the app for the simulator without signing and runs its tests on an iPhone Duo
 # simulator when the image has one (ios/scripts/ci.sh, which also runs locally).
 #
@@ -47,6 +48,13 @@ jobs:
           xcrun simctl list runtimes
           xcrun simctl list devicetypes | grep -i iphone
       - run: ios/scripts/ci.sh
+      - name: Upload the regenerated API client, if the committed one is stale
+        if: always() && hashFiles('ios/build/generated-client.patch') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-generated-client
+          path: ios/build/generated-client.patch
+          retention-days: 14
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

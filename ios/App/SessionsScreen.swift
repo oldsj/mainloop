@@ -17,7 +17,8 @@ struct SessionsScreen: View {
             }
             .refreshable { await model.load() }
         } detail: {
-            if let row = model.selected { SessionDetail(row: row) }
+            // A new identity per session, as on Needs you; the draft itself lives in the model.
+            if let row = model.selected { SessionDetail(row: row).id(row.id) }
         } placeholder: {
             ContentUnavailableView("No session open", systemImage: "bubble.left.and.text.bubble.right")
         }
@@ -50,10 +51,12 @@ struct SessionDetail: View {
     @Environment(AppEnvironment.self) private var environment
     @Environment(SessionsModel.self) private var model
     let row: SessionRow
-    @State private var draft = ""
-    /// Kept until the send succeeds, so a retry of the same text is one message on the server.
-    @State private var messageID = UUID().uuidString
     @State private var showWeb = false
+
+    /// The draft belongs to this session in the model (with the `message_id` a retry reuses).
+    private var draft: Binding<String> {
+        Binding(get: { model.draft(for: row.id) }, set: { model.setDraft($0, for: row.id) })
+    }
 
     var body: some View {
         Form {
@@ -63,18 +66,12 @@ struct SessionDetail: View {
                 if let summary = row.summary { Text(summary).foregroundStyle(.secondary) }
             }
             Section("Message") {
-                TextField("Message \(row.title)", text: $draft, axis: .vertical)
+                TextField("Message \(row.title)", text: draft, axis: .vertical)
                     .lineLimit(1...8)
-                    .onChange(of: draft) { messageID = UUID().uuidString }
                 Button("Send") {
-                    Task {
-                        if await model.send(draft, to: row.id, messageID: messageID) {
-                            draft = ""
-                            messageID = UUID().uuidString
-                        }
-                    }
+                    Task { await model.sendDraft(to: row.id) }
                 }
-                .disabled(model.sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(model.sending || draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             if let url = transcriptURL {
                 Section {
