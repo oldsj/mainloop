@@ -131,14 +131,23 @@ roles). Those change only through GitOps.
 
 - `argocd.sync {app, namespace, prune}` starts an Argo CD sync of one Application (`namespace`
   defaults to `argocd`) at the revision Argo CD has resolved, as `argocd app sync --revision` does.
-  It pins every source's revision for a multi-source Application. With `prune`, resources no longer
+  It pins every source's revision for a multi-source Application, and carries the Application's own
+  sync options and retry policy (`spec.syncPolicy`), as the argocd server does: Argo CD reads them
+  from the operation, not the spec. With `prune`, resources no longer
   in Git are deleted, so the request waits 1 hour for the owner, as a delete does.
-  - Refused: an Application that is missing, has a sync pending or running, has no resolved
-    revision yet, or deploys the executor's own namespace, and an Application in the executor's
-    namespace.
-  - The card shows the revision(s), sync and health status, the destination, and the resources out
-    of sync or to prune (the first 50 by name, with a count). Tags: destructive when it prunes,
-    auto-sync on, and Mainloop's, system or Argo CD namespaces.
+  - Refused: an Application that is missing, has a sync pending or running, or has no resolved
+    revision yet; an Application in the executor's namespace; and one that deploys into the
+    executor: its destination is the executor's namespace, or among the resources Argo CD manages
+    for it (`status.resources`) is one in that namespace, that Namespace, or a cluster-wide object
+    named after it (`<namespace>-…`). The Mainloop chart's Application is such a one: it deploys
+    the release namespace and names the executor's namespace per object. The executor changes only
+    through GitOps the owner merges.
+  - The card shows the revision(s), sync and health status, the destination, the namespaces of its
+    resources, its source(s) (repository, path or chart, target revision, and whether it has inline
+    Helm values), its sync options and retry limit, and the resources out of sync or to prune (the
+    first 50 by name, with a count). Tags: destructive when it prunes or has `Force=true`,
+    `Replace=true`, auto-sync on, and Mainloop's, system or Argo CD namespaces. The agent's view of
+    the facts leaves out the sources: inline Helm values can hold anything.
   - The sync's own outcome is Argo CD's: the action succeeds once the sync is started.
 
 ## Preflight and the card
@@ -262,13 +271,15 @@ For `k8s.delete` (in `serve-executor`):
 
 For `argocd.sync` (in `serve-executor`):
 
-- **Observe.** An Application annotated with this action's id had its sync started by an earlier
-  attempt, so the action `succeeded`. One deleted or replaced, whose resolved revision moved, or
-  with another set of resources out of sync, is `stale`. A sync pending or running is waited for:
-  the attempt is retried.
-- **Write.** A merge patch of the Application's `operation`, as the argocd CLI writes it, pinned
-  to the frozen revision(s), with `initiatedBy` `mainloop/<action id>`, the action annotation and
-  the resourceVersion just observed. A concurrent write is retried, observing first.
+- **Observe.** An Application annotated with this action's id, or whose last operation was
+  initiated by `mainloop/<action id>`, had its sync started by an earlier attempt, so the action
+  `succeeded`. One deleted or replaced, whose resolved revision moved, whose destination, source(s),
+  sync options or retry policy changed, or with another set of resources out of sync, is `stale`.
+  One that now deploys into the executor (as above) `failed`. A sync pending or running is waited
+  for: the attempt is retried.
+- **Write.** A merge patch of the Application's `operation`, as the argocd server writes it, pinned
+  to the frozen revision(s), with the frozen sync options and retry policy, `initiatedBy`
+  `mainloop/<action id>`, the action annotation and the resourceVersion just observed. A concurrent write is retried, observing first.
 
 For `k8s.patch` and `k8s.apply` (in `serve-executor`), every object is checked before anything is
 written:
