@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -45,10 +47,20 @@ func chrome(t *testing.T) string {
 		}
 		t.Skip("no Chrome to drive; set MAINLOOP_TEST_CHROME to run the fence tests")
 	}
+	// Not t.TempDir: Chrome's helper processes can still be writing the profile as the test ends,
+	// which fails that directory's strict cleanup. This one is removed best-effort.
+	profile, err := os.MkdirTemp("", "fence-chrome-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(profile) })
 	cmd := exec.CommandContext(t.Context(), path, //nolint:gosec // G204: the test's own browser
-		"--headless=new", "--remote-debugging-port=0", "--user-data-dir="+t.TempDir(),
+		"--headless=new", "--remote-debugging-port=0", "--user-data-dir="+profile,
 		"--no-first-run", "--no-default-browser-check", "--disable-gpu", "--no-sandbox",
 		"--host-resolver-rules=MAP *.test 127.0.0.1", "about:blank")
+	// Chrome is a tree of processes: stop the whole group, not just the browser process.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +68,7 @@ func chrome(t *testing.T) string {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); _ = cmd.Wait() })
 	found := make(chan string, 1)
 	go func() {
 		s := bufio.NewScanner(stderr)
