@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -208,6 +209,14 @@ func TestRequestRefusals(t *testing.T) {
 	}
 	if n := len(e.openItems(t)); n != 0 {
 		t.Errorf("a refused request opened %d cards", n)
+	}
+	// GitHub refusals are not counted against MaxRefusedPerHour: main must not lock itself out of
+	// merging.
+	for i := range privileged.MaxRefusedPerHour + 1 {
+		a, err := e.svc.Request(ctx, mainSession, privileged.TypePRMerge, mergeArgs(moved), "r", fmt.Sprintf("req-moved-%d", i))
+		if err != nil || a.State != privileged.StatePreflightFailed {
+			t.Fatalf("refusal %d: %+v, %v", i, a, err)
+		}
 	}
 }
 

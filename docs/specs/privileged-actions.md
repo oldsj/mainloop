@@ -11,10 +11,10 @@ sends the requesting session one message with the outcome.
 - Slice 2: `onepassword.item_to_secret`, run by a separate process, `serve-executor`, which holds a
   1Password credential `serve-api` never sees. Also the owner's read-only audit page.
 - Slice 3, first part: the typed Kubernetes actions `k8s.rollout_restart`, `k8s.scale`,
-  `k8s.delete`, `k8s.patch` and `k8s.apply`, run by `serve-executor` with short-lived credentials
-  it mints per run.
+  `k8s.delete`, `k8s.patch` and `k8s.apply`, and `argocd.sync`, run by `serve-executor` with
+  short-lived credentials it mints per run.
 
-`argocd.sync`, approved commands and the home-network types are later
+Approved commands and the home-network types are later
 parts. They are not described here.
 
 ## Enablement
@@ -28,7 +28,7 @@ The executor types are accepted only when `MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED`
 `true`. The chart sets it when `executor.enabled` deploys `serve-executor` (see
 [The executor](#the-executor)). Without it, a request of an executor type is `[unsupported_action]`.
 
-The `k8s.*` types also need `MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED`, exactly `true`. The
+The `k8s.*` types and `argocd.sync` also need `MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED`, exactly `true`. The
 chart sets it with `executor.kubernetes.enabled`, which is off by default.
 
 ## Tools
@@ -50,6 +50,11 @@ supervises them.
 - A repeat with the same arguments under a new `request_id`, while the first action is undecided,
   also returns the first action.
 - At most 3 undecided actions per session, and 10 per owner (`[too_many_pending]`).
+- A session whose requests of the executor's types (`onepassword.*`, `k8s.*`, `argocd.*`) a
+  preflight refused 5 times in the last hour gets `[too_many_refused]` for those types until the
+  hour passes. GitHub merges and closes are neither counted nor limited. A refusal opens no card, and whether a request is refused, and why, says
+  something about the target, so a session must not probe it unseen. A request refused before any
+  read (`[validation]`) does not count.
 - `reason` is shown on the card as the agent's claim, set apart from the facts. It is not part of
   the digest.
 
@@ -57,8 +62,9 @@ The tool returns at once with the action's state. The agent ends its turn. When 
 the session gets one message, whose id is the action id, naming the final state, the owner's note
 (if any) and the result. `get_privileged_action` returns the full record, including the audit
 events, except the diffs of `k8s.patch` and `k8s.apply`: they hold the objects' contents, read with
-the executor's credential before anyone approved, so the agent gets each object's name, the diff's
-size and its SHA-256, and only the owner sees the diff. `cancel_privileged_action` withdraws an undecided action and closes its card.
+the executor's credential before anyone approved, so the agent gets each object's name and whether
+it is created, not the diff, its size or a hash of it (any of which would confirm a guess), and only
+the owner sees the diff. `cancel_privileged_action` withdraws an undecided action and closes its card.
 
 ## Types
 
@@ -77,7 +83,8 @@ Neither type bypasses a branch rule. GitHub's own protection still decides the m
 - `vault`, `item` and `field` are each an id or an exact title. An ambiguous title is refused:
   name it by id.
 - `namespace` must be in the executor's allowlist (`executor.secretNamespaces`). These are always
-  refused: `default`, and names starting with `kube-`, `mainloop`, `onepassword` or `argocd`.
+  refused: `default`, and names starting with `kube-`, `mainloop`, `onepassword` or `argocd`. The
+  chart refuses to render an allowlist that holds the executor's or the release's namespace.
 - An existing Secret is refused when a controller owns it, Argo CD tracks it, it is immutable, or
   its type is not `Opaque`.
 - A field that is empty, or has a type 1Password does not expose, is refused.
@@ -102,7 +109,8 @@ The Kubernetes types act on the cluster the executor runs in, named on the card 
   of operations. A patch may not set what the diff does not show or the executor binds: `status`,
   the metadata the API server keeps (resourceVersion, uid, generation, creation and deletion
   times, managed fields, selfLink) or the `mainloop.dev/privileged-action` annotation. A JSON patch
-  may not replace `/metadata` whole, and a merge patch may not null `metadata` or
+  may not replace `/metadata` whole or use `test` (refused or not, a test would confirm a guess
+  about the object without an approval), and a merge patch may not null `metadata` or
   `metadata.annotations` (remove annotations one by one).
 - `k8s.apply {manifests, namespace, force_conflicts}` server-side applies YAML or JSON manifests
   (up to 50 objects, 64 KiB) as `mainloop-executor`, as `kubectl apply --server-side` does.
@@ -116,17 +124,51 @@ Preflight runs the patch or apply as a server dry run, and the card shows each o
 YAML, live against the dry run's answer, without status and the metadata the API server keeps
 (resourceVersion, generation, uid, creation time, managed fields). A change that alters nothing is
 refused, and an apply skips the objects it would leave as they are. The card shows every diff whole:
-diffs over 16 KiB together are refused, never cut, and so is a diff the redactor would change
-(`contains_secret`). The dry run runs twice; a value on which the answers differ is one the API
-server generates on each write (a Job's controller-uid, a Pod's token volume name, a webhook's
-timestamp), and the diff and the check before the write show it as `<server-generated>`, with the
-card naming its paths.
+diffs over 16 KiB together are refused, never cut.
+
+A patch or manifest that sets what looks like a credential is invalid before any read of the
+cluster (`contains_secret`), naming the field. Checked only after the dry run, a credential-named
+field set to a guess would end as "changes nothing" when the guess is right and `contains_secret`
+when it is wrong, with no card either way. A diff that shows what looks like a credential is refused
+too, naming the field's path but not its value, or only the object when the value is folded or
+escaped in the diff's YAML. What looks like a credential is a value holding a shape the session
+redactor knows (a private key block, a bearer token, a JWT, a known token prefix, credentials in a
+URL, an assignment such as `password: …`, also inside one-line JSON), or a `data` or `stringData`
+value that is one long word of high entropy, as a random key is. Long names, checksums and CA
+bundles pass. Neither this refusal nor the size refusal gives a figure an agent could compare
+between guesses.
+
+The dry run runs twice; a value on which the answers differ is one the API server generates on each
+write (a Job's controller-uid, a Pod's token volume name, a webhook's timestamp), and the diff and
+the check before the write show it as `<server-generated>`, with the card naming its paths. A value
+the request itself sets is never masked: if it differs between the runs, the request is refused: the API server generates it, so the request must leave it out.
 
 Both refuse Secrets, since a dry run's answer would carry the value. Copy one from 1Password with
 `onepassword.item_to_secret`.
 
 All five refuse the executor's own namespace, and the cluster-scoped objects named after it (its
 roles). Those change only through GitOps.
+
+- `argocd.sync {app, namespace, prune}` starts an Argo CD sync of one Application (`namespace`
+  defaults to `argocd`) at the revision Argo CD has resolved, as `argocd app sync --revision` does.
+  It pins every source's revision for a multi-source Application, and carries the Application's own
+  sync options and retry policy (`spec.syncPolicy`), as the argocd server does: Argo CD reads them
+  from the operation, not the spec. With `prune`, resources no longer
+  in Git are deleted, so the request waits 1 hour for the owner, as a delete does.
+  - Refused: an Application that is missing, has a sync pending or running, or has no resolved
+    revision yet; an Application in the executor's namespace; and one that deploys into the
+    executor: its destination is the executor's namespace, or among the resources Argo CD manages
+    for it (`status.resources`) is one in that namespace, that Namespace, or a cluster-wide object
+    named after it (`<namespace>-…`). The Mainloop chart's Application is such a one: it deploys
+    the release namespace and names the executor's namespace per object. The executor changes only
+    through GitOps the owner merges.
+  - The card shows the revision(s), sync and health status, the destination, the namespaces of its
+    resources, its source(s) (repository, path or chart, target revision, and whether it has inline
+    Helm values), its sync options and retry limit, and the resources out of sync or to prune (the
+    first 50 by name, with a count). Tags: destructive when it prunes or has `Force=true`,
+    `Replace=true`, auto-sync on, and Mainloop's, system or Argo CD namespaces. The agent's view of
+    the facts leaves out the sources: inline Helm values can hold anything.
+  - The sync's own outcome is Argo CD's: the action succeeds once the sync is started.
 
 ## Preflight and the card
 
@@ -247,6 +289,18 @@ For `k8s.delete` (in `serve-executor`):
   `kubectl delete` does. A replaced object is `stale` and nothing is deleted. The result says when
   finalizers still hold the object.
 
+For `argocd.sync` (in `serve-executor`):
+
+- **Observe.** An Application annotated with this action's id, or whose last operation was
+  initiated by `mainloop/<action id>`, had its sync started by an earlier attempt, so the action
+  `succeeded`. One deleted or replaced, whose resolved revision moved, whose destination, source(s),
+  sync options or retry policy changed, or with another set of resources out of sync, is `stale`.
+  One that now deploys into the executor (as above) `failed`. A sync pending or running is waited
+  for: the attempt is retried.
+- **Write.** A merge patch of the Application's `operation`, as the argocd server writes it, pinned
+  to the frozen revision(s), with the frozen sync options and retry policy, `initiatedBy`
+  `mainloop/<action id>`, the action annotation and the resourceVersion just observed. A concurrent write is retried, observing first.
+
 For `k8s.patch` and `k8s.apply` (in `serve-executor`), every object is checked before anything is
 written:
 
@@ -287,7 +341,7 @@ role can:
 It cannot record or change a decision, change what was asked, or read any other table. The
 executor refuses to start under a role that can read `attention_items`.
 
-**Kubernetes credentials.** With `executor.kubernetes.enabled`, the chart renders three
+**Kubernetes credentials.** With `executor.kubernetes.enabled`, the chart renders four
 ServiceAccounts in the executor's namespace. No pod runs as any of them:
 
 - `mainloop-executor-workloads`: get and patch Deployments, StatefulSets and DaemonSets, and list
@@ -295,8 +349,10 @@ ServiceAccounts in the executor's namespace. No pod runs as any of them:
 - `mainloop-executor-delete`: get and delete any object, cluster-wide
 - `mainloop-executor-writer`: get, create and patch any object, cluster-wide, and `escalate` and
   `bind` on roles, so an approved change can write roles and bindings as an admin's would
+- `mainloop-executor-argo`: get and patch Argo CD Applications, cluster-wide, and nothing else of
+  Argo CD
 
-The executor's own account may only create tokens for those three. Each run of a `k8s.*` type mints
+The executor's own account may only create tokens for those four. Each run of a `k8s.*` type or `argocd.sync` mints
 a 10-minute token for the one it needs. The delete and writer accounts can read every object,
 Secrets included, because RBAC cannot grant "everything but Secrets". The executor reads through
 delete with metadata-only requests, so no object's data reaches it, and refuses Secrets for the

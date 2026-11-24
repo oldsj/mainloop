@@ -3,6 +3,9 @@
 {{- if not .namespace }}{{ fail "executor.namespace is required when executor.enabled" }}{{ end }}
 {{- if eq .namespace $.Release.Namespace }}{{ fail "executor.namespace must not be the release namespace" }}{{ end }}
 {{- if $.Values.database.local.enabled }}{{ fail "the executor cannot reach the local database" }}{{ end }}
+{{- range .secretNamespaces }}
+{{- if or (eq . $.Values.executor.namespace) (eq . $.Release.Namespace) }}{{ fail (printf "executor.secretNamespaces must not hold the executor's or the release's namespace (%s)" .) }}{{ end }}
+{{- end }}
 {{- $image := $.Values.images.backend }}
 {{- if .image.repository }}{{ $image = .image }}{{ end }}
 # serve-executor (docs/specs/privileged-actions.md): runs the privileged actions that need a
@@ -152,7 +155,7 @@ subjects:
 {{- end }}
 {{- if .kubernetes.enabled }}
 {{- $ns := .namespace }}
-{{- $accounts := dict "workloads" "mainloop-executor-workloads" "delete" "mainloop-executor-delete" "writer" "mainloop-executor-writer" }}
+{{- $accounts := dict "workloads" "mainloop-executor-workloads" "delete" "mainloop-executor-delete" "writer" "mainloop-executor-writer" "argo" "mainloop-executor-argo" }}
 {{- range $role, $account := $accounts }}
 ---
 # The k8s.* types' narrow ServiceAccounts. Nothing runs as them: the executor mints a 10-minute
@@ -219,6 +222,17 @@ rules:
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [roles, clusterroles]
     verbs: [escalate, bind]
+---
+# argocd.sync: read Applications and patch one to start a sync (its operation field), as the argocd
+# CLI does. Nothing else of Argo CD: not its projects, clusters or repositories.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $ns }}-argo
+rules:
+  - apiGroups: [argoproj.io]
+    resources: [applications]
+    verbs: [get, patch]
 ---
 # The executor's own account may mint tokens for the narrow accounts, and nothing else here.
 apiVersion: rbac.authorization.k8s.io/v1

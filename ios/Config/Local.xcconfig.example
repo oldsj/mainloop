@@ -1,0 +1,4 @@
+// Copy to Local.xcconfig (gitignored) and fill in your own values.
+DEVELOPMENT_TEAM = YOURTEAMID
+MAINLOOP_BUNDLE_ID = com.yourdomain.mainloop
+MAINLOOP_ORIGIN = https:/$()/mainloop.yourdomain.example

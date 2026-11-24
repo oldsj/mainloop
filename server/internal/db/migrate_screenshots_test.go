@@ -9,13 +9,13 @@ import (
 	"github.com/oldsj/mainloop/server/internal/testdb"
 )
 
-// Migration 00940 marks the chat copies of report screenshots that existed before it, claimed
+// Migration 00970 marks the chat copies of report screenshots that existed before it, claimed
 // or not, by their "<message id>:<screenshot id>" ids, and leaves pasted images unmarked.
 func TestMigrationMarksExistingScreenshotCopies(t *testing.T) {
 	ctx := context.Background()
 	d := testdb.NewEmpty(t)
 	m := newMigrator(t, d.URL)
-	if _, err := m.UpTo(ctx, 939); err != nil {
+	if _, err := m.UpTo(ctx, 969); err != nil {
 		t.Fatal(err)
 	}
 	exec := func(sql string, args ...any) {

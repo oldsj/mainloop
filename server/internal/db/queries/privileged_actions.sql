@@ -10,6 +10,15 @@ SELECT count(*) FILTER (WHERE requester_session_id = sqlc.arg(session_id))::int 
 FROM privileged_actions
 WHERE owner_id = sqlc.arg(owner_id) AND state IN ('requested', 'pending_approval');
 
+-- Counts the session's requests of the given types that a preflight refused in the last hour.
+-- name: CountRefusedPrivilegedPreflights :one
+SELECT count(*)::int
+FROM privileged_action_events e
+JOIN privileged_actions a ON a.id = e.action_id
+WHERE a.owner_id = sqlc.arg(owner_id) AND a.requester_session_id = sqlc.arg(session_id)
+  AND a.type = ANY (sqlc.arg(types)::text[])
+  AND e.step = 'preflight_refused' AND e.created_at > now() - interval '1 hour';
+
 -- A conflict (same session and request id, or an undecided action with the same arguments)
 -- inserts nothing; the caller reads the existing row.
 -- name: InsertPrivilegedAction :one
