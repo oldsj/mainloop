@@ -1746,7 +1746,7 @@
     },
     {
       "name": "preview_screenshot",
-      "description": "Screenshot your workspace's running preview, as the owner would see it on a phone (mobile, 390x844 at 2x) or a laptop (desktop, 1440x900). Mainloop's own headless browser opens the preview of a declared port through its signed-in preview host and returns PNG images you can look at. Each screenshot has an id: pass the ids as screenshot_ids to report to show them to the owner in the task view and their conversation. Reuse request_id when retrying; a new request_id takes new screenshots. The dev server must be running on the port.",
+      "description": "Screenshot your workspace's running preview, as the owner would see it on a phone (mobile, 390x844 at 2x) or a laptop (desktop, 1440x900). Mainloop's own headless browser opens the preview of a declared port through its signed-in preview host and returns PNG images you can look at. Each screenshot has an id: pass the ids as screenshot_ids to report to show them to the owner in the task view and their conversation. Reuse request_id when retrying; a new request_id takes new screenshots. The dev server must be running on the port. The page must stay on its preview host: requests to other hosts fail, and a redirect or navigation away is refused as left_preview. Images expire after 7 days.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {

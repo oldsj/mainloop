@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -26,6 +28,62 @@ type PreviewSigner interface {
 
 const maxScreenshotPath = 2048
 
+// maxCaptures is how many captures the one shared browser runs at once; a call waits up to
+// captureWait for room. A hung page holds its place until the capture's own timeout.
+const (
+	maxCaptures = 2
+	captureWait = 30 * time.Second
+)
+
+// captureGate bounds the captures in flight: one call per workspace at a time, and maxCaptures
+// captures in all.
+type captureGate struct {
+	once   sync.Once
+	slots  chan struct{}
+	mu     sync.Mutex
+	active map[string]bool
+}
+
+func (g *captureGate) init() {
+	g.once.Do(func() {
+		g.slots = make(chan struct{}, maxCaptures)
+		g.active = map[string]bool{}
+	})
+}
+
+// claim marks a workspace's call in flight; false when one already is.
+func (g *captureGate) claim(workspaceID string) bool {
+	g.init()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.active[workspaceID] {
+		return false
+	}
+	g.active[workspaceID] = true
+	return true
+}
+
+func (g *captureGate) release(workspaceID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.active, workspaceID)
+}
+
+// slot waits for room in the browser, at most captureWait; the returned func gives it back.
+func (g *captureGate) slot(ctx context.Context) (func(), bool) {
+	g.init()
+	t := time.NewTimer(captureWait)
+	defer t.Stop()
+	select {
+	case g.slots <- struct{}{}:
+		return func() { <-g.slots }, true
+	case <-t.C:
+		return nil, false
+	case <-ctx.Done():
+		return nil, false
+	}
+}
+
 // screenshotTools is preview_screenshot (docs/specs/workspaces.md "Preview screenshots"). The
 // policy shows it only to workspace agents, and only when a browser is configured.
 func (s *Server) screenshotTools() []Tool {
@@ -36,7 +94,9 @@ func (s *Server) screenshotTools() []Tool {
 			"the preview of a declared port through its signed-in preview host and returns PNG images you " +
 			"can look at. Each screenshot has an id: pass the ids as screenshot_ids to report to show them " +
 			"to the owner in the task view and their conversation. Reuse request_id when retrying; a new " +
-			"request_id takes new screenshots. The dev server must be running on the port.",
+			"request_id takes new screenshots. The dev server must be running on the port. The page must " +
+			"stay on its preview host: requests to other hosts fail, and a redirect or navigation away is " +
+			"refused as left_preview. Images expire after 7 days.",
 		InputSchema: objectSchema(map[string]any{
 			"request_id": stringSchema(1, 100),
 			"port":       map[string]any{"type": "integer", "minimum": 1, "maximum": 65535},
@@ -118,22 +178,10 @@ func (s *Server) previewScreenshot(ctx context.Context, a agentauth.Actor, raw j
 		}
 		return screenshotResult(prior, true), nil
 	}
-	// The limit is read in a transaction that re-checks the caller's credential, so a revoked agent
-	// captures nothing.
-	limit := s.screenshotsPerMinute()
-	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
-		n, err := dbq.New(tx).CountRecentPreviewScreenshots(ctx, workspaceID)
-		if err != nil {
-			return err
-		}
-		if int(n)+len(viewports) > limit {
-			return failure("rate_limited", fmt.Sprintf("at most %d screenshots a minute; wait and try again", limit))
-		}
-		return nil
-	})
-	if err != nil {
-		return Result{}, err
+	if !s.shots.claim(workspaceID) {
+		return Result{}, failure("busy", "another screenshot of this workspace is still being taken; wait for it, then try again")
 	}
+	defer s.shots.release(workspaceID)
 	visit, err := s.Previews.Visit(ctx, workspaceID, in.Port, in.Path)
 	switch {
 	case errors.Is(err, previews.ErrNotPreviewable):
@@ -145,11 +193,44 @@ func (s *Server) previewScreenshot(ctx context.Context, a agentauth.Actor, raw j
 	case err != nil:
 		return Result{}, err
 	}
+	// Every attempt counts against the limit, stored or not, so failed and hung captures count too.
+	// The workspace's lock orders concurrent calls (another serve-mcp replica's included); the
+	// transaction re-checks the caller's credential, so a revoked agent captures nothing.
+	limit := s.screenshotsPerMinute()
+	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+		if err := db.XactLock(ctx, tx, "mainloop:preview-screenshot:"+workspaceID); err != nil {
+			return err
+		}
+		q := dbq.New(tx)
+		n, err := q.CountRecentScreenshotAttempts(ctx, workspaceID)
+		if err != nil {
+			return err
+		}
+		if int(n)+len(viewports) > limit {
+			return failure("rate_limited", fmt.Sprintf("at most %d screenshots a minute; wait and try again", limit))
+		}
+		return q.InsertScreenshotAttempt(ctx, dbq.InsertScreenshotAttemptParams{
+			SessionID: workspaceID, Captures: int32(len(viewports)), //nolint:gosec // 1 or 2
+		})
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	done, ok := s.shots.slot(ctx)
+	if !ok {
+		return Result{}, failure("busy", "the screenshot browser is busy with other workspaces; try again in a minute")
+	}
+	defer done()
 	rows := make([]dbq.InsertPreviewScreenshotParams, 0, len(viewports))
 	for _, v := range viewports {
 		img, err := s.Screenshots.Capture(ctx, screenshot.Shot{URL: visit.URL, Cookie: visit.Cookie, Viewport: v, FullPage: in.FullPage})
 		if errors.Is(err, screenshot.ErrTooLarge) {
 			return Result{}, failure("too_large", "the screenshot is larger than 5 MB; try without full_page")
+		}
+		if errors.Is(err, screenshot.ErrLeftPreview) {
+			s.Log.WarnContext(ctx, "preview screenshot left the preview host", "session", workspaceID, "port", in.Port, "viewport", v.Name)
+			return Result{}, failure("left_preview", "the page redirected or navigated away from the workspace's preview host; "+
+				"screenshots show only the preview itself, so capture a path that stays on it")
 		}
 		if err != nil {
 			s.Log.WarnContext(ctx, "preview screenshot failed", "session", workspaceID, "port", in.Port, "viewport", v.Name, "error", err)
@@ -217,12 +298,19 @@ func screenshotResult(rows []dbq.PreviewScreenshot, replayed bool) Result {
 		if r.PageStatus != nil {
 			status = fmt.Sprintf("HTTP %d", *r.PageStatus)
 		}
+		expired := r.ExpiredAt != nil
+		if expired {
+			status += ", image expired"
+		}
 		fmt.Fprintf(&b, "screenshot %s: %s %dx%d of port %d %s (%s)\n", r.ID, r.Viewport, r.Width, r.Height, r.Port, r.Path, status)
 		items = append(items, map[string]any{
 			"id": r.ID, "viewport": r.Viewport, "port": r.Port, "path": r.Path, "full_page": r.FullPage,
 			"width": r.Width, "height": r.Height, "page_status": r.PageStatus, "media_type": r.MediaType,
+			"expired": expired,
 		})
-		images = append(images, Image{MediaType: r.MediaType, Data: r.Data})
+		if !expired {
+			images = append(images, Image{MediaType: r.MediaType, Data: r.Data})
+		}
 		ids = append(ids, r.ID)
 	}
 	b.WriteString("To show them to the owner, pass these ids as screenshot_ids to report.")

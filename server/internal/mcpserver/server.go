@@ -90,7 +90,9 @@ type Server struct {
 	Previews             PreviewSigner
 	Screenshots          screenshot.Capturer
 	ScreenshotsPerMinute int
-	Log                  *slog.Logger
+	// shots bounds the captures in flight: one per workspace, maxCaptures in all.
+	shots captureGate
+	Log   *slog.Logger
 	// AllowedHosts are the Host names the listener answers to; Dev also allows loopback.
 	AllowedHosts map[string]bool
 	Dev          bool

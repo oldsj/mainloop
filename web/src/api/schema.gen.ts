@@ -5648,9 +5648,14 @@ export interface components {
       media_type: 'image/png';
       /**
        * Format: byte
-       * @description Base64-encoded image bytes.
+       * @description Base64-encoded image bytes. Absent once the image has expired.
        */
-      data: string;
+      data?: string;
+      /**
+       * Format: date-time
+       * @description When the image was dropped: after 7 days, or when the workspace held 50 newer screenshots that no report names. The rest of the screenshot stays.
+       */
+      expired_at?: string;
       /** @enum {string} */
       viewport: 'mobile' | 'desktop';
       port: number;

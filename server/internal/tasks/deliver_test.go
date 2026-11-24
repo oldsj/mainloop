@@ -312,3 +312,32 @@ func TestReportScreenshotsReachMainAsImages(t *testing.T) {
 		t.Errorf("main message carries %d screenshot images, want 1", n)
 	}
 }
+
+// A report whose screenshot's image expired before it went out is still delivered, without that
+// image.
+func TestAReportWithAnExpiredScreenshotIsDeliveredWithoutIt(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	root, sup := r.supervisor()
+	r.finishTurns()
+	_, binding := r.attemptOf(root)
+	shot := uuid.NewString()
+	if _, err := r.pool.Exec(context.Background(), `INSERT INTO preview_screenshots
+		(id, owner_id, session_id, request_id, port, path, viewport, media_type, width, height, data, expired_at, size_bytes)
+		SELECT $1, owner_id, $2, 'shot-1', 3000, '/menu', 'mobile', 'image/png', 780, 1688, NULL, now(), 100 FROM tasks WHERE id = $3`,
+		shot, binding, root); err != nil {
+		t.Fatal(err)
+	}
+	in := report(sup, "done", dbstate.OutcomeCompleted)
+	in.Summary, in.ScreenshotIDs = "the menu page", []string{shot}
+	if _, err := r.svc.Report(context.Background(), sup, in); err != nil {
+		t.Fatal(err)
+	}
+	r.eventually("the report to main is sent", func() bool {
+		return r.count(`SELECT count(*) FROM session_messages m JOIN agent_bindings b ON b.session_id = m.session_id
+			WHERE b.role = 'main' AND m.content LIKE '[report from%'`) == 1
+	})
+	if n := r.count(`SELECT count(*) FROM message_images`); n != 0 {
+		t.Errorf("message images = %d, want 0", n)
+	}
+}

@@ -229,4 +229,10 @@ func TestRESTTaskScreenshot(t *testing.T) {
 	for _, path := range []string{id + "/screenshots/shot-unshown", other + "/screenshots/shot-shown", id + "/screenshots/nope"} {
 		r.do("GET", "/tasks/"+path, nil, 404)
 	}
+	// Once its image expires, the screenshot still answers, with its facts and no image.
+	exec(`UPDATE preview_screenshots SET data = NULL, expired_at = now() WHERE id = 'shot-shown'`)
+	got = r.do("GET", "/tasks/"+id+"/screenshots/shot-shown", nil, 200)
+	if _, has := got["data"]; has || got["expired_at"] == nil || got["viewport"] != "mobile" || got["path"] != "/menu" {
+		t.Errorf("expired screenshot = %v", got)
+	}
 }

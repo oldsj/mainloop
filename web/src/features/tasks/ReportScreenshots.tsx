@@ -37,6 +37,17 @@ function ReportScreenshot({ taskId, id }: { taskId: string; id: string }) {
   }
   const s = shot.data;
   const caption = `${s.viewport} · port ${s.port} ${s.path}`;
+  if (s.data === undefined) {
+    // The image expired; the screenshot's facts stay.
+    return (
+      <figure className="gap-2xs flex flex-col">
+        <div className="border-border text-muted-foreground flex h-40 w-24 items-center justify-center border text-xs">
+          Expired
+        </div>
+        <figcaption className="text-muted-foreground text-2xs break-all">{caption}</figcaption>
+      </figure>
+    );
+  }
   return (
     <figure className="gap-2xs flex flex-col">
       <img

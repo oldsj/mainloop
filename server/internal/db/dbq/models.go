@@ -658,6 +658,11 @@ type PrCreation struct {
 	UpdatedAt      time.Time
 }
 
+type PreviewGrantUse struct {
+	Nonce     string
+	ExpiresAt time.Time
+}
+
 type PreviewLease struct {
 	ID          string
 	WorkspaceID string
@@ -682,6 +687,14 @@ type PreviewScreenshot struct {
 	Data       []byte
 	SizeBytes  int32
 	CreatedAt  time.Time
+	ExpiredAt  *time.Time
+}
+
+type PreviewScreenshotAttempt struct {
+	ID        int64
+	SessionID string
+	Captures  int32
+	CreatedAt time.Time
 }
 
 type PrivilegedAction struct {
