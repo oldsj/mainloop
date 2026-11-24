@@ -255,7 +255,7 @@ func bearer(_ sent: FakeTransport.Sent) throws -> String {
             "response_type": "code", "client_id": "mainloop-ios", "redirect_uri": "mainloop-ios://oauth/callback",
             "scope": "openid profile email groups", "state": "state-1", "nonce": "nonce-1",
             "code_challenge": "qaXBbiZDbF7ISLEFHyh4ZJk90Pu736q4qkxvxzh-IA0", "code_challenge_method": "S256",
-            "prompt": "login",
+            "prompt": "login", "max_age": "600",
         ])
         #expect(url.host() == "id.example.test")
     }

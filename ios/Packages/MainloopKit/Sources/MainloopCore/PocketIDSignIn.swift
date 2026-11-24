@@ -70,6 +70,9 @@ public struct PocketIDSignIn: Sendable {
         return endpoints
     }
 
+    /// The oldest sign-in, in seconds, that may register a device: the server's limit.
+    public static let maxAge = 600
+
     public func authorizationURL(_ endpoints: Endpoints, _ attempt: Attempt) -> URL {
         var parts = URLComponents(url: endpoints.authorizationEndpoint, resolvingAgainstBaseURL: false)!
         parts.queryItems = (parts.queryItems ?? []) + [
@@ -83,6 +86,9 @@ public struct PocketIDSignIn: Sendable {
             .init(name: "code_challenge_method", value: "S256"),
             // Always ask: a registration must come from a sign-in the owner just made.
             .init(name: "prompt", value: "login"),
+            // max_age makes the ID token carry auth_time (OIDC Core 3.1.2.1), which the server
+            // requires within the same 10 minutes.
+            .init(name: "max_age", value: String(Self.maxAge)),
         ]
         return parts.url!
     }

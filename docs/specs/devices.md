@@ -14,7 +14,8 @@ server's tests. Not yet proven against a real phone or Pocket ID.
 1. The app creates a new request key in the Secure Enclave (usable after the phone's first unlock,
    on this device only, never synced or backed up).
 2. It signs the owner in with Pocket ID itself: `ASWebAuthenticationSession` in a private session
-   with `prompt=login`, the authorization-code flow with PKCE, against a **public** OIDC client of
+   with `prompt=login` and `max_age=600` (so the ID token carries `auth_time`), the
+   authorization-code flow with PKCE, against a **public** OIDC client of
    its own (no client secret). The server names that client in `MAINLOOP_AUTH_DEVICE_CLIENT_ID`.
    The request's `nonce` is the new key's [RFC 7638](https://www.rfc-editor.org/rfc/rfc7638)
    thumbprint, so the ID token Pocket ID returns names the key it may register.
