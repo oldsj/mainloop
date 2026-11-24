@@ -221,13 +221,20 @@ func TestItemToSecretRefusals(t *testing.T) {
 	}
 	ids := map[string]string{}
 	for name, args := range cases {
-		ids[name] = e.requestCopy(t, name, args).ID
+		// A session of its own each: more refusals than MaxRefusedPerHour from one would be refused.
+		by := mainSession
+		by.SessionID = "main-session-" + strings.ReplaceAll(name, " ", "-")
+		a, err := e.svc.Request(context.Background(), by, privileged.TypeItemToSecret, args, "The widgets app needs its database password.", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[by.SessionID] = a.ID
 		e.runExecutor(t) // each ends at preflight, so none counts against the pending limit
 	}
 	e.run(t)
-	for name, id := range ids {
-		if a := e.get(t, id); a.State != privileged.StatePreflightFailed {
-			t.Errorf("%s: %+v", name, a)
+	for session, id := range ids {
+		if a, _, err := e.svc.Get(context.Background(), session, id); err != nil || a.State != privileged.StatePreflightFailed {
+			t.Errorf("%s: %+v (%v)", session, a, err)
 		}
 	}
 	if n := len(e.openItems(t)); n != 0 {

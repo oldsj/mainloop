@@ -2,8 +2,6 @@ package privileged
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -151,6 +149,9 @@ func normalizePatch(raw json.RawMessage) (any, error) {
 				return nil, err
 			}
 		}
+		if at := requestCredential(ops); at != "" {
+			return nil, fmt.Errorf("%w: the patch sets what looks like a credential at %s (contains_secret); %s", ErrInvalid, at, secretAdvice)
+		}
 		canonical = ops
 	} else {
 		var m map[string]any
@@ -159,6 +160,9 @@ func normalizePatch(raw json.RawMessage) (any, error) {
 		}
 		if field := protectedField(m, false); field != "" {
 			return nil, fmt.Errorf("%w: the patch may not set %s: the card's diff does not show it, or the executor binds it", ErrInvalid, field)
+		}
+		if at := requestCredential(m); at != "" {
+			return nil, fmt.Errorf("%w: the patch sets what looks like a credential at %s (contains_secret); %s", ErrInvalid, at, secretAdvice)
 		}
 		canonical = m
 	}
@@ -170,8 +174,10 @@ func normalizePatch(raw json.RawMessage) (any, error) {
 
 func checkOperation(op map[string]any) error {
 	name, _ := op["op"].(string)
-	if !slices.Contains([]string{"add", "remove", "replace", "move", "copy", "test"}, name) {
-		return fmt.Errorf("%w: each json patch operation has an op: add, remove, replace, move, copy or test", ErrInvalid)
+	if !slices.Contains([]string{"add", "remove", "replace", "move", "copy"}, name) {
+		// test is refused: refused or not, it would tell the agent whether a guess about a field is
+		// right without anyone approving. The executor's own check binds the write to the diff.
+		return fmt.Errorf("%w: each json patch operation has an op: add, remove, replace, move or copy (not test)", ErrInvalid)
 	}
 	for _, field := range []string{"path", "from"} {
 		p, ok := op[field].(string)
@@ -247,10 +253,17 @@ func normalizeApply(raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, o := range objs {
+	for i, o := range objs {
 		if ns := (&unstructured.Unstructured{Object: o}).GetNamespace(); ns != "" && a.Namespace != "" && ns != a.Namespace {
 			return nil, fmt.Errorf("%w: an object names namespace %s, not %s", ErrInvalid, ns, a.Namespace)
 		}
+		if at := requestCredential(o); at != "" {
+			return nil, fmt.Errorf("%w: object %d of the manifests sets what looks like a credential at %s (contains_secret); %s",
+				ErrInvalid, i+1, at, secretAdvice)
+		}
+	}
+	if redact.Credential(a.Manifests) {
+		return nil, fmt.Errorf("%w: the manifests hold what looks like a credential (contains_secret); %s", ErrInvalid, secretAdvice)
 	}
 	return a, nil
 }
@@ -398,7 +411,11 @@ func preflightPatch(ctx context.Context, s *Service, raw json.RawMessage, now ti
 	if live == nil {
 		return nil, refuse("%s was not found", target)
 	}
-	c, err := dryRunChange(r, a.Namespace, a.Name, live, func() (map[string]any, error) {
+	sets, err := patchPointers(patchTypes[a.PatchType], a.Patch)
+	if err != nil {
+		return nil, err
+	}
+	c, err := dryRunChange(r, a.Namespace, a.Name, live, sets, func() (map[string]any, error) {
 		return s.Kube.Patch(ctx, r, a.Namespace, a.Name, patchTypes[a.PatchType], a.Patch, true)
 	})
 	switch {
@@ -413,8 +430,10 @@ func preflightPatch(ctx context.Context, s *Service, raw json.RawMessage, now ti
 
 // dryRunChange runs a dry run twice and diffs the object against its answer, with the values on
 // which the two answers disagree shown as GeneratedValue: the API server made them up, and the
-// check before the write must not trip on them.
-func dryRunChange(r Resource, namespace, name string, live map[string]any, dryRun func() (map[string]any, error)) (ObjectChange, error) {
+// check before the write must not trip on them. A value the request itself sets is never masked:
+// if it differs between the runs, the request is refused. So is a diff that shows what looks like
+// a credential.
+func dryRunChange(r Resource, namespace, name string, live map[string]any, sets []string, dryRun func() (map[string]any, error)) (ObjectChange, error) {
 	first, err := dryRun()
 	if err != nil {
 		return ObjectChange{}, err
@@ -425,28 +444,42 @@ func dryRunChange(r Resource, namespace, name string, live map[string]any, dryRu
 	}
 	var gen []string
 	generatedPaths(comparable(first), comparable(second), "", &gen)
-	diff, err := objectDiff(live, maskGenerated(first, gen))
+	target := objectName(r, namespace, name)
+	for _, g := range gen {
+		for _, p := range sets {
+			if g == p || strings.HasPrefix(g, p+"/") || strings.HasPrefix(p, g+"/") {
+				return ObjectChange{}, refuse("%s: the value at %s, which the request sets, came out differently on two dry runs: "+
+					"the API server generates it (or adds to it) on each write, so the request cannot set it; leave it out", target, g)
+			}
+		}
+	}
+	after := maskGenerated(first, gen)
+	diff, err := objectDiff(live, after)
 	if err != nil {
 		return ObjectChange{}, err
+	}
+	// The walk names the field; the diff's text catches a value YAML folded or escaped there, which
+	// the walk cannot match to the diff.
+	if at := credentialAt(diff, comparable(live), comparable(after)); at != "" {
+		return ObjectChange{}, refuse("the change to %s shows what looks like a credential at %s (contains_secret); %s", target, at, secretAdvice)
+	}
+	if redact.Credential(diff) {
+		return ObjectChange{}, refuse("the change to %s shows what looks like a credential in its diff (contains_secret); %s", target, secretAdvice)
 	}
 	c := newChange(r, namespace, name, live, diff)
 	c.Generated = gen
 	return c, nil
 }
 
-// check refuses facts the card cannot show whole, or whose diffs hold what looks like a
-// credential: the card is the owner's only view of the change, and no secret goes on it.
+// check refuses facts the card cannot show whole: the card is the owner's only view of the change.
 func (f ChangeFacts) check() error {
 	total := 0
 	for _, c := range f.Changes {
 		total += len(c.Diff)
-		if redact.Text(c.Diff) != c.Diff {
-			return refuse("the change to %s shows what looks like a credential (contains_secret); a secret belongs in a Secret, "+
-				"through onepassword.item_to_secret", c.target())
-		}
 	}
 	if total > MaxDiffBytes {
-		return refuse("the change is %d KiB as a diff, over the %d KiB a card shows whole; split it", (total+1023)>>10, MaxDiffBytes>>10)
+		// No size: it would tell the agent how much a guess changed the diff.
+		return refuse("the change as a diff is over the %d KiB a card shows whole; split it", MaxDiffBytes>>10)
 	}
 	return nil
 }
@@ -470,7 +503,9 @@ func preflightApply(ctx context.Context, s *Service, raw json.RawMessage, now ti
 		if err != nil {
 			return nil, badTarget(err)
 		}
-		c, err := dryRunChange(p.r, p.namespace(), p.name(), live, func() (map[string]any, error) {
+		var sets []string
+		leafPointers(p.obj, "", &sets)
+		c, err := dryRunChange(p.r, p.namespace(), p.name(), live, sets, func() (map[string]any, error) {
 			return s.Kube.Apply(ctx, p.r, p.obj, a.ForceConflicts, true)
 		})
 		switch {
@@ -781,8 +816,8 @@ func changeStale(err error, res ChangeResult) outcome {
 
 // AgentFacts is what the requesting session may see of an action's frozen facts. For k8s.patch
 // and k8s.apply the diffs are the objects' contents, read with the executor's credential before
-// anyone approved, so the session gets each object's name, the diff's size and its hash only; the
-// owner sees the diff on the card and the audit page.
+// anyone approved, so the session gets each object's name only: not the diff, nor its size or
+// hash, which would let it confirm a guess. The owner sees the diff on the card and the audit page.
 func AgentFacts(typ string, facts json.RawMessage) json.RawMessage {
 	if typ != TypePatch && typ != TypeApply || len(facts) == 0 {
 		return facts
@@ -792,10 +827,9 @@ func AgentFacts(typ string, facts json.RawMessage) json.RawMessage {
 		return nil
 	}
 	type change struct {
-		Object     string `json:"object"`
-		UID        string `json:"uid,omitempty"`
-		DiffBytes  int    `json:"diff_bytes"`
-		DiffSHA256 string `json:"diff_sha256"`
+		Object  string `json:"object"`
+		UID     string `json:"uid,omitempty"`
+		Creates bool   `json:"creates,omitempty"`
 	}
 	out := struct {
 		Cluster   string    `json:"cluster,omitempty"`
@@ -805,8 +839,7 @@ func AgentFacts(typ string, facts json.RawMessage) json.RawMessage {
 		CheckedAt time.Time `json:"checked_at"`
 	}{Cluster: f.Cluster, Unchanged: f.Unchanged, CheckedAt: f.CheckedAt, Note: "the diffs are on the owner's card only"}
 	for _, c := range f.Changes {
-		sum := sha256.Sum256([]byte(c.Diff))
-		out.Changes = append(out.Changes, change{Object: c.target(), UID: c.UID, DiffBytes: len(c.Diff), DiffSHA256: hex.EncodeToString(sum[:])})
+		out.Changes = append(out.Changes, change{Object: c.target(), UID: c.UID, Creates: c.UID == ""})
 	}
 	b, err := json.Marshal(out)
 	if err != nil {
