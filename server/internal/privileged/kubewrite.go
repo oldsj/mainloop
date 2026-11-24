@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/pmezard/go-difflib/difflib"
@@ -254,4 +257,93 @@ func managedByOf(o map[string]any) string {
 // answer would carry its data to the executor and the card.
 func isSecret(r Resource) bool {
 	return r.Group == "" && strings.EqualFold(r.Kind, "Secret")
+}
+
+// generatedPaths collects the JSON pointers at which two dry runs of the same write disagree: a
+// differing value, a key only one has, or a list of another length. Below such a pointer nothing
+// more is compared.
+func generatedPaths(a, b any, path string, out *[]string) {
+	switch av := a.(type) {
+	case map[string]any:
+		bv, ok := b.(map[string]any)
+		if !ok {
+			*out = append(*out, path)
+			return
+		}
+		keys := make([]string, 0, len(av)+len(bv))
+		for k := range av {
+			keys = append(keys, k)
+		}
+		for k := range bv {
+			if _, ok := av[k]; !ok {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			p := path + "/" + strings.NewReplacer("~", "~0", "/", "~1").Replace(k)
+			x, inA := av[k]
+			y, inB := bv[k]
+			if inA != inB {
+				*out = append(*out, p)
+				continue
+			}
+			generatedPaths(x, y, p, out)
+		}
+	case []any:
+		bv, ok := b.([]any)
+		if !ok || len(av) != len(bv) {
+			*out = append(*out, path)
+			return
+		}
+		for i := range av {
+			generatedPaths(av[i], bv[i], path+"/"+strconv.Itoa(i), out)
+		}
+	default:
+		if !reflect.DeepEqual(a, b) {
+			*out = append(*out, path)
+		}
+	}
+}
+
+// maskGenerated is a copy of o with GeneratedValue at each pointer whose parent exists, so a value
+// the API server makes up afresh reads the same on every run.
+func maskGenerated(o map[string]any, pointers []string) map[string]any {
+	if o == nil || len(pointers) == 0 {
+		return o
+	}
+	c := runtime.DeepCopyJSON(o)
+	for _, p := range pointers {
+		parts := strings.Split(strings.TrimPrefix(p, "/"), "/")
+		var parent any = c
+		for i, raw := range parts {
+			key := strings.NewReplacer("~1", "/", "~0", "~").Replace(raw)
+			last := i == len(parts)-1
+			switch node := parent.(type) {
+			case map[string]any:
+				if last {
+					node[key] = GeneratedValue
+				} else {
+					parent = node[key]
+				}
+			case []any:
+				n, err := strconv.Atoi(key)
+				if err != nil || n < 0 || n >= len(node) {
+					parent = nil
+					continue
+				}
+				if last {
+					node[n] = GeneratedValue
+				} else {
+					parent = node[n]
+				}
+			default:
+				parent = nil
+			}
+			if parent == nil {
+				break
+			}
+		}
+	}
+	return c
 }

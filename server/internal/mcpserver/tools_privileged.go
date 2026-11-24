@@ -36,8 +36,9 @@ func (s *Server) privilegedTools() []Tool {
 			"deletes that one object (its card expires in an hour); k8s.patch {namespace, kind, name, patch_type: merge|strategic|json, " +
 			"patch (an object, or an array of JSON patch operations)} patches one object as kubectl patch does; k8s.apply " +
 			"{manifests (YAML or JSON, up to 50 objects, 64 KiB), namespace (the default for objects naming none), force_conflicts} " +
-			"server-side applies them. Patch and apply show the API server's dry-run diff and write only while it still holds; " +
-			"they refuse Secrets (use onepassword.item_to_secret). The k8s.* types run through the executor on the cluster it " +
+			"server-side applies them. Patch and apply show the owner the API server's dry-run diff (16 KiB at most, never status " +
+			"or server-kept metadata, which they may not set) and write only while it still holds; you get its size and hash, " +
+			"not its text. They refuse Secrets (use onepassword.item_to_secret). The k8s.* types run through the executor on the cluster it " +
 			"runs in, never in its own namespace, and answer unavailable where it has no Kubernetes access; prefer a Git change " +
 			"for anything Argo CD manages. " +
 			"An executor type returns state requested; its card opens once the executor has checked the target. Reuse request_id to read the same request back. At most 3 requests per session " +
@@ -51,7 +52,7 @@ func (s *Server) privilegedTools() []Tool {
 		Handle: s.requestPrivilegedAction,
 	}, {
 		Name:        agentauth.ToolGetPrivilegedAction,
-		Description: "Read a privileged action you requested: its state, frozen facts, the owner's decision, the result and the audit events.",
+		Description: "Read a privileged action you requested: its state, frozen facts (for k8s.patch and k8s.apply, each diff's size and hash only), the owner's decision, the result and the audit events.",
 		InputSchema: objectSchema(map[string]any{"action_id": str(1, 100)}, "action_id"),
 		Handle:      s.getPrivilegedAction,
 	}, {
@@ -193,8 +194,8 @@ func privilegedResult(act privileged.Action, evs []dbq.PrivilegedActionEvent) Re
 		m["queue_item_id"] = act.QueueItemID
 		m["inbox_url"] = "/inbox?item=" + act.QueueItemID
 	}
-	if len(act.Facts) > 0 {
-		m["frozen_facts"] = act.Facts
+	if facts := privileged.AgentFacts(act.Type, act.Facts); len(facts) > 0 {
+		m["frozen_facts"] = facts
 	}
 	if len(act.Result) > 0 {
 		m["result"] = act.Result

@@ -381,10 +381,15 @@ func renderDelete(r dbq.PrivilegedAction, ctx map[string]any) (string, string, m
 		fmt.Fprintf(&b, "Labelled managed-by %s.\n", o.ManagedBy)
 	}
 	tags := []string{"destructive", "irreversible"}
-	if f.Resource.Kind == "Namespace" && f.Resource.Group == "" {
+	switch {
+	case f.Resource.Kind == "Namespace" && f.Resource.Group == "":
 		tags = append(tags, "deletes everything in the namespace")
 		tags = append(tags, namespaceTags(f.Name)...)
-	} else {
+	case f.Resource.Kind == "CustomResourceDefinition" && f.Resource.Group == "apiextensions.k8s.io":
+		tags = append(tags, "deletes every "+f.Name+" object in the cluster, in every namespace")
+	case f.Resource.Kind == "APIService" && f.Resource.Group == "apiregistration.k8s.io":
+		tags = append(tags, "the API it serves ("+f.Name+") goes away for every client and controller")
+	default:
 		tags = append(tags, namespaceTags(f.Namespace)...)
 	}
 	if o.Controller != "" {
@@ -454,10 +459,10 @@ func (r *Runner) workload(ctx context.Context, row dbq.PrivilegedAction) outcome
 	return outcome{state: StateSucceeded, result: res}
 }
 
-// kubeFailure ends an attempt that a Kubernetes call failed: forbidden fails the action, anything
-// else retries, observing first.
+// kubeFailure ends an attempt that a Kubernetes call failed: forbidden or rejected fails the
+// action, anything else (a timeout, a lost answer, a conflict) retries, observing first.
 func kubeFailure(err error) outcome {
-	if errors.Is(err, ErrForbidden) {
+	if errors.Is(err, ErrForbidden) || errors.Is(err, ErrRejected) {
 		return outcome{state: StateFailed, err: safeError(err)}
 	}
 	return retry(err)

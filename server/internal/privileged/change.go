@@ -2,6 +2,8 @@ package privileged
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/redact"
 )
 
 // The Kubernetes types that change arbitrary objects. The card shows the server dry-run's diff;
@@ -32,10 +35,12 @@ const (
 	MaxChangeBytes = 64 << 10
 	// MaxApplyObjects bounds the objects in one apply.
 	MaxApplyObjects = 50
-	// maxDiffBytes bounds the frozen diffs together; a larger change is split.
-	maxDiffBytes = 64 << 10
-	// cardDiffBytes bounds the diffs the card shows; the full diffs are in the audit.
-	cardDiffBytes = 16 << 10
+	// MaxDiffBytes bounds the diffs of one action together. The card shows every byte of them:
+	// the diff is the only statement of what changes, so a larger change is split, never cut.
+	MaxDiffBytes = 16 << 10
+	// GeneratedValue stands for a value the API server generates afresh on each dry run (a Job's
+	// controller-uid, a Pod's token volume name, a webhook's timestamp).
+	GeneratedValue = "<server-generated>"
 )
 
 var patchTypes = map[string]types.PatchType{
@@ -73,6 +78,9 @@ type ObjectChange struct {
 	// Diff is the unified diff of the object's YAML, live against the dry run's answer, without
 	// status and the metadata the API server keeps.
 	Diff string `json:"diff"`
+	// Generated are the JSON pointers at which two dry runs disagreed; the diff and the check
+	// before the write show GeneratedValue there.
+	Generated []string `json:"generated,omitempty"`
 }
 
 func (c ObjectChange) target() string { return objectName(c.Resource, c.Namespace, c.Name) }
@@ -103,8 +111,17 @@ type ChangeResult struct {
 }
 
 // Paths a patch may not touch: the executor binds the write to the resourceVersion it observed
-// and marks the object with the action.
-var protectedPointers = []string{"/metadata/resourceVersion", "/metadata/uid", "/metadata/annotations/mainloop.dev~1privileged-action"}
+// and marks the object with the action, and the diff does not show status or the metadata the
+// API server keeps, so a write may not set them unseen.
+var protectedPointers = []string{
+	"/status", "/metadata/resourceVersion", "/metadata/uid", "/metadata/managedFields", "/metadata/generation",
+	"/metadata/creationTimestamp", "/metadata/selfLink", "/metadata/deletionTimestamp", "/metadata/deletionGracePeriodSeconds",
+	"/metadata/annotations/mainloop.dev~1privileged-action",
+}
+
+// hiddenMeta are the metadata fields the diff does not show.
+var hiddenMeta = []string{"resourceVersion", "uid", "managedFields", "generation", "creationTimestamp", "selfLink",
+	"deletionTimestamp", "deletionGracePeriodSeconds"}
 
 func normalizePatch(raw json.RawMessage) (any, error) {
 	var a PatchArgs
@@ -140,8 +157,8 @@ func normalizePatch(raw json.RawMessage) (any, error) {
 		if err := json.Unmarshal(a.Patch, &m); err != nil || len(m) == 0 {
 			return nil, fmt.Errorf("%w: a %s patch is a non-empty JSON object", ErrInvalid, a.PatchType)
 		}
-		if protectedMerge(m) {
-			return nil, fmt.Errorf("%w: the patch may not set metadata.resourceVersion, metadata.uid or the %s annotation", ErrInvalid, AnnotationAction)
+		if field := protectedField(m, false); field != "" {
+			return nil, fmt.Errorf("%w: the patch may not set %s: the card's diff does not show it, or the executor binds it", ErrInvalid, field)
 		}
 		canonical = m
 	}
@@ -173,16 +190,43 @@ func checkOperation(op map[string]any) error {
 	return nil
 }
 
-func protectedMerge(m map[string]any) bool {
-	md, _ := m["metadata"].(map[string]any)
-	if md == nil {
-		return m["metadata"] != nil
+// protectedField names a field of a merge patch or manifest that the diff would not show or the
+// executor binds: status, server-kept metadata, the action annotation, or metadata or annotations
+// that are not objects. A manifest may carry an empty status and a null creationTimestamp, as
+// generated YAML does; they write nothing.
+func protectedField(m map[string]any, manifest bool) string {
+	if st, ok := m["status"]; ok && (!manifest || !empty(st)) {
+		return "status"
 	}
-	_, rv := md["resourceVersion"]
-	_, uid := md["uid"]
-	ann, _ := md["annotations"].(map[string]any)
-	_, action := ann[AnnotationAction]
-	return rv || uid || action
+	raw, ok := m["metadata"]
+	if !ok {
+		return ""
+	}
+	md, isMap := raw.(map[string]any)
+	if !isMap {
+		return "metadata (other than as an object)"
+	}
+	for _, k := range hiddenMeta {
+		if v, ok := md[k]; ok && (!manifest || k != "creationTimestamp" || v != nil) {
+			return "metadata." + k
+		}
+	}
+	if raw, ok := md["annotations"]; ok {
+		ann, isMap := raw.(map[string]any)
+		switch {
+		case !isMap:
+			return "metadata.annotations (other than as an object; remove annotations one by one)"
+		}
+		if _, ok := ann[AnnotationAction]; ok {
+			return "the " + AnnotationAction + " annotation"
+		}
+	}
+	return ""
+}
+
+func empty(v any) bool {
+	m, ok := v.(map[string]any)
+	return v == nil || (ok && len(m) == 0)
 }
 
 func normalizeApply(raw json.RawMessage) (any, error) {
@@ -238,8 +282,8 @@ func parseManifests(s string) ([]map[string]any, error) {
 			return nil, fmt.Errorf("%w: %s needs metadata.name (generateName is not supported)", ErrInvalid, u.GetKind())
 		case u.GetNamespace() != "" && !dnsLabelRE.MatchString(u.GetNamespace()):
 			return nil, fmt.Errorf("%w: %s %s: metadata.namespace must be a Kubernetes namespace name", ErrInvalid, u.GetKind(), u.GetName())
-		case protectedMerge(map[string]any{"metadata": o["metadata"]}):
-			return nil, fmt.Errorf("%w: %s %s sets metadata.resourceVersion, metadata.uid or the %s annotation", ErrInvalid, u.GetKind(), u.GetName(), AnnotationAction)
+		case protectedField(o, true) != "":
+			return nil, fmt.Errorf("%w: %s %s sets %s: the card's diff does not show it, or the executor binds it", ErrInvalid, u.GetKind(), u.GetName(), protectedField(o, true))
 		}
 		key := gv.Group + "/" + u.GetKind() + "/" + u.GetNamespace() + "/" + u.GetName()
 		if seen[key] {
@@ -354,20 +398,57 @@ func preflightPatch(ctx context.Context, s *Service, raw json.RawMessage, now ti
 	if live == nil {
 		return nil, refuse("%s was not found", target)
 	}
-	after, err := s.Kube.Patch(ctx, r, a.Namespace, a.Name, patchTypes[a.PatchType], a.Patch, true)
-	if err != nil {
-		return nil, changeRefusal(target, err)
-	}
-	diff, err := objectDiff(live, after)
+	c, err := dryRunChange(r, a.Namespace, a.Name, live, func() (map[string]any, error) {
+		return s.Kube.Patch(ctx, r, a.Namespace, a.Name, patchTypes[a.PatchType], a.Patch, true)
+	})
 	switch {
 	case err != nil:
-		return nil, err
-	case diff == "":
+		return nil, changeRefusal(target, err)
+	case c.Diff == "":
 		return nil, refuse("the patch changes nothing in %s (status and server-kept metadata aside)", target)
-	case len(diff) > maxDiffBytes:
-		return nil, refuse("the change to %s is over %d KiB as a diff; split it", target, maxDiffBytes>>10)
 	}
-	return ChangeFacts{Cluster: s.Cluster, Changes: []ObjectChange{newChange(r, a.Namespace, a.Name, live, diff)}, CheckedAt: now}, nil
+	f := ChangeFacts{Cluster: s.Cluster, Changes: []ObjectChange{c}, CheckedAt: now}
+	return f, f.check()
+}
+
+// dryRunChange runs a dry run twice and diffs the object against its answer, with the values on
+// which the two answers disagree shown as GeneratedValue: the API server made them up, and the
+// check before the write must not trip on them.
+func dryRunChange(r Resource, namespace, name string, live map[string]any, dryRun func() (map[string]any, error)) (ObjectChange, error) {
+	first, err := dryRun()
+	if err != nil {
+		return ObjectChange{}, err
+	}
+	second, err := dryRun()
+	if err != nil {
+		return ObjectChange{}, err
+	}
+	var gen []string
+	generatedPaths(comparable(first), comparable(second), "", &gen)
+	diff, err := objectDiff(live, maskGenerated(first, gen))
+	if err != nil {
+		return ObjectChange{}, err
+	}
+	c := newChange(r, namespace, name, live, diff)
+	c.Generated = gen
+	return c, nil
+}
+
+// check refuses facts the card cannot show whole, or whose diffs hold what looks like a
+// credential: the card is the owner's only view of the change, and no secret goes on it.
+func (f ChangeFacts) check() error {
+	total := 0
+	for _, c := range f.Changes {
+		total += len(c.Diff)
+		if redact.Text(c.Diff) != c.Diff {
+			return refuse("the change to %s shows what looks like a credential (contains_secret); a secret belongs in a Secret, "+
+				"through onepassword.item_to_secret", c.target())
+		}
+	}
+	if total > MaxDiffBytes {
+		return refuse("the change is %d KiB as a diff, over the %d KiB a card shows whole; split it", (total+1023)>>10, MaxDiffBytes>>10)
+	}
+	return nil
 }
 
 func preflightApply(ctx context.Context, s *Service, raw json.RawMessage, now time.Time) (any, error) {
@@ -383,35 +464,28 @@ func preflightApply(ctx context.Context, s *Service, raw json.RawMessage, now ti
 		return nil, err
 	}
 	f := ChangeFacts{Cluster: s.Cluster, CheckedAt: now}
-	total := 0
 	for _, p := range objs {
 		target := objectName(p.r, p.namespace(), p.name())
 		live, err := s.Kube.Get(ctx, p.r, p.namespace(), p.name())
 		if err != nil {
 			return nil, badTarget(err)
 		}
-		after, err := s.Kube.Apply(ctx, p.r, p.obj, a.ForceConflicts, true)
-		if err != nil {
+		c, err := dryRunChange(p.r, p.namespace(), p.name(), live, func() (map[string]any, error) {
+			return s.Kube.Apply(ctx, p.r, p.obj, a.ForceConflicts, true)
+		})
+		switch {
+		case err != nil:
 			return nil, changeRefusal(target, err)
-		}
-		diff, err := objectDiff(live, after)
-		if err != nil {
-			return nil, err
-		}
-		if diff == "" {
+		case c.Diff == "":
 			f.Unchanged = append(f.Unchanged, target)
 			continue
 		}
-		total += len(diff)
-		f.Changes = append(f.Changes, newChange(p.r, p.namespace(), p.name(), live, diff))
+		f.Changes = append(f.Changes, c)
 	}
-	switch {
-	case len(f.Changes) == 0:
+	if len(f.Changes) == 0 {
 		return nil, refuse("the manifests change nothing (status and server-kept metadata aside)")
-	case total > maxDiffBytes:
-		return nil, refuse("the change is over %d KiB as a diff; split it", maxDiffBytes>>10)
 	}
-	return f, nil
+	return f, f.check()
 }
 
 func renderChange(r dbq.PrivilegedAction, ctx map[string]any) (string, string, map[string]any, error) {
@@ -447,7 +521,7 @@ func renderChange(r dbq.PrivilegedAction, ctx map[string]any) (string, string, m
 			tags = append(tags, "force_conflicts: takes fields other managers own")
 		}
 	}
-	shown, created := 0, 0
+	created := 0
 	for _, c := range f.Changes {
 		if c.UID == "" {
 			created++
@@ -455,12 +529,10 @@ func renderChange(r dbq.PrivilegedAction, ctx map[string]any) (string, string, m
 		} else {
 			fmt.Fprintf(&b, "\n%s (uid %s):\n", c.target(), c.UID)
 		}
-		diff := c.Diff
-		if rest := cardDiffBytes - shown; len(diff) > rest {
-			diff = diff[:max(rest, 0)] + "\n… (cut here; the full diff is in the audit)\n"
+		b.WriteString("```diff\n" + strings.TrimSuffix(c.Diff, "\n") + "\n```\n")
+		if len(c.Generated) > 0 {
+			fmt.Fprintf(&b, "%s marks values the API server generates on each run (%s).\n", GeneratedValue, strings.Join(c.Generated, ", "))
 		}
-		shown += len(diff)
-		b.WriteString("```diff\n" + strings.TrimSuffix(diff, "\n") + "\n```\n")
 		tags = append(tags, changeTags(c)...)
 	}
 	if len(f.Unchanged) > 0 {
@@ -576,15 +648,26 @@ func (r *Runner) change(ctx context.Context, row dbq.PrivilegedAction) outcome {
 			return outcome{state: StateFailed, err: "the arguments cannot be read"}
 		}
 		placed, err := place(ctx, r.Service, aa)
-		if err != nil {
-			return changeStale(err, nil)
+		var refused *refusal
+		switch {
+		case errors.As(err, &refused):
+			return changeStale(err, ChangeResult{})
+		case err != nil:
+			return kubeFailure(err) // a token, discovery or network failure: retry
 		}
 		for _, p := range placed {
 			objects[objectName(p.r, p.namespace(), p.name())] = p
 		}
 	}
 	first := row.Attempts == 1
+	// res is what this attempt found written or wrote; every outcome carries it.
 	var res ChangeResult
+	ended := func(o outcome) outcome {
+		if len(res.Objects) > 0 {
+			o.result = res
+		}
+		return o
+	}
 	type write struct {
 		c     ObjectChange
 		live  map[string]any
@@ -595,7 +678,7 @@ func (r *Runner) change(ctx context.Context, row dbq.PrivilegedAction) outcome {
 		done := ChangedObject{Kind: c.Resource.Qualified(), Namespace: c.Namespace, Name: c.Name, Created: c.UID == ""}
 		live, err := r.Kube.Get(ctx, c.Resource, c.Namespace, c.Name)
 		if err != nil {
-			return kubeFailure(err)
+			return ended(kubeFailure(err))
 		}
 		if live != nil && patch && actionOf(live) == row.ID {
 			done.ResourceVersion, done.Observed = resourceVersionOf(live), true
@@ -604,11 +687,11 @@ func (r *Runner) change(ctx context.Context, row dbq.PrivilegedAction) outcome {
 		}
 		switch {
 		case c.UID == "" && live != nil && first:
-			return changeStale(fmt.Errorf("%s was created by someone else since the owner saw it", c.target()), res.Objects)
+			return changeStale(fmt.Errorf("%s was created by someone else since the owner saw it", c.target()), res)
 		case c.UID != "" && live == nil:
-			return changeStale(fmt.Errorf("%s was deleted since the owner saw it", c.target()), res.Objects)
+			return changeStale(fmt.Errorf("%s was deleted since the owner saw it", c.target()), res)
 		case c.UID != "" && uidOf(live) != c.UID:
-			return changeStale(fmt.Errorf("%s was replaced by a new object since the owner saw it", c.target()), res.Objects)
+			return changeStale(fmt.Errorf("%s was replaced by a new object since the owner saw it", c.target()), res)
 		}
 		var after map[string]any
 		if patch {
@@ -616,19 +699,19 @@ func (r *Runner) change(ctx context.Context, row dbq.PrivilegedAction) outcome {
 		} else {
 			p, ok := objects[c.target()]
 			if !ok {
-				return outcome{state: StateFailed, err: c.target() + " is no longer in the manifests"}
+				return ended(outcome{state: StateFailed, err: c.target() + " is no longer in the manifests"})
 			}
 			after, err = r.Kube.Apply(ctx, c.Resource, p.obj, aa.ForceConflicts, true)
 		}
 		if err != nil {
 			if errors.Is(err, ErrGone) || errors.Is(err, ErrFieldConflict) || errors.Is(err, ErrBadTarget) {
-				return changeStale(fmt.Errorf("%s: %w", c.target(), err), res.Objects)
+				return changeStale(fmt.Errorf("%s: %w", c.target(), err), res)
 			}
-			return kubeFailure(err)
+			return ended(kubeFailure(err))
 		}
-		diff, err := objectDiff(live, after)
+		diff, err := objectDiff(live, maskGenerated(after, c.Generated))
 		if err != nil {
-			return outcome{state: StateFailed, err: safeError(err)}
+			return ended(outcome{state: StateFailed, err: safeError(err)})
 		}
 		if diff == "" && !patch && !first {
 			done.ResourceVersion, done.Observed = resourceVersionOf(live), true
@@ -636,7 +719,7 @@ func (r *Runner) change(ctx context.Context, row dbq.PrivilegedAction) outcome {
 			continue
 		}
 		if diff != c.Diff {
-			return changeStale(fmt.Errorf("%s changed since the owner saw it: the change would now differ from the approved diff", c.target()), res.Objects)
+			return changeStale(fmt.Errorf("%s changed since the owner saw it: the change would now differ from the approved diff", c.target()), res)
 		}
 		writes = append(writes, write{c: c, live: live, after: after})
 	}
@@ -650,20 +733,25 @@ func (r *Runner) change(ctx context.Context, row dbq.PrivilegedAction) outcome {
 		if patch {
 			var body []byte
 			if body, err = boundPatch(patchTypes[pa.PatchType], pa.Patch, rv, row.ID, w.after); err != nil {
-				return outcome{state: StateFailed, err: safeError(err)}
+				return ended(outcome{state: StateFailed, err: safeError(err)})
 			}
 			out, err = r.Kube.Patch(ctx, c.Resource, c.Namespace, c.Name, patchTypes[pa.PatchType], body, false)
 		} else {
 			obj := runtime.DeepCopyJSON(objects[c.target()].obj)
 			if rv != "" {
 				if err = unstructured.SetNestedField(obj, rv, "metadata", "resourceVersion"); err != nil {
-					return outcome{state: StateFailed, err: safeError(err)}
+					return ended(outcome{state: StateFailed, err: safeError(err)})
 				}
 			}
 			out, err = r.Kube.Apply(ctx, c.Resource, obj, aa.ForceConflicts, false)
 		}
-		if err != nil {
-			return kubeFailure(err) // a concurrent write retries; the next attempt checks again
+		switch {
+		case errors.Is(err, ErrBadTarget) || errors.Is(err, ErrFieldConflict):
+			// The API server refused the write itself (an admission webhook that skips dry runs,
+			// a quota): it will refuse it again.
+			return ended(outcome{state: StateFailed, err: safeError(fmt.Errorf("%s: %w", c.target(), err))})
+		case err != nil:
+			return ended(kubeFailure(err)) // a concurrent write retries; the next attempt checks again
 		}
 		res.Objects = append(res.Objects, ChangedObject{
 			Kind: c.Resource.Qualified(), Namespace: c.Namespace, Name: c.Name, Created: c.UID == "", ResourceVersion: resourceVersionOf(out),
@@ -672,19 +760,57 @@ func (r *Runner) change(ctx context.Context, row dbq.PrivilegedAction) outcome {
 	return outcome{state: StateSucceeded, result: res}
 }
 
-// changeStale ends the action stale, naming what an earlier attempt already wrote.
-func changeStale(err error, written []ChangedObject) outcome {
+// changeStale ends the action stale, with what an earlier attempt already wrote as its result.
+func changeStale(err error, res ChangeResult) outcome {
 	msg := strings.TrimPrefix(safeError(err), "privileged: ")
 	var r *refusal
 	if errors.As(err, &r) {
 		msg = r.msg
 	}
-	if len(written) > 0 {
-		names := make([]string, 0, len(written))
-		for _, o := range written {
-			names = append(names, o.Kind+" "+strings.TrimPrefix(o.Namespace+"/"+o.Name, "/"))
+	o := outcome{state: StateStale, err: msg}
+	if len(res.Objects) > 0 {
+		names := make([]string, 0, len(res.Objects))
+		for _, w := range res.Objects {
+			names = append(names, w.Kind+" "+strings.TrimPrefix(w.Namespace+"/"+w.Name, "/"))
 		}
-		msg += "; already written: " + strings.Join(names, ", ")
+		o.err += "; already written: " + strings.Join(names, ", ")
+		o.result = res
 	}
-	return outcome{state: StateStale, err: msg}
+	return o
+}
+
+// AgentFacts is what the requesting session may see of an action's frozen facts. For k8s.patch
+// and k8s.apply the diffs are the objects' contents, read with the executor's credential before
+// anyone approved, so the session gets each object's name, the diff's size and its hash only; the
+// owner sees the diff on the card and the audit page.
+func AgentFacts(typ string, facts json.RawMessage) json.RawMessage {
+	if typ != TypePatch && typ != TypeApply || len(facts) == 0 {
+		return facts
+	}
+	var f ChangeFacts
+	if err := json.Unmarshal(facts, &f); err != nil {
+		return nil
+	}
+	type change struct {
+		Object     string `json:"object"`
+		UID        string `json:"uid,omitempty"`
+		DiffBytes  int    `json:"diff_bytes"`
+		DiffSHA256 string `json:"diff_sha256"`
+	}
+	out := struct {
+		Cluster   string    `json:"cluster,omitempty"`
+		Changes   []change  `json:"changes"`
+		Unchanged []string  `json:"unchanged,omitempty"`
+		Note      string    `json:"note"`
+		CheckedAt time.Time `json:"checked_at"`
+	}{Cluster: f.Cluster, Unchanged: f.Unchanged, CheckedAt: f.CheckedAt, Note: "the diffs are on the owner's card only"}
+	for _, c := range f.Changes {
+		sum := sha256.Sum256([]byte(c.Diff))
+		out.Changes = append(out.Changes, change{Object: c.target(), UID: c.UID, DiffBytes: len(c.Diff), DiffSHA256: hex.EncodeToString(sum[:])})
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil
+	}
+	return b
 }

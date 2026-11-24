@@ -274,22 +274,7 @@ func (r *Runner) attempt(ctx context.Context, row dbq.PrivilegedAction) error {
 		out = outcome{state: StateFailed, err: "the stored action no longer matches the digest the owner approved; nothing ran"}
 	} else {
 		_ = r.event(ctx, row.ID, "claimed", fmt.Sprintf("attempt %d", row.Attempts))
-		switch row.Type {
-		case TypePRMerge:
-			out = r.merge(ctx, row)
-		case TypePRClose:
-			out = r.close(ctx, row)
-		case TypeItemToSecret:
-			out = r.itemToSecret(ctx, row)
-		case TypeRolloutRestart, TypeScale:
-			out = r.workload(ctx, row)
-		case TypeDelete:
-			out = r.deleteObject(ctx, row)
-		case TypePatch, TypeApply:
-			out = r.change(ctx, row)
-		default:
-			out = outcome{state: StateFailed, err: "the type is no longer in the catalog"}
-		}
+		out = r.run(ctx, row)
 	}
 	if ctx.Err() != nil {
 		return ctx.Err() // stopping; the lease lets the next run observe and finish it
@@ -308,6 +293,32 @@ func (r *Runner) attempt(ctx context.Context, row dbq.PrivilegedAction) error {
 		out.err = "the remote's answer was lost " + fmt.Sprint(MaxAttempts) + " times and the outcome could not be observed: " + out.err
 	}
 	return r.finish(ctx, row, out)
+}
+
+// RemoteTimeout bounds one preflight or one attempt's remote calls, well inside the execution
+// lease, so one hung call cannot stall the executor: the attempt retries, and the next observes.
+const RemoteTimeout = 90 * time.Second
+
+// run executes one attempt of a claimed action under RemoteTimeout.
+func (r *Runner) run(ctx context.Context, row dbq.PrivilegedAction) outcome {
+	ctx, cancel := context.WithTimeout(ctx, RemoteTimeout)
+	defer cancel()
+	switch row.Type {
+	case TypePRMerge:
+		return r.merge(ctx, row)
+	case TypePRClose:
+		return r.close(ctx, row)
+	case TypeItemToSecret:
+		return r.itemToSecret(ctx, row)
+	case TypeRolloutRestart, TypeScale:
+		return r.workload(ctx, row)
+	case TypeDelete:
+		return r.deleteObject(ctx, row)
+	case TypePatch, TypeApply:
+		return r.change(ctx, row)
+	default:
+		return outcome{state: StateFailed, err: "the type is no longer in the catalog"}
+	}
 }
 
 func (r *Runner) finish(ctx context.Context, row dbq.PrivilegedAction, out outcome) error {
@@ -530,7 +541,11 @@ func Message(row dbq.PrivilegedAction) string {
 	case StateExpired:
 		b.WriteString(" Nobody decided (or nothing ran) in time; nothing changed.")
 	case StateStale:
-		b.WriteString(" The target changed since the owner saw it, so nothing ran; request again if it is still needed.")
+		if len(row.Result) > 0 {
+			b.WriteString(" The target changed since the owner saw it, so it stopped; an earlier attempt had already written what the result lists. Request again if the rest is still needed.")
+		} else {
+			b.WriteString(" The target changed since the owner saw it, so nothing ran; request again if it is still needed.")
+		}
 	case StateUncertain:
 		b.WriteString(" Mainloop could not tell whether it ran; the owner has an item. Check the target before requesting again.")
 	}

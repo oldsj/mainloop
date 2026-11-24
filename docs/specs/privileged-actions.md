@@ -56,7 +56,9 @@ supervises them.
 The tool returns at once with the action's state. The agent ends its turn. When the action ends,
 the session gets one message, whose id is the action id, naming the final state, the owner's note
 (if any) and the result. `get_privileged_action` returns the full record, including the audit
-events. `cancel_privileged_action` withdraws an undecided action and closes its card.
+events, except the diffs of `k8s.patch` and `k8s.apply`: they hold the objects' contents, read with
+the executor's credential before anyone approved, so the agent gets each object's name, the diff's
+size and its SHA-256, and only the owner sees the diff. `cancel_privileged_action` withdraws an undecided action and closes its card.
 
 ## Types
 
@@ -76,8 +78,8 @@ Neither type bypasses a branch rule. GitHub's own protection still decides the m
   name it by id.
 - `namespace` must be in the executor's allowlist (`executor.secretNamespaces`). These are always
   refused: `default`, and names starting with `kube-`, `mainloop`, `onepassword` or `argocd`.
-- An existing Secret is refused when a controller owns it, Argo CD tracks it, or its type is not
-  `Opaque`.
+- An existing Secret is refused when a controller owns it, Argo CD tracks it, it is immutable, or
+  its type is not `Opaque`.
 - A field that is empty, or has a type 1Password does not expose, is refused.
 
 The value never leaves the executor: not in the facts, the card, the result, an event or an error.
@@ -97,19 +99,28 @@ The Kubernetes types act on the cluster the executor runs in, named on the card 
 
 - `k8s.patch {namespace, kind, name, patch_type, patch}` patches one object as `kubectl patch`
   does. `patch_type` is `merge`, `strategic` or `json`; `patch` is an object, or for `json` an array
-  of operations. A patch may not touch `metadata.resourceVersion`, `metadata.uid` or the
-  `mainloop.dev/privileged-action` annotation, and a JSON patch may not replace `/metadata` whole.
+  of operations. A patch may not set what the diff does not show or the executor binds: `status`,
+  the metadata the API server keeps (resourceVersion, uid, generation, creation and deletion
+  times, managed fields, selfLink) or the `mainloop.dev/privileged-action` annotation. A JSON patch
+  may not replace `/metadata` whole, and a merge patch may not null `metadata` or
+  `metadata.annotations` (remove annotations one by one).
 - `k8s.apply {manifests, namespace, force_conflicts}` server-side applies YAML or JSON manifests
   (up to 50 objects, 64 KiB) as `mainloop-executor`, as `kubectl apply --server-side` does.
   `namespace` is the default for namespaced objects that name none; an object naming another is
   invalid. Each object needs a name (no `generateName`), and a `List` is given object by object.
-  Without `force_conflicts`, fields another manager owns are refused with the conflicts.
+  Without `force_conflicts`, fields another manager owns are refused with the conflicts. A manifest
+  is held to the same fields as a patch; an empty `status` and a null `creationTimestamp`, as
+  generated YAML carries, are allowed.
 
 Preflight runs the patch or apply as a server dry run, and the card shows each object's diff: its
 YAML, live against the dry run's answer, without status and the metadata the API server keeps
 (resourceVersion, generation, uid, creation time, managed fields). A change that alters nothing is
-refused, and an apply skips the objects it would leave as they are. Diffs over 64 KiB together are
-refused; the card shows the first 16 KiB.
+refused, and an apply skips the objects it would leave as they are. The card shows every diff whole:
+diffs over 16 KiB together are refused, never cut, and so is a diff the redactor would change
+(`contains_secret`). The dry run runs twice; a value on which the answers differ is one the API
+server generates on each write (a Job's controller-uid, a Pod's token volume name, a webhook's
+timestamp), and the diff and the check before the write show it as `<server-generated>`, with the
+card naming its paths.
 
 Both refuse Secrets, since a dry run's answer would carry the value. Copy one from 1Password with
 `onepassword.item_to_secret`.
@@ -151,7 +162,8 @@ The card is a Needs-you `approval` item with high priority, so it gets an ntfy p
   overwrites an existing key; a Secret labelled managed-by; destructive, irreversible, scales to
   zero; Argo-managed; an autoscaler or an owner that may undo it; a paused Deployment; a namespace
   that is Mainloop's, the cluster's or Argo CD's; cluster-scoped; access rights; a
-  CustomResourceDefinition; creates objects; force_conflicts),
+  CustomResourceDefinition; creates objects; force_conflicts; for a delete of a Namespace, a
+  CustomResourceDefinition or an APIService, what goes with it),
   the labelled agent reason, the expiry, and the action id with the first 16 characters of the
   digest.
 - **Options:** `Approve` and `Deny`. The card also accepts a free-text reply.
@@ -215,8 +227,8 @@ For `onepassword.item_to_secret` (in `serve-executor`):
   of this one key, carrying the frozen resourceVersion, so a concurrent change is refused (`stale`)
   and nothing is written. Other keys are left as they are. The field manager is
   `mainloop-executor`.
-- **Failures.** A 403 is `failed`. Other errors are retried like a merge, and each retry observes
-  first.
+- **Failures.** A 403, or another 4xx save a 401, 404, 408, 409 or 429, is `failed`: asking again
+  gets the same answer. Other errors are retried like a merge, and each retry observes first.
 
 For `k8s.rollout_restart` and `k8s.scale` (in `serve-executor`):
 
@@ -244,11 +256,16 @@ written:
   action's own earlier write. On the first attempt it is `stale`: someone else made the change.
 - **Check.** The object is the one the owner saw (the same uid, or still absent for a creation), and
   a fresh dry run gives exactly the approved diff. Anything else is `stale`, naming what an earlier
-  attempt already wrote.
+  attempt already wrote; the result lists it too.
 - **Write.** The patch, with the resourceVersion just observed and the action annotation added; or
   the apply, with the resourceVersion just observed. A concurrent write is retried, checking again.
 
-A 403 from Kubernetes is `failed`; other errors are retried like a merge.
+A 403 from Kubernetes, or a write it rejects (another 4xx save a 401, 404, 408, 409 or 429: an
+immutable field, an admission webhook's denial), is `failed`, and the result lists what was
+written before it. A token, discovery or network failure is retried like a merge.
+
+Each preflight and each attempt has 90 seconds for its remote calls, well inside the 2-minute
+lease, so one hung call cannot stall the executor: the attempt is retried, observing first.
 
 States: `requested`, `pending_approval`, `preflight_failed`, `approved`, `executing`, `succeeded`,
 `failed`, `stale`, `denied`, `expired`, `cancelled`, `uncertain`.

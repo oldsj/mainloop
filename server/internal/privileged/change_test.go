@@ -32,6 +32,15 @@ type memKube struct {
 	lose int
 	// fail makes the real write numbered fail fail without writing.
 	fail int
+	// reject makes the real write numbered reject refused by the API server.
+	reject int
+	// generate gives every created object a label the server makes up afresh on each call, as a
+	// Job's controller-uid; stamp gives every write an annotation that differs on each call, as a
+	// mutating webhook that stamps a time.
+	generate, stamp bool
+	nonce           int
+	// resolveFail makes that many ResolveObject calls fail as a discovery outage would.
+	resolveFail int
 }
 
 var memResources = map[string]privileged.Resource{
@@ -70,6 +79,10 @@ func (m *memKube) Resolve(_ context.Context, kind string) (privileged.Resource, 
 }
 
 func (m *memKube) ResolveObject(ctx context.Context, _, kind string) (privileged.Resource, error) {
+	if m.resolveFail > 0 {
+		m.resolveFail--
+		return privileged.Resource{}, errors.New("mint a token for mainloop-executor-writer: connection refused")
+	}
 	return m.Resolve(ctx, kind)
 }
 
@@ -128,6 +141,14 @@ func (m *memKube) store(r privileged.Resource, live map[string]any, out []byte, 
 		return nil, err
 	}
 	u := &unstructured.Unstructured{Object: o}
+	if m.stamp {
+		m.nonce++
+		_ = unstructured.SetNestedField(o, fmt.Sprintf("2026-11-24T10:%02d:00Z", m.nonce), "metadata", "annotations", "example.com/stamped-at")
+	}
+	if m.generate && live == nil {
+		m.nonce++
+		_ = unstructured.SetNestedField(o, fmt.Sprintf("generated-%d", m.nonce), "metadata", "labels", "controller-uid")
+	}
 	if live != nil {
 		was := (&unstructured.Unstructured{Object: live}).GetResourceVersion()
 		if rv := u.GetResourceVersion(); rv != "" && rv != was {
@@ -138,6 +159,9 @@ func (m *memKube) store(r privileged.Resource, live map[string]any, out []byte, 
 		return o, nil
 	}
 	m.writes++
+	if m.writes == m.reject {
+		return nil, fmt.Errorf("%w: the API server rejects it: admission webhook \"policy.example.com\" denied the request", privileged.ErrBadTarget)
+	}
 	if m.writes == m.fail {
 		return nil, errors.New("connection refused")
 	}
@@ -210,6 +234,12 @@ func TestPatchShowsTheDryRunDiff(t *testing.T) {
 	}
 	if m.writes != 0 {
 		t.Fatalf("preflight wrote %d times", m.writes)
+	}
+	// The requesting session sees the object, the diff's size and hash, never the diff: it holds
+	// the object's contents, read before anyone approved.
+	if seen := string(privileged.AgentFacts(a.Type, a.Facts)); strings.Contains(seen, "slow") || strings.Contains(seen, "size") ||
+		!strings.Contains(seen, `"object":"ConfigMap widgets/settings"`) || !strings.Contains(seen, "diff_sha256") {
+		t.Fatalf("agent facts = %s", seen)
 	}
 
 	e.approve(t, a.ID)
@@ -296,6 +326,8 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: limits
+  creationTimestamp: null
+status: {}
 data:
   max: "10"
 ---
@@ -416,6 +448,10 @@ func TestChangeRefusals(t *testing.T) {
 			false, "give its namespace"},
 		"cluster-scoped, ns": {privileged.TypePatch, map[string]any{"namespace": appNS, "kind": "Namespace", "name": "billing", "patch_type": "merge",
 			"patch": map[string]any{"metadata": map[string]any{"labels": map[string]any{"a": "b"}}}}, false, "is cluster-scoped"},
+		"over the card": {privileged.TypePatch, map[string]any{"namespace": appNS, "kind": "ConfigMap", "name": "settings", "patch_type": "merge",
+			"patch": map[string]any{"data": map[string]any{"big": strings.Repeat("x ", privileged.MaxDiffBytes/2)}}}, false, "over the 16 KiB a card shows whole"},
+		"a credential": {privileged.TypePatch, map[string]any{"namespace": appNS, "kind": "ConfigMap", "name": "settings", "patch_type": "merge",
+			"patch": map[string]any{"data": map[string]any{"api_key": "hunter2hunter2"}}}, false, "contains_secret"},
 		"unknown kind": {privileged.TypeApply, map[string]any{"manifests": "apiVersion: example.com/v1\nkind: Widget\nmetadata:\n  name: w\n"},
 			false, "the cluster has no such kind"},
 	} {
@@ -446,7 +482,16 @@ func TestChangeRefusals(t *testing.T) {
 		"empty patch":        {privileged.TypePatch, merge(map[string]any{})},
 		"array merge patch":  {privileged.TypePatch, merge([]any{1})},
 		"sets the rv":        {privileged.TypePatch, merge(map[string]any{"metadata": map[string]any{"resourceVersion": "1"}})},
-		"sets the action":    {privileged.TypePatch, merge(map[string]any{"metadata": map[string]any{"annotations": map[string]any{privileged.AnnotationAction: "x"}}})},
+		"sets status":        {privileged.TypePatch, merge(map[string]any{"metadata": map[string]any{"labels": map[string]any{"a": "b"}}, "status": map[string]any{"phase": "Approved"}})},
+		"sets managedFields": {privileged.TypePatch, merge(map[string]any{"metadata": map[string]any{"managedFields": []any{}}})},
+		"null annotations":   {privileged.TypePatch, merge(map[string]any{"metadata": map[string]any{"annotations": nil}})},
+		"null metadata":      {privileged.TypePatch, merge(map[string]any{"metadata": nil})},
+		"json patch status": {privileged.TypePatch, map[string]any{"namespace": appNS, "kind": "ConfigMap", "name": "x", "patch_type": "json",
+			"patch": []any{map[string]any{"op": "add", "path": "/status/phase", "value": "Approved"}}}},
+		"json patch managedFields": {privileged.TypePatch, map[string]any{"namespace": appNS, "kind": "ConfigMap", "name": "x", "patch_type": "json",
+			"patch": []any{map[string]any{"op": "remove", "path": "/metadata/managedFields"}}}},
+		"manifest with status": {privileged.TypeApply, map[string]any{"manifests": cm(appNS, "x") + "status:\n  phase: Approved\n"}},
+		"sets the action":      {privileged.TypePatch, merge(map[string]any{"metadata": map[string]any{"annotations": map[string]any{privileged.AnnotationAction: "x"}}})},
 		"json patch the rv": {privileged.TypePatch, map[string]any{"namespace": appNS, "kind": "ConfigMap", "name": "x", "patch_type": "json",
 			"patch": []any{map[string]any{"op": "replace", "path": "/metadata/resourceVersion", "value": "1"}}}},
 		"json patch the metadata": {privileged.TypePatch, map[string]any{"namespace": appNS, "kind": "ConfigMap", "name": "x", "patch_type": "json",
@@ -469,5 +514,81 @@ func TestChangeRefusals(t *testing.T) {
 				t.Fatalf("err = %v", err)
 			}
 		})
+	}
+}
+
+// Given writes the API server stamps with values it makes up on each call (a Job's controller-uid
+// on creation, a webhook's timestamp on every write), then the card shows them as generated and
+// the approved change runs rather than going stale on them.
+func TestServerGeneratedValuesAreMasked(t *testing.T) {
+	t.Run("apply", func(t *testing.T) {
+		e := newKubeEnv(t)
+		m := newMemKube(e)
+		m.generate, m.stamp = true, true
+		m.put(memResources["configmap"], configMap(appNS, "settings", map[string]any{"mode": "slow"}))
+		a := e.request(t, privileged.TypeApply, "apply-1", applyArgs())
+		a, card := e.preflighted(t, a.ID)
+		cardHas(t, card, "controller-uid: <server-generated>", "example.com/stamped-at: <server-generated>",
+			"<server-generated> marks values the API server generates on each run (/metadata/annotations/example.com~1stamped-at, /metadata/labels/controller-uid)")
+		e.approve(t, a.ID)
+		e.runExecutor(t)
+		if a = e.get(t, a.ID); a.State != privileged.StateSucceeded {
+			t.Fatalf("after execution: %+v (%v)", a, deref(a.LastError))
+		}
+	})
+	t.Run("patch", func(t *testing.T) {
+		e := newKubeEnv(t)
+		m := newMemKube(e)
+		m.stamp = true
+		m.put(memResources["configmap"], configMap(appNS, "settings", map[string]any{"mode": "slow"}))
+		a := e.request(t, privileged.TypePatch, "patch-1", patchFast)
+		a, card := e.preflighted(t, a.ID)
+		cardHas(t, card, "+    example.com/stamped-at: <server-generated>")
+		e.approve(t, a.ID)
+		e.runExecutor(t)
+		if a = e.get(t, a.ID); a.State != privileged.StateSucceeded {
+			t.Fatalf("after execution: %+v (%v)", a, deref(a.LastError))
+		}
+	})
+}
+
+// Given an approved apply, when discovery or the token mint fails once at run time, then the
+// executor retries rather than ending the approval stale.
+func TestApplyRetriesATransientFailure(t *testing.T) {
+	e := newKubeEnv(t)
+	m := newMemKube(e)
+	m.put(memResources["configmap"], configMap(appNS, "settings", map[string]any{"mode": "slow"}))
+	a := e.request(t, privileged.TypeApply, "apply-1", applyArgs())
+	a, _ = e.preflighted(t, a.ID)
+	e.approve(t, a.ID)
+	m.resolveFail = 1
+	e.runExecutor(t)
+	if a = e.get(t, a.ID); a.State != privileged.StateExecuting || !strings.Contains(deref(a.LastError), "connection refused") {
+		t.Fatalf("after the outage: %+v (%v)", a, deref(a.LastError))
+	}
+	e.exec(t, `UPDATE privileged_actions SET next_attempt_at = now() WHERE id = $1`, a.ID)
+	e.runExecutor(t)
+	if a = e.get(t, a.ID); a.State != privileged.StateSucceeded {
+		t.Fatalf("after the retry: %+v (%v)", a, deref(a.LastError))
+	}
+}
+
+// Given an apply whose second write the API server refuses, then the action fails at once, and
+// its result says the first object was written.
+func TestApplyRejectedWriteKeepsWhatWasWritten(t *testing.T) {
+	e := newKubeEnv(t)
+	m := newMemKube(e)
+	m.put(memResources["configmap"], configMap(appNS, "settings", map[string]any{"mode": "slow"}))
+	a := e.request(t, privileged.TypeApply, "apply-1", applyArgs())
+	a, _ = e.preflighted(t, a.ID)
+	e.approve(t, a.ID)
+	m.reject = 2
+	e.runExecutor(t)
+	if a = e.get(t, a.ID); a.State != privileged.StateFailed || !strings.Contains(deref(a.LastError), "ConfigMap widgets/limits") ||
+		!strings.Contains(deref(a.LastError), "denied the request") {
+		t.Fatalf("action = %+v (%v)", a, deref(a.LastError))
+	}
+	if res := changeResult(t, a); len(res.Objects) != 1 || res.Objects[0].Name != "settings" {
+		t.Fatalf("result = %+v", res)
 	}
 }
