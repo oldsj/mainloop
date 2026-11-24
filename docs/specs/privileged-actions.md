@@ -202,15 +202,15 @@ one fits: it observes its target and retries, and this does neither.
   will: an underscore spelling, a value taken from the next word, a short-flag cluster. Then an
   allowlist holds: the commands `get`, `describe`, `logs`, `top pod|node`, `events`, `explain`,
   `api-resources`, `api-versions`, `version`, `cluster-info`, `wait`, `auth can-i|whoami|reconcile`,
-  `apply`, `create` (manifests, and `create deployment|job|cronjob|configmap|namespace|
-  serviceaccount|role|clusterrole|rolebinding|clusterrolebinding|quota|priorityclass|
-  poddisruptionbudget|ingress|service …`), `replace`, `patch`, `label`, `annotate`, `scale`,
+  `apply`, `create` (from manifests, or a generator: deployment, job, cronjob, configmap, namespace,
+  serviceaccount, role, clusterrole, rolebinding, clusterrolebinding, quota, priorityclass,
+  poddisruptionbudget, ingress, service), `replace`, `patch`, `label`, `annotate`, `scale`,
   `set image|env|resources|selector|serviceaccount|subject`, `autoscale`, `expose`, `run`, `taint`,
   `rollout restart|undo|pause|resume|status|history`, `delete`, `drain`, `cordon`, `uncordon` and
   `exec` (whose command follows `--`), each with its own list of flags; every other command and
   flag is refused. No list holds a flag that chooses the target, identity or credential, reads or
-  writes a local file (`-f` takes only `-`), `--raw`, `--dry-run`, `--prune`, a watch, `-A` or
-  `--all` on a write. Also refused: a flag value that starts with `-`; words after `--` but for
+  writes a local file (`-f` takes only `-`), `--raw`, `--dry-run`, `--prune`, a watch (but
+  `rollout status`'s, which ends), `-A` or `--all` on a write. Also refused: a flag value that starts with `-`; words after `--` but for
   `exec`, `run` and `create`; control and bidirectional characters; `get`, `describe`, `events` or
   `wait` of Secrets, `create secret` and `create token`; a write naming admission policies or
   webhooks, in argv or as a stdin manifest. Argv or stdin that looks like a credential is refused
