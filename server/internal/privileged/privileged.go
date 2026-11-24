@@ -92,7 +92,7 @@ const (
 	// counted: their refusals (a moved head, a closed PR) say nothing the session cannot read on
 	// GitHub, and main must not lock itself out of merging.
 	MaxRefusedPerHour = 5
-	MaxPendingTotal      = 10
+	MaxPendingTotal   = 10
 	// UndecidedExpiry is how long a request waits for the owner.
 	UndecidedExpiry = 24 * time.Hour
 	// UnclaimedExpiry is how long an approved action waits for the executor before it expires,
