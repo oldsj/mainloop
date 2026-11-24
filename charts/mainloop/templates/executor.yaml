@@ -155,11 +155,12 @@ subjects:
 {{- end }}
 {{- if .kubernetes.enabled }}
 {{- $ns := .namespace }}
-{{- $accounts := dict "workloads" "mainloop-executor-workloads" "delete" "mainloop-executor-delete" "writer" "mainloop-executor-writer" "argo" "mainloop-executor-argo" }}
+{{- $accounts := dict "workloads" "mainloop-executor-workloads" "delete" "mainloop-executor-delete" "writer" "mainloop-executor-writer" "argo" "mainloop-executor-argo" "admin" "mainloop-executor-admin" }}
 {{- range $role, $account := $accounts }}
 ---
-# The k8s.* types' narrow ServiceAccounts. Nothing runs as them: the executor mints a 10-minute
-# token for one per run, and its own account may do nothing else with them.
+# The k8s.* types' narrow ServiceAccounts, and command.kubectl's admin. Nothing runs as them: the
+# executor mints a short-lived token for one per run, and its own account may do nothing else with
+# them.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -176,12 +177,55 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ $ns }}-{{ $role }}
+  # command.kubectl runs an owner-approved command as cluster-admin. The executor holds the token
+  # in its own proxy and refuses its own namespace and objects there; the policy below is a safety
+  # net, not the boundary.
+  name: {{ if eq $role "admin" }}cluster-admin{{ else }}{{ $ns }}-{{ $role }}{{ end }}
 subjects:
   - kind: ServiceAccount
     name: {{ $account }}
     namespace: {{ $ns }}
 {{- end }}
+---
+# A safety net, not a boundary: it denies the executor's accounts writes to the executor's namespace
+# and anything in it (its pods, Secrets, tokens), that Namespace, and the cluster-wide roles and
+# bindings named after it. The API server exempts admission policies and bindings from policies made
+# through the API, so this one cannot protect itself, and it matches the requesting user, which
+# impersonation changes. The executor's own checks hold those lines: its kubectl proxy refuses
+# admission writes and impersonation. Reads are not admission requests: the executor refuses
+# commands naming its namespace, and Secrets, before they run.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $ns }}-guard
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['*']
+        apiVersions: ['*']
+        operations: ['*']
+        resources: ['*/*']
+  matchConditions:
+    # The narrow accounts and admin, not the executor's own account (which mints their tokens).
+    - name: executor-accounts
+      expression: request.userInfo.username.startsWith('system:serviceaccount:{{ $ns }}:mainloop-executor-')
+  validations:
+    - expression: request.namespace != '{{ $ns }}'
+      message: the executor's own namespace changes only through GitOps
+    - expression: "!(request.resource.group == '' && request.resource.resource == 'namespaces' && request.name == '{{ $ns }}')"
+      message: the executor's own namespace changes only through GitOps
+    # admissionregistration covers webhook configurations; policies and bindings are exempt.
+    - expression: "!(request.resource.group in ['rbac.authorization.k8s.io', 'admissionregistration.k8s.io'] && request.name.startsWith('{{ $ns }}-'))"
+      message: the executor's own roles, bindings and webhooks change only through GitOps
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $ns }}-guard
+spec:
+  policyName: {{ $ns }}-guard
+  validationActions: [Deny]
 ---
 # k8s.rollout_restart and k8s.scale: read and patch workloads, and see their autoscalers.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -234,7 +278,7 @@ rules:
     resources: [applications]
     verbs: [get, patch]
 ---
-# The executor's own account may mint tokens for the narrow accounts, and nothing else here.
+# The executor's own account may mint tokens for the narrow accounts and admin, and nothing else here.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

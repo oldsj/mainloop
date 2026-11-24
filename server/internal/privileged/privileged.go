@@ -175,6 +175,8 @@ type Service struct {
 	ExecutorNamespace string
 	// Cluster names the cluster the executor acts on, for the card.
 	Cluster string
+	// Kubectl runs command.kubectl as AccountAdmin; nil without it.
+	Kubectl Kubectl
 }
 
 func (s *Service) now() time.Time {

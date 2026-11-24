@@ -564,7 +564,7 @@ func renderChange(r dbq.PrivilegedAction, ctx map[string]any) (string, string, m
 		} else {
 			fmt.Fprintf(&b, "\n%s (uid %s):\n", c.target(), c.UID)
 		}
-		b.WriteString("```diff\n" + strings.TrimSuffix(c.Diff, "\n") + "\n```\n")
+		b.WriteString(fenced("diff", c.Diff))
 		if len(c.Generated) > 0 {
 			fmt.Fprintf(&b, "%s marks values the API server generates on each run (%s).\n", GeneratedValue, strings.Join(c.Generated, ", "))
 		}
@@ -819,6 +819,9 @@ func changeStale(err error, res ChangeResult) outcome {
 // anyone approved, so the session gets each object's name only: not the diff, nor its size or
 // hash, which would let it confirm a guess. The owner sees the diff on the card and the audit page.
 func AgentFacts(typ string, facts json.RawMessage) json.RawMessage {
+	if typ == TypeKubectl && len(facts) > 0 {
+		return kubectlAgentFacts(facts)
+	}
 	if typ == TypeArgoSync && len(facts) > 0 {
 		var f ArgoFacts
 		if err := json.Unmarshal(facts, &f); err != nil {

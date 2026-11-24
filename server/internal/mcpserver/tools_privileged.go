@@ -40,9 +40,19 @@ func (s *Server) privilegedTools() []Tool {
 			"or server-kept metadata, which they may not set) and write only while it still holds; you get the objects' names, " +
 			"not the diff (no JSON patch test ops; setting or showing a credential is refused, naming the field; 5 refused preflights an hour per session, then too_many_refused). They refuse Secrets (use onepassword.item_to_secret). argocd.sync {app, namespace (default argocd), prune} starts " +
 			"an Argo CD sync of that Application at the revision Argo CD resolved, with its own sync options and retry, only while Git, its spec and the out-of-sync set stay as the " +
-			"owner saw them (refused for an app with resources in the executor's namespace; with prune its card expires in an hour); it succeeds once the sync starts. The k8s.* types and argocd.sync run through the executor on the cluster it " +
-			"runs in, never in its own namespace, and answer unavailable where it has no Kubernetes access; prefer a Git change " +
-			"for anything Argo CD manages. " +
+			"owner saw them (refused for an app with resources in the executor's namespace; with prune its card expires in an hour); it succeeds once the sync starts. command.kubectl {target (the executor's cluster), argv (kubectl and its words, no shell; " +
+			"at most 64 words, 8 KiB), stdin (for -f - or exec -i; 64 KiB), timeout_seconds (default 60, at most 600)} runs that " +
+			"one command once as cluster-admin, for what no typed action covers: the card shows the exact command and, for a change, " +
+			"the API server's dry-run diff (or a delete's dry-run text), run again before the command; you get the objects' names, not " +
+			"the diff, and the output, redacted. argv is read by kubectl's own parser; each allowed command has its own allowed flags and " +
+			"the refusal names them. Refused: other targets or credentials, impersonation, local files (-f takes only -), Secrets, " +
+			"create secret or token, --raw, --dry-run, --prune, watches, -A or --all on a change, admission policies and webhooks, a " +
+			"flag value starting with -, and edit, cp, proxy, port-forward, attach, debug, config and plugins. kubectl never holds the " +
+			"credential: the executor's proxy does, and refuses those whatever kubectl sends. A failed dry run gives its reason " +
+			"(NotFound), not its text. A lost answer is uncertain, never " +
+			"run again; a delete's card expires in an hour. The k8s.* types, argocd.sync and command.kubectl run through the " +
+			"executor on the cluster it runs in, never in its own namespace, and answer unavailable where it has no Kubernetes " +
+			"access; prefer a Git change for anything Argo CD manages, and a typed action where one fits. " +
 			"An executor type returns state requested; its card opens once the executor has checked the target. Reuse request_id to read the same request back. At most 3 requests per session " +
 			"and 10 in all wait for the owner.",
 		InputSchema: objectSchema(map[string]any{
