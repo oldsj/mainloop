@@ -238,7 +238,7 @@ func TestPatchShowsTheDryRunDiff(t *testing.T) {
 	// The requesting session sees the object, the diff's size and hash, never the diff: it holds
 	// the object's contents, read before anyone approved.
 	if seen := string(privileged.AgentFacts(a.Type, a.Facts)); strings.Contains(seen, "slow") || strings.Contains(seen, "size") ||
-		!strings.Contains(seen, `"object":"ConfigMap widgets/settings"`) || !strings.Contains(seen, "diff_sha256") {
+		!strings.Contains(seen, `"object":"ConfigMap widgets/settings"`) || strings.Contains(seen, "sha256") || strings.Contains(seen, "bytes") {
 		t.Fatalf("agent facts = %s", seen)
 	}
 
@@ -451,7 +451,12 @@ func TestChangeRefusals(t *testing.T) {
 		"over the card": {privileged.TypePatch, map[string]any{"namespace": appNS, "kind": "ConfigMap", "name": "settings", "patch_type": "merge",
 			"patch": map[string]any{"data": map[string]any{"big": strings.Repeat("x ", privileged.MaxDiffBytes/2)}}}, false, "over the 16 KiB a card shows whole"},
 		"a credential": {privileged.TypePatch, map[string]any{"namespace": appNS, "kind": "ConfigMap", "name": "settings", "patch_type": "merge",
-			"patch": map[string]any{"data": map[string]any{"api_key": "hunter2hunter2"}}}, false, "contains_secret"},
+			"patch": map[string]any{"data": map[string]any{"api_key": "hunter2hunter2"}}}, false, "a credential at /data/api_key (contains_secret)"},
+		"a random key in data": {privileged.TypePatch, map[string]any{"namespace": appNS, "kind": "ConfigMap", "name": "settings", "patch_type": "merge",
+			"patch": map[string]any{"data": map[string]any{"signing": "q8Zt3vXk9LmP2wRb7YcN4hJs6FdA1eGu0TiKoQzW5xV="}}}, false, "a credential at /data/signing"},
+		"a token prefix": {privileged.TypePatch, map[string]any{"namespace": appNS, "kind": "ConfigMap", "name": "settings", "patch_type": "merge",
+			"patch": map[string]any{"metadata": map[string]any{"annotations": map[string]any{"example.com/note": "ghp_exampleexampleexample0000"}}}},
+			false, "a credential at /metadata/annotations/example.com~1note"},
 		"unknown kind": {privileged.TypeApply, map[string]any{"manifests": "apiVersion: example.com/v1\nkind: Widget\nmetadata:\n  name: w\n"},
 			false, "the cluster has no such kind"},
 	} {
@@ -496,6 +501,8 @@ func TestChangeRefusals(t *testing.T) {
 			"patch": []any{map[string]any{"op": "replace", "path": "/metadata/resourceVersion", "value": "1"}}}},
 		"json patch the metadata": {privileged.TypePatch, map[string]any{"namespace": appNS, "kind": "ConfigMap", "name": "x", "patch_type": "json",
 			"patch": []any{map[string]any{"op": "remove", "path": "/metadata"}}}},
+		"json patch test op": {privileged.TypePatch, map[string]any{"namespace": appNS, "kind": "ConfigMap", "name": "x", "patch_type": "json",
+			"patch": []any{map[string]any{"op": "test", "path": "/data/mode", "value": "slow"}}}},
 		"json patch bad op": {privileged.TypePatch, map[string]any{"namespace": appNS, "kind": "ConfigMap", "name": "x", "patch_type": "json",
 			"patch": []any{map[string]any{"op": "exec", "path": "/data"}}}},
 		"no manifests":        {privileged.TypeApply, map[string]any{"manifests": " "}},
@@ -590,5 +597,49 @@ func TestApplyRejectedWriteKeepsWhatWasWritten(t *testing.T) {
 	}
 	if res := changeResult(t, a); len(res.Objects) != 1 || res.Objects[0].Name != "settings" {
 		t.Fatalf("result = %+v", res)
+	}
+}
+
+// Given manifests with what a credential check that takes every long word for a token would refuse
+// (a 41-character name, a checksum annotation, a CA certificate, a hex digest in data), then the
+// card opens.
+func TestOrdinaryLongValuesAreNotCredentials(t *testing.T) {
+	e := newKubeEnv(t)
+	newMemKube(e)
+	const manifest = `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kube-prometheus-stack-prometheus-operator
+  annotations:
+    checksum/config: 6f1ed002ab5595859014ebf0951522d9ee1a5fe0ac0f0a5e8e8f1e5d0c0b1a2f
+    example.com/ca-bundle: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUJrVENCK3dJSkFQRXhhbXBsZQo=
+data:
+  digest: 6f1ed002ab5595859014ebf0951522d9ee1a5fe0ac0f0a5e8e8f1e5d0c0b1a2f
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIBkTCB+wIJAPExampleExampleExampleExampleExample
+    -----END CERTIFICATE-----
+`
+	a := e.request(t, privileged.TypeApply, "apply-1", map[string]any{"namespace": appNS, "manifests": manifest})
+	a, card := e.preflighted(t, a.ID)
+	cardHas(t, card, "kube-prometheus-stack-prometheus-operator", "checksum/config")
+	if a.State != privileged.StatePendingApproval {
+		t.Fatalf("action = %+v (%v)", a, deref(a.LastError))
+	}
+}
+
+// Given a manifest that sets a value the API server makes up afresh on every write, then it is
+// refused rather than masked: the owner would not see what is written there.
+func TestGeneratedValueTheRequestSetsIsRefused(t *testing.T) {
+	e := newKubeEnv(t)
+	m := newMemKube(e)
+	m.generate = true
+	manifest := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: batch\n  labels:\n    controller-uid: mine\ndata:\n  a: b\n"
+	a := e.request(t, privileged.TypeApply, "apply-1", map[string]any{"namespace": appNS, "manifests": manifest})
+	e.runExecutor(t)
+	e.run(t)
+	if a = e.get(t, a.ID); a.State != privileged.StatePreflightFailed ||
+		!strings.Contains(deref(a.LastError), "the value at /metadata/labels/controller-uid, which the request sets, came out differently") {
+		t.Fatalf("action = %+v (%v)", a, deref(a.LastError))
 	}
 }

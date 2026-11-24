@@ -171,3 +171,24 @@ func TestTextRedactsMultiLinePrivateKey(t *testing.T) {
 		t.Errorf("cut-off key: %q", cut)
 	}
 }
+
+// Credential knows the credential shapes but, unlike Text, not every long word: names and
+// checksums are not credentials.
+func TestCredential(t *testing.T) {
+	for _, s := range []string{
+		"password: hunter2", "Authorization: Bearer abc.def", "https://user:pw@example.com/x",
+		"ghp_exampleexampleexample0000", "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----",
+	} {
+		if !Credential(s) {
+			t.Errorf("not a credential: %q", s)
+		}
+	}
+	for _, s := range []string{
+		"kube-prometheus-stack-prometheus-operator", "checksum/config: 6f1ed002ab5595859014ebf0951522d9ee1a5fe0ac0f0a5e8e8f1e5d0c0b1a2f",
+		"secretName: widgets-tls", "automountServiceAccountToken: false",
+	} {
+		if Credential(s) {
+			t.Errorf("a credential: %q", s)
+		}
+	}
+}

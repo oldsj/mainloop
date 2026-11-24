@@ -37,8 +37,8 @@ func (s *Server) privilegedTools() []Tool {
 			"patch (an object, or an array of JSON patch operations)} patches one object as kubectl patch does; k8s.apply " +
 			"{manifests (YAML or JSON, up to 50 objects, 64 KiB), namespace (the default for objects naming none), force_conflicts} " +
 			"server-side applies them. Patch and apply show the owner the API server's dry-run diff (16 KiB at most, never status " +
-			"or server-kept metadata, which they may not set) and write only while it still holds; you get its size and hash, " +
-			"not its text. They refuse Secrets (use onepassword.item_to_secret). The k8s.* types run through the executor on the cluster it " +
+			"or server-kept metadata, which they may not set) and write only while it still holds; you get the objects' names, " +
+			"not the diff (no JSON patch test ops; a diff showing a credential is refused, naming the field). They refuse Secrets (use onepassword.item_to_secret). The k8s.* types run through the executor on the cluster it " +
 			"runs in, never in its own namespace, and answer unavailable where it has no Kubernetes access; prefer a Git change " +
 			"for anything Argo CD manages. " +
 			"An executor type returns state requested; its card opens once the executor has checked the target. Reuse request_id to read the same request back. At most 3 requests per session " +
@@ -52,7 +52,7 @@ func (s *Server) privilegedTools() []Tool {
 		Handle: s.requestPrivilegedAction,
 	}, {
 		Name:        agentauth.ToolGetPrivilegedAction,
-		Description: "Read a privileged action you requested: its state, frozen facts (for k8s.patch and k8s.apply, each diff's size and hash only), the owner's decision, the result and the audit events.",
+		Description: "Read a privileged action you requested: its state, frozen facts (for k8s.patch and k8s.apply, the objects' names only, not the diffs), the owner's decision, the result and the audit events.",
 		InputSchema: objectSchema(map[string]any{"action_id": str(1, 100)}, "action_id"),
 		Handle:      s.getPrivilegedAction,
 	}, {
