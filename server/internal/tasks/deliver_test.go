@@ -308,7 +308,8 @@ func TestReportScreenshotsReachMainAsImages(t *testing.T) {
 	}
 	if n := r.count(`SELECT count(*) FROM message_images i JOIN session_messages m ON m.id = i.message_id
 		JOIN agent_bindings b ON b.session_id = m.session_id
-		WHERE b.role = 'main' AND i.session_id = m.session_id AND i.media_type = 'image/png' AND i.data = $1`, png); n != 1 {
+		WHERE b.role = 'main' AND i.session_id = m.session_id AND i.media_type = 'image/png' AND i.data = $1
+		AND i.screenshot_id = $2`, png, shot); n != 1 {
 		t.Errorf("main message carries %d screenshot images, want 1", n)
 	}
 }

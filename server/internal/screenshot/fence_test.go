@@ -148,13 +148,15 @@ func (g *gateway) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, `<h1>Fictional Bakery</h1><script>setTimeout(() => { location.href = %q }, 50)</script>`, other+"/secret")
 	case "/reach":
 		// Every way a page reaches another host without navigating: an image, fetch, a worker's
-		// fetch, a WebSocket, and loopback (where the browser's own DevTools listen).
+		// fetch, a WebSocket, and loopback (where the browser's own DevTools listen). Last, a fetch
+		// of its own host, which shows the script ran through the others.
 		_, _ = fmt.Fprintf(w, `<h1>Fictional Bakery</h1><img src=%[1]q>
 <script>
 fetch(%[2]q).catch(() => {});
 new Worker(URL.createObjectURL(new Blob(['fetch(%[3]s).catch(() => {})'], {type: "text/javascript"})));
 try { new WebSocket(%[4]q) } catch (e) {}
 fetch(%[5]q).catch(() => {});
+fetch("/own").catch(() => {});
 </script>`, other+"/img", other+"/fetch", fmt.Sprintf("%q", other+"/worker"),
 			"ws://b.test:"+g.port+"/ws", "http://127.0.0.1:"+g.port+"/loopback")
 	default:
@@ -187,10 +189,14 @@ func TestCaptureStaysOnThePreviewHost(t *testing.T) {
 	if img.Status != http.StatusOK || len(img.Data) == 0 || img.Width != 1440 {
 		t.Errorf("image = status %d, %d bytes, width %d", img.Status, len(img.Data), img.Width)
 	}
-	for _, h := range g.seen() {
+	seen := g.seen()
+	for _, h := range seen {
 		if !strings.HasPrefix(h, "a.test ") {
 			t.Errorf("the page reached %q", h)
 		}
+	}
+	if !slices.Contains(seen, "a.test /own") {
+		t.Errorf("the page's script did not run to its end: %v", seen)
 	}
 
 	// The preview cookie went to the preview host.

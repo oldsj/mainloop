@@ -605,13 +605,14 @@ type MergeResult struct {
 }
 
 type MessageImage struct {
-	ID        string
-	SessionID string
-	MessageID *string
-	MediaType string
-	Data      []byte
-	SizeBytes int32
-	CreatedAt time.Time
+	ID           string
+	SessionID    string
+	MessageID    *string
+	MediaType    string
+	Data         []byte
+	SizeBytes    int32
+	CreatedAt    time.Time
+	ScreenshotID *string
 }
 
 type OwnerDotfilesSource struct {

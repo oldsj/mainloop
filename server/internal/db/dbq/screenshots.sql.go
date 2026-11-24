@@ -10,8 +10,8 @@ import (
 )
 
 const copyReportScreenshotsToMessage = `-- name: CopyReportScreenshotsToMessage :exec
-INSERT INTO message_images (id, session_id, message_id, media_type, data, size_bytes)
-SELECT $1::text || ':' || s.id, $2::text, NULL, s.media_type, s.data, s.size_bytes
+INSERT INTO message_images (id, session_id, message_id, media_type, data, size_bytes, screenshot_id)
+SELECT $1::text || ':' || s.id, $2::text, NULL, s.media_type, s.data, s.size_bytes, s.id
 FROM task_reports r
 CROSS JOIN LATERAL unnest(r.screenshot_ids) AS u(id)
 JOIN preview_screenshots s ON s.id = u.id
@@ -71,17 +71,28 @@ func (q *Queries) CountRecentScreenshotAttempts(ctx context.Context, sessionID s
 }
 
 const expireScreenshotImages = `-- name: ExpireScreenshotImages :execrows
+WITH reported AS (
+    SELECT DISTINCT u.id FROM task_reports r CROSS JOIN LATERAL unnest(r.screenshot_ids) AS u(id)
+),
+held AS (
+    SELECT s.id, s.reported,
+           row_number() OVER (PARTITION BY s.session_id, s.reported ORDER BY s.created_at DESC, s.id DESC) AS nth,
+           sum(s.size_bytes) OVER (PARTITION BY s.session_id
+               ORDER BY s.reported DESC, s.created_at DESC, s.id DESC) AS bytes
+    FROM (
+        SELECT p.id, p.session_id, p.created_at, p.size_bytes, (r.id IS NOT NULL) AS reported
+        FROM preview_screenshots p LEFT JOIN reported r ON r.id = p.id
+        WHERE p.expired_at IS NULL
+          AND p.created_at >= now() - make_interval(secs => $1::float8)
+          AND p.created_at < now() - make_interval(secs => $4::float8)
+    ) s
+)
 UPDATE preview_screenshots s SET data = NULL, expired_at = now()
 WHERE s.expired_at IS NULL AND (
     s.created_at < now() - make_interval(secs => $1::float8)
     OR s.id IN (
-        SELECT k.id FROM (
-            SELECT u.id, row_number() OVER (PARTITION BY u.session_id ORDER BY u.created_at DESC, u.id) AS n
-            FROM preview_screenshots u
-            WHERE u.expired_at IS NULL
-              AND NOT EXISTS (SELECT 1 FROM task_reports r WHERE u.id = ANY(r.screenshot_ids))
-        ) k
-        WHERE k.n > $2::integer
+        SELECT h.id FROM held h
+        WHERE (NOT h.reported AND h.nth > $2::integer) OR h.bytes > $3::bigint
     )
 )
 `
@@ -89,12 +100,22 @@ WHERE s.expired_at IS NULL AND (
 type ExpireScreenshotImagesParams struct {
 	MaxAgeSeconds float64
 	Keep          int32
+	MaxBytes      int64
+	GraceSeconds  float64
 }
 
-// Drops the image of every screenshot older than max_age, and of a workspace's screenshots that no
-// report names beyond its newest keep; the row stays. A report's screenshots expire by age only.
+// Drops a screenshot's image, keeping the row, when it is older than max_age; when it is one of a
+// workspace's screenshots that no report names beyond its newest keep; or when the workspace's
+// held images pass max_bytes. The byte budget counts reported images too and spends itself on
+// them first, newest first, then on the unreported ones, newest first. The two caps leave images
+// younger than grace alone and do not count them, so an agent can report what it just captured.
 func (q *Queries) ExpireScreenshotImages(ctx context.Context, arg ExpireScreenshotImagesParams) (int64, error) {
-	result, err := q.db.Exec(ctx, expireScreenshotImages, arg.MaxAgeSeconds, arg.Keep)
+	result, err := q.db.Exec(ctx, expireScreenshotImages,
+		arg.MaxAgeSeconds,
+		arg.Keep,
+		arg.MaxBytes,
+		arg.GraceSeconds,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -288,6 +309,39 @@ DELETE FROM preview_screenshot_attempts WHERE created_at < now() - interval '1 h
 // Attempts older than the limit's window count for nothing.
 func (q *Queries) PruneScreenshotAttempts(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, pruneScreenshotAttempts)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const pruneScreenshotCopies = `-- name: PruneScreenshotCopies :execrows
+WITH ranked AS (
+    SELECT m.id, sum(m.size_bytes) OVER (PARTITION BY m.session_id ORDER BY m.created_at DESC, m.id DESC) AS bytes
+    FROM message_images m
+    WHERE m.screenshot_id IS NOT NULL AND m.message_id IS NOT NULL
+)
+DELETE FROM message_images m
+WHERE m.screenshot_id IS NOT NULL AND m.created_at < now() - make_interval(secs => $1::float8) AND (
+    m.message_id IS NULL
+    OR m.created_at < now() - make_interval(secs => $2::float8)
+    OR EXISTS (SELECT 1 FROM preview_screenshots s WHERE s.id = m.screenshot_id AND s.expired_at IS NOT NULL)
+    OR m.id IN (SELECT r.id FROM ranked r WHERE r.bytes > $3::bigint)
+)
+`
+
+type PruneScreenshotCopiesParams struct {
+	GraceSeconds  float64
+	MaxAgeSeconds float64
+	MaxBytes      int64
+}
+
+// Deletes the chat copies of report screenshots on the screenshots' schedule: older than max_age,
+// copied from a screenshot whose image expired, or past max_bytes of copies in one conversation
+// (oldest first). A copy younger than grace is left alone, so a send in flight still finds the
+// images it copied; past that, a copy no message claimed is an orphan of a failed send.
+func (q *Queries) PruneScreenshotCopies(ctx context.Context, arg PruneScreenshotCopiesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneScreenshotCopies, arg.GraceSeconds, arg.MaxAgeSeconds, arg.MaxBytes)
 	if err != nil {
 		return 0, err
 	}
