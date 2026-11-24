@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	admissionv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -70,6 +71,8 @@ type rendered struct {
 	roles        []rbacv1.Role
 	cronJobs     map[string]batchv1.CronJob
 	accounts     map[string]corev1.ServiceAccount
+	admission    []admissionv1.ValidatingAdmissionPolicy
+	admissionBy  []admissionv1.ValidatingAdmissionPolicyBinding
 	// objects is "Kind/name" for every object, so a test can assert what is absent.
 	objects []string
 }
@@ -177,6 +180,14 @@ func render(t *testing.T, path string) rendered {
 			var a corev1.ServiceAccount
 			mustUnmarshal(t, raw, &a)
 			r.accounts[name] = a
+		case "ValidatingAdmissionPolicy":
+			var p admissionv1.ValidatingAdmissionPolicy
+			mustUnmarshal(t, raw, &p)
+			r.admission = append(r.admission, p)
+		case "ValidatingAdmissionPolicyBinding":
+			var b admissionv1.ValidatingAdmissionPolicyBinding
+			mustUnmarshal(t, raw, &b)
+			r.admissionBy = append(r.admissionBy, b)
 		}
 	}
 	return r

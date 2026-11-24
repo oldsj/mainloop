@@ -12,8 +12,22 @@ COPY . .
 ARG REVISION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/oldsj/mainloop/server/internal/buildinfo.Revision=${REVISION}" -o /out/mainloop ./cmd/mainloop
 
+# kubectl for serve-executor's command.kubectl, pinned to the cluster's minor version and checked
+# against the release's published sha256 for each architecture.
+FROM golang:${GO_VERSION}-bookworm AS kubectl
+ARG TARGETARCH
+ARG KUBECTL_VERSION=v1.37.2
+ARG KUBECTL_SHA256_AMD64=c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4
+ARG KUBECTL_SHA256_ARM64=fcc16f63186659d9722014b7e02d5fdd2d4e669cb8c0ab66365d7d3b8ba03509
+RUN arch="${TARGETARCH:-amd64}" \
+    && sum="$(case "${arch}" in arm64) echo "${KUBECTL_SHA256_ARM64}";; amd64) echo "${KUBECTL_SHA256_AMD64}";; esac)" \
+    && test -n "${sum}" \
+    && curl -fsSLo /kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${arch}/kubectl" \
+    && echo "${sum}  /kubectl" | sha256sum -c - \
+    && chmod 0555 /kubectl
+
 # prod: git for the git transport, util-linux for the workspace helpers, CA certificates for
-# TLS to GitHub and kagent.
+# TLS to GitHub and kagent, kubectl for serve-executor.
 FROM debian:bookworm-slim AS prod
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git util-linux \
@@ -21,6 +35,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin mainloop
 COPY --from=build /out/mainloop /usr/local/bin/mainloop
+COPY --from=kubectl /kubectl /usr/local/bin/kubectl
 USER 1000:1000
 EXPOSE 8000 8002 8003 8004
 ENTRYPOINT ["/usr/local/bin/mainloop"]

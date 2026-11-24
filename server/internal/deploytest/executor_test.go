@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	admissionv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 )
@@ -101,7 +102,9 @@ func TestExecutor(t *testing.T) {
 // Secret. The delete and writer accounts are the only cluster-wide grants over every resource,
 // Secrets included (RBAC cannot say "all but"): the executor reads through delete with
 // metadata-only requests, refuses Secrets through writer, and refuses its own namespace and roles.
-// The roles are named after the executor's namespace.
+// The roles are named after the executor's namespace. command.kubectl's admin account is bound to
+// cluster-admin, and an admission policy keeps every one of these accounts, but not the executor's
+// own, off the executor's namespace and its cluster-wide objects.
 func TestExecutorKubernetes(t *testing.T) {
 	r := render(t, "production-executor-kubernetes")
 	cfg := r.configMaps["mainloop-config"].Data
@@ -115,7 +118,7 @@ func TestExecutorKubernetes(t *testing.T) {
 		t.Errorf("executor env = %+v", c.Env)
 	}
 
-	for _, name := range []string{"mainloop-executor-workloads", "mainloop-executor-delete", "mainloop-executor-writer", "mainloop-executor-argo"} {
+	for _, name := range []string{"mainloop-executor-workloads", "mainloop-executor-delete", "mainloop-executor-writer", "mainloop-executor-argo", "mainloop-executor-admin"} {
 		a, ok := r.accounts[name]
 		if !ok || a.Namespace != "mainloop-executor" || a.AutomountServiceAccountToken == nil || *a.AutomountServiceAccountToken {
 			t.Errorf("account %s = %+v", name, a)
@@ -145,6 +148,7 @@ func TestExecutorKubernetes(t *testing.T) {
 	if !maps.Equal(bound, map[string]string{
 		"mainloop-executor-workloads": "mainloop-executor-workloads", "mainloop-executor-delete": "mainloop-executor-delete",
 		"mainloop-executor-writer": "mainloop-executor-writer", "mainloop-executor-argo": "mainloop-executor-argo",
+		"mainloop-executor-admin": "cluster-admin",
 	}) {
 		t.Errorf("bindings = %v", bound)
 	}
@@ -193,8 +197,39 @@ func TestExecutorKubernetes(t *testing.T) {
 		}
 	}
 	if len(tokens) != 1 || !slices.Equal(tokens[0].Resources, []string{"serviceaccounts/token"}) || !slices.Equal(tokens[0].Verbs, []string{"create"}) ||
-		!slices.Equal(tokens[0].ResourceNames, []string{"mainloop-executor-argo", "mainloop-executor-delete", "mainloop-executor-workloads", "mainloop-executor-writer"}) {
+		!slices.Equal(tokens[0].ResourceNames, []string{"mainloop-executor-admin", "mainloop-executor-argo", "mainloop-executor-delete", "mainloop-executor-workloads", "mainloop-executor-writer"}) {
 		t.Errorf("token rules = %+v", tokens)
+	}
+
+	if len(r.admission) != 1 || len(r.admissionBy) != 1 {
+		t.Fatalf("admission policies = %d, bindings = %d", len(r.admission), len(r.admissionBy))
+	}
+	guard, by := r.admission[0], r.admissionBy[0]
+	if guard.Name != "mainloop-executor-guard" || by.Spec.PolicyName != guard.Name || !slices.Equal(by.Spec.ValidationActions, []admissionv1.ValidationAction{admissionv1.Deny}) ||
+		by.Spec.MatchResources != nil || by.Spec.ParamRef != nil {
+		t.Errorf("guard = %s, binding = %+v", guard.Name, by.Spec)
+	}
+	if fp := guard.Spec.FailurePolicy; fp == nil || *fp != admissionv1.Fail {
+		t.Errorf("failure policy = %v", fp)
+	}
+	rules := guard.Spec.MatchConstraints.ResourceRules
+	if len(rules) != 1 || !slices.Equal(rules[0].Operations, []admissionv1.OperationType{"*"}) || !slices.Equal(rules[0].Resources, []string{"*/*"}) ||
+		!slices.Equal(rules[0].APIGroups, []string{"*"}) {
+		t.Errorf("match = %+v", rules)
+	}
+	if mc := guard.Spec.MatchConditions; len(mc) != 1 || mc[0].Expression != "request.userInfo.username.startsWith('system:serviceaccount:mainloop-executor:mainloop-executor-')" {
+		t.Errorf("match conditions = %+v", mc)
+	}
+	var checks []string
+	for _, v := range guard.Spec.Validations {
+		checks = append(checks, v.Expression)
+	}
+	if !slices.Equal(checks, []string{
+		"request.namespace != 'mainloop-executor'",
+		"!(request.resource.group == '' && request.resource.resource == 'namespaces' && request.name == 'mainloop-executor')",
+		"!(request.resource.group in ['rbac.authorization.k8s.io', 'admissionregistration.k8s.io'] && request.name.startsWith('mainloop-executor-'))",
+	}) {
+		t.Errorf("validations = %q", checks)
 	}
 }
 

@@ -358,6 +358,28 @@ func (q *Queries) ExpirePrivilegedActions(ctx context.Context, arg ExpirePrivile
 	return items, nil
 }
 
+const extendPrivilegedLease = `-- name: ExtendPrivilegedLease :execrows
+UPDATE privileged_actions
+SET claimed_until = now() + make_interval(secs => $1::double precision), updated_at = now()
+WHERE id = $2 AND state = 'executing' AND attempts = $3 AND claimed_until > now()
+`
+
+type ExtendPrivilegedLeaseParams struct {
+	LeaseSeconds float64
+	ID           string
+	Attempts     int32
+}
+
+// Extends a claimed attempt's lease while one long command runs. The attempt count fences a
+// holder whose lease already ran out.
+func (q *Queries) ExtendPrivilegedLease(ctx context.Context, arg ExtendPrivilegedLeaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, extendPrivilegedLease, arg.LeaseSeconds, arg.ID, arg.Attempts)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const failPrivilegedPreflight = `-- name: FailPrivilegedPreflight :one
 UPDATE privileged_actions
 SET state = 'preflight_failed', last_error = $1, finished_at = now(), updated_at = now(),

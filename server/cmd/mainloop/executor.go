@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -53,7 +54,9 @@ func serveExecutor(ctx context.Context, log *slog.Logger) error {
 		ExecutorNamespace: cfg.Namespace, Cluster: cfg.Cluster,
 	}
 	if cfg.Kubernetes {
-		svc.Kube = privileged.NewKubeActions(privileged.KubeClients{Client: kube, Base: kc, Namespace: cfg.Namespace})
+		clients := privileged.KubeClients{Client: kube, Base: kc, Namespace: cfg.Namespace}
+		svc.Kube = privileged.NewKubeActions(clients)
+		svc.Kubectl = privileged.ExecKubectl{Clients: clients, Dir: os.TempDir()}
 	}
 	r := &privileged.Runner{Service: svc}
 	log.Info("executor ready", "types", privileged.TypesFor(true), "secret_namespaces", cfg.SecretNamespaces,

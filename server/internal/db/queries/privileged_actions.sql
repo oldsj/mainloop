@@ -202,6 +202,13 @@ SET state = sqlc.arg(state), result = sqlc.narg(result), last_error = sqlc.narg(
     delivery_state = 'pending', delivery_next_at = now()
 WHERE id = sqlc.arg(id) AND state = 'executing' AND attempts = sqlc.arg(attempts);
 
+-- Extends a claimed attempt's lease while one long command runs. The attempt count fences a
+-- holder whose lease already ran out.
+-- name: ExtendPrivilegedLease :execrows
+UPDATE privileged_actions
+SET claimed_until = now() + make_interval(secs => sqlc.arg(lease_seconds)::double precision), updated_at = now()
+WHERE id = sqlc.arg(id) AND state = 'executing' AND attempts = sqlc.arg(attempts) AND claimed_until > now();
+
 -- Leaves a claimed attempt for a later one, which observes before it writes.
 -- name: RetryPrivilegedAction :execrows
 UPDATE privileged_actions

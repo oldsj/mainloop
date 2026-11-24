@@ -11,11 +11,11 @@ sends the requesting session one message with the outcome.
 - Slice 2: `onepassword.item_to_secret`, run by a separate process, `serve-executor`, which holds a
   1Password credential `serve-api` never sees. Also the owner's read-only audit page.
 - Slice 3, first part: the typed Kubernetes actions `k8s.rollout_restart`, `k8s.scale`,
-  `k8s.delete`, `k8s.patch` and `k8s.apply`, and `argocd.sync`, run by `serve-executor` with
-  short-lived credentials it mints per run.
+  `k8s.delete`, `k8s.patch` and `k8s.apply`, `argocd.sync`, and the approved command
+  `command.kubectl`, run by `serve-executor` with short-lived credentials it mints per run.
 
-Approved commands and the home-network types are later
-parts. They are not described here.
+The other approved commands (`talosctl`, `omnictl`, ssh to LAN hosts) and the home-network types
+are later parts. They are not described here.
 
 ## Enablement
 
@@ -28,8 +28,9 @@ The executor types are accepted only when `MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED`
 `true`. The chart sets it when `executor.enabled` deploys `serve-executor` (see
 [The executor](#the-executor)). Without it, a request of an executor type is `[unsupported_action]`.
 
-The `k8s.*` types and `argocd.sync` also need `MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED`, exactly `true`. The
-chart sets it with `executor.kubernetes.enabled`, which is off by default.
+The `k8s.*` types, `argocd.sync` and `command.kubectl` also need
+`MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED`, exactly `true`. The chart sets it with
+`executor.kubernetes.enabled`, which is off by default.
 
 ## Tools
 
@@ -50,7 +51,7 @@ supervises them.
 - A repeat with the same arguments under a new `request_id`, while the first action is undecided,
   also returns the first action.
 - At most 3 undecided actions per session, and 10 per owner (`[too_many_pending]`).
-- A session whose requests of the executor's types (`onepassword.*`, `k8s.*`, `argocd.*`) a
+- A session whose requests of the executor's types (`onepassword.*`, `k8s.*`, `argocd.*`, `command.*`) a
   preflight refused 5 times in the last hour gets `[too_many_refused]` for those types until the
   hour passes. GitHub merges and closes are neither counted nor limited. A refusal opens no card, and whether a request is refused, and why, says
   something about the target, so a session must not probe it unseen. A request refused before any
@@ -61,7 +62,7 @@ supervises them.
 The tool returns at once with the action's state. The agent ends its turn. When the action ends,
 the session gets one message, whose id is the action id, naming the final state, the owner's note
 (if any) and the result. `get_privileged_action` returns the full record, including the audit
-events, except the diffs of `k8s.patch` and `k8s.apply`: they hold the objects' contents, read with
+events, except the diffs of `k8s.patch`, `k8s.apply` and `command.kubectl`: they hold the objects' contents, read with
 the executor's credential before anyone approved, so the agent gets each object's name and whether
 it is created, not the diff, its size or a hash of it (any of which would confirm a guess), and only
 the owner sees the diff. `cancel_privileged_action` withdraws an undecided action and closes its card.
@@ -169,6 +170,53 @@ roles). Those change only through GitOps.
     `Replace=true`, auto-sync on, and Mainloop's, system or Argo CD namespaces. The agent's view of
     the facts leaves out the sources: inline Helm values can hold anything.
   - The sync's own outcome is Argo CD's: the action succeeds once the sync is started.
+
+`command.kubectl {target, argv, stdin, timeout_seconds}` runs one kubectl command as
+cluster-admin, for the work on the cluster that no typed action covers. Prefer a typed action where
+one fits: it observes its target and retries, and this does neither.
+
+- `target` is the executor's cluster (`executor.kubernetes.clusterName`); another is refused.
+  `argv` is the command's words, starting with `kubectl` and then its verb, run as is without a
+  shell: at most 64 words and 8 KiB. `stdin` is what `-f -` or `exec -i` reads, up to 64 KiB.
+  `timeout_seconds` is 1 to 600, default 60.
+- The executor writes its own kubeconfig, with a token minted for `mainloop-executor-admin` that
+  outlives the deadline, in a fresh directory, and runs the pinned kubectl with only `PATH`, `HOME`
+  and `KUBECONFIG` set. The token is removed from the output (plain and base64), the session
+  redactor runs over it, and each stream is kept to 64 KiB.
+- Refused when requested (`[validation]`): flags that choose another target, identity or credential
+  (`--kubeconfig`, `--context`, `--cluster`, `--server`, `--user`, `--token`, `--as…`, the
+  certificate flags); flags that read or write the executor's files (`-f` other than `-`, `-k`,
+  `--from-file`, `--from-env-file`, `-o …-file=`, `--log-file`, `--profile-output`, `--cache-dir`);
+  `--raw`, `--resolve`, `--prune`, `-v`, watches and `--tty`; `-A` or `--all` on anything but a
+  read; `get`, `describe`, `events` or `wait` of Secrets, and `create secret` or `create token`; and
+  every verb but `get`, `describe`, `logs`, `top`, `events`, `explain`, `api-resources`,
+  `api-versions`, `version`, `cluster-info`, `wait`, `auth can-i|whoami|reconcile`, `apply`,
+  `create`, `replace`, `patch`, `label`, `annotate`, `scale`, `set`, `autoscale`, `expose`, `run`,
+  `taint`, `rollout restart|undo|pause|resume|status|history`, `delete`, `drain`, `cordon`,
+  `uncordon` and `exec` (whose command follows `--`). A single-letter flag outside `-n -f -o -l -c
+  -L -e -p -r` and `-A -i -q -h` is refused: it goes in long form, so nothing is guessed. Argv or
+  stdin that looks like a credential is refused (`contains_secret`), as is a manifest in stdin that
+  sets one.
+- Preflight refuses a command that names the executor's namespace anywhere in argv or stdin, then
+  previews it by its verb:
+  - A change (`apply`, `create`, `replace`, `patch`, `label`, `annotate`, `scale`, `set`,
+    `autoscale`, `expose`, `run`, `taint`, `rollout restart|undo|pause|resume`, `auth reconcile`)
+    runs twice as a server dry run with `-o json`. Each object it prints is diffed against the live
+    one as for `k8s.apply`, with values the two runs disagree on masked, and held to the same
+    checks: no Secrets, not the executor's own, no credential in a diff, 16 KiB of diffs at most,
+    not a change that alters nothing.
+  - `delete`, `drain`, `cordon` and `uncordon` run once as a server dry run, and the card shows what
+    kubectl printed, 16 KiB at most. A dry run that reaches the executor's namespace or objects is
+    refused.
+  - A read has nothing to preview. `exec` cannot be previewed: the card says it runs inside a
+    container and can do anything that container can.
+  - A dry run that fails is refused with kubectl's error.
+- The card shows the exact command, the stdin, the preview, and tags: destructive (a delete, a
+  drain, `--force`, `--grace-period=0`, scaling to zero), the namespaces it names, every namespace,
+  runs inside a container, and always cluster-admin, plus the change tags of `k8s.apply`. A command
+  that deletes or evicts waits 1 hour for the owner.
+- The agent's view of the facts has the preview kind and the changed objects' names, not the diffs
+  or the dry run's text.
 
 ## Preflight and the card
 
@@ -301,6 +349,18 @@ For `argocd.sync` (in `serve-executor`):
   to the frozen revision(s), with the frozen sync options and retry policy, `initiatedBy`
   `mainloop/<action id>`, the action annotation and the resourceVersion just observed. A concurrent write is retried, observing first.
 
+For `command.kubectl` (in `serve-executor`):
+
+- **Once.** An attempt that finds a `command_started` event ends `uncertain` without running
+  anything: an earlier attempt may have run the command and lost its answer.
+- **Check.** A change or a delete is previewed again, and it must give exactly what the owner saw
+  (resourceVersions aside, which status updates move). Anything else is `stale`, and nothing runs.
+  A failed check before the command (a token or network failure) is retried.
+- **Run.** The executor extends its lease past the command's deadline, logs `command_started`, and
+  runs it. Exit 0 is `succeeded`, another exit is `failed` with the output; a command still running
+  at its deadline is stopped and `uncertain`; one that could not be run to its end is `uncertain`.
+  The result is the exit code, stdout and stderr.
+
 For `k8s.patch` and `k8s.apply` (in `serve-executor`), every object is checked before anything is
 written:
 
@@ -319,7 +379,8 @@ immutable field, an admission webhook's denial), is `failed`, and the result lis
 written before it. A token, discovery or network failure is retried like a merge.
 
 Each preflight and each attempt has 90 seconds for its remote calls, well inside the 2-minute
-lease, so one hung call cannot stall the executor: the attempt is retried, observing first.
+lease, so one hung call cannot stall the executor: the attempt is retried, observing first. A
+`command.kubectl` attempt has its command's deadline on top.
 
 States: `requested`, `pending_approval`, `preflight_failed`, `approved`, `executing`, `succeeded`,
 `failed`, `stale`, `denied`, `expired`, `cancelled`, `uncertain`.
@@ -351,9 +412,18 @@ ServiceAccounts in the executor's namespace. No pod runs as any of them:
   `bind` on roles, so an approved change can write roles and bindings as an admin's would
 - `mainloop-executor-argo`: get and patch Argo CD Applications, cluster-wide, and nothing else of
   Argo CD
+- `mainloop-executor-admin`: `cluster-admin`, for `command.kubectl`
 
-The executor's own account may only create tokens for those four. Each run of a `k8s.*` type or `argocd.sync` mints
-a 10-minute token for the one it needs. The delete and writer accounts can read every object,
+The executor's own account may only create tokens for those five. Each run of a `k8s.*` type or
+`argocd.sync` mints a 10-minute token for the one it needs; each kubectl run mints one for admin
+that outlives its deadline.
+
+A ValidatingAdmissionPolicy, `<namespace>-guard`, denies every write by those five accounts (not
+the executor's own) to the executor's namespace and anything in it, to that Namespace, and to the
+roles, bindings and admission policies named `<namespace>-…`, itself included: an admission policy
+applies to policies too. It holds even for a command nothing can preview (`exec` aside, which runs
+as the container). Reads are not admitted, so the executor refuses commands that name its namespace
+or read Secrets before they run. The delete and writer accounts can read every object,
 Secrets included, because RBAC cannot grant "everything but Secrets". The executor reads through
 delete with metadata-only requests, so no object's data reaches it, and refuses Secrets for the
 types that use writer. The guards on Secrets and on the executor's own namespace and roles are the

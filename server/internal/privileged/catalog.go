@@ -101,6 +101,12 @@ var catalog = map[string]entry{
 		version: 1, expiry: UndecidedExpiry, expiryFor: argoExpiry, executor: true, kube: true, how: kubeHow,
 		normalize: normalizeArgoSync, preflight: preflightArgoSync,
 	},
+	TypeKubectl: {
+		version: 1, expiry: UndecidedExpiry, expiryFor: kubectlExpiry, executor: true, kube: true,
+		how: "Approve runs exactly this command once, as cluster-admin, through Mainloop's executor. " +
+			"An admission policy keeps it off the executor's own namespace and access.",
+		normalize: normalizeKubectl, preflight: preflightKubectl,
+	},
 }
 
 // TypesFor lists the types one process runs, sorted: the executor's, or serve-api's.

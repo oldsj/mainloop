@@ -299,8 +299,10 @@ executor:
   # the executor's or the release's namespace.
   secretNamespaces: []
   # The typed Kubernetes actions (k8s.rollout_restart, k8s.scale, k8s.delete, k8s.patch,
-  # k8s.apply) and argocd.sync. On, it renders their narrow ServiceAccounts with cluster-wide roles
-  # (named after the executor's namespace) and lets the executor mint 10-minute tokens for them.
+  # k8s.apply), argocd.sync and command.kubectl. On, it renders their narrow ServiceAccounts with
+  # cluster-wide roles (named after the executor's namespace), an admin account bound to
+  # cluster-admin for approved kubectl commands, and an admission policy that keeps them all off the
+  # executor's own namespace and objects; the executor mints short-lived tokens for them.
   kubernetes:
     enabled: false
     # Shown on the cards, e.g. internal-01.

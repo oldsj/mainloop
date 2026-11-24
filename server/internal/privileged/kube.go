@@ -166,7 +166,12 @@ type KubeClients struct {
 
 // Config is a client config that authenticates as account with a fresh token.
 func (c KubeClients) Config(ctx context.Context, account string) (*rest.Config, error) {
-	ttl := int64(tokenSeconds)
+	return c.ConfigFor(ctx, account, tokenSeconds*time.Second)
+}
+
+// ConfigFor is Config with a token valid for d, at least the API server's 10-minute minimum.
+func (c KubeClients) ConfigFor(ctx context.Context, account string, d time.Duration) (*rest.Config, error) {
+	ttl := max(int64(d.Seconds()), int64(tokenSeconds))
 	tr, err := c.Client.CoreV1().ServiceAccounts(c.Namespace).CreateToken(ctx, account,
 		&authv1.TokenRequest{Spec: authv1.TokenRequestSpec{ExpirationSeconds: &ttl}}, metav1.CreateOptions{})
 	if err != nil {
