@@ -982,5 +982,242 @@ extension Components {
                 ])
             }
         }
+        /// A registered device. Only public facts; no key material beyond the key's thumbprint.
+        ///
+        /// - Remark: Generated from `#/components/schemas/Device`.
+        public struct Device: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/Device/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Device/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Device/platform`.
+            @frozen public enum PlatformPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case ios = "ios"
+            }
+            /// - Remark: Generated from `#/components/schemas/Device/platform`.
+            public var platform: Components.Schemas.Device.PlatformPayload
+            /// RFC 7638 SHA-256 thumbprint of the request key, unpadded base64url.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Device/key_thumbprint`.
+            public var keyThumbprint: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Device/created_at`.
+            public var createdAt: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/Device/last_seen_at`.
+            public var lastSeenAt: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/Device/revoked_at`.
+            public var revokedAt: Foundation.Date?
+            /// True when this request was signed by this device.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Device/current`.
+            public var current: Swift.Bool
+            /// Creates a new `Device`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - name:
+            ///   - platform:
+            ///   - keyThumbprint: RFC 7638 SHA-256 thumbprint of the request key, unpadded base64url.
+            ///   - createdAt:
+            ///   - lastSeenAt:
+            ///   - revokedAt:
+            ///   - current: True when this request was signed by this device.
+            public init(
+                id: Swift.String,
+                name: Swift.String,
+                platform: Components.Schemas.Device.PlatformPayload,
+                keyThumbprint: Swift.String,
+                createdAt: Foundation.Date,
+                lastSeenAt: Foundation.Date? = nil,
+                revokedAt: Foundation.Date? = nil,
+                current: Swift.Bool
+            ) {
+                self.id = id
+                self.name = name
+                self.platform = platform
+                self.keyThumbprint = keyThumbprint
+                self.createdAt = createdAt
+                self.lastSeenAt = lastSeenAt
+                self.revokedAt = revokedAt
+                self.current = current
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case name
+                case platform
+                case keyThumbprint = "key_thumbprint"
+                case createdAt = "created_at"
+                case lastSeenAt = "last_seen_at"
+                case revokedAt = "revoked_at"
+                case current
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.id = try container.decode(
+                    Swift.String.self,
+                    forKey: .id
+                )
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.platform = try container.decode(
+                    Components.Schemas.Device.PlatformPayload.self,
+                    forKey: .platform
+                )
+                self.keyThumbprint = try container.decode(
+                    Swift.String.self,
+                    forKey: .keyThumbprint
+                )
+                self.createdAt = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .createdAt
+                )
+                self.lastSeenAt = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .lastSeenAt
+                )
+                self.revokedAt = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .revokedAt
+                )
+                self.current = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .current
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "id",
+                    "name",
+                    "platform",
+                    "key_thumbprint",
+                    "created_at",
+                    "last_seen_at",
+                    "revoked_at",
+                    "current"
+                ])
+            }
+        }
+        /// A P-256 public key as a JWK (RFC 7517), coordinates unpadded base64url.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DeviceKey`.
+        public struct DeviceKey: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DeviceKey/kty`.
+            @frozen public enum KtyPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case ec = "EC"
+            }
+            /// - Remark: Generated from `#/components/schemas/DeviceKey/kty`.
+            public var kty: Components.Schemas.DeviceKey.KtyPayload
+            /// - Remark: Generated from `#/components/schemas/DeviceKey/crv`.
+            @frozen public enum CrvPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case p256 = "P-256"
+            }
+            /// - Remark: Generated from `#/components/schemas/DeviceKey/crv`.
+            public var crv: Components.Schemas.DeviceKey.CrvPayload
+            /// - Remark: Generated from `#/components/schemas/DeviceKey/x`.
+            public var x: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DeviceKey/y`.
+            public var y: Swift.String
+            /// Creates a new `DeviceKey`.
+            ///
+            /// - Parameters:
+            ///   - kty:
+            ///   - crv:
+            ///   - x:
+            ///   - y:
+            public init(
+                kty: Components.Schemas.DeviceKey.KtyPayload,
+                crv: Components.Schemas.DeviceKey.CrvPayload,
+                x: Swift.String,
+                y: Swift.String
+            ) {
+                self.kty = kty
+                self.crv = crv
+                self.x = x
+                self.y = y
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kty
+                case crv
+                case x
+                case y
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kty = try container.decode(
+                    Components.Schemas.DeviceKey.KtyPayload.self,
+                    forKey: .kty
+                )
+                self.crv = try container.decode(
+                    Components.Schemas.DeviceKey.CrvPayload.self,
+                    forKey: .crv
+                )
+                self.x = try container.decode(
+                    Swift.String.self,
+                    forKey: .x
+                )
+                self.y = try container.decode(
+                    Swift.String.self,
+                    forKey: .y
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kty",
+                    "crv",
+                    "x",
+                    "y"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/DeviceRegistration`.
+        public struct DeviceRegistration: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DeviceRegistration/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DeviceRegistration/platform`.
+            @frozen public enum PlatformPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case ios = "ios"
+            }
+            /// - Remark: Generated from `#/components/schemas/DeviceRegistration/platform`.
+            public var platform: Components.Schemas.DeviceRegistration.PlatformPayload
+            /// - Remark: Generated from `#/components/schemas/DeviceRegistration/request_key`.
+            public var requestKey: Components.Schemas.DeviceKey
+            /// Creates a new `DeviceRegistration`.
+            ///
+            /// - Parameters:
+            ///   - name:
+            ///   - platform:
+            ///   - requestKey:
+            public init(
+                name: Swift.String,
+                platform: Components.Schemas.DeviceRegistration.PlatformPayload,
+                requestKey: Components.Schemas.DeviceKey
+            ) {
+                self.name = name
+                self.platform = platform
+                self.requestKey = requestKey
+            }
+            public enum CodingKeys: String, CodingKey {
+                case name
+                case platform
+                case requestKey = "request_key"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.platform = try container.decode(
+                    Components.Schemas.DeviceRegistration.PlatformPayload.self,
+                    forKey: .platform
+                )
+                self.requestKey = try container.decode(
+                    Components.Schemas.DeviceKey.self,
+                    forKey: .requestKey
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "name",
+                    "platform",
+                    "request_key"
+                ])
+            }
+        }
     }
 }

@@ -326,6 +326,9 @@ type Auth struct {
 	OIDCAudience string `env:"MAINLOOP_AUTH_OIDC_AUDIENCE"`
 	// OIDCCookie is the gateway's login cookie holding the ID token.
 	OIDCCookie string `env:"MAINLOOP_AUTH_OIDC_COOKIE" envDefault:"mainloop-id"`
+	// DeviceClientID is the native app's public OIDC client (PKCE). A token with only this audience
+	// may register a device and call nothing else (docs/specs/devices.md).
+	DeviceClientID string `env:"MAINLOOP_AUTH_DEVICE_CLIENT_ID"`
 	// OwnerSubject is the owner's Pocket ID subject (sub). Only that subject is the owner.
 	OwnerSubject string `env:"MAINLOOP_AUTH_OWNER_SUBJECT"`
 	// OwnerGroup, when set, is a group the owner token's groups claim must also contain.
@@ -360,6 +363,13 @@ func (a *Auth) validate(dev bool) []error {
 		}
 	}
 	a.OIDCAudience = strings.TrimSpace(a.OIDCAudience)
+	a.DeviceClientID = strings.TrimSpace(a.DeviceClientID)
+	if a.DeviceClientID != "" && a.OIDCIssuer == "" {
+		errs = append(errs, errors.New("MAINLOOP_AUTH_DEVICE_CLIENT_ID needs MAINLOOP_AUTH_OIDC_ISSUER"))
+	}
+	if a.DeviceClientID != "" && a.DeviceClientID == a.OIDCAudience {
+		errs = append(errs, errors.New("MAINLOOP_AUTH_DEVICE_CLIENT_ID must differ from MAINLOOP_AUTH_OIDC_AUDIENCE"))
+	}
 	a.OIDCCookie = strings.TrimSpace(a.OIDCCookie)
 	a.OwnerSubject = strings.TrimSpace(a.OwnerSubject)
 	a.OwnerGroup = strings.TrimSpace(a.OwnerGroup)

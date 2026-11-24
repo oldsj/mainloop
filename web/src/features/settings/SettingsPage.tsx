@@ -4,6 +4,7 @@ import { PageHeader } from '@/components/shared/page-header';
 import { API_SAME_ORIGIN, SIGN_OUT_PATH } from '@/api/signin';
 import { ThemeSelector } from '@/shell/ThemeSelector';
 import { OwnerDotfilesSection } from '@/features/dotfiles/DotfilesSection';
+import { DevicesSection } from './DevicesSection';
 import { ImportProjectSection } from './ImportProjectSection';
 import { SessionDefaultsSection } from './SessionDefaultsSection';
 
@@ -15,6 +16,7 @@ export function SettingsPage() {
       <SessionDefaultsSection />
       <OwnerDotfilesSection />
       <ImportProjectSection />
+      <DevicesSection />
       <section aria-labelledby="appearance-heading" className="gap-sm flex flex-col">
         <h2 id="appearance-heading" className="text-base font-semibold">
           Appearance

@@ -1,8 +1,11 @@
+import AuthenticationServices
 import MainloopCore
 import SwiftUI
 
 struct SettingsScreen: View {
     @Environment(AppEnvironment.self) private var environment
+    @Environment(AccountModel.self) private var account
+    @Environment(\.webAuthenticationSession) private var webAuthenticationSession
 
     var body: some View {
         NavigationStack {
@@ -14,11 +17,33 @@ struct SettingsScreen: View {
                     }
                 }
                 Section {
-                    LabeledContent("Sign-in", value: "Not available yet")
+                    switch account.phase {
+                    case .unavailable:
+                        LabeledContent("Sign-in", value: environment.isFixtures ? "Sample data" : "Not configured")
+                    case .signedOut:
+                        Button("Sign in with Pocket ID") {
+                            Task { await account.register(using: webAuthenticationSession) }
+                        }
+                    case .working:
+                        HStack {
+                            Text("Working…")
+                            Spacer()
+                            ProgressView()
+                        }
+                    case .signedIn(let deviceID):
+                        LabeledContent("Device", value: deviceID)
+                            .textSelection(.enabled)
+                        Button("Sign out", role: .destructive) {
+                            Task { await account.signOut() }
+                        }
+                    }
+                    if let error = account.lastError {
+                        Text(error).foregroundStyle(.red)
+                    }
                 } header: {
                     Text("This iPhone")
                 } footer: {
-                    Text("Signing in with Pocket ID, notifications and Touch ID approvals come in the next updates.")
+                    Text("Signing in registers a key that stays in this iPhone's Secure Enclave and signs every request. Signing out revokes it. Notifications and Touch ID approvals come in the next updates.")
                 }
                 Section("About") {
                     LabeledContent("Version", value: Bundle.main.versionString)

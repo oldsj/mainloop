@@ -46,6 +46,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/auth"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
@@ -78,7 +79,19 @@ var (
 	ErrNotFound = errors.New("not found")
 	ErrConflict = errors.New("conflict")
 	ErrInvalid  = errors.New("invalid")
+	// ErrForbidden refuses an answer this caller may not give.
+	ErrForbidden = errors.New("forbidden")
 )
+
+// PrivilegedDigestKey is the context key a privileged action's card carries its digest under
+// (privileged.ContextDigest). Approving such a card is the owner's alone, never a device's, until
+// approvals are signed with the device's Touch ID key (docs/specs/devices.md).
+const PrivilegedDigestKey = "privileged_action_digest"
+
+// AnswerHook checks, and acts on, the owner's answer to a queue item another slice opened, inside
+// the answer's transaction. ctx carries the caller's principal. An error refuses the answer and
+// undoes the hook's writes; wrap ErrForbidden or ErrInvalid to say why.
+type AnswerHook func(ctx context.Context, tx pgx.Tx, sourceID, response string) error
 
 // Service reads and changes the owner's attention.
 type Service struct {
@@ -87,6 +100,17 @@ type Service struct {
 	Log     *slog.Logger
 	// SweepEvery is the period of the task-decision sweep. Zero means 3 seconds.
 	SweepEvery time.Duration
+
+	hooks map[string]AnswerHook // queue item id prefix → hook
+}
+
+// OnAnswer runs h on every answer to an open queue item whose id starts with prefix. Call it
+// while wiring, before serving.
+func (s *Service) OnAnswer(prefix string, h AnswerHook) {
+	if s.hooks == nil {
+		s.hooks = map[string]AnswerHook{}
+	}
+	s.hooks[prefix] = h
 }
 
 func (s *Service) log() *slog.Logger {
@@ -524,6 +548,9 @@ func (s *Service) Respond(ctx context.Context, itemID string, body api.QueueItem
 	}
 	return events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
 		q := dbq.New(tx)
+		if err := s.checkAnswer(ctx, tx, q, itemID, body.Response); err != nil {
+			return nil, err
+		}
 		id, err := q.RespondQueueAttention(ctx, dbq.RespondQueueAttentionParams{
 			Response: body.Response, Metadata: meta, OwnerID: s.OwnerID, SourceID: itemID,
 		})
@@ -535,6 +562,37 @@ func (s *Service) Respond(ctx context.Context, itemID string, body api.QueueItem
 		}
 		return nil, s.whyNotAnswered(ctx, q, itemID, body.Response)
 	})
+}
+
+// checkAnswer refuses an answer the caller may not give, and runs the item's hook, before an open
+// item records it. An item that isn't open is left to whyNotAnswered.
+func (s *Service) checkAnswer(ctx context.Context, tx pgx.Tx, q *dbq.Queries, itemID, response string) error {
+	row, err := q.GetAttentionBySource(ctx, dbq.GetAttentionBySourceParams{OwnerID: s.OwnerID, SourceKind: SourceQueue, SourceID: itemID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if row.State != dbstate.AttentionOpen {
+		return nil
+	}
+	if p, ok := auth.FromContext(ctx); ok && p.Kind == auth.KindDevice &&
+		strings.EqualFold(strings.TrimSpace(response), "Approve") {
+		var d queueDetail
+		if err := json.Unmarshal(row.Detail, &d); err != nil {
+			return err
+		}
+		if _, privileged := d.Context[PrivilegedDigestKey]; privileged {
+			return fmt.Errorf("%w: a privileged action is approved from the web app, not a device", ErrForbidden)
+		}
+	}
+	for prefix, h := range s.hooks {
+		if strings.HasPrefix(itemID, prefix) {
+			return h(ctx, tx, itemID, response)
+		}
+	}
+	return nil
 }
 
 // whyNotAnswered explains an answer that matched no open queue item: nil when the item already

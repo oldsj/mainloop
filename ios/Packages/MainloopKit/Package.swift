@@ -27,8 +27,23 @@ let package = Package(
                 .product(name: "HTTPTypes", package: "swift-http-types"),
             ]
         ),
-        .target(name: "MainloopCore", dependencies: ["MainloopAPI"], resources: [.copy("Fixtures")]),
-        .testTarget(name: "MainloopCoreTests", dependencies: ["MainloopCore"]),
+        .target(
+            name: "MainloopCore",
+            dependencies: [
+                "MainloopAPI",
+                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+                .product(name: "HTTPTypes", package: "swift-http-types"),
+            ],
+            resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "MainloopCoreTests",
+            dependencies: [
+                "MainloopCore", "MainloopAPI",
+                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+                .product(name: "HTTPTypes", package: "swift-http-types"),
+            ]
+        ),
     ],
     swiftLanguageModes: [.v6]
 )

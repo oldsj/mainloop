@@ -28,6 +28,7 @@ const orchestrationHealth: Schemas['HealthView'] = {
   retention: { events_days: 7, summaries_days: 90 }
 };
 const providers: Schemas['ProviderProfile'][] = [];
+const devices: Schemas['Device'][] = [];
 
 /**
  * `GET` and `PUT /session-defaults`, kept in memory. A save answers with every default, and one
@@ -158,6 +159,8 @@ export const baseHandlers = [
   // A test that only passes through /health incidentally (on its way elsewhere) still needs these.
   http.get(url('/orchestration-health'), () => HttpResponse.json(orchestrationHealth)),
   http.get(url('/providers'), () => HttpResponse.json(providers)),
+  // Settings lists the owner's devices; none are registered unless a test serves its own.
+  http.get(url('/devices'), () => HttpResponse.json(devices)),
   ...sessionDefaultsHandlers(),
   ...dotfilesHandlers(),
   ...testSeen.handlers

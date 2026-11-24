@@ -17,6 +17,7 @@ security:
   - pocketId: []
   - pocketIdCookie: []
   - serviceAccount: []
+  - ownerDevice: []
 # trunk-ignore-end(checkov/CKV_OPENAPI_5)
 tags:
   - name: health
@@ -51,6 +52,8 @@ tags:
     description: Stored session transcripts and their search.
   - name: privileged
     description: The owner's audit of privileged actions agents asked for.
+  - name: devices
+    description: The owner's registered phones, whose keys sign their API requests (docs/specs/devices.md).
 paths:
   /activity:
     get:
@@ -231,6 +234,143 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConversationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /devices:
+    get:
+      tags:
+        - devices
+      summary: List Devices
+      description: The owner's registered devices, newest first, revoked ones included. A device sees itself marked `current`.
+      operationId: listDevices
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 100
+                items:
+                  $ref: '#/components/schemas/Device'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+    post:
+      tags:
+        - devices
+      summary: Register Device
+      description: >-
+        Registers a phone and its request key (docs/specs/devices.md). Only the owner's own Pocket ID
+        token sent as a bearer may call this, issued within the last 10 minutes: the native app signs in
+        once with its own OIDC client (MAINLOOP_AUTH_DEVICE_CLIENT_ID), whose tokens are good for this
+        operation only. A device key, the login cookie or a ServiceAccount is refused with 403. The
+        response's `id` is the `kid` and `sub` of the device's request tokens.
+      operationId: registerDevice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceRegistration'
+      responses:
+        '201':
+          description: Registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: This request key is already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /devices/current:
+    get:
+      tags:
+        - devices
+      summary: Get Current Device
+      description: The device whose key signed this request. 404 when the request was not signed by a device.
+      operationId: getCurrentDevice
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+  /devices/{device_id}:
+    delete:
+      tags:
+        - devices
+      summary: Revoke Device
+      description: >-
+        Revokes a device: its request key stops working at once. The owner may revoke any device; a device
+        may revoke only itself (signing out). Revoking a revoked device succeeds and changes nothing.
+      operationId: revokeDevice
+      parameters:
+        - name: device_id
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 64
+            title: Device Id
+      responses:
+        '204':
+          description: Revoked
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -6524,6 +6664,16 @@ components:
       description: >-
         A projected Kubernetes ServiceAccount token with the configured audience, checked with a
         TokenReview. Each allowed ServiceAccount has a fixed scope (owner, read or canary).
+    ownerDevice:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        A request token a registered device signs with its Secure Enclave key (docs/specs/devices.md):
+        a JWT with header `alg` ES256, `typ` mainloop-device+jwt and `kid` the device id, and claims
+        `iss` mainloop-device, `sub` the device id, `aud` mainloop-api, `iat`, `exp` at most 60 seconds
+        after `iat`, a unique `jti`, `htm` the method, `htu` the path and query the API sees, and `bh`
+        the unpadded base64url SHA-256 of the body. Each token is good for one request.
   responses:
     Unauthorized:
       description: No valid identity came with the request.
@@ -11193,6 +11343,88 @@ components:
       required:
         - message_id
         - state
+      additionalProperties: false
+    Device:
+      type: object
+      description: A registered device. Only public facts; no key material beyond the key's thumbprint.
+      properties:
+        id:
+          type: string
+          maxLength: 64
+        name:
+          type: string
+          maxLength: 100
+        platform:
+          type: string
+          enum: [ios]
+        key_thumbprint:
+          type: string
+          description: RFC 7638 SHA-256 thumbprint of the request key, unpadded base64url.
+          maxLength: 64
+        created_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        revoked_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        current:
+          type: boolean
+          description: True when this request was signed by this device.
+      required:
+        - id
+        - name
+        - platform
+        - key_thumbprint
+        - created_at
+        - last_seen_at
+        - revoked_at
+        - current
+      additionalProperties: false
+    DeviceKey:
+      type: object
+      description: A P-256 public key as a JWK (RFC 7517), coordinates unpadded base64url.
+      properties:
+        kty:
+          type: string
+          enum: [EC]
+        crv:
+          type: string
+          enum: [P-256]
+        x:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+        y:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+      required:
+        - kty
+        - crv
+        - x
+        - y
+      additionalProperties: false
+    DeviceRegistration:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        platform:
+          type: string
+          enum: [ios]
+        request_key:
+          $ref: '#/components/schemas/DeviceKey'
+      required:
+        - name
+        - platform
+        - request_key
       additionalProperties: false
     DevloopLease:
       type: object

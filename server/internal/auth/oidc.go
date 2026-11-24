@@ -37,6 +37,11 @@ var signingMethods = []string{"RS256", "RS384", "RS512", "PS256", "PS384", "PS51
 type OwnerClaims struct {
 	jwt.RegisteredClaims
 	Groups []string `json:"groups,omitempty"`
+	// Nonce is the authorization request's nonce. The phone sends its new key's thumbprint, so the
+	// token can register that key only.
+	Nonce string `json:"nonce,omitempty"`
+	// AuthTime is when the owner signed in to the issuer, unlike iat, which a refresh renews.
+	AuthTime *jwt.NumericDate `json:"auth_time,omitempty"`
 }
 
 // OIDC verifies tokens an OpenID Connect issuer signed, with the keys its discovery document names.
@@ -44,8 +49,11 @@ type OwnerClaims struct {
 type OIDC struct {
 	Issuer   string
 	Audience string
-	Client   *http.Client
-	Now      func() time.Time
+	// DeviceAudience, when set, is also accepted: the native app's own OIDC client, whose tokens
+	// the Authenticator lets register a device and nothing else.
+	DeviceAudience string
+	Client         *http.Client
+	Now            func() time.Time
 
 	mu      sync.Mutex
 	jwksURI string
@@ -81,7 +89,7 @@ func (o *OIDC) Verify(ctx context.Context, raw string) (*OwnerClaims, error) {
 	switch {
 	case claims.Issuer != o.Issuer:
 		return nil, errors.New("token: wrong issuer")
-	case !claims.VerifyAudience(o.Audience, true):
+	case !claims.VerifyAudience(o.Audience, true) && (o.DeviceAudience == "" || !claims.VerifyAudience(o.DeviceAudience, true)):
 		return nil, errors.New("token: wrong audience")
 	case claims.ExpiresAt == nil:
 		return nil, errors.New("token: no expiry")

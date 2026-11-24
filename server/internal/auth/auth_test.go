@@ -41,19 +41,21 @@ func (r *reviewer) Review(_ context.Context, token string, audiences []string) (
 }
 
 type fixture struct {
-	iss    *authtest.Issuer
-	rev    *reviewer
-	logs   *bytes.Buffer
-	h      http.Handler
-	seen   *auth.Principal
-	called bool
+	iss     *authtest.Issuer
+	devices *authtest.DeviceStore
+	rev     *reviewer
+	logs    *bytes.Buffer
+	h       http.Handler
+	seen    *auth.Principal
+	called  bool
 }
 
 func newFixture(t *testing.T, mode auth.Mode) *fixture {
 	t.Helper()
-	f := &fixture{iss: authtest.NewIssuer(t), rev: &reviewer{users: map[string]string{}}, logs: &bytes.Buffer{}}
+	f := &fixture{iss: authtest.NewIssuer(t), devices: &authtest.DeviceStore{}, rev: &reviewer{users: map[string]string{}}, logs: &bytes.Buffer{}}
 	a := &auth.Authenticator{
-		Mode: mode, OIDC: &auth.OIDC{Issuer: f.iss.URL(), Audience: "mainloop", Client: f.iss.Client()},
+		Mode: mode, OIDC: &auth.OIDC{Issuer: f.iss.URL(), Audience: "mainloop", DeviceAudience: "mainloop-ios", Client: f.iss.Client()},
+		Devices:      &auth.Devices{Store: f.devices, MaxBody: 1 << 20, Audience: authtest.DeviceOrigin},
 		OwnerSubject: ownerSub, Cookie: "mainloop-id",
 		ServiceAccounts: &auth.ServiceAccounts{Audience: saAud, Reviewer: f.rev},
 		Scopes: map[string]auth.Scope{
@@ -303,12 +305,17 @@ func TestNewModeRules(t *testing.T) {
 
 func TestConfigRefusesBadAuthSettings(t *testing.T) {
 	for name, vars := range map[string]map[string]string{
-		"mode":         {"MAINLOOP_AUTH_MODE": "strict"},
-		"http issuer":  {"MAINLOOP_AUTH_OIDC_ISSUER": "http://id.test", "MAINLOOP_AUTH_OIDC_AUDIENCE": "a", "MAINLOOP_AUTH_OWNER_SUBJECT": "s"},
-		"issuer alone": {"MAINLOOP_AUTH_OIDC_ISSUER": "https://id.test", "MAINLOOP_AUTH_OWNER_SUBJECT": "s"},
-		"no subject":   {"MAINLOOP_AUTH_OIDC_ISSUER": "https://id.test", "MAINLOOP_AUTH_OIDC_AUDIENCE": "a"},
-		"bad scope":    {"MAINLOOP_AUTH_SERVICE_ACCOUNTS": "mainloop/canary=admin"},
-		"bad entry":    {"MAINLOOP_AUTH_SERVICE_ACCOUNTS": "canary=owner"},
+		"mode":                            {"MAINLOOP_AUTH_MODE": "strict"},
+		"http issuer":                     {"MAINLOOP_AUTH_OIDC_ISSUER": "http://id.test", "MAINLOOP_AUTH_OIDC_AUDIENCE": "a", "MAINLOOP_AUTH_OWNER_SUBJECT": "s"},
+		"issuer alone":                    {"MAINLOOP_AUTH_OIDC_ISSUER": "https://id.test", "MAINLOOP_AUTH_OWNER_SUBJECT": "s"},
+		"no subject":                      {"MAINLOOP_AUTH_OIDC_ISSUER": "https://id.test", "MAINLOOP_AUTH_OIDC_AUDIENCE": "a"},
+		"bad scope":                       {"MAINLOOP_AUTH_SERVICE_ACCOUNTS": "mainloop/canary=admin"},
+		"bad entry":                       {"MAINLOOP_AUTH_SERVICE_ACCOUNTS": "canary=owner"},
+		"device client without an issuer": {"MAINLOOP_AUTH_DEVICE_CLIENT_ID": "mainloop-ios"},
+		"device client is the web audience": {
+			"MAINLOOP_AUTH_OIDC_ISSUER": "https://id.test", "MAINLOOP_AUTH_OIDC_AUDIENCE": "mainloop",
+			"MAINLOOP_AUTH_OWNER_SUBJECT": "s", "MAINLOOP_AUTH_DEVICE_CLIENT_ID": "mainloop",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			vars["AGENT_TOKEN_KEY"] = "k"

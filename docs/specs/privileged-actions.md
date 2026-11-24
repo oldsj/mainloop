@@ -214,8 +214,9 @@ The card is a Needs-you `approval` item with high priority, so it gets an ntfy p
 
 ## Decision
 
-The web app sends `Approve` with `metadata.reviewed_context` set to the card's digest. A sweep
-records the decision:
+The web app sends `Approve` with `metadata.reviewed_context` set to the card's digest. An Approve
+from a registered phone is refused (`403`) until approvals are signed with the phone's Touch ID key
+([devices](devices.md)); the phone may still deny. A sweep records the decision:
 
 - An **Approve** whose `reviewed_context` equals the digest, sent before expiry, approves the
   action.

@@ -15,6 +15,34 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /attention`.
     /// - Remark: Generated from `#/paths//attention/get(getAttention)`.
     func getAttention(_ input: Operations.GetAttention.Input) async throws -> Operations.GetAttention.Output
+    /// List Devices
+    ///
+    /// The owner's registered devices, newest first, revoked ones included. A device sees itself marked `current`.
+    ///
+    /// - Remark: HTTP `GET /devices`.
+    /// - Remark: Generated from `#/paths//devices/get(listDevices)`.
+    func listDevices(_ input: Operations.ListDevices.Input) async throws -> Operations.ListDevices.Output
+    /// Register Device
+    ///
+    /// Registers a phone and its request key (docs/specs/devices.md). Only the owner's own Pocket ID token sent as a bearer may call this, issued within the last 10 minutes: the native app signs in once with its own OIDC client (MAINLOOP_AUTH_DEVICE_CLIENT_ID), whose tokens are good for this operation only. A device key, the login cookie or a ServiceAccount is refused with 403. The response's `id` is the `kid` and `sub` of the device's request tokens.
+    ///
+    /// - Remark: HTTP `POST /devices`.
+    /// - Remark: Generated from `#/paths//devices/post(registerDevice)`.
+    func registerDevice(_ input: Operations.RegisterDevice.Input) async throws -> Operations.RegisterDevice.Output
+    /// Get Current Device
+    ///
+    /// The device whose key signed this request. 404 when the request was not signed by a device.
+    ///
+    /// - Remark: HTTP `GET /devices/current`.
+    /// - Remark: Generated from `#/paths//devices/current/get(getCurrentDevice)`.
+    func getCurrentDevice(_ input: Operations.GetCurrentDevice.Input) async throws -> Operations.GetCurrentDevice.Output
+    /// Revoke Device
+    ///
+    /// Revokes a device: its request key stops working at once. The owner may revoke any device; a device may revoke only itself (signing out). Revoking a revoked device succeeds and changes nothing.
+    ///
+    /// - Remark: HTTP `DELETE /devices/{device_id}`.
+    /// - Remark: Generated from `#/paths//devices/{device_id}/delete(revokeDevice)`.
+    func revokeDevice(_ input: Operations.RevokeDevice.Input) async throws -> Operations.RevokeDevice.Output
     /// Health
     ///
     /// Health check endpoint.
@@ -53,6 +81,54 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//attention/get(getAttention)`.
     public func getAttention(headers: Operations.GetAttention.Input.Headers = .init()) async throws -> Operations.GetAttention.Output {
         try await getAttention(Operations.GetAttention.Input(headers: headers))
+    }
+    /// List Devices
+    ///
+    /// The owner's registered devices, newest first, revoked ones included. A device sees itself marked `current`.
+    ///
+    /// - Remark: HTTP `GET /devices`.
+    /// - Remark: Generated from `#/paths//devices/get(listDevices)`.
+    public func listDevices(headers: Operations.ListDevices.Input.Headers = .init()) async throws -> Operations.ListDevices.Output {
+        try await listDevices(Operations.ListDevices.Input(headers: headers))
+    }
+    /// Register Device
+    ///
+    /// Registers a phone and its request key (docs/specs/devices.md). Only the owner's own Pocket ID token sent as a bearer may call this, issued within the last 10 minutes: the native app signs in once with its own OIDC client (MAINLOOP_AUTH_DEVICE_CLIENT_ID), whose tokens are good for this operation only. A device key, the login cookie or a ServiceAccount is refused with 403. The response's `id` is the `kid` and `sub` of the device's request tokens.
+    ///
+    /// - Remark: HTTP `POST /devices`.
+    /// - Remark: Generated from `#/paths//devices/post(registerDevice)`.
+    public func registerDevice(
+        headers: Operations.RegisterDevice.Input.Headers = .init(),
+        body: Operations.RegisterDevice.Input.Body
+    ) async throws -> Operations.RegisterDevice.Output {
+        try await registerDevice(Operations.RegisterDevice.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// Get Current Device
+    ///
+    /// The device whose key signed this request. 404 when the request was not signed by a device.
+    ///
+    /// - Remark: HTTP `GET /devices/current`.
+    /// - Remark: Generated from `#/paths//devices/current/get(getCurrentDevice)`.
+    public func getCurrentDevice(headers: Operations.GetCurrentDevice.Input.Headers = .init()) async throws -> Operations.GetCurrentDevice.Output {
+        try await getCurrentDevice(Operations.GetCurrentDevice.Input(headers: headers))
+    }
+    /// Revoke Device
+    ///
+    /// Revokes a device: its request key stops working at once. The owner may revoke any device; a device may revoke only itself (signing out). Revoking a revoked device succeeds and changes nothing.
+    ///
+    /// - Remark: HTTP `DELETE /devices/{device_id}`.
+    /// - Remark: Generated from `#/paths//devices/{device_id}/delete(revokeDevice)`.
+    public func revokeDevice(
+        path: Operations.RevokeDevice.Input.Path,
+        headers: Operations.RevokeDevice.Input.Headers = .init()
+    ) async throws -> Operations.RevokeDevice.Output {
+        try await revokeDevice(Operations.RevokeDevice.Input(
+            path: path,
+            headers: headers
+        ))
     }
     /// Health
     ///

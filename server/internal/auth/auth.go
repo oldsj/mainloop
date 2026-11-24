@@ -67,17 +67,61 @@ const ClientHeader = "X-Mainloop-Client"
 const (
 	KindOwner          = "owner"
 	KindServiceAccount = "service_account"
+	// KindDevice is one of the owner's registered phones, by its signed request token.
+	KindDevice = "device"
 )
+
+// registerDeviceOperation registers a phone. Only a fresh Pocket ID bearer may call it, and a
+// token of the native app's own OIDC client may call nothing else.
+const registerDeviceOperation = "registerdevice"
+
+// RegistrationMaxAge is how recent the Pocket ID sign-in (auth_time) behind a device registration
+// must be.
+const RegistrationMaxAge = 10 * time.Minute
+
+// registrationSkew absorbs the issuer's clock running ahead of the server's.
+const registrationSkew = time.Minute
 
 // Principal is the verified caller of a request.
 type Principal struct {
-	// Kind is KindOwner or KindServiceAccount.
+	// Kind is KindOwner, KindServiceAccount or KindDevice.
 	Kind string
-	// Name is the owner's subject or the ServiceAccount's namespace/name.
+	// Name is the owner's subject, the ServiceAccount's namespace/name or the device id.
 	Name  string
 	Scope Scope
-	// Via is "bearer" or "cookie".
+	// Via is "bearer", "cookie" or "device".
 	Via string
+	// RegistrationOnly marks a Pocket ID token of the native app's client
+	// (MAINLOOP_AUTH_DEVICE_CLIENT_ID) and not the web audience: it may only register a device.
+	RegistrationOnly bool
+	// DeviceClient marks a Pocket ID token whose audience includes the native app's client. Only
+	// such a token registers a device.
+	DeviceClient bool
+	// AuthTime is when the owner signed in to Pocket ID for an owner token (zero without
+	// auth_time). Nonce and TokenID are the token's nonce and jti.
+	AuthTime time.Time
+	Nonce    string
+	TokenID  string
+}
+
+// CanRegisterDevice says why p may not register a device, or nil: only the owner's own Pocket ID
+// sign-in through the native app's client, as a bearer, from the last RegistrationMaxAge, with a
+// nonce (the key's thumbprint, which the handler checks). Never a device key (a stolen phone can't
+// enroll another), the login cookie, a web-audience token or a ServiceAccount.
+func CanRegisterDevice(p Principal, now time.Time) error {
+	switch {
+	case p.Kind != KindOwner || p.Via != "bearer":
+		return errors.New("registering a device needs a Pocket ID bearer")
+	case !p.DeviceClient:
+		return errors.New("registering a device needs a token for the app's own client")
+	case p.AuthTime.IsZero():
+		return errors.New("registering a device needs the token's auth_time")
+	case now.Sub(p.AuthTime) > RegistrationMaxAge || p.AuthTime.After(now.Add(registrationSkew)):
+		return errors.New("registering a device needs a sign-in from the last 10 minutes")
+	case p.Nonce == "":
+		return errors.New("registering a device needs the key's thumbprint as the nonce")
+	}
+	return nil
 }
 
 type ctxKey struct{}
@@ -102,11 +146,13 @@ type Authenticator struct {
 	Cookie       string
 	// ServiceAccounts is nil when ServiceAccount tokens are not accepted.
 	ServiceAccounts *ServiceAccounts
-	Scopes          map[string]Scope // namespace/name → scope
-	FrontendOrigin  string
-	Dev             bool
-	Log             *slog.Logger
-	Now             func() time.Time
+	// Devices verifies the owner's phones. Nil refuses device tokens.
+	Devices        *Devices
+	Scopes         map[string]Scope // namespace/name → scope
+	FrontendOrigin string
+	Dev            bool
+	Log            *slog.Logger
+	Now            func() time.Time
 
 	mu     sync.Mutex
 	logged map[string]time.Time
@@ -133,7 +179,7 @@ func New(cfg *config.Config, reviewer TokenReviewer, client *http.Client, log *s
 		FrontendOrigin: cfg.FrontendOrigin(), Dev: cfg.IsDev(), Log: log, Scopes: map[string]Scope{},
 	}
 	if a.OIDCIssuer != "" {
-		au.OIDC = &OIDC{Issuer: a.OIDCIssuer, Audience: a.OIDCAudience, Client: client}
+		au.OIDC = &OIDC{Issuer: a.OIDCIssuer, Audience: a.OIDCAudience, DeviceAudience: a.DeviceClientID, Client: client}
 	}
 	for name, scope := range a.ServiceAccounts {
 		au.Scopes[name] = Scope(scope)
@@ -170,6 +216,12 @@ func (a *Authenticator) Middleware(spec *openapi3.T) (func(http.Handler) http.Ha
 			}
 			if p != nil {
 				r = r.WithContext(WithPrincipal(r.Context(), *p))
+				if p.Kind == KindDevice && a.Devices != nil {
+					// A revoked device's open stream ends rather than outliving it.
+					ctx, stop := a.Devices.Watch(r.Context(), p.Name)
+					defer stop()
+					r = r.WithContext(ctx)
+				}
 			}
 			next.ServeHTTP(w, r)
 		})
@@ -233,7 +285,7 @@ func (a *Authenticator) identify(r *http.Request) (*Principal, *refusal) {
 		if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
 			return nil, unauthorized("malformed Authorization header")
 		}
-		return a.bearer(r.Context(), token)
+		return a.bearer(r, token)
 	}
 	if a.OIDC != nil {
 		if c, err := r.Cookie(a.Cookie); err == nil && c.Value != "" {
@@ -244,9 +296,10 @@ func (a *Authenticator) identify(r *http.Request) (*Principal, *refusal) {
 }
 
 // bearer routes a token by its unverified claims: the owner's issuer goes to the OIDC verifier, a
-// projected ServiceAccount token (it carries the kubernetes.io claim) to a TokenReview. Nothing is
-// trusted before that verification.
-func (a *Authenticator) bearer(ctx context.Context, token string) (*Principal, *refusal) {
+// device token to the device verifier, a projected ServiceAccount token (it carries the
+// kubernetes.io claim) to a TokenReview. Nothing is trusted before that verification.
+func (a *Authenticator) bearer(r *http.Request, token string) (*Principal, *refusal) {
+	ctx := r.Context()
 	claims := jwt.MapClaims{}
 	if _, _, err := jwt.NewParser().ParseUnverified(token, claims); err != nil {
 		return nil, unauthorized("malformed token")
@@ -254,6 +307,16 @@ func (a *Authenticator) bearer(ctx context.Context, token string) (*Principal, *
 	iss, _ := claims["iss"].(string)
 	if a.OIDC != nil && iss == a.OIDC.Issuer {
 		return a.owner(ctx, token, "bearer")
+	}
+	if iss == DeviceIssuer {
+		if a.Devices == nil {
+			return nil, unauthorized("device tokens are not accepted here")
+		}
+		id, err := a.Devices.Verify(r, token)
+		if err != nil {
+			return nil, unauthorized(err.Error())
+		}
+		return &Principal{Kind: KindDevice, Name: id, Scope: ScopeOwner, Via: "device"}, nil
 	}
 	if _, ok := claims["kubernetes.io"]; !ok {
 		return nil, unauthorized("token from an unknown issuer")
@@ -291,7 +354,14 @@ func (a *Authenticator) owner(ctx context.Context, token, via string) (*Principa
 	if a.OwnerGroup != "" && !slices.Contains(claims.Groups, a.OwnerGroup) {
 		return nil, forbidden("owner token lacks the owner group")
 	}
-	return &Principal{Kind: KindOwner, Name: claims.Subject, Scope: ScopeOwner, Via: via}, nil
+	p := &Principal{Kind: KindOwner, Name: claims.Subject, Scope: ScopeOwner, Via: via, Nonce: claims.Nonce, TokenID: claims.ID}
+	// A token only for the native app's client (not the web audience) may only register a device.
+	p.RegistrationOnly = !claims.VerifyAudience(a.OIDC.Audience, true)
+	p.DeviceClient = a.OIDC.DeviceAudience != "" && claims.VerifyAudience(a.OIDC.DeviceAudience, true)
+	if claims.AuthTime != nil {
+		p.AuthTime = claims.AuthTime.Time
+	}
+	return p, nil
 }
 
 // authorize checks the principal's scope, and that an owner write came from the frontend: the
@@ -299,6 +369,13 @@ func (a *Authenticator) owner(ctx context.Context, token, via string) (*Principa
 // same-site page (a workspace preview) is held off by the header and the Origin.
 func (a *Authenticator) authorize(r *http.Request, op *openapi3.Operation, p Principal) *refusal {
 	opID := strings.ToLower(op.OperationID)
+	if opID == registerDeviceOperation {
+		if err := CanRegisterDevice(p, a.now()); err != nil {
+			return forbidden(err.Error())
+		}
+	} else if p.RegistrationOnly {
+		return forbidden("the device client's token may only register a device")
+	}
 	switch p.Scope {
 	case ScopeOwner:
 	case ScopeRead:
@@ -312,7 +389,7 @@ func (a *Authenticator) authorize(r *http.Request, op *openapi3.Operation, p Pri
 	default:
 		return forbidden("unknown scope")
 	}
-	if p.Kind == KindOwner && !safe(r.Method) {
+	if (p.Kind == KindOwner || p.Kind == KindDevice) && !safe(r.Method) {
 		if r.Header.Get(ClientHeader) == "" {
 			return forbidden("owner write without " + ClientHeader)
 		}

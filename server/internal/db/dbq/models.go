@@ -192,6 +192,12 @@ type DevEnvironment struct {
 	LastFollowedAt   *time.Time
 }
 
+type DeviceTokenUse struct {
+	DeviceID  string
+	Jti       string
+	ExpiresAt time.Time
+}
+
 type DevloopLease struct {
 	ID                 string
 	HolderSessionID    *string
@@ -612,6 +618,22 @@ type MessageImage struct {
 	Data      []byte
 	SizeBytes int32
 	CreatedAt time.Time
+}
+
+type OwnerDevice struct {
+	ID                   string
+	OwnerID              string
+	Name                 string
+	Platform             string
+	RequestKeyX          string
+	RequestKeyY          string
+	KeyThumbprint        string
+	RegisteredBy         string
+	RegistrationJti      *string
+	RegistrationAuthTime time.Time
+	CreatedAt            time.Time
+	LastSeenAt           *time.Time
+	RevokedAt            *time.Time
 }
 
 type OwnerDotfilesSource struct {

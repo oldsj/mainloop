@@ -15,6 +15,7 @@ and is not yet proven live.
 | Web app sends `X-Mainloop-Client`, re-login on `401`, sign-out in Settings                     | implemented                      |
 | Production web build served same-origin at `/api` (needs the gateway's `/api` route first)     | implemented (image build)        |
 | Pocket ID login at the admin gateway (Envoy SecurityPolicy) for dev, then prod                 | proposed (deployment repository) |
+| Device-signed requests from the owner's phones ([devices](devices.md))                         | implemented                      |
 | `enforce` on dev, then prod; `mainloop-api.<domain>` route removed                             | proposed                         |
 
 Workspace previews (`*.preview.<domain>`) are routed ahead of this layer. They have their own
@@ -54,6 +55,17 @@ present but invalid is refused; it is never treated as absent.
 - `sub` must equal `MAINLOOP_AUTH_OWNER_SUBJECT`. Any other user of the issuer is refused with `403`.
 - With `MAINLOOP_AUTH_OWNER_GROUP` set, the token's `groups` claim must also contain that group.
 - Headers the gateway derives from claims are never read.
+
+**The app's own sign-in.** With `MAINLOOP_AUTH_DEVICE_CLIENT_ID` set (the iPhone app's public
+OIDC client; it must differ from the web audience), a token whose audience is that client also
+passes the checks above, but it may only call `POST /devices`. Only such a token registers a
+device: a bearer (not the cookie) whose `auth_time` is within the last 10 minutes and whose `nonce`
+is the new key's thumbprint. See [devices](devices.md).
+
+**A device.** A JWT signed by a registered phone's Secure Enclave key (`iss` `mainloop-device`),
+bound to one request's method, path and body, at most 60 seconds long and good once. It is checked
+against the registered, unrevoked devices on every request. Device tokens are refused when
+`serve-api` has no database. See [devices](devices.md).
 
 **A ServiceAccount.** A projected token issued for `MAINLOOP_AUTH_SA_AUDIENCE` (default
 `mainloop-api`). The backend checks it with a TokenReview, which also refuses a token whose pod is
@@ -99,15 +111,15 @@ so this path gives nobody new access. The token expires on its own.
 
 ## Scopes
 
-| Scope    | May call                                                                                                                                        |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `owner`  | everything (Pocket ID owner; the break-glass operator ServiceAccount)                                                                           |
-| `read`   | `GET`/`HEAD` operations except `GET /sessions/{id}/live` (`mainloop-backend`: in-pod `smoke --read-only`)                                       |
-| `canary` | list and create sessions, send a message, read the conversation and native strip, stop the turn, restart, cancel, archive ([canary](canary.md)) |
+| Scope    | May call                                                                                                                                                 |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `owner`  | everything (Pocket ID owner; a registered device; the break-glass operator ServiceAccount), except that only a fresh Pocket ID bearer registers a device |
+| `read`   | `GET`/`HEAD` operations except `GET /sessions/{id}/live` (`mainloop-backend`: in-pod `smoke --read-only`)                                                |
+| `canary` | list and create sessions, send a message, read the conversation and native strip, stop the turn, restart, cancel, archive ([canary](canary.md))          |
 
 ## Owner writes
 
-An owner request with an unsafe method (anything but `GET`, `HEAD` or `OPTIONS`) must carry
+An owner or device request with an unsafe method (anything but `GET`, `HEAD` or `OPTIONS`) must carry
 `X-Mainloop-Client` (any value). If it carries an `Origin`, that must be the frontend origin, or
 loopback in development. This applies to bearer requests too, because the gateway can turn the login
 cookie into a bearer. A page on another origin can't add the header without a CORS preflight, and
