@@ -112,8 +112,9 @@ GitHub-hosted Xcode runner, for changes under `ios/` or to `api/openapi.yaml`. I
 tests against a Swift client freshly generated from the contract. The committed copy
 (`ios/Packages/MainloopKit/Sources/MainloopAPI/Generated`) can lag behind:
 
-- After a contract change, a stale copy is a warning on the iOS check, not a failure, and the run
-  uploads the regenerated files as the `ios-generated-client` artifact.
+- After a contract change, a stale copy is a warning on the pull request's iOS check, not a
+  failure, and the run uploads the regenerated files as the `ios-generated-client` artifact. On
+  the push to `main` it fails the check, so whoever merged it, or the next iOS change, applies it.
 - Apply it in the same pull request when you can:
   `gh run download <run id> -n ios-generated-client && git apply generated-client.patch`, from the
   repository root.
