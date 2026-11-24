@@ -164,6 +164,12 @@ func TestGrantExchangeSetsAHostOnlyCookie(t *testing.T) {
 	}); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("grant on another host: got %d", rec.Code)
 	}
+	// The grant signs in once: a second exchange, even in its minute, is refused.
+	if rec := e.do("POST", wsHost, AuthPath, strings.NewReader(form), map[string]string{
+		anon: "1", "Origin": "http://" + wsHost, "Content-Type": "application/x-www-form-urlencoded",
+	}); rec.Code != http.StatusUnauthorized || len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("second exchange: got %d with cookies %v", rec.Code, rec.Result().Cookies())
+	}
 	e.proxy.now = func() time.Time { return time.Now().Add(GrantTTL + time.Second) }
 	if rec := e.do("POST", wsHost, AuthPath, strings.NewReader(form), map[string]string{
 		anon: "1", "Content-Type": "application/x-www-form-urlencoded",

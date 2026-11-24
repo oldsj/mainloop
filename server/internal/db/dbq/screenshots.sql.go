@@ -15,7 +15,7 @@ SELECT $1::text || ':' || s.id, $2::text, NULL, s.media_type, s.data, s.size_byt
 FROM task_reports r
 CROSS JOIN LATERAL unnest(r.screenshot_ids) AS u(id)
 JOIN preview_screenshots s ON s.id = u.id
-WHERE r.id = ANY($3::text[])
+WHERE r.id = ANY($3::text[]) AND s.data IS NOT NULL
 ON CONFLICT (id) DO NOTHING
 `
 
@@ -55,23 +55,54 @@ func (q *Queries) CountAttemptScreenshots(ctx context.Context, arg CountAttemptS
 	return count, err
 }
 
-const countRecentPreviewScreenshots = `-- name: CountRecentPreviewScreenshots :one
+const countRecentScreenshotAttempts = `-- name: CountRecentScreenshotAttempts :one
 
-SELECT count(*) FROM preview_screenshots
+SELECT coalesce(sum(captures), 0)::integer FROM preview_screenshot_attempts
 WHERE session_id = $1 AND created_at > now() - interval '1 minute'
 `
 
 // Preview screenshots (docs/specs/workspaces.md "Preview screenshots").
-// A session's captures in the last minute, for the per-session rate limit.
-func (q *Queries) CountRecentPreviewScreenshots(ctx context.Context, sessionID string) (int64, error) {
-	row := q.db.QueryRow(ctx, countRecentPreviewScreenshots, sessionID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+// The captures a session tried in the last minute, stored or not, for the per-session rate limit.
+func (q *Queries) CountRecentScreenshotAttempts(ctx context.Context, sessionID string) (int32, error) {
+	row := q.db.QueryRow(ctx, countRecentScreenshotAttempts, sessionID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const expireScreenshotImages = `-- name: ExpireScreenshotImages :execrows
+UPDATE preview_screenshots s SET data = NULL, expired_at = now()
+WHERE s.expired_at IS NULL AND (
+    s.created_at < now() - make_interval(secs => $1::float8)
+    OR s.id IN (
+        SELECT k.id FROM (
+            SELECT u.id, row_number() OVER (PARTITION BY u.session_id ORDER BY u.created_at DESC, u.id) AS n
+            FROM preview_screenshots u
+            WHERE u.expired_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM task_reports r WHERE u.id = ANY(r.screenshot_ids))
+        ) k
+        WHERE k.n > $2::integer
+    )
+)
+`
+
+type ExpireScreenshotImagesParams struct {
+	MaxAgeSeconds float64
+	Keep          int32
+}
+
+// Drops the image of every screenshot older than max_age, and of a workspace's screenshots that no
+// report names beyond its newest keep; the row stays. A report's screenshots expire by age only.
+func (q *Queries) ExpireScreenshotImages(ctx context.Context, arg ExpireScreenshotImagesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, expireScreenshotImages, arg.MaxAgeSeconds, arg.Keep)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getTaskReportScreenshot = `-- name: GetTaskReportScreenshot :one
-SELECT s.id, s.owner_id, s.session_id, s.request_id, s.port, s.path, s.viewport, s.full_page, s.media_type, s.width, s.height, s.page_status, s.data, s.size_bytes, s.created_at FROM preview_screenshots s
+SELECT s.id, s.owner_id, s.session_id, s.request_id, s.port, s.path, s.viewport, s.full_page, s.media_type, s.width, s.height, s.page_status, s.data, s.size_bytes, s.created_at, s.expired_at FROM preview_screenshots s
 WHERE s.id = $1::text AND s.owner_id = $2::text
   AND EXISTS (
     SELECT 1 FROM task_reports r JOIN tasks t ON t.id = r.task_id
@@ -106,6 +137,7 @@ func (q *Queries) GetTaskReportScreenshot(ctx context.Context, arg GetTaskReport
 		&i.Data,
 		&i.SizeBytes,
 		&i.CreatedAt,
+		&i.ExpiredAt,
 	)
 	return i, err
 }
@@ -155,8 +187,53 @@ func (q *Queries) InsertPreviewScreenshot(ctx context.Context, arg InsertPreview
 	return err
 }
 
+const insertScreenshotAttempt = `-- name: InsertScreenshotAttempt :exec
+INSERT INTO preview_screenshot_attempts (session_id, captures) VALUES ($1, $2)
+`
+
+type InsertScreenshotAttemptParams struct {
+	SessionID string
+	Captures  int32
+}
+
+func (q *Queries) InsertScreenshotAttempt(ctx context.Context, arg InsertScreenshotAttemptParams) error {
+	_, err := q.db.Exec(ctx, insertScreenshotAttempt, arg.SessionID, arg.Captures)
+	return err
+}
+
+const listMessageImageIDs = `-- name: ListMessageImageIDs :many
+SELECT id FROM message_images WHERE session_id = $1::text AND id = ANY($2::text[])
+`
+
+type ListMessageImageIDsParams struct {
+	SessionID string
+	Ids       []string
+}
+
+// Which of ids a session holds as chat images: the report screenshots that were copied (an expired
+// one is not).
+func (q *Queries) ListMessageImageIDs(ctx context.Context, arg ListMessageImageIDsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listMessageImageIDs, arg.SessionID, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPreviewScreenshotsByRequest = `-- name: ListPreviewScreenshotsByRequest :many
-SELECT id, owner_id, session_id, request_id, port, path, viewport, full_page, media_type, width, height, page_status, data, size_bytes, created_at FROM preview_screenshots
+SELECT id, owner_id, session_id, request_id, port, path, viewport, full_page, media_type, width, height, page_status, data, size_bytes, created_at, expired_at FROM preview_screenshots
 WHERE session_id = $1 AND request_id = $2
 ORDER BY viewport
 `
@@ -192,6 +269,7 @@ func (q *Queries) ListPreviewScreenshotsByRequest(ctx context.Context, arg ListP
 			&i.Data,
 			&i.SizeBytes,
 			&i.CreatedAt,
+			&i.ExpiredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -201,4 +279,17 @@ func (q *Queries) ListPreviewScreenshotsByRequest(ctx context.Context, arg ListP
 		return nil, err
 	}
 	return items, nil
+}
+
+const pruneScreenshotAttempts = `-- name: PruneScreenshotAttempts :execrows
+DELETE FROM preview_screenshot_attempts WHERE created_at < now() - interval '1 hour'
+`
+
+// Attempts older than the limit's window count for nothing.
+func (q *Queries) PruneScreenshotAttempts(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneScreenshotAttempts)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

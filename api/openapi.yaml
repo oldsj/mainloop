@@ -12837,7 +12837,13 @@ components:
         data:
           type: string
           format: byte
-          description: Base64-encoded image bytes.
+          description: Base64-encoded image bytes. Absent once the image has expired.
+        expired_at:
+          type: string
+          format: date-time
+          description: >-
+            When the image was dropped: after 7 days, or when the workspace held 50 newer screenshots
+            that no report names. The rest of the screenshot stays.
         viewport:
           type: string
           enum:
@@ -12859,7 +12865,6 @@ components:
       required:
         - id
         - media_type
-        - data
         - viewport
         - port
         - path

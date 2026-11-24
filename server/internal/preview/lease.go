@@ -24,6 +24,10 @@ const (
 // Register adds the keep-awake sweep to the runner.
 func (p *Proxy) Register(r *reconcile.Runner) {
 	r.AddSweep(reconcile.Sweep{Name: "preview-keep-awake", Every: keepAwakeEvery, Run: p.KeepAwake})
+	r.AddSweep(reconcile.Sweep{Name: "preview-grant-uses", Every: 10 * time.Minute, Run: func(ctx context.Context) error {
+		_, err := dbq.New(p.Pool).PruneUsedPreviewGrants(ctx)
+		return err
+	}})
 }
 
 // KeepAwake counts every workspace with an unexpired lease as active, which defers the idle

@@ -39,3 +39,11 @@ SELECT DISTINCT workspace_id FROM preview_leases WHERE expires_at > now();
 
 -- name: PruneExpiredPreviewLeases :execrows
 DELETE FROM preview_leases WHERE expires_at < now() - make_interval(secs => sqlc.arg(keep_seconds)::float8);
+
+-- name: UsePreviewGrant :execrows
+-- Records a grant's exchange; no row when it was exchanged before.
+INSERT INTO preview_grant_uses (nonce, expires_at) VALUES ($1, $2) ON CONFLICT (nonce) DO NOTHING;
+
+-- name: PruneUsedPreviewGrants :execrows
+-- A used grant past its expiry is refused for that reason alone.
+DELETE FROM preview_grant_uses WHERE expires_at < now();

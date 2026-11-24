@@ -334,10 +334,25 @@ full_page=false)` opens `<port>--<own workspace>--preview.<domain><path>` in a d
   captures. The DevTools protocol has no authentication, so the chart's NetworkPolicy admits only
   the backend to the browser, and lets the browser reach only DNS and the preview gateway
   (`screenshots.previewEgress` on `screenshots.previewEgressPorts`, the gateway pods' own port).
+- **Held to the preview host.** The gateway also serves other hostnames, so the page may reach
+  nothing but its own preview origin. The tab fails every request to another origin (an image, a
+  fetch, a redirect, a navigation), and the browser context sends every other host, loopback
+  included, to a proxy that does not exist, which also stops WebSockets and workers. A page whose
+  main document is not on the preview origin before and after the capture (a redirect, or a script
+  that navigates away) is refused as `left_preview` and nothing is stored. Assets from other hosts
+  (a CDN font or script) do not load in a screenshot.
 - **Retries and limits.** `request_id` makes a call idempotent: the same request returns the stored
   images (`replayed: true`) without opening the browser again, and the same id for another page or
-  size is `request_conflict`. Each workspace may take `MAINLOOP_SCREENSHOTS_PER_MINUTE` (10)
-  captures a minute; more are `rate_limited`.
+  size is `request_conflict`. Each workspace may try `MAINLOOP_SCREENSHOTS_PER_MINUTE` (10)
+  captures a minute, counted per viewport whether the capture succeeded or not; more are
+  `rate_limited`. One call per workspace runs at a time (another meanwhile is `busy`), and the
+  shared browser runs at most two captures at once; a call that waits more than 30 s for room is
+  `busy`.
+- **Retention.** A screenshot's image is dropped after 7 days, and a workspace keeps the images of
+  at most 50 screenshots that no report names (its oldest go first); a reported one expires by age
+  only. The row stays: a replay lists it with `expired: true` and no image, and the task page shows
+  it as expired with its viewport, port and path (`GET /tasks/{id}/screenshots/{id}` answers
+  `expired_at` and no `data`).
 - **Showing the owner.** Each image is stored with its workspace (deleted with it) and returned
   to the agent with its `screenshot_id`. The agent shows the owner by naming up to 8 ids in a
   task `report` (`screenshot_ids`, [delegation](delegation.md)); a report may name only screenshots
@@ -449,7 +464,8 @@ preview host serves nothing without a **preview cookie**, a credential for that 
   so it also needs `X-Mainloop-Client`, which a preview page cannot send to the API. The workspace
   must be the owner's with a live Session (else `404`) and the port declared (else `422`); `path`
   must start with a single `/` (else `422`). Nothing is woken or touched.
-- The grant is good for 60 seconds and for one preview host (workspace and port). The API returns
+- The grant is good for 60 seconds, for one preview host (workspace and port), and for one
+  exchange: its nonce is recorded when it is exchanged, and a second exchange is `401`. The API returns
   `<preview origin>/__mainloop/preview-auth#t=<grant>&next=<path>`, and the app opens it with
   `location.replace`. The grant rides in the **fragment**, which the browser never sends to a server,
   so no grant lands in an access log or a `Referer`.

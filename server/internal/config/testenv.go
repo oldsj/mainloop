@@ -9,3 +9,6 @@ func TestDatabaseURL() string { return os.Getenv("MAINLOOP_TEST_DATABASE_URL") }
 // RequireTestDatabase reports whether a missing test database is a failure instead of a skip.
 // CI sets CI=true and always provides the database.
 func RequireTestDatabase() bool { return os.Getenv("CI") == "true" }
+
+// TestChrome names the Chrome binary the screenshot fence tests drive; empty lets them look for one.
+func TestChrome() string { return os.Getenv("MAINLOOP_TEST_CHROME") }
