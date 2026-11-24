@@ -1,0 +1,82 @@
+# Generate Mainloop.xcodeproj with:  xcodegen generate   (run in ios/)
+# The generated project is gitignored; this file is the source of truth.
+name: Mainloop
+options:
+  deploymentTarget:
+    iOS: '27.1'
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+configFiles:
+  Debug: Config/Mainloop.xcconfig
+  Release: Config/Mainloop.xcconfig
+packages:
+  MainloopKit:
+    path: Packages/MainloopKit
+settings:
+  base:
+    SWIFT_VERSION: '6.0'
+    SWIFT_STRICT_CONCURRENCY: complete
+    # iPhone only. iPhone Duo is the target device (outer and inner screens).
+    TARGETED_DEVICE_FAMILY: '1'
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: '1'
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+
+targets:
+  Mainloop:
+    type: application
+    platform: iOS
+    sources:
+      - App
+    dependencies:
+      - package: MainloopKit
+        product: MainloopCore
+      - package: MainloopKit
+        product: MainloopAPI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(MAINLOOP_BUNDLE_ID)
+        PRODUCT_NAME: Mainloop
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Mainloop
+        # HTTPS only (exempt): no export-compliance question per TestFlight build.
+        ITSAppUsesNonExemptEncryption: false
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        # The outer screen rotates; the inner screen ignores this list (iPhone Duo).
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # The one origin the app talks to. A placeholder origin means sample data.
+        MainloopOrigin: $(MAINLOOP_ORIGIN)
+
+  MainloopTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+    dependencies:
+      - target: Mainloop
+      - package: MainloopKit
+        product: MainloopCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(MAINLOOP_BUNDLE_ID).tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Mainloop.app/Mainloop
+        BUNDLE_LOADER: $(TEST_HOST)
+
+schemes:
+  Mainloop:
+    build:
+      targets:
+        Mainloop: all
+    test:
+      targets:
+        - MainloopTests
