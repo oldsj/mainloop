@@ -177,6 +177,13 @@ type Service struct {
 	Cluster string
 	// Kubectl runs command.kubectl as AccountAdmin; nil without it.
 	Kubectl Kubectl
+	// OmniOn, in serve-api, accepts command.omnictl and command.talosctl: the executor has Omni
+	// access.
+	OmniOn bool
+	// Sidero runs omnictl and talosctl through Omni; nil without Omni access.
+	Sidero Sidero
+	// OmniClusters are the clusters command.talosctl may act on.
+	OmniClusters []string
 }
 
 func (s *Service) now() time.Time {
@@ -206,6 +213,8 @@ func (s *Service) Request(ctx context.Context, by Requester, typ string, rawArgs
 		return Action{}, fmt.Errorf("%w: %s needs Mainloop's executor, which this Mainloop does not run", ErrUnsupported, typ)
 	case entry.kube && !s.KubernetesOn:
 		return Action{}, fmt.Errorf("%w: %s needs Kubernetes access for Mainloop's executor, which this Mainloop does not have", ErrUnsupported, typ)
+	case entry.omni && !s.OmniOn:
+		return Action{}, fmt.Errorf("%w: %s needs Omni access for Mainloop's executor, which this Mainloop does not have", ErrUnsupported, typ)
 	case !entry.executor && s.GitHub == nil:
 		return Action{}, fmt.Errorf("%w: this Mainloop has no GitHub App", ErrUnsupported)
 	}

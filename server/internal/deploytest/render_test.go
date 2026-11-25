@@ -49,6 +49,11 @@ var installs = map[string]struct {
 		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.kubernetes.enabled=true",
 		"executor.kubernetes.clusterName=internal-01",
 	}},
+	// The same, with omnictl and talosctl on.
+	"production-executor-omni": {"mainloop", "ci/production-values.yaml", []string{
+		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.omni.enabled=true",
+		"executor.omni.endpoint=https://omni.example.com", "executor.omni.clusters={internal-01,lab-02}",
+	}},
 	// Production with Apple push on (docs/specs/push-notifications.md).
 	"production-apns": {"mainloop", "ci/production-values.yaml", []string{
 		"apns.existingSecret=opencozy-apns", "apns.keyFileKey=AuthKey_ABC123DEFG.p8", "apns.topic=org.example.mainloop",
@@ -601,7 +606,7 @@ func TestNoClusterScopedSecretAccess(t *testing.T) {
 }
 
 func TestFeatureFlagsDefaultOff(t *testing.T) {
-	flags := []string{"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_MERGE_TOOLS_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED", "MAINLOOP_OWNER_POLICY_WRITES_ENABLED", "MAINLOOP_PRIVILEGED_ACTIONS_ENABLED", "MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED", "MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED"}
+	flags := []string{"GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED", "MAINLOOP_MERGE_TOOLS_ENABLED", "MAINLOOP_OWNER_HITL_WRITES_ENABLED", "MAINLOOP_OWNER_POLICY_WRITES_ENABLED", "MAINLOOP_PRIVILEGED_ACTIONS_ENABLED", "MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED", "MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED", "MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED"}
 	// The live dev instance is a single-owner prototype, so it may turn HITL answers, Git transport
 	// and the push gate on (through its own proxies). Every other install keeps every flag off.
 	allowed := map[string][]string{

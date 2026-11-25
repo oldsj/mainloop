@@ -102,6 +102,22 @@ spec:
             - name: MAINLOOP_EXECUTOR_CLUSTER
               value: {{ .kubernetes.clusterName | quote }}
             {{- end }}
+            {{- if .omni.enabled }}
+            {{- if not (hasPrefix "https://" .omni.endpoint) }}
+            {{- fail "executor.omni.endpoint must be Omni's https URL" }}
+            {{- end }}
+            - name: MAINLOOP_EXECUTOR_OMNI_ENABLED
+              value: "true"
+            - name: MAINLOOP_EXECUTOR_OMNI_ENDPOINT
+              value: {{ .omni.endpoint | quote }}
+            - name: MAINLOOP_EXECUTOR_OMNI_CLUSTERS
+              value: {{ join "," .omni.clusters | quote }}
+            - name: MAINLOOP_EXECUTOR_OMNI_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .omni.keySecret }}
+                  key: service-account-key
+            {{- end }}
             # The root filesystem is read-only; /tmp is the only writable path.
             - name: HOME
               value: /tmp

@@ -268,6 +268,11 @@ func TestKubectlParserIsThePinnedRelease(t *testing.T) {
 	if !strings.Contains(string(df), "\nARG KUBECTL_VERSION="+KubectlVersion+"\n") {
 		t.Errorf("the Dockerfile does not pin kubectl %s", KubectlVersion)
 	}
+	for arg, v := range map[string]string{"OMNICTL_VERSION": OmnictlVersion, "TALOSCTL_VERSION": TalosctlVersion} {
+		if !strings.Contains(string(df), "\nARG "+arg+"="+v+"\n") {
+			t.Errorf("the Dockerfile does not pin %s=%s, the release sideroparse.go's grammar was read from", arg, v)
+		}
+	}
 }
 
 // realKubectl is the pinned kubectl: MAINLOOP_TEST_KUBECTL (CI installs it there), or kubectl on
@@ -315,7 +320,7 @@ func TestRealKubectlNeverHoldsTheToken(t *testing.T) {
 		return true, tr, nil
 	})
 	k := ExecKubectl{Clients: KubeClients{Client: kube, Base: api.config(), Namespace: proxyOwnNS}, Binary: bin, Dir: t.TempDir()}
-	run := func(preflight bool, stdin string, args ...string) KubectlOutput {
+	run := func(preflight bool, stdin string, args ...string) CommandOutput {
 		t.Helper()
 		out, err := k.Run(context.Background(), KubectlRun{Args: args, Stdin: stdin, Timeout: 30 * time.Second, Preflight: preflight})
 		if err != nil || out.TimedOut {

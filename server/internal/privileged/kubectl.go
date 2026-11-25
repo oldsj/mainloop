@@ -30,13 +30,13 @@ const AccountAdmin = "mainloop-executor-admin"
 
 // Bounds of command.kubectl.
 const (
-	MaxArgv              = 64
-	MaxArgvBytes         = 8 << 10
-	MaxStdinBytes        = 64 << 10
-	MaxCommandOutput     = 64 << 10
-	MaxPreflightOutput   = 16 << 10
+	MaxArgv               = 64
+	MaxArgvBytes          = 8 << 10
+	MaxStdinBytes         = 64 << 10
+	MaxCommandOutput      = 64 << 10
+	MaxPreflightOutput    = 16 << 10
 	DefaultCommandTimeout = 60 * time.Second
-	MaxCommandTimeout    = 600 * time.Second
+	MaxCommandTimeout     = 600 * time.Second
 )
 
 // KubectlArgs are command.kubectl's arguments. Argv starts with "kubectl" and runs as is, without a
@@ -54,7 +54,6 @@ func (a KubectlArgs) timeout() time.Duration {
 	}
 	return time.Duration(a.TimeoutSeconds) * time.Second
 }
-
 
 func normalizeKubectl(raw json.RawMessage) (any, error) {
 	var a KubectlArgs
@@ -185,9 +184,9 @@ type KubectlRun struct {
 	Preflight bool
 }
 
-// KubectlOutput is what one invocation printed. Credentials are the exact values the run held
+// CommandOutput is what one command printed. Credentials are the exact values the run held
 // (its token), to remove from anything kept.
-type KubectlOutput struct {
+type CommandOutput struct {
 	ExitCode    int
 	Stdout      []byte
 	Stderr      []byte
@@ -197,7 +196,7 @@ type KubectlOutput struct {
 
 // Kubectl runs the kubectl binary as AccountAdmin.
 type Kubectl interface {
-	Run(ctx context.Context, run KubectlRun) (KubectlOutput, error)
+	Run(ctx context.Context, run KubectlRun) (CommandOutput, error)
 }
 
 func preflightKubectl(ctx context.Context, s *Service, raw json.RawMessage, now time.Time) (any, error) {
@@ -528,9 +527,9 @@ func renderKubectl(r dbq.PrivilegedAction, ctx map[string]any) (string, string, 
 	return title, b.String(), ctx, nil
 }
 
-// KubectlResult is command.kubectl's result: what kubectl printed, without the credential it held,
-// through the session redactor and bounded.
-type KubectlResult struct {
+// CommandResult is a command's result: what it printed, without the credentials it held, through
+// the session redactor and bounded.
+type CommandResult struct {
 	ExitCode int    `json:"exit_code"`
 	Stdout   string `json:"stdout,omitempty"`
 	Stderr   string `json:"stderr,omitempty"`
@@ -550,12 +549,8 @@ func (r *Runner) kubectl(ctx context.Context, row dbq.PrivilegedAction) outcome 
 	if r.Kube == nil || r.Kubectl == nil {
 		return outcome{state: StateFailed, err: "this executor cannot run kubectl"}
 	}
-	evs, err := dbq.New(r.Pool).ListPrivilegedActionEvents(ctx, row.ID)
-	if err != nil {
-		return retry(err)
-	}
-	if slices.ContainsFunc(evs, func(e dbq.PrivilegedActionEvent) bool { return e.Step == stepStarted }) {
-		return outcome{state: StateUncertain, err: "an earlier attempt started the command and its outcome was lost; it is not run again"}
+	if done, out := r.startedBefore(ctx, row); done {
+		return out
 	}
 	now, err := r.kubectlPreview(ctx, a)
 	var refused *refusal
@@ -577,7 +572,26 @@ func (r *Runner) kubectl(ctx context.Context, row dbq.PrivilegedAction) outcome 
 	if err != nil {
 		return outcome{state: StateUncertain, err: "kubectl could not be run to the end: " + safeError(err)}
 	}
-	res := KubectlResult{ExitCode: out.ExitCode}
+	return commandOutcome("kubectl", out, a.timeout())
+}
+
+// startedBefore ends an attempt that finds an earlier one started the command: it is never run
+// twice.
+func (r *Runner) startedBefore(ctx context.Context, row dbq.PrivilegedAction) (bool, outcome) {
+	evs, err := dbq.New(r.Pool).ListPrivilegedActionEvents(ctx, row.ID)
+	if err != nil {
+		return true, retry(err)
+	}
+	if slices.ContainsFunc(evs, func(e dbq.PrivilegedActionEvent) bool { return e.Step == stepStarted }) {
+		return true, outcome{state: StateUncertain, err: "an earlier attempt started the command and its outcome was lost; it is not run again"}
+	}
+	return false, outcome{}
+}
+
+// commandOutcome is a command's outcome from what it printed, without the credentials it held,
+// through the session redactor and bounded.
+func commandOutcome(tool string, out CommandOutput, timeout time.Duration) outcome {
+	res := CommandResult{ExitCode: out.ExitCode}
 	stdout := cleanOutput(out.Stdout, out.Credentials)
 	stderr := cleanOutput(out.Stderr, out.Credentials)
 	res.Stdout = boundText(stdout, MaxCommandOutput)
@@ -588,9 +602,9 @@ func (r *Runner) kubectl(ctx context.Context, row dbq.PrivilegedAction) outcome 
 	}
 	switch {
 	case out.TimedOut:
-		return outcome{state: StateUncertain, result: res, err: fmt.Sprintf("kubectl ran past its %s and was stopped; what it changed is unknown", a.timeout())}
+		return outcome{state: StateUncertain, result: res, err: fmt.Sprintf("%s ran past its %s and was stopped; what it changed is unknown", tool, timeout)}
 	case out.ExitCode != 0:
-		return outcome{state: StateFailed, result: res, err: fmt.Sprintf("kubectl exited %d", out.ExitCode)}
+		return outcome{state: StateFailed, result: res, err: fmt.Sprintf("%s exited %d", tool, out.ExitCode)}
 	}
 	return outcome{state: StateSucceeded, result: res}
 }

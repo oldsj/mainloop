@@ -112,6 +112,8 @@ func render(r dbq.PrivilegedAction) (string, string, map[string]any, error) {
 		return renderArgoSync(r, ctx)
 	case TypeKubectl:
 		return renderKubectl(r, ctx)
+	case TypeOmnictl, TypeTalosctl:
+		return renderSidero(r, ctx)
 	}
 	return "", "", nil, fmt.Errorf("privileged: no card for type %q", r.Type)
 }

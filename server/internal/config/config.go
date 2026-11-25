@@ -65,6 +65,9 @@ type Config struct {
 	// PrivilegedKubernetesEnabled says that executor may mint Kubernetes credentials, so the k8s.*
 	// types are accepted.
 	PrivilegedKubernetesEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED"`
+	// PrivilegedOmniEnabled accepts command.omnictl and command.talosctl: the executor has Omni
+	// access (executor.omni in the chart).
+	PrivilegedOmniEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED"`
 
 	// WebFetchPerMinute bounds the open-web web_fetch tool's fetches per owner per minute, and
 	// WebFetchDenyCIDRs adds comma-separated ranges it never connects to, beyond the built-in

@@ -80,7 +80,7 @@ func TestExecKubectlRunsWithAKubeconfigWithoutTheToken(t *testing.T) {
 	if len(out.Credentials) != 2 || out.Credentials[0] != executorToken || len(out.Credentials[1]) != 64 {
 		t.Errorf("credentials = %v", out.Credentials)
 	}
-	if *ttl < int64((20*time.Second + 2*time.Minute).Seconds()) || *ttl < 600 {
+	if *ttl < int64((20*time.Second+2*time.Minute).Seconds()) || *ttl < 600 {
 		t.Errorf("token ttl = %d", *ttl)
 	}
 	if left, _ := os.ReadDir(runs); len(left) != 0 {
