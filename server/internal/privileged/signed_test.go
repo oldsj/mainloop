@@ -430,3 +430,35 @@ func TestAPhoneApprovesAMergeWithItsSignature(t *testing.T) {
 		t.Fatalf("after the phone's approval: %+v (%v)", got, deref(got.LastError))
 	}
 }
+
+// Given an approved action whose stored arguments carry the target under a second key in another
+// letter case, digest recomputed to match (what a compromised serve-api could write), then the
+// executor refuses it before any read: Go would run one of the two values, and which one isn't
+// what a reader of the record would assume.
+func TestTheExecutorRunsOnlyExactRows(t *testing.T) {
+	e := newExecEnv(t)
+	e.inbox.Approvals = checker(nil)
+	a := e.pendingCopy(t, "copy-1", "widgets-db")
+	e.exec(t, `ALTER TABLE privileged_actions DISABLE TRIGGER USER`)
+	t.Cleanup(func() { e.exec(t, `ALTER TABLE privileged_actions ENABLE TRIGGER USER`) })
+	e.exec(t, `UPDATE privileged_actions SET args = args || '{"Secret": "other-secret"}'::jsonb WHERE id = $1`, a.ID)
+	row, err := dbq.New(e.db.Pool).GetPrivilegedAction(context.Background(), dbq.GetPrivilegedActionParams{OwnerID: owner, ID: a.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := privileged.Digest(row, row.FrozenFacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.exec(t, `UPDATE privileged_actions SET digest = $2 WHERE id = $1`, a.ID, d)
+	e.answer(t, a, privileged.AnswerApprove, map[string]any{"reviewed_context": d})
+	e.run(t)
+	if got := e.get(t, a.ID); got.State != privileged.StateApproved {
+		t.Fatalf("not approved: %+v", got)
+	}
+	e.runExecutor(t)
+	got := e.get(t, a.ID)
+	if got.State != privileged.StateFailed || !strings.Contains(deref(got.LastError), "not exactly what its type reads") || e.op.Reads != 0 {
+		t.Fatalf("state %s, error %q, reads %d", got.State, deref(got.LastError), e.op.Reads)
+	}
+}

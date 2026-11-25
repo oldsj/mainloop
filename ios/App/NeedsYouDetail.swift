@@ -155,8 +155,54 @@ private struct FieldRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(field.label).font(.caption).foregroundStyle(.secondary)
-            Text(field.value).font(.callout.monospaced()).textSelection(.enabled)
+            switch field.kind {
+            case .text, .command:
+                Text(field.value).font(.callout.monospaced()).textSelection(.enabled)
+            case .lines:
+                ScrollView(.horizontal) {
+                    Text(field.value).font(.caption.monospaced()).fixedSize().textSelection(.enabled)
+                }
+            case .diff:
+                ScrollView(.horizontal) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(field.value.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
+                            DiffLine(line: String(line))
+                        }
+                    }
+                    .fixedSize()
+                    .textSelection(.enabled)
+                }
+            }
         }
+    }
+}
+
+/// One line of a unified diff: added lines green, removed red, hunk headers secondary.
+private struct DiffLine: View {
+    let line: String
+
+    var body: some View {
+        Text(line.isEmpty ? " " : line)
+            .font(.caption.monospaced())
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(background)
+    }
+
+    private var isHeader: Bool { line.hasPrefix("+++") || line.hasPrefix("---") || line.hasPrefix("@@") }
+
+    private var color: Color {
+        if isHeader { return .secondary }
+        if line.hasPrefix("+") { return .green }
+        if line.hasPrefix("-") { return .red }
+        return .primary
+    }
+
+    private var background: Color {
+        if isHeader { return .clear }
+        if line.hasPrefix("+") { return .green.opacity(0.12) }
+        if line.hasPrefix("-") { return .red.opacity(0.12) }
+        return .clear
     }
 }
 

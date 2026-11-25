@@ -11,8 +11,26 @@ import Foundation
 public struct ActionRecord: Hashable, Sendable {
     /// One labelled value on the sheet.
     public struct Field: Hashable, Sendable {
+        public enum Kind: Hashable, Sendable {
+            /// A short value, or indented JSON.
+            case text
+            /// A list of words, such as an argv, quoted as one would type it.
+            case command
+            /// A unified diff, shown line by line.
+            case diff
+            /// Text of several lines, shown as is.
+            case lines
+        }
+
         public let label: String
         public let value: String
+        public let kind: Kind
+
+        public init(label: String, value: String, kind: Kind = .text) {
+            self.label = label
+            self.value = value
+            self.kind = kind
+        }
     }
 
     public let actionID: String
@@ -58,35 +76,91 @@ public struct ActionRecord: Hashable, Sendable {
         )
     }
 
+    /// One field per key, in key order. A string of several lines nested in a value, such as a
+    /// diff in `changes[0].diff`, gets a field of its own right after it, and the value's JSON
+    /// says where it went.
     static func fields(_ object: [String: Any]) -> [Field] {
-        object.keys.sorted().map { key in Field(label: visible(key), value: display(object[key] as Any)) }
+        var out: [Field] = []
+        for key in object.keys.sorted() {
+            let value = object[key] as Any
+            if let text = value as? String, text.contains("\n") {
+                out.append(Field(label: visible(key), value: visible(text), kind: kind(of: text, key: key)))
+                continue
+            }
+            var moved: [Field] = []
+            let token = UUID().uuidString
+            let kept = extract(value, path: visible(key), key: key, token: token, into: &moved)
+            var (text, kind) = display(kept)
+            for (i, m) in moved.enumerated() {
+                text = text.replacingOccurrences(of: "\(token)#\(i)#", with: "⟨below: \(m.label)⟩")
+            }
+            out.append(Field(label: visible(key), value: text, kind: kind))
+            out += moved
+        }
+        return out
     }
 
-    /// A value as the sheet shows it: a string as is, a list of strings (an argv) joined by
-    /// spaces, anything else as indented JSON. Always through `visible`.
-    static func display(_ value: Any) -> String {
+    /// `value` with every string of several lines replaced by a placeholder (`token`#n#), which the
+    /// record's own text can't contain, and those strings appended to `moved`.
+    static func extract(_ value: Any, path: String, key: String, token: String, into moved: inout [Field]) -> Any {
         switch value {
-        case let string as String: return visible(string)
+        case let text as String where text.contains("\n"):
+            moved.append(Field(label: path, value: visible(text), kind: kind(of: text, key: key)))
+            return "\(token)#\(moved.count - 1)#"
+        case let object as [String: Any]:
+            var out: [String: Any] = [:]
+            for (k, v) in object {
+                out[k] = extract(v, path: path + "." + visible(k), key: k, token: token, into: &moved)
+            }
+            return out
+        case let list as [Any]:
+            return list.enumerated().map { i, v in extract(v, path: path + "[\(i)]", key: key, token: token, into: &moved) }
+        default:
+            return value
+        }
+    }
+
+    static func kind(of text: String, key: String) -> Field.Kind {
+        key == "diff" || text.hasPrefix("--- ") || text.hasPrefix("diff ") || text.contains("\n@@ ") ? .diff : .lines
+    }
+
+    /// A value as the sheet shows it: a string as is, a list of strings (an argv) quoted as one
+    /// would type it, anything else as indented JSON. Always through `visible`.
+    static func display(_ value: Any) -> (value: String, kind: Field.Kind) {
+        switch value {
+        case let string as String: return (visible(string), .text)
         case let list as [Any] where !list.isEmpty && list.allSatisfy({ $0 is String }):
-            return visible((list as? [String] ?? []).joined(separator: " "))
-        case is NSNull: return "null"
+            return (visible(shellQuote(list.compactMap { $0 as? String })), .command)
+        case is NSNull: return ("null", .text)
         default:
             let options: JSONSerialization.WritingOptions = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed]
-            guard let data = try? JSONSerialization.data(withJSONObject: value, options: options) else { return "?" }
-            return visible(String(decoding: data, as: UTF8.self))
+            guard let data = try? JSONSerialization.data(withJSONObject: value, options: options) else { return ("?", .text) }
+            return (visible(String(decoding: data, as: UTF8.self)), .text)
         }
+    }
+
+    static let shellSafe = Set("-_./:=,@abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+
+    /// Words as one would type them, the server's rule (privileged.shellQuote, the web card's): a
+    /// word of safe characters as is, any other in single quotes, a quote inside as '\''.
+    public static func shellQuote(_ words: [String]) -> String {
+        words.map { word in
+            if !word.isEmpty, word.allSatisfy({ shellSafe.contains($0) }) { return word }
+            return "'" + word.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
+        }.joined(separator: " ")
     }
 
     /// Text with every character that could hide or reorder what is shown made visible as
     /// ⟨U+XXXX⟩: control characters but newline and tab, format characters such as bidi overrides
-    /// and zero-width joiners, and line and paragraph separators.
+    /// and zero-width joiners, line and paragraph separators, and ⟨ itself.
     public static func visible(_ text: String) -> String {
         var out = ""
         for scalar in text.unicodeScalars {
             let hidden: Bool = switch scalar.properties.generalCategory {
             case .control: scalar != "\n" && scalar != "\t"
             case .format, .lineSeparator, .paragraphSeparator, .unassigned, .privateUse, .surrogate: true
-            default: false
+            // The sheet's own markers start with ⟨, so the record's text can't imitate one.
+            default: scalar == "⟨"
             }
             if hidden {
                 out += String(format: "⟨U+%04X⟩", scalar.value)
