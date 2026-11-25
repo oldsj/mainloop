@@ -1,6 +1,7 @@
 import { Info } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { SessionBar } from '@/components/shared/session-bar';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import { LogoMark } from '@/shell/LogoMark';
 import { barStatus, threadWords, type LiveStatus } from '@/lib/barStatus';
@@ -161,13 +162,14 @@ export function MainThreadHeader({
       lead={
         <>
           {pending > 0 ? (
-            <>
+            // A fact keeps its separator: a wrapped row never ends on a lone dot.
+            <span className="gap-sm inline-flex items-center whitespace-nowrap">
               <span aria-hidden="true">·</span>
               <span data-testid="mt-pending">{pending} pending</span>
-            </>
+            </span>
           ) : null}
           {loops && loops.live > 0 ? (
-            <>
+            <span className="gap-sm inline-flex items-center whitespace-nowrap">
               <span aria-hidden="true">·</span>
               <button
                 type="button"
@@ -179,22 +181,22 @@ export function MainThreadHeader({
               >
                 {loops.live === 1 ? '1 loop' : `${loops.live} loops`}
               </button>
-            </>
+            </span>
           ) : null}
         </>
       }
       trail={
         <>
           {onStop && native?.turn_in_flight ? (
-            <button
-              type="button"
-              className="border-border-subtle text-foreground hover:text-term-red px-md min-h-control border disabled:opacity-50"
+            <Button
+              variant="outline"
+              size="sm"
               disabled={stopping || offline}
               onClick={onStop}
               data-testid="mt-stop-turn"
             >
-              {stopping ? 'stopping…' : 'stop'}
-            </button>
+              {stopping ? 'Stopping…' : 'Stop'}
+            </Button>
           ) : null}
           {live?.controls}
           <button

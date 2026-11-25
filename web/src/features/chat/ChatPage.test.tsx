@@ -1585,13 +1585,13 @@ describe('the main lock while a send, a stop or a load is in flight', () => {
     const release = hold('stop-turn');
     await userEvent.click(await screen.findByTestId('mt-stop-turn'));
     await waitFor(() => expect(state.stopped).toEqual([MAIN_SESSION_ID]));
-    expect(screen.getByTestId('mt-stop-turn')).toHaveTextContent('stopping…');
+    expect(screen.getByTestId('mt-stop-turn')).toHaveTextContent('Stopping…');
     expect(await providerChoice()).toBeDisabled();
     expect(input()).toBeEnabled();
 
     release();
     await waitFor(() =>
-      expect(screen.getByTestId('mt-stop-turn')).not.toHaveTextContent('stopping…')
+      expect(screen.getByTestId('mt-stop-turn')).not.toHaveTextContent('Stopping…')
     );
     expect(await providerChoice()).toBeDisabled();
     endTurn();

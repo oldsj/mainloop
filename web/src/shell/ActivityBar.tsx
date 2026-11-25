@@ -1,5 +1,5 @@
 import { Link, useRouterState } from '@tanstack/react-router';
-import { Activity, Inbox, ListTree, Search, Settings } from 'lucide-react';
+import { Activity, Inbox, PanelLeft, Search, Settings } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '@/components/ui/cn';
 import { badgeText } from '@/features/inbox/model';
@@ -7,10 +7,12 @@ import { shortcutLabel, sidebarShortcutLabel } from '@/lib/platform';
 import { LogoMark } from './LogoMark';
 import { ThemeSelector } from './ThemeSelector';
 
-/** One square item: 36 px, filled while it is the thing showing. */
+/** One square item: 36 px, with a 20 px icon. */
 const ITEM =
-  'text-muted-foreground hover:text-foreground hover:bg-accent relative inline-flex size-9 items-center justify-center [&_svg]:size-4';
-const ITEM_ON = 'bg-accent text-accent-foreground';
+  'text-muted-foreground hover:text-foreground hover:bg-accent relative inline-flex size-9 items-center justify-center [&_svg]:size-5';
+/** While it is the thing showing: filled, with a rule down its left edge, as an editor marks it. */
+const ITEM_ON =
+  'bg-accent text-accent-foreground before:bg-primary before:absolute before:inset-y-1 before:-left-1 before:w-0.5';
 
 export interface ActivityBarProps {
   /** The sidebar (spaces and agents) is hidden. */
@@ -59,7 +61,7 @@ export function ActivityBar({ collapsed, needs, onToggleSidebar, onSearch }: Act
           <span
             aria-hidden="true"
             data-testid="activity-needs"
-            className="bg-destructive text-destructive-foreground text-label absolute top-0 right-0 inline-flex min-w-4 items-center justify-center px-0.5 leading-4 font-semibold tabular-nums"
+            className="bg-status-attention text-background text-label absolute top-0 right-0 inline-flex min-w-4 items-center justify-center px-0.5 leading-4 font-semibold tabular-nums"
           >
             {badgeText(needs)}
           </span>
@@ -74,7 +76,7 @@ export function ActivityBar({ collapsed, needs, onToggleSidebar, onSearch }: Act
         data-testid="activity-sidebar"
         className={cn(ITEM, !collapsed && ITEM_ON)}
       >
-        <ListTree aria-hidden="true" />
+        <PanelLeft aria-hidden="true" />
       </button>
       <button
         type="button"

@@ -14,6 +14,7 @@ import { ControlsHeading, SessionControls } from '@/components/shared/controls-s
 import { DeliveredContext } from '@/components/shared/DeliveredContext';
 import { CONVERSATION } from '@/components/shared/measure';
 import { SessionBar } from '@/components/shared/session-bar';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import { barStatus, type LiveStatus } from '@/lib/barStatus';
 import { splitDelivered } from '@/lib/delivered';
@@ -294,13 +295,9 @@ export function LiveSessionView({
   const bar: LiveBar = {
     status: liveStatus(state, conn, waiting),
     controls: resting ? (
-      <button
-        type="button"
-        onClick={retry}
-        className="border-border-subtle text-foreground hover:bg-accent px-sm min-h-control border"
-      >
+      <Button variant="outline" size="sm" onClick={retry}>
         {conn === 'paused' ? 'Resume' : 'Wake now'}
-      </button>
+      </Button>
     ) : null
   };
 

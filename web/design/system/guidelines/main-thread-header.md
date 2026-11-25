@@ -9,7 +9,7 @@ The one row above the main conversation: who it is (Mainloop's mark and **Mainlo
 ## Tokens
 
 - Surface `bg-card`, rule `border-border-subtle`, text `text-muted-foreground`; the state word is `text-foreground`.
-- State marker, in the status-dot language: working, starting and waking are filled amber (`bg-status-working`, pulsing); needs you and unconfirmed are filled red (`bg-status-attention`); failed, unreachable and unavailable are filled red (`bg-status-failed`); ready, idle, asleep and paused are hollow (`border border-status-idle`); connecting and reconnecting are hollow and pulse. The marker is a square (`rounded-none`).
+- State chip (`SessionState`): on `bg-background`, the status icon (14 px) and the word, capitalised by style (`first-letter:uppercase`, so the word read and tested is the status itself) in `font-medium`. The icon is the sidebar's (`STATUS_ICON`, via `barStatusTone`): an alert for needs you and unconfirmed, a cross for failed, unreachable's struck-through cloud, unavailable's cross; a turning ring in `text-status-working` for working, starting and waking; a moon for asleep, a pause for paused, an empty ring for ready and idle, and a turning ring in the idle colour for connecting and reconnecting. The ring turns slowly, and only with `motion-safe`. The word is in its status colour when it is the owner's turn or a failure, otherwise `text-foreground`.
 
 ## States
 
@@ -17,11 +17,11 @@ There is one status word. In the chat view, most urgent first: **unreachable** (
 
 Under the live view the row is the same one, and the live channel's state joins the thread's in a single order: **unreachable**; **needs you** (a request or permission prompt is waiting); **working** or **starting**; **last message failed**; **last message unconfirmed**; then what the channel is doing: **asleep**, **paused**, **waking…**, **connecting…**, **reconnecting…**, **unavailable**, or **ready** once attached. A sleeping session reads "asleep", never "ready" or "idle" beside it.
 
-- **Wake now / Resume:** in the row while the live view is asleep or paused. There is no banner; the composer's placeholder says a message wakes or resumes the session.
+- **Wake now / Resume:** a small outline button in the row while the live view is asleep or paused. There is no banner; the composer's placeholder says a message wakes or resumes the session.
 - **Provider, model and effort** are not in this row. They are the session controls chip by the composer (see `session-controls.md`).
 
 - **Pending:** shown only when topics are waiting on the owner; the sum across topics.
-- **Stop:** shown only while a turn is in flight. Disabled while the stop request runs ("stopping…") and while offline.
+- **Stop:** shown only while a turn is in flight. A small outline button (`Button variant="outline" size="sm"`), **Stop**; disabled while the stop request runs (**Stopping…**) and while offline.
 - **Session info:** an icon button at the end of the row, labelled "Session info", closed by default; it also holds the provider row unless the provider needs attention (see Provider row). Open shows the identity strip (supplied by the sessions slice) and the topic index, `name (status line) [n pending]`, or "none yet".
 
 ## Provider row

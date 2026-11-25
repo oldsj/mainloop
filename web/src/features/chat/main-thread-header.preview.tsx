@@ -2,6 +2,7 @@ import { deliveryFixture, mainThreadFixture, nativeFixture, providerFixture } fr
 import { MainThreadHeader } from './MainThreadHeader';
 import type { MainProviderControl } from './mainProvider';
 import type { MainProviderInfo, MainThreadInfo } from './types';
+import { Button } from '@/components/ui/button';
 
 const topics = [
   { name: 'build', status_line: 'running', pending: 1 },
@@ -134,12 +135,9 @@ export function LiveAsleepPreview() {
       live={{
         status: 'asleep',
         controls: (
-          <button
-            type="button"
-            className="border-border-subtle text-foreground px-sm min-h-control border"
-          >
+          <Button variant="outline" size="sm">
             Wake now
-          </button>
+          </Button>
         )
       }}
     />

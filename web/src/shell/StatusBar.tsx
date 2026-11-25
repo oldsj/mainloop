@@ -1,4 +1,5 @@
 import { Link } from '@tanstack/react-router';
+import { CircleAlert, LoaderCircle, TriangleAlert } from 'lucide-react';
 import { cn } from '@/components/ui/cn';
 import { signIn } from '@/api/signin';
 import { useConnection, useSignIn } from './ConnectionBanner';
@@ -45,7 +46,7 @@ export function StatusBar({
   const signedOut = useSignIn() === 'expired';
   const offline = signedOut || connection.status === 'offline';
   const item = cn(
-    'inline-flex h-6 items-center whitespace-nowrap hover:underline',
+    'gap-xs inline-flex h-6 items-center whitespace-nowrap hover:underline [&_svg]:size-3.5 [&_svg]:shrink-0',
     offline ? 'text-destructive-foreground' : 'hover:text-foreground'
   );
   return (
@@ -54,7 +55,7 @@ export function StatusBar({
       data-testid="status-bar"
       data-offline={offline ? 'true' : undefined}
       className={cn(
-        'border-border-subtle gap-md px-sm text-label flex h-6 shrink-0 items-center border-t',
+        'border-border-subtle gap-md px-sm text-caption flex h-6 shrink-0 items-center border-t',
         offline ? 'bg-destructive text-destructive-foreground' : 'bg-card text-muted-foreground'
       )}
     >
@@ -62,7 +63,7 @@ export function StatusBar({
         <button
           type="button"
           onClick={() => signIn.signInAgain()}
-          className={cn(item, 'gap-xs min-w-0')}
+          className={cn(item, 'min-w-0')}
           data-testid="status-signin"
         >
           <span aria-hidden="true" className="bg-destructive-foreground size-2 shrink-0" />
@@ -71,7 +72,8 @@ export function StatusBar({
           </span>
         </button>
       ) : (
-        <Link to="/health" className={cn(item, 'gap-xs min-w-0')} data-testid="status-connection">
+        <Link to="/health" className={cn(item, 'min-w-0')} data-testid="status-connection">
+          {/* The connection light: the only green in the status language. */}
           <span
             aria-hidden="true"
             className={cn(
@@ -96,6 +98,10 @@ export function StatusBar({
       {counts === 'ready' ? (
         <>
           <Link to="/inbox" className={item} data-testid="status-needs">
+            <CircleAlert
+              aria-hidden="true"
+              className={cn(needs > 0 && !offline && 'text-status-attention')}
+            />
             {needs > 0 ? plural(needs, 'needs you', 'need you') : 'Nothing needs you'}
           </Link>
           <button
@@ -104,6 +110,10 @@ export function StatusBar({
             className={item}
             data-testid="status-working"
           >
+            <LoaderCircle
+              aria-hidden="true"
+              className={cn(working > 0 && !offline && 'text-status-working')}
+            />
             {working} working
           </button>
           <Link
@@ -112,6 +122,7 @@ export function StatusBar({
             className={item}
             data-testid="status-problems"
           >
+            <TriangleAlert aria-hidden="true" />
             {plural(problems, 'problem', 'problems')}
           </Link>
         </>

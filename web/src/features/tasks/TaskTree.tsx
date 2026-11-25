@@ -1,7 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { SkeletonRows } from '@/components/shared/skeleton';
-import { StatusDot } from '@/components/shared/status-dot';
+import { StatusIcon } from '@/components/shared/status-icon';
 import { statusLine, workGroup } from '@/features/home/model';
 import type { TaskView } from '@/lib/contract';
 import {
@@ -178,10 +178,10 @@ function TaskRow({
             aria-hidden="true"
             data-testid="task-indent-guide"
             className="bg-border absolute inset-y-0 w-px"
-            style={{ left: `${level * INDENT_PX + GUTTER_PX + 4}px` }}
+            style={{ left: `${level * INDENT_PX + GUTTER_PX + 7}px` }}
           />
         ))}
-        <StatusDot tone={rowTone(view)} testId="task-dot" />
+        <StatusIcon tone={rowTone(view)} testId="task-dot" className="size-3.5" />
         <span className="min-w-0 flex-1 basis-1/2 truncate">{view.task.title}</span>
         {/* A narrow screen keeps the status word alone, so the state is never colour only. */}
         <span
