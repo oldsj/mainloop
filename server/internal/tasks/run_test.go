@@ -494,6 +494,7 @@ func newRig(t *testing.T) *rig {
 		MaxChildrenPerParent: 3, MaxChildrenGlobal: 6, ProvisionWindow: 30 * time.Second,
 		Interval: 10 * time.Millisecond, ProjectionEvery: time.Second, SettleIdle: time.Nanosecond,
 		ResolveBackoff: reconcile.Backoff{Base: 20 * time.Millisecond, Max: 20 * time.Millisecond},
+		ResendBackoff:  reconcile.Backoff{Base: 10 * time.Millisecond, Max: 10 * time.Millisecond},
 		StallTimeout:   45 * time.Minute, MaxRuntime: 6 * time.Hour, LoopPoll: 20 * time.Millisecond,
 	}
 	e.svc.Log = slog.Default()

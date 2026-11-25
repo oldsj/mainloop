@@ -98,6 +98,9 @@ type Limits struct {
 	// unsuccessful looks come before the task is blocked for reconciliation. Zero values take defaults.
 	ResolveBackoff reconcile.Backoff
 	ResolveBound   int
+	// ResendBackoff paces the resends of a report the ledger failed as never sent (deliver.go,
+	// maxNotSentSends); a zero value takes the default, 30 seconds doubling to 5 minutes.
+	ResendBackoff reconcile.Backoff
 	// ForceSuspendAfter is how long a requested stop may stay unconfirmed before the observer suspends
 	// the runtime itself, and ForceDeleteAfter how long before it deletes the native session. Both
 	// count from the stop request, not from looks; zero values take the defaults.
