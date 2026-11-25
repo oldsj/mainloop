@@ -213,6 +213,10 @@ type SideroRun struct {
 // Sidero runs omnictl and talosctl with the executor's Omni service account.
 type Sidero interface {
 	Run(ctx context.Context, run SideroRun) (CommandOutput, error)
+	// CheckUpgrade applies the run's upgrade-image check before the card: each node must be a
+	// machine of cluster whose schematic Omni records, and image its installer at a Talos version no
+	// older than it runs. A *refusal says why not.
+	CheckUpgrade(ctx context.Context, cluster string, nodes []string, image string) error
 }
 
 func preflightSidero(tool string) func(ctx context.Context, s *Service, raw json.RawMessage, now time.Time) (any, error) {
@@ -227,12 +231,19 @@ func preflightSidero(tool string) func(ctx context.Context, s *Service, raw json
 		case tool == ToolTalosctl && !slices.Contains(s.OmniClusters, a.Target):
 			return nil, refuse("target %q is not a cluster this executor may act on (%s)", a.Target, strings.Join(s.OmniClusters, ", "))
 		}
+		c, err := parseSidero(tool, a.Argv)
+		if err != nil {
+			return nil, err
+		}
 		if tool == ToolOmnictl {
-			c, err := parseSidero(tool, a.Argv)
-			if err != nil {
+			if err := checkOmniClusters(c, a.Stdin, s.OmniClusters); err != nil {
 				return nil, err
 			}
-			if err := checkOmniClusters(c, a.Stdin, s.OmniClusters); err != nil {
+		}
+		// A doomed upgrade is refused here, not after the owner approves it; the proxy checks again
+		// when it runs.
+		if tool == ToolTalosctl && c.path == "upgrade" {
+			if err := s.Sidero.CheckUpgrade(ctx, a.Target, c.nodes, c.flags["image"]); err != nil {
 				return nil, err
 			}
 		}

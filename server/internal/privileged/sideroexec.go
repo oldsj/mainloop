@@ -14,7 +14,9 @@ import (
 
 	"github.com/siderolabs/go-api-signature/pkg/serviceaccount"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	grpcstatus "google.golang.org/grpc/status"
 	"sigs.k8s.io/yaml"
 )
 
@@ -130,6 +132,30 @@ func (e ExecSidero) Run(ctx context.Context, run SideroRun) (CommandOutput, erro
 	out, err := runBinary(ctx, bin, sideroArgv(run.Argv, stdinFile, run.DryRun), env, dir, "", run.Timeout)
 	out.Credentials = creds
 	return out, err
+}
+
+func (e ExecSidero) CheckUpgrade(ctx context.Context, cluster string, nodes []string, image string) error {
+	if e.Key == nil {
+		return errors.New("the executor has no Omni key")
+	}
+	upstream := e.Upstream
+	if upstream == nil {
+		conn, err := e.dial()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = conn.Close() }()
+		upstream = conn
+	}
+	proxy, err := newSideroProxy(e.Key, upstream, ToolTalosctl, cluster, e.Clusters, true, time.Hour)
+	if err != nil {
+		return err
+	}
+	err = proxy.checkUpgradeImage(ctx, nodes, image)
+	if s, ok := grpcstatus.FromError(err); ok && s.Code() == codes.PermissionDenied {
+		return refuse("%s", s.Message())
+	}
+	return err
 }
 
 // writeTalosconfig writes a talosconfig with one context: the proxy as the endpoint, its

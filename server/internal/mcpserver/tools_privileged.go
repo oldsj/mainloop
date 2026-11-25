@@ -58,7 +58,7 @@ func (s *Server) privilegedTools() []Tool {
 			"as the executor's service account (role Admin). Allowed: omnictl get, cluster status, apply (the card shows " +
 			"its --dry-run diff, run again before it), delete and cluster delete; talosctl version, get, service, logs, etcd " +
 			"members|status|alarm list, containers, stats, memory, processes, mounts, netstat, time, list, and (no preview) reboot, " +
-			"shutdown, reset, upgrade (--wait=false on these four; --image from factory.talos.dev or ghcr.io/siderolabs only; give " +
+			"shutdown, reset, upgrade (--wait=false on these four; --image required, the node's own installer, factory.talos.dev/<platform>-installer/<the schematic ID Omni records for it>:<a version no older than it runs>, a tag and no digest; give " +
 			"an upgrade timeout_seconds for the image's pull and install), " +
 			"rollback, service <id> start|stop|restart, etcd defrag|forfeit-leadership|leave|remove-member|alarm disarm. omnictl " +
 			"delete takes <type> <id>, no selector. Flags are long only, as --name or --name=value; the refusal names the allowed " +
