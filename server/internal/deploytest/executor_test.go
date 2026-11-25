@@ -10,6 +10,7 @@ import (
 
 	admissionv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 
 	"github.com/oldsj/mainloop/server/internal/approval"
@@ -130,6 +131,55 @@ func TestExecutorOmni(t *testing.T) {
 		"--set", "executor.omni.endpoint=http://omni.example.com").CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "executor.omni.endpoint must be Omni's https URL") {
 		t.Errorf("an http endpoint renders: %v\n%s", err, out)
+	}
+}
+
+// With executor.ssh, serve-api accepts command.ssh, and the executor gets the host list and each
+// host's credential Secret, mounted read-only under its own directory; nothing else.
+func TestExecutorSSH(t *testing.T) {
+	if v := render(t, "production-executor").configMaps["mainloop-config"].Data["MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED"]; v != "false" {
+		t.Errorf("command.ssh is on without executor.ssh: %q", v)
+	}
+	r := render(t, "production-executor-ssh")
+	if v := r.configMaps["mainloop-config"].Data["MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED"]; v != "true" {
+		t.Errorf("serve-api's flag = %q", v)
+	}
+	pod := r.deployments["mainloop-executor"].Spec.Template.Spec
+	c := pod.Containers[0]
+	env := envByName(c)
+	if env["MAINLOOP_EXECUTOR_SSH_ENABLED"].Value != "true" || env["MAINLOOP_EXECUTOR_SSH_HOSTS"].Value != "nas-01=192.0.2.20:22,router=192.0.2.1:2222" ||
+		env["MAINLOOP_EXECUTOR_SSH_DIR"].Value != "/etc/mainloop-executor/ssh" {
+		t.Errorf("executor env = %+v", env)
+	}
+	for _, host := range []string{"nas-01", "router"} {
+		mounted := slices.ContainsFunc(c.VolumeMounts, func(m corev1.VolumeMount) bool {
+			return m.Name == "ssh-"+host && m.MountPath == "/etc/mainloop-executor/ssh/"+host && m.ReadOnly
+		})
+		i := slices.IndexFunc(pod.Volumes, func(v corev1.Volume) bool { return v.Name == "ssh-"+host })
+		if !mounted || i < 0 || pod.Volumes[i].Secret == nil || pod.Volumes[i].Secret.SecretName != "mainloop-executor-ssh-"+host ||
+			*pod.Volumes[i].Secret.DefaultMode != 0o440 || len(pod.Volumes[i].Secret.Items) != 3 {
+			t.Errorf("%s: mounts %+v, volumes %+v", host, c.VolumeMounts, pod.Volumes)
+		}
+	}
+	if _, ok := env["MAINLOOP_EXECUTOR_OMNI_ENABLED"]; ok || r.accounts["mainloop-executor-admin"].Name != "" {
+		t.Error("executor.ssh renders Omni or Kubernetes access")
+	}
+
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm is not installed")
+	}
+	for set, want := range map[string]string{
+		"executor.ssh.hosts=null":                                  "executor.ssh.hosts must name a host",
+		"executor.ssh.hosts[0].name=NAS,executor.ssh.hosts[0].address=192.0.2.20:22": `"NAS" is not a DNS label`,
+		"executor.ssh.hosts[0].name=nas":                           "nas has no address",
+	} {
+		out, err := exec.CommandContext(t.Context(), helm, "template", "mainloop", chart, "--namespace", "mainloop",
+			"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true",
+			"--set", "executor.namespace=mainloop-executor", "--set", "executor.ssh.enabled=true", "--set", set).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), want) {
+			t.Errorf("%s renders: %v\n%s", set, err, out)
+		}
 	}
 }
 

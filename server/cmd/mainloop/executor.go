@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"time"
 
@@ -70,9 +71,18 @@ func serveExecutor(ctx context.Context, log *slog.Logger) error {
 	if svc.ApprovalKeys, err = approval.ParsePinned(cfg.ApprovalKeys); err != nil {
 		return err
 	}
+	if cfg.SSH {
+		hosts := map[string]netip.AddrPort{}
+		for _, h := range cfg.SSHHosts {
+			hosts[h.Name] = h.Address
+			svc.SSHHosts = append(svc.SSHHosts, h.Name)
+		}
+		svc.SSH = privileged.ExecSSH{Hosts: hosts, Dir: cfg.SSHDir}
+	}
 	r := &privileged.Runner{Service: svc}
 	log.Info("executor ready", "types", privileged.TypesFor(true), "secret_namespaces", cfg.SecretNamespaces,
 		"kubernetes", bool(cfg.Kubernetes), "namespace", cfg.Namespace, "omni", bool(cfg.Omni), "omni_clusters", cfg.OmniClusters,
+		"ssh_hosts", svc.SSHHosts,
 		"pinned_approval_keys", len(svc.ApprovalKeys))
 	t := time.NewTicker(executorEvery)
 	defer t.Stop()

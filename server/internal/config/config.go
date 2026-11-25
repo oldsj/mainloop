@@ -72,6 +72,9 @@ type Config struct {
 	// serve-executor's). With any pinned, serve-api accepts an approval of an executor type only
 	// from a phone whose key is pinned, signed with it.
 	PrivilegedApprovalKeys string `env:"MAINLOOP_PRIVILEGED_APPROVAL_KEYS"`
+	// PrivilegedSSHEnabled accepts command.ssh: the executor reaches home-network hosts over ssh
+	// (executor.ssh in the chart).
+	PrivilegedSSHEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED"`
 
 	// WebFetchPerMinute bounds the open-web web_fetch tool's fetches per owner per minute, and
 	// WebFetchDenyCIDRs adds comma-separated ranges it never connects to, beyond the built-in

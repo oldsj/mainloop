@@ -22,6 +22,9 @@ data:
   {{- with .Values.executor.approvalKeys }}
   {{- $_ := set $data "MAINLOOP_PRIVILEGED_APPROVAL_KEYS" (toJson .) }}
   {{- end }}
+  {{- if .Values.executor.ssh.enabled }}
+  {{- $_ := set $data "MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED" "true" }}
+  {{- end }}
   {{- end }}
   {{- if and .Values.screenshots.enabled (not (hasKey $data "MAINLOOP_SCREENSHOT_BROWSER_URL")) }}
   {{- $_ := set $data "MAINLOOP_SCREENSHOT_BROWSER_URL" (printf "http://mainloop-screenshots.%s.svc.cluster.local:9222" .Release.Namespace) }}

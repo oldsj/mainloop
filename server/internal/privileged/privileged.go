@@ -188,6 +188,12 @@ type Service struct {
 	// ApprovalKeys, in serve-executor, are the pinned approval keys. With any, an action runs only
 	// when one of them signed its approval for its id and digest.
 	ApprovalKeys approval.Pinned
+	// SSHOn, in serve-api, accepts command.ssh: the executor reaches home-network hosts over ssh.
+	SSHOn bool
+	// SSH reaches the allowlisted hosts; nil without ssh access.
+	SSH SSH
+	// SSHHosts are the host names command.ssh may target.
+	SSHHosts []string
 }
 
 func (s *Service) now() time.Time {
@@ -219,6 +225,8 @@ func (s *Service) Request(ctx context.Context, by Requester, typ string, rawArgs
 		return Action{}, fmt.Errorf("%w: %s needs Kubernetes access for Mainloop's executor, which this Mainloop does not have", ErrUnsupported, typ)
 	case entry.omni && !s.OmniOn:
 		return Action{}, fmt.Errorf("%w: %s needs Omni access for Mainloop's executor, which this Mainloop does not have", ErrUnsupported, typ)
+	case entry.ssh && !s.SSHOn:
+		return Action{}, fmt.Errorf("%w: %s needs ssh access for Mainloop's executor, which this Mainloop does not have", ErrUnsupported, typ)
 	case !entry.executor && s.GitHub == nil:
 		return Action{}, fmt.Errorf("%w: this Mainloop has no GitHub App", ErrUnsupported)
 	}

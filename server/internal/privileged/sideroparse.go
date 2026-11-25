@@ -129,7 +129,7 @@ func resetFlags() map[string]sideroFlag {
 
 func upgradeFlags() map[string]sideroFlag {
 	return map[string]sideroFlag{
-		"wait": noWait, "image": {value: true, check: talosImage, hint: "an installer image from factory.talos.dev or ghcr.io/siderolabs"},
+		"wait": noWait, "image": {value: true, check: talosImage, hint: installerImageHint},
 		"stage": switchFlag, "force": switchFlag, "preserve": switchFlag,
 		"reboot-mode": {value: true, values: []string{"default", "powercycle"}},
 	}
@@ -267,6 +267,9 @@ func parseSidero(tool string, argv []string) (sideroCommand, error) {
 	if tool == ToolTalosctl {
 		if len(c.nodes) == 0 {
 			return c, invalidf("talosctl needs --nodes=<node>[,<node>...]: the executor never picks a node")
+		}
+		if _, ok := c.flags["image"]; c.path == "upgrade" && !ok {
+			return c, invalidf("talosctl upgrade needs --image=<%s>: the executor checks it against the node's schematic and version", installerImageHint)
 		}
 		if c.path == "service" && len(c.words) == 2 && !slices.Contains([]string{"start", "stop", "restart", "status"}, c.words[1]) {
 			return c, invalidf("talosctl service <id> takes start, stop, restart or status")

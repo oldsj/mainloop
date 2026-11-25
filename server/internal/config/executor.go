@@ -3,7 +3,10 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/caarlos0/env/v11"
@@ -39,6 +42,13 @@ type Executor struct {
 	// as kid. With any pinned, the executor runs only actions whose approval one of them signed
 	// (docs/specs/privileged-actions.md, "Signed approvals"). Public keys, not secrets.
 	ApprovalKeys string `env:"MAINLOOP_PRIVILEGED_APPROVAL_KEYS"`
+	// SSH turns on command.ssh: the hosts in SSHHostList ("name=address:port,..."; addresses are
+	// IP literals), each with its credential's files (private-key, user, known-hosts) in
+	// SSHDir/<name>/.
+	SSH         ExactTrue `env:"MAINLOOP_EXECUTOR_SSH_ENABLED"`
+	SSHHostList string    `env:"MAINLOOP_EXECUTOR_SSH_HOSTS"`
+	SSHDir      string    `env:"MAINLOOP_EXECUTOR_SSH_DIR" envDefault:"/etc/mainloop-executor/ssh"`
+	SSHHosts    []SSHHost `env:"-"`
 }
 
 // LoadExecutor reads and validates serve-executor's settings from the process environment.
@@ -96,8 +106,50 @@ func ParseExecutor(vars map[string]string) (*Executor, error) {
 			e.OmniClusters = append(e.OmniClusters, c)
 		}
 	}
+	if e.SSH {
+		hosts, err := parseSSHHosts(e.SSHHostList)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		e.SSHHosts = hosts
+		if !filepath.IsAbs(e.SSHDir) {
+			errs = append(errs, errors.New("MAINLOOP_EXECUTOR_SSH_DIR must be an absolute path"))
+		}
+	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	return e, nil
+}
+
+// SSHHost is one host command.ssh may reach.
+type SSHHost struct {
+	Name    string
+	Address netip.AddrPort
+}
+
+func parseSSHHosts(list string) ([]SSHHost, error) {
+	var hosts []SSHHost
+	var errs []error
+	for _, h := range strings.Split(list, ",") {
+		if h = strings.TrimSpace(h); h == "" {
+			continue
+		}
+		name, addr, ok := strings.Cut(h, "=")
+		ap, err := netip.ParseAddrPort(strings.TrimSpace(addr))
+		switch {
+		case !ok || !dnsLabel.MatchString(strings.TrimSpace(name)):
+			errs = append(errs, fmt.Errorf("MAINLOOP_EXECUTOR_SSH_HOSTS: %q is not name=address:port", h))
+		case err != nil || ap.Port() == 0 || ap.Addr().Zone() != "":
+			errs = append(errs, fmt.Errorf("MAINLOOP_EXECUTOR_SSH_HOSTS: %q: the address is an IP address and a port", h))
+		case slices.ContainsFunc(hosts, func(o SSHHost) bool { return o.Name == strings.TrimSpace(name) }):
+			errs = append(errs, fmt.Errorf("MAINLOOP_EXECUTOR_SSH_HOSTS: %q is named twice", strings.TrimSpace(name)))
+		default:
+			hosts = append(hosts, SSHHost{Name: strings.TrimSpace(name), Address: ap})
+		}
+	}
+	if len(hosts) == 0 && len(errs) == 0 {
+		errs = append(errs, errors.New("MAINLOOP_EXECUTOR_SSH_HOSTS must name a host when MAINLOOP_EXECUTOR_SSH_ENABLED is true"))
+	}
+	return hosts, errors.Join(errs...)
 }

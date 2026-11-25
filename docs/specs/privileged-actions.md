@@ -15,11 +15,13 @@ sends the requesting session one message with the outcome.
   `command.kubectl`, run by `serve-executor` with short-lived credentials it mints per run.
 - Slice 3, second part: the approved commands `command.omnictl` and `command.talosctl`, run by
   `serve-executor` through a proxy of its own that holds its Omni service account.
+- Slice 3, third part: the approved command `command.ssh` to a named home-network host, run by
+  `serve-executor` with its own key for that host.
 - [Signed approvals](#signed-approvals): Approve from the iPhone app, signed with the phone's Touch
   ID approval key, checked by `serve-api` and again by `serve-executor` against keys pinned in its
   own configuration. Tested with software keys; not yet proven on a phone.
 
-ssh to LAN hosts and the home-network types are later parts. They are not described here.
+The UniFi types are a later part. They are not described here.
 
 ## Enablement
 
@@ -39,6 +41,9 @@ The `k8s.*` types, `argocd.sync` and `command.kubectl` also need
 `command.omnictl` and `command.talosctl` need `MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED`, exactly
 `true`; the chart sets it with `executor.omni.enabled`, which is off by default. Without it they are
 `[unavailable]`.
+
+`command.ssh` needs `MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED`, exactly `true`; the chart sets it
+with `executor.ssh.enabled`, which is off by default. Without it, it is `[unavailable]`.
 
 ## Tools
 
@@ -301,9 +306,17 @@ account, whose role is Admin: for Omni resources (clusters, machine sets) and fo
   - in omnictl's answers, any resource of another cluster: a list or watch leaves it out, and a
     get is refused. Omni may manage clusters the executor does not act on, and omnictl sees none
     of theirs;
-  - `talosctl upgrade` to an image that is not from `factory.talos.dev` or `ghcr.io/siderolabs`:
-    checked in the legacy upgrade call, and in the image pull and install calls that talosctl
-    makes for Talos 1.13 and later.
+  - `talosctl upgrade` to an image that is not the node's own installer: the Image Factory's for
+    the schematic Omni records for that machine (`factory.talos.dev/<platform>-installer/<ID>`),
+    or `ghcr.io/siderolabs/installer` for a machine with no customization, tagged with a Talos
+    version no older than the one the machine runs, and with no digest (a digest installs whatever
+    it names, whatever the tag says). So no extensions or kernel arguments the
+    machine does not have, and no silent downgrade (`talosctl rollback` goes back). A machine
+    whose schematic Omni cannot tell is not upgraded through the executor. The proxy reads the
+    machine's status itself for this, its schematic and version only. The same check runs at
+    preflight, so a doomed upgrade is refused before the card; at the run it checks the legacy
+    upgrade call, and the image pull and install calls that talosctl makes for Talos 1.13 and
+    later.
 
   Before approval it forwards reads only.
 
@@ -323,8 +336,9 @@ account, whose role is Admin: for Omni resources (clusters, machine sets) and fo
 
   No list holds a flag that chooses the endpoint, cluster, configuration or credential
   (`--omniconfig`, `--talosconfig`, `--context`, `--cluster`, `--endpoints`, `--insecure*`), a
-  watch or follow, `--dry-run` or `--debug`. `talosctl upgrade --image=` takes an image from
-  `factory.talos.dev` or `ghcr.io/siderolabs` only. Also refused: `get` or `delete` of a type
+  watch or follow, `--dry-run` or `--debug`. `talosctl upgrade` needs `--image=`, an installer image
+  with its version tag and no digest (`factory.talos.dev/<platform>-installer/<schematic ID>:v1.x.y` or
+  `ghcr.io/siderolabs/installer:v1.x.y`), held to the node's schematic and version by the proxy. Also refused: `get` or `delete` of a type
   that is not on the allowlist, given by its full name, its plural or its singular (`clusters`,
   `cluster`, `Clusters.omni.sidero.dev`; not an abbreviation such as `mc`), or that may hold a
   secret; `get` in the `secrets` namespace; a resource in stdin of a type not on the allowlist or
@@ -352,6 +366,41 @@ Not allowed in this part: `talosctl patch` and `apply-config` (their preview wou
 machine config, which holds secrets), `dmesg` and `omnictl machine-logs` (the kernel log),
 `image pull`, `upgrade-k8s`, and every command that makes
 or reads a kubeconfig, talosconfig or service account.
+
+`command.ssh {target, command, stdin, timeout_seconds}` runs one command line on a home-network
+host, over ssh, as that host's admin user, with the executor's own key for that host.
+
+- `target` is a host's name from the executor's host allowlist (`executor.ssh.hosts`: a name and an
+  IP address with its port, such as `nas`). An address, or a name not on the list, is refused.
+- `command` is one line of at most 8 KiB, with no control or invisible characters. The remote
+  user's shell receives and interprets it, as ssh always does: it can do anything that user can.
+  `stdin` is up to 64 KiB of text that the command reads (a script for `sh -s`, a file's new
+  contents); a carriage return is allowed only before a newline, so no line can show as something
+  other than what runs. `timeout_seconds` is 1 to 600, default 60. A command or stdin that looks like it holds
+  a credential is refused (`contains_secret`): the card shows them as they are.
+- The executor's ssh client is its own (Go's `x/crypto/ssh`, no OpenSSH configuration). It accepts
+  only the host key pinned for that host, logs in with that host's key only, and asks for the
+  command and nothing else: no agent, no port or X11 forwarding, no terminal, no environment.
+  Each host's key, user and pinned host key are read for each connection.
+- **Preflight.** The executor connects, checks the host key, logs in and disconnects. Nothing runs,
+  and nothing can preview the command. The facts are the host, its address, the user and the host
+  key's fingerprint; the agent sees them without the address. A host key that is not the pinned
+  one, a refused login, or a host the executor cannot reach ends the request as `preflight_failed`,
+  with the reason, which names the host but not its address.
+- The card shows the command, its stdin, the host, user, address and host key, and tags: remote
+  shell, the user and host, and from a scan of the words, which is not a guarantee, destructive
+  (`rm`, `dd`, `mkfs`, `Remove-Item`…) and reboot or power off. A command tagged destructive waits
+  1 hour for the owner. The card says that the command's output (exit code, stdout and stderr,
+  redacted and bounded) goes back to the agent and is stored with the action.
+- **Run.** The executor connects again and checks that the host key, user and address are those the
+  owner saw. If any changed, it is `stale` and nothing runs. Then it runs the command once, with
+  the run's result as for the other commands. Only a failure before the command is sent, or the
+  host's explicit refusal of the exec request, is `failed`, "nothing ran". A connection that breaks
+  after the command was sent is `uncertain`, since the host may have started it, and it is never
+  run again. A command that ends without an exit status (a dropped connection) is `uncertain`. One
+  that runs past its timeout is `uncertain` too: the executor asks the host to kill it and closes
+  the connection, but with no terminal the host may ignore both, so the command may still be
+  running there.
 
 ## Preflight and the card
 
@@ -574,6 +623,12 @@ boundary against an approved one:
 **Omni credentials.** With `executor.omni.enabled`, the executor reads an Omni service account's
 key (role Admin) from the Secret `executor.omni.keySecret`, key `service-account-key`, and dials
 `executor.omni.endpoint`. Only its proxy holds the key; see `command.omnictl` above.
+
+**ssh credentials.** With `executor.ssh.enabled`, each host in `executor.ssh.hosts` has a Secret
+`mainloop-executor-ssh-<name>`, with keys `private-key` (an unencrypted OpenSSH key made for the
+executor only), `user` and `known-hosts` (the host's key line, pinned; markers and hashed names
+are refused). The executor mounts each read-only and reads it for each connection, so a rotated
+key needs no restart. The executor reaches a host only if the network lets its address through.
 
 What holds is the executor's: the parser's allowlist, the namespace checks on argv, stdin and the
 dry run, the preview's object checks, and the proxy, which holds the token. Reads are not admitted, so the executor refuses commands that name its namespace
