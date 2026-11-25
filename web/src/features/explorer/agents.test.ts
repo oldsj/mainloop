@@ -206,7 +206,7 @@ describe('agents', () => {
       ['task:child-1', 'worker', 1],
       ['task:child-2', 'worker', 1]
     ]);
-    expect(agents[2]?.detail).toBe('supervisor · 0/2 done · 2 running');
+    expect(agents[2]?.detail).toBe('Supervisor · 0/2 done · 2 running');
   });
 
   it('leaves out a finished task the owner has looked at, and keeps one they have not', () => {
@@ -341,7 +341,7 @@ describe('a project’s standing supervisor', () => {
     // Then it leads its space, and being at rest is neither work nor anything for the owner
     expect(agents.map((agent) => agent.id)).toEqual(['main', 'task:sup', 'task:older']);
     expect(agents[1]).toMatchObject({
-      label: 'supervisor',
+      label: 'Supervisor',
       role: 'supervisor',
       standing: true,
       detail: 'Idle',
@@ -386,12 +386,12 @@ describe('a project’s standing supervisor', () => {
 
     // On the supervisor's conversation: supervisor, then its workers, and no overview tab
     expect(strip({ to: 'session', id: 'session-sup' }, '/sessions/session-sup')).toEqual([
-      'supervisor*',
+      'Supervisor*',
       'worker'
     ]);
     // On the project's page, reached from the space's row: a last tab of its own
     expect(strip({ to: 'project', id: 'project-1' }, '/projects/project-1')).toEqual([
-      'supervisor',
+      'Supervisor',
       'worker',
       'overview*'
     ]);

@@ -100,7 +100,7 @@ describe('shell switch', () => {
     const strip = screen.getByTestId('tab-strip');
     const main = screen.getByRole('main');
     const status = screen.getByTestId('status-bar');
-    expect(await within(aside).findByRole('group', { name: 'agents' })).toBeInTheDocument();
+    expect(await within(aside).findByRole('group', { name: 'Agents' })).toBeInTheDocument();
     expect(main).not.toContainElement(aside);
     const follows = (a: Element, b: Element) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -126,16 +126,13 @@ describe('shell switch', () => {
       'Settings',
       expect.stringMatching(/^Theme: /)
     ]);
-    // The sidebar keeps its row of words between the lists: start something, and the menu.
+    // The sidebar's Agents heading has its buttons: start something, and search and commands.
     const row = within(aside).getByTestId('column-actions');
     expect(
       within(row)
         .getAllByRole('button')
-        .map((button) => [button.textContent, button.getAttribute('aria-label')])
-    ).toEqual([
-      ['new', 'New: ask Mainloop'],
-      ['menu', 'Menu']
-    ]);
+        .map((button) => button.getAttribute('aria-label'))
+    ).toEqual(['New: ask Mainloop', 'Search and commands']);
   });
 
   it('puts a strip of tabs over the page: the current space’s agents, with the page’s own lit', async () => {
@@ -241,7 +238,7 @@ describe('shell switch', () => {
   it('shows the spaces and agents over the page when the URL asks for them', async () => {
     setViewport(false);
     await renderAt('/?tab=explorer');
-    expect(await screen.findByRole('group', { name: 'agents' })).toBeVisible();
+    expect(await screen.findByRole('group', { name: 'Agents' })).toBeVisible();
     expect(screen.getByTestId('agents-toggle')).toHaveAttribute('aria-expanded', 'true');
     expect(screen.queryByRole('tree')).toBeNull();
   });
@@ -253,7 +250,7 @@ describe('shell switch', () => {
     const toggle = screen.getByTestId('agents-toggle');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     await user.click(toggle);
-    expect(await screen.findByRole('group', { name: 'agents' })).toBeVisible();
+    expect(await screen.findByRole('group', { name: 'Agents' })).toBeVisible();
     // It is in the URL, so the phone's Back puts the list away.
     expect(router.state.location.search).toMatchObject({ tab: 'explorer' });
     await user.click(toggle);
@@ -267,7 +264,7 @@ describe('shell switch', () => {
     async (legacy) => {
       setViewport(false);
       await renderAt(`/?tab=${legacy}`);
-      expect(await screen.findByRole('group', { name: 'agents' })).toBeVisible();
+      expect(await screen.findByRole('group', { name: 'Agents' })).toBeVisible();
       expect(screen.getByTestId('agents-toggle')).toHaveAttribute('aria-expanded', 'true');
     }
   );
@@ -299,7 +296,7 @@ describe('header health link', () => {
     setViewport(true);
     const user = userEvent.setup();
     const router = await renderAt('/');
-    await user.click(screen.getByRole('button', { name: 'Menu' }));
+    await user.click(screen.getByRole('button', { name: 'Search and commands' }));
     await user.type(await screen.findByRole('combobox'), 'settings');
     await user.keyboard('{Enter}');
     await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
@@ -315,7 +312,7 @@ describe('header health link', () => {
     setViewport(false);
     const user = userEvent.setup();
     const router = await renderAt('/?tab=explorer');
-    await user.click(await screen.findByRole('button', { name: 'Menu' }));
+    await user.click(await screen.findByRole('button', { name: 'Search and commands' }));
     await user.type(await screen.findByRole('combobox'), 'settings');
     await user.keyboard('{Enter}');
     await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
@@ -542,7 +539,7 @@ describe('the phone’s top row', () => {
     const user = userEvent.setup();
     const router = await renderAt('/health');
     await user.click(screen.getByTestId('agents-toggle'));
-    expect(await screen.findByRole('group', { name: 'agents' })).toBeVisible();
+    expect(await screen.findByRole('group', { name: 'Agents' })).toBeVisible();
     expect(router.state.location.pathname).toBe('/health');
     expect(router.state.location.search).toMatchObject({ tab: 'explorer' });
   });
@@ -552,7 +549,7 @@ describe('the phone’s top row', () => {
     const user = userEvent.setup();
     await renderAt('/');
     await user.click(screen.getByTestId('agents-toggle'));
-    await user.click(await screen.findByRole('button', { name: 'Menu' }));
+    await user.click(await screen.findByRole('button', { name: 'Search and commands' }));
     const options = within(await screen.findByRole('listbox'))
       .getAllByRole('option')
       .map((option) => option.textContent);
@@ -573,7 +570,7 @@ describe('the phone’s page under the lists', () => {
     await renderAt('/');
     const thread = await screen.findByTestId('main-thread');
     await user.click(screen.getByTestId('agents-toggle'));
-    await screen.findByRole('group', { name: 'agents' });
+    await screen.findByRole('group', { name: 'Agents' });
     expect(thread).not.toBeVisible();
     await user.click(screen.getByTestId('agents-toggle'));
     await waitFor(() => expect(thread).toBeVisible());
@@ -584,7 +581,7 @@ describe('the phone’s page under the lists', () => {
     setViewport(false);
     const user = userEvent.setup();
     await renderAt('/?tab=explorer');
-    await screen.findByRole('group', { name: 'agents' });
+    await screen.findByRole('group', { name: 'Agents' });
     expect(screen.queryByTestId('main-thread')).toBeNull();
     await user.click(screen.getByTestId('agents-toggle'));
     expect(await screen.findByTestId('main-thread')).toBeVisible();
@@ -753,7 +750,7 @@ describe('explorer panel', () => {
     );
     expect(within(aside).getByRole('status')).toHaveTextContent('Loading Mainloop…');
     release();
-    expect(await within(aside).findByRole('group', { name: 'agents' })).toBeInTheDocument();
+    expect(await within(aside).findByRole('group', { name: 'Agents' })).toBeInTheDocument();
     expect(within(aside).queryByTestId('explorer-loading')).toBeNull();
   });
 
@@ -792,9 +789,9 @@ describe('explorer panel', () => {
     // Then the agent appears once, under its project, and the tabs are the main thread's own
     const widgets = await within(aside).findByRole('list', { name: 'widgets' });
     expect(within(widgets).getByRole('button', { name: /^Add retry button/ })).toBeInTheDocument();
-    expect(
-      within(within(aside).getByRole('list', { name: 'main' })).getAllByTestId('agent-row')
-    ).toHaveLength(1);
+    // The main thread is pinned above the projects, and nothing is left over for No project
+    expect(within(aside).getByTestId('main-entry')).toBeInTheDocument();
+    expect(within(aside).queryByText('No project')).toBeNull();
     expect(
       within(strip)
         .getAllByTestId('tab')
@@ -1000,18 +997,13 @@ describe('explorer panel', () => {
     it('opens the menu with g, and goes to the spaces with w', async () => {
       setViewport(true);
       await renderAt('/');
-      await within(screen.getByTestId('explorer-aside')).findByRole('group', { name: 'agents' });
+      await within(screen.getByTestId('explorer-aside')).findByRole('group', { name: 'Agents' });
 
       prefix();
       then('w');
-      // The current space's row has focus, so the arrows move from there and Enter opens.
-      await waitFor(() =>
-        expect(
-          within(screen.getByRole('list', { name: 'spaces' })).getByRole('button', {
-            current: true
-          })
-        ).toHaveFocus()
-      );
+      // The current space's row (the pinned main thread, on home) has focus, so the arrows move
+      // from there and Enter opens.
+      await waitFor(() => expect(screen.getByTestId('main-entry')).toHaveFocus());
 
       prefix();
       then('g');
@@ -1024,17 +1016,17 @@ describe('explorer panel', () => {
     server.use(projectsRead([project()]));
     await renderAt('/');
     const aside = screen.getByTestId('explorer-aside');
-    // Spaces: main, then each project. Agents: the main thread, until there is work.
-    const spaces = await within(aside).findByRole('list', { name: 'spaces' });
+    // The main thread pinned at the top, then each project's heading over its agents: none yet.
+    expect(await within(aside).findByTestId('main-entry')).toHaveTextContent('MainloopIdle');
+    const agents = await within(aside).findByRole('group', { name: 'Agents' });
     await waitFor(() =>
       expect(
-        within(spaces)
+        within(agents)
           .getAllByTestId('space-row')
           .map((row) => row.textContent)
-      ).toEqual(['mainidle', 'widgetsidle'])
+      ).toEqual(['widgets'])
     );
-    const agents = within(aside).getByRole('group', { name: 'agents' });
-    expect(within(agents).getByTestId('agent-row')).toHaveTextContent('MainloopIdle');
+    expect(within(agents).queryByTestId('agent-row')).toBeNull();
     expect(within(aside).queryByRole('tree')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Projects' })).toBeNull();
   });
@@ -1043,7 +1035,7 @@ describe('explorer panel', () => {
     setViewport(true);
     const user = userEvent.setup();
     const router = await renderAt('/');
-    await user.click(screen.getByRole('button', { name: 'Menu' }));
+    await user.click(screen.getByRole('button', { name: 'Search and commands' }));
     await user.type(await screen.findByRole('combobox'), 'import');
     await user.keyboard('{Enter}');
     await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
@@ -1228,9 +1220,7 @@ describe('answer view', () => {
     // An owner action that belongs to no task is no agent's: it turns the main thread's dot red,
     // and the count in the status bar leads to it.
     const column = within(screen.getByTestId('explorer-aside'));
-    await waitFor(() =>
-      expect(column.getByRole('button', { name: /^Mainloop/ })).toHaveTextContent('Needs you')
-    );
+    await waitFor(() => expect(column.getByTestId('main-entry')).toHaveTextContent('1 needs you'));
     await user.click(await screen.findByRole('link', { name: '1 needs you' }));
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/inbox'));
@@ -1381,7 +1371,7 @@ describe('command palette', () => {
     seedTask();
     const user = userEvent.setup();
     const router = await renderAt('/');
-    await within(screen.getByTestId('explorer-aside')).findByRole('group', { name: 'agents' });
+    await within(screen.getByTestId('explorer-aside')).findByRole('group', { name: 'Agents' });
     await user.click(screen.getByTestId('column-menu'));
     const field = await screen.findByRole('combobox');
     expect(field).toHaveFocus();
@@ -1428,7 +1418,7 @@ describe('command palette', () => {
     seedTask();
     const user = userEvent.setup();
     const router = await renderAt('/inbox');
-    await within(screen.getByTestId('explorer-aside')).findByRole('group', { name: 'agents' });
+    await within(screen.getByTestId('explorer-aside')).findByRole('group', { name: 'Agents' });
     await user.click(screen.getByTestId('column-menu'));
     await user.type(await screen.findByRole('combobox'), 'queue');
     await user.keyboard('{Control>}{Enter}{/Control}');
@@ -1493,11 +1483,7 @@ describe('command palette', () => {
     await user.type(await screen.findByRole('combobox'), 'go to the spaces');
     await user.keyboard('{Enter}');
     await waitFor(() => expect(palette()).toBeNull());
-    await waitFor(() =>
-      expect(
-        within(screen.getByRole('list', { name: 'spaces' })).getByRole('button', { current: true })
-      ).toHaveFocus()
-    );
+    await waitFor(() => expect(screen.getByTestId('main-entry')).toHaveFocus());
   });
 
   it('offers the same actions on a phone, without keys, and opens the lists from one', async () => {
@@ -1566,7 +1552,7 @@ describe('answer view on desktop', () => {
     expect(screen.getByTestId('status-needs')).toHaveTextContent('2 need you');
     // The column says it per agent: the failed task has the red dot, and so does the main thread.
     const column = within(screen.getByTestId('explorer-aside'));
-    expect(column.getByRole('button', { name: /^Mainloop/ })).toHaveTextContent('Needs you');
+    expect(column.getByTestId('main-entry')).toHaveTextContent('2 need you');
     expect(
       within(column.getByRole('button', { name: /^Fix CI flake/ })).getByTestId('agent-dot')
     ).toHaveAttribute('data-tone', 'bad');
