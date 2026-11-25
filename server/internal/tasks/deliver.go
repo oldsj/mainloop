@@ -25,7 +25,24 @@ const EventChannel = "mainloop_task_events"
 // maxSends is how many times a report is recorded in the sessions ledger before the delivery is
 // given up as uncertain. Each send uses a new message id, so a message the ledger failed is not
 // mistaken for one that was delivered.
-const maxSends = 3
+//
+// A send the ledger failed as never sent (sessions.NotSent: kagent refused it, for one, while the
+// recipient could not take input) is safe to repeat and usually means the recipient is busy, so it
+// may be sent up to maxNotSentSends times, each after [Limits.ResendBackoff] from the failure. With
+// the default backoff that is about half an hour of trying before the reporting task is blocked.
+const (
+	maxSends        = 3
+	maxNotSentSends = 10
+)
+
+var defaultResendBackoff = reconcile.Backoff{Base: 30 * time.Second, Max: 5 * time.Minute}
+
+func (s *Service) resendBackoff() reconcile.Backoff {
+	if s.Limits.ResendBackoff == (reconcile.Backoff{}) {
+		return defaultResendBackoff
+	}
+	return s.Limits.ResendBackoff
+}
 
 // DeliveryTable is the table of report deliveries the loop drives.
 func DeliveryTable() reconcile.Table {
@@ -392,8 +409,9 @@ func (s *Service) setDelivery(ctx context.Context, c reconcile.Claim, to dbstate
 }
 
 // followReport watches the ledger row of a queued report. A delivered message ends the delivery. A
-// failed one is recorded again under a new id, up to maxSends times; after that the delivery is
-// uncertain, the failure is written to the reporting attempt's evidence and its task is blocked.
+// failed one is recorded again under a new id, up to maxSends times, or maxNotSentSends with a
+// backoff when the ledger says it was never sent; after that the delivery is uncertain, the failure
+// is written to the reporting attempt's evidence and its task is blocked.
 func (s *Service) followReport(ctx context.Context, c reconcile.Claim, d dbq.TaskEventDelivery) (reconcile.Outcome, error) {
 	q := dbq.New(s.Pool)
 	if d.DeliveryID == nil {
@@ -421,7 +439,19 @@ func (s *Service) followReport(ctx context.Context, c reconcile.Claim, d dbq.Tas
 		// blocked; the report stays on the child, readable through the task tools.
 		return s.setDelivery(ctx, c, dbstate.TaskDeliveryCancelled)
 	case dbstate.DeliveryFailed:
-		if d.Sends < maxSends {
+		limit := maxSends
+		notSent := sessions.NotSent(row.Detail)
+		if notSent {
+			limit = maxNotSentSends
+		}
+		if int(d.Sends) < limit {
+			if notSent {
+				// Never sent, most often because the recipient could not take input yet: wait before
+				// asking again, counted from when the ledger gave up on the last send.
+				if wait := row.UpdatedAt.Add(s.resendBackoff().Delay(int(d.Sends))).Sub(s.now()); wait > 0 {
+					return reconcile.RetryAfter(wait), nil
+				}
+			}
 			next := messageID(d.ID, d.Sends+1)
 			_, err := q.ResendTaskEventDelivery(ctx, dbq.ResendTaskEventDeliveryParams{
 				ID: d.ID, LeaseOwner: &c.Owner, Attempts: int32(c.Attempts), DeliveryID: &next, //nolint:gosec // a small counter
