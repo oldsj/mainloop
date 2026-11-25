@@ -10,6 +10,12 @@ MAINLOOP_ORIGIN = https:/$()/mainloop.example.test
 // (PKCE, no secret, redirect mainloop-ios://oauth/callback). Empty means no sign-in.
 MAINLOOP_OIDC_ISSUER =
 MAINLOOP_OIDC_CLIENT_ID =
+// APNs environment for the aps-environment entitlement, also told to the server with the token:
+// the sandbox (development) for Debug builds from Xcode, production for Release (TestFlight,
+// App Store). Local.xcconfig may set MAINLOOP_APNS_ENVIRONMENT directly to override both.
+MAINLOOP_APNS_ENVIRONMENT_Debug = development
+MAINLOOP_APNS_ENVIRONMENT_Release = production
+MAINLOOP_APNS_ENVIRONMENT = $(MAINLOOP_APNS_ENVIRONMENT_$(CONFIGURATION))
 DEVELOPMENT_TEAM =
 CODE_SIGN_STYLE = Automatic
 

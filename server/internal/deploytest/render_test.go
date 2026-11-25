@@ -60,6 +60,10 @@ var installs = map[string]struct {
 		"executor.ssh.hosts[0].name=nas-01", "executor.ssh.hosts[0].address=192.0.2.20:22",
 		"executor.ssh.hosts[1].name=router", "executor.ssh.hosts[1].address=192.0.2.1:2222",
 	}},
+	// Production with Apple push on (docs/specs/push-notifications.md).
+	"production-apns": {"mainloop", "ci/production-values.yaml", []string{
+		"apns.existingSecret=opencozy-apns", "apns.keyFileKey=AuthKey_ABC123DEFG.p8", "apns.topic=org.example.mainloop",
+	}},
 	// Production with the preview screenshot browser on.
 	"production-screenshots": {"mainloop", "ci/production-values.yaml", []string{
 		"screenshots.enabled=true",
@@ -1091,5 +1095,52 @@ func TestScreenshotBrowserIsFencedIn(t *testing.T) {
 	if len(gw.Ports) != 1 || gw.Ports[0].Port.String() != "10443" || len(gw.To) != 1 || gw.To[0].IPBlock != nil ||
 		gw.To[0].PodSelector == nil || gw.To[0].PodSelector.MatchLabels["app"] != "preview-gateway" {
 		t.Errorf("browser egress to the gateway: %+v", gw)
+	}
+}
+
+// The APNs key reaches the API container only, from an optional Secret, and nothing else when
+// APNs is off.
+func TestTheAPNsKeyIsMountedIntoTheAPIOnly(t *testing.T) {
+	for _, path := range append(slices.Clone(installNames), "production-apns") {
+		t.Run(path, func(t *testing.T) {
+			on := path == "production-apns"
+			pod := render(t, path).backend(t)
+			var vol *corev1.Volume
+			for i := range pod.Volumes {
+				if pod.Volumes[i].Name == "apns" {
+					vol = &pod.Volumes[i]
+				}
+			}
+			if (vol != nil) != on {
+				t.Fatalf("apns volume = %+v", vol)
+			}
+			if on {
+				sec := vol.Secret
+				if sec == nil || sec.SecretName != "opencozy-apns" || sec.Optional == nil || !*sec.Optional {
+					t.Fatalf("apns volume is not the optional Secret: %+v", vol)
+				}
+				want := map[string]string{"AuthKey_ABC123DEFG.p8": "key.p8", "key-id": "key-id", "team-id": "team-id"}
+				got := map[string]string{}
+				for _, it := range sec.Items {
+					got[it.Key] = it.Path
+				}
+				if len(got) != len(want) || got["AuthKey_ABC123DEFG.p8"] != "key.p8" || got["key-id"] != "key-id" || got["team-id"] != "team-id" {
+					t.Fatalf("items = %v, want %v", got, want)
+				}
+			}
+			for name, c := range containers(pod) {
+				env := envByName(c)
+				mounted := slices.ContainsFunc(c.VolumeMounts, func(m corev1.VolumeMount) bool {
+					return m.Name == "apns" && m.MountPath == "/run/mainloop-apns" && m.ReadOnly
+				})
+				want := on && name == "backend"
+				if mounted != want || (env["MAINLOOP_APNS_CREDENTIALS_DIR"].Value == "/run/mainloop-apns") != want {
+					t.Errorf("%s: apns mounted = %v, env = %+v; want %v", name, mounted, env["MAINLOOP_APNS_CREDENTIALS_DIR"], want)
+				}
+				if want && env["MAINLOOP_APNS_TOPIC"].Value != "org.example.mainloop" {
+					t.Errorf("%s: MAINLOOP_APNS_TOPIC = %+v", name, env["MAINLOOP_APNS_TOPIC"])
+				}
+			}
+		})
 	}
 }

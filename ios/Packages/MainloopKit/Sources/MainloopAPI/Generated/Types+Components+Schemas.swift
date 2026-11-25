@@ -1010,6 +1010,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Device/current`.
             public var current: Swift.Bool
+            /// The device's APNs token, if it set one. Null when it has none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Device/push`.
+            public var push: Components.Schemas.DevicePush?
             /// Creates a new `Device`.
             ///
             /// - Parameters:
@@ -1021,6 +1025,7 @@ extension Components {
             ///   - lastSeenAt:
             ///   - revokedAt:
             ///   - current: True when this request was signed by this device.
+            ///   - push: The device's APNs token, if it set one. Null when it has none.
             public init(
                 id: Swift.String,
                 name: Swift.String,
@@ -1029,7 +1034,8 @@ extension Components {
                 createdAt: Foundation.Date,
                 lastSeenAt: Foundation.Date? = nil,
                 revokedAt: Foundation.Date? = nil,
-                current: Swift.Bool
+                current: Swift.Bool,
+                push: Components.Schemas.DevicePush? = nil
             ) {
                 self.id = id
                 self.name = name
@@ -1039,6 +1045,7 @@ extension Components {
                 self.lastSeenAt = lastSeenAt
                 self.revokedAt = revokedAt
                 self.current = current
+                self.push = push
             }
             public enum CodingKeys: String, CodingKey {
                 case id
@@ -1049,6 +1056,7 @@ extension Components {
                 case lastSeenAt = "last_seen_at"
                 case revokedAt = "revoked_at"
                 case current
+                case push
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1084,6 +1092,10 @@ extension Components {
                     Swift.Bool.self,
                     forKey: .current
                 )
+                self.push = try container.decodeIfPresent(
+                    Components.Schemas.DevicePush.self,
+                    forKey: .push
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "id",
                     "name",
@@ -1092,9 +1104,110 @@ extension Components {
                     "created_at",
                     "last_seen_at",
                     "revoked_at",
-                    "current"
+                    "current",
+                    "push"
                 ])
             }
+        }
+        /// A device's APNs token, without the token itself.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DevicePush`.
+        public struct DevicePush: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DevicePush/environment`.
+            public var environment: Components.Schemas.APNsEnvironment
+            /// - Remark: Generated from `#/components/schemas/DevicePush/updated_at`.
+            public var updatedAt: Foundation.Date
+            /// When APNs said the token is no longer valid; pushes stop until the device sets a new one.
+            ///
+            /// - Remark: Generated from `#/components/schemas/DevicePush/invalid_at`.
+            public var invalidAt: Foundation.Date?
+            /// Creates a new `DevicePush`.
+            ///
+            /// - Parameters:
+            ///   - environment:
+            ///   - updatedAt:
+            ///   - invalidAt: When APNs said the token is no longer valid; pushes stop until the device sets a new one.
+            public init(
+                environment: Components.Schemas.APNsEnvironment,
+                updatedAt: Foundation.Date,
+                invalidAt: Foundation.Date? = nil
+            ) {
+                self.environment = environment
+                self.updatedAt = updatedAt
+                self.invalidAt = invalidAt
+            }
+            public enum CodingKeys: String, CodingKey {
+                case environment
+                case updatedAt = "updated_at"
+                case invalidAt = "invalid_at"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.environment = try container.decode(
+                    Components.Schemas.APNsEnvironment.self,
+                    forKey: .environment
+                )
+                self.updatedAt = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .updatedAt
+                )
+                self.invalidAt = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .invalidAt
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "environment",
+                    "updated_at",
+                    "invalid_at"
+                ])
+            }
+        }
+        /// An APNs device token, as the app received it, in lower-case hex.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DevicePushRegistration`.
+        public struct DevicePushRegistration: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DevicePushRegistration/token`.
+            public var token: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DevicePushRegistration/environment`.
+            public var environment: Components.Schemas.APNsEnvironment
+            /// Creates a new `DevicePushRegistration`.
+            ///
+            /// - Parameters:
+            ///   - token:
+            ///   - environment:
+            public init(
+                token: Swift.String,
+                environment: Components.Schemas.APNsEnvironment
+            ) {
+                self.token = token
+                self.environment = environment
+            }
+            public enum CodingKeys: String, CodingKey {
+                case token
+                case environment
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.token = try container.decode(
+                    Swift.String.self,
+                    forKey: .token
+                )
+                self.environment = try container.decode(
+                    Components.Schemas.APNsEnvironment.self,
+                    forKey: .environment
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "token",
+                    "environment"
+                ])
+            }
+        }
+        /// The APNs environment the app was built for (its aps-environment entitlement).
+        ///
+        /// - Remark: Generated from `#/components/schemas/APNsEnvironment`.
+        @frozen public enum APNsEnvironment: String, Codable, Hashable, Sendable, CaseIterable {
+            case development = "development"
+            case production = "production"
         }
         /// A P-256 public key as a JWK (RFC 7517), coordinates unpadded base64url.
         ///

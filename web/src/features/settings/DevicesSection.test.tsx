@@ -31,7 +31,20 @@ const ACTIVE: Device = {
   created_at: '2026-01-02T10:00:00Z',
   last_seen_at: null,
   revoked_at: null,
-  current: false
+  current: false,
+  push: null
+};
+
+const PUSHING: Device = {
+  id: 'dev_pushpushpushpushpushpushpu',
+  name: 'Work Test iPhone',
+  platform: 'ios',
+  key_thumbprint: 'PPPPPPPPPPPPqqqqqqqqqqqqrrrrrrrrrrrrssssss',
+  created_at: '2026-01-02T11:00:00Z',
+  last_seen_at: '2026-01-02T11:05:00Z',
+  revoked_at: null,
+  current: false,
+  push: { environment: 'production', updated_at: '2026-01-02T11:01:00Z', invalid_at: null }
 };
 
 const REVOKED: Device = {
@@ -42,7 +55,8 @@ const REVOKED: Device = {
   created_at: '2026-01-01T10:00:00Z',
   last_seen_at: '2026-01-01T11:00:00Z',
   revoked_at: '2026-01-01T12:00:00Z',
-  current: false
+  current: false,
+  push: { environment: 'production', updated_at: '2026-01-01T11:00:00Z', invalid_at: null }
 };
 
 /** Serves the list from memory; a DELETE revokes the device there, as the server does. */
@@ -105,6 +119,28 @@ describe('devices', () => {
     expect(within(revoked).getByText(/· revoked /)).toBeInTheDocument();
     expect(within(revoked).queryByText(/last seen never/)).toBeNull();
     expect(within(revoked).queryByRole('button')).toBeNull();
+    expect(within(revoked).queryByText(/notifications/)).toBeNull();
+  });
+
+  it('says whether each active device gets notifications', async () => {
+    const refused: Device = {
+      ...PUSHING,
+      id: 'dev_refusedrefusedrefusedref',
+      name: 'Refused Test iPhone',
+      key_thumbprint: 'RRRRRRRRRRRRssssssssssssttttttttttttuuuuuu',
+      push: { ...PUSHING.push!, invalid_at: '2026-01-02T12:00:00Z' }
+    };
+    serve([ACTIVE, PUSHING, refused]);
+    renderSection();
+    expect(within(await row('Test iPhone')).getByText(/· notifications off$/)).toBeInTheDocument();
+    expect(
+      within(await row('Work Test iPhone')).getByText(/· notifications on$/)
+    ).toBeInTheDocument();
+    expect(
+      within(await row('Refused Test iPhone')).getByText(
+        /· notifications stopped: Apple refused its token$/
+      )
+    ).toBeInTheDocument();
   });
 
   it('revokes a device after confirmation, then reads the list again', async () => {

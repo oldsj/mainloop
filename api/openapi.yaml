@@ -351,6 +351,71 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+  /devices/current/push:
+    put:
+      tags:
+        - devices
+      summary: Set Device Push Token
+      description: >-
+        Sets the APNs device token of the device that signed this request (docs/specs/push-notifications.md).
+        Replaces any token it had; a token another device had moves to this one. Only a device may call it.
+      operationId: setDevicePush
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DevicePushRegistration'
+      responses:
+        '200':
+          description: The device, with its push token's status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+        - devices
+      summary: Clear Device Push Token
+      description: Stops pushes to the device that signed this request. Clearing a device with no token succeeds.
+      operationId: clearDevicePush
+      responses:
+        '204':
+          description: Cleared
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
   /devices/{device_id}:
     delete:
       tags:
@@ -11377,6 +11442,11 @@ components:
         current:
           type: boolean
           description: True when this request was signed by this device.
+        push:
+          description: The device's APNs token, if it set one. Null when it has none.
+          anyOf:
+            - $ref: '#/components/schemas/DevicePush'
+            - type: 'null'
       required:
         - id
         - name
@@ -11386,7 +11456,47 @@ components:
         - last_seen_at
         - revoked_at
         - current
+        - push
       additionalProperties: false
+    DevicePush:
+      type: object
+      description: A device's APNs token, without the token itself.
+      properties:
+        environment:
+          $ref: '#/components/schemas/APNsEnvironment'
+        updated_at:
+          type: string
+          format: date-time
+        invalid_at:
+          description: When APNs said the token is no longer valid; pushes stop until the device sets a new one.
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+      required:
+        - environment
+        - updated_at
+        - invalid_at
+      additionalProperties: false
+    DevicePushRegistration:
+      type: object
+      description: An APNs device token, as the app received it, in lower-case hex.
+      properties:
+        token:
+          type: string
+          pattern: '^[0-9a-f]{64,200}$'
+          minLength: 64
+          maxLength: 200
+        environment:
+          $ref: '#/components/schemas/APNsEnvironment'
+      required:
+        - token
+        - environment
+      additionalProperties: false
+    APNsEnvironment:
+      type: string
+      description: The APNs environment the app was built for (its aps-environment entitlement).
+      enum: [development, production]
     DeviceKey:
       type: object
       description: A P-256 public key as a JWK (RFC 7517), coordinates unpadded base64url.

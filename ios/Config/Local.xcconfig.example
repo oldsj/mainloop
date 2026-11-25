@@ -4,3 +4,6 @@ MAINLOOP_BUNDLE_ID = com.yourdomain.mainloop
 MAINLOOP_ORIGIN = https:/$()/mainloop.yourdomain.example
 MAINLOOP_OIDC_ISSUER = https:/$()/id.yourdomain.example
 MAINLOOP_OIDC_CLIENT_ID = mainloop-ios
+// Optional: the APNs environment for every configuration. Unset, Debug uses development (the
+// sandbox) and Release production; it must match what your provisioning profile allows.
+// MAINLOOP_APNS_ENVIRONMENT = production

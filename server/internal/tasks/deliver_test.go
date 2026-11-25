@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 )
@@ -35,6 +36,107 @@ func (r *rig) failOpenReports() int {
 		r.t.Fatal(err)
 	}
 	return int(tag.RowsAffected())
+}
+
+// failOpenReportsNotSent fails the ledger rows of queued report deliveries as never sent, as the
+// ledger does when kagent refused the message because the recipient could not take input, and
+// makes those deliveries due now rather than at their next 2-second look, so ten sends fit the rig's
+// wait. It returns how many it failed.
+func (r *rig) failOpenReportsNotSent() int {
+	r.t.Helper()
+	var n int
+	err := r.pool.QueryRow(context.Background(), `WITH failed AS (
+			UPDATE deliveries SET state = 'failed', detail = $1
+			WHERE state = 'recorded' AND id IN (SELECT delivery_id FROM task_event_deliveries WHERE state = 'queued')
+			RETURNING id),
+		due AS (UPDATE task_event_deliveries SET next_attempt_at = now() WHERE delivery_id IN (SELECT id FROM failed))
+		SELECT count(*) FROM failed`,
+		sessions.NotSentPrefix+"A2A error -32004: input was not accepted; retry after the session becomes available").Scan(&n)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return n
+}
+
+func TestNotSentReportIsResentPastTheUncertainLimit(t *testing.T) {
+	// Given a child's report to its supervisor, whose session refuses input for a while
+	r := newRig(t)
+	_, supSession, child, kid := r.reportingChild()
+	if _, err := r.svc.Report(context.Background(), kid, report(kid, "r1", dbstate.OutcomeProgress)); err != nil {
+		t.Fatal(err)
+	}
+	// When the ledger fails five sends in a row as never sent
+	failures := 0
+	r.eventually("five not-sent failures", func() bool {
+		failures += r.failOpenReportsNotSent()
+		return failures >= 5
+	})
+	// and the sixth is delivered
+	r.eventually("a sixth send", func() bool {
+		return r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, supSession) == 6
+	})
+	r.exec(`UPDATE deliveries SET state = 'completed' WHERE state = 'recorded' AND id IN (SELECT delivery_id FROM task_event_deliveries WHERE state = 'queued')`)
+	// Then the report is delivered, and the child is not blocked: nothing was ever uncertain
+	r.eventually("delivery delivered", func() bool {
+		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'delivered'`) == 1
+	})
+	if n := r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'uncertain'`); n != 0 {
+		t.Fatalf("uncertain deliveries = %d", n)
+	}
+	if got := r.taskStatus(child); got == "blocked" {
+		t.Fatalf("child status = %s", got)
+	}
+	attempt, _ := r.attemptOf(child)
+	if n := r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND EXISTS (SELECT 1 FROM unnest(evidence_refs) e WHERE e LIKE 'native-delivery-failed:%')`, attempt); n != 0 {
+		t.Fatal("native-delivery-failed evidence on a report that was delivered")
+	}
+}
+
+func TestNotSentReportGivesUpAfterItsOwnLimit(t *testing.T) {
+	// Given a child's report to a supervisor that never takes input
+	r := newRig(t)
+	_, supSession, child, kid := r.reportingChild()
+	if _, err := r.svc.Report(context.Background(), kid, report(kid, "r1", dbstate.OutcomeProgress)); err != nil {
+		t.Fatal(err)
+	}
+	// When every send fails as never sent
+	failures := 0
+	r.eventually("delivery uncertain", func() bool {
+		failures += r.failOpenReportsNotSent()
+		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'uncertain'`) == 1
+	})
+	// Then it is sent ten times, not three, and only then is the child blocked for reconciliation
+	if failures != 10 {
+		t.Fatalf("sends = %d, want 10", failures)
+	}
+	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, supSession); n != 10 {
+		t.Fatalf("report messages = %d", n)
+	}
+	if got := r.taskStatus(child); got != "blocked" {
+		t.Fatalf("child status = %s", got)
+	}
+	if got := r.str(`SELECT reason FROM tasks WHERE id = $1`, child); got != "reconciliation" {
+		t.Fatalf("child reason = %s", got)
+	}
+}
+
+func TestNotSentReportWaitsBeforeItIsSentAgain(t *testing.T) {
+	// Given the default resend backoff (30 seconds first)
+	r := newRig(t)
+	r.svc.Limits.ResendBackoff = reconcile.Backoff{}
+	_, supSession, _, kid := r.reportingChild()
+	if _, err := r.svc.Report(context.Background(), kid, report(kid, "r1", dbstate.OutcomeProgress)); err != nil {
+		t.Fatal(err)
+	}
+	// When the first send fails as never sent
+	r.eventually("first send failed", func() bool { return r.failOpenReportsNotSent() == 1 })
+	// Then the delivery is parked until the backoff has passed, rather than sent again at once
+	r.eventually("resend parked", func() bool {
+		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'queued' AND next_attempt_at > now() + interval '10 seconds'`) == 1
+	})
+	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, supSession); n != 1 {
+		t.Fatalf("report messages = %d, want 1", n)
+	}
 }
 
 func TestFailedDeliveryIsSentAgainThenBlocksTheTask(t *testing.T) {

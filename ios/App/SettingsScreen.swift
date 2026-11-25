@@ -1,10 +1,12 @@
 import AuthenticationServices
 import MainloopCore
 import SwiftUI
+import UIKit
 
 struct SettingsScreen: View {
     @Environment(AppEnvironment.self) private var environment
     @Environment(AccountModel.self) private var account
+    @Environment(PushModel.self) private var push
     @Environment(\.webAuthenticationSession) private var webAuthenticationSession
 
     var body: some View {
@@ -33,6 +35,7 @@ struct SettingsScreen: View {
                     case .signedIn(let deviceID):
                         LabeledContent("Device", value: deviceID)
                             .textSelection(.enabled)
+                        NotificationsRow()
                         Button("Sign out", role: .destructive) {
                             Task { await account.signOut() }
                         }
@@ -43,7 +46,7 @@ struct SettingsScreen: View {
                 } header: {
                     Text("This iPhone")
                 } footer: {
-                    Text("Signing in registers a key that stays in this iPhone's Secure Enclave and signs every request. Signing out revokes it. Notifications and Touch ID approvals come in the next updates.")
+                    Text("Signing in registers a key that stays in this iPhone's Secure Enclave and signs every request. Signing out revokes it, which also stops notifications. Touch ID approvals come in a later update.")
                 }
                 Section("About") {
                     LabeledContent("Version", value: Bundle.main.versionString)
@@ -51,6 +54,41 @@ struct SettingsScreen: View {
             }
             .navigationTitle("Settings")
             .avoidingReservedRegions()
+            .task(id: account.phase) {
+                await push.refreshPermission()
+                await push.refreshServerStatus()
+            }
+        }
+    }
+}
+
+/// Whether this iPhone gets notifications, and a way to turn them on.
+private struct NotificationsRow: View {
+    @Environment(PushModel.self) private var push
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        switch push.permission {
+        case .unknown:
+            LabeledContent("Notifications") { ProgressView() }
+        case .on:
+            LabeledContent("Notifications", value: "On")
+        case .off:
+            LabeledContent("Notifications", value: "Off")
+            Button("Turn on in Settings") {
+                if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
+            }
+        case .notAsked:
+            LabeledContent("Notifications", value: "Not asked yet")
+            Button("Turn on") { Task { await push.requestPermission() } }
+        }
+        if let invalid = push.tokenInvalidAt {
+            Text("Apple reported this iPhone's notification token invalid on \(invalid.formatted(date: .abbreviated, time: .shortened)), so Mainloop stopped sending. The app sends its token again each time it opens.")
+                .font(.footnote)
+                .foregroundStyle(.orange)
+        }
+        if let error = push.lastError {
+            Text(error).font(.footnote).foregroundStyle(.red)
         }
     }
 }

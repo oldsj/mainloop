@@ -190,6 +190,21 @@ auth:
     # More namespace/name=scope entries, such as another instance's canary.
     extra: []
 
+# Apple push to the owner's registered phones (docs/specs/push-notifications.md). Off while
+# existingSecret is empty. The Secret holds an APNs token-auth key: the .p8 file, its key ID and the
+# team ID, under the key names below. It is mounted optionally into the API container only, so the
+# chart deploys before the Secret exists and APNs stays off until it does; the API reads it at
+# startup, so restart the backend after creating it. One key serves every app of the team.
+apns:
+  existingSecret: ''
+  # The Secret's key holding the .p8 file (1Password names an attached file after the file itself,
+  # such as AuthKey_<key id>.p8).
+  keyFileKey: ''
+  keyIdKey: key-id
+  teamIdKey: team-id
+  # The app's bundle ID (the apns-topic), required with existingSecret.
+  topic: ''
+
 # Authenticated, TLS calls to kagent's control gateway. The backend sends a projected token of its
 # own ServiceAccount, for the audience below, which kagent verifies by TokenReview. Needs Secret
 # kagent-control-ca (key ca.crt) in the release namespace.

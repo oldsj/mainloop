@@ -16,3 +16,5 @@ filter:
     - listDevices
     - getCurrentDevice
     - revokeDevice
+    - setDevicePush
+    - clearDevicePush

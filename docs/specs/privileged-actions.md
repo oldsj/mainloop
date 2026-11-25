@@ -303,9 +303,17 @@ account, whose role is Admin: for Omni resources (clusters, machine sets) and fo
   - in omnictl's answers, any resource of another cluster: a list or watch leaves it out, and a
     get is refused. Omni may manage clusters the executor does not act on, and omnictl sees none
     of theirs;
-  - `talosctl upgrade` to an image that is not from `factory.talos.dev` or `ghcr.io/siderolabs`:
-    checked in the legacy upgrade call, and in the image pull and install calls that talosctl
-    makes for Talos 1.13 and later.
+  - `talosctl upgrade` to an image that is not the node's own installer: the Image Factory's for
+    the schematic Omni records for that machine (`factory.talos.dev/<platform>-installer/<ID>`),
+    or `ghcr.io/siderolabs/installer` for a machine with no customization, tagged with a Talos
+    version no older than the one the machine runs, and with no digest (a digest installs whatever
+    it names, whatever the tag says). So no extensions or kernel arguments the
+    machine does not have, and no silent downgrade (`talosctl rollback` goes back). A machine
+    whose schematic Omni cannot tell is not upgraded through the executor. The proxy reads the
+    machine's status itself for this, its schematic and version only. The same check runs at
+    preflight, so a doomed upgrade is refused before the card; at the run it checks the legacy
+    upgrade call, and the image pull and install calls that talosctl makes for Talos 1.13 and
+    later.
 
   Before approval it forwards reads only.
 
@@ -325,8 +333,9 @@ account, whose role is Admin: for Omni resources (clusters, machine sets) and fo
 
   No list holds a flag that chooses the endpoint, cluster, configuration or credential
   (`--omniconfig`, `--talosconfig`, `--context`, `--cluster`, `--endpoints`, `--insecure*`), a
-  watch or follow, `--dry-run` or `--debug`. `talosctl upgrade --image=` takes an image from
-  `factory.talos.dev` or `ghcr.io/siderolabs` only. Also refused: `get` or `delete` of a type
+  watch or follow, `--dry-run` or `--debug`. `talosctl upgrade` needs `--image=`, an installer image
+  with its version tag and no digest (`factory.talos.dev/<platform>-installer/<schematic ID>:v1.x.y` or
+  `ghcr.io/siderolabs/installer:v1.x.y`), held to the node's schematic and version by the proxy. Also refused: `get` or `delete` of a type
   that is not on the allowlist, given by its full name, its plural or its singular (`clusters`,
   `cluster`, `Clusters.omni.sidero.dev`; not an abbreviation such as `mc`), or that may hold a
   secret; `get` in the `secrets` namespace; a resource in stdin of a type not on the allowlist or

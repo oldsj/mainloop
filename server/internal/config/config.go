@@ -31,6 +31,7 @@ type Config struct {
 	Sessions    Sessions
 	Server      Server
 	Ntfy        Ntfy
+	APNs        APNs
 	Auth        Auth
 
 	// EnvironmentRegistryAllowlist limits OCI registries for development environments.
@@ -319,6 +320,16 @@ type Ntfy struct {
 // Enabled reports whether push notifications are configured.
 func (n Ntfy) Enabled() bool { return n.URL != "" && n.Topic != "" }
 
+// APNs configures Apple push to the owner's registered phones (docs/specs/push-notifications.md).
+// The credentials are files in CredentialsDir, from a Secret mounted optionally: until it exists,
+// APNs is off. serve-executor reads them at startup.
+type APNs struct {
+	// CredentialsDir holds key.p8 (the token-auth key, PEM), key-id and team-id.
+	CredentialsDir string `env:"MAINLOOP_APNS_CREDENTIALS_DIR"`
+	// Topic is the app's bundle ID.
+	Topic string `env:"MAINLOOP_APNS_TOPIC"`
+}
+
 // Auth is how the owner API verifies who is calling (docs/specs/authentication.md). Only serve-api
 // reads it; [Auth.Mode] must be set there outside development.
 type Auth struct {
@@ -432,6 +443,9 @@ func Parse(vars map[string]string) (*Config, error) {
 
 var ntfyTopic = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
+// bundleID is an Apple bundle ID: reverse-DNS labels of letters, digits and '-'.
+var bundleID = regexp.MustCompile(`^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$`)
+
 func environ() map[string]string {
 	vars := map[string]string{}
 	for _, kv := range os.Environ() {
@@ -481,6 +495,11 @@ func (c *Config) validate() error {
 		if !ntfyTopic.MatchString(c.Ntfy.Topic) {
 			fail("MAINLOOP_NTFY_TOPIC must be 1-64 letters, digits, '-' or '_'")
 		}
+	}
+	c.APNs.CredentialsDir = strings.TrimSpace(c.APNs.CredentialsDir)
+	c.APNs.Topic = strings.TrimSpace(c.APNs.Topic)
+	if c.APNs.CredentialsDir != "" && !bundleID.MatchString(c.APNs.Topic) {
+		fail("MAINLOOP_APNS_TOPIC must be the app's bundle ID when MAINLOOP_APNS_CREDENTIALS_DIR is set")
 	}
 	for _, name := range []string{"read", "push"} {
 		field, label := &c.Git.ReadOrigin, "GIT_READ_ORIGIN"

@@ -39,6 +39,14 @@ const (
 	createBackoffM = time.Minute
 )
 
+// NotSentPrefix starts the detail of a delivery that ended before kagent took the message. It was
+// never sent, so sending the same text again cannot deliver it twice: tasks resends a report on
+// such a failure for longer than on one whose fate is unknown.
+const NotSentPrefix = "not sent: "
+
+// NotSent reports whether a delivery's detail says its message was never sent.
+func NotSent(detail *string) bool { return detail != nil && strings.HasPrefix(*detail, NotSentPrefix) }
+
 // assistantNS derives the id of a mirrored reply, so mirroring one twice is a no-op.
 var assistantNS = uuid.MustParse("6a2f6f0e-3a54-4c3c-9f0a-8b0d1b8f4e51")
 
@@ -184,7 +192,7 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 		var aerr error
 		if t.agent, aerr = s.agentFor(d); aerr != nil {
 			if c.State == string(dbstate.DeliveryRecorded) {
-				return t.settle(ctx, dbstate.DeliveryFailed, "not sent: "+aerr.Error(), nil, false)
+				return t.settle(ctx, dbstate.DeliveryFailed, NotSentPrefix+aerr.Error(), nil, false)
 			}
 			// A row past recorded may hold a running task, so it is not failed here; the log says it is
 			// stuck, at error level once it has been for longer than the uncertain hold.
@@ -609,7 +617,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 	ksid, err := t.ensureKagentSession(ctx)
 	if err != nil {
 		if errors.Is(err, errTaskSessionStopped) {
-			return t.settle(ctx, dbstate.DeliveryCancelled, "not sent: the task attempt has stopped", nil, false)
+			return t.settle(ctx, dbstate.DeliveryCancelled, NotSentPrefix+"the task attempt has stopped", nil, false)
 		}
 		if ctx.Err() != nil {
 			return reconcile.Retry(), ctx.Err()
@@ -623,7 +631,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 			age := time.Since(t.d.CreatedAt)
 			if hold := t.s.opts().UncertainHold; age > hold {
 				return t.settle(ctx, dbstate.DeliveryFailed,
-					"not sent: the workspace was not ready after "+hold.String()+": "+err.Error(), nil, false)
+					NotSentPrefix+"the workspace was not ready after "+hold.String()+": "+err.Error(), nil, false)
 			}
 			t.s.log().WarnContext(ctx, "delivery is waiting for its workspace",
 				"message_id", t.c.ID, "workspace", *t.d.WorkspaceID, "age", age.Round(time.Second), "waiting_for", err.Error())
@@ -636,13 +644,13 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 			return reconcile.RetryAfter(t.s.opts().UncertainRecheck), nil
 		}
 		if errors.Is(err, agentauth.ErrBindingEnded) || errors.Is(err, agentauth.ErrInvalidGrant) {
-			return t.settle(ctx, dbstate.DeliveryFailed, "not sent: "+err.Error(), nil, false)
+			return t.settle(ctx, dbstate.DeliveryFailed, NotSentPrefix+err.Error(), nil, false)
 		}
 		var cfg *kagent.ConfigError
 		if errors.As(err, &cfg) || errors.Is(err, errWorkspaceSessionGone) || errors.Is(err, errTaskSessionGone) ||
 			errors.Is(err, errWorkspacePreparationFailed) || errors.Is(err, errSessionUnrecoverable) {
 			return t.settle(ctx, dbstate.DeliveryFailed,
-				"not sent: could not prepare the kagent session: "+err.Error(), nil, false)
+				NotSentPrefix+"could not prepare the kagent session: "+err.Error(), nil, false)
 		}
 		// Failures are counted apart from claims: waiting for a credential cleanup or recovering a
 		// lease claims the row again without being a failure.
@@ -656,7 +664,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 		}
 		if int(failures) >= createAttempts {
 			return t.settle(ctx, dbstate.DeliveryFailed,
-				"not sent: could not prepare the kagent session: "+err.Error(), nil, false)
+				NotSentPrefix+"could not prepare the kagent session: "+err.Error(), nil, false)
 		}
 		t.s.log().WarnContext(ctx, "prepare kagent session failed", "message_id", t.c.ID, "error", err)
 		return reconcile.RetryAfter(min(createBackoff<<(failures-1), createBackoffM)), nil
@@ -667,7 +675,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 	text, err := t.decideSend(ctx, ksid)
 	if err != nil {
 		if errors.Is(err, errTaskSessionStopped) {
-			return t.settle(ctx, dbstate.DeliveryCancelled, "not sent: the task attempt has stopped", nil, false)
+			return t.settle(ctx, dbstate.DeliveryCancelled, NotSentPrefix+"the task attempt has stopped", nil, false)
 		}
 		return reconcile.Retry(), err
 	}
@@ -708,9 +716,9 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 		if out, ok, err := t.awaitRuntimeCapacity(ctx, sendErr); ok || err != nil {
 			return out, err
 		}
-		return t.settle(ctx, dbstate.DeliveryFailed, "not sent: "+sendErr.Error(), nil, false)
+		return t.settle(ctx, dbstate.DeliveryFailed, NotSentPrefix+sendErr.Error(), nil, false)
 	case errors.As(sendErr, &cfg):
-		return t.settle(ctx, dbstate.DeliveryFailed, "not sent: "+sendErr.Error(), nil, false)
+		return t.settle(ctx, dbstate.DeliveryFailed, NotSentPrefix+sendErr.Error(), nil, false)
 	case errors.As(sendErr, &rejected):
 		return t.settle(ctx, dbstate.DeliveryFailed, "send rejected: "+sendErr.Error(), nil, false)
 	}
@@ -930,7 +938,7 @@ func (t *turn) observe(ctx context.Context) (reconcile.Outcome, error) {
 	ksid := t.ksid
 	if ksid == "" {
 		// Nothing can have been sent to a session that was never created.
-		return t.settle(ctx, dbstate.DeliveryFailed, "not sent: the kagent session was never created", nil, false)
+		return t.settle(ctx, dbstate.DeliveryFailed, NotSentPrefix+"the kagent session was never created", nil, false)
 	}
 	task, found, err := t.s.Kagent.FindTaskForMessage(ctx, t.agent, ksid, t.c.ID)
 	switch {

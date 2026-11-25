@@ -154,7 +154,8 @@ env:
 {{- end }}
 {{- end -}}
 
-{{/* One listener container. Takes root, name, subcommand, ports, probe port, resources, defaults. */}}
+{{/* One listener container. Takes root, name, subcommand, ports, probe port, resources, defaults,
+     and optionally mounts and env of its own. */}}
 {{- define "mainloop.listener" -}}
 {{- $v := .root.Values -}}
 - name: {{ .name }}
@@ -173,6 +174,10 @@ env:
     {{- toYaml .ports | nindent 4 }}
   {{- include "mainloop.securityContext" .root | nindent 2 }}
   {{- include "mainloop.serverEnv" .root | nindent 2 }}
+  {{- /* This listener's own env, after the shared list. */}}
+  {{- with .env }}
+  {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- $mounts := trim (include "mainloop.serverMounts" .root) }}
   {{- if or .mounts $mounts }}
   volumeMounts:
