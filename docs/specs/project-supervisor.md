@@ -80,7 +80,9 @@ the project's standing supervisor, not a root task:
   `[the owner started child task <id> under you]`, the task's title, mode and `/tasks/<id>`, and
   that it reports to the supervisor and is managed as one it delegated. The message goes through
   the same outbox as its children's reports: batched with them, sent when its session has no turn
-  open, and after its first brief when the create started it. A retry of the same `request_id` makes
+  open, and never before the current attempt's first brief is recorded (an attempt is active, with
+  its session, a moment before that; the create may have started it, or a restart replaced it). The
+  same wait applies to its children's reports. A retry of the same `request_id` makes
   no second task and no second message.
 - Its reports go to the supervisor, as any child's do. The owner sees and manages it as any task.
 - A task with no `project_id` is a root task, as before. Main's `delegate` with a `project_id` is still
