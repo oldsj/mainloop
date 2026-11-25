@@ -78,6 +78,12 @@ final class AccountModel {
         }
     }
 
+    /// How this phone approves privileged actions, as Settings shows it; nil while signed out.
+    var approvals: String? {
+        guard case .signedIn = phase, let credential = account.credential, credential.approvalKeyData != nil else { return nil }
+        return credential.keyKind == .secureEnclave ? "Touch ID" : "Software key (simulator)"
+    }
+
     func signOut() async {
         phase = .working
         try? await account.signOut()

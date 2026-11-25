@@ -1014,6 +1014,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Device/push`.
             public var push: Components.Schemas.DevicePush?
+            /// The device's Touch ID approval key, registered with the device; null for a device registered without one. Public: the owner pins it in the executor's configuration.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Device/approval_key`.
+            public var approvalKey: Components.Schemas.DeviceApprovalKey?
             /// Creates a new `Device`.
             ///
             /// - Parameters:
@@ -1026,6 +1030,7 @@ extension Components {
             ///   - revokedAt:
             ///   - current: True when this request was signed by this device.
             ///   - push: The device's APNs token, if it set one. Null when it has none.
+            ///   - approvalKey: The device's Touch ID approval key, registered with the device; null for a device registered without one. Public: the owner pins it in the executor's configuration.
             public init(
                 id: Swift.String,
                 name: Swift.String,
@@ -1035,7 +1040,8 @@ extension Components {
                 lastSeenAt: Foundation.Date? = nil,
                 revokedAt: Foundation.Date? = nil,
                 current: Swift.Bool,
-                push: Components.Schemas.DevicePush? = nil
+                push: Components.Schemas.DevicePush? = nil,
+                approvalKey: Components.Schemas.DeviceApprovalKey? = nil
             ) {
                 self.id = id
                 self.name = name
@@ -1046,6 +1052,7 @@ extension Components {
                 self.revokedAt = revokedAt
                 self.current = current
                 self.push = push
+                self.approvalKey = approvalKey
             }
             public enum CodingKeys: String, CodingKey {
                 case id
@@ -1057,6 +1064,7 @@ extension Components {
                 case revokedAt = "revoked_at"
                 case current
                 case push
+                case approvalKey = "approval_key"
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1096,6 +1104,10 @@ extension Components {
                     Components.Schemas.DevicePush.self,
                     forKey: .push
                 )
+                self.approvalKey = try container.decodeIfPresent(
+                    Components.Schemas.DeviceApprovalKey.self,
+                    forKey: .approvalKey
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "id",
                     "name",
@@ -1105,7 +1117,50 @@ extension Components {
                     "last_seen_at",
                     "revoked_at",
                     "current",
-                    "push"
+                    "push",
+                    "approval_key"
+                ])
+            }
+        }
+        /// A device's approval key, which signs approvals of privileged actions behind Touch ID.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DeviceApprovalKey`.
+        public struct DeviceApprovalKey: Codable, Hashable, Sendable {
+            /// RFC 7638 SHA-256 thumbprint of the key, unpadded base64url.
+            ///
+            /// - Remark: Generated from `#/components/schemas/DeviceApprovalKey/thumbprint`.
+            public var thumbprint: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DeviceApprovalKey/jwk`.
+            public var jwk: Components.Schemas.DeviceKey
+            /// Creates a new `DeviceApprovalKey`.
+            ///
+            /// - Parameters:
+            ///   - thumbprint: RFC 7638 SHA-256 thumbprint of the key, unpadded base64url.
+            ///   - jwk:
+            public init(
+                thumbprint: Swift.String,
+                jwk: Components.Schemas.DeviceKey
+            ) {
+                self.thumbprint = thumbprint
+                self.jwk = jwk
+            }
+            public enum CodingKeys: String, CodingKey {
+                case thumbprint
+                case jwk
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.thumbprint = try container.decode(
+                    Swift.String.self,
+                    forKey: .thumbprint
+                )
+                self.jwk = try container.decode(
+                    Components.Schemas.DeviceKey.self,
+                    forKey: .jwk
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "thumbprint",
+                    "jwk"
                 ])
             }
         }
@@ -1291,25 +1346,33 @@ extension Components {
             public var platform: Components.Schemas.DeviceRegistration.PlatformPayload
             /// - Remark: Generated from `#/components/schemas/DeviceRegistration/request_key`.
             public var requestKey: Components.Schemas.DeviceKey
+            /// A second key, which signs approvals of privileged actions and needs Touch ID for each signature. Optional; it must differ from the request key and can't be added later.
+            ///
+            /// - Remark: Generated from `#/components/schemas/DeviceRegistration/approval_key`.
+            public var approvalKey: Components.Schemas.DeviceKey?
             /// Creates a new `DeviceRegistration`.
             ///
             /// - Parameters:
             ///   - name:
             ///   - platform:
             ///   - requestKey:
+            ///   - approvalKey: A second key, which signs approvals of privileged actions and needs Touch ID for each signature. Optional; it must differ from the request key and can't be added later.
             public init(
                 name: Swift.String,
                 platform: Components.Schemas.DeviceRegistration.PlatformPayload,
-                requestKey: Components.Schemas.DeviceKey
+                requestKey: Components.Schemas.DeviceKey,
+                approvalKey: Components.Schemas.DeviceKey? = nil
             ) {
                 self.name = name
                 self.platform = platform
                 self.requestKey = requestKey
+                self.approvalKey = approvalKey
             }
             public enum CodingKeys: String, CodingKey {
                 case name
                 case platform
                 case requestKey = "request_key"
+                case approvalKey = "approval_key"
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1325,10 +1388,15 @@ extension Components {
                     Components.Schemas.DeviceKey.self,
                     forKey: .requestKey
                 )
+                self.approvalKey = try container.decodeIfPresent(
+                    Components.Schemas.DeviceKey.self,
+                    forKey: .approvalKey
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "name",
                     "platform",
-                    "request_key"
+                    "request_key",
+                    "approval_key"
                 ])
             }
         }

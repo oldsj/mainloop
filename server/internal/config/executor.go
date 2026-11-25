@@ -35,6 +35,10 @@ type Executor struct {
 	OmniKey         Secret    `env:"MAINLOOP_EXECUTOR_OMNI_KEY"`
 	OmniClusterList string    `env:"MAINLOOP_EXECUTOR_OMNI_CLUSTERS"`
 	OmniClusters    []string  `env:"-"`
+	// ApprovalKeys pins the phones' approval keys, a JSON array of P-256 JWKs with the device id
+	// as kid. With any pinned, the executor runs only actions whose approval one of them signed
+	// (docs/specs/privileged-actions.md, "Signed approvals"). Public keys, not secrets.
+	ApprovalKeys string `env:"MAINLOOP_PRIVILEGED_APPROVAL_KEYS"`
 }
 
 // LoadExecutor reads and validates serve-executor's settings from the process environment.

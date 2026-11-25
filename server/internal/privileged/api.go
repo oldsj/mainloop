@@ -68,6 +68,12 @@ func (a *PrivilegedAPI) GetPrivilegedAction(ctx context.Context, r api.GetPrivil
 		res := object(row.Result)
 		d.Result = &res
 	}
+	switch a, err := q.GetPrivilegedApproval(ctx, row.ID); {
+	case err == nil:
+		d.Approval = &api.PrivilegedActionApproval{DeviceId: a.DeviceID, SignedAt: a.SignedAt}
+	case !errors.Is(err, pgx.ErrNoRows):
+		return nil, err
+	}
 	for _, e := range evs {
 		d.Events = append(d.Events, api.PrivilegedActionEvent{Id: e.ID, Step: e.Step, Detail: e.Detail, CreatedAt: e.CreatedAt})
 	}

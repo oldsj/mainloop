@@ -26,6 +26,17 @@ function pushFact(push: Device['push']): string {
   return 'notifications on';
 }
 
+/**
+ * The device's approval key as the chart pins it (executor.approvalKeys, see
+ * docs/specs/privileged-actions.md): one list entry, the public JWK with the device id as kid.
+ */
+export function pinEntry(device: Device): string | null {
+  const key = device.approval_key;
+  if (key === null) return null;
+  const { kty, crv, x, y } = key.jwk;
+  return `- {kid: ${device.id}, kty: ${kty}, crv: ${crv}, x: ${x}, y: ${y}}`;
+}
+
 /** What a failed revoke says. The server's own sentence when it sent one. */
 function revokeError(error: unknown): string {
   if (error instanceof ApiError && error.status === 404)
@@ -140,6 +151,7 @@ function DeviceRow({
   onRevoke: () => void;
 }) {
   const revokedAt = device.revoked_at;
+  const pin = pinEntry(device);
   const facts = [
     PLATFORM_LABEL[device.platform],
     `registered ${messageTime(device.created_at)}`,
@@ -158,7 +170,31 @@ function DeviceRow({
       <p className="text-muted-foreground text-xs break-all">
         {device.id} · key{' '}
         <span title={device.key_thumbprint}>{shortThumbprint(device.key_thumbprint)}</span>
+        {device.approval_key ? (
+          <>
+            {' · Touch ID approval key '}
+            <span title={device.approval_key.thumbprint}>
+              {shortThumbprint(device.approval_key.thumbprint)}
+            </span>
+          </>
+        ) : (
+          ' · no approval key'
+        )}
       </p>
+      {revokedAt || pin === null ? null : (
+        <details className="text-xs">
+          <summary className="text-muted-foreground cursor-pointer">
+            Pin its approval key for the executor
+          </summary>
+          <p className="text-muted-foreground mt-xs max-w-measure">
+            Add this entry to <code>executor.approvalKeys</code> in the chart values. The executor
+            then runs only actions this phone approved with Touch ID. It is a public key.
+          </p>
+          <pre className="bg-muted p-xs mt-xs break-all whitespace-pre-wrap">
+            <code>{pin}</code>
+          </pre>
+        </details>
+      )}
       {revokedAt ? null : (
         <div>
           <Button

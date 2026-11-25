@@ -11,6 +11,8 @@ import (
 	admissionv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+
+	"github.com/oldsj/mainloop/server/internal/approval"
 )
 
 // serve-executor is off by default. On, it is one replica replaced rather than rolled, in its own
@@ -282,5 +284,28 @@ func TestExecutorSecretNamespacesRefuseItsOwn(t *testing.T) {
 		if err == nil || !strings.Contains(string(out), "executor.secretNamespaces must not hold the executor's or the release's namespace ("+ns+")") {
 			t.Errorf("%s: err = %v\n%s", ns, err, out)
 		}
+	}
+}
+
+// Given approval keys pinned in the chart, serve-api (through the shared config) and
+// serve-executor get the same value, which the binary parses; without any, neither has it.
+func TestPinnedApprovalKeysReachBothProcesses(t *testing.T) {
+	r := render(t, "production-executor-approvals")
+	api := r.configMaps["mainloop-config"].Data["MAINLOOP_PRIVILEGED_APPROVAL_KEYS"]
+	ex := envByName(r.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])["MAINLOOP_PRIVILEGED_APPROVAL_KEYS"].Value
+	if api == "" || api != ex {
+		t.Fatalf("serve-api %q, serve-executor %q", api, ex)
+	}
+	pinned, err := approval.ParsePinned(ex)
+	if err != nil || len(pinned) != 1 || pinned["dev_0123456789abcdefghijklmnop"] == nil {
+		t.Fatalf("ParsePinned = %v, %v", pinned, err)
+	}
+
+	r = render(t, "production-executor")
+	if v, ok := r.configMaps["mainloop-config"].Data["MAINLOOP_PRIVILEGED_APPROVAL_KEYS"]; ok {
+		t.Errorf("serve-api pins %q", v)
+	}
+	if v, ok := envByName(r.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])["MAINLOOP_PRIVILEGED_APPROVAL_KEYS"]; ok {
+		t.Errorf("serve-executor pins %+v", v)
 	}
 }

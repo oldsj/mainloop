@@ -118,6 +118,10 @@ spec:
                   name: {{ .omni.keySecret }}
                   key: service-account-key
             {{- end }}
+            {{- with .approvalKeys }}
+            - name: MAINLOOP_PRIVILEGED_APPROVAL_KEYS
+              value: {{ toJson . | quote }}
+            {{- end }}
             # The root filesystem is read-only; /tmp is the only writable path.
             - name: HOME
               value: /tmp

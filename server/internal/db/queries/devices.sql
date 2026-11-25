@@ -1,8 +1,9 @@
 -- name: InsertOwnerDevice :one
--- No row when the key, or the registering token, was registered before.
+-- No row when a key, or the registering token, was registered before.
 INSERT INTO owner_devices (id, owner_id, name, platform, request_key_x, request_key_y, key_thumbprint, registered_by,
-                           registration_jti, registration_auth_time)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                           registration_jti, registration_auth_time, approval_key_x, approval_key_y,
+                           approval_key_thumbprint)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT DO NOTHING
 RETURNING *;
 

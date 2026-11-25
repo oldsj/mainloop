@@ -131,6 +131,12 @@ function Detail({ d }: { d: NonNullable<ReturnType<typeof usePrivilegedAction>['
     ['Asked', messageTime(a.created_at)],
     ['Expires', messageTime(a.expires_at)],
     ['Decided', a.decided_at ? messageTime(a.decided_at) : null],
+    [
+      'Signed',
+      d.approval
+        ? `with Touch ID on ${d.approval.device_id}, ${messageTime(d.approval.signed_at)}`
+        : null
+    ],
     ['Finished', a.finished_at ? messageTime(a.finished_at) : null],
     ['Note', a.decision_note],
     ['Error', a.last_error],

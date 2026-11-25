@@ -41,14 +41,22 @@ struct DecodedToken {
     let header: [String: Any]
     let claims: [String: Any]
 
-    init(_ token: String, key: P256.Signing.PublicKey) throws {
+    init(_ token: String, key: P256.Signing.PublicKey, verify: Bool = true) throws {
         let parts = token.split(separator: ".").map(String.init)
         try #require(parts.count == 3)
         let signature = try P256.Signing.ECDSASignature(rawRepresentation: try #require(Base64URL.decode(parts[2])))
-        try #require(key.isValidSignature(signature, for: Data((parts[0] + "." + parts[1]).utf8)))
+        try #require(!verify || key.isValidSignature(signature, for: Data((parts[0] + "." + parts[1]).utf8)))
         header = try JSONSerialization.jsonObject(with: try #require(Base64URL.decode(parts[0]))) as! [String: Any]
         claims = try JSONSerialization.jsonObject(with: try #require(Base64URL.decode(parts[1]))) as! [String: Any]
     }
+}
+
+/// Whether the token's signature verifies with `key`.
+func verifies(_ token: String, key: P256.Signing.PublicKey) -> Bool {
+    let parts = token.split(separator: ".").map(String.init)
+    guard parts.count == 3, let raw = Base64URL.decode(parts[2]),
+          let signature = try? P256.Signing.ECDSASignature(rawRepresentation: raw) else { return false }
+    return key.isValidSignature(signature, for: Data((parts[0] + "." + parts[1]).utf8))
 }
 
 let deviceID = "dev_0123456789abcdefghijklmnop"
@@ -116,6 +124,73 @@ func bearer(_ sent: FakeTransport.Sent) throws -> String {
     }
 }
 
+/// A fictional action id and digest (sha256 of "fixture").
+let actionID = "pa_fixture0001"
+let digest = "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+
+@Suite struct ApprovalTokenTests {
+    @Test func anApprovalCarriesTheActionAndDigest() async throws {
+        let signer = SoftwareSigner()
+        let token = try await ApprovalToken.make(
+            deviceID: deviceID, audience: DeviceToken.audience(for: origin), actionID: actionID, digest: digest,
+            signer: signer, reason: "Approve: a test", now: Date(timeIntervalSince1970: 1_790_000_000), jti: "approval-jti-0001"
+        )
+        let decoded = try DecodedToken(token, key: signer.key.publicKey)
+        #expect(decoded.header as? [String: String] == ["alg": "ES256", "typ": "mainloop-approval+jwt", "kid": deviceID])
+        #expect(Set(decoded.claims.keys) == ["iss", "sub", "aud", "iat", "exp", "jti", "act", "dig"])
+        #expect(decoded.claims["iss"] as? String == "mainloop-device")
+        #expect(decoded.claims["sub"] as? String == deviceID)
+        #expect(decoded.claims["aud"] as? String == "https://mainloop.example.test")
+        #expect(decoded.claims["iat"] as? Int == 1_790_000_000)
+        #expect(decoded.claims["exp"] as? Int == 1_790_000_120)
+        #expect(decoded.claims["jti"] as? String == "approval-jti-0001")
+        #expect(decoded.claims["act"] as? String == actionID)
+        #expect(decoded.claims["dig"] as? String == digest)
+    }
+
+    @Test func anApprovalSignedWithAnotherKeyDoesNotVerify() async throws {
+        let token = try await ApprovalToken.make(
+            deviceID: deviceID, audience: "https://mainloop.example.test", actionID: actionID, digest: digest,
+            signer: SoftwareSigner(), reason: "Approve"
+        )
+        #expect(!verifies(token, key: SoftwareSigner().key.publicKey))
+        let jti = try DecodedToken(token, key: P256.Signing.PrivateKey().publicKey, verify: false).claims["jti"] as? String
+        #expect(jti?.count == 32)
+    }
+}
+
+@Suite struct DeviceApproverTests {
+    @Test func aPhoneWithoutAnApprovalKeyCantApprove() async throws {
+        let key = NewDeviceKey.software(approval: nil)
+        let account = DeviceAccount(store: MemoryCredentialStore(DeviceCredential(deviceID: deviceID, origin: origin, keyKind: .software, keyData: key.data)))
+        let approver = DeviceApprover(account: account, origin: origin)
+        #expect(!approver.canApprove)
+        await #expect(throws: ApprovalError.noApprovalKey) {
+            try await approver.approval(actionID: actionID, digest: digest, reason: "Approve")
+        }
+    }
+
+    @Test func anApprovalIsSignedWithTheApprovalKeyNotTheRequestKey() async throws {
+        let request = P256.Signing.PrivateKey(), approval = P256.Signing.PrivateKey()
+        let key = NewDeviceKey.software(request, approval: approval)
+        let credential = DeviceCredential(deviceID: deviceID, origin: origin, keyKind: .software, keyData: key.data, approvalKeyData: key.approvalData)
+        let approver = DeviceApprover(account: DeviceAccount(store: MemoryCredentialStore(credential)), origin: origin)
+        #expect(approver.canApprove)
+        let token = try await approver.approval(actionID: actionID, digest: digest, reason: "Approve")
+        let decoded = try DecodedToken(token, key: approval.publicKey)
+        #expect(decoded.claims["aud"] as? String == "https://mainloop.example.test")
+        #expect(decoded.claims["act"] as? String == actionID)
+        #expect(!verifies(token, key: request.publicKey))
+    }
+
+    @Test func anApprovalKeyNeverSignsForAnotherOrigin() {
+        let key = NewDeviceKey.software()
+        let credential = DeviceCredential(deviceID: deviceID, origin: origin, keyKind: .software, keyData: key.data, approvalKeyData: key.approvalData)
+        let account = DeviceAccount(store: MemoryCredentialStore(credential))
+        #expect(!DeviceApprover(account: account, origin: URL(string: "https://other.example.test")!).canApprove)
+    }
+}
+
 @Suite struct DeviceSigningMiddlewareTests {
     @Test func aReadIsSignedForItsPathWithoutTheAPIPrefix() async throws {
         let transport = FakeTransport(json: "[]")
@@ -180,7 +255,7 @@ func bearer(_ sent: FakeTransport.Sent) throws -> String {
             origin: origin, idToken: "id-token-fixture", name: "Test iPhone", key: key, transport: transport
         )
 
-        #expect(credential == DeviceCredential(deviceID: deviceID, origin: origin, keyKind: .software, keyData: key.data))
+        #expect(credential == DeviceCredential(deviceID: deviceID, origin: origin, keyKind: .software, keyData: key.data, approvalKeyData: key.approvalData))
         let sent = try #require(await transport.sent.first)
         #expect(try bearer(sent) == "id-token-fixture")
         #expect(sent.request.method == .post)
@@ -191,6 +266,38 @@ func bearer(_ sent: FakeTransport.Sent) throws -> String {
         #expect(body["platform"] as? String == "ios")
         // The stored key signs as the registered one.
         #expect(try credential.signer().publicJWK == key.signer.publicJWK)
+    }
+
+    @Test func registeringSendsASecondKeyForApprovals() async throws {
+        let transport = FakeTransport(status: .created, json: deviceJSON)
+        let key = NewDeviceKey.software()
+
+        let credential = try await DeviceEnrollment.register(
+            origin: origin, idToken: "id-token-fixture", name: "Test iPhone", key: key, transport: transport
+        )
+
+        let sent = try #require(await transport.sent.first)
+        let body = try JSONSerialization.jsonObject(with: try #require(sent.body)) as! [String: Any]
+        let requestKey = try #require(body["request_key"] as? [String: String])
+        let approvalKey = try #require(body["approval_key"] as? [String: String])
+        let approvalJWK = try #require(key.approvalSigner?.publicJWK)
+        #expect(approvalKey == ["kty": "EC", "crv": "P-256", "x": approvalJWK.x, "y": approvalJWK.y])
+        #expect(approvalKey != requestKey)
+        // Kept with the request key, and signs as the registered one.
+        #expect(credential.approvalKeyData == key.approvalData)
+        let stored = try #require(try credential.approvalSigner())
+        #expect(stored.publicJWK == approvalJWK)
+    }
+
+    @Test func aPhoneWithoutAnApprovalKeyRegistersWithoutOne() async throws {
+        let transport = FakeTransport(status: .created, json: deviceJSON)
+        let credential = try await DeviceEnrollment.register(
+            origin: origin, idToken: "t", name: "n", key: .software(approval: nil), transport: transport
+        )
+        let body = try JSONSerialization.jsonObject(with: try #require(await transport.sent.first?.body)) as! [String: Any]
+        #expect(body["approval_key"] == nil)
+        #expect(credential.approvalKeyData == nil)
+        #expect(try credential.approvalSigner() == nil)
     }
 
     @Test func aRefusalIsReported() async throws {
@@ -226,9 +333,22 @@ func bearer(_ sent: FakeTransport.Sent) throws -> String {
     }
 
     @Test func aCredentialSurvivesEncoding() throws {
-        let credential = DeviceCredential(deviceID: deviceID, origin: origin, keyKind: .software, keyData: NewDeviceKey.software().data)
+        let key = NewDeviceKey.software()
+        let credential = DeviceCredential(deviceID: deviceID, origin: origin, keyKind: .software, keyData: key.data, approvalKeyData: key.approvalData)
         let decoded = try JSONDecoder().decode(DeviceCredential.self, from: JSONEncoder().encode(credential))
         #expect(decoded == credential)
+        #expect(decoded.approvalKeyData != nil)
+    }
+
+    @Test func aCredentialSavedBeforeApprovalKeysHasNone() throws {
+        // As the keychain item was written before approval keys existed.
+        let keyData = NewDeviceKey.software().data.base64EncodedString()
+        let old = #"{"deviceID":"\#(deviceID)","origin":"https:\/\/mainloop.example.test","keyKind":"software","keyData":"\#(keyData)"}"#
+        let decoded = try JSONDecoder().decode(DeviceCredential.self, from: Data(old.utf8))
+        #expect(decoded.deviceID == deviceID)
+        #expect(decoded.approvalKeyData == nil)
+        #expect(try decoded.approvalSigner() == nil)
+        #expect(!DeviceApprover(account: DeviceAccount(store: MemoryCredentialStore(decoded)), origin: origin).canApprove)
     }
 }
 
@@ -308,6 +428,28 @@ let fixtureOrigin = URL(string: "https://mainloop.test")!
             "device_id": deviceID, "x": signer.publicJWK.x, "y": signer.publicJWK.y, "thumbprint": signer.thumbprint,
             "audience": DeviceToken.audience(for: fixtureOrigin),
             "method": "POST", "target": "/queue/q-0001/respond?wait=1", "body": body, "iat": iat, "token": token,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: fixture, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        try (data + Data("\n".utf8)).write(to: URL(fileURLWithPath: path))
+    }
+
+    /// Writes an approval this code signed for the Go approval verifier's test
+    /// (server/internal/approval/testdata/swift-approval-token.json). Runs only when asked:
+    /// `MAINLOOP_WRITE_APPROVAL_FIXTURE=<path> swift test --filter writeTheGoApprovalFixture`.
+    @Test func writeTheGoApprovalFixture() async throws {
+        guard let path = ProcessInfo.processInfo.environment["MAINLOOP_WRITE_APPROVAL_FIXTURE"] else { return }
+        let signer = SoftwareSigner()
+        let iat = 1_790_000_000
+        let token = try await ApprovalToken.make(
+            deviceID: deviceID, audience: DeviceToken.audience(for: fixtureOrigin), actionID: actionID, digest: digest,
+            signer: signer, reason: "Approve: fixture", now: Date(timeIntervalSince1970: TimeInterval(iat)),
+            jti: "fixture-approval-jti-0001"
+        )
+        let fixture: [String: Any] = [
+            "comment": "Signed by ios/Packages/MainloopKit ApprovalToken with a throwaway software key; only the public key is kept.",
+            "device_id": deviceID, "x": signer.publicJWK.x, "y": signer.publicJWK.y, "thumbprint": signer.thumbprint,
+            "audience": DeviceToken.audience(for: fixtureOrigin),
+            "action_id": actionID, "digest": digest, "iat": iat, "token": token,
         ]
         let data = try JSONSerialization.data(withJSONObject: fixture, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         try (data + Data("\n".utf8)).write(to: URL(fileURLWithPath: path))

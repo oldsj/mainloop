@@ -418,3 +418,66 @@ func TestADeviceSetsAndClearsItsPushToken(t *testing.T) {
 		}
 	}
 }
+
+// Given a registration with a Touch ID approval key, the device is registered with both keys, the
+// list shows the approval key's thumbprint and JWK, and the owner's registration item names it.
+// The approval key must differ from the request key, be a P-256 point, and can't be added or
+// changed later.
+func TestARegistrationCarriesTheApprovalKey(t *testing.T) {
+	db := testdb.New(t)
+	a := &devices.DevicesAPI{Pool: db.Pool, OwnerID: owner}
+	phone := authtest.NewDevice(t, "dev_placeholder00000000000000")
+	ax, ay := authtest.NewDevice(t, "dev_placeholder00000000000000").JWK()
+
+	same := registration(phone)
+	same.Body.ApprovalKey = &same.Body.RequestKey
+	if _, err := a.RegisterDevice(signIn(phone), same); !isStatus(err, http.StatusUnprocessableEntity) {
+		t.Fatalf("approval key equal to the request key: %v", err)
+	}
+	offCurve := registration(phone)
+	offCurve.Body.ApprovalKey = &api.DeviceKey{Kty: api.EC, Crv: api.P256, X: ax, Y: ax}
+	if _, err := a.RegisterDevice(signIn(phone), offCurve); !isStatus(err, http.StatusUnprocessableEntity) {
+		t.Fatalf("off-curve approval key: %v", err)
+	}
+
+	req := registration(phone)
+	req.Body.ApprovalKey = &api.DeviceKey{Kty: api.EC, Crv: api.P256, X: ax, Y: ay}
+	res, err := a.RegisterDevice(signIn(phone), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := api.Device(res.(api.RegisterDevice201JSONResponse))
+	want := devices.Thumbprint(ax, ay)
+	if dev.ApprovalKey == nil || dev.ApprovalKey.Thumbprint != want || dev.ApprovalKey.Jwk.X != ax || dev.ApprovalKey.Jwk.Y != ay {
+		t.Fatalf("approval key = %+v", dev.ApprovalKey)
+	}
+	list, err := a.ListDevices(context.Background(), api.ListDevicesRequestObject{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := list.(api.ListDevices200JSONResponse)[0].ApprovalKey; got == nil || got.Thumbprint != want {
+		t.Fatalf("listed approval key = %+v", got)
+	}
+	var content string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT detail->>'content' FROM attention_items WHERE source_id = $1`, devices.RegistrationItemPrefix+dev.Id).Scan(&content); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "Touch ID approval key "+want[:16]) {
+		t.Fatalf("registration item: %s", content)
+	}
+	if _, err := db.Pool.Exec(context.Background(), `UPDATE owner_devices SET approval_key_x = NULL, approval_key_y = NULL, approval_key_thumbprint = NULL WHERE id = $1`, dev.Id); err == nil {
+		t.Fatal("an approval key was removed")
+	}
+
+	// A device registered without one can't have one added.
+	plain := register(t, a, authtest.NewDevice(t, "dev_placeholder00000000000000"))
+	if plain.ApprovalKey != nil {
+		t.Fatalf("approval key = %+v", plain.ApprovalKey)
+	}
+	bx, by := authtest.NewDevice(t, "dev_placeholder00000000000000").JWK()
+	if _, err := db.Pool.Exec(context.Background(), `UPDATE owner_devices SET approval_key_x = $2, approval_key_y = $3, approval_key_thumbprint = $4 WHERE id = $1`,
+		plain.Id, bx, by, devices.Thumbprint(bx, by)); err == nil {
+		t.Fatal("an approval key was added after registration")
+	}
+}

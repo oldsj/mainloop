@@ -11,7 +11,7 @@ import (
 )
 
 const getOwnerDevice = `-- name: GetOwnerDevice :one
-SELECT id, owner_id, name, platform, request_key_x, request_key_y, key_thumbprint, registered_by, registration_jti, registration_auth_time, created_at, last_seen_at, revoked_at FROM owner_devices WHERE id = $1
+SELECT id, owner_id, name, platform, request_key_x, request_key_y, key_thumbprint, registered_by, registration_jti, registration_auth_time, created_at, last_seen_at, revoked_at, approval_key_x, approval_key_y, approval_key_thumbprint FROM owner_devices WHERE id = $1
 `
 
 func (q *Queries) GetOwnerDevice(ctx context.Context, id string) (OwnerDevice, error) {
@@ -31,32 +31,39 @@ func (q *Queries) GetOwnerDevice(ctx context.Context, id string) (OwnerDevice, e
 		&i.CreatedAt,
 		&i.LastSeenAt,
 		&i.RevokedAt,
+		&i.ApprovalKeyX,
+		&i.ApprovalKeyY,
+		&i.ApprovalKeyThumbprint,
 	)
 	return i, err
 }
 
 const insertOwnerDevice = `-- name: InsertOwnerDevice :one
 INSERT INTO owner_devices (id, owner_id, name, platform, request_key_x, request_key_y, key_thumbprint, registered_by,
-                           registration_jti, registration_auth_time)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                           registration_jti, registration_auth_time, approval_key_x, approval_key_y,
+                           approval_key_thumbprint)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT DO NOTHING
-RETURNING id, owner_id, name, platform, request_key_x, request_key_y, key_thumbprint, registered_by, registration_jti, registration_auth_time, created_at, last_seen_at, revoked_at
+RETURNING id, owner_id, name, platform, request_key_x, request_key_y, key_thumbprint, registered_by, registration_jti, registration_auth_time, created_at, last_seen_at, revoked_at, approval_key_x, approval_key_y, approval_key_thumbprint
 `
 
 type InsertOwnerDeviceParams struct {
-	ID                   string
-	OwnerID              string
-	Name                 string
-	Platform             string
-	RequestKeyX          string
-	RequestKeyY          string
-	KeyThumbprint        string
-	RegisteredBy         string
-	RegistrationJti      *string
-	RegistrationAuthTime time.Time
+	ID                    string
+	OwnerID               string
+	Name                  string
+	Platform              string
+	RequestKeyX           string
+	RequestKeyY           string
+	KeyThumbprint         string
+	RegisteredBy          string
+	RegistrationJti       *string
+	RegistrationAuthTime  time.Time
+	ApprovalKeyX          *string
+	ApprovalKeyY          *string
+	ApprovalKeyThumbprint *string
 }
 
-// No row when the key, or the registering token, was registered before.
+// No row when a key, or the registering token, was registered before.
 func (q *Queries) InsertOwnerDevice(ctx context.Context, arg InsertOwnerDeviceParams) (OwnerDevice, error) {
 	row := q.db.QueryRow(ctx, insertOwnerDevice,
 		arg.ID,
@@ -69,6 +76,9 @@ func (q *Queries) InsertOwnerDevice(ctx context.Context, arg InsertOwnerDevicePa
 		arg.RegisteredBy,
 		arg.RegistrationJti,
 		arg.RegistrationAuthTime,
+		arg.ApprovalKeyX,
+		arg.ApprovalKeyY,
+		arg.ApprovalKeyThumbprint,
 	)
 	var i OwnerDevice
 	err := row.Scan(
@@ -85,12 +95,15 @@ func (q *Queries) InsertOwnerDevice(ctx context.Context, arg InsertOwnerDevicePa
 		&i.CreatedAt,
 		&i.LastSeenAt,
 		&i.RevokedAt,
+		&i.ApprovalKeyX,
+		&i.ApprovalKeyY,
+		&i.ApprovalKeyThumbprint,
 	)
 	return i, err
 }
 
 const listOwnerDevices = `-- name: ListOwnerDevices :many
-SELECT id, owner_id, name, platform, request_key_x, request_key_y, key_thumbprint, registered_by, registration_jti, registration_auth_time, created_at, last_seen_at, revoked_at FROM owner_devices WHERE owner_id = $1 ORDER BY created_at DESC, id LIMIT 100
+SELECT id, owner_id, name, platform, request_key_x, request_key_y, key_thumbprint, registered_by, registration_jti, registration_auth_time, created_at, last_seen_at, revoked_at, approval_key_x, approval_key_y, approval_key_thumbprint FROM owner_devices WHERE owner_id = $1 ORDER BY created_at DESC, id LIMIT 100
 `
 
 func (q *Queries) ListOwnerDevices(ctx context.Context, ownerID string) ([]OwnerDevice, error) {
@@ -116,6 +129,9 @@ func (q *Queries) ListOwnerDevices(ctx context.Context, ownerID string) ([]Owner
 			&i.CreatedAt,
 			&i.LastSeenAt,
 			&i.RevokedAt,
+			&i.ApprovalKeyX,
+			&i.ApprovalKeyY,
+			&i.ApprovalKeyThumbprint,
 		); err != nil {
 			return nil, err
 		}
@@ -143,7 +159,7 @@ func (q *Queries) PruneDeviceTokenUses(ctx context.Context) (int64, error) {
 const revokeOwnerDevice = `-- name: RevokeOwnerDevice :one
 UPDATE owner_devices SET revoked_at = coalesce(revoked_at, now())
 WHERE id = $1 AND owner_id = $2
-RETURNING id, owner_id, name, platform, request_key_x, request_key_y, key_thumbprint, registered_by, registration_jti, registration_auth_time, created_at, last_seen_at, revoked_at
+RETURNING id, owner_id, name, platform, request_key_x, request_key_y, key_thumbprint, registered_by, registration_jti, registration_auth_time, created_at, last_seen_at, revoked_at, approval_key_x, approval_key_y, approval_key_thumbprint
 `
 
 type RevokeOwnerDeviceParams struct {
@@ -169,6 +185,9 @@ func (q *Queries) RevokeOwnerDevice(ctx context.Context, arg RevokeOwnerDevicePa
 		&i.CreatedAt,
 		&i.LastSeenAt,
 		&i.RevokedAt,
+		&i.ApprovalKeyX,
+		&i.ApprovalKeyY,
+		&i.ApprovalKeyThumbprint,
 	)
 	return i, err
 }

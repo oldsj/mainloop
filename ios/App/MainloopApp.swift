@@ -31,9 +31,9 @@ final class AppEnvironment {
     /// The one environment the app and its UIKit delegate share.
     static let shared = AppEnvironment.fromBundle()
 
-    init(origin: ServerOrigin, source: any MainloopSource, account: AccountModel, push: PushModel) {
+    init(origin: ServerOrigin, source: any MainloopSource, approver: any Approver, account: AccountModel, push: PushModel) {
         self.origin = origin
-        needsYou = NeedsYouModel(source: source)
+        needsYou = NeedsYouModel(source: source, approver: approver)
         sessions = SessionsModel(source: source)
         self.account = account
         self.push = push
@@ -56,14 +56,16 @@ final class AppEnvironment {
             let push = PushModel(account: deviceAccount, origin: url, client: client, environment: apnsEnvironment)
             return AppEnvironment(
                 origin: origin, source: LiveSource(client: client),
+                approver: DeviceApprover(account: deviceAccount, origin: url),
                 account: AccountModel(account: deviceAccount, origin: url, signIn: signIn, push: push),
                 push: push
             )
         case .fixtures:
             // Fixtures are bundled with MainloopCore; failing to read them is a build error.
             let push = PushModel(account: deviceAccount, origin: nil, client: nil, environment: nil)
+            // Sample approvals are signed with a throwaway software key, without Touch ID.
             return AppEnvironment(
-                origin: origin, source: try! FixtureSource(),
+                origin: origin, source: try! FixtureSource(), approver: SampleApprover(),
                 account: AccountModel(account: deviceAccount, origin: nil, signIn: nil, push: push),
                 push: push
             )

@@ -54,6 +54,13 @@ var installs = map[string]struct {
 		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.omni.enabled=true",
 		"executor.omni.endpoint=https://omni.example.com", "executor.omni.clusters={internal-01,lab-02}",
 	}},
+	// Production with serve-executor on and a phone's approval key pinned.
+	"production-executor-approvals": {"mainloop", "ci/production-values.yaml", []string{
+		"executor.enabled=true", "executor.namespace=mainloop-executor",
+		"executor.approvalKeys[0].kid=dev_0123456789abcdefghijklmnop", "executor.approvalKeys[0].kty=EC",
+		"executor.approvalKeys[0].crv=P-256", "executor.approvalKeys[0].x=VBY4eEqK2i_pljz6fJ7BYbPqbMOb-ZFPzBXzI1_w1mM",
+		"executor.approvalKeys[0].y=YNqLInY0XbP0fGgecdIgsmrHXiY9zDnuNAG4ozmCWgQ",
+	}},
 	// Production with Apple push on (docs/specs/push-notifications.md).
 	"production-apns": {"mainloop", "ci/production-values.yaml", []string{
 		"apns.existingSecret=opencozy-apns", "apns.keyFileKey=AuthKey_ABC123DEFG.p8", "apns.topic=org.example.mainloop",

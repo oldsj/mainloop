@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/oldsj/mainloop/server/internal/approval"
 	"github.com/oldsj/mainloop/server/internal/attention"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/events"
@@ -184,6 +185,9 @@ type Service struct {
 	Sidero Sidero
 	// OmniClusters are the clusters command.talosctl may act on.
 	OmniClusters []string
+	// ApprovalKeys, in serve-executor, are the pinned approval keys. With any, an action runs only
+	// when one of them signed its approval for its id and digest.
+	ApprovalKeys approval.Pinned
 }
 
 func (s *Service) now() time.Time {

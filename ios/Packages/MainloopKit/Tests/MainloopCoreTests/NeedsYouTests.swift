@@ -1,7 +1,35 @@
+import CryptoKit
 import Foundation
 import MainloopAPI
 @testable import MainloopCore
 import Testing
+
+/// A privileged card like the fixture's first, with the given context.
+func privilegedItem(_ context: [String: String]) throws -> NeedsYouItem {
+    let base = try Fixtures.attention().items.map(NeedsYouItem.init)[0]
+    return NeedsYouItem(
+        id: base.id, kind: base.kind, title: base.title, needed: base.needed, content: nil,
+        options: ["Approve", "Deny"], taskID: nil, queueItemID: base.queueItemID, createdAt: nil, expiresAt: nil,
+        privileged: PrivilegedCard(context: context)
+    )
+}
+
+/// An approver with a software key, or one whose prompt the owner cancels.
+struct TestApprover: Approver {
+    var canApprove = true
+    var fails: (any Error)?
+    let signer = SoftwareSigner()
+
+    func approval(actionID: String, digest: String, reason: String) async throws -> String {
+        if let fails { throw fails }
+        return try await ApprovalToken.make(
+            deviceID: deviceID, audience: "https://mainloop.example.test", actionID: actionID, digest: digest,
+            signer: signer, reason: reason
+        )
+    }
+}
+
+let fixtureDigest = "3f2a9c1e7b6d4a5f8e0c2b1a9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e"
 
 @Suite struct FixtureContractTests {
     @Test func attentionFixtureDecodesWithTheGeneratedTypes() throws {
@@ -98,6 +126,32 @@ import Testing
         }
     }
 
+    @Test func aSignedApproveCarriesTheDigestAndTheApproval() throws {
+        let item = try items()[0]
+        let body = try AnswerBody.make(for: item, answer: .signedApprove(token: "header.claims.signature"))
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(body)) as! [String: Any]
+        #expect(json["response"] as? String == "Approve")
+        let metadata = try #require(json["metadata"] as? [String: String])
+        #expect(metadata == ["reviewed_context": fixtureDigest, "approval": "header.claims.signature"])
+    }
+
+    @Test(arguments: [
+        ["privileged_action_id": "pa-9"],
+        ["privileged_action_id": "pa-9", "privileged_action_digest": "abc"],
+        ["privileged_action_digest": String(repeating: "a", count: 64)],
+    ] as [[String: String]])
+    func aSignedApproveNeedsWellFormedFacts(_ context: [String: String]) throws {
+        #expect(throws: AnswerError.notApprovable) {
+            try AnswerBody.make(for: privilegedItem(context), answer: .signedApprove(token: "t"))
+        }
+    }
+
+    @Test func aSignedApproveIsOnlyForPrivilegedCards() throws {
+        #expect(throws: AnswerError.notApprovable) {
+            try AnswerBody.make(for: items()[2], answer: .signedApprove(token: "t"))
+        }
+    }
+
     @Test func ordinaryCardsMayBeApproved() throws {
         let merge = try items()[2]
         #expect(try AnswerBody.make(for: merge, answer: .text("Approve")).response == "Approve")
@@ -140,6 +194,57 @@ import Testing
         await model.answer(item, with: .option(Answer.approve))
         #expect(model.items.count == 4)
         #expect(model.lastError?.contains("signed approval") == true)
+    }
+
+    @Test func approveIsOfferedOnlyWithAnApprovalKeyAndWellFormedFacts() async throws {
+        let privileged = try Fixtures.attention().items.map(NeedsYouItem.init)[0]
+        #expect(NeedsYouModel(source: try FixtureSource(), approver: TestApprover()).offersSignedApprove(privileged))
+        // Registered before approval keys, or signed out.
+        #expect(!NeedsYouModel(source: try FixtureSource(), approver: TestApprover(canApprove: false)).offersSignedApprove(privileged))
+        #expect(!NeedsYouModel(source: try FixtureSource()).offersSignedApprove(privileged))
+        // Malformed facts.
+        let model = NeedsYouModel(source: try FixtureSource(), approver: TestApprover())
+        #expect(!model.offersSignedApprove(try privilegedItem(["privileged_action_id": "pa-9", "privileged_action_digest": "abc"])))
+        #expect(!model.offersSignedApprove(try privilegedItem(["privileged_action_type": "k8s.delete"])))
+        // Ordinary cards answer with their options.
+        #expect(!model.offersSignedApprove(try Fixtures.attention().items.map(NeedsYouItem.init)[2]))
+    }
+
+    @Test func approvingSignsAndRemovesTheCard() async throws {
+        let model = NeedsYouModel(source: try FixtureSource(), approver: TestApprover())
+        await model.load()
+        let item = try #require(model.items.first)
+        await model.approve(item)
+        #expect(model.items.map(\.id) == ["attn-0002", "attn-0003", "attn-0004"])
+        #expect(model.lastError == nil)
+    }
+
+    @Test func aCancelledPromptSendsNothingAndSaysNothing() async throws {
+        let model = NeedsYouModel(source: try FixtureSource(), approver: TestApprover(fails: ApprovalSigningError.cancelled))
+        await model.load()
+        let item = try #require(model.items.first)
+        await model.approve(item)
+        #expect(model.items.count == 4)
+        #expect(model.lastError == nil)
+        #expect(model.answering.isEmpty)
+    }
+
+    @Test func anUnrecognisedFingerSendsNothing() async throws {
+        let model = NeedsYouModel(source: try FixtureSource(), approver: TestApprover(fails: ApprovalSigningError.notRecognised))
+        await model.load()
+        await model.approve(try #require(model.items.first))
+        #expect(model.items.count == 4)
+        #expect(model.lastError?.contains("Nothing was sent") == true)
+    }
+
+    @Test func typedApproveIsStillRefusedWithAnApprovalKey() async throws {
+        let model = NeedsYouModel(source: try FixtureSource(), approver: TestApprover())
+        await model.load()
+        let item = try #require(model.items.first)
+        await model.answer(item, with: .text("approve"))
+        await model.answer(item, with: .option(Answer.approve))
+        #expect(model.items.count == 4)
+        #expect(model.lastError != nil)
     }
 
     @Test func sessionsListLiveAndNeedsOwnerFirstWithoutArchived() async throws {
@@ -195,4 +300,43 @@ final class Counter: @unchecked Sendable {
     private let lock = NSLock()
     private var value = 0
     func next() -> Int { lock.withLock { value += 1; return value } }
+}
+
+@MainActor @Suite struct LiveApprovalTests {
+    func model(_ transport: FakeTransport, approver: TestApprover) throws -> (NeedsYouModel, NeedsYouItem) {
+        let client = MainloopAPI.client(origin: origin, middlewares: [], transport: transport)
+        let item = try Fixtures.attention().items.map(NeedsYouItem.init)[0]
+        return (NeedsYouModel(source: LiveSource(client: client), approver: approver), item)
+    }
+
+    @Test func approvingSendsTheSignedApproval() async throws {
+        let transport = FakeTransport(json: #"{"status":"ok"}"#)
+        let approver = TestApprover()
+        let (model, item) = try model(transport, approver: approver)
+        await model.approve(item)
+
+        let sent = try #require(await transport.sent.first)
+        #expect(sent.request.path == "/queue/q-0001/respond")
+        let body = try JSONSerialization.jsonObject(with: try #require(sent.body)) as! [String: Any]
+        #expect(body["response"] as? String == "Approve")
+        let metadata = try #require(body["metadata"] as? [String: String])
+        #expect(metadata["reviewed_context"] == fixtureDigest)
+        let claims = try DecodedToken(try #require(metadata["approval"]), key: approver.signer.key.publicKey).claims
+        #expect(claims["act"] as? String == "pa-0001")
+        #expect(claims["dig"] as? String == fixtureDigest)
+    }
+
+    @Test func aRefusalShowsTheServersReason() async throws {
+        let transport = FakeTransport(status: .forbidden, json: #"{"detail":"This device's approval key is not pinned for this action."}"#)
+        let (model, item) = try model(transport, approver: TestApprover())
+        await model.approve(item)
+        #expect(model.lastError == "This device's approval key is not pinned for this action.")
+    }
+
+    @Test func aCancelledPromptSendsNoRequest() async throws {
+        let transport = FakeTransport(json: #"{"status":"ok"}"#)
+        let (model, item) = try model(transport, approver: TestApprover(fails: ApprovalSigningError.cancelled))
+        await model.approve(item)
+        #expect(await transport.sent.isEmpty)
+    }
 }

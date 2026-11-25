@@ -84,9 +84,16 @@ var (
 )
 
 // PrivilegedDigestKey is the context key a privileged action's card carries its digest under
-// (privileged.ContextDigest). Approving such a card is the owner's alone, never a device's, until
-// approvals are signed with the device's Touch ID key (docs/specs/devices.md).
+// (privileged.ContextDigest). Approving such a card is checked by PrivilegedApprovals; without
+// one, a device can't approve it (docs/specs/devices.md).
 const PrivilegedDigestKey = "privileged_action_digest"
+
+// PrivilegedApprovals checks an Approve of a privileged action's card, inside the answer's
+// transaction, given the card's context and the answer's metadata. ctx carries the caller's
+// principal. An error refuses the answer; wrap ErrForbidden to say why.
+type PrivilegedApprovals interface {
+	CheckApprove(ctx context.Context, tx pgx.Tx, card map[string]any, metadata []byte) error
+}
 
 // AnswerHook checks, and acts on, the owner's answer to a queue item another slice opened, inside
 // the answer's transaction. ctx carries the caller's principal. An error refuses the answer and
@@ -100,6 +107,8 @@ type Service struct {
 	Log     *slog.Logger
 	// SweepEvery is the period of the task-decision sweep. Zero means 3 seconds.
 	SweepEvery time.Duration
+	// Approvals checks an Approve of a privileged action's card. Nil refuses a device's.
+	Approvals PrivilegedApprovals
 
 	hooks map[string]AnswerHook // queue item id prefix → hook
 }
@@ -552,7 +561,7 @@ func (s *Service) Respond(ctx context.Context, itemID string, body api.QueueItem
 	}
 	return events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
 		q := dbq.New(tx)
-		if err := s.checkAnswer(ctx, tx, q, itemID, body.Response); err != nil {
+		if err := s.checkAnswer(ctx, tx, q, itemID, body.Response, meta); err != nil {
 			return nil, err
 		}
 		id, err := q.RespondQueueAttention(ctx, dbq.RespondQueueAttentionParams{
@@ -570,7 +579,7 @@ func (s *Service) Respond(ctx context.Context, itemID string, body api.QueueItem
 
 // checkAnswer refuses an answer the caller may not give, and runs the item's hook, before an open
 // item records it. An item that isn't open is left to whyNotAnswered.
-func (s *Service) checkAnswer(ctx context.Context, tx pgx.Tx, q *dbq.Queries, itemID, response string) error {
+func (s *Service) checkAnswer(ctx context.Context, tx pgx.Tx, q *dbq.Queries, itemID, response string, metadata []byte) error {
 	row, err := q.GetAttentionBySource(ctx, dbq.GetAttentionBySourceParams{OwnerID: s.OwnerID, SourceKind: SourceQueue, SourceID: itemID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
@@ -581,14 +590,19 @@ func (s *Service) checkAnswer(ctx context.Context, tx pgx.Tx, q *dbq.Queries, it
 	if row.State != dbstate.AttentionOpen {
 		return nil
 	}
-	if p, ok := auth.FromContext(ctx); ok && p.Kind == auth.KindDevice &&
-		strings.EqualFold(strings.TrimSpace(response), "Approve") {
+	if strings.EqualFold(strings.TrimSpace(response), "Approve") {
 		var d queueDetail
 		if err := json.Unmarshal(row.Detail, &d); err != nil {
 			return err
 		}
 		if _, privileged := d.Context[PrivilegedDigestKey]; privileged {
-			return fmt.Errorf("%w: a privileged action is approved from the web app, not a device", ErrForbidden)
+			if s.Approvals != nil {
+				if err := s.Approvals.CheckApprove(ctx, tx, d.Context, metadata); err != nil {
+					return err
+				}
+			} else if p, ok := auth.FromContext(ctx); ok && p.Kind == auth.KindDevice {
+				return fmt.Errorf("%w: a privileged action is approved from the web app, not a device", ErrForbidden)
+			}
 		}
 	}
 	for prefix, h := range s.hooks {

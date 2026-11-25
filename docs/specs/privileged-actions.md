@@ -15,6 +15,9 @@ sends the requesting session one message with the outcome.
   `command.kubectl`, run by `serve-executor` with short-lived credentials it mints per run.
 - Slice 3, second part: the approved commands `command.omnictl` and `command.talosctl`, run by
   `serve-executor` through a proxy of its own that holds its Omni service account.
+- [Signed approvals](#signed-approvals): Approve from the iPhone app, signed with the phone's Touch
+  ID approval key, checked by `serve-api` and again by `serve-executor` against keys pinned in its
+  own configuration. Tested with software keys; not yet proven on a phone.
 
 ssh to LAN hosts and the home-network types are later parts. They are not described here.
 
@@ -394,9 +397,10 @@ The card is a Needs-you `approval` item with high priority, so it gets an ntfy p
 
 ## Decision
 
-The web app sends `Approve` with `metadata.reviewed_context` set to the card's digest. An Approve
-from a registered phone is refused (`403`) until approvals are signed with the phone's Touch ID key
-([devices](devices.md)); the phone may still deny. A sweep records the decision:
+The web app sends `Approve` with `metadata.reviewed_context` set to the card's digest. The iPhone
+app sends the same with a Touch ID signature, and `serve-api` refuses (`403`) a phone's Approve
+without a valid one; see [Signed approvals](#signed-approvals). Either may deny. A sweep records
+the decision:
 
 - An **Approve** whose `reviewed_context` equals the digest, sent before expiry, approves the
   action.
@@ -589,9 +593,71 @@ The split of work:
 An executor type that nobody preflights within 10 minutes ends `preflight_failed`, with a note
 that the executor may be down.
 
-`serve-api`'s own database role can still write every column. A compromised `serve-api` could
-therefore forge an approval for an executor type. Binding approvals to the owner's passkey (a
-later slice) closes that gap.
+`serve-api`'s own database role can still write every column. Without pinned approval keys, a
+compromised `serve-api` could therefore forge an approval for an executor type. With them, the
+executor runs only what a pinned phone signed; see [Signed approvals](#signed-approvals).
+
+## Signed approvals
+
+A phone approves with its **approval key** ([devices](devices.md#the-approval-key)), whose every
+signature asks for Touch ID.
+
+**The token.** The app's Approve carries `metadata.approval`, a compact JWS:
+
+| Part         | Value                                                                       |
+| ------------ | --------------------------------------------------------------------------- |
+| header `alg` | `ES256`                                                                     |
+| header `typ` | `mainloop-approval+jwt`                                                     |
+| header `kid` | the device id                                                               |
+| `iss`, `sub` | `mainloop-device`, the device id                                            |
+| `aud`        | the instance's origin, as for [request tokens](devices.md#signed-requests)  |
+| `iat`, `exp` | required; `exp` after `iat` and at most 5 minutes after it (the app uses 2) |
+| `jti`        | 16 to 128 characters                                                        |
+| `act`        | the action id, the card's `privileged_action_id`                            |
+| `dig`        | the digest, the card's `privileged_action_digest`                           |
+
+The digest covers the canonical arguments and the frozen facts, so a token approves that one
+action as the owner saw it, and nothing else.
+
+**In `serve-api`**, in the transaction of the answer, an Approve of a privileged card from a phone
+is refused (`403`) unless:
+
+- it carries a token, signed by the calling phone's own approval key (a phone registered without
+  one is told to sign out and in again);
+- the token is for this instance, current (30 seconds of leeway), and names this card's action id
+  and digest;
+- its `jti` was never used: the token is recorded in `privileged_approvals`, one per action, and a
+  `jti` approves one action, ever.
+
+An approval token with an answer from the web app is refused.
+
+**Pinning.** The owner pins phones' approval keys in the chart's `executor.approvalKeys`: each
+entry is the public JWK that Settings › Devices shows, with the device id as `kid`. The chart gives
+the same value, `MAINLOOP_PRIVILEGED_APPROVAL_KEYS`, to `serve-api` and `serve-executor`, and each
+refuses to start if it is malformed. With any key pinned:
+
+- `serve-api` takes an Approve of an executor type only from a phone whose key is pinned, signed
+  with it. The web app's Approve of an executor type is refused ("approve this on your iPhone").
+  Types `serve-api` runs itself, such as a merge, can still be approved from the web app.
+- `serve-executor` checks, before an action's first step and against its pinned keys only, never
+  the database's:
+  1. A recorded token exists and a pinned key verifies it for its `kid`.
+  2. Its `act` is the action's id and its `dig` the digest just recomputed from the stored row,
+     which must also equal the approved digest. A row changed under the same id, however its
+     digest was rewritten, no longer matches.
+  3. Its `jti` is recorded in the executor's own table, `executor_approval_uses`, for this action.
+     A `jti` used for another action is refused. A first use more than 15 minutes after `iat` is
+     refused; a retry of the same action finds its own record and is not.
+
+  Anything else fails the action with the reason, and nothing runs.
+
+With no key pinned, an executor type is approved as before, from the web app or a phone's signed
+Approve.
+
+**Limits.** `serve-api`'s role owns the schema and could delete the executor's records or turn the
+row triggers off. A token then still approves only its own action and digest. Within 15 minutes
+of the owner's Touch ID, a deleted record would let that same action run again, which each type's
+observe-first step mostly absorbs (see [Execution](#execution)); after that, it is refused.
 
 ## Audit
 

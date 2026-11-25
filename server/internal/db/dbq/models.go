@@ -348,6 +348,12 @@ type EventFloor struct {
 	PrunedThrough int64
 }
 
+type ExecutorApprovalUse struct {
+	Jti      string
+	ActionID string
+	UsedAt   time.Time
+}
+
 type GitBranchPolicy struct {
 	ProjectID string
 	Version   int64
@@ -649,19 +655,22 @@ type MessageImage struct {
 }
 
 type OwnerDevice struct {
-	ID                   string
-	OwnerID              string
-	Name                 string
-	Platform             string
-	RequestKeyX          string
-	RequestKeyY          string
-	KeyThumbprint        string
-	RegisteredBy         string
-	RegistrationJti      *string
-	RegistrationAuthTime time.Time
-	CreatedAt            time.Time
-	LastSeenAt           *time.Time
-	RevokedAt            *time.Time
+	ID                    string
+	OwnerID               string
+	Name                  string
+	Platform              string
+	RequestKeyX           string
+	RequestKeyY           string
+	KeyThumbprint         string
+	RegisteredBy          string
+	RegistrationJti       *string
+	RegistrationAuthTime  time.Time
+	CreatedAt             time.Time
+	LastSeenAt            *time.Time
+	RevokedAt             *time.Time
+	ApprovalKeyX          *string
+	ApprovalKeyY          *string
+	ApprovalKeyThumbprint *string
 }
 
 type OwnerDotfilesSource struct {
@@ -786,6 +795,15 @@ type PrivilegedActionEvent struct {
 	ActionID  string
 	Step      string
 	Detail    string
+	CreatedAt time.Time
+}
+
+type PrivilegedApproval struct {
+	ActionID  string
+	DeviceID  string
+	Jti       string
+	Token     string
+	SignedAt  time.Time
 	CreatedAt time.Time
 }
 

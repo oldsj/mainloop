@@ -170,6 +170,9 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 	attn := attention.NewService(cfg, pool, log)
+	if attn.Approvals, err = newApprovals(cfg); err != nil {
+		return err
+	}
 
 	// The one push gate of this process. A renamed default branch advances the push policy whether or
 	// not the gate is on: the policy is database state that outlives a gate-off period, and advancing

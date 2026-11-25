@@ -33,11 +33,13 @@ lint:
     - linters: [yamllint, prettier, checkov, trivy]
       paths:
         - charts/*/templates/**
-    # A device token the iOS code signed with a throwaway key (only its public half is kept),
+    # A device token and an approval token the iOS code signed with throwaway keys (only their
+    # public halves are kept),
     # expired, verified by the Go interop test. CKV_SECRET_9 matches any JWT.
     - linters: [checkov]
       paths:
         - server/internal/auth/testdata/swift-device-token.json
+        - server/internal/approval/testdata/swift-approval-token.json
     # Written by the TanStack Router plugin on every vite run; its output is committed as written
     - linters: [ALL]
       paths:

@@ -48,6 +48,13 @@ public struct PrivilegedCard: Hashable, Sendable {
     /// The first 16 characters, as the card shows them.
     public var digestPrefix: String? { digest.map { String($0.prefix(16)) } }
 
+    /// The action id and digest an approval signs, when both are well formed. A card without them
+    /// can't be approved here.
+    public var approvable: (actionID: String, digest: String)? {
+        guard let actionID, let digest else { return nil }
+        return (actionID, digest)
+    }
+
     public init?(context: [String: (any Sendable)?]) {
         guard context.keys.contains(where: { $0.hasPrefix(Self.keyPrefix) }) else { return nil }
         actionID = (context[Self.contextActionID] as? String).flatMap { $0.isEmpty ? nil : $0 }
@@ -93,6 +100,9 @@ public enum Answer: Hashable, Sendable {
     case option(String)
     /// A free-text reply. On a privileged card this is a denial with the text as its note.
     case text(String)
+    /// Approve on a privileged card, with the approval token signed by this phone's approval key
+    /// (`ApprovalToken`).
+    case signedApprove(token: String)
 
     public static let approve = "Approve"
     public static let deny = "Deny"
@@ -100,25 +110,35 @@ public enum Answer: Hashable, Sendable {
     public var response: String {
         switch self {
         case .option(let value), .text(let value): value
+        case .signedApprove: Self.approve
         }
     }
 }
 
 public enum AnswerError: Error, Equatable, Sendable {
     case empty
-    /// Approving a privileged action needs a signed approval (slice 4); the phone can't send
-    /// the web app's unsigned Approve.
+    /// Approving a privileged action needs a signed approval; the phone never sends the web
+    /// app's unsigned Approve, tapped or typed.
     case privilegedApproveNeedsSignature
+    /// A signed approval for a card that isn't privileged, or whose action id or digest is
+    /// missing or malformed.
+    case notApprovable
 }
 
 /// Builds the body of `POST /queue/{item_id}/respond`.
 public enum AnswerBody {
     public static func make(for item: NeedsYouItem, answer: Answer) throws -> Components.Schemas.QueueItemResponse {
+        if case .signedApprove(let token) = answer {
+            guard let facts = item.privileged?.approvable, !token.isEmpty else { throw AnswerError.notApprovable }
+            // The server approves only when reviewed_context is the digest the approval signed.
+            let metadata = try OpenAPIObjectContainer(unvalidatedValue: ["reviewed_context": facts.digest, "approval": token])
+            return .init(response: Answer.approve, metadata: .init(additionalProperties: metadata))
+        }
         let response = answer.response.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !response.isEmpty else { throw AnswerError.empty }
         // On a privileged card the server records anything but a signed Approve with the
-        // card's digest as a denial. Refuse an Approve here, typed or tapped, so the owner
-        // doesn't deny by accident.
+        // card's digest as a denial. Refuse an unsigned Approve here, typed or tapped, so the
+        // owner doesn't deny by accident.
         if item.privileged != nil, response.caseInsensitiveCompare(Answer.approve) == .orderedSame {
             throw AnswerError.privilegedApproveNeedsSignature
         }

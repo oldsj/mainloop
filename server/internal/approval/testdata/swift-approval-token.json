@@ -1,0 +1,12 @@
+{
+  "action_id": "pa_fixture0001",
+  "audience": "https://mainloop.test",
+  "comment": "Signed by ios/Packages/MainloopKit ApprovalToken with a throwaway software key; only the public key is kept.",
+  "device_id": "dev_0123456789abcdefghijklmnop",
+  "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+  "iat": 1790000000,
+  "thumbprint": "VBbuD2C9Q0h7f6DbTi-NSUZdm2S7Zp6XKw6r5VsOz50",
+  "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRldl8wMTIzNDU2Nzg5YWJjZGVmZ2hpamtsbW5vcCIsInR5cCI6Im1haW5sb29wLWFwcHJvdmFsK2p3dCJ9.eyJhY3QiOiJwYV9maXh0dXJlMDAwMSIsImF1ZCI6Imh0dHBzOi8vbWFpbmxvb3AudGVzdCIsImRpZyI6ImYxNmQwNWVjNmIyOTI0OGQyYzYxYWRiMWU5MjYzZjc4ZTRmN2JhY2UxYjk1NTAxNGEyZDE3ODcyY2ZlNDA2NGQiLCJleHAiOjE3OTAwMDAxMjAsImlhdCI6MTc5MDAwMDAwMCwiaXNzIjoibWFpbmxvb3AtZGV2aWNlIiwianRpIjoiZml4dHVyZS1hcHByb3ZhbC1qdGktMDAwMSIsInN1YiI6ImRldl8wMTIzNDU2Nzg5YWJjZGVmZ2hpamtsbW5vcCJ9.EXz1UOAQx3-0Xo8MGCp7fVFB92OzJhBibnevj2xTzRvbXoBSDRhQoJBT-h2AvfeT8nxl34axtiKUFGeyxprekg",
+  "x": "VBY4eEqK2i_pljz6fJ7BYbPqbMOb-ZFPzBXzI1_w1mM",
+  "y": "YNqLInY0XbP0fGgecdIgsmrHXiY9zDnuNAG4ozmCWgQ"
+}

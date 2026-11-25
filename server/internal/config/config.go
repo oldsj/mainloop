@@ -68,6 +68,10 @@ type Config struct {
 	// PrivilegedOmniEnabled accepts command.omnictl and command.talosctl: the executor has Omni
 	// access (executor.omni in the chart).
 	PrivilegedOmniEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED"`
+	// PrivilegedApprovalKeys is the executor's pinned approval keys (the same value as
+	// serve-executor's). With any pinned, serve-api accepts an approval of an executor type only
+	// from a phone whose key is pinned, signed with it.
+	PrivilegedApprovalKeys string `env:"MAINLOOP_PRIVILEGED_APPROVAL_KEYS"`
 
 	// WebFetchPerMinute bounds the open-web web_fetch tool's fetches per owner per minute, and
 	// WebFetchDenyCIDRs adds comma-separated ranges it never connects to, beyond the built-in

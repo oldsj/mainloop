@@ -2,8 +2,8 @@ import MainloopCore
 import SwiftUI
 
 /// One card: what is asked, the facts, and the answers. A privileged card shows the action id
-/// and the digest prefix as the web card does; approving it on the phone waits for signed
-/// approvals (Touch ID), so only Deny and a note are offered here.
+/// and the digest prefix as the web card does. Its Approve signs an approval with this phone's
+/// approval key, which asks for Touch ID; its other answers are denials.
 struct NeedsYouDetail: View {
     @Environment(NeedsYouModel.self) private var model
     let item: NeedsYouItem
@@ -35,7 +35,7 @@ struct NeedsYouDetail: View {
                 } header: {
                     Text("Privileged action")
                 } footer: {
-                    Text("Approving needs Touch ID on this phone, which arrives with signed approvals. Until then, approve on the web app, or deny here.")
+                    Text(privilegedFooter(card))
                 }
             }
             if let expires = item.expiresAt {
@@ -45,9 +45,18 @@ struct NeedsYouDetail: View {
             }
             if item.isAnswerable {
                 Section("Answer") {
-                    ForEach(item.options, id: \.self) { option in
+                    if model.offersSignedApprove(item) {
+                        Button {
+                            Task { await model.approve(item) }
+                        } label: {
+                            Label(Answer.approve, systemImage: "touchid")
+                        }
+                        .disabled(busy)
+                    }
+                    // A privileged card's Approve is the signed one above, never the plain option.
+                    ForEach(item.options.filter { !isUnsignedApprove($0) }, id: \.self) { option in
                         Button(option) { send(.option(option)) }
-                            .disabled(busy || isUnsignedApprove(option))
+                            .disabled(busy)
                     }
                     TextField(item.privileged != nil ? "Deny with a note" : "Reply", text: reply, axis: .vertical)
                         .lineLimit(1...6)
@@ -67,7 +76,17 @@ struct NeedsYouDetail: View {
     }
 
     private func isUnsignedApprove(_ option: String) -> Bool {
-        item.privileged != nil && option == Answer.approve
+        item.privileged != nil && option.caseInsensitiveCompare(Answer.approve) == .orderedSame
+    }
+
+    private func privilegedFooter(_ card: PrivilegedCard) -> String {
+        if card.approvable == nil {
+            return "This card's action id or digest is missing or malformed, so it can't be approved. Deny it, or ask the agent again."
+        }
+        if model.canSignApprovals {
+            return "Approve asks for Touch ID, then signs this action id and digest with a key that stays in this iPhone's Secure Enclave."
+        }
+        return "Sign out and in again to approve privileged actions on this iPhone."
     }
 
     private func send(_ answer: Answer) {

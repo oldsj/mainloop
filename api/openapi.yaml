@@ -6908,6 +6908,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PrivilegedActionEvent'
+        approval:
+          description: The device signature the approval carried; null for an approval from the web app, or none.
+          anyOf:
+            - $ref: '#/components/schemas/PrivilegedActionApproval'
+            - type: 'null'
       required:
         - action
         - body
@@ -6918,7 +6923,22 @@ components:
         - attempts
         - delivery_state
         - events
+        - approval
       title: PrivilegedActionDetail
+    PrivilegedActionApproval:
+      type: object
+      description: An approval signed with a device's Touch ID approval key.
+      properties:
+        device_id:
+          type: string
+          maxLength: 64
+        signed_at:
+          type: string
+          format: date-time
+      required:
+        - device_id
+        - signed_at
+      additionalProperties: false
     PrivilegedActionEvent:
       type: object
       properties:
@@ -11447,6 +11467,13 @@ components:
           anyOf:
             - $ref: '#/components/schemas/DevicePush'
             - type: 'null'
+        approval_key:
+          description: >-
+            The device's Touch ID approval key, registered with the device; null for a device
+            registered without one. Public: the owner pins it in the executor's configuration.
+          anyOf:
+            - $ref: '#/components/schemas/DeviceApprovalKey'
+            - type: 'null'
       required:
         - id
         - name
@@ -11457,6 +11484,21 @@ components:
         - revoked_at
         - current
         - push
+        - approval_key
+      additionalProperties: false
+    DeviceApprovalKey:
+      type: object
+      description: A device's approval key, which signs approvals of privileged actions behind Touch ID.
+      properties:
+        thumbprint:
+          type: string
+          description: RFC 7638 SHA-256 thumbprint of the key, unpadded base64url.
+          maxLength: 64
+        jwk:
+          $ref: '#/components/schemas/DeviceKey'
+      required:
+        - thumbprint
+        - jwk
       additionalProperties: false
     DevicePush:
       type: object
@@ -11530,6 +11572,11 @@ components:
           type: string
           enum: [ios]
         request_key:
+          $ref: '#/components/schemas/DeviceKey'
+        approval_key:
+          description: >-
+            A second key, which signs approvals of privileged actions and needs Touch ID for each
+            signature. Optional; it must differ from the request key and can't be added later.
           $ref: '#/components/schemas/DeviceKey'
       required:
         - name

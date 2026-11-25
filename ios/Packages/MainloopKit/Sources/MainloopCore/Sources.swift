@@ -16,6 +16,8 @@ public enum SourceError: Error, Equatable, Sendable {
     /// A 401: the sign-in lapsed or there is none yet.
     case signedOut
     case alreadyAnswered
+    /// A 403 with the server's reason, such as an approval it didn't accept.
+    case refused(String)
 }
 
 /// The generated client against one Mainloop origin. The app adds `AccountSigningMiddleware`, so
@@ -42,7 +44,9 @@ public struct LiveSource: MainloopSource {
         case .ok: return
         case .unauthorized: throw SourceError.signedOut
         case .conflict: throw SourceError.alreadyAnswered
-        case .forbidden: throw SourceError.unexpectedStatus(403)
+        case .forbidden(let forbidden):
+            if let detail = try? forbidden.body.json.detail, !detail.isEmpty { throw SourceError.refused(detail) }
+            throw SourceError.unexpectedStatus(403)
         case .notFound: throw SourceError.unexpectedStatus(404)
         case .contentTooLarge: throw SourceError.unexpectedStatus(413)
         case .unprocessableContent: throw SourceError.unexpectedStatus(422)

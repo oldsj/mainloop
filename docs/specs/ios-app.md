@@ -20,10 +20,24 @@ to build it.
   action id and the first 16 characters of the digest.
   - A card counts as privileged when its context has any `privileged_action_*` key. If those facts
     are malformed, the card shows them as missing.
-  - The phone never sends an Approve on a privileged card, whether tapped or typed (in any letter
-    case): approving needs a Touch ID signature, which is not built yet. The server would record
-    an unsigned Approve as a denial.
-  - **Deny** and a note (a denial with that text) are offered.
+  - **Approve** is offered only when this phone has an approval key (below) and the card's
+    action id and digest (64 lowercase hex characters) are well formed. Tapping it asks for Touch
+    ID ("Approve: " and the card's title), signs an approval token with the approval key, and sends
+    `Approve` with `metadata.reviewed_context` set to the digest and `metadata.approval` set to the
+    token. The request itself is signed with the request key, as every request is.
+  - **The approval token** is a compact JWS: header `{"alg":"ES256","typ":"mainloop-approval+jwt","kid":<device id>}`,
+    claims `iss` `mainloop-device`, `sub` the device id, `aud` the instance's origin (as for request
+    tokens), `iat`, `exp` (`iat` + 120 seconds), a random `jti`, `act` the action id and `dig` the
+    digest; the signature is the raw r‖s, unpadded base64url.
+  - A cancelled Touch ID prompt sends nothing and shows nothing. A finger not recognised, Touch ID
+    unavailable, or an approval key the Secure Enclave no longer accepts (as after the enrolled
+    fingers change) sends nothing and says so. A `403` shows the server's reason.
+  - On a phone registered without an approval key the card says "Sign out and in again to approve
+    privileged actions on this iPhone." instead. A card with malformed facts can't be approved.
+  - Any other Approve, tapped or typed (in any letter case), is never sent on a privileged card:
+    the server refuses an unsigned Approve from a phone (see [privileged
+    actions](privileged-actions.md#signed-approvals)).
+  - **Deny** and a note (a denial with that text) are offered as before.
 - **Drafts stay with their item.** A note typed on a card, or a message typed to a session, belongs
   to that card or session. Changing the selection in the side-by-side layout shows the other item's
   own draft, never carries text over, and coming back restores it.
@@ -40,6 +54,14 @@ to build it.
   `MAINLOOP_OIDC_ISSUER` and `MAINLOOP_OIDC_CLIENT_ID` in the build; without them it reads "Not
   configured". The simulator, which has no Secure Enclave, uses a software key; a phone never
   does.
+- **The approval key.** Signing in also makes a second Secure Enclave key, sent as `approval_key`
+  when the phone registers. It needs a passcode set, stays on this phone, and asks for the
+  currently enrolled Touch ID fingers (or Face ID) at every signature, so enrolling a new finger
+  makes it unusable. It is kept in the same keychain item as the request key, and signing out
+  deletes both. A phone without a passcode or enrolled biometry registers without one. Settings ›
+  **This iPhone** shows **Approvals: Touch ID**, or **Not set up** with "Sign out and in again to
+  set up approvals" for a phone registered before approval keys. The simulator uses a software
+  approval key, which asks for nothing. Built, not yet proven on a phone.
 - **Notifications** through APNs (the server side is in [push notifications](push-notifications.md)).
   Built, not yet proven on a phone:
   - **When it asks.** Right after this phone registers, iOS's permission prompt asks for alerts,
@@ -60,21 +82,21 @@ to build it.
   - **The lock screen.** iOS's own **Show Previews** setting decides whether the title and text
     show there. With previews hidden it shows "Mainloop needs you" for a Needs-you notification and
     "A task changed" for a task. Needs-you notifications are time sensitive.
-  - **No actions** on a notification yet: Approve and Deny from the lock screen wait for Touch
-    ID-signed approvals.
+  - **No actions** on a notification: approving asks for Touch ID, which needs the app in the
+    foreground, so a card is answered in the app.
   - **The badge** on the app icon is the Needs-you count, set whenever the list loads or a card is
     answered. **Sign out** unregisters from APNs and clears the badge and the delivered
     notifications; its revoke clears the device's token on the server.
 - **Sample data.** A build whose origin is a placeholder (`*.example.test`, `*.example`) or empty
-  runs on fictional fixtures. Answers and messages then change only the app's copy.
+  runs on fictional fixtures. Answers and messages then change only the app's copy. Approve on a
+  sample privileged card is signed with a throwaway software key, without Touch ID.
 
 ## Not built yet
 
 These are planned (see the iOS plan in the pull request that added `ios/`). None is live:
 
-- a second, Touch ID-gated key for approvals (the request key needs no Touch ID);
 - through the admin gateway once its login lands (see [devices](devices.md), "Through the gateway");
-- approving privileged actions with a Touch ID signature that the executor verifies;
+- Approve and Deny as notification actions;
 - native task views and chat;
 - voice: on-device dictation first, then real-time voice with main and top-level supervisors.
 
@@ -86,3 +108,10 @@ software keys, and a token the app's code signed is checked by the server's veri
 Mainloop server. Notifications are tested only as far as `swift test` reaches: the token's
 encoding, the signed `PUT /devices/current/push` request and how a payload maps to a screen, all
 with fictional data. No notification has been delivered to a phone through APNs.
+
+Approvals are tested with software keys: the token's header, claims and signature, the
+registration's second key, the respond body, and that Approve is offered only with an approval
+key and well-formed facts. An approval token this code signed is checked by the server's verifier
+in Go (`server/internal/approval/testdata`). Nothing has run on a phone: the Touch ID prompt, the
+Secure Enclave key's access control (`.biometryCurrentSet`) and what happens after re-enrolling
+are untested, as CI's simulator uses a software key.

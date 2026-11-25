@@ -6,8 +6,9 @@ import OpenAPIRuntime
 import Security
 
 /// What the phone keeps after registering (docs/specs/devices.md): its device id, the origin it
-/// registered with, and its request key. On a phone the key is a Secure Enclave blob that only
-/// this phone can use; in the simulator, which has no Secure Enclave, a software key.
+/// registered with, its request key and its approval key. On a phone the keys are Secure Enclave
+/// blobs that only this phone can use; in the simulator, which has no Secure Enclave, software
+/// keys. Both keys are of the same kind.
 public struct DeviceCredential: Codable, Equatable, Sendable {
     public enum KeyKind: String, Codable, Sendable { case secureEnclave, software }
 
@@ -15,12 +16,17 @@ public struct DeviceCredential: Codable, Equatable, Sendable {
     public let origin: URL
     public let keyKind: KeyKind
     public let keyData: Data
+    /// The approval key, which signs approvals of privileged actions behind Touch ID. Nil for a
+    /// phone registered before approval keys, or one that couldn't make one (no passcode or no
+    /// enrolled biometry): it signs in again to get one.
+    public let approvalKeyData: Data?
 
-    public init(deviceID: String, origin: URL, keyKind: KeyKind, keyData: Data) {
+    public init(deviceID: String, origin: URL, keyKind: KeyKind, keyData: Data, approvalKeyData: Data? = nil) {
         self.deviceID = deviceID
         self.origin = origin
         self.keyKind = keyKind
         self.keyData = keyData
+        self.approvalKeyData = approvalKeyData
     }
 
     public func signer() throws -> any RequestSigner {
@@ -29,32 +35,61 @@ public struct DeviceCredential: Codable, Equatable, Sendable {
         case .software: try SoftwareSigner(key: .init(rawRepresentation: keyData))
         }
     }
+
+    /// The approval key's signer; nil without an approval key.
+    public func approvalSigner() throws -> (any ApprovalSigner)? {
+        guard let approvalKeyData else { return nil }
+        return switch keyKind {
+        case .secureEnclave: try SecureEnclaveApprovalSigner(keyData: approvalKeyData)
+        case .software: try SoftwareSigner(key: .init(rawRepresentation: approvalKeyData))
+        }
+    }
 }
 
-/// A new request key, before it is registered.
+/// New keys, before they are registered: the request key and the approval key.
 public struct NewDeviceKey: Sendable {
     public let kind: DeviceCredential.KeyKind
     public let data: Data
     public let signer: any RequestSigner
+    public let approvalData: Data?
+    public let approvalSigner: (any ApprovalSigner)?
 
-    /// A Secure Enclave key, usable after the phone's first unlock, on this phone only. Where
-    /// there is no Secure Enclave, a software key only if `allowSoftware` (the simulator).
+    /// Secure Enclave keys, on this phone only. The request key is usable after the phone's first
+    /// unlock and asks for nothing. The approval key needs a passcode set and asks for the current
+    /// Touch ID or Face ID enrollment at every signature; without a passcode or enrolled biometry
+    /// the phone registers without one. Where there is no Secure Enclave, software keys only if
+    /// `allowSoftware` (the simulator).
     public static func make(allowSoftware: Bool) throws -> NewDeviceKey {
         if SecureEnclave.isAvailable {
-            var error: Unmanaged<CFError>?
-            guard let access = SecAccessControlCreateWithFlags(
-                nil, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly, .privateKeyUsage, &error
-            ) else { throw error!.takeRetainedValue() as Error }
-            let key = try SecureEnclave.P256.Signing.PrivateKey(accessControl: access)
-            return NewDeviceKey(kind: .secureEnclave, data: key.dataRepresentation, signer: SecureEnclaveSigner(key: key))
+            let key = try SecureEnclave.P256.Signing.PrivateKey(
+                accessControl: accessControl(kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly, .privateKeyUsage)
+            )
+            let approval = try? SecureEnclave.P256.Signing.PrivateKey(
+                accessControl: accessControl(kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, [.privateKeyUsage, .biometryCurrentSet])
+            )
+            let approvalSigner = approval.flatMap { try? SecureEnclaveApprovalSigner(keyData: $0.dataRepresentation) }
+            return NewDeviceKey(
+                kind: .secureEnclave, data: key.dataRepresentation, signer: SecureEnclaveSigner(key: key),
+                approvalData: approvalSigner?.keyData, approvalSigner: approvalSigner
+            )
         }
         guard allowSoftware else { throw DeviceError.noSecureEnclave }
-        let key = P256.Signing.PrivateKey()
-        return NewDeviceKey(kind: .software, data: key.rawRepresentation, signer: SoftwareSigner(key: key))
+        return software()
     }
 
-    public static func software(_ key: P256.Signing.PrivateKey = .init()) -> NewDeviceKey {
-        NewDeviceKey(kind: .software, data: key.rawRepresentation, signer: SoftwareSigner(key: key))
+    public static func software(_ key: P256.Signing.PrivateKey = .init(), approval: P256.Signing.PrivateKey? = .init()) -> NewDeviceKey {
+        NewDeviceKey(
+            kind: .software, data: key.rawRepresentation, signer: SoftwareSigner(key: key),
+            approvalData: approval?.rawRepresentation, approvalSigner: approval.map { SoftwareSigner(key: $0) }
+        )
+    }
+
+    private static func accessControl(_ protection: CFString, _ flags: SecAccessControlCreateFlags) throws -> SecAccessControl {
+        var error: Unmanaged<CFError>?
+        guard let access = SecAccessControlCreateWithFlags(nil, protection, flags, &error) else {
+            throw error!.takeRetainedValue() as Error
+        }
+        return access
     }
 }
 
@@ -140,13 +175,17 @@ public enum DeviceEnrollment {
             MainloopAPI.client(origin: origin, middlewares: middlewares)
         }
         let jwk = key.signer.publicJWK
+        let approvalJWK = key.approvalSigner?.publicJWK
         let body = Components.Schemas.DeviceRegistration(
-            name: name, platform: .ios, requestKey: .init(kty: .ec, crv: .p256, x: jwk.x, y: jwk.y)
+            name: name, platform: .ios, requestKey: .init(kty: .ec, crv: .p256, x: jwk.x, y: jwk.y),
+            approvalKey: approvalJWK.map { .init(kty: .ec, crv: .p256, x: $0.x, y: $0.y) }
         )
         switch try await client.registerDevice(body: .json(body)) {
         case .created(let created):
             let device = try created.body.json
-            return DeviceCredential(deviceID: device.id, origin: origin, keyKind: key.kind, keyData: key.data)
+            return DeviceCredential(
+                deviceID: device.id, origin: origin, keyKind: key.kind, keyData: key.data, approvalKeyData: key.approvalData
+            )
         case .conflict: throw DeviceError.alreadyRegistered
         case .unauthorized: throw DeviceError.registrationRefused(401)
         case .forbidden: throw DeviceError.registrationRefused(403)
@@ -172,8 +211,8 @@ public enum DeviceEnrollment {
         }
     }
 
-    /// Signing out: revoke on the server (best effort; a phone offline still forgets its key),
-    /// then forget the credential.
+    /// Signing out: revoke on the server (best effort; a phone offline still forgets its keys),
+    /// then forget the credential, with both keys.
     public static func signOut(_ credential: DeviceCredential, store: any CredentialStore, transport: (any ClientTransport)? = nil) async throws {
         if let client = try? client(for: credential, transport: transport) {
             _ = try? await client.revokeDevice(path: .init(deviceId: credential.deviceID))
@@ -187,23 +226,41 @@ public enum DeviceEnrollment {
 public final class DeviceAccount: @unchecked Sendable {
     private let lock = NSLock()
     private let store: any CredentialStore
-    private var cached: (credential: DeviceCredential, signer: any RequestSigner)?
+    private var cached: Cached?
+
+    private struct Cached {
+        let credential: DeviceCredential
+        let signer: any RequestSigner
+        let approvalSigner: (any ApprovalSigner)?
+    }
 
     public init(store: any CredentialStore) {
         self.store = store
         if let credential = try? store.load(), let signer = try? credential.signer() {
-            cached = (credential, signer)
+            // An approval key the phone can no longer use counts as none: sign in again.
+            cached = Cached(credential: credential, signer: signer, approvalSigner: try? credential.approvalSigner())
         }
     }
 
     public var credential: DeviceCredential? { lock.withLock { cached?.credential } }
 
-    func signing() -> (credential: DeviceCredential, signer: any RequestSigner)? { lock.withLock { cached } }
+    func signing() -> (credential: DeviceCredential, signer: any RequestSigner)? {
+        lock.withLock { cached.map { ($0.credential, $0.signer) } }
+    }
+
+    /// The registration and its approval key, if it has one.
+    func approving() -> (credential: DeviceCredential, signer: any ApprovalSigner)? {
+        lock.withLock {
+            guard let cached, let signer = cached.approvalSigner else { return nil }
+            return (cached.credential, signer)
+        }
+    }
 
     public func save(_ credential: DeviceCredential) throws {
         let signer = try credential.signer()
+        let approvalSigner = try credential.approvalSigner()
         try store.save(credential)
-        lock.withLock { cached = (credential, signer) }
+        lock.withLock { cached = Cached(credential: credential, signer: signer, approvalSigner: approvalSigner) }
     }
 
     /// Revokes this device on the server (best effort), then forgets it.
@@ -239,4 +296,60 @@ public struct AccountSigningMiddleware: ClientMiddleware {
         return try await DeviceSigningMiddleware(deviceID: credential.deviceID, origin: credential.origin, signer: signer)
             .intercept(request, body: body, baseURL: baseURL, operationID: operationID, next: next)
     }
+}
+
+/// Signs approvals of privileged actions for the Needs-you model (docs/specs/ios-app.md).
+public protocol Approver: Sendable {
+    /// Whether this phone can sign approvals: registered with an approval key.
+    var canApprove: Bool { get }
+    /// An approval token for the action (`ApprovalToken`). Signing asks for Touch ID on a phone.
+    func approval(actionID: String, digest: String, reason: String) async throws -> String
+}
+
+/// Signs with the account's approval key, for the origin it registered with only.
+public struct DeviceApprover: Approver {
+    let account: DeviceAccount
+    let origin: URL
+
+    public init(account: DeviceAccount, origin: URL) {
+        self.account = account
+        self.origin = origin
+    }
+
+    private var approving: (credential: DeviceCredential, signer: any ApprovalSigner)? {
+        guard let approving = account.approving(), approving.credential.origin == origin else { return nil }
+        return approving
+    }
+
+    public var canApprove: Bool { approving != nil }
+
+    public func approval(actionID: String, digest: String, reason: String) async throws -> String {
+        guard let (credential, signer) = approving else { throw ApprovalError.noApprovalKey }
+        return try await ApprovalToken.make(
+            deviceID: credential.deviceID, audience: DeviceToken.audience(for: credential.origin),
+            actionID: actionID, digest: digest, signer: signer, reason: reason
+        )
+    }
+}
+
+/// Sample-data builds: a throwaway software key, no Touch ID. The fixtures check only that an
+/// approval is attached.
+public struct SampleApprover: Approver {
+    let signer = SoftwareSigner()
+
+    public init() {}
+
+    public var canApprove: Bool { true }
+
+    public func approval(actionID: String, digest: String, reason: String) async throws -> String {
+        try await ApprovalToken.make(
+            deviceID: "dev_sample", audience: "https://sample.example.test",
+            actionID: actionID, digest: digest, signer: signer, reason: reason
+        )
+    }
+}
+
+public enum ApprovalError: Error, Equatable, Sendable {
+    /// Registered before approval keys: sign out and in again.
+    case noApprovalKey
 }

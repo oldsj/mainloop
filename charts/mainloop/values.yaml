@@ -338,6 +338,13 @@ executor:
     # prints it.
     # trunk-ignore(checkov/CKV_SECRET_6): the Secret's name, not a value
     keySecret: mainloop-executor-omni
+  # The phones' Touch ID approval keys, pinned (docs/specs/privileged-actions.md, "Signed
+  # approvals"). Each is the public JWK Settings › Devices shows, with the device id as kid:
+  #   - {kid: dev_…, kty: EC, crv: P-256, x: …, y: …}
+  # With any pinned, the executor runs only actions whose approval one of these keys signed, and
+  # serve-api takes an approval of an executor type only from such a phone. Public keys, not
+  # secrets; empty keeps approvals from the web app.
+  approvalKeys: []
   nodeSelector: {}
   affinity: {}
   tolerations: []

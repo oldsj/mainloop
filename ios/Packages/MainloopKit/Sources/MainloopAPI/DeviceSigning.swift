@@ -1,15 +1,41 @@
 import CryptoKit
 import Foundation
 import HTTPTypes
+import LocalAuthentication
 import OpenAPIRuntime
+
+/// A device's P-256 public key.
+public protocol DevicePublicKey: Sendable {
+    /// The public key as JWK coordinates, unpadded base64url.
+    var publicJWK: (x: String, y: String) { get }
+}
 
 /// Signs data with a device's P-256 request key (docs/specs/devices.md). The key lives in the
 /// Secure Enclave on a phone; tests and the simulator use a software key.
-public protocol RequestSigner: Sendable {
-    /// The public key as JWK coordinates, unpadded base64url.
-    var publicJWK: (x: String, y: String) { get }
+public protocol RequestSigner: DevicePublicKey {
     /// An ECDSA P-256 SHA-256 signature over `data`, as the raw 64-byte r‖s that JWS uses.
     func sign(_ data: Data) throws -> Data
+}
+
+/// Signs approvals of privileged actions with a device's second key, the approval key. On a
+/// phone it is a Secure Enclave key that asks for Touch ID or Face ID at every signature; tests
+/// and the simulator use a software key, which asks for nothing.
+public protocol ApprovalSigner: DevicePublicKey {
+    /// An ECDSA P-256 SHA-256 signature over `data`, raw r‖s. `reason` is what the biometric
+    /// prompt says is being approved. Throws `ApprovalSigningError.cancelled` when the owner
+    /// cancels the prompt.
+    func sign(_ data: Data, reason: String) async throws -> Data
+}
+
+public enum ApprovalSigningError: Error, Equatable, Sendable {
+    /// The owner cancelled the prompt, or the system did: not an error to show.
+    case cancelled
+    /// Touch ID or Face ID didn't recognise the owner.
+    case notRecognised
+    /// No biometry enrolled, locked out, or not available on this phone.
+    case biometryUnavailable
+    /// The Secure Enclave refused the key, as it does once the enrolled fingers or face change.
+    case keyUnusable
 }
 
 /// A software P-256 key: tests, and the simulator, which has no Secure Enclave.
@@ -21,6 +47,10 @@ public struct SoftwareSigner: RequestSigner {
     public var publicJWK: (x: String, y: String) { jwkCoordinates(key.publicKey.rawRepresentation) }
 
     public func sign(_ data: Data) throws -> Data { try key.signature(for: data).rawRepresentation }
+}
+
+extension SoftwareSigner: ApprovalSigner {
+    public func sign(_ data: Data, reason _: String) async throws -> Data { try sign(data) }
 }
 
 /// A key in the Secure Enclave. Its `dataRepresentation` is an opaque blob only this phone's
@@ -35,7 +65,44 @@ public struct SecureEnclaveSigner: RequestSigner {
     public func sign(_ data: Data) throws -> Data { try key.signature(for: data).rawRepresentation }
 }
 
-public extension RequestSigner {
+/// The approval key in the Secure Enclave, made with an access control that requires the current
+/// set of enrolled fingers or face for every use (`.biometryCurrentSet`): re-enrolling makes it
+/// unusable. Each signature asks for Touch ID or Face ID with `reason`.
+public struct SecureEnclaveApprovalSigner: ApprovalSigner {
+    /// The key's opaque Secure Enclave blob.
+    public let keyData: Data
+    public let publicJWK: (x: String, y: String)
+
+    public init(keyData: Data) throws {
+        self.keyData = keyData
+        publicJWK = try jwkCoordinates(SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: keyData).publicKey.rawRepresentation)
+    }
+
+    public func sign(_ data: Data, reason: String) async throws -> Data {
+        let context = LAContext()
+        context.localizedReason = reason
+        // Only the enrolled fingers or face: no passcode fallback, which the key would refuse.
+        context.localizedFallbackTitle = ""
+        do {
+            _ = try await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason)
+        } catch let error as LAError {
+            switch error.code {
+            case .userCancel, .appCancel, .systemCancel, .userFallback: throw ApprovalSigningError.cancelled
+            case .authenticationFailed: throw ApprovalSigningError.notRecognised
+            default: throw ApprovalSigningError.biometryUnavailable
+            }
+        }
+        // The context has just been evaluated, so using the key doesn't ask again.
+        do {
+            let key = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: keyData, authenticationContext: context)
+            return try key.signature(for: data).rawRepresentation
+        } catch {
+            throw ApprovalSigningError.keyUnusable
+        }
+    }
+}
+
+public extension DevicePublicKey {
     /// The key's RFC 7638 thumbprint: base64url SHA-256 of its canonical JWK. The sign-in that
     /// registers the key carries it as the nonce, so that sign-in registers this key only.
     var thumbprint: String {
@@ -114,8 +181,44 @@ public enum DeviceToken {
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func segment(_ object: [String: any Sendable]) throws -> String {
+    static func segment(_ object: [String: any Sendable]) throws -> String {
         Base64URL.encode(try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]))
+    }
+}
+
+/// An approval of one privileged action, signed with the device's approval key: an ES256 JWT
+/// that the server checks against the key registered with the device, and the action's id and
+/// digest (docs/specs/privileged-actions.md, "Decision").
+public enum ApprovalToken {
+    public static let type = "mainloop-approval+jwt"
+    /// The token's lifetime.
+    public static let lifetime: TimeInterval = 120
+
+    /// - Parameters:
+    ///   - audience: the instance's origin (`DeviceToken.audience(for:)`).
+    ///   - actionID: the card's `privileged_action_id`.
+    ///   - digest: the card's `privileged_action_digest`, 64 lowercase hex characters.
+    ///   - reason: what the biometric prompt says, such as "Approve: <card title>".
+    public static func make(
+        deviceID: String,
+        audience: String,
+        actionID: String,
+        digest: String,
+        signer: some ApprovalSigner,
+        reason: String,
+        now: Date = Date(),
+        jti: String = DeviceToken.randomID()
+    ) async throws -> String {
+        let iat = Int(now.timeIntervalSince1970)
+        let header: [String: String] = ["alg": "ES256", "typ": type, "kid": deviceID]
+        let claims: [String: any Sendable] = [
+            "iss": DeviceToken.issuer, "sub": deviceID, "aud": audience,
+            "iat": iat, "exp": iat + Int(lifetime), "jti": jti,
+            "act": actionID, "dig": digest,
+        ]
+        let input = try DeviceToken.segment(header) + "." + DeviceToken.segment(claims)
+        let signature = try await signer.sign(Data(input.utf8), reason: reason)
+        return input + "." + Base64URL.encode(signature)
     }
 }
 

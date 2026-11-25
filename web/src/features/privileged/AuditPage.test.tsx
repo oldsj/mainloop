@@ -91,7 +91,8 @@ describe('privileged actions audit', () => {
       events: [
         { id: 1, step: 'requested', detail: 'asked', created_at: '2026-11-20T10:00:00Z' },
         { id: 2, step: 'executed', detail: 'wrote the key', created_at: '2026-11-20T10:05:03Z' }
-      ]
+      ],
+      approval: { device_id: 'dev_0123456789abcdefghijklmnop', signed_at: '2026-11-20T10:05:00Z' }
     };
     server.use(
       http.get(`${API_URL}/privileged-actions`, () => HttpResponse.json([summary({}), DENIED])),
@@ -110,6 +111,9 @@ describe('privileged actions audit', () => {
     expect(await screen.findByText('wrote the key')).toBeInTheDocument();
     expect(screen.getByText(/Write key password of Secret/)).toBeInTheDocument();
     expect(screen.getByText('The widgets app needs its database password.')).toBeInTheDocument();
+    expect(
+      screen.getByText(/^with Touch ID on dev_0123456789abcdefghijklmnop, /)
+    ).toBeInTheDocument();
   });
 
   it('says so when no agent has asked', async () => {

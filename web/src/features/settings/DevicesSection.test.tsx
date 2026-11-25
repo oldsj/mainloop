@@ -32,7 +32,8 @@ const ACTIVE: Device = {
   last_seen_at: null,
   revoked_at: null,
   current: false,
-  push: null
+  push: null,
+  approval_key: null
 };
 
 const PUSHING: Device = {
@@ -44,7 +45,8 @@ const PUSHING: Device = {
   last_seen_at: '2026-01-02T11:05:00Z',
   revoked_at: null,
   current: false,
-  push: { environment: 'production', updated_at: '2026-01-02T11:01:00Z', invalid_at: null }
+  push: { environment: 'production', updated_at: '2026-01-02T11:01:00Z', invalid_at: null },
+  approval_key: null
 };
 
 const REVOKED: Device = {
@@ -56,7 +58,8 @@ const REVOKED: Device = {
   last_seen_at: '2026-01-01T11:00:00Z',
   revoked_at: '2026-01-01T12:00:00Z',
   current: false,
-  push: { environment: 'production', updated_at: '2026-01-01T11:00:00Z', invalid_at: null }
+  push: { environment: 'production', updated_at: '2026-01-01T11:00:00Z', invalid_at: null },
+  approval_key: null
 };
 
 /** Serves the list from memory; a DELETE revokes the device there, as the server does. */
@@ -102,6 +105,31 @@ const row = async (name: string) =>
   )!;
 
 describe('devices', () => {
+  it('shows an approval key and the entry that pins it for the executor', async () => {
+    const signing: Device = {
+      ...PUSHING,
+      approval_key: {
+        thumbprint: 'TTTTTTTTTTTTuuuuuuuuuuuuvvvvvvvvvvvvwwwwww',
+        jwk: { kty: 'EC', crv: 'P-256', x: 'X'.repeat(43), y: 'Y'.repeat(43) }
+      }
+    };
+    serve([ACTIVE, signing, { ...REVOKED, approval_key: signing.approval_key }]);
+    const user = renderSection();
+
+    const active = await row('Work Test iPhone');
+    expect(within(active).getByText('TTTTTTTTTTTT…')).toBeInTheDocument();
+    await user.click(within(active).getByText('Pin its approval key for the executor'));
+    expect(
+      within(active).getByText(
+        `- {kid: dev_pushpushpushpushpushpushpu, kty: EC, crv: P-256, x: ${'X'.repeat(43)}, y: ${'Y'.repeat(43)}}`
+      )
+    ).toBeVisible();
+
+    expect(within(await row('Test iPhone')).getByText(/· no approval key/)).toBeInTheDocument();
+    expect(within(await row('Test iPhone')).queryByText(/Pin its approval key/)).toBeNull();
+    expect(within(await row('Old Test iPhone')).queryByText(/Pin its approval key/)).toBeNull();
+  });
+
   it('lists every device, revoked ones included, with their facts', async () => {
     serve([ACTIVE, REVOKED]);
     renderSection();
