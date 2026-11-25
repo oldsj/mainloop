@@ -39,7 +39,7 @@ export function SettingsPage() {
             <button
               type="button"
               onClick={openNativeDeviceSettings}
-              className="px-sm border-border inline-flex min-h-11 items-center border text-body font-medium hover:underline"
+              className="px-sm border-border text-body inline-flex min-h-11 items-center border font-medium hover:underline"
               data-testid="this-iphone"
             >
               Open
