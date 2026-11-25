@@ -510,7 +510,7 @@ func (a *DevicesAPI) CreateDeviceWebSession(ctx context.Context, _ api.CreateDev
 	}
 	token := base64.RawURLEncoding.EncodeToString(b)
 	sum := sha256.Sum256([]byte(token))
-	expires := a.now().Add(auth.DeviceSessionLife).UTC()
+	expires := a.now().Add(auth.DeviceSessionLife).UTC().Truncate(time.Microsecond)
 	// One session per device: the new one ends the earlier ones in the same transaction.
 	err := pgx.BeginFunc(ctx, a.Pool, func(tx pgx.Tx) error {
 		q := dbq.New(tx)
