@@ -188,6 +188,9 @@ type Service struct {
 	// ApprovalKeys, in serve-executor, are the pinned approval keys. With any, an action runs only
 	// when one of them signed its approval for its id and digest.
 	ApprovalKeys approval.Pinned
+	// ApprovalsRequired, in serve-executor, refuses every action without a pinned key's signature,
+	// even with no key pinned (fail closed).
+	ApprovalsRequired bool
 	// SSHOn, in serve-api, accepts command.ssh: the executor reaches home-network hosts over ssh.
 	SSHOn bool
 	// SSH reaches the allowlisted hosts; nil without ssh access.

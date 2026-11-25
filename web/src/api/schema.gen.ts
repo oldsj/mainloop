@@ -2259,6 +2259,8 @@ export interface components {
         [key: string]: unknown;
       } | null;
       digest: string | null;
+      /** @description The canonical JSON the digest is the SHA-256 of: the type and its version, the arguments, the frozen facts, the requester, the action id, the expiry and the catalog version. A phone hashes these bytes itself and shows what it parsed from them before it signs an approval. Null before the facts are frozen. */
+      canonical_record: string | null;
       result: {
         [key: string]: unknown;
       } | null;

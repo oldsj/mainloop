@@ -6,6 +6,9 @@ import MainloopAPI
 public protocol MainloopSource: Sendable {
     func needsYou() async throws -> [NeedsYouItem]
     func respond(to item: NeedsYouItem, with answer: Answer) async throws
+    /// A privileged action's canonical record (`canonical_record`), which the phone hashes and
+    /// shows before it signs an approval (`ActionRecord`).
+    func privilegedRecord(_ actionID: String) async throws -> String
     func sessions() async throws -> [SessionRow]
     func send(_ message: String, to sessionID: String, messageID: String) async throws
 }
@@ -54,6 +57,17 @@ public struct LiveSource: MainloopSource {
         }
     }
 
+    public func privilegedRecord(_ actionID: String) async throws -> String {
+        switch try await client.getPrivilegedAction(path: .init(actionId: actionID)) {
+        case .ok(let ok):
+            guard let record = try ok.body.json.canonicalRecord else { throw ActionRecordError.malformed }
+            return record
+        case .unauthorized: throw SourceError.signedOut
+        case .undocumented(let status, _): throw SourceError.unexpectedStatus(status)
+        default: throw SourceError.unexpectedStatus(0)
+        }
+    }
+
     public func sessions() async throws -> [SessionRow] {
         switch try await client.listSessions() {
         case .ok(let ok): return try ok.body.json.map(SessionRow.init)
@@ -79,12 +93,16 @@ public struct LiveSource: MainloopSource {
 public actor FixtureSource: MainloopSource {
     private var items: [NeedsYouItem]
     private var rows: [SessionRow]
+    private let records: [String: String]
     public private(set) var sent: [(sessionID: String, message: String)] = []
     public private(set) var sentIDs: [String] = []
 
     public init() throws {
         items = try Fixtures.attention().items.map(NeedsYouItem.init)
         rows = try Fixtures.sessions().map(SessionRow.init)
+        let record = try Fixtures.privilegedRecord().record
+        let object = try JSONSerialization.jsonObject(with: Data(record.utf8)) as? [String: Any]
+        records = [(object?["action_id"] as? String) ?? "": record]
     }
 
     public func needsYou() async throws -> [NeedsYouItem] { items }
@@ -94,6 +112,11 @@ public actor FixtureSource: MainloopSource {
         _ = try AnswerBody.make(for: item, answer: answer)
         guard items.contains(where: { $0.id == item.id }) else { throw SourceError.alreadyAnswered }
         items.removeAll { $0.id == item.id }
+    }
+
+    public func privilegedRecord(_ actionID: String) async throws -> String {
+        guard let record = records[actionID] else { throw SourceError.unexpectedStatus(404) }
+        return record
     }
 
     public func sessions() async throws -> [SessionRow] { rows }
@@ -120,6 +143,14 @@ public enum Fixtures {
 
     public static func attention() throws -> Components.Schemas.AttentionSnapshot {
         try decoder().decode(Components.Schemas.AttentionSnapshot.self, from: data("attention"))
+    }
+
+    /// The canonical record of the first card's action, a copy of the Go vector
+    /// (server/internal/privileged/testdata/canonical-record.json).
+    public static func privilegedRecord() throws -> (record: String, digest: String) {
+        struct Vector: Decodable { let record: String; let digest: String }
+        let vector = try JSONDecoder().decode(Vector.self, from: data("privileged-record"))
+        return (vector.record, vector.digest)
     }
 
     public static func sessions() throws -> [Components.Schemas.Session] {

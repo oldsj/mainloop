@@ -11,6 +11,349 @@ public import Foundation
 extension Components {
     /// Types generated from the `#/components/schemas` section of the OpenAPI document.
     public enum Schemas {
+        /// - Remark: Generated from `#/components/schemas/PrivilegedActionState`.
+        @frozen public enum PrivilegedActionState: String, Codable, Hashable, Sendable, CaseIterable {
+            case requested = "requested"
+            case pendingApproval = "pending_approval"
+            case preflightFailed = "preflight_failed"
+            case approved = "approved"
+            case executing = "executing"
+            case succeeded = "succeeded"
+            case failed = "failed"
+            case stale = "stale"
+            case denied = "denied"
+            case expired = "expired"
+            case cancelled = "cancelled"
+            case uncertain = "uncertain"
+        }
+        /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary`.
+        public struct PrivilegedActionSummary: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/id`.
+            public var id: Swift.String
+            /// The catalog type, e.g. github.pr_merge or onepassword.item_to_secret.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/type`.
+            public var _type: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/state`.
+            public var state: Components.Schemas.PrivilegedActionState
+            /// The card's title once the facts are frozen; the type before.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/title`.
+            public var title: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/requester_role`.
+            public var requesterRole: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/requester_session_id`.
+            public var requesterSessionId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/requester_task_id`.
+            public var requesterTaskId: Swift.String?
+            /// The agent's claim, never checked by Mainloop.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/reason`.
+            public var reason: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/created_at`.
+            public var createdAt: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/expires_at`.
+            public var expiresAt: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/decided_at`.
+            public var decidedAt: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/finished_at`.
+            public var finishedAt: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/decision_note`.
+            public var decisionNote: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/last_error`.
+            public var lastError: Swift.String?
+            /// Creates a new `PrivilegedActionSummary`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - _type: The catalog type, e.g. github.pr_merge or onepassword.item_to_secret.
+            ///   - state:
+            ///   - title: The card's title once the facts are frozen; the type before.
+            ///   - requesterRole:
+            ///   - requesterSessionId:
+            ///   - requesterTaskId:
+            ///   - reason: The agent's claim, never checked by Mainloop.
+            ///   - createdAt:
+            ///   - expiresAt:
+            ///   - decidedAt:
+            ///   - finishedAt:
+            ///   - decisionNote:
+            ///   - lastError:
+            public init(
+                id: Swift.String,
+                _type: Swift.String,
+                state: Components.Schemas.PrivilegedActionState,
+                title: Swift.String,
+                requesterRole: Swift.String,
+                requesterSessionId: Swift.String,
+                requesterTaskId: Swift.String? = nil,
+                reason: Swift.String,
+                createdAt: Foundation.Date,
+                expiresAt: Foundation.Date,
+                decidedAt: Foundation.Date? = nil,
+                finishedAt: Foundation.Date? = nil,
+                decisionNote: Swift.String? = nil,
+                lastError: Swift.String? = nil
+            ) {
+                self.id = id
+                self._type = _type
+                self.state = state
+                self.title = title
+                self.requesterRole = requesterRole
+                self.requesterSessionId = requesterSessionId
+                self.requesterTaskId = requesterTaskId
+                self.reason = reason
+                self.createdAt = createdAt
+                self.expiresAt = expiresAt
+                self.decidedAt = decidedAt
+                self.finishedAt = finishedAt
+                self.decisionNote = decisionNote
+                self.lastError = lastError
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case _type = "type"
+                case state
+                case title
+                case requesterRole = "requester_role"
+                case requesterSessionId = "requester_session_id"
+                case requesterTaskId = "requester_task_id"
+                case reason
+                case createdAt = "created_at"
+                case expiresAt = "expires_at"
+                case decidedAt = "decided_at"
+                case finishedAt = "finished_at"
+                case decisionNote = "decision_note"
+                case lastError = "last_error"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail`.
+        public struct PrivilegedActionDetail: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/action`.
+            public var action: Components.Schemas.PrivilegedActionSummary
+            /// The card's text as the owner saw it; empty before the facts are frozen.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/body`.
+            public var body: Swift.String
+            /// The canonical arguments.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/args`.
+            public struct ArgsPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `ArgsPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// The canonical arguments.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/args`.
+            public var args: Components.Schemas.PrivilegedActionDetail.ArgsPayload
+            /// What preflight read, which the approval's digest covers. Never a secret value.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/frozen_facts`.
+            public struct FrozenFactsPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `FrozenFactsPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// What preflight read, which the approval's digest covers. Never a secret value.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/frozen_facts`.
+            public var frozenFacts: Components.Schemas.PrivilegedActionDetail.FrozenFactsPayload?
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/digest`.
+            public var digest: Swift.String?
+            /// The canonical JSON the digest is the SHA-256 of: the type and its version, the arguments, the frozen facts, the requester, the action id, the expiry and the catalog version. A phone hashes these bytes itself and shows what it parsed from them before it signs an approval. Null before the facts are frozen.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/canonical_record`.
+            public var canonicalRecord: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/result`.
+            public struct ResultPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `ResultPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/result`.
+            public var result: Components.Schemas.PrivilegedActionDetail.ResultPayload?
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/attempts`.
+            public var attempts: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/delivery_state`.
+            @frozen public enum DeliveryStatePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case none = "none"
+                case pending = "pending"
+                case delivered = "delivered"
+                case undeliverable = "undeliverable"
+            }
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/delivery_state`.
+            public var deliveryState: Components.Schemas.PrivilegedActionDetail.DeliveryStatePayload
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/events`.
+            public var events: [Components.Schemas.PrivilegedActionEvent]
+            /// The device signature the approval carried; null for an approval from the web app, or none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionDetail/approval`.
+            public var approval: Components.Schemas.PrivilegedActionApproval?
+            /// Creates a new `PrivilegedActionDetail`.
+            ///
+            /// - Parameters:
+            ///   - action:
+            ///   - body: The card's text as the owner saw it; empty before the facts are frozen.
+            ///   - args: The canonical arguments.
+            ///   - frozenFacts: What preflight read, which the approval's digest covers. Never a secret value.
+            ///   - digest:
+            ///   - canonicalRecord: The canonical JSON the digest is the SHA-256 of: the type and its version, the arguments, the frozen facts, the requester, the action id, the expiry and the catalog version. A phone hashes these bytes itself and shows what it parsed from them before it signs an approval. Null before the facts are frozen.
+            ///   - result:
+            ///   - attempts:
+            ///   - deliveryState:
+            ///   - events:
+            ///   - approval: The device signature the approval carried; null for an approval from the web app, or none.
+            public init(
+                action: Components.Schemas.PrivilegedActionSummary,
+                body: Swift.String,
+                args: Components.Schemas.PrivilegedActionDetail.ArgsPayload,
+                frozenFacts: Components.Schemas.PrivilegedActionDetail.FrozenFactsPayload? = nil,
+                digest: Swift.String? = nil,
+                canonicalRecord: Swift.String? = nil,
+                result: Components.Schemas.PrivilegedActionDetail.ResultPayload? = nil,
+                attempts: Swift.Int,
+                deliveryState: Components.Schemas.PrivilegedActionDetail.DeliveryStatePayload,
+                events: [Components.Schemas.PrivilegedActionEvent],
+                approval: Components.Schemas.PrivilegedActionApproval? = nil
+            ) {
+                self.action = action
+                self.body = body
+                self.args = args
+                self.frozenFacts = frozenFacts
+                self.digest = digest
+                self.canonicalRecord = canonicalRecord
+                self.result = result
+                self.attempts = attempts
+                self.deliveryState = deliveryState
+                self.events = events
+                self.approval = approval
+            }
+            public enum CodingKeys: String, CodingKey {
+                case action
+                case body
+                case args
+                case frozenFacts = "frozen_facts"
+                case digest
+                case canonicalRecord = "canonical_record"
+                case result
+                case attempts
+                case deliveryState = "delivery_state"
+                case events
+                case approval
+            }
+        }
+        /// An approval signed with a device's Touch ID approval key.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PrivilegedActionApproval`.
+        public struct PrivilegedActionApproval: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionApproval/device_id`.
+            public var deviceId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionApproval/signed_at`.
+            public var signedAt: Foundation.Date
+            /// Creates a new `PrivilegedActionApproval`.
+            ///
+            /// - Parameters:
+            ///   - deviceId:
+            ///   - signedAt:
+            public init(
+                deviceId: Swift.String,
+                signedAt: Foundation.Date
+            ) {
+                self.deviceId = deviceId
+                self.signedAt = signedAt
+            }
+            public enum CodingKeys: String, CodingKey {
+                case deviceId = "device_id"
+                case signedAt = "signed_at"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.deviceId = try container.decode(
+                    Swift.String.self,
+                    forKey: .deviceId
+                )
+                self.signedAt = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .signedAt
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "device_id",
+                    "signed_at"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/PrivilegedActionEvent`.
+        public struct PrivilegedActionEvent: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionEvent/id`.
+            public var id: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionEvent/step`.
+            public var step: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionEvent/detail`.
+            public var detail: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionEvent/created_at`.
+            public var createdAt: Foundation.Date
+            /// Creates a new `PrivilegedActionEvent`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - step:
+            ///   - detail:
+            ///   - createdAt:
+            public init(
+                id: Swift.Int64,
+                step: Swift.String,
+                detail: Swift.String,
+                createdAt: Foundation.Date
+            ) {
+                self.id = id
+                self.step = step
+                self.detail = detail
+                self.createdAt = createdAt
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case step
+                case detail
+                case createdAt = "created_at"
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/AttentionItem`.
         public struct AttentionItem: Codable, Hashable, Sendable {
             /// Closed reason for reconciliation or merge approval attention; absent for other sources.

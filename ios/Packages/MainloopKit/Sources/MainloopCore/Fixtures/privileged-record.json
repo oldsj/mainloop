@@ -1,0 +1,4 @@
+{
+  "record": "{\"action_id\":\"pa-0001\",\"args\":{\"kind\":\"Deployment\",\"name\":\"web\",\"namespace\":\"shop\"},\"catalog_version\":1,\"expires_at\":\"2026-11-24T23:30:00.123456Z\",\"frozen_facts\":{\"big\":1e3,\"image\":\"registry.example.test/shop/web:1.50\",\"nested\":{\"a\":\"x\",\"z\":[1,2,{\"a\":null,\"b\":true}]},\"note\":\"caf\u00e9 \u003cb\u003e\u0026\u003c/b\u003e \\u2028 tab\\there\\nnext \ud83d\ude80 \u202eevil\",\"ratio\":1.50,\"ready_replicas\":3,\"replicas\":3},\"requester\":{\"role\":\"worker\",\"session_id\":\"sess-0001\",\"task_id\":\"task-0001\"},\"type\":\"k8s.rollout_restart\",\"version\":1}",
+  "digest": "8a6714a445634201211bad2c2b296d2d521c69bfd33488e9484ae2ced57e316e"
+}

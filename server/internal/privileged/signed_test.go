@@ -5,7 +5,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -160,8 +162,16 @@ func TestAPinnedPhoneApprovesAndTheExecutorRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := d.(api.GetPrivilegedAction200JSONResponse).Approval; got == nil || got.DeviceId != p.id {
+	detail := d.(api.GetPrivilegedAction200JSONResponse)
+	if got := detail.Approval; got == nil || got.DeviceId != p.id {
 		t.Fatalf("audit approval = %+v", got)
+	}
+	// The record the phone hashes and shows is the one the digest covers.
+	if detail.CanonicalRecord == nil || detail.Digest == nil {
+		t.Fatalf("record %v, digest %v", detail.CanonicalRecord, detail.Digest)
+	}
+	if sum := sha256.Sum256([]byte(*detail.CanonicalRecord)); hex.EncodeToString(sum[:]) != *detail.Digest || *detail.Digest != a.Digest {
+		t.Fatalf("the canonical record does not hash to the digest the owner signed")
 	}
 }
 
@@ -253,22 +263,27 @@ func TestASwappedRowCannotReuseTheSignature(t *testing.T) {
 }
 
 // Given the executor's record of the tokens it acted on, a token used for another action is
-// refused, one first acted on more than 15 minutes after it was signed is refused, and a retry of
-// the same action, which finds its own record, is not bound by that age.
+// refused, one first acted on more than 15 minutes after it was signed is refused, a retry of the
+// same action within the retry window runs, and a later one, such as a finished action that
+// serve-api's role reset to approved, ends uncertain without running.
 func TestTheExecutorUsesATokenOnce(t *testing.T) {
 	cases := []struct {
 		name  string
 		setup func(t *testing.T, e *execEnv, a privileged.Action, jti string)
 		iat   time.Time
 		want  string // "" runs
+		state string // when refused; failed by default
 	}{
 		{"used for another action", func(t *testing.T, e *execEnv, _ privileged.Action, jti string) {
 			e.exec(t, `INSERT INTO executor_approval_uses (jti, action_id) VALUES ($1, 'pa_other')`, jti)
-		}, time.Now(), "already used for action pa_other"},
-		{"signed too long before the first attempt", nil, time.Now().Add(-20 * time.Minute), "older than 15 minutes"},
+		}, time.Now(), "already used for action pa_other", ""},
+		{"signed too long before the first attempt", nil, time.Now().Add(-20 * time.Minute), "older than 15 minutes", ""},
 		{"a retry of its own action", func(t *testing.T, e *execEnv, a privileged.Action, jti string) {
 			e.exec(t, `INSERT INTO executor_approval_uses (jti, action_id) VALUES ($1, $2)`, jti, a.ID)
-		}, time.Now().Add(-20 * time.Minute), ""},
+		}, time.Now().Add(-20 * time.Minute), "", ""},
+		{"a retry after the retry window", func(t *testing.T, e *execEnv, a privileged.Action, jti string) {
+			e.exec(t, `INSERT INTO executor_approval_uses (jti, action_id, used_at) VALUES ($1, $2, now())`, jti, a.ID)
+		}, time.Now().Add(-privileged.ApprovalMaxUse - time.Minute), "too old for another attempt", privileged.StateUncertain},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -293,10 +308,39 @@ func TestTheExecutorUsesATokenOnce(t *testing.T) {
 				}
 				return
 			}
-			if got.State != privileged.StateFailed || !strings.Contains(deref(got.LastError), c.want) {
-				t.Fatalf("state %s, error %q; want failed with %q", got.State, deref(got.LastError), c.want)
+			state := c.state
+			if state == "" {
+				state = privileged.StateFailed
+			}
+			if got.State != state || !strings.Contains(deref(got.LastError), c.want) || e.op.Reads != 0 {
+				t.Fatalf("state %s, error %q, reads %d; want %s with %q", got.State, deref(got.LastError), e.op.Reads, state, c.want)
 			}
 		})
+	}
+}
+
+// Given signed approvals are required, when no key is pinned (the keys were dropped from the
+// values), then serve-api refuses the web app's approval of an executor type and the executor
+// runs nothing; neither falls back to unsigned approvals.
+func TestRequiredApprovalsFailClosed(t *testing.T) {
+	e := newExecEnv(t)
+	c := checker(nil)
+	c.Required = true
+	e.inbox.Approvals = c
+	a := e.pendingCopy(t, "copy-1", "widgets-db")
+	meta := map[string]any{"reviewed_context": a.Digest}
+	err := e.inbox.Respond(context.Background(), a.QueueItemID, api.QueueItemResponse{Response: privileged.AnswerApprove, Metadata: &meta})
+	forbiddenErr(t, err, "approve this on your iPhone")
+
+	// A serve-api that let it through anyway.
+	e.inbox.Approvals = checker(nil)
+	e.ex.ApprovalsRequired = true
+	e.answer(t, a, privileged.AnswerApprove, meta)
+	e.run(t)
+	e.runExecutor(t)
+	got := e.get(t, a.ID)
+	if got.State != privileged.StateFailed || !strings.Contains(deref(got.LastError), "required and no approval key is pinned") || e.op.Reads != 0 {
+		t.Fatalf("state %s, error %q, reads %d", got.State, deref(got.LastError), e.op.Reads)
 	}
 }
 

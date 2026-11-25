@@ -63,6 +63,10 @@ func (a *PrivilegedAPI) GetPrivilegedAction(ctx context.Context, r api.GetPrivil
 		if _, body, _, err := render(row); err == nil {
 			d.Body = body
 		}
+		if rec, err := CanonicalRecord(row, row.FrozenFacts); err == nil {
+			s := string(rec)
+			d.CanonicalRecord = &s
+		}
 	}
 	if row.Result != nil {
 		res := object(row.Result)

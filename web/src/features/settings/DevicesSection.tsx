@@ -27,7 +27,7 @@ function pushFact(push: Device['push']): string {
 }
 
 /**
- * The device's approval key as the chart pins it (executor.approvalKeys, see
+ * The device's approval key as the chart pins it (executor.approvalKeys.pinned, see
  * docs/specs/privileged-actions.md): one list entry, the public JWK with the device id as kid.
  */
 export function pinEntry(device: Device): string | null {
@@ -187,8 +187,8 @@ function DeviceRow({
             Pin its approval key for the executor
           </summary>
           <p className="text-muted-foreground mt-xs max-w-measure">
-            Add this entry to <code>executor.approvalKeys</code> in the chart values. The executor
-            then runs only actions this phone approved with Touch ID. It is a public key.
+            Add this entry to <code>executor.approvalKeys.pinned</code> in the chart values. The
+            executor then runs only actions this phone approved with Touch ID. It is a public key.
           </p>
           <pre className="bg-muted p-xs mt-xs break-all whitespace-pre-wrap">
             <code>{pin}</code>

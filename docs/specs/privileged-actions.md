@@ -668,11 +668,27 @@ signature asks for Touch ID.
 | `aud`        | the instance's origin, as for [request tokens](devices.md#signed-requests)  |
 | `iat`, `exp` | required; `exp` after `iat` and at most 5 minutes after it (the app uses 2) |
 | `jti`        | 16 to 128 characters                                                        |
-| `act`        | the action id, the card's `privileged_action_id`                            |
-| `dig`        | the digest, the card's `privileged_action_digest`                           |
+| `act`        | the action id, as the phone read it from the action's canonical record      |
+| `dig`        | the digest, which the phone computed from that record                       |
 
-The digest covers the canonical arguments and the frozen facts, so a token approves that one
-action as the owner saw it, and nothing else.
+**What the phone signs.** The digest is the SHA-256 of the action's **canonical record**: the
+canonical JSON of the type and its version, the arguments, the frozen facts, the requester, the
+action id, the expiry and the catalog version (sorted keys, numbers as written, no HTML escaping).
+`GET /privileged-actions/{id}` returns those exact bytes as `canonical_record`. The phone never
+takes the card's word for what it approves:
+
+- it hashes the record itself, and refuses unless that is the card's digest and the record names
+  the card's action id and type;
+- its approval sheet shows only what it parsed from the record: the type, every argument, every
+  frozen fact, who asked, the expiry, the action id and the digest, with hidden characters made
+  visible ([iPhone app](ios-app.md));
+- it signs that digest and that action id.
+
+The executor runs an action only when the record it computes from the stored row has the signed
+digest, so a `serve-api` that shows one action and serves another's id or digest gets a token for
+what it showed, which the executor refuses for anything else. A test vector written by the Go
+server (`server/internal/privileged/testdata/canonical-record.json`) is hashed by the app's tests
+to the same digest.
 
 **In `serve-api`**, in the transaction of the answer, an Approve of a privileged card from a phone
 is refused (`403`) unless:
@@ -686,10 +702,15 @@ is refused (`403`) unless:
 
 An approval token with an answer from the web app is refused.
 
-**Pinning.** The owner pins phones' approval keys in the chart's `executor.approvalKeys`: each
-entry is the public JWK that Settings › Devices shows, with the device id as `kid`. The chart gives
-the same value, `MAINLOOP_PRIVILEGED_APPROVAL_KEYS`, to `serve-api` and `serve-executor`, and each
-refuses to start if it is malformed. With any key pinned:
+**Pinning.** The owner pins phones' approval keys in the chart's `executor.approvalKeys.pinned`:
+each entry is the public JWK that Settings › Devices shows, with the device id as `kid`. The chart
+gives the same value, `MAINLOOP_PRIVILEGED_APPROVAL_KEYS`, to `serve-api` and `serve-executor`, and
+each refuses to start if it is malformed.
+
+`executor.approvalKeys.required` (`MAINLOOP_PRIVILEGED_APPROVAL_KEYS_REQUIRED`, in both processes)
+makes this fail closed: the chart refuses to render, and either process refuses to start, with no
+key pinned, so a values change that drops the keys can't quietly go back to unsigned approvals.
+With any key pinned, or required:
 
 - `serve-api` takes an Approve of an executor type only from a phone whose key is pinned, signed
   with it. The web app's Approve of an executor type is refused ("approve this on your iPhone").
@@ -701,18 +722,33 @@ refuses to start if it is malformed. With any key pinned:
      which must also equal the approved digest. A row changed under the same id, however its
      digest was rewritten, no longer matches.
   3. Its `jti` is recorded in the executor's own table, `executor_approval_uses`, for this action.
-     A `jti` used for another action is refused. A first use more than 15 minutes after `iat` is
-     refused; a retry of the same action finds its own record and is not.
+     A `jti` used for another action is refused.
+  4. Every use is bounded by the token's signed `iat`, which `serve-api` can't change, not by the
+     executor's record, which it could. A first use more than 15 minutes after `iat` is refused.
+     A retry of the same action, which finds its own record, is refused more than 77 minutes after
+     `iat`: the 15 minutes, then every attempt at its longest deadline (the remote calls' 90
+     seconds and a command's longest timeout, 10 minutes), the 30-second delays between them and
+     one 2-minute lease after a crash. A retry later than that needs a new approval.
 
-  Anything else fails the action with the reason, and nothing runs.
+  A refusal before any attempt ran fails the action with the reason, and nothing runs. A retry
+  refused for its age ends **uncertain**, as an earlier attempt may have acted, and is raised to
+  the owner.
 
-With no key pinned, an executor type is approved as before, from the web app or a phone's signed
-Approve.
+With no key pinned and not required, an executor type is approved as before, from the web app or a
+phone's signed Approve, and both processes log `UNSIGNED PRIVILEGED APPROVALS` as a warning at
+every start.
 
-**Limits.** `serve-api`'s role owns the schema and could delete the executor's records or turn the
-row triggers off. A token then still approves only its own action and digest. Within 15 minutes
-of the owner's Touch ID, a deleted record would let that same action run again, which each type's
-observe-first step mostly absorbs (see [Execution](#execution)); after that, it is refused.
+**Limits.**
+
+- `serve-api`'s role owns the schema and could delete the executor's records, turn the row
+  triggers off, or reset a finished action to approved. A token still approves only its own
+  action and digest, and only until 77 minutes after the owner's Touch ID. Within that time such a
+  reset could make the same action run again, which each type's observe-first step mostly absorbs
+  (see [Execution](#execution)); after it, the action ends uncertain without running.
+- The executor doesn't check the token's `aud`: it has no origin of its own. Action ids are unique
+  to an instance and inside the digest, so a token from another instance names no action here.
+- Preflight runs before any approval, so a compromised `serve-api` can still request actions and
+  read their frozen facts. Signed approvals bound what runs, not what preflight reads.
 
 ## Audit
 

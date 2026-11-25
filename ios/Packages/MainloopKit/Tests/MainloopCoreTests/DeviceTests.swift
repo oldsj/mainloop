@@ -18,17 +18,25 @@ actor FakeTransport: ClientTransport {
     let status: HTTPResponse.Status
     let json: String?
     let fails: Bool
+    /// Answers for particular operations, by operation id, with 200.
+    let routes: [String: String]
 
-    init(status: HTTPResponse.Status = .ok, json: String? = nil, fails: Bool = false) {
+    init(status: HTTPResponse.Status = .ok, json: String? = nil, fails: Bool = false, routes: [String: String] = [:]) {
         self.status = status
         self.json = json
         self.fails = fails
+        self.routes = routes
     }
 
     func send(_ request: HTTPRequest, body: HTTPBody?, baseURL: URL, operationID: String) async throws -> (HTTPResponse, HTTPBody?) {
         let data: Data? = if let body { try await Data(collecting: body, upTo: 1 << 20) } else { nil }
         sent.append(Sent(request: request, body: data, baseURL: baseURL))
         if fails { throw URLError(.notConnectedToInternet) }
+        if let routed = routes[operationID] {
+            var response = HTTPResponse(status: .ok)
+            response.headerFields[.contentType] = "application/json"
+            return (response, HTTPBody(routed))
+        }
         var response = HTTPResponse(status: status)
         guard let json else { return (response, nil) }
         response.headerFields[.contentType] = "application/json"

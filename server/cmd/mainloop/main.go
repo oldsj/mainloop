@@ -170,7 +170,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 	attn := attention.NewService(cfg, pool, log)
-	if attn.Approvals, err = newApprovals(cfg); err != nil {
+	if attn.Approvals, err = newApprovals(cfg, log); err != nil {
 		return err
 	}
 

@@ -7,6 +7,13 @@ public enum LoadState: Equatable, Sendable {
     case failed(String)
 }
 
+/// An approval being reviewed: the card, and the record the sheet shows and Touch ID signs.
+public struct ApprovalReview: Identifiable, Hashable, Sendable {
+    public let item: NeedsYouItem
+    public let record: ActionRecord
+    public var id: NeedsYouItem.ID { item.id }
+}
+
 @MainActor @Observable
 public final class NeedsYouModel {
     public private(set) var items: [NeedsYouItem] = []
@@ -18,6 +25,9 @@ public final class NeedsYouModel {
     /// Free-text replies being written, per card. Kept here rather than in the detail view, so
     /// a note typed on one card can never be sent on another when the selection changes.
     public var replies: [NeedsYouItem.ID: String] = [:]
+    /// The approval being reviewed: the card and its action's verified canonical record, which the
+    /// approval sheet shows before Touch ID.
+    public var reviewing: ApprovalReview?
 
     private let source: any MainloopSource
     private let approver: (any Approver)?
@@ -61,25 +71,46 @@ public final class NeedsYouModel {
         await submit(item, answer)
     }
 
-    /// Approves a privileged card: signs an approval for its action id and digest (Touch ID on a
-    /// phone), then sends it. A cancelled prompt sends nothing and says nothing.
-    public func approve(_ item: NeedsYouItem) async {
-        guard let approver, offersSignedApprove(item), let facts = item.privileged?.approvable else {
+    /// Starts approving a privileged card: fetches its action's canonical record, hashes it here
+    /// and checks it is the card's action and digest, then opens the approval sheet on it. Nothing
+    /// is signed yet.
+    public func review(_ item: NeedsYouItem) async {
+        guard approver != nil, offersSignedApprove(item), let card = item.privileged, let facts = card.approvable else {
             lastError = Self.describe(AnswerError.notApprovable)
             return
         }
         answering.insert(item.id)
         defer { answering.remove(item.id) }
+        do {
+            let record = try ActionRecord.verify(try await source.privilegedRecord(facts.actionID), for: card)
+            reviewing = ApprovalReview(item: item, record: record)
+        } catch {
+            lastError = Self.describe(error)
+        }
+    }
+
+    /// Approves what the sheet showed: signs the record's own action id and digest (Touch ID on a
+    /// phone), then sends it. A cancelled prompt sends nothing, says nothing and keeps the sheet.
+    public func confirm(_ review: ApprovalReview) async {
+        guard let approver else {
+            lastError = Self.describe(AnswerError.notApprovable)
+            return
+        }
+        let item = review.item
+        answering.insert(item.id)
+        defer { answering.remove(item.id) }
         let token: String
         do {
-            token = try await approver.approval(actionID: facts.actionID, digest: facts.digest, reason: "Approve: \(item.title)")
+            token = try await approver.approval(actionID: review.record.actionID, digest: review.record.digest, reason: review.record.reason)
         } catch ApprovalSigningError.cancelled {
             return
         } catch {
+            reviewing = nil
             lastError = Self.describe(error)
             return
         }
-        await submit(item, .signedApprove(token: token))
+        reviewing = nil
+        await submit(item, .signedApprove(token: token, digest: review.record.digest))
     }
 
     private func submit(_ item: NeedsYouItem, _ answer: Answer) async {
@@ -111,6 +142,10 @@ public final class NeedsYouModel {
         case AnswerError.privilegedApproveNeedsSignature:
             "Approving a privileged action needs a signed approval: use Approve, which asks for Touch ID."
         case AnswerError.notApprovable: "This card can't be approved here."
+        case ActionRecordError.digestMismatch, ActionRecordError.otherAction:
+            "The server's record of this action doesn't match the card, so it can't be approved. Nothing was signed."
+        case ActionRecordError.malformed, ActionRecordError.notApprovable:
+            "This action's record couldn't be read, so it can't be approved. Nothing was signed."
         case ApprovalError.noApprovalKey: "Sign out and in again to approve privileged actions on this iPhone."
         case ApprovalSigningError.notRecognised: "Touch ID didn't recognise you. Nothing was sent."
         case ApprovalSigningError.biometryUnavailable:

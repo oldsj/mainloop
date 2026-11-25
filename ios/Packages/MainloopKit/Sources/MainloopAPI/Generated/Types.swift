@@ -64,6 +64,13 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /health`.
     /// - Remark: Generated from `#/paths//health/get(getHealth)`.
     func getHealth(_ input: Operations.GetHealth.Input) async throws -> Operations.GetHealth.Output
+    /// Get Privileged Action
+    ///
+    /// One privileged action with what was asked, the facts the owner approved, the outcome and every step taken.
+    ///
+    /// - Remark: HTTP `GET /privileged-actions/{action_id}`.
+    /// - Remark: Generated from `#/paths//privileged-actions/{action_id}/get(getPrivilegedAction)`.
+    func getPrivilegedAction(_ input: Operations.GetPrivilegedAction.Input) async throws -> Operations.GetPrivilegedAction.Output
     /// Respond To Queue Item
     ///
     /// Respond to a queue item.
@@ -176,6 +183,21 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//health/get(getHealth)`.
     public func getHealth(headers: Operations.GetHealth.Input.Headers = .init()) async throws -> Operations.GetHealth.Output {
         try await getHealth(Operations.GetHealth.Input(headers: headers))
+    }
+    /// Get Privileged Action
+    ///
+    /// One privileged action with what was asked, the facts the owner approved, the outcome and every step taken.
+    ///
+    /// - Remark: HTTP `GET /privileged-actions/{action_id}`.
+    /// - Remark: Generated from `#/paths//privileged-actions/{action_id}/get(getPrivilegedAction)`.
+    public func getPrivilegedAction(
+        path: Operations.GetPrivilegedAction.Input.Path,
+        headers: Operations.GetPrivilegedAction.Input.Headers = .init()
+    ) async throws -> Operations.GetPrivilegedAction.Output {
+        try await getPrivilegedAction(Operations.GetPrivilegedAction.Input(
+            path: path,
+            headers: headers
+        ))
     }
     /// Respond To Queue Item
     ///

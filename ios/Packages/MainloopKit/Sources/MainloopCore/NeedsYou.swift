@@ -101,8 +101,8 @@ public enum Answer: Hashable, Sendable {
     /// A free-text reply. On a privileged card this is a denial with the text as its note.
     case text(String)
     /// Approve on a privileged card, with the approval token signed by this phone's approval key
-    /// (`ApprovalToken`).
-    case signedApprove(token: String)
+    /// (`ApprovalToken`) and the digest it signed, which the phone computed (`ActionRecord`).
+    case signedApprove(token: String, digest: String)
 
     public static let approve = "Approve"
     public static let deny = "Deny"
@@ -128,10 +128,12 @@ public enum AnswerError: Error, Equatable, Sendable {
 /// Builds the body of `POST /queue/{item_id}/respond`.
 public enum AnswerBody {
     public static func make(for item: NeedsYouItem, answer: Answer) throws -> Components.Schemas.QueueItemResponse {
-        if case .signedApprove(let token) = answer {
-            guard let facts = item.privileged?.approvable, !token.isEmpty else { throw AnswerError.notApprovable }
+        if case .signedApprove(let token, let digest) = answer {
+            guard let facts = item.privileged?.approvable, !token.isEmpty, digest == facts.digest else {
+                throw AnswerError.notApprovable
+            }
             // The server approves only when reviewed_context is the digest the approval signed.
-            let metadata = try OpenAPIObjectContainer(unvalidatedValue: ["reviewed_context": facts.digest, "approval": token])
+            let metadata = try OpenAPIObjectContainer(unvalidatedValue: ["reviewed_context": digest, "approval": token])
             return .init(response: Answer.approve, metadata: .init(additionalProperties: metadata))
         }
         let response = answer.response.trimmingCharacters(in: .whitespacesAndNewlines)

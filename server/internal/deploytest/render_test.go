@@ -60,12 +60,12 @@ var installs = map[string]struct {
 		"executor.ssh.hosts[0].name=nas-01", "executor.ssh.hosts[0].address=192.0.2.20:22",
 		"executor.ssh.hosts[1].name=router", "executor.ssh.hosts[1].address=192.0.2.1:2222",
 	}},
-	// Production with serve-executor on and a phone's approval key pinned.
+	// Production with serve-executor on and a phone's approval key pinned and required.
 	"production-executor-approvals": {"mainloop", "ci/production-values.yaml", []string{
 		"executor.enabled=true", "executor.namespace=mainloop-executor",
-		"executor.approvalKeys[0].kid=dev_0123456789abcdefghijklmnop", "executor.approvalKeys[0].kty=EC",
-		"executor.approvalKeys[0].crv=P-256", "executor.approvalKeys[0].x=VBY4eEqK2i_pljz6fJ7BYbPqbMOb-ZFPzBXzI1_w1mM",
-		"executor.approvalKeys[0].y=YNqLInY0XbP0fGgecdIgsmrHXiY9zDnuNAG4ozmCWgQ",
+		"executor.approvalKeys.pinned[0].kid=dev_0123456789abcdefghijklmnop", "executor.approvalKeys.pinned[0].kty=EC",
+		"executor.approvalKeys.pinned[0].crv=P-256", "executor.approvalKeys.pinned[0].x=VBY4eEqK2i_pljz6fJ7BYbPqbMOb-ZFPzBXzI1_w1mM",
+		"executor.approvalKeys.pinned[0].y=YNqLInY0XbP0fGgecdIgsmrHXiY9zDnuNAG4ozmCWgQ", "executor.approvalKeys.required=true",
 	}},
 	// Production with Apple push on (docs/specs/push-notifications.md).
 	"production-apns": {"mainloop", "ci/production-values.yaml", []string{

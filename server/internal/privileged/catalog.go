@@ -448,17 +448,27 @@ func hashHex(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Digest is the SHA-256 of the canonical JSON of everything the owner's approval binds: the type
-// and its version, the arguments, the frozen facts, the requester, the action id, the expiry and
-// the catalog version. The agent's reason is not part of it.
+// Digest is the SHA-256 of the action's canonical record (CanonicalRecord).
 func Digest(row dbq.PrivilegedAction, facts []byte) (string, error) {
-	args, err := canonicalRaw(row.Args)
+	b, err := CanonicalRecord(row, facts)
 	if err != nil {
 		return "", err
 	}
+	return hashHex(b), nil
+}
+
+// CanonicalRecord is the canonical JSON of everything the owner's approval binds: the type and
+// its version, the arguments, the frozen facts, the requester, the action id, the expiry and the
+// catalog version. The agent's reason is not part of it. The digest is its SHA-256; a phone hashes
+// these bytes itself and shows what it parsed from them, so what it signs is what it showed.
+func CanonicalRecord(row dbq.PrivilegedAction, facts []byte) ([]byte, error) {
+	args, err := canonicalRaw(row.Args)
+	if err != nil {
+		return nil, err
+	}
 	f, err := canonicalRaw(facts)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	in := map[string]any{
 		"action_id": row.ID, "type": row.Type, "version": row.Version, "catalog_version": CatalogVersion,
@@ -466,11 +476,7 @@ func Digest(row dbq.PrivilegedAction, facts []byte) (string, error) {
 		"requester":  map[string]any{"role": row.RequesterRole, "session_id": row.RequesterSessionID, "task_id": row.RequesterTaskID},
 		"expires_at": row.ExpiresAt.UTC().Format(time.RFC3339Nano),
 	}
-	b, err := canonical(in)
-	if err != nil {
-		return "", err
-	}
-	return hashHex(b), nil
+	return canonical(in)
 }
 
 // safeError is an error's text with secrets removed and its length bounded, for results, events

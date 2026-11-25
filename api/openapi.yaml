@@ -6894,6 +6894,14 @@ components:
           anyOf:
             - type: string
             - type: 'null'
+        canonical_record:
+          description: >-
+            The canonical JSON the digest is the SHA-256 of: the type and its version, the arguments, the frozen facts,
+            the requester, the action id, the expiry and the catalog version. A phone hashes these bytes itself and shows
+            what it parsed from them before it signs an approval. Null before the facts are frozen.
+          anyOf:
+            - type: string
+            - type: 'null'
         result:
           anyOf:
             - type: object
@@ -6919,6 +6927,7 @@ components:
         - args
         - frozen_facts
         - digest
+        - canonical_record
         - result
         - attempts
         - delivery_state

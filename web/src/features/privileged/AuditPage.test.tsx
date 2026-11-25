@@ -85,6 +85,7 @@ describe('privileged actions audit', () => {
       args: { namespace: 'widgets' },
       frozen_facts: {},
       digest: 'a'.repeat(64),
+      canonical_record: null,
       result: {},
       attempts: 1,
       delivery_state: 'delivered',

@@ -20,16 +20,30 @@ to build it.
   action id and the first 16 characters of the digest.
   - A card counts as privileged when its context has any `privileged_action_*` key. If those facts
     are malformed, the card shows them as missing.
-  - **Approve** is offered only when this phone has an approval key (below) and the card's
-    action id and digest (64 lowercase hex characters) are well formed. Tapping it asks for Touch
-    ID ("Approve: " and the card's title), signs an approval token with the approval key, and sends
-    `Approve` with `metadata.reviewed_context` set to the digest and `metadata.approval` set to the
-    token. The request itself is signed with the request key, as every request is.
+  - **Review and approve** is offered only when this phone has an approval key (below) and the
+    card's action id and digest (64 lowercase hex characters) are well formed. The phone never
+    signs the card's word for what it approves:
+    1. It fetches the action's `canonical_record` (`GET /privileged-actions/{id}`) and computes its
+       SHA-256 itself. Unless that is the card's digest, and the record names the card's action id
+       (and type, when the card names one), it refuses and signs nothing.
+    2. It opens the **approval sheet**, built only from the record it parsed: the type, every
+       argument, every fact preflight froze (a diff, the current state), who asked, the expiry,
+       the action id and the digest. Control and format characters (bidi overrides, zero-width
+       characters, line separators) are shown as ⟨U+XXXX⟩, never applied.
+    3. The sheet's **Approve** asks for Touch ID ("Approve _type_ (_action id_)", from the record),
+       signs an approval token with the approval key for the record's action id and the digest the
+       phone computed, and sends `Approve` with `metadata.reviewed_context` set to that digest and
+       `metadata.approval` set to the token. The request itself is signed with the request key, as
+       every request is.
+
+    The executor runs an action only when the canonical record it computes from the stored row
+    has the signed digest, so what runs is what the sheet showed.
+
   - **The approval token** is a compact JWS: header `{"alg":"ES256","typ":"mainloop-approval+jwt","kid":<device id>}`,
     claims `iss` `mainloop-device`, `sub` the device id, `aud` the instance's origin (as for request
     tokens), `iat`, `exp` (`iat` + 120 seconds), a random `jti`, `act` the action id and `dig` the
     digest; the signature is the raw r‖s, unpadded base64url.
-  - A cancelled Touch ID prompt sends nothing and shows nothing. A finger not recognised, Touch ID
+  - A cancelled Touch ID prompt sends nothing, shows nothing and keeps the sheet open. A finger not recognised, Touch ID
     unavailable, or an approval key the Secure Enclave no longer accepts (as after the enrolled
     fingers change) sends nothing and says so. A `403` shows the server's reason.
   - On a phone registered without an approval key the card says "Sign out and in again to approve
@@ -38,6 +52,7 @@ to build it.
     the server refuses an unsigned Approve from a phone (see [privileged
     actions](privileged-actions.md#signed-approvals)).
   - **Deny** and a note (a denial with that text) are offered as before.
+
 - **Drafts stay with their item.** A note typed on a card, or a message typed to a session, belongs
   to that card or session. Changing the selection in the side-by-side layout shows the other item's
   own draft, never carries text over, and coming back restores it.
@@ -112,6 +127,10 @@ with fictional data. No notification has been delivered to a phone through APNs.
 Approvals are tested with software keys: the token's header, claims and signature, the
 registration's second key, the respond body, and that Approve is offered only with an approval
 key and well-formed facts. An approval token this code signed is checked by the server's verifier
-in Go (`server/internal/approval/testdata`). Nothing has run on a phone: the Touch ID prompt, the
+in Go (`server/internal/approval/testdata`). The record's digest is checked against a vector the
+Go server wrote (`server/internal/privileged/testdata/canonical-record.json`): its facts keep
+number text, HTML characters, U+2028, a character outside the BMP and a bidi override, and the
+app's fixture is a copy of it. A record that isn't the card's is refused before anything is signed.
+The approval sheet itself is compiled by CI but not tested. Nothing has run on a phone: the Touch ID prompt, the
 Secure Enclave key's access control (`.biometryCurrentSet`) and what happens after re-enrolling
 are untested, as CI's simulator uses a software key.

@@ -32,6 +32,9 @@ type Checker struct {
 	// pinned, an executor type is approved only from a phone whose key is pinned, so the
 	// executor never gets an approval it would refuse.
 	Pinned Pinned
+	// Required takes an executor type's approval only with a pinned key's signature even when none
+	// is pinned (which serve-api refuses to start with).
+	Required bool
 	// ExecutorTypes are the types serve-executor runs.
 	ExecutorTypes map[string]bool
 	Now           func() time.Time
@@ -51,7 +54,7 @@ func (c *Checker) CheckApprove(ctx context.Context, tx pgx.Tx, card map[string]a
 	var meta map[string]any
 	_ = json.Unmarshal(metadata, &meta) // Respond has checked it is JSON
 	token, _ := meta[MetadataKey].(string)
-	needsPinned := len(c.Pinned) > 0 && c.ExecutorTypes[typ]
+	needsPinned := (len(c.Pinned) > 0 || c.Required) && c.ExecutorTypes[typ]
 
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Kind != auth.KindDevice {

@@ -2,8 +2,9 @@ import MainloopCore
 import SwiftUI
 
 /// One card: what is asked, the facts, and the answers. A privileged card shows the action id
-/// and the digest prefix as the web card does. Its Approve signs an approval with this phone's
-/// approval key, which asks for Touch ID; its other answers are denials.
+/// and the digest prefix as the web card does. Its Approve opens the approval sheet on the
+/// action's record, which this phone fetched and hashed itself; the sheet's Approve signs that
+/// record's digest with the approval key, which asks for Touch ID. Its other answers are denials.
 struct NeedsYouDetail: View {
     @Environment(NeedsYouModel.self) private var model
     let item: NeedsYouItem
@@ -14,6 +15,14 @@ struct NeedsYouDetail: View {
     }
 
     private var busy: Bool { model.answering.contains(item.id) }
+
+    /// The approval sheet, for this card only.
+    private var review: Binding<ApprovalReview?> {
+        Binding(
+            get: { model.reviewing?.item.id == item.id ? model.reviewing : nil },
+            set: { if $0 == nil { model.reviewing = nil } }
+        )
+    }
 
     var body: some View {
         @Bindable var model = model
@@ -47,9 +56,9 @@ struct NeedsYouDetail: View {
                 Section("Answer") {
                     if model.offersSignedApprove(item) {
                         Button {
-                            Task { await model.approve(item) }
+                            Task { await model.review(item) }
                         } label: {
-                            Label(Answer.approve, systemImage: "touchid")
+                            Label("Review and approve", systemImage: "touchid")
                         }
                         .disabled(busy)
                     }
@@ -68,6 +77,7 @@ struct NeedsYouDetail: View {
         .navigationTitle(item.kind.title)
         .navigationBarTitleDisplayMode(.inline)
         .overlay { if busy { ProgressView() } }
+        .sheet(item: review) { ApprovalSheet(review: $0) }
         .alert("Couldn't send", isPresented: Binding(get: { model.lastError != nil }, set: { if !$0 { model.lastError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -84,13 +94,69 @@ struct NeedsYouDetail: View {
             return "This card's action id or digest is missing or malformed, so it can't be approved. Deny it, or ask the agent again."
         }
         if model.canSignApprovals {
-            return "Approve asks for Touch ID, then signs this action id and digest with a key that stays in this iPhone's Secure Enclave."
+            return "Review and approve shows the action as this iPhone reads it from the server's record and checks it against this card. Approving there asks for Touch ID and signs that record's digest with a key that stays in this iPhone's Secure Enclave."
         }
         return "Sign out and in again to approve privileged actions on this iPhone."
     }
 
     private func send(_ answer: Answer) {
         Task { await model.answer(item, with: answer) }
+    }
+}
+
+/// What Touch ID signs, shown before it asks: the action's canonical record as this phone parsed
+/// it, never the card's text. Hidden characters are shown as ⟨U+XXXX⟩.
+struct ApprovalSheet: View {
+    @Environment(NeedsYouModel.self) private var model
+    let review: ApprovalReview
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(review.record.type).font(.title3.weight(.semibold)).monospaced()
+                } footer: {
+                    Text("This is the action Touch ID approves, read from the record this iPhone fetched and hashed itself.")
+                }
+                Section("Arguments") {
+                    ForEach(review.record.args, id: \.self) { FieldRow(field: $0) }
+                }
+                if !review.record.facts.isEmpty {
+                    Section("What preflight read") {
+                        ForEach(review.record.facts, id: \.self) { FieldRow(field: $0) }
+                    }
+                }
+                Section("Request") {
+                    ForEach(review.record.context, id: \.self) { FieldRow(field: $0) }
+                }
+            }
+            .navigationTitle("Approve")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { model.reviewing = nil }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        Task { await model.confirm(review) }
+                    } label: {
+                        Label(Answer.approve, systemImage: "touchid")
+                    }
+                    .disabled(model.answering.contains(review.id))
+                }
+            }
+        }
+    }
+}
+
+private struct FieldRow: View {
+    let field: ActionRecord.Field
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(field.label).font(.caption).foregroundStyle(.secondary)
+            Text(field.value).font(.callout.monospaced()).textSelection(.enabled)
+        }
     }
 }
 

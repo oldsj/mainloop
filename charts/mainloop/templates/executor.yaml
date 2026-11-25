@@ -118,9 +118,13 @@ spec:
                   name: {{ .omni.keySecret }}
                   key: service-account-key
             {{- end }}
-            {{- with .approvalKeys }}
+            {{- with .approvalKeys.pinned }}
             - name: MAINLOOP_PRIVILEGED_APPROVAL_KEYS
               value: {{ toJson . | quote }}
+            {{- end }}
+            {{- if .approvalKeys.required }}
+            - name: MAINLOOP_PRIVILEGED_APPROVAL_KEYS_REQUIRED
+              value: "true"
             {{- end }}
             {{- if .ssh.enabled }}
             {{- if not .ssh.hosts }}
