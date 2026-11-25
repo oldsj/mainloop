@@ -69,9 +69,6 @@ var sideroCommands = map[string]map[string]sideroSpec{
 			"namespace": valueFlag, "output": outputFlag, "selector": valueFlag, "id-match-regexp": valueFlag,
 		}},
 		"cluster status": {preview: PreviewRead, args: [2]int{1, 1}, flags: map[string]sideroFlag{"quiet": switchFlag}},
-		"machine-logs": {preview: PreviewRead, args: [2]int{1, 1}, flags: map[string]sideroFlag{
-			"log-format": {value: true, values: []string{"raw", "omni", "dmesg"}},
-		}},
 		"apply": {preview: PreviewDryRun, dryRun: true, stdin: true, effect: "creates or updates Omni resources", flags: map[string]sideroFlag{
 			"file": {value: true, require: "-"}, "verbose": switchFlag,
 		}},
@@ -89,7 +86,6 @@ var sideroCommands = map[string]map[string]sideroSpec{
 		"get":                     {preview: PreviewRead, args: [2]int{1, 2}, flags: map[string]sideroFlag{"namespace": valueFlag, "output": outputFlag}},
 		"service":                 {preview: PreviewRead, args: [2]int{0, 2}},
 		"logs":                    {preview: PreviewRead, args: [2]int{1, 1}, flags: map[string]sideroFlag{"tail": valueFlag, "kubernetes": switchFlag, "namespace": valueFlag}},
-		"dmesg":                   {preview: PreviewRead, flags: map[string]sideroFlag{"tail": switchFlag}},
 		"etcd members":            {preview: PreviewRead},
 		"etcd status":             {preview: PreviewRead},
 		"etcd alarm list":         {preview: PreviewRead},

@@ -55,16 +55,18 @@ func (s *Server) privilegedTools() []Tool {
 			"access; prefer a Git change for anything Argo CD manages, and a typed action where one fits. " +
 			"command.omnictl {argv, stdin (for apply --file=-), timeout_seconds} and command.talosctl {target (an Omni cluster the " +
 			"executor may act on), argv (with --nodes=<node>), timeout_seconds} run one omnictl or talosctl command once through Omni " +
-			"as the executor's service account (role Admin). Allowed: omnictl get, cluster status, machine-logs, apply (the card shows " +
-			"its --dry-run diff, run again before it), delete and cluster delete; talosctl version, get, service, logs, dmesg, etcd " +
+			"as the executor's service account (role Admin). Allowed: omnictl get, cluster status, apply (the card shows " +
+			"its --dry-run diff, run again before it), delete and cluster delete; talosctl version, get, service, logs, etcd " +
 			"members|status|alarm list, containers, stats, memory, processes, mounts, netstat, time, list, and (no preview) reboot, " +
-			"shutdown, reset, upgrade (--wait=false on these four; --image from factory.talos.dev or ghcr.io/siderolabs only), " +
+			"shutdown, reset, upgrade (--wait=false on these four; --image from factory.talos.dev or ghcr.io/siderolabs only; give " +
+			"an upgrade timeout_seconds for the image's pull and install), " +
 			"rollback, service <id> start|stop|restart, etcd defrag|forfeit-leadership|leave|remove-member|alarm disarm. omnictl " +
 			"delete takes <type> <id>, no selector. Flags are long only, as --name or --name=value; the refusal names the allowed " +
 			"ones. get and delete take only the resource types an operator reads (clusters, machine sets, machines and statuses; " +
 			"Talos members, addresses, routes, links, disks, volumes, services), by full, plural or singular name; the refusal lists " +
-			"them. Refused: endpoint, config, context, cluster and credential flags, watches and follows, other types (config " +
-			"patches, configs, tokens, secrets), and types the server marks sensitive. omnictl is held to the executor's clusters: " +
+			"them. Refused: endpoint, config, context, cluster and credential flags, watches and follows, dmesg and machine-logs " +
+			"(the kernel log holds the join token), other types (config patches, configs, tokens, secrets, kernel args, machine " +
+			"statuses), and types the server marks sensitive. omnictl is held to the executor's clusters: " +
 			"it changes only resources labelled omni.sidero.dev/cluster=<one of them> and sees none of another cluster's; talosctl " +
 			"reaches only its target's machines. The tools never hold the Omni key: the executor's proxy signs each request and " +
 			"refuses those whatever they send. " +

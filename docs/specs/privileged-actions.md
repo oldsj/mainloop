@@ -275,13 +275,16 @@ account, whose role is Admin: for Omni resources (clusters, machine sets) and fo
   removed from the output, the session redactor runs over it, and each stream is kept to 64 KiB.
 - The proxy refuses, for every command, with `refused by the executor`:
   - any method but the reads and writes the allowed commands use (no kubeconfig, talosconfig,
-    service account, support bundle, file read, client certificate, config apply or etcd snapshot);
+    service account, support bundle, file read, client certificate, config apply or etcd snapshot;
+    no kernel log, through Talos's dmesg or Omni's machine logs, which prints the kernel command
+    line where Omni's installation media put the SideroLink join token);
   - a resource type, named in a request or in a resource it writes, that is not on the executor's
-    allowlist of types an operator reads: Omni's clusters, machine sets, machines and their
-    statuses, upgrade and etcd backup statuses; Talos's members, addresses, routes, links, disks,
+    allowlist of types an operator reads: Omni's clusters, machine sets, machines, cluster
+    machine statuses, upgrade and etcd backup statuses; Talos's members, addresses, routes, links, disks,
     volumes, services, etcd members, node and hardware statuses. Nothing that holds a credential is
     on it: not Omni's config patches, configs, Siderolink config, join tokens, kubeconfigs,
-    talosconfigs or secrets, nor Talos's machine config, link specs, registry config, manifests,
+    talosconfigs or secrets, nor what holds a kernel command line or a machine config diff (Omni's
+    machine statuses, kernel args and their statuses, pending updates), nor Talos's machine config, link specs, registry config, manifests,
     KubeSpan and discovery configs, volume configs, extension service configs or Siderolink config;
   - a type whose resource definition, read from Omni or the node with the executor's key, marks it
     sensitive, or whose definition cannot be read; and, as a second check, a type whose name
@@ -300,8 +303,9 @@ account, whose role is Admin: for Omni resources (clusters, machine sets) and fo
   - in omnictl's answers, any resource of another cluster: a list or watch leaves it out, and a
     get is refused. Omni may manage clusters the executor does not act on, and omnictl sees none
     of theirs;
-  - `machine-logs` of a machine that is not in those clusters, and `talosctl upgrade` to an image
-    that is not from `factory.talos.dev` or `ghcr.io/siderolabs`.
+  - `talosctl upgrade` to an image that is not from `factory.talos.dev` or `ghcr.io/siderolabs`:
+    checked in the legacy upgrade call, and in the image pull and install calls that talosctl
+    makes for Talos 1.13 and later.
 
   Before approval it forwards reads only.
 
@@ -310,12 +314,13 @@ account, whose role is Admin: for Omni resources (clusters, machine sets) and fo
   `--name` or `--name=value`, and words that do not start with `-`. Short flags, `--`, a flag
   given twice, a value starting with `-`, a flag name with `_` or capitals, and control or
   invisible characters are refused. Then an allowlist holds, each command with its own flags:
-  - omnictl: `get`, `cluster status`, `machine-logs` (reads); `apply --file=-` and `cluster delete`
+  - omnictl: `get`, `cluster status` (reads); `apply --file=-` and `cluster delete`
     (changes with a dry run); `delete <type> <id>`, one resource by name, with no selector.
-  - talosctl, which always needs `--nodes=`: `version`, `get`, `service`, `logs`, `dmesg`,
+  - talosctl, which always needs `--nodes=`: `version`, `get`, `service`, `logs`,
     `etcd members|status|alarm list`, `containers`, `stats`, `memory`, `processes`, `mounts`,
     `netstat`, `time`, `list` (reads); `reboot`, `shutdown`, `reset` and `upgrade` (each with
-    `--wait=false`: the command returns once the node accepts it), `rollback`,
+    `--wait=false`: the command returns once the node accepts it; on Talos 1.13 and later an
+    upgrade first pulls and installs the image, so give it a `timeout_seconds` to match), `rollback`,
     `service <id> start|stop|restart`, `etcd defrag|forfeit-leadership|alarm disarm|leave|remove-member`.
 
   No list holds a flag that chooses the endpoint, cluster, configuration or credential
@@ -346,7 +351,8 @@ account, whose role is Admin: for Omni resources (clusters, machine sets) and fo
 - The agent's view of the facts has the preview kind, not the dry run's text.
 
 Not allowed in this part: `talosctl patch` and `apply-config` (their preview would read the
-machine config, which holds secrets), `image pull`, `upgrade-k8s`, and every command that makes
+machine config, which holds secrets), `dmesg` and `omnictl machine-logs` (the kernel log),
+`image pull`, `upgrade-k8s`, and every command that makes
 or reads a kubeconfig, talosconfig or service account.
 
 `command.ssh {target, command, stdin, timeout_seconds}` runs one command line on a home-network
