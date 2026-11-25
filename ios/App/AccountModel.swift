@@ -20,11 +20,13 @@ final class AccountModel {
     let account: DeviceAccount
     private let origin: URL?
     private let signIn: PocketIDSignIn?
+    private let push: PushModel
 
-    init(account: DeviceAccount, origin: URL?, signIn: PocketIDSignIn?) {
+    init(account: DeviceAccount, origin: URL?, signIn: PocketIDSignIn?, push: PushModel) {
         self.account = account
         self.origin = origin
         self.signIn = signIn
+        self.push = push
         if let credential = account.credential, credential.origin == origin {
             phase = .signedIn(deviceID: credential.deviceID)
         } else {
@@ -66,6 +68,8 @@ final class AccountModel {
                 throw error
             }
             phase = .signedIn(deviceID: credential.deviceID)
+            // Registered: now there is somewhere to send a token. iOS asks only the first time.
+            await push.requestPermission()
         } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
             phase = .signedOut
         } catch {
@@ -77,6 +81,7 @@ final class AccountModel {
     func signOut() async {
         phase = .working
         try? await account.signOut()
+        await push.signedOut()
         phase = origin != nil && signIn != nil ? .signedOut : .unavailable
     }
 

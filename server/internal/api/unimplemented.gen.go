@@ -39,6 +39,11 @@ func (Unimplemented) CancelTask(context.Context, CancelTaskRequestObject) (Cance
 	return nil, apierr.NotImplemented
 }
 
+// ClearDevicePush is not implemented yet.
+func (Unimplemented) ClearDevicePush(context.Context, ClearDevicePushRequestObject) (ClearDevicePushResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // CreateSchedule is not implemented yet.
 func (Unimplemented) CreateSchedule(context.Context, CreateScheduleRequestObject) (CreateScheduleResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -566,6 +571,11 @@ func (Unimplemented) SendMessage(context.Context, SendMessageRequestObject) (Sen
 
 // SendSessionMessage is not implemented yet.
 func (Unimplemented) SendSessionMessage(context.Context, SendSessionMessageRequestObject) (SendSessionMessageResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// SetDevicePush is not implemented yet.
+func (Unimplemented) SetDevicePush(context.Context, SetDevicePushRequestObject) (SetDevicePushResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

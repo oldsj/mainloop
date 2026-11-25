@@ -301,12 +301,20 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	transcriptSvc.Register(runner)
 	runner.AddSweep(schedSvc.Sweep())
 	runner.AddSweep(environments.NewAPI(cfg, pool, nil).Service.FollowSweep(cfg.Identity.OwnerID))
-	if cfg.Ntfy.Enabled() {
+	apnsSvc, err := newAPNs(cfg, pool, attn, log)
+	if err != nil {
+		return err
+	}
+	if cfg.Ntfy.Enabled() || apnsSvc != nil {
+		// Notifications are written whenever a channel is on; ntfy sends them when it is on.
 		(&notify.Service{
 			Pool: pool, OwnerID: cfg.Identity.OwnerID, Log: log,
 			URL: cfg.Ntfy.URL, Topic: cfg.Ntfy.Topic, Token: cfg.Ntfy.Token.Reveal(),
 			AppURL: cfg.Server.FrontendScheme + "://" + cfg.Server.FrontendDomain,
 		}).Register(runner)
+	}
+	if apnsSvc != nil {
+		apnsSvc.Register(runner)
 	}
 	previews.Register(runner)
 	taskSvc.Register(runner)

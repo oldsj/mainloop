@@ -193,6 +193,8 @@ func TestInvalidValues(t *testing.T) {
 		want string
 	}{
 		{"blank owner", base("MAINLOOP_OWNER_ID", "  "), "MAINLOOP_OWNER_ID"},
+		{"apns without a topic", base("MAINLOOP_APNS_CREDENTIALS_DIR", "/var/run/secrets/apns"), "MAINLOOP_APNS_TOPIC"},
+		{"apns topic not a bundle id", map[string]string{"AGENT_TOKEN_KEY": "k", "MAINLOOP_APNS_CREDENTIALS_DIR": "/x", "MAINLOOP_APNS_TOPIC": "mainloop"}, "MAINLOOP_APNS_TOPIC"},
 		{"bad mcp host", base("MAINLOOP_MCP_HOSTS", "ok.example,not a host"), "MAINLOOP_MCP_HOSTS"},
 		{"bad namespace", base("MAINLOOP_NAMESPACE", "Not_A_Label"), "MAINLOOP_NAMESPACE"},
 		{"colliding namespace", base("MAINLOOP_NAMESPACE", "team-git"), "collides"},

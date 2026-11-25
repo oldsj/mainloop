@@ -40,6 +40,14 @@ targets:
         PRODUCT_NAME: Mainloop
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    # Generated from these properties by XcodeGen (gitignored, like Info.plist). Xcode expands the
+    # build setting when it signs; CI's unsigned simulator build signs nothing.
+    entitlements:
+      path: App/Mainloop.entitlements
+      properties:
+        # development (the APNs sandbox) for Debug, production for Release; see Config/Mainloop.xcconfig.
+        aps-environment: $(MAINLOOP_APNS_ENVIRONMENT)
+        com.apple.developer.usernotifications.time-sensitive: true
     info:
       path: App/Info.plist
       properties:
@@ -59,6 +67,8 @@ targets:
         # Pocket ID, for registering this phone (docs/specs/devices.md). Empty: no sign-in.
         MainloopOIDCIssuer: $(MAINLOOP_OIDC_ISSUER)
         MainloopOIDCClientID: $(MAINLOOP_OIDC_CLIENT_ID)
+        # The APNs environment the entitlement names, sent to the server with the device token.
+        MainloopAPNsEnvironment: $(MAINLOOP_APNS_ENVIRONMENT)
 
   MainloopTests:
     type: bundle.unit-test

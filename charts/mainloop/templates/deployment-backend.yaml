@@ -98,12 +98,26 @@ spec:
           (dict "name" "substrate-router-identity" "mountPath" "/run/substrate-router/identity" "readOnly" true)
           (dict "name" "substrate-router-ca" "mountPath" "/run/substrate-router/ca" "readOnly" true) }}
         {{- end }}
+        {{- /* Only the API sends Apple push; the key is mounted nowhere else. */}}
+        {{- $apiMounts := $routerMounts }}
+        {{- $apiEnv := list }}
+        {{- with .Values.apns }}
+        {{- if .existingSecret }}
+        {{- if not .topic }}{{ fail "apns.topic (the app's bundle ID) is required with apns.existingSecret" }}{{ end }}
+        {{- if not .keyFileKey }}{{ fail "apns.keyFileKey is required with apns.existingSecret" }}{{ end }}
+        {{- $apiMounts = append $apiMounts (dict "name" "apns" "mountPath" "/run/mainloop-apns" "readOnly" true) }}
+        {{- $apiEnv = list
+          (dict "name" "MAINLOOP_APNS_CREDENTIALS_DIR" "value" "/run/mainloop-apns")
+          (dict "name" "MAINLOOP_APNS_TOPIC" "value" .topic) }}
+        {{- end }}
+        {{- end }}
         {{- include "mainloop.listener" (dict
           "root" .
           "name" "backend"
           "subcommand" "serve-api"
           "ports" (list (dict "containerPort" 8000) (dict "name" "metrics" "containerPort" 9100))
-          "mounts" $routerMounts
+          "mounts" $apiMounts
+          "env" $apiEnv
           "resources" .Values.server.api.resources
           "liveness" (dict "tcpSocket" (dict "port" 8000) "initialDelaySeconds" 30 "periodSeconds" 10 "timeoutSeconds" 5 "failureThreshold" 3)
           "readiness" (dict "httpGet" (dict "path" "/health" "port" 8000) "initialDelaySeconds" 5 "periodSeconds" 5 "timeoutSeconds" 3 "failureThreshold" 3)
@@ -179,6 +193,23 @@ spec:
                     matchLabels:
                       podcert.ate.dev/canarying: live
                   path: trust-bundle.pem
+        {{- end }}
+        {{- with .Values.apns }}
+        {{- if .existingSecret }}
+        # Optional: until the Secret exists, the API starts with APNs off.
+        - name: apns
+          secret:
+            secretName: {{ .existingSecret }}
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: {{ .keyFileKey | quote }}
+                path: key.p8
+              - key: {{ .keyIdKey | quote }}
+                path: key-id
+              - key: {{ .teamIdKey | quote }}
+                path: team-id
+        {{- end }}
         {{- end }}
         {{- with .Values.server.extraVolumes }}
         {{- toYaml . | nindent 8 }}

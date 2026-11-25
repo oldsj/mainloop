@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -141,11 +142,29 @@ func current(ctx context.Context) string {
 	return ""
 }
 
-func toAPI(r dbq.OwnerDevice, currentID string) api.Device {
-	return api.Device{
+func toAPI(r dbq.OwnerDevice, currentID string, push map[string]dbq.DevicePushToken) api.Device {
+	d := api.Device{
 		Id: r.ID, Name: r.Name, Platform: api.DevicePlatform(r.Platform), KeyThumbprint: r.KeyThumbprint,
 		CreatedAt: r.CreatedAt, LastSeenAt: r.LastSeenAt, RevokedAt: r.RevokedAt, Current: r.ID == currentID,
 	}
+	if t, ok := push[r.ID]; ok {
+		// The token itself never leaves the server.
+		d.Push = &api.DevicePush{Environment: api.APNsEnvironment(t.Environment), UpdatedAt: t.UpdatedAt, InvalidAt: t.InvalidAt}
+	}
+	return d
+}
+
+// pushTokens is the owner's devices' APNs tokens by device.
+func (a *DevicesAPI) pushTokens(ctx context.Context, q *dbq.Queries) (map[string]dbq.DevicePushToken, error) {
+	rows, err := q.ListDevicePushTokens(ctx, a.OwnerID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]dbq.DevicePushToken, len(rows))
+	for _, t := range rows {
+		out[t.DeviceID] = t
+	}
+	return out, nil
 }
 
 // ListDevices implements api.StrictServerInterface.
@@ -153,14 +172,19 @@ func (a *DevicesAPI) ListDevices(ctx context.Context, _ api.ListDevicesRequestOb
 	if err := a.ready(); err != nil {
 		return nil, err
 	}
-	rows, err := dbq.New(a.Pool).ListOwnerDevices(ctx, a.OwnerID)
+	q := dbq.New(a.Pool)
+	rows, err := q.ListOwnerDevices(ctx, a.OwnerID)
+	if err != nil {
+		return nil, err
+	}
+	push, err := a.pushTokens(ctx, q)
 	if err != nil {
 		return nil, err
 	}
 	cur := current(ctx)
 	out := make(api.ListDevices200JSONResponse, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, toAPI(r, cur))
+		out = append(out, toAPI(r, cur, push))
 	}
 	return out, nil
 }
@@ -222,7 +246,7 @@ func (a *DevicesAPI) RegisterDevice(ctx context.Context, r api.RegisterDeviceReq
 	if err != nil {
 		return nil, err
 	}
-	return api.RegisterDevice201JSONResponse(toAPI(row, "")), nil
+	return api.RegisterDevice201JSONResponse(toAPI(row, "", nil)), nil
 }
 
 // registrationItem tells the owner a device was registered, so one they didn't register is seen
@@ -274,17 +298,104 @@ func (a *DevicesAPI) GetCurrentDevice(ctx context.Context, _ api.GetCurrentDevic
 	if id == "" {
 		return api.GetCurrentDevice404JSONResponse{Detail: "This request was not signed by a device"}, nil
 	}
-	row, err := dbq.New(a.Pool).GetOwnerDevice(ctx, id)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && row.OwnerID != a.OwnerID) {
-		return api.GetCurrentDevice404JSONResponse{Detail: "Device not found"}, nil
-	}
+	d, found, err := a.currentDevice(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return api.GetCurrentDevice200JSONResponse(toAPI(row, id)), nil
+	if !found {
+		return api.GetCurrentDevice404JSONResponse{Detail: "Device not found"}, nil
+	}
+	return api.GetCurrentDevice200JSONResponse(d), nil
 }
 
-// RevokeDevice implements api.StrictServerInterface. A device may revoke only itself.
+// currentDevice reads the owner's device id as the API shows it.
+func (a *DevicesAPI) currentDevice(ctx context.Context, id string) (api.Device, bool, error) {
+	q := dbq.New(a.Pool)
+	row, err := q.GetOwnerDevice(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && row.OwnerID != a.OwnerID) {
+		return api.Device{}, false, nil
+	}
+	if err != nil {
+		return api.Device{}, false, err
+	}
+	push, err := a.pushTokens(ctx, q)
+	if err != nil {
+		return api.Device{}, false, err
+	}
+	return toAPI(row, id, push), true, nil
+}
+
+// SetDevicePush implements api.StrictServerInterface: the signing device records its APNs token
+// (docs/specs/push-notifications.md). Only a device can set its own; a token that another device
+// held moves to this one.
+func (a *DevicesAPI) SetDevicePush(ctx context.Context, r api.SetDevicePushRequestObject) (api.SetDevicePushResponseObject, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	id := current(ctx)
+	if id == "" {
+		return api.SetDevicePush403JSONResponse{Detail: "Only a registered device can set its push token"}, nil
+	}
+	if r.Body == nil || !apnsToken.MatchString(r.Body.Token) {
+		return nil, apierr.Invalid("token must be the APNs device token in lower-case hex")
+	}
+	env := r.Body.Environment
+	if env != api.Development && env != api.Production {
+		return nil, apierr.Invalid("environment must be development or production")
+	}
+	if _, found, err := a.currentDevice(ctx, id); err != nil || !found {
+		if err != nil {
+			return nil, err
+		}
+		return api.SetDevicePush404JSONResponse{Detail: "Device not found"}, nil
+	}
+	err := pgx.BeginFunc(ctx, a.Pool, func(tx pgx.Tx) error {
+		q := dbq.New(tx)
+		if err := q.ClearPushTokenElsewhere(ctx, dbq.ClearPushTokenElsewhereParams{Token: r.Body.Token, DeviceID: id}); err != nil {
+			return err
+		}
+		_, err := q.SetDevicePushToken(ctx, dbq.SetDevicePushTokenParams{DeviceID: id, Token: r.Body.Token, Environment: string(env)})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	d, found, err := a.currentDevice(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return api.SetDevicePush404JSONResponse{Detail: "Device not found"}, nil
+	}
+	return api.SetDevicePush200JSONResponse(d), nil
+}
+
+// ClearDevicePush implements api.StrictServerInterface: the signing device stops receiving push.
+func (a *DevicesAPI) ClearDevicePush(ctx context.Context, _ api.ClearDevicePushRequestObject) (api.ClearDevicePushResponseObject, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	id := current(ctx)
+	if id == "" {
+		return api.ClearDevicePush403JSONResponse{Detail: "Only a registered device can clear its push token"}, nil
+	}
+	if _, found, err := a.currentDevice(ctx, id); err != nil || !found {
+		if err != nil {
+			return nil, err
+		}
+		return api.ClearDevicePush404JSONResponse{Detail: "Device not found"}, nil
+	}
+	if err := dbq.New(a.Pool).ClearDevicePushToken(ctx, id); err != nil {
+		return nil, err
+	}
+	return api.ClearDevicePush204Response{}, nil
+}
+
+// apnsToken is an APNs device token in lower-case hex (32 bytes today; Apple may lengthen it).
+var apnsToken = regexp.MustCompile(`^[0-9a-f]{64,200}$`)
+
+// RevokeDevice implements api.StrictServerInterface. A device may revoke only itself. Revoking
+// also clears the device's APNs token.
 func (a *DevicesAPI) RevokeDevice(ctx context.Context, r api.RevokeDeviceRequestObject) (api.RevokeDeviceResponseObject, error) {
 	if err := a.ready(); err != nil {
 		return nil, err
@@ -295,7 +406,14 @@ func (a *DevicesAPI) RevokeDevice(ctx context.Context, r api.RevokeDeviceRequest
 	if !auth.DeviceIDPattern.MatchString(r.DeviceId) {
 		return api.RevokeDevice404JSONResponse{Detail: "Device not found"}, nil
 	}
-	_, err := dbq.New(a.Pool).RevokeOwnerDevice(ctx, dbq.RevokeOwnerDeviceParams{ID: r.DeviceId, OwnerID: a.OwnerID})
+	// A revoked device gets no more push: its token goes with it (signing out is a revoke).
+	err := pgx.BeginFunc(ctx, a.Pool, func(tx pgx.Tx) error {
+		q := dbq.New(tx)
+		if _, err := q.RevokeOwnerDevice(ctx, dbq.RevokeOwnerDeviceParams{ID: r.DeviceId, OwnerID: a.OwnerID}); err != nil {
+			return err
+		}
+		return q.ClearDevicePushToken(ctx, r.DeviceId)
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return api.RevokeDevice404JSONResponse{Detail: "Device not found"}, nil
 	}

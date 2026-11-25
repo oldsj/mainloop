@@ -331,6 +331,10 @@ func (s *Service) Snapshot(ctx context.Context) (api.AttentionSnapshot, error) {
 	return snap, nil
 }
 
+// WireItem is the wire shape of an attention row, as Needs you shows it; false for a row this build
+// does not show. Push notifications use its id, so a tap opens the same item.
+func (s *Service) WireItem(r dbq.AttentionItem) (api.AttentionItem, bool) { return s.item(r) }
+
 // item is the wire shape of an attention row. A row of a source this build does not know is
 // skipped, not guessed at.
 func (s *Service) item(r dbq.AttentionItem) (api.AttentionItem, bool) {
