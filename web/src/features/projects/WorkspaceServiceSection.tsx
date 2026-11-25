@@ -205,7 +205,7 @@ function ServiceForm({ saved, busy, saveError, onSave }: ServiceFormProps) {
       <textarea
         id="workspace-service-command"
         aria-describedby="workspace-service-hint"
-        className="border-border bg-background text-foreground p-sm min-h-24 border font-mono text-sm"
+        className="border-border bg-background text-foreground p-sm min-h-24 border text-sm"
         value={commandDraft}
         disabled={busy}
         spellCheck={false}
@@ -231,7 +231,7 @@ function ServiceForm({ saved, busy, saveError, onSave }: ServiceFormProps) {
       <textarea
         id="workspace-service-ports"
         aria-describedby="workspace-service-ports-hint"
-        className="border-border bg-background text-foreground p-sm min-h-16 border font-mono text-sm"
+        className="border-border bg-background text-foreground p-sm min-h-16 border text-sm"
         value={portsDraft}
         disabled={busy}
         spellCheck={false}

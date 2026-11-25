@@ -47,7 +47,6 @@
   --color-status-failed: var(--status-failed);
   --color-status-idle: var(--status-idle);
 
-  --font-sans: system-ui, 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'SFMono-Regular', 'Geist Mono', 'Menlo', monospace;
   --text-2xs: 0.6875rem;
   --text-xs: 0.75rem;

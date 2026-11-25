@@ -67,6 +67,9 @@ type entry struct {
 	how string
 	// normalize validates raw arguments and returns their canonical value.
 	normalize func(raw json.RawMessage) (any, error)
+	// facts is the zero value of the type's frozen facts, which preflight returns and execute
+	// decodes; the executor refuses a row whose facts don't round-trip through it (exactRow).
+	facts any
 	// preflight reads the facts the card shows and the executor's preconditions through the
 	// service's clients. A *refusal means the action cannot go to the owner as asked.
 	preflight func(ctx context.Context, s *Service, args json.RawMessage, now time.Time) (any, error)
@@ -75,51 +78,51 @@ type entry struct {
 const githubHow = "Approve runs exactly this once, through Mainloop's GitHub App; nothing bypasses a branch rule."
 
 var catalog = map[string]entry{
-	TypePRMerge: {version: 1, expiry: UndecidedExpiry, how: githubHow, normalize: normalizeMerge, preflight: preflightMerge},
-	TypePRClose: {version: 1, expiry: UndecidedExpiry, how: githubHow, normalize: normalizeClose, preflight: preflightClose},
+	TypePRMerge: {version: 1, expiry: UndecidedExpiry, how: githubHow, normalize: normalizeMerge, facts: MergeFacts{}, preflight: preflightMerge},
+	TypePRClose: {version: 1, expiry: UndecidedExpiry, how: githubHow, normalize: normalizeClose, facts: CloseFacts{}, preflight: preflightClose},
 	TypeItemToSecret: {
 		version: 1, expiry: UndecidedExpiry, executor: true,
 		how: "Approve copies exactly this field once, through Mainloop's executor; the value never reaches an agent, " +
 			"the API process or this card.",
-		normalize: normalizeItemToSecret, preflight: preflightItemToSecret,
+		normalize: normalizeItemToSecret, facts: ItemToSecretFacts{}, preflight: preflightItemToSecret,
 	},
 	TypeRolloutRestart: {
 		version: 1, expiry: UndecidedExpiry, executor: true, kube: true, how: kubeHow,
-		normalize: normalizeRestart, preflight: preflightRestart,
+		normalize: normalizeRestart, facts: WorkloadFacts{}, preflight: preflightRestart,
 	},
 	TypeScale: {
 		version: 1, expiry: UndecidedExpiry, executor: true, kube: true, how: kubeHow,
-		normalize: normalizeScale, preflight: preflightScale,
+		normalize: normalizeScale, facts: WorkloadFacts{}, preflight: preflightScale,
 	},
 	TypeDelete: {
 		version: 1, expiry: DeleteExpiry, executor: true, kube: true, how: kubeHow,
-		normalize: normalizeDelete, preflight: preflightDelete,
+		normalize: normalizeDelete, facts: DeleteFacts{}, preflight: preflightDelete,
 	},
 	TypePatch: {
 		version: 1, expiry: UndecidedExpiry, executor: true, kube: true, how: kubeHow,
-		normalize: normalizePatch, preflight: preflightPatch,
+		normalize: normalizePatch, facts: ChangeFacts{}, preflight: preflightPatch,
 	},
 	TypeApply: {
 		version: 1, expiry: UndecidedExpiry, executor: true, kube: true, how: kubeHow,
-		normalize: normalizeApply, preflight: preflightApply,
+		normalize: normalizeApply, facts: ChangeFacts{}, preflight: preflightApply,
 	},
 	TypeArgoSync: {
 		version: 1, expiry: UndecidedExpiry, expiryFor: argoExpiry, executor: true, kube: true, how: kubeHow,
-		normalize: normalizeArgoSync, preflight: preflightArgoSync,
+		normalize: normalizeArgoSync, facts: ArgoFacts{}, preflight: preflightArgoSync,
 	},
 	TypeKubectl: {
 		version: 1, expiry: UndecidedExpiry, expiryFor: kubectlExpiry, executor: true, kube: true,
 		how: "Approve runs exactly this command once, as cluster-admin, through Mainloop's executor. " +
 			"kubectl never holds the credential: the executor's proxy does, and refuses its own namespace, Secrets, impersonation and admission policies.",
-		normalize: normalizeKubectl, preflight: preflightKubectl,
+		normalize: normalizeKubectl, facts: KubectlFacts{}, preflight: preflightKubectl,
 	},
 	TypeOmnictl: {
 		version: 1, expiry: UndecidedExpiry, expiryFor: sideroExpiry(ToolOmnictl), executor: true, omni: true, how: sideroHow,
-		normalize: normalizeSidero(ToolOmnictl), preflight: preflightSidero(ToolOmnictl),
+		normalize: normalizeSidero(ToolOmnictl), facts: SideroFacts{}, preflight: preflightSidero(ToolOmnictl),
 	},
 	TypeTalosctl: {
 		version: 1, expiry: UndecidedExpiry, expiryFor: sideroExpiry(ToolTalosctl), executor: true, omni: true, how: sideroHow,
-		normalize: normalizeSidero(ToolTalosctl), preflight: preflightSidero(ToolTalosctl),
+		normalize: normalizeSidero(ToolTalosctl), facts: SideroFacts{}, preflight: preflightSidero(ToolTalosctl),
 	},
 	TypeUniFi: {
 		version: 1, expiry: UndecidedExpiry, expiryFor: unifiExpiry, executor: true, unifi: true,
@@ -131,7 +134,7 @@ var catalog = map[string]entry{
 		version: 1, expiry: UndecidedExpiry, expiryFor: sshExpiry, executor: true, ssh: true,
 		how: "Approve runs exactly this command once on the host, over ssh, as its admin user with the executor's key for that host. " +
 			"Nothing previews it, and nothing on the executor's side limits what the remote shell does with it.",
-		normalize: normalizeSSH, preflight: preflightSSH,
+		normalize: normalizeSSH, facts: SSHFacts{}, preflight: preflightSSH,
 	},
 }
 

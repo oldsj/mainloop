@@ -222,7 +222,7 @@ export function MainThreadHeader({
             </p>
           ) : null}
           {info.session_id && renderIdentity ? renderIdentity(info.session_id) : null}
-          <div className="px-md py-xs font-mono" data-testid="topic-index">
+          <div className="px-md py-xs" data-testid="topic-index">
             topics:{' '}
             {info.topics.length ? (
               info.topics.map((topic) => (

@@ -8,7 +8,7 @@ One field that gets the owner anywhere without the mouse: jump to a task, sessio
 
 ## Tokens
 
-- Panel `bg-popover text-popover-foreground`, edge `border-border`, radius `rounded-none`, set in the chrome's sans. Up to 36 rem wide (`max-w-xl`), 16 px from the screen's edges on a phone, 96 px from the top.
+- Panel `bg-popover text-popover-foreground`, edge `border-border`, radius `rounded-none`. Up to 36 rem wide (`max-w-xl`), 16 px from the screen's edges on a phone, 96 px from the top.
 - Overlay `bg-background/80`.
 - Field: 44 px tall, `text-ui`, no edge of its own; a `border-border-subtle` rule under it. Placeholder `text-muted-foreground`.
 - Row: the control height (`min-h-control`), `text-ui`. Title in the foreground colour; the words beside it `text-muted-foreground text-xs`; the kind on the right in small capitals (`text-2xs uppercase tracking-wide`, muted).

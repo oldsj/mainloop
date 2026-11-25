@@ -21,7 +21,7 @@ export function HealthNativeStrip({ sessionId }: { sessionId: string }) {
   const provider = agentLabel(nativeProviderFor(info.kind, providers.data ?? []));
   const model = (info.model ?? 'model pending').replace(/^claude-/, '');
   return (
-    <p className="text-muted-foreground font-mono text-xs break-words">
+    <p className="text-muted-foreground text-xs break-words">
       {provider} · {model} · {liveWord({ native: info, offline })}
     </p>
   );

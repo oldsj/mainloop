@@ -39,7 +39,7 @@ export function ShortId({ id, label }: { id: string; label: string }) {
     }
   }
   return (
-    <span className="gap-xs inline-flex max-w-full flex-wrap items-center font-mono text-xs">
+    <span className="gap-xs inline-flex max-w-full flex-wrap items-center text-xs">
       <code title={id}>{id.slice(0, SHORT_ID_LENGTH)}</code>
       <Button
         variant="outline"

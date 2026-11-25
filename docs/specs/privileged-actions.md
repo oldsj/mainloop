@@ -521,6 +521,12 @@ The executor claims an approved action with a 2-minute lease and then:
 
 1. Recomputes the digest from the stored row. If it differs from the approved digest, nothing
    runs and the action fails.
+   - It also checks the row is exactly what its type's code reads. The arguments must pass the
+     type's validation again. The arguments and the frozen facts must each decode strictly into the
+     type's own structs (no unknown field, nothing after the value), and encode back canonically
+     to the JSON stored. Go's decoder matches keys in any letter case and keeps the last of two,
+     so a row with `"Secret"` beside `"secret"` could show one value and run the other. Such a row
+     fails, and nothing runs.
 2. Observes the target before writing anything:
    - **Merge:** a head that moved, or a pull request closed meanwhile, makes the action `stale`.
      A merge already made at the frozen head by an earlier attempt of this action counts as

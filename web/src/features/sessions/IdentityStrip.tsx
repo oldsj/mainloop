@@ -39,7 +39,7 @@ export function IdentityStrip({ session }: { session: Session }) {
     <section
       data-testid="identity-strip"
       aria-label="Session identity"
-      className="gap-xs border-border-subtle bg-card text-muted-foreground px-md py-sm border-b font-mono text-xs"
+      className="gap-xs border-border-subtle bg-card text-muted-foreground px-md py-sm border-b text-xs"
     >
       <div className="gap-sm flex items-center">
         <span

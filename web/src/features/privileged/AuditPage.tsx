@@ -161,7 +161,7 @@ function Detail({ d }: { d: NonNullable<ReturnType<typeof usePrivilegedAction>['
       {d.body ? (
         <section className="gap-xs flex flex-col" aria-label="What was approved">
           <h2 className="text-sm font-medium">The card</h2>
-          <p className="font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap">{d.body}</p>
+          <p className="text-xs [overflow-wrap:anywhere] whitespace-pre-wrap">{d.body}</p>
         </section>
       ) : null}
       <section className="gap-xs flex flex-col" aria-label="Steps">

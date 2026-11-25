@@ -66,7 +66,7 @@ export function TabStrip({
     <nav
       aria-label={`Agents in ${name}`}
       data-testid="tab-strip"
-      className="border-border-subtle bg-card text-ui flex shrink-0 items-stretch border-b font-mono"
+      className="border-border-subtle bg-card text-ui flex shrink-0 items-stretch border-b"
     >
       {leading}
       <div

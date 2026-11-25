@@ -130,8 +130,7 @@ export function PreviewSignIn({
     <main className="gap-md p-lg mx-auto flex max-w-prose flex-col">
       <h1 className="text-base font-medium">Opening preview</h1>
       <p className="text-muted-foreground text-sm">
-        Port <span className="font-mono">{port}</span> of workspace{' '}
-        <span className="font-mono break-all">{workspaceId}</span>
+        Port {port} of workspace <span className="break-all">{workspaceId}</span>
       </p>
       {problem ? (
         <ErrorRecovery
