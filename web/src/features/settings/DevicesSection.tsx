@@ -19,6 +19,13 @@ const PLATFORM_LABEL: Record<Device['platform'], string> = { ios: 'iOS' };
 const shortThumbprint = (thumbprint: string) =>
   thumbprint.length > 12 ? `${thumbprint.slice(0, 12)}…` : thumbprint;
 
+/** Whether Mainloop can push to the device (docs/specs/push-notifications.md). */
+function pushFact(push: Device['push']): string {
+  if (push === null) return 'notifications off';
+  if (push.invalid_at) return 'notifications stopped: Apple refused its token';
+  return 'notifications on';
+}
+
 /** What a failed revoke says. The server's own sentence when it sent one. */
 function revokeError(error: unknown): string {
   if (error instanceof ApiError && error.status === 404)
@@ -137,7 +144,7 @@ function DeviceRow({
     PLATFORM_LABEL[device.platform],
     `registered ${messageTime(device.created_at)}`,
     `last seen ${device.last_seen_at ? messageTime(device.last_seen_at) : 'never'}`,
-    revokedAt ? `revoked ${messageTime(revokedAt)}` : null
+    revokedAt ? `revoked ${messageTime(revokedAt)}` : pushFact(device.push)
   ].filter((fact): fact is string => fact !== null);
 
   return (

@@ -43,7 +43,8 @@ type Service struct {
 	Pool    *pgxpool.Pool
 	OwnerID string
 	Log     *slog.Logger
-	// URL is the ntfy base URL; Topic the topic; Token an optional access token.
+	// URL is the ntfy base URL; Topic the topic; Token an optional access token. Both empty turns
+	// the ntfy channel off.
 	URL, Topic, Token string
 	// AppURL is the web app's origin, such as https://mainloop.example.com; notification links
 	// are AppURL plus the item's path.
@@ -74,8 +75,14 @@ func (s *Service) Register(r *reconcile.Runner) {
 		every = 5 * time.Second
 	}
 	r.AddSweep(reconcile.Sweep{Name: "push-enqueue", Every: every, Run: s.Enqueue})
-	r.Add(reconcile.Loop{Name: "push-send", Table: Table(), Handle: s.Handle, Concurrency: 2, Interval: every})
+	if s.ntfy() {
+		r.Add(reconcile.Loop{Name: "push-send", Table: Table(), Handle: s.Handle, Concurrency: 2, Interval: every})
+	}
 }
+
+// ntfy reports whether the ntfy channel is on. Without it, notifications are still written for
+// the other channels (APNs) and settle 'skipped'.
+func (s *Service) ntfy() bool { return s.URL != "" && s.Topic != "" }
 
 // Enqueue writes a notification for each new Needs-you item and each root task that finished or
 // got blocked. It is idempotent.
@@ -89,6 +96,11 @@ func (s *Service) Enqueue(ctx context.Context) error {
 	}
 	if _, err := q.EnqueueTaskPush(ctx, s.OwnerID); err != nil {
 		return fmt.Errorf("notify: enqueue tasks: %w", err)
+	}
+	if !s.ntfy() {
+		if _, err := q.SkipNtfyPush(ctx, s.OwnerID); err != nil {
+			return fmt.Errorf("notify: skip: %w", err)
+		}
 	}
 	return nil
 }

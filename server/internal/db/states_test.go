@@ -84,7 +84,11 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.SteerDelivered), string(dbstate.SteerCompleted), string(dbstate.SteerFailed),
 			string(dbstate.SteerCancelled), string(dbstate.SteerConverted))},
 		{"push_notifications", "state", strs(
+			string(dbstate.PushPending), string(dbstate.PushSent), string(dbstate.PushSuppressed), string(dbstate.PushFailed),
+			string(dbstate.PushSkipped))},
+		{"apns_deliveries", "state", strs(
 			string(dbstate.PushPending), string(dbstate.PushSent), string(dbstate.PushSuppressed), string(dbstate.PushFailed))},
+		{"device_push_tokens", "environment", strs(string(dbstate.APNsDevelopment), string(dbstate.APNsProduction))},
 		{"push_notifications", "kind", strs(string(dbstate.PushAttention), string(dbstate.PushTask))},
 		{"session_defaults", "role", strs(string(dbstate.DefaultRoleMain), string(dbstate.DefaultRoleWorker))},
 		{"session_restarts", "state", strs(string(dbstate.RestartRequested), string(dbstate.RestartDone))},

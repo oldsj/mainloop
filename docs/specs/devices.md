@@ -100,11 +100,13 @@ seconds.
 
 ## Managing devices
 
-| Operation                     | Who                                                                                            |
-| ----------------------------- | ---------------------------------------------------------------------------------------------- |
-| `GET /devices`                | the owner and devices: newest first, revoked ones included; `current` marks the calling device |
-| `GET /devices/current`        | a device: itself; `404` for anyone else                                                        |
-| `DELETE /devices/{device_id}` | the owner, any device; a device, only itself (signing out). Idempotent                         |
+| Operation                      | Who                                                                                            |
+| ------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `GET /devices`                 | the owner and devices: newest first, revoked ones included; `current` marks the calling device |
+| `GET /devices/current`         | a device: itself; `404` for anyone else                                                        |
+| `DELETE /devices/{device_id}`  | the owner, any device; a device, only itself (signing out). Idempotent                         |
+| `PUT /devices/current/push`    | a device: sets its APNs token ([push notifications](push-notifications.md#apple-push-apns))    |
+| `DELETE /devices/current/push` | a device: clears its APNs token. Idempotent                                                    |
 
 Revoking stops the device's key at once and keeps the row for the audit. A revoked device can't be
 brought back, and a device's key and identity can't change (a database trigger refuses both).
@@ -113,7 +115,9 @@ The web app's Settings has a **Devices** section that lists every device, revoke
 its name, platform, when it was registered and last seen (or never), its id and the start of its
 key's thumbprint, and **Active** or **Revoked** with the date. An active device has **Revoke**,
 which asks for confirmation, then reads the list again. A device the owner did not register can be
-seen and stopped there.
+seen and stopped there. An active device's facts also say whether it gets notifications: **on**,
+**off** (it set no APNs token), or **stopped** when Apple refused its token. The token itself is
+never returned.
 
 ## Through the gateway
 
@@ -126,4 +130,4 @@ either way. Until then the app reaches the API directly.
 
 ## Not built yet
 
-- Push tokens and APNs (next slice), and the separate Touch ID approval key for privileged actions.
+- The separate Touch ID approval key for privileged actions (next slice).

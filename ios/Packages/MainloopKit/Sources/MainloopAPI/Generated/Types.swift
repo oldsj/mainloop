@@ -36,6 +36,20 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /devices/current`.
     /// - Remark: Generated from `#/paths//devices/current/get(getCurrentDevice)`.
     func getCurrentDevice(_ input: Operations.GetCurrentDevice.Input) async throws -> Operations.GetCurrentDevice.Output
+    /// Set Device Push Token
+    ///
+    /// Sets the APNs device token of the device that signed this request (docs/specs/push-notifications.md). Replaces any token it had; a token another device had moves to this one. Only a device may call it.
+    ///
+    /// - Remark: HTTP `PUT /devices/current/push`.
+    /// - Remark: Generated from `#/paths//devices/current/push/put(setDevicePush)`.
+    func setDevicePush(_ input: Operations.SetDevicePush.Input) async throws -> Operations.SetDevicePush.Output
+    /// Clear Device Push Token
+    ///
+    /// Stops pushes to the device that signed this request. Clearing a device with no token succeeds.
+    ///
+    /// - Remark: HTTP `DELETE /devices/current/push`.
+    /// - Remark: Generated from `#/paths//devices/current/push/delete(clearDevicePush)`.
+    func clearDevicePush(_ input: Operations.ClearDevicePush.Input) async throws -> Operations.ClearDevicePush.Output
     /// Revoke Device
     ///
     /// Revokes a device: its request key stops working at once. The owner may revoke any device; a device may revoke only itself (signing out). Revoking a revoked device succeeds and changes nothing.
@@ -114,6 +128,30 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//devices/current/get(getCurrentDevice)`.
     public func getCurrentDevice(headers: Operations.GetCurrentDevice.Input.Headers = .init()) async throws -> Operations.GetCurrentDevice.Output {
         try await getCurrentDevice(Operations.GetCurrentDevice.Input(headers: headers))
+    }
+    /// Set Device Push Token
+    ///
+    /// Sets the APNs device token of the device that signed this request (docs/specs/push-notifications.md). Replaces any token it had; a token another device had moves to this one. Only a device may call it.
+    ///
+    /// - Remark: HTTP `PUT /devices/current/push`.
+    /// - Remark: Generated from `#/paths//devices/current/push/put(setDevicePush)`.
+    public func setDevicePush(
+        headers: Operations.SetDevicePush.Input.Headers = .init(),
+        body: Operations.SetDevicePush.Input.Body
+    ) async throws -> Operations.SetDevicePush.Output {
+        try await setDevicePush(Operations.SetDevicePush.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// Clear Device Push Token
+    ///
+    /// Stops pushes to the device that signed this request. Clearing a device with no token succeeds.
+    ///
+    /// - Remark: HTTP `DELETE /devices/current/push`.
+    /// - Remark: Generated from `#/paths//devices/current/push/delete(clearDevicePush)`.
+    public func clearDevicePush(headers: Operations.ClearDevicePush.Input.Headers = .init()) async throws -> Operations.ClearDevicePush.Output {
+        try await clearDevicePush(Operations.ClearDevicePush.Input(headers: headers))
     }
     /// Revoke Device
     ///

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
@@ -44,6 +45,23 @@ type AgentBinding struct {
 	ModelOverride              *string
 	EffortOverride             *string
 	WebFetch                   bool
+}
+
+type ApnsDelivery struct {
+	ID             string
+	IdempotencyKey string
+	PushID         string
+	DeviceID       string
+	ApnsID         pgtype.UUID
+	State          dbstate.PushState
+	Detail         *string
+	Attempts       int32
+	NextAttemptAt  time.Time
+	LeaseOwner     *string
+	LeaseUntil     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	SentAt         *time.Time
 }
 
 type AttentionItem struct {
@@ -190,6 +208,16 @@ type DevEnvironment struct {
 	CreatedAt        time.Time
 	FollowWatchedTag bool
 	LastFollowedAt   *time.Time
+}
+
+type DevicePushToken struct {
+	DeviceID      string
+	Token         string
+	Environment   string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	InvalidAt     *time.Time
+	InvalidReason *string
 }
 
 type DeviceTokenUse struct {

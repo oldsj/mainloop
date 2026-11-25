@@ -334,3 +334,73 @@ func isStatus(err error, status int) bool {
 	var e *apierr.Error
 	return errors.As(err, &e) && e.Status == status
 }
+
+func TestADeviceSetsAndClearsItsPushToken(t *testing.T) {
+	db := testdb.New(t)
+	a := &devices.DevicesAPI{Pool: db.Pool, OwnerID: owner}
+	first := register(t, a, authtest.NewDevice(t, "dev_placeholder00000000000000"))
+	second := register(t, a, authtest.NewDevice(t, "dev_placeholder00000000000000"))
+	token := strings.Repeat("0a", 32)
+	set := func(ctx context.Context, tok string, env api.APNsEnvironment) (api.SetDevicePushResponseObject, error) {
+		return a.SetDevicePush(ctx, api.SetDevicePushRequestObject{Body: &api.DevicePushRegistration{Token: tok, Environment: env}})
+	}
+
+	// Only a device sets a token, and only its own.
+	if res, _ := set(signIn(authtest.NewDevice(t, "dev_placeholder00000000000000")), token, api.Production); !isType[api.SetDevicePush403JSONResponse](res) {
+		t.Fatalf("set without a device = %#v", res)
+	}
+	if res, _ := set(asDevice("dev_zzzzzzzzzzzzzzzzzzzzzzzzzz"), token, api.Production); !isType[api.SetDevicePush404JSONResponse](res) {
+		t.Fatalf("set by an unknown device = %#v", res)
+	}
+	for _, bad := range []string{"0A" + token[2:], token[:62], token + "zz"} {
+		var ae *apierr.Error
+		if _, err := set(asDevice(first.Id), bad, api.Production); !errors.As(err, &ae) || ae.Status != http.StatusUnprocessableEntity {
+			t.Fatalf("token %q = %v", bad, err)
+		}
+	}
+
+	res, err := set(asDevice(first.Id), token, api.Development)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := api.Device(res.(api.SetDevicePush200JSONResponse))
+	if got.Push == nil || got.Push.Environment != api.Development || got.Push.InvalidAt != nil || !got.Current {
+		t.Fatalf("after set = %+v", got.Push)
+	}
+
+	// A refused token is marked invalid; setting it again clears the mark.
+	if _, err := db.Pool.Exec(context.Background(), `UPDATE device_push_tokens SET invalid_at = now() WHERE device_id = $1`, first.Id); err != nil {
+		t.Fatal(err)
+	}
+	cur, _ := a.GetCurrentDevice(asDevice(first.Id), api.GetCurrentDeviceRequestObject{})
+	if p := cur.(api.GetCurrentDevice200JSONResponse).Push; p == nil || p.InvalidAt == nil {
+		t.Fatalf("current after refusal = %+v", p)
+	}
+	if res, _ := set(asDevice(first.Id), token, api.Production); res.(api.SetDevicePush200JSONResponse).Push.InvalidAt != nil {
+		t.Fatal("setting the token again left it invalid")
+	}
+
+	// A token moves to the device that sets it last.
+	if _, err := set(asDevice(second.Id), token, api.Production); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := a.ListDevices(context.Background(), api.ListDevicesRequestObject{})
+	for _, d := range list.(api.ListDevices200JSONResponse) {
+		if (d.Push != nil) != (d.Id == second.Id) {
+			t.Fatalf("%s push = %+v", d.Id, d.Push)
+		}
+	}
+
+	if res, _ := a.ClearDevicePush(context.Background(), api.ClearDevicePushRequestObject{}); !isType[api.ClearDevicePush403JSONResponse](res) {
+		t.Fatalf("clear without a device = %#v", res)
+	}
+	for range 2 {
+		if res, err := a.ClearDevicePush(asDevice(second.Id), api.ClearDevicePushRequestObject{}); err != nil || !isType[api.ClearDevicePush204Response](res) {
+			t.Fatalf("clear = %#v, %v", res, err)
+		}
+	}
+	cur, _ = a.GetCurrentDevice(asDevice(second.Id), api.GetCurrentDeviceRequestObject{})
+	if p := cur.(api.GetCurrentDevice200JSONResponse).Push; p != nil {
+		t.Fatalf("after clear = %+v", p)
+	}
+}

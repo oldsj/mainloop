@@ -4,29 +4,78 @@ import SwiftUI
 /// Three tabs. On iPhone Duo the tab bar sits on a side edge except on the inner screen in
 /// portrait; the system places it, and `toolbarVerticalBehavior(.automatic)` keeps that default.
 struct RootView: View {
+    enum Tabs: Hashable { case needsYou, sessions, settings }
+
+    @Environment(AppEnvironment.self) private var environment
     @Environment(NeedsYouModel.self) private var needsYou
+    @Environment(PushModel.self) private var push
     @Environment(\.scenePhase) private var scenePhase
+    @State private var tab: Tabs = .needsYou
+    @State private var webPage: WebPage?
 
     var body: some View {
-        TabView {
-            Tab("Needs you", systemImage: "tray.full") {
+        TabView(selection: $tab) {
+            Tab("Needs you", systemImage: "tray.full", value: .needsYou) {
                 NeedsYouScreen()
             }
             .badge(needsYou.count)
 
-            Tab("Sessions", systemImage: "bubble.left.and.text.bubble.right") {
+            Tab("Sessions", systemImage: "bubble.left.and.text.bubble.right", value: .sessions) {
                 SessionsScreen()
             }
 
-            Tab("Settings", systemImage: "gearshape") {
+            Tab("Settings", systemImage: "gearshape", value: .settings) {
                 SettingsScreen()
             }
         }
         .toolbarVerticalBehavior(.automatic)
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await needsYou.load() } }
+            if phase == .active {
+                Task { await needsYou.load() }
+                Task { await push.sync() }
+            }
+        }
+        // The app icon's badge follows the list, after each load and each answer.
+        .onChange(of: needsYou.state) { _, state in
+            if state == .loaded { push.setBadge(needsYou.count) }
+        }
+        .onChange(of: needsYou.count) { _, count in
+            if needsYou.state == .loaded { push.setBadge(count) }
+        }
+        .onChange(of: push.pendingRoute, initial: true) { _, route in
+            guard let route else { return }
+            push.pendingRoute = nil
+            Task { await open(route) }
+        }
+        .sheet(item: $webPage) { page in
+            SafariView(url: page.url).ignoresSafeArea()
         }
     }
+
+    /// Opens what a tapped notification is about.
+    private func open(_ route: PushRoute) async {
+        switch route {
+        case .needsYou:
+            tab = .needsYou
+        case .needsYouItem(let id):
+            tab = .needsYou
+            if !needsYou.items.contains(where: { $0.id == id }) { await needsYou.load() }
+            // An item answered elsewhere in the meantime is gone: the list stays open instead.
+            if needsYou.items.contains(where: { $0.id == id }) { needsYou.selection = id }
+        case .webPage(let path):
+            if let origin = environment.webOrigin, let url = PushRoute.url(for: path, origin: origin) {
+                webPage = WebPage(url: url)
+            } else {
+                tab = .needsYou
+            }
+        }
+    }
+}
+
+/// A web app page opened from a notification.
+struct WebPage: Identifiable {
+    let url: URL
+    var id: URL { url }
 }
 
 /// A list beside its detail on the inner screen (regular width), a pushed detail on the outer

@@ -40,6 +40,31 @@ to build it.
   `MAINLOOP_OIDC_ISSUER` and `MAINLOOP_OIDC_CLIENT_ID` in the build; without them it reads "Not
   configured". The simulator, which has no Secure Enclave, uses a software key; a phone never
   does.
+- **Notifications** through APNs (the server side is in [push notifications](push-notifications.md)).
+  Built, not yet proven on a phone:
+  - **When it asks.** Right after this phone registers, iOS's permission prompt asks for alerts,
+    sounds and badges. It never asks while signed out. If the owner hasn't answered it, Settings ›
+    **This iPhone** shows **Notifications: Not asked yet** with **Turn on**; if notifications are
+    off, **Off** with **Turn on in Settings**, which opens the app's page in the Settings app.
+  - **The token.** While signed in with notifications allowed, the app sends this phone's APNs
+    token to `PUT /devices/current/push`, signed with the request key, with the APNs environment
+    the build's entitlement names: on every launch, on each return to the foreground, and whenever
+    iOS hands it a new token. If the server reports that Apple rejected the token, Settings says
+    so.
+  - **A tap** on a Needs-you notification opens that card (the list on the outer screen pushes
+    it; on the inner screen it opens beside the list). If the card is gone, answered elsewhere,
+    the list opens. A task notification opens the task's page of the web app in Safari's in-app
+    browser, as there is no native task screen yet. Anything the app doesn't recognise opens Needs
+    you.
+  - **In the foreground** a notification shows as a banner and Needs you reloads.
+  - **The lock screen.** iOS's own **Show Previews** setting decides whether the title and text
+    show there. With previews hidden it shows "Mainloop needs you" for a Needs-you notification and
+    "A task changed" for a task. Needs-you notifications are time sensitive.
+  - **No actions** on a notification yet: Approve and Deny from the lock screen wait for Touch
+    ID-signed approvals.
+  - **The badge** on the app icon is the Needs-you count, set whenever the list loads or a card is
+    answered. **Sign out** clears the badge and the delivered notifications; revoking the device
+    stops its pushes on the server.
 - **Sample data.** A build whose origin is a placeholder (`*.example.test`, `*.example`) or empty
   runs on fictional fixtures. Answers and messages then change only the app's copy.
 
@@ -49,7 +74,6 @@ These are planned (see the iOS plan in the pull request that added `ios/`). None
 
 - a second, Touch ID-gated key for approvals (the request key needs no Touch ID);
 - through the admin gateway once its login lands (see [devices](devices.md), "Through the gateway");
-- push notifications through APNs, alongside ntfy;
 - approving privileged actions with a Touch ID signature that the executor verifies;
 - native task views and chat;
 - voice: on-device dictation first, then real-time voice with main and top-level supervisors.
@@ -59,4 +83,6 @@ These are planned (see the iOS plan in the pull request that added `ios/`). None
 The app's tests run on the simulator in CI, with sample data. Request signing is tested with
 software keys, and a token the app's code signed is checked by the server's verifier in Go
 (`server/internal/auth/testdata`). Nothing has run on an iPhone Duo, against Pocket ID or against a
-Mainloop server.
+Mainloop server. Notifications are tested only as far as `swift test` reaches: the token's
+encoding, the signed `PUT /devices/current/push` request and how a payload maps to a screen, all
+with fictional data. No notification has been delivered to a phone through APNs.

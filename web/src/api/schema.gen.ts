@@ -142,6 +142,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/devices/current/push': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Set Device Push Token
+     * @description Sets the APNs device token of the device that signed this request (docs/specs/push-notifications.md). Replaces any token it had; a token another device had moves to this one. Only a device may call it.
+     */
+    put: operations['setDevicePush'];
+    post?: never;
+    /**
+     * Clear Device Push Token
+     * @description Stops pushes to the device that signed this request. Clearing a device with no token succeeds.
+     */
+    delete: operations['clearDevicePush'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/devices/{device_id}': {
     parameters: {
       query?: never;
@@ -4793,7 +4817,27 @@ export interface components {
       revoked_at: string | null;
       /** @description True when this request was signed by this device. */
       current: boolean;
+      /** @description The device's APNs token, if it set one. Null when it has none. */
+      push: components['schemas']['DevicePush'] | null;
     };
+    /** @description A device's APNs token, without the token itself. */
+    DevicePush: {
+      environment: components['schemas']['APNsEnvironment'];
+      /** Format: date-time */
+      updated_at: string;
+      /** @description When APNs said the token is no longer valid; pushes stop until the device sets a new one. */
+      invalid_at: string | null;
+    };
+    /** @description An APNs device token, as the app received it, in lower-case hex. */
+    DevicePushRegistration: {
+      token: string;
+      environment: components['schemas']['APNsEnvironment'];
+    };
+    /**
+     * @description The APNs environment the app was built for (its aps-environment entitlement).
+     * @enum {string}
+     */
+    APNsEnvironment: 'development' | 'production';
     /** @description A P-256 public key as a JWK (RFC 7517), coordinates unpadded base64url. */
     DeviceKey: {
       /** @enum {string} */
@@ -7342,6 +7386,95 @@ export interface operations {
         content: {
           'application/json': components['schemas']['Device'];
         };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  setDevicePush: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['DevicePushRegistration'];
+      };
+    };
+    responses: {
+      /** @description The device, with its push token's status */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Device'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  clearDevicePush: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Cleared */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       401: components['responses']['Unauthorized'];
       /** @description Forbidden */
