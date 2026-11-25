@@ -326,6 +326,8 @@ func (r *Runner) run(ctx context.Context, row dbq.PrivilegedAction) outcome {
 		if json.Unmarshal(row.Args, &a) == nil {
 			limit += a.timeout()
 		}
+	case TypeUniFi:
+		limit += unifiTimeout // the certificate, the object again, then the request
 	}
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
@@ -350,6 +352,8 @@ func (r *Runner) run(ctx context.Context, row dbq.PrivilegedAction) outcome {
 		return r.sidero(ctx, row)
 	case TypeSSH:
 		return r.ssh(ctx, row)
+	case TypeUniFi:
+		return r.unifi(ctx, row)
 	default:
 		return outcome{state: StateFailed, err: "the type is no longer in the catalog"}
 	}

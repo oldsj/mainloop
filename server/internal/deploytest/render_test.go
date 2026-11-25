@@ -60,6 +60,11 @@ var installs = map[string]struct {
 		"executor.ssh.hosts[0].name=nas-01", "executor.ssh.hosts[0].address=192.0.2.20:22",
 		"executor.ssh.hosts[1].name=router", "executor.ssh.hosts[1].address=192.0.2.1:2222",
 	}},
+	// The same, with http.unifi on.
+	"production-executor-unifi": {"mainloop", "ci/production-values.yaml", []string{
+		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.unifi.enabled=true",
+		"executor.unifi.address=192.0.2.2:443",
+	}},
 	// Production with serve-executor on and a phone's approval key pinned and required.
 	"production-executor-approvals": {"mainloop", "ci/production-values.yaml", []string{
 		"executor.enabled=true", "executor.namespace=mainloop-executor",

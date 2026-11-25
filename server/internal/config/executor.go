@@ -52,6 +52,12 @@ type Executor struct {
 	SSHHostList string    `env:"MAINLOOP_EXECUTOR_SSH_HOSTS"`
 	SSHDir      string    `env:"MAINLOOP_EXECUTOR_SSH_DIR" envDefault:"/etc/mainloop-executor/ssh"`
 	SSHHosts    []SSHHost `env:"-"`
+	// UniFi turns on http.unifi: the console at UniFiAddressText (an IP address and port), with its
+	// credential's files (api-key, certificate) in UniFiDir.
+	UniFi            ExactTrue      `env:"MAINLOOP_EXECUTOR_UNIFI_ENABLED"`
+	UniFiAddressText string         `env:"MAINLOOP_EXECUTOR_UNIFI_ADDRESS"`
+	UniFiDir         string         `env:"MAINLOOP_EXECUTOR_UNIFI_DIR" envDefault:"/etc/mainloop-executor/unifi"`
+	UniFiAddress     netip.AddrPort `env:"-"`
 }
 
 // LoadExecutor reads and validates serve-executor's settings from the process environment.
@@ -117,6 +123,16 @@ func ParseExecutor(vars map[string]string) (*Executor, error) {
 		e.SSHHosts = hosts
 		if !filepath.IsAbs(e.SSHDir) {
 			errs = append(errs, errors.New("MAINLOOP_EXECUTOR_SSH_DIR must be an absolute path"))
+		}
+	}
+	if e.UniFi {
+		ap, err := netip.ParseAddrPort(strings.TrimSpace(e.UniFiAddressText))
+		if err != nil || ap.Port() == 0 || ap.Addr().Zone() != "" {
+			errs = append(errs, errors.New("MAINLOOP_EXECUTOR_UNIFI_ADDRESS must be the console's IP address and port when MAINLOOP_EXECUTOR_UNIFI_ENABLED is true"))
+		}
+		e.UniFiAddress = ap
+		if !filepath.IsAbs(e.UniFiDir) {
+			errs = append(errs, errors.New("MAINLOOP_EXECUTOR_UNIFI_DIR must be an absolute path"))
 		}
 	}
 	if err := errors.Join(errs...); err != nil {

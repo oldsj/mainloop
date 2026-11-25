@@ -61,6 +61,8 @@ type entry struct {
 	omni bool
 	// ssh types need the executor's ssh access (executor.ssh in the chart).
 	ssh bool
+	// unifi types need the executor's UniFi access (executor.unifi in the chart).
+	unifi bool
 	// how is the card's line on what Approve does and through which credential.
 	how string
 	// normalize validates raw arguments and returns their canonical value.
@@ -121,6 +123,12 @@ var catalog = map[string]entry{
 	TypeTalosctl: {
 		version: 1, expiry: UndecidedExpiry, expiryFor: sideroExpiry(ToolTalosctl), executor: true, omni: true, how: sideroHow,
 		normalize: normalizeSidero(ToolTalosctl), facts: SideroFacts{}, preflight: preflightSidero(ToolTalosctl),
+	},
+	TypeUniFi: {
+		version: 1, expiry: UndecidedExpiry, expiryFor: unifiExpiry, executor: true, unifi: true,
+		how: "Approve sends exactly this request once to the UniFi console, with the executor's UniFi API key. " +
+			"The console applies it as it would any administrator's.",
+		normalize: normalizeUniFi, facts: UniFiFacts{}, preflight: preflightUniFi,
 	},
 	TypeSSH: {
 		version: 1, expiry: UndecidedExpiry, expiryFor: sshExpiry, executor: true, ssh: true,

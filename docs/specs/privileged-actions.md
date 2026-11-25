@@ -17,11 +17,11 @@ sends the requesting session one message with the outcome.
   `serve-executor` through a proxy of its own that holds its Omni service account.
 - Slice 3, third part: the approved command `command.ssh` to a named home-network host, run by
   `serve-executor` with its own key for that host.
+- Slice 3, fourth part: `http.unifi`, one request to the UniFi console's Network application, sent
+  by `serve-executor` with its own API key to the console's pinned certificate.
 - [Signed approvals](#signed-approvals): Approve from the iPhone app, signed with the phone's Touch
   ID approval key, checked by `serve-api` and again by `serve-executor` against keys pinned in its
   own configuration. Tested with software keys; not yet proven on a phone.
-
-The UniFi types are a later part. They are not described here.
 
 ## Enablement
 
@@ -44,6 +44,9 @@ The `k8s.*` types, `argocd.sync` and `command.kubectl` also need
 
 `command.ssh` needs `MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED`, exactly `true`; the chart sets it
 with `executor.ssh.enabled`, which is off by default. Without it, it is `[unavailable]`.
+
+`http.unifi` needs `MAINLOOP_PRIVILEGED_EXECUTOR_UNIFI_ENABLED`, exactly `true`; the chart sets it
+with `executor.unifi.enabled`, which is off by default. Without it, it is `[unavailable]`.
 
 ## Tools
 
@@ -401,6 +404,71 @@ host, over ssh, as that host's admin user, with the executor's own key for that 
   that runs past its timeout is `uncertain` too: the executor asks the host to kill it and closes
   the connection, but with no terminal the host may ignore both, so the command may still be
   running there.
+
+`http.unifi {method, path, body}` sends one request to the UniFi console's Network application,
+with the executor's own API key.
+
+- `method` is `GET`, `POST`, `PUT`, `PATCH` or `DELETE`. `path` is at most 2 KiB: the console's
+  Network application path (`/proxy/network/integration/...`, `/proxy/network/api/...` or
+  `/proxy/network/v2/...`), with an optional query of printable ASCII and no fragment. Another
+  application's path, an empty, `.` or `..` segment, and the console's administrators, API keys,
+  site management and backups (`admin`, `apikey`, `sitemgr`, `backup` segments) are refused: those
+  stay the owner's. `body` is a JSON object or array of at most 64 KiB (or its JSON text, as a
+  string), for `POST`, `PUT` and `PATCH` only. Mainloop stores it as text with sorted keys and no
+  spaces, and the console receives exactly those bytes.
+- A `GET` may read any other Network path. Every other method goes only to the families below, and
+  the refusal lists them. The console's settings, other commands, and a device upgrade from a URL
+  stay the owner's. A body with a URL anywhere in it is refused, so no request has the console
+  fetch from one.
+  - `api/s/<site>/rest/<collection>` (`POST`) and `.../rest/<collection>/<id>` (`PUT`, `DELETE`),
+    for `networkconf`, `wlanconf`, `wlangroup`, `portforward`, `firewallrule`, `firewallgroup`,
+    `routing`, `portconf`, `user`, `usergroup`, `device`, `tag` and `dynamicdns`;
+  - `v2/api/site/<site>/<collection>` (`POST`) and `.../<id>` (`PUT`, `PATCH`, `DELETE`), for
+    `trafficrules`, `trafficroutes` and `firewall-policies`;
+  - `api/s/<site>/cmd/devmgr` (`POST`), whose `cmd` is `restart`, `force-provision`,
+    `power-cycle`, `adopt`, `set-locate`, `unset-locate`, `speedtest` or `upgrade` (the firmware
+    the console offers);
+  - `api/s/<site>/cmd/stamgr` (`POST`), whose `cmd` is `block-sta`, `unblock-sta`, `kick-sta`,
+    `forget-sta`, `authorize-guest` or `unauthorize-guest`;
+  - the integration API's actions (`POST`): `.../devices/<id>/actions` (`RESTART`),
+    `.../devices/<id>/interfaces/ports/<n>/actions` (`POWER_CYCLE`) and `.../clients/<id>/actions`
+    (`AUTHORIZE_GUEST_ACCESS`, `UNAUTHORIZE_GUEST_ACCESS`).
+- A body that sets a secret field to a non-empty value is refused (`contains_secret`): a field
+  named `x_...`, one whose name holds password, passphrase, secret, psk, private key, token, API
+  key, auth key, credential, community (SNMP) or configuration file (a WireGuard client's), or one
+  named `code` or `voucher` (a hotspot voucher). The owner sets secrets on the console. A path or
+  body that looks like it holds a credential is refused too. The same fields are redacted
+  (`[redacted]`) wherever the console's answers show: on the card, in the facts and in the result.
+- The executor's HTTPS client is its own. It accepts only the console's pinned certificate (the
+  credential's `certificate` field; consoles serve a self-signed one), sends the API key only after
+  that check, follows no redirect and opens one connection per request. The key and certificate
+  are read for each connection. The key has the rights of the console administrator who made it:
+  it belongs to a dedicated administrator limited to the Network application, so the console
+  itself refuses what is outside it.
+- **Preflight.** The executor connects and checks the certificate. For `PUT`, `PATCH` and `DELETE`
+  it also sends a `GET` of the same path, and the card shows that answer, redacted, as what is
+  there now: at most 16 KiB, so the path must name one object. A path the console has nothing at
+  (404), another error, or a larger answer ends the request as `preflight_failed`, as do a
+  certificate that is not the pinned one and a console the executor cannot reach; the reason never
+  holds its address. (So a refusal can tell the agent whether a path exists; the hourly refusal
+  limit bounds that.) A `GET` only reads; nothing can preview a `POST`, and the card says so. The
+  agent sees the facts without the console's address or the object.
+- The card shows the request, its body, the console's address and certificate fingerprint, and
+  tags: UniFi API and the method; "changes the network" for anything but a `GET`; from a scan of
+  the words, which is not a guarantee, destructive (a `DELETE`, or delete, forget, reset…),
+  installs software (upgrade, firmware) and restart or reprovision (restart, upgrade, adopt…); and
+  "no preview" for a `POST`. A request tagged destructive waits 1 hour for the owner. The card says
+  the console's answer goes back to the agent and is stored with the action.
+- **Run.** The executor connects again and checks that the certificate and address are those the
+  owner saw. For a previewed request it reads the object again and compares what the request
+  changes: the fields the body sets, and the object's `_id`, `id` and `name` (for a `DELETE`, those
+  three), as the card showed them. A device's counters and timestamps change by the second and
+  are not compared. An answer that is not one object is compared whole. If any of this changed, it
+  is `stale` and nothing is sent. (A change only to a redacted field is not seen.) Then it sends
+  the request once. A failure before any byte was sent is `failed`, "nothing was sent". A
+  connection that breaks after that is `uncertain`, since the console may have applied it, and it
+  is never sent again; for a `GET` it is `failed`. An answer outside 2xx is `failed`, with the
+  answer; a 2xx is `succeeded`, with the status and the body (redacted, bounded) as the result.
 
 ## Preflight and the card
 
