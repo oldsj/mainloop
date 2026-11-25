@@ -21,7 +21,7 @@ import (
 
 const (
 	// TokenType is the approval token's typ header.
-	TokenType = "mainloop-approval+jwt"
+	TokenType = "mainloop-approval+jwt" //nolint:gosec // G101: a JWS typ header value, not a credential
 	// MetadataKey is the answer's metadata key that carries the token.
 	MetadataKey = "approval"
 	// MaxLife is the longest an approval token may live (exp - iat).

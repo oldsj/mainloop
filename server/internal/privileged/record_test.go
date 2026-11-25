@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -16,8 +17,11 @@ import (
 
 // recordVectorPath is the cross-language vector: the canonical record of vectorRow and its
 // digest. The iOS app's tests hash the same bytes (ios/Packages/MainloopKit, ActionRecordTests)
-// and bundle a copy as the fixture card's record. MAINLOOP_UPDATE_VECTORS=1 rewrites it.
+// and bundle a copy as the fixture card's record. `go test -run TestTheCanonicalRecordVector
+// ./internal/privileged -args -update-vectors` rewrites it.
 const recordVectorPath = "testdata/canonical-record.json"
+
+var updateVectors = flag.Bool("update-vectors", false, "rewrite "+recordVectorPath)
 
 type recordVector struct {
 	Record string `json:"record"`
@@ -61,7 +65,7 @@ func TestTheCanonicalRecordVector(t *testing.T) {
 		}
 	}
 	got := recordVector{Record: string(rec), Digest: dig}
-	if os.Getenv("MAINLOOP_UPDATE_VECTORS") == "1" {
+	if *updateVectors {
 		b, err := json.MarshalIndent(got, "", "  ")
 		if err != nil {
 			t.Fatal(err)
@@ -79,7 +83,7 @@ func TestTheCanonicalRecordVector(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got != want {
-		t.Fatalf("%s is stale; rerun with MAINLOOP_UPDATE_VECTORS=1 and copy it to the iOS fixture", recordVectorPath)
+		t.Fatalf("%s is stale; rerun with -args -update-vectors and copy it to the iOS fixture", recordVectorPath)
 	}
 }
 
