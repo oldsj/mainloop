@@ -116,6 +116,8 @@ func render(r dbq.PrivilegedAction) (string, string, map[string]any, error) {
 		return renderSidero(r, ctx)
 	case TypeSSH:
 		return renderSSH(r, ctx)
+	case TypeUniFi:
+		return renderUniFi(r, ctx)
 	}
 	return "", "", nil, fmt.Errorf("privileged: no card for type %q", r.Type)
 }

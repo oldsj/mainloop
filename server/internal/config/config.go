@@ -78,6 +78,9 @@ type Config struct {
 	// PrivilegedSSHEnabled accepts command.ssh: the executor reaches home-network hosts over ssh
 	// (executor.ssh in the chart).
 	PrivilegedSSHEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED"`
+	// PrivilegedUniFiEnabled accepts http.unifi: the executor reaches the UniFi console
+	// (executor.unifi in the chart).
+	PrivilegedUniFiEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_EXECUTOR_UNIFI_ENABLED"`
 
 	// WebFetchPerMinute bounds the open-web web_fetch tool's fetches per owner per minute, and
 	// WebFetchDenyCIDRs adds comma-separated ranges it never connects to, beyond the built-in

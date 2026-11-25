@@ -379,3 +379,46 @@ func TestPinnedApprovalKeysReachBothProcesses(t *testing.T) {
 		}
 	}
 }
+
+// With executor.unifi, serve-api accepts http.unifi, and the executor gets the console's address
+// and its credential Secret, mounted read-only; nothing else.
+func TestExecutorUniFi(t *testing.T) {
+	if v := render(t, "production-executor").configMaps["mainloop-config"].Data["MAINLOOP_PRIVILEGED_EXECUTOR_UNIFI_ENABLED"]; v != "false" {
+		t.Errorf("http.unifi is on without executor.unifi: %q", v)
+	}
+	r := render(t, "production-executor-unifi")
+	if v := r.configMaps["mainloop-config"].Data["MAINLOOP_PRIVILEGED_EXECUTOR_UNIFI_ENABLED"]; v != "true" {
+		t.Errorf("serve-api's flag = %q", v)
+	}
+	pod := r.deployments["mainloop-executor"].Spec.Template.Spec
+	c := pod.Containers[0]
+	env := envByName(c)
+	if env["MAINLOOP_EXECUTOR_UNIFI_ENABLED"].Value != "true" || env["MAINLOOP_EXECUTOR_UNIFI_ADDRESS"].Value != "192.0.2.2:443" ||
+		env["MAINLOOP_EXECUTOR_UNIFI_DIR"].Value != "/etc/mainloop-executor/unifi" {
+		t.Errorf("executor env = %+v", env)
+	}
+	mounted := slices.ContainsFunc(c.VolumeMounts, func(m corev1.VolumeMount) bool {
+		return m.Name == "unifi" && m.MountPath == "/etc/mainloop-executor/unifi" && m.ReadOnly
+	})
+	i := slices.IndexFunc(pod.Volumes, func(v corev1.Volume) bool { return v.Name == "unifi" })
+	if !mounted || i < 0 || pod.Volumes[i].Secret == nil || pod.Volumes[i].Secret.SecretName != "mainloop-executor-unifi" ||
+		*pod.Volumes[i].Secret.DefaultMode != 0o440 || len(pod.Volumes[i].Secret.Items) != 2 {
+		t.Errorf("mounts %+v, volumes %+v", c.VolumeMounts, pod.Volumes)
+	}
+	if _, ok := env["MAINLOOP_EXECUTOR_SSH_ENABLED"]; ok || r.accounts["mainloop-executor-admin"].Name != "" {
+		t.Error("executor.unifi renders ssh or Kubernetes access")
+	}
+
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm is not installed")
+	}
+	for _, addr := range []string{"", "unifi.example.com:443", "192.0.2.2"} {
+		out, err := exec.CommandContext(t.Context(), helm, "template", "mainloop", chart, "--namespace", "mainloop",
+			"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true",
+			"--set", "executor.namespace=mainloop-executor", "--set", "executor.unifi.enabled=true", "--set-string", "executor.unifi.address="+addr).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "executor.unifi.address must be the console's IP:port") {
+			t.Errorf("%q renders: %v\n%s", addr, err, out)
+		}
+	}
+}

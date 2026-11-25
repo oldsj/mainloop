@@ -79,6 +79,15 @@ func (s *Server) privilegedTools() []Tool {
 			"the command. A credential in command or stdin is refused. A command naming a delete or wipe (rm, dd, mkfs, " +
 			"Remove-Item...) is tagged destructive and expires in an hour; one naming a reboot is tagged so. It answers unavailable " +
 			"where the executor has no ssh access. " +
+			"http.unifi {method (GET, POST, PUT, PATCH or DELETE), path (the console's Network application path with an optional " +
+			"query: /proxy/network/integration/v1/..., /proxy/network/api/s/<site>/... or /proxy/network/v2/api/...), body (a JSON " +
+			"object or array, for POST, PUT and PATCH; 64 KiB)} sends that request once to the UniFi console with the executor's API " +
+			"key, for network changes no Git change covers. The console's administrators, API keys, site management and backups " +
+			"are refused, as is a body that sets a secret field (x_*, passphrases, secrets, keys): the owner sets those. The card " +
+			"shows, for PUT, PATCH and DELETE, the object a GET of the same path returns now (its secret fields redacted), read " +
+			"again just before the request; a POST has no preview. Name one object: a path a GET cannot read is refused. A DELETE, " +
+			"or a command naming a delete, forget or reset, is tagged destructive and expires in an hour. The answer (status and " +
+			"body, secret fields redacted) comes back as the result. It answers unavailable where the executor has no UniFi access. " +
 			"An executor type returns state requested; its card opens once the executor has checked the target. Reuse request_id to read the same request back. At most 3 requests per session " +
 			"and 10 in all wait for the owner.",
 		InputSchema: objectSchema(map[string]any{

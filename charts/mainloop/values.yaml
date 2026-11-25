@@ -49,6 +49,7 @@ config:
   MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED: 'false'
   MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED: 'false'
   MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED: 'false'
+  MAINLOOP_PRIVILEGED_EXECUTOR_UNIFI_ENABLED: 'false'
   # Owner API authentication (docs/specs/authentication.md): observe verifies and logs what enforce
   # would refuse, and refuses nothing. serve-api will not start outside development without a mode.
   # A deployment sets enforce once it has MAINLOOP_AUTH_OIDC_* and its machine callers carry tokens.
@@ -364,6 +365,15 @@ executor:
     # - name: nas-01
     #   address: 192.0.2.20:22
     hosts: []
+  # http.unifi. On, the executor sends one approved request at a time to the UniFi console's
+  # Network application at address (IP:port), over HTTPS with a client of its own that accepts only
+  # the console's pinned certificate. The credential is the Secret mainloop-executor-unifi, keys
+  # api-key (a local Network API key) and certificate (the console's PEM certificate), mounted
+  # read-only. The pod needs egress to the address, like ssh's hosts.
+  unifi:
+    enabled: false
+    # e.g. 192.0.2.2:443
+    address: ""
   nodeSelector: {}
   affinity: {}
   tolerations: []

@@ -828,6 +828,9 @@ func AgentFacts(typ string, facts json.RawMessage) json.RawMessage {
 	if typ == TypeSSH && len(facts) > 0 {
 		return sshAgentFacts(facts)
 	}
+	if typ == TypeUniFi && len(facts) > 0 {
+		return unifiAgentFacts(facts)
+	}
 	if typ == TypeArgoSync && len(facts) > 0 {
 		var f ArgoFacts
 		if err := json.Unmarshal(facts, &f); err != nil {

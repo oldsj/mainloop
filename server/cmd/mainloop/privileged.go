@@ -26,6 +26,7 @@ func newPrivileged(cfg *config.Config, pool *pgxpool.Pool, gh *github.App, log *
 		KubernetesOn: bool(cfg.PrivilegedExecutorEnabled) && bool(cfg.PrivilegedKubernetesEnabled),
 		OmniOn:       bool(cfg.PrivilegedExecutorEnabled) && bool(cfg.PrivilegedOmniEnabled),
 		SSHOn:        bool(cfg.PrivilegedExecutorEnabled) && bool(cfg.PrivilegedSSHEnabled),
+		UniFiOn:      bool(cfg.PrivilegedExecutorEnabled) && bool(cfg.PrivilegedUniFiEnabled),
 	}
 }
 

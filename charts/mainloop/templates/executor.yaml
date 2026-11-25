@@ -147,6 +147,17 @@ spec:
             - name: MAINLOOP_EXECUTOR_SSH_DIR
               value: /etc/mainloop-executor/ssh
             {{- end }}
+            {{- if .unifi.enabled }}
+            {{- if not (regexMatch "^([0-9]{1,3}[.]){3}[0-9]{1,3}:[0-9]{1,5}$|^\\[[0-9a-fA-F:.]+\\]:[0-9]{1,5}$" (toString .unifi.address)) }}
+            {{- fail "executor.unifi.address must be the console's IP:port when executor.unifi.enabled is true" }}
+            {{- end }}
+            - name: MAINLOOP_EXECUTOR_UNIFI_ENABLED
+              value: "true"
+            - name: MAINLOOP_EXECUTOR_UNIFI_ADDRESS
+              value: {{ .unifi.address | quote }}
+            - name: MAINLOOP_EXECUTOR_UNIFI_DIR
+              value: /etc/mainloop-executor/unifi
+            {{- end }}
             # The root filesystem is read-only; /tmp is the only writable path.
             - name: HOME
               value: /tmp
@@ -159,6 +170,11 @@ spec:
               mountPath: /etc/mainloop-executor/ssh/{{ .name }}
               readOnly: true
             {{- end }}
+            {{- end }}
+            {{- if .unifi.enabled }}
+            - name: unifi
+              mountPath: /etc/mainloop-executor/unifi
+              readOnly: true
             {{- end }}
           {{- with .resources }}
           resources:
@@ -183,6 +199,18 @@ spec:
               - key: known-hosts
                 path: known-hosts
         {{- end }}
+        {{- end }}
+        {{- if .unifi.enabled }}
+        # Read fresh for each request, like the ssh credentials.
+        - name: unifi
+          secret:
+            secretName: mainloop-executor-unifi
+            defaultMode: 0440
+            items:
+              - key: api-key
+                path: api-key
+              - key: certificate
+                path: certificate
         {{- end }}
 ---
 # Nothing connects to the executor.

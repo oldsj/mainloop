@@ -83,10 +83,13 @@ func serveExecutor(ctx context.Context, log *slog.Logger) error {
 		}
 		svc.SSH = privileged.ExecSSH{Hosts: hosts, Dir: cfg.SSHDir}
 	}
+	if cfg.UniFi {
+		svc.UniFi = privileged.ExecUniFi{Address: cfg.UniFiAddress, Dir: cfg.UniFiDir}
+	}
 	r := &privileged.Runner{Service: svc}
 	log.Info("executor ready", "types", privileged.TypesFor(true), "secret_namespaces", cfg.SecretNamespaces,
 		"kubernetes", bool(cfg.Kubernetes), "namespace", cfg.Namespace, "omni", bool(cfg.Omni), "omni_clusters", cfg.OmniClusters,
-		"ssh_hosts", svc.SSHHosts,
+		"ssh_hosts", svc.SSHHosts, "unifi", bool(cfg.UniFi),
 		"pinned_approval_keys", len(svc.ApprovalKeys), "approval_keys_required", svc.ApprovalsRequired)
 	t := time.NewTicker(executorEvery)
 	defer t.Stop()

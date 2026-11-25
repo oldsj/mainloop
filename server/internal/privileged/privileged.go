@@ -197,6 +197,10 @@ type Service struct {
 	SSH SSH
 	// SSHHosts are the host names command.ssh may target.
 	SSHHosts []string
+	// UniFiOn, in serve-api, accepts http.unifi: the executor reaches the UniFi console.
+	UniFiOn bool
+	// UniFi reaches the UniFi console; nil without UniFi access.
+	UniFi UniFi
 }
 
 func (s *Service) now() time.Time {
@@ -230,6 +234,8 @@ func (s *Service) Request(ctx context.Context, by Requester, typ string, rawArgs
 		return Action{}, fmt.Errorf("%w: %s needs Omni access for Mainloop's executor, which this Mainloop does not have", ErrUnsupported, typ)
 	case entry.ssh && !s.SSHOn:
 		return Action{}, fmt.Errorf("%w: %s needs ssh access for Mainloop's executor, which this Mainloop does not have", ErrUnsupported, typ)
+	case entry.unifi && !s.UniFiOn:
+		return Action{}, fmt.Errorf("%w: %s needs UniFi access for Mainloop's executor, which this Mainloop does not have", ErrUnsupported, typ)
 	case !entry.executor && s.GitHub == nil:
 		return Action{}, fmt.Errorf("%w: this Mainloop has no GitHub App", ErrUnsupported)
 	}

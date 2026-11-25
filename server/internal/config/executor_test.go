@@ -108,3 +108,21 @@ func TestParseExecutorSSH(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestParseExecutorUniFi(t *testing.T) {
+	on := map[string]string{"MAINLOOP_EXECUTOR_OP_TOKEN": "x", "MAINLOOP_EXECUTOR_UNIFI_ENABLED": "true", "MAINLOOP_EXECUTOR_UNIFI_ADDRESS": " 192.0.2.2:443 "}
+	e, err := config.ParseExecutor(on)
+	if err != nil || e.UniFiAddress != netip.MustParseAddrPort("192.0.2.2:443") || e.UniFiDir != "/etc/mainloop-executor/unifi" {
+		t.Fatalf("e = %+v, %v", e, err)
+	}
+	for _, addr := range []string{"", "unifi.example.com:443", "192.0.2.2", "192.0.2.2:0"} {
+		on["MAINLOOP_EXECUTOR_UNIFI_ADDRESS"] = addr
+		if _, err := config.ParseExecutor(on); err == nil || !strings.Contains(err.Error(), "MAINLOOP_EXECUTOR_UNIFI_ADDRESS must be the console's IP address and port") {
+			t.Errorf("%q: err = %v", addr, err)
+		}
+	}
+	on["MAINLOOP_EXECUTOR_UNIFI_ADDRESS"], on["MAINLOOP_EXECUTOR_UNIFI_DIR"] = "192.0.2.2:443", "unifi"
+	if _, err := config.ParseExecutor(on); err == nil || !strings.Contains(err.Error(), "MAINLOOP_EXECUTOR_UNIFI_DIR must be an absolute path") {
+		t.Fatalf("err = %v", err)
+	}
+}
