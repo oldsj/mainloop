@@ -37,7 +37,7 @@ export function ScheduleCard({
       <p className={`text-sm break-words ${cron.ok ? 'text-foreground' : 'text-destructive'}`}>
         {cron.ok ? cron.text : cron.message}
       </p>
-      <p className="text-muted-foreground font-mono text-xs break-all">{schedule}</p>
+      <p className="text-muted-foreground text-xs break-all">{schedule}</p>
       <dl className="gap-x-md gap-y-xs text-muted-foreground grid grid-cols-[auto_1fr] text-xs">
         <dt>Agent</dt>
         <dd className="text-foreground break-all">{agent}</dd>

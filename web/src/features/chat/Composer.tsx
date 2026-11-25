@@ -358,7 +358,7 @@ export function Composer({
   }
 
   return (
-    <div className="border-border-subtle bg-background border-t font-mono">
+    <div className="border-border-subtle bg-background border-t">
       {/* As wide as the transcript, so the box lines up with the messages above it. */}
       <div className={CONVERSATION}>
         {allowImages && images.length > 0 ? (

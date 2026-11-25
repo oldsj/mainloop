@@ -47,7 +47,7 @@ export function RegisterForm({ busy, uncertain, error, onSubmit }: RegisterFormP
           Image
           <input
             aria-label="Image"
-            className="border-border bg-background text-foreground px-md min-h-control border font-mono text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
             required
             pattern={IMAGE_PATTERN}
             placeholder="registry/repository@sha256:digest"

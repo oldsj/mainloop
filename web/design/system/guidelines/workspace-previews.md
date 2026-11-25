@@ -10,7 +10,7 @@ Links to a workspace's declared HTTP ports, so the owner can open a running app 
 
 - Each link is a row with a `border-border-subtle` bottom rule and `py-sm`.
 - The link takes the control height (`min-h-control`, 44 px on touch), with `text-foreground` and an underline.
-- The port number uses `text-muted-foreground font-mono`.
+- The port number uses `text-muted-foreground`.
 - Notes use `text-muted-foreground text-xs`. Failures use the shared error recovery block.
 
 ## Content

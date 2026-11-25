@@ -149,7 +149,7 @@ export function ScheduleForm({
             <input
               id="schedule-cron"
               required
-              className={`${CONTROL} font-mono`}
+              className={CONTROL}
               maxLength={256}
               spellCheck={false}
               autoComplete="off"
@@ -173,7 +173,7 @@ export function ScheduleForm({
               <input
                 id="schedule-zone"
                 list="schedule-zone-options"
-                className={`${CONTROL} font-mono`}
+                className={CONTROL}
                 autoComplete="off"
                 spellCheck={false}
                 placeholder="UTC"

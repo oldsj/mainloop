@@ -33,18 +33,20 @@ export function SessionBar({
   return (
     <div
       className={cn(
-        // Chrome, even inside the monospace live view.
-        'border-border-subtle bg-card text-muted-foreground shrink-0 border-b font-sans text-xs',
+        'border-border-subtle bg-card text-muted-foreground shrink-0 border-b text-xs',
         className
       )}
       data-testid={testId}
     >
       <div className="gap-sm px-md min-h-control flex flex-wrap items-center py-1">
-        <span className={cn('size-2 shrink-0', barStatusDot(status))} aria-hidden="true" />
-        <span className="text-foreground" role="status" data-testid={statusTestId}>
-          {status}
+        {/* The facts wrap inside their own box, so a long status keeps the controls on its row. */}
+        <span className="gap-sm flex min-w-0 flex-1 flex-wrap items-center">
+          <span className={cn('size-2 shrink-0', barStatusDot(status))} aria-hidden="true" />
+          <span className="text-foreground" role="status" data-testid={statusTestId}>
+            {status}
+          </span>
+          {lead}
         </span>
-        {lead}
         {trail ? <span className="gap-sm ml-auto flex flex-wrap items-center">{trail}</span> : null}
       </div>
       {children}

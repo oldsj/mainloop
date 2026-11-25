@@ -50,15 +50,15 @@ export function TranscriptView({ sessionId, entry }: { sessionId: string; entry?
       <div
         ref={scroller}
         data-testid="transcript"
-        className="px-md py-sm min-h-0 flex-1 overflow-y-auto overscroll-contain font-mono text-sm"
+        className="px-md py-sm min-h-0 flex-1 overflow-y-auto overscroll-contain text-sm"
       >
         <div className={cn('gap-sm flex flex-col', CONVERSATION)}>
           {transcript.isPending ? (
-            <p role="status" className="text-muted-foreground font-sans">
+            <p role="status" className="text-muted-foreground">
               Loading transcript…
             </p>
           ) : transcript.isError && !pages ? (
-            <div className="gap-sm flex flex-col items-start font-sans">
+            <div className="gap-sm flex flex-col items-start">
               <p role="alert" className="text-destructive">
                 {transcript.error.message}
               </p>
@@ -69,7 +69,7 @@ export function TranscriptView({ sessionId, entry }: { sessionId: string; entry?
           ) : null}
 
           {unavailable.map((s) => (
-            <p key={s.created_at} role="note" className="text-term-warning font-sans text-xs">
+            <p key={s.created_at} role="note" className="text-term-warning text-xs">
               Part of this transcript could not be copied{s.reason ? `: ${s.reason}` : '.'}
             </p>
           ))}
@@ -83,7 +83,7 @@ export function TranscriptView({ sessionId, entry }: { sessionId: string; entry?
           ) : null}
 
           {pages && stored.length === 0 && live.length === 0 ? (
-            <p className="text-muted-foreground font-sans" data-testid="transcript-empty">
+            <p className="text-muted-foreground" data-testid="transcript-empty">
               {sources.length === 0
                 ? 'No transcript yet. Turns are copied here as they finish.'
                 : 'Nothing stored for this session.'}
@@ -104,7 +104,7 @@ export function TranscriptView({ sessionId, entry }: { sessionId: string; entry?
 
           {live.length > 0 ? (
             <section aria-label="Not stored yet" className="gap-sm flex flex-col">
-              <p className="text-term-fg-muted border-border-subtle pt-sm border-t font-sans text-xs">
+              <p className="text-term-fg-muted border-border-subtle pt-sm border-t text-xs">
                 Not stored yet: the turn still running, or just finished
               </p>
               {live.map((item) => (
@@ -114,7 +114,7 @@ export function TranscriptView({ sessionId, entry }: { sessionId: string; entry?
           ) : null}
 
           {last?.live_error ? (
-            <p role="note" className="text-term-warning font-sans text-xs">
+            <p role="note" className="text-term-warning text-xs">
               {last.live_error}
             </p>
           ) : null}
@@ -134,7 +134,7 @@ function PageButton({
   onClick: () => void;
 }) {
   return (
-    <div className="font-sans">
+    <div>
       <Button variant="outline" size="sm" onClick={onClick} disabled={pending}>
         {pending ? 'Loading…' : label}
       </Button>
@@ -175,7 +175,7 @@ function SessionSearch({ sessionId }: { sessionId: string }) {
 function Cut({ e }: { e: TranscriptEntry }) {
   if (!e.truncated) return null;
   return (
-    <span className="text-term-fg-muted block font-sans text-xs">
+    <span className="text-term-fg-muted block text-xs">
       Cut to {e.text.length.toLocaleString()} of {e.orig_bytes.toLocaleString()} bytes when stored
     </span>
   );
@@ -297,7 +297,7 @@ function ToolItem({
             {result.text || '(no output)'}
           </pre>
         ) : (
-          <span className="text-term-fg-muted font-sans">No result stored.</span>
+          <span className="text-term-fg-muted">No result stored.</span>
         )}
         {result ? <Cut e={result} /> : null}
       </div>

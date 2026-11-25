@@ -52,7 +52,7 @@ export function CommandPalette({ open, onOpenChange, keys }: CommandPaletteProps
             pending.current = null;
             if (command) runShellCommand(command);
           }}
-          className="inset-x-md border-border bg-popover text-popover-foreground fixed top-24 z-50 mx-auto flex max-h-[70dvh] max-w-xl flex-col rounded-none border font-sans"
+          className="inset-x-md border-border bg-popover text-popover-foreground fixed top-24 z-50 mx-auto flex max-h-[70dvh] max-w-xl flex-col rounded-none border"
         >
           <Dialog.Title className="sr-only">Search and commands</Dialog.Title>
           <PaletteBody

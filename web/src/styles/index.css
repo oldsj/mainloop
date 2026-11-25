@@ -32,8 +32,8 @@
     margin: 0;
     background-color: var(--background);
     color: var(--foreground);
-    /* The chrome is a sans. The transcript, its composer and code set font-mono themselves. */
-    font-family: var(--font-sans);
+    /* One monospace for the whole app: the chrome matches the transcript. */
+    font-family: var(--font-mono);
     /* Every digit is the same width, so counts, ages and times line up and do not shift as they change. */
     font-variant-numeric: tabular-nums;
     min-height: 100dvh;

@@ -1,8 +1,8 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-// The type contract: the page is a sans, and the generated theme carries both families and the two
-// chrome sizes. The transcript and code opt into the monospace with font-mono.
+// The type contract: the whole app is one monospace, so the chrome matches the transcript. The
+// generated theme carries that one family and the two chrome sizes, and no component picks another.
 // A function, not a literal `new URL('…', import.meta.url)`: the bundler rewrites that form for assets.
 const at = (path) => new URL(path, import.meta.url);
 const read = (path) => readFileSync(at(path), 'utf8');
@@ -11,11 +11,10 @@ const base = read('../src/styles/index.css');
 const { family, size } = JSON.parse(read('./tokens.json')).font;
 
 describe('type', () => {
-  it('defines a sans for the chrome and a monospace for the transcript and code', () => {
-    expect(family.sans.$value[0]).toBe('system-ui');
-    expect(family.sans.$value.at(-1)).toBe('sans-serif');
+  it('defines one family, a monospace', () => {
+    expect(Object.keys(family)).toEqual(['mono']);
     expect(family.mono.$value.at(-1)).toBe('monospace');
-    expect(theme).toMatch(/--font-sans: system-ui, [^;]*sans-serif;/);
+    expect(theme).not.toMatch(/--font-(sans|serif):/);
     // SF Mono where the browser has it; otherwise Geist Mono, which the app serves itself.
     expect(theme).toMatch(
       /--font-mono:\s+ui-monospace, 'SF Mono', 'SFMono-Regular', 'Geist Mono', 'Menlo', monospace;/
@@ -48,10 +47,25 @@ describe('type', () => {
     );
   });
 
-  it('makes the sans the page default', () => {
+  it('makes the monospace the page default', () => {
     const body = /body \{[^}]*\}/.exec(base)?.[0] ?? '';
-    expect(body).toContain('font-family: var(--font-sans);');
-    expect(body).not.toContain('--font-mono');
+    expect(body).toContain('font-family: var(--font-mono);');
+    expect(body).not.toContain('--font-sans');
+  });
+
+  it('leaves the family to the page: no component sets one', () => {
+    // Given every source file under src/
+    const src = at('../src/');
+    const files = readdirSync(src, { recursive: true }).filter((name) =>
+      /\.(tsx?|css)$/.test(String(name))
+    );
+    expect(files.length).toBeGreaterThan(0);
+
+    // Then none picks a family with a utility, so nothing escapes the one monospace
+    const offenders = files.filter((name) =>
+      /(?<![\w-])font-(sans|serif|mono)\b/.test(readFileSync(new URL(String(name), src), 'utf8'))
+    );
+    expect(offenders).toEqual([]);
   });
 
   it('adds the 11px and 13px chrome sizes', () => {

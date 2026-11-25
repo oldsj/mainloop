@@ -61,11 +61,10 @@ CI (`.github/workflows/web.yml`) regenerates the files and fails on any diff.
 
 ## Type
 
-Mainloop reads like an IDE around a terminal: the chrome is a sans and the transcript is monospace.
+Mainloop reads like an IDE around a terminal, and the whole app is set in one monospace, so the chrome matches the transcript.
 
-- `font.family.sans` (the system UI font, so nothing is downloaded) is the page default. It is the chrome: navigation, the Explorer, page headings, buttons, forms, labels, status rows and the request cards.
-- `font.family.mono` (SF Mono where the browser has it to give; everywhere else Geist Mono, one variable woff2 the app serves itself from `src/assets/fonts`, under the SIL OFL 1.1, so nobody installs a font and nothing comes from a font service) is for the shell (sidebar, tabs, status bar), the transcript and its composer, and for anything that is code: ids, branches, commits, paths, schedules, a task's brief, and `code` and `pre`. A component opts in with `font-mono`. The `$ mainloop` mark is monospace too.
-- A chrome element that sits inside a monospace area (the session row above the live transcript, the session controls picker) sets `font-sans` itself.
+- `font.family.mono` is the only family and the page default (`body` sets it). It is SF Mono where the browser has it to give; everywhere else Geist Mono, one variable woff2 the app serves itself from `src/assets/fonts`, under the SIL OFL 1.1, so nobody installs a font and nothing comes from a font service. Navigation, page headings, buttons, forms, labels, status rows, the request cards, the transcript, its composer and code all use it.
+- Components set no font family: do not add `font-mono`, `font-sans` or `font-serif`. A test fails on any of them under `src/`.
 - Sizes: `2xs` (11 px) for group headings in small capitals, `xs` (12 px) for secondary lines, `ui` (13 px) for the chrome's default (rows, buttons), `sm` (14 px) for the transcript and page text, and `base` and up for titles. A size added to the tokens must also be added to `TOKEN_FONT_SIZES` in `src/components/ui/cn.ts`, or `cn` treats it as a text colour and drops it; a test checks this.
 
 ## Control size

@@ -139,7 +139,7 @@ function InstructionsForm({
             <summary className="py-sm min-h-control cursor-pointer">
               Current version {view.version}
             </summary>
-            <pre className="p-sm border-border border font-mono text-xs break-words whitespace-pre-wrap">
+            <pre className="p-sm border-border border text-xs break-words whitespace-pre-wrap">
               {view.text || '(empty)'}
             </pre>
           </details>
@@ -157,7 +157,7 @@ function InstructionsForm({
           Instructions for agents
           <textarea
             aria-describedby="instructions-size"
-            className="border-input bg-background text-foreground p-sm w-full rounded-none border font-mono text-sm"
+            className="border-input bg-background text-foreground p-sm w-full rounded-none border text-sm"
             rows={10}
             value={value}
             disabled={busy}
@@ -232,7 +232,7 @@ function EarlierVersions({ projectId }: { projectId: string }) {
                 Version {v.version},{' '}
                 <time dateTime={v.created_at}>{new Date(v.created_at).toLocaleString()}</time>
               </span>
-              <pre className="p-sm border-border border font-mono text-xs break-words whitespace-pre-wrap">
+              <pre className="p-sm border-border border text-xs break-words whitespace-pre-wrap">
                 {v.text || '(cleared)'}
               </pre>
             </li>

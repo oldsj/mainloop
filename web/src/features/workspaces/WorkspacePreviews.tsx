@@ -58,7 +58,7 @@ export function WorkspacePreviews({ workspaceId }: { workspaceId: string }) {
             >
               <span className="min-w-0 text-sm break-words">
                 {link.name}
-                <span className="text-muted-foreground font-mono">:{link.port}</span>
+                <span className="text-muted-foreground">:{link.port}</span>
               </span>
               <a
                 href={link.url}

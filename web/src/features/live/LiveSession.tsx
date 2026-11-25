@@ -308,7 +308,7 @@ export function LiveSessionView({
       aria-label="Live session"
       data-testid="live-session"
       data-conn={conn}
-      className="bg-term-bg text-term-fg flex min-h-0 flex-1 flex-col font-mono text-sm"
+      className="bg-term-bg text-term-fg flex min-h-0 flex-1 flex-col text-sm"
     >
       {renderBar ? (
         renderBar(bar)
@@ -419,7 +419,7 @@ function Log({
             ✻ {state.activity}… <span className="text-term-fg-muted text-xs">esc to interrupt</span>
           </div>
         ) : null}
-        {requests ? <div className="font-sans">{requests}</div> : null}
+        {requests ? <div>{requests}</div> : null}
       </div>
     </div>
   );
@@ -533,7 +533,7 @@ const Row = memo(function Row({
             {e.verb} {e.file} · +{e.lines.filter((l) => l[0] === '+').length} −
             {e.lines.filter((l) => l[0] === '-').length}
           </div>
-          <pre className="py-xs m-0 font-mono">
+          <pre className="py-xs m-0">
             {e.lines.map((l, i) => (
               <span
                 key={i}

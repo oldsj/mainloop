@@ -245,7 +245,7 @@ function Brief({ text }: { text: string }) {
       <p
         id={id}
         className={cn(
-          'text-muted-foreground font-mono text-xs break-words whitespace-pre-wrap',
+          'text-muted-foreground text-xs break-words whitespace-pre-wrap',
           long && !open && 'line-clamp-2'
         )}
       >

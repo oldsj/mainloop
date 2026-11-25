@@ -317,7 +317,7 @@ function SavedValues({ config }: { config: Config }) {
         <dt className="text-muted-foreground">Name</dt>
         <dd className="min-w-0 [overflow-wrap:anywhere]">{config.name || '—'}</dd>
         <dt className="text-muted-foreground">Schedule</dt>
-        <dd className="font-mono break-all">{config.schedule}</dd>
+        <dd className="break-all">{config.schedule}</dd>
         <dt className="text-muted-foreground">Time zone</dt>
         <dd className="break-all">{config.time_zone}</dd>
         <dt className="text-muted-foreground">Timeout (s)</dt>
