@@ -19,7 +19,7 @@ function geometry(el: HTMLElement, scrollTop: number, scrollHeight = 1000, clien
 }
 
 describe('MessageList', () => {
-  it('is monospace, with the request cards at its end in the chrome sans', () => {
+  it('shows the request cards at its end', () => {
     render(
       <MessageList
         {...base}
@@ -27,8 +27,8 @@ describe('MessageList', () => {
         requests={<p>Approve a deploy</p>}
       />
     );
-    expect(screen.getByTestId('message-list')).toHaveClass('font-mono');
-    expect(screen.getByTestId('thread-requests')).toHaveClass('font-sans');
+    expect(screen.getByTestId('message-list')).toHaveTextContent('hello');
+    expect(screen.getByTestId('thread-requests')).toHaveTextContent('Approve a deploy');
   });
 
   it('shows the empty state once loaded, and "connecting" before', () => {

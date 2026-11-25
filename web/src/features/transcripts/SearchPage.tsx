@@ -129,7 +129,7 @@ function HitRow({ hit }: { hit: TranscriptSearchHit }) {
           {kind}
           {hit.tool_name ? ` · ${hit.tool_name}` : ''}
         </span>
-        <span className="font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap">
+        <span className="text-xs [overflow-wrap:anywhere] whitespace-pre-wrap">
           {hit.snippet.map((part, i) =>
             part.match ? (
               <mark key={i} className="bg-term-selection text-foreground">

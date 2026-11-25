@@ -54,7 +54,7 @@ export function StatusBar({
       data-testid="status-bar"
       data-offline={offline ? 'true' : undefined}
       className={cn(
-        'border-border-subtle gap-md px-sm text-2xs flex h-6 shrink-0 items-center border-t font-mono',
+        'border-border-subtle gap-md px-sm text-2xs flex h-6 shrink-0 items-center border-t',
         offline ? 'bg-destructive text-destructive-foreground' : 'bg-card text-muted-foreground'
       )}
     >

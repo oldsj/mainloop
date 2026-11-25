@@ -94,7 +94,7 @@ function ControlsSheet({
         role="dialog"
         aria-label={title}
         tabIndex={-1}
-        className="bg-popover text-popover-foreground border-border p-md md:mb-xs md:pb-md fixed inset-x-0 bottom-0 z-30 flex max-h-[80%] flex-col gap-3 overflow-y-auto border-t pb-[calc(1rem+env(safe-area-inset-bottom,0px))] font-sans text-sm shadow-md outline-none md:absolute md:inset-x-auto md:bottom-full md:left-0 md:max-h-[70vh] md:w-[420px] md:border"
+        className="bg-popover text-popover-foreground border-border p-md md:mb-xs md:pb-md fixed inset-x-0 bottom-0 z-30 flex max-h-[80%] flex-col gap-3 overflow-y-auto border-t pb-[calc(1rem+env(safe-area-inset-bottom,0px))] text-sm shadow-md outline-none md:absolute md:inset-x-auto md:bottom-full md:left-0 md:max-h-[70vh] md:w-[420px] md:border"
       >
         {children}
       </div>

@@ -195,7 +195,7 @@ function PolicyForm({
         <ul className="gap-xs pt-sm flex flex-col">
           {view.protected_globs.map((glob) => (
             <li key={glob}>
-              <code className="font-mono text-xs break-all">{glob}</code>
+              <code className="text-xs break-all">{glob}</code>
             </li>
           ))}
         </ul>

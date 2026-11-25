@@ -181,7 +181,7 @@ export function HealthPage({ search }: { search: HealthSearch }) {
             <section aria-label="Unconfirmed stops" className="gap-sm grid">
               <h2 className="text-term-yellow font-medium">Unconfirmed stops</h2>
               <p className="text-muted-foreground max-w-prose text-sm">{STOPS_NOTE}</p>
-              <ul className="gap-xs grid font-mono text-xs break-words">
+              <ul className="gap-xs grid text-xs break-words">
                 {view.stops.map((stop) => (
                   <li key={stop.attempt_id}>{stopText(stop)}</li>
                 ))}
@@ -197,7 +197,7 @@ export function HealthPage({ search }: { search: HealthSearch }) {
             <section aria-label="Stalled turns" className="gap-sm grid">
               <h2 className="text-term-yellow font-medium">Stalled turns</h2>
               <p className="text-muted-foreground max-w-prose text-sm">{STALLS_NOTE}</p>
-              <ul className="gap-xs grid font-mono text-xs break-words">
+              <ul className="gap-xs grid text-xs break-words">
                 {view.stalls.map((stall) => (
                   <li key={stall.message_id}>{stallText(stall)}</li>
                 ))}

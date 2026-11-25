@@ -24,7 +24,7 @@ export function designPreviews(): Plugin {
       const inputs: Record<string, string> = {};
       const links: string[] = [];
       const html = (title: string, body: string) => `<!doctype html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${title} — Mainloop design system</title></head><body class="bg-background text-foreground font-mono"><main class="p-lg"><h1 class="text-xl mb-lg">${title}</h1>${body}</main></body></html>`;
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${title} — Mainloop design system</title></head><body class="bg-background text-foreground"><main class="p-lg"><h1 class="text-xl mb-lg">${title}</h1>${body}</main></body></html>`;
       for (const file of files) {
         const name = relative(join(root, 'src'), file)
           .replace(/\.preview\.tsx$/, '')

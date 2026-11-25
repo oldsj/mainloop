@@ -404,12 +404,12 @@ function CommitLine({ commit }: { commit: CommitRow }) {
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            className="min-h-control min-w-control inline-flex items-center justify-center font-mono underline"
+            className="min-h-control min-w-control inline-flex items-center justify-center underline"
           >
             {commit.sha.slice(0, 7)}
           </a>
         ) : (
-          <span className="font-mono">{commit.sha.slice(0, 7)}</span>
+          <span>{commit.sha.slice(0, 7)}</span>
         )}
       </span>
     </li>

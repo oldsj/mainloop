@@ -285,7 +285,7 @@ export function AgentColumn({
     <section
       aria-label="Spaces and agents"
       data-testid="agent-column"
-      className="text-ui flex min-h-0 flex-1 flex-col font-mono"
+      className="text-ui flex min-h-0 flex-1 flex-col"
     >
       {/* As tall as the tab strip beside it, rule included, so the two first rows line up. */}
       <header className="pr-xs min-h-control box-content flex shrink-0 items-center justify-between border-b border-transparent">
