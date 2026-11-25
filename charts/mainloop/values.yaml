@@ -373,7 +373,7 @@ executor:
   unifi:
     enabled: false
     # e.g. 192.0.2.2:443
-    address: ""
+    address: ''
   nodeSelector: {}
   affinity: {}
   tolerations: []
