@@ -20,6 +20,7 @@ Mainloop reads like an IDE around a terminal: the chrome is the system sans, cod
 Each file in `guidelines/` covers one product component: purpose, states, keyboard and screen-reader behaviour, touch targets, and do and don't.
 
 - `guidelines/activity-list.md`
+- `guidelines/agent-column.md`
 - `guidelines/attention-card.md`
 - `guidelines/command-palette.md`
 - `guidelines/composer.md`

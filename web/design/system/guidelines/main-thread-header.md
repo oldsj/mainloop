@@ -4,7 +4,7 @@ Source: `docs/specs/chat.md` (Main thread header), `docs/specs/sessions.md`.
 
 ## Purpose
 
-The one row above the main conversation: the session's status, how many topics are waiting on the owner, and then its controls: stop while a turn runs, and a **Session info** toggle that opens the identity strip and the topic index. It is drawn by the shared session row (`SessionBar`), which the live view also uses, so there is one row whether the conversation is the chat view or the live view.
+The one row above the main conversation: who it is (Mainloop's mark and **Mainloop** in `text-title font-semibold`, so the main thread never looks like a task's session, whose row has no title), the session's status, how many topics are waiting on the owner, and then its controls: stop while a turn runs, and a **Session info** toggle that opens the identity strip and the topic index. It is drawn by the shared session row (`SessionBar`), which the live view also uses, so there is one row whether the conversation is the chat view or the live view.
 
 ## Tokens
 
