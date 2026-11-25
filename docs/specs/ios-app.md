@@ -33,7 +33,7 @@ the web's mark, `>_` (`web/public/favicon.svg`), drawn by `ios/Design/make-app-i
 
 Steps 3 to 5 show once per pairing; after that the app opens straight into the web app. If the
 server stops knowing the device (revoked elsewhere, or its keys reset), the app deletes its keys
-and returns to Welcome, saying why.
+and the web view's data and returns to Welcome, saying why.
 
 ### Pairing
 
@@ -55,7 +55,7 @@ software approval key, which asks for nothing.
   as the cookie `__Host-mainloop-device` (host-only, `Secure`, `HttpOnly`, `SameSite=Strict`, no
   expiry) before the page loads. The session lasts an hour; the app starts a new one ten minutes
   before it ends while open, on returning to the foreground with ten minutes or less left, and when
-  the page reports a `401`, then reloads. Each new session ends the device's earlier ones.
+  the page reports a `401` (at most once every 30 seconds), then reloads. Each new session ends the device's earlier ones.
 - **The website data store** is the default, persistent one, so the page's own settings (its
   theme, for one) survive a relaunch. The session cookie has no expiry, so it doesn't outlive the
   app, and is set again at each launch.

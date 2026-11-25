@@ -64,6 +64,21 @@ public struct WebSessionGrant: Equatable, Sendable {
     }
 }
 
+/// How often the page's `sessionExpired` may start a new session: once per `interval`.
+public struct SessionExpiryLimit: Sendable {
+    public static let interval: TimeInterval = 30
+    private var last: Date?
+
+    public init() {}
+
+    /// True, and counted, when a new session may start now.
+    public mutating func allow(at now: Date = Date()) -> Bool {
+        if let last, now.timeIntervalSince(last) < Self.interval { return false }
+        last = now
+        return true
+    }
+}
+
 public enum WebSessionError: Error, Equatable, Sendable {
     /// The server doesn't know this device (revoked elsewhere, or the keys are gone): pair again.
     case notPaired

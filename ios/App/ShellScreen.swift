@@ -43,6 +43,7 @@ final class ShellModel {
     private var pendingPath: String?
     private var renewal: Task<Void, Never>?
     private var starting = false
+    private var expiries = SessionExpiryLimit()
 
     @ObservationIgnored private(set) lazy var webView: WKWebView = makeWebView()
     @ObservationIgnored private lazy var bridge = ShellBridge(shell: self)
@@ -100,8 +101,10 @@ final class ShellModel {
     }
 
     /// The page got a 401: a new session, then the page again.
+    /// At most one new session per 30 seconds, so a page that keeps getting 401s can't keep
+    /// minting sessions.
     func sessionExpired() async {
-        guard isPaired else { return }
+        guard isPaired, expiries.allow() else { return }
         if await renew() { webView.reload() }
     }
 
@@ -139,10 +142,17 @@ final class ShellModel {
 
     /// Ends this device's web sessions on the server and forgets the web view's data.
     func signOut() async {
+        if grant != nil { await WebSessionGrant.end(client: client) }
+        await forget()
+    }
+
+    /// Forgets the session and the web view's data without asking the server: for a device the
+    /// server no longer knows, whose sessions are already gone.
+    func forget() async {
         renewal?.cancel()
         renewal = nil
-        if grant != nil { await WebSessionGrant.end(client: client) }
         grant = nil
+        expiries = SessionExpiryLimit()
         loaded = false
         state = .starting
         await WKWebsiteDataStore.default().removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)

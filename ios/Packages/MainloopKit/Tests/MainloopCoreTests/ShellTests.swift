@@ -27,6 +27,13 @@ import Testing
         #expect(WebSessionGrant(token: token, expiresAt: now.addingTimeInterval(-1)).needsRenewal(at: now))
     }
 
+    @Test func thePageStartsAtMostOneSessionEveryThirtySeconds() {
+        var limit = SessionExpiryLimit()
+        let now = Date()
+        let answers = [0, 1, 29, 30, 31].map { limit.allow(at: now.addingTimeInterval($0)) }
+        #expect(answers == [true, false, false, true, false])
+    }
+
     @Test func startingTakesOnlyTheServersCookieAndAWellFormedToken() async throws {
         func start(_ json: String, status: HTTPResponse.Status = .created) async throws -> WebSessionGrant {
             let client = MainloopAPI.client(origin: origin, middlewares: [], transport: FakeTransport(status: status, json: json))

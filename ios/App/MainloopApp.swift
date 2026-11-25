@@ -150,8 +150,10 @@ final class AppModel {
     }
 
     /// The server no longer knows this device (revoked from the web app or another device).
+    /// Its sessions are gone with it, so the web view's data is cleared without a server call.
     private func lostPairing() {
         Task {
+            if let shell { await shell.forget() }
             await account.signOut()
             await push.signedOut()
             notice = "Mainloop no longer knows this iPhone: it was revoked, or its keys were reset. Sign in to pair it again."
