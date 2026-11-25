@@ -494,8 +494,20 @@ func TestSideroProxyRefusals(t *testing.T) {
 		"teardown another cluster":    {ToolOmnictl, false, cosiState + "Teardown", cosiGet("default", "Clusters.omni.sidero.dev", "prod-02"), nil},
 		"destroy of no cluster":       {ToolOmnictl, false, cosiState + "Destroy", cosiGet("default", "MachineClasses.omni.sidero.dev", "big"), nil},
 		"destroy what is not there":   {ToolOmnictl, false, cosiState + "Destroy", cosiGet("default", "MachineSets.omni.sidero.dev", "gone"), nil},
-		"logs of another's machine":   {ToolOmnictl, false, methodMachineLogs, cosiRequest("m-2", ""), nil},
-		"logs of an unknown machine":  {ToolOmnictl, false, methodMachineLogs, cosiRequest("m-404", ""), nil},
+		// The kernel log prints the kernel command line, which may hold the SideroLink join token;
+		// so do these types.
+		"machine logs":           {ToolOmnictl, false, "/management.ManagementService/MachineLogs", cosiRequest("m-1", ""), nil},
+		"dmesg":                  {ToolTalosctl, false, "/machine.MachineService/Dmesg", nil, talos},
+		"machine statuses":       {ToolOmnictl, false, cosiState + "List", cosiRequest("default", "MachineStatuses.omni.sidero.dev"), nil},
+		"kernel args":            {ToolOmnictl, false, cosiState + "List", cosiRequest("default", "KernelArgs.omni.sidero.dev"), nil},
+		"kernel args statuses":   {ToolOmnictl, false, cosiState + "Get", cosiRequest("default", "KernelArgsStatuses.omni.sidero.dev"), nil},
+		"pending config diff":    {ToolOmnictl, false, cosiState + "List", cosiRequest("default", "MachinePendingUpdates.omni.sidero.dev"), nil},
+		// Talos 1.13's upgrade: pull, then install, each with the image.
+		"pull any image":         {ToolTalosctl, false, methodImagePull, imagePull("docker.io/someone/installer:v1"), talos},
+		"pull no image":          {ToolTalosctl, false, methodImagePull, []byte{}, talos},
+		"install any image":      {ToolTalosctl, false, methodLifecycleUpgrade, lifecycleUpgrade("docker.io/someone/installer:v1"), talos},
+		"install with no source": {ToolTalosctl, false, methodLifecycleUpgrade, []byte{}, talos},
+		"pull in preflight":      {ToolTalosctl, true, methodImagePull, imagePull("ghcr.io/siderolabs/installer:v1.14.5"), talos},
 	} {
 		t.Run(name, func(t *testing.T) {
 			omni, _, conn := newProxyFixture(t, tc.tool, "internal-01", tc.preflight)
@@ -523,7 +535,6 @@ func TestSideroProxyHoldsOmnictlToItsClusters(t *testing.T) {
 		{cosiState + "Update", cosiWrite(2, cosiResource{ns: "default", typ: "MachineSets.omni.sidero.dev", id: "internal-01-workers", labels: map[string]string{omniClusterLabel: "internal-01"}})},
 		{cosiState + "Destroy", cosiGet("default", "MachineSets.omni.sidero.dev", "internal-01-workers")},
 		{cosiState + "Teardown", cosiGet("default", "Clusters.omni.sidero.dev", "internal-01")},
-		{methodMachineLogs, cosiRequest("m-1", "")},
 	} {
 		if _, err := callAll(ctx, conn, w.method, w.body); err != nil || !omni.forwarded(w.method, w.body) {
 			t.Fatalf("%s: %v", w.method, err)
@@ -577,6 +588,28 @@ func TestSideroProxyTalosNodes(t *testing.T) {
 	if lists != 1 {
 		t.Errorf("the machines were listed %d times, want once per run", lists)
 	}
+	// Talos 1.13 and later: talosctl pulls the image, installs it, then reboots.
+	for method, body := range map[string][]byte{methodImagePull: imagePull(image), methodLifecycleUpgrade: lifecycleUpgrade(image)} {
+		if err := call(ctx, conn, method, body, "node", "node-a", "context", "internal-01"); err != nil || !omni.forwarded(method, body) {
+			t.Fatalf("%s: %v", method, err)
+		}
+	}
+}
+
+// imagePull encodes an ImageServicePullRequest: containerd (1), image_ref (3).
+func imagePull(ref string) []byte {
+	b := protowire.AppendTag(nil, 1, protowire.BytesType)
+	b = protowire.AppendBytes(b, []byte{})
+	b = protowire.AppendTag(b, 3, protowire.BytesType)
+	return protowire.AppendString(b, ref)
+}
+
+// lifecycleUpgrade encodes a LifecycleServiceUpgradeRequest: source (2) with image_name (1).
+func lifecycleUpgrade(image string) []byte {
+	src := protowire.AppendTag(nil, 1, protowire.BytesType)
+	src = protowire.AppendString(src, image)
+	b := protowire.AppendTag(nil, 2, protowire.BytesType)
+	return protowire.AppendBytes(b, src)
 }
 
 // The parser's allowlist names types as the tools do: full name, plural or singular.

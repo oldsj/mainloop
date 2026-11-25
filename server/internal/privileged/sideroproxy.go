@@ -105,22 +105,23 @@ func (p *sideroProxy) serve(ln net.Listener) (stop func()) {
 // The methods the allowed commands call. Everything else is refused, by name: Omni's
 // kubeconfig, talosconfig, service-account, user, join-token and support-bundle methods; Talos's
 // file reads and copies, etcd snapshots, client-certificate minting, packet captures, config
-// applies and META writes.
+// applies and META writes. Also the kernel log, through Talos (dmesg) or Omni (machine logs): it
+// prints the kernel command line at boot, which may hold the SideroLink join token.
 var (
 	sideroReads = []string{
 		"/machine.MachineService/Version", "/machine.MachineService/ServiceList", "/machine.MachineService/Logs",
-		"/machine.MachineService/LogsContainers", "/machine.MachineService/Dmesg", "/machine.MachineService/EtcdMemberList",
+		"/machine.MachineService/LogsContainers", "/machine.MachineService/EtcdMemberList",
 		"/machine.MachineService/EtcdStatus", "/machine.MachineService/EtcdAlarmList", "/machine.MachineService/Containers",
 		"/machine.MachineService/Stats", "/machine.MachineService/Memory", "/machine.MachineService/Processes",
 		"/machine.MachineService/Mounts", "/machine.MachineService/Netstat", "/machine.MachineService/List",
 		"/machine.MachineService/Hostname", "/machine.MachineService/Events",
 		"/time.TimeService/Time", "/time.TimeService/TimeCheck",
-		"/management.ManagementService/MachineLogs",
 		cosiState + "Get", cosiState + "List", cosiState + "Watch",
 	}
 	sideroWrites = []string{
 		"/machine.MachineService/Reboot", "/machine.MachineService/Shutdown", "/machine.MachineService/Reset",
-		"/machine.MachineService/Upgrade", "/machine.MachineService/Rollback", "/machine.MachineService/ServiceStart",
+		"/machine.MachineService/Upgrade", methodImagePull, methodLifecycleUpgrade,
+		"/machine.MachineService/Rollback", "/machine.MachineService/ServiceStart",
 		"/machine.MachineService/ServiceStop", "/machine.MachineService/ServiceRestart",
 		"/machine.MachineService/EtcdDefragment", "/machine.MachineService/EtcdForfeitLeadership",
 		"/machine.MachineService/EtcdLeaveCluster", "/machine.MachineService/EtcdRemoveMemberByID",
