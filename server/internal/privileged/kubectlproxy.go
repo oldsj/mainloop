@@ -69,7 +69,7 @@ func loopbackCert() (tls.Certificate, []byte, error) {
 	}
 	now := time.Now()
 	tmpl := &x509.Certificate{
-		SerialNumber: serial, Subject: pkix.Name{CommonName: "mainloop-executor kubectl proxy"},
+		SerialNumber: serial, Subject: pkix.Name{CommonName: "mainloop-executor loopback proxy"},
 		NotBefore: now.Add(-time.Minute), NotAfter: now.Add(MaxCommandTimeout + time.Hour),
 		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)}, KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, BasicConstraintsValid: true, IsCA: true,

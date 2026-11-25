@@ -302,10 +302,16 @@ const RemoteTimeout = 90 * time.Second
 // run executes one attempt of a claimed action under RemoteTimeout.
 func (r *Runner) run(ctx context.Context, row dbq.PrivilegedAction) outcome {
 	limit := RemoteTimeout
-	if row.Type == TypeKubectl {
+	switch row.Type {
+	case TypeKubectl:
 		var a KubectlArgs
 		if json.Unmarshal(row.Args, &a) == nil {
 			limit += a.timeout() // the dry run again, then the command under its own deadline
+		}
+	case TypeOmnictl, TypeTalosctl:
+		var a SideroArgs
+		if json.Unmarshal(row.Args, &a) == nil {
+			limit += a.timeout()
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, limit)
@@ -327,6 +333,8 @@ func (r *Runner) run(ctx context.Context, row dbq.PrivilegedAction) outcome {
 		return r.argoSync(ctx, row)
 	case TypeKubectl:
 		return r.kubectl(ctx, row)
+	case TypeOmnictl, TypeTalosctl:
+		return r.sidero(ctx, row)
 	default:
 		return outcome{state: StateFailed, err: "the type is no longer in the catalog"}
 	}

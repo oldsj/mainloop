@@ -26,8 +26,28 @@ RUN arch="${TARGETARCH:-amd64}" \
     && echo "${sum}  /kubectl" | sha256sum -c - \
     && chmod 0555 /kubectl
 
+# omnictl and talosctl for serve-executor's command.omnictl and command.talosctl, pinned and checked
+# against each release's published sha256sum.txt.
+FROM golang:${GO_VERSION}-bookworm AS sidero
+ARG TARGETARCH
+ARG OMNICTL_VERSION=v1.13.1
+ARG OMNICTL_SHA256_AMD64=fce94ffb14c2ae233085ca93e518b5c50a00ab1a7461fa6475f686ebc9fae90f
+ARG OMNICTL_SHA256_ARM64=2474f32d9cf0f8fd709fd478dbaf8c8dfee89f556d4830d8381cf11b6403ecd3
+ARG TALOSCTL_VERSION=v1.14.5
+ARG TALOSCTL_SHA256_AMD64=ff432b68986709e6b69c563a08a2ced4232d5196b0dccd6d2e783e9d714d7d7d
+ARG TALOSCTL_SHA256_ARM64=dfd3aa33c3159810e216fc39afb685d4d120c8f2728e017d8c7f7635d3139382
+RUN arch="${TARGETARCH:-amd64}" \
+    && omni="$(case "${arch}" in arm64) echo "${OMNICTL_SHA256_ARM64}";; amd64) echo "${OMNICTL_SHA256_AMD64}";; esac)" \
+    && talos="$(case "${arch}" in arm64) echo "${TALOSCTL_SHA256_ARM64}";; amd64) echo "${TALOSCTL_SHA256_AMD64}";; esac)" \
+    && test -n "${omni}" && test -n "${talos}" \
+    && curl -fsSLo /omnictl "https://github.com/siderolabs/omni/releases/download/${OMNICTL_VERSION}/omnictl-linux-${arch}" \
+    && curl -fsSLo /talosctl "https://github.com/siderolabs/talos/releases/download/${TALOSCTL_VERSION}/talosctl-linux-${arch}" \
+    && echo "${omni}  /omnictl" | sha256sum -c - \
+    && echo "${talos}  /talosctl" | sha256sum -c - \
+    && chmod 0555 /omnictl /talosctl
+
 # prod: git for the git transport, util-linux for the workspace helpers, CA certificates for
-# TLS to GitHub and kagent, kubectl for serve-executor.
+# TLS to GitHub and kagent, kubectl, omnictl and talosctl for serve-executor.
 FROM debian:bookworm-slim AS prod
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git util-linux \
@@ -36,6 +56,7 @@ RUN apt-get update \
 RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin mainloop
 COPY --from=build /out/mainloop /usr/local/bin/mainloop
 COPY --from=kubectl /kubectl /usr/local/bin/kubectl
+COPY --from=sidero /omnictl /talosctl /usr/local/bin/
 USER 1000:1000
 EXPOSE 8000 8002 8003 8004
 ENTRYPOINT ["/usr/local/bin/mainloop"]

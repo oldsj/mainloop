@@ -58,9 +58,17 @@ func serveExecutor(ctx context.Context, log *slog.Logger) error {
 		svc.Kube = privileged.NewKubeActions(clients)
 		svc.Kubectl = privileged.ExecKubectl{Clients: clients, Dir: os.TempDir()}
 	}
+	if cfg.Omni {
+		key, err := privileged.DecodeOmniKey(cfg.OmniKey.Reveal())
+		if err != nil {
+			return fmt.Errorf("executor: MAINLOOP_EXECUTOR_OMNI_KEY: %w", err)
+		}
+		svc.Sidero = privileged.ExecSidero{Endpoint: cfg.OmniEndpoint, Key: key, Clusters: cfg.OmniClusters, Dir: os.TempDir()}
+		svc.OmniClusters = cfg.OmniClusters
+	}
 	r := &privileged.Runner{Service: svc}
 	log.Info("executor ready", "types", privileged.TypesFor(true), "secret_namespaces", cfg.SecretNamespaces,
-		"kubernetes", bool(cfg.Kubernetes), "namespace", cfg.Namespace)
+		"kubernetes", bool(cfg.Kubernetes), "namespace", cfg.Namespace, "omni", bool(cfg.Omni), "omni_clusters", cfg.OmniClusters)
 	t := time.NewTicker(executorEvery)
 	defer t.Stop()
 	for {

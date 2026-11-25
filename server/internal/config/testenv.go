@@ -16,3 +16,10 @@ func TestChrome() string { return os.Getenv("MAINLOOP_TEST_CHROME") }
 // TestKubectl is the kubectl binary command.kubectl's tests run, the one the prod image pins; CI
 // installs it. Empty means kubectl on PATH, when it is that release.
 func TestKubectl() string { return os.Getenv("MAINLOOP_TEST_KUBECTL") }
+
+// TestOmnictl and TestTalosctl are the omnictl and talosctl binaries command.omnictl's and
+// command.talosctl's tests run, the releases the prod image pins; CI installs them. Empty means
+// the tool on PATH, when it is that release.
+func TestOmnictl() string { return os.Getenv("MAINLOOP_TEST_OMNICTL") }
+
+func TestTalosctl() string { return os.Getenv("MAINLOOP_TEST_TALOSCTL") }

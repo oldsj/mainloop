@@ -57,6 +57,8 @@ type entry struct {
 	executor bool
 	// kube types also need the executor's Kubernetes access (executor.kubernetes in the chart).
 	kube bool
+	// omni types need the executor's Omni access (executor.omni in the chart).
+	omni bool
 	// how is the card's line on what Approve does and through which credential.
 	how string
 	// normalize validates raw arguments and returns their canonical value.
@@ -107,7 +109,18 @@ var catalog = map[string]entry{
 			"kubectl never holds the credential: the executor's proxy does, and refuses its own namespace, Secrets, impersonation and admission policies.",
 		normalize: normalizeKubectl, preflight: preflightKubectl,
 	},
+	TypeOmnictl: {
+		version: 1, expiry: UndecidedExpiry, expiryFor: sideroExpiry(ToolOmnictl), executor: true, omni: true, how: sideroHow,
+		normalize: normalizeSidero(ToolOmnictl), preflight: preflightSidero(ToolOmnictl),
+	},
+	TypeTalosctl: {
+		version: 1, expiry: UndecidedExpiry, expiryFor: sideroExpiry(ToolTalosctl), executor: true, omni: true, how: sideroHow,
+		normalize: normalizeSidero(ToolTalosctl), preflight: preflightSidero(ToolTalosctl),
+	},
 }
+
+const sideroHow = "Approve runs exactly this command once, through Mainloop's executor, as its Omni service account (role Admin). " +
+	"The tool never holds that key: the executor's proxy signs each request, and refuses secrets, credential minting and other clusters."
 
 // TypesFor lists the types one process runs, sorted: the executor's, or serve-api's.
 func TypesFor(executor bool) []string {

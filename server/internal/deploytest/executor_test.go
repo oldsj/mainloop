@@ -97,6 +97,40 @@ func TestExecutor(t *testing.T) {
 	}
 }
 
+// With executor.omni, serve-api accepts the Sidero types and the executor gets Omni's endpoint, the
+// clusters talosctl may target, and its Omni key from a Secret; it gets no Kubernetes access.
+func TestExecutorOmni(t *testing.T) {
+	if v := render(t, "production-executor").configMaps["mainloop-config"].Data["MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED"]; v != "false" {
+		t.Errorf("the Sidero types are on without executor.omni: %q", v)
+	}
+	r := render(t, "production-executor-omni")
+	if v := r.configMaps["mainloop-config"].Data["MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED"]; v != "true" {
+		t.Errorf("serve-api's flag = %q", v)
+	}
+	env := envByName(r.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])
+	key := env["MAINLOOP_EXECUTOR_OMNI_KEY"].ValueFrom
+	if env["MAINLOOP_EXECUTOR_OMNI_ENABLED"].Value != "true" || env["MAINLOOP_EXECUTOR_OMNI_ENDPOINT"].Value != "https://omni.example.com" ||
+		env["MAINLOOP_EXECUTOR_OMNI_CLUSTERS"].Value != "internal-01,lab-02" || env["MAINLOOP_EXECUTOR_OMNI_KEY"].Value != "" ||
+		key == nil || key.SecretKeyRef == nil || key.SecretKeyRef.Name != "mainloop-executor-omni" || key.SecretKeyRef.Key != "service-account-key" {
+		t.Errorf("executor env = %+v", env)
+	}
+	if _, ok := env["MAINLOOP_EXECUTOR_KUBERNETES_ENABLED"]; ok || r.accounts["mainloop-executor-admin"].Name != "" {
+		t.Error("executor.omni renders Kubernetes access")
+	}
+
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm is not installed")
+	}
+	out, err := exec.CommandContext(t.Context(), helm, "template", "mainloop", chart, "--namespace", "mainloop",
+		"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true",
+		"--set", "executor.namespace=mainloop-executor", "--set", "executor.omni.enabled=true",
+		"--set", "executor.omni.endpoint=http://omni.example.com").CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "executor.omni.endpoint must be Omni's https URL") {
+		t.Errorf("an http endpoint renders: %v\n%s", err, out)
+	}
+}
+
 // With executor.kubernetes, the executor's own account may only mint tokens for three narrow
 // accounts; none runs a pod. The workloads account may patch workloads and nothing holding a
 // Secret. The delete and writer accounts are the only cluster-wide grants over every resource,
