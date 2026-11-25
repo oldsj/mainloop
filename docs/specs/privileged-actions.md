@@ -17,6 +17,9 @@ sends the requesting session one message with the outcome.
   `serve-executor` through a proxy of its own that holds its Omni service account.
 - Slice 3, third part: the approved command `command.ssh` to a named home-network host, run by
   `serve-executor` with its own key for that host.
+- [Signed approvals](#signed-approvals): Approve from the iPhone app, signed with the phone's Touch
+  ID approval key, checked by `serve-api` and again by `serve-executor` against keys pinned in its
+  own configuration. Tested with software keys; not yet proven on a phone.
 
 The UniFi types are a later part. They are not described here.
 
@@ -443,9 +446,10 @@ The card is a Needs-you `approval` item with high priority, so it gets an ntfy p
 
 ## Decision
 
-The web app sends `Approve` with `metadata.reviewed_context` set to the card's digest. An Approve
-from a registered phone is refused (`403`) until approvals are signed with the phone's Touch ID key
-([devices](devices.md)); the phone may still deny. A sweep records the decision:
+The web app sends `Approve` with `metadata.reviewed_context` set to the card's digest. The iPhone
+app sends the same with a Touch ID signature, and `serve-api` refuses (`403`) a phone's Approve
+without a valid one; see [Signed approvals](#signed-approvals). Either may deny. A sweep records
+the decision:
 
 - An **Approve** whose `reviewed_context` equals the digest, sent before expiry, approves the
   action.
@@ -644,9 +648,107 @@ The split of work:
 An executor type that nobody preflights within 10 minutes ends `preflight_failed`, with a note
 that the executor may be down.
 
-`serve-api`'s own database role can still write every column. A compromised `serve-api` could
-therefore forge an approval for an executor type. Binding approvals to the owner's passkey (a
-later slice) closes that gap.
+`serve-api`'s own database role can still write every column. Without pinned approval keys, a
+compromised `serve-api` could therefore forge an approval for an executor type. With them, the
+executor runs only what a pinned phone signed; see [Signed approvals](#signed-approvals).
+
+## Signed approvals
+
+A phone approves with its **approval key** ([devices](devices.md#the-approval-key)), whose every
+signature asks for Touch ID.
+
+**The token.** The app's Approve carries `metadata.approval`, a compact JWS:
+
+| Part         | Value                                                                       |
+| ------------ | --------------------------------------------------------------------------- |
+| header `alg` | `ES256`                                                                     |
+| header `typ` | `mainloop-approval+jwt`                                                     |
+| header `kid` | the device id                                                               |
+| `iss`, `sub` | `mainloop-device`, the device id                                            |
+| `aud`        | the instance's origin, as for [request tokens](devices.md#signed-requests)  |
+| `iat`, `exp` | required; `exp` after `iat` and at most 5 minutes after it (the app uses 2) |
+| `jti`        | 16 to 128 characters                                                        |
+| `act`        | the action id, as the phone read it from the action's canonical record      |
+| `dig`        | the digest, which the phone computed from that record                       |
+
+**What the phone signs.** The digest is the SHA-256 of the action's **canonical record**: the
+canonical JSON of the type and its version, the arguments, the frozen facts, the requester, the
+action id, the expiry and the catalog version (sorted keys, numbers as written, no HTML escaping).
+`GET /privileged-actions/{id}` returns those exact bytes as `canonical_record`. The phone never
+takes the card's word for what it approves:
+
+- it hashes the record itself, and refuses unless that is the card's digest and the record names
+  the card's action id and type;
+- its approval sheet shows only what it parsed from the record: the type, every argument, every
+  frozen fact, who asked, the expiry, the action id and the digest, with hidden characters made
+  visible ([iPhone app](ios-app.md));
+- it signs that digest and that action id.
+
+The executor runs an action only when the record it computes from the stored row has the signed
+digest, so a `serve-api` that shows one action and serves another's id or digest gets a token for
+what it showed, which the executor refuses for anything else. A test vector written by the Go
+server (`server/internal/privileged/testdata/canonical-record.json`) is hashed by the app's tests
+to the same digest.
+
+**In `serve-api`**, in the transaction of the answer, an Approve of a privileged card from a phone
+is refused (`403`) unless:
+
+- it carries a token, signed by the calling phone's own approval key (a phone registered without
+  one is told to sign out and in again);
+- the token is for this instance, current (30 seconds of leeway), and names this card's action id
+  and digest;
+- its `jti` was never used: the token is recorded in `privileged_approvals`, one per action, and a
+  `jti` approves one action, ever.
+
+An approval token with an answer from the web app is refused.
+
+**Pinning.** The owner pins phones' approval keys in the chart's `executor.approvalKeys.pinned`:
+each entry is the public JWK that Settings › Devices shows, with the device id as `kid`. The chart
+gives the same value, `MAINLOOP_PRIVILEGED_APPROVAL_KEYS`, to `serve-api` and `serve-executor`, and
+each refuses to start if it is malformed.
+
+`executor.approvalKeys.required` (`MAINLOOP_PRIVILEGED_APPROVAL_KEYS_REQUIRED`, in both processes)
+makes this fail closed: the chart refuses to render, and either process refuses to start, with no
+key pinned, so a values change that drops the keys can't quietly go back to unsigned approvals.
+With any key pinned, or required:
+
+- `serve-api` takes an Approve of an executor type only from a phone whose key is pinned, signed
+  with it. The web app's Approve of an executor type is refused ("approve this on your iPhone").
+  Types `serve-api` runs itself, such as a merge, can still be approved from the web app.
+- `serve-executor` checks, before an action's first step and against its pinned keys only, never
+  the database's:
+  1. A recorded token exists and a pinned key verifies it for its `kid`.
+  2. Its `act` is the action's id and its `dig` the digest just recomputed from the stored row,
+     which must also equal the approved digest. A row changed under the same id, however its
+     digest was rewritten, no longer matches.
+  3. Its `jti` is recorded in the executor's own table, `executor_approval_uses`, for this action.
+     A `jti` used for another action is refused.
+  4. Every use is bounded by the token's signed `iat`, which `serve-api` can't change, not by the
+     executor's record, which it could. A first use more than 15 minutes after `iat` is refused.
+     A retry of the same action, which finds its own record, is refused more than 77 minutes after
+     `iat`: the 15 minutes, then every attempt at its longest deadline (the remote calls' 90
+     seconds and a command's longest timeout, 10 minutes), the 30-second delays between them and
+     one 2-minute lease after a crash. A retry later than that needs a new approval.
+
+  A refusal before any attempt ran fails the action with the reason, and nothing runs. A retry
+  refused for its age ends **uncertain**, as an earlier attempt may have acted, and is raised to
+  the owner.
+
+With no key pinned and not required, an executor type is approved as before, from the web app or a
+phone's signed Approve, and both processes log `UNSIGNED PRIVILEGED APPROVALS` as a warning at
+every start.
+
+**Limits.**
+
+- `serve-api`'s role owns the schema and could delete the executor's records, turn the row
+  triggers off, or reset a finished action to approved. A token still approves only its own
+  action and digest, and only until 77 minutes after the owner's Touch ID. Within that time such a
+  reset could make the same action run again, which each type's observe-first step mostly absorbs
+  (see [Execution](#execution)); after it, the action ends uncertain without running.
+- The executor doesn't check the token's `aud`: it has no origin of its own. Action ids are unique
+  to an instance and inside the digest, so a token from another instance names no action here.
+- Preflight runs before any approval, so a compromised `serve-api` can still request actions and
+  read their frozen facts. Signed approvals bound what runs, not what preflight reads.
 
 ## Audit
 

@@ -147,6 +147,12 @@ func toAPI(r dbq.OwnerDevice, currentID string, push map[string]dbq.DevicePushTo
 		Id: r.ID, Name: r.Name, Platform: api.DevicePlatform(r.Platform), KeyThumbprint: r.KeyThumbprint,
 		CreatedAt: r.CreatedAt, LastSeenAt: r.LastSeenAt, RevokedAt: r.RevokedAt, Current: r.ID == currentID,
 	}
+	if r.ApprovalKeyX != nil && r.ApprovalKeyY != nil && r.ApprovalKeyThumbprint != nil {
+		d.ApprovalKey = &api.DeviceApprovalKey{
+			Thumbprint: *r.ApprovalKeyThumbprint,
+			Jwk:        api.DeviceKey{Kty: api.EC, Crv: api.P256, X: *r.ApprovalKeyX, Y: *r.ApprovalKeyY},
+		}
+	}
 	if t, ok := push[r.ID]; ok {
 		// The token itself never leaves the server.
 		d.Push = &api.DevicePush{Environment: api.APNsEnvironment(t.Environment), UpdatedAt: t.UpdatedAt, InvalidAt: t.InvalidAt}
@@ -218,6 +224,19 @@ func (a *DevicesAPI) RegisterDevice(ctx context.Context, r api.RegisterDeviceReq
 	if subtle.ConstantTimeCompare([]byte(thumb), []byte(p.Nonce)) != 1 {
 		return api.RegisterDevice403JSONResponse{Detail: "The sign-in was not made for this key"}, nil
 	}
+	// The approval key signs approvals of privileged actions behind Touch ID. It comes with the
+	// registration or never, so the owner's Keep on the registration item covers it too.
+	var approvalX, approvalY, approvalThumb *string
+	if k := body.ApprovalKey; k != nil {
+		if _, err := PublicKey(k.X, k.Y); err != nil {
+			return nil, apierr.Invalid("approval_key: " + err.Error())
+		}
+		t := Thumbprint(k.X, k.Y)
+		if t == thumb {
+			return nil, apierr.Invalid("approval_key must differ from request_key")
+		}
+		approvalX, approvalY, approvalThumb = &k.X, &k.Y, &t
+	}
 	id, err := newID()
 	if err != nil {
 		return nil, err
@@ -233,6 +252,7 @@ func (a *DevicesAPI) RegisterDevice(ctx context.Context, r api.RegisterDeviceReq
 			ID: id, OwnerID: a.OwnerID, Name: name, Platform: string(body.Platform),
 			RequestKeyX: body.RequestKey.X, RequestKeyY: body.RequestKey.Y, KeyThumbprint: thumb,
 			RegisteredBy: p.Name, RegistrationJti: jti, RegistrationAuthTime: p.AuthTime,
+			ApprovalKeyX: approvalX, ApprovalKeyY: approvalY, ApprovalKeyThumbprint: approvalThumb,
 		})
 		if err != nil {
 			return nil, err
@@ -241,7 +261,7 @@ func (a *DevicesAPI) RegisterDevice(ctx context.Context, r api.RegisterDeviceReq
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		// A key, and a sign-in, registers once, ever: a phone that signs out makes a new key.
-		return api.RegisterDevice409JSONResponse{Detail: "This request key or sign-in is already registered"}, nil
+		return api.RegisterDevice409JSONResponse{Detail: "This key or sign-in is already registered"}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -252,11 +272,15 @@ func (a *DevicesAPI) RegisterDevice(ctx context.Context, r api.RegisterDeviceReq
 // registrationItem tells the owner a device was registered, so one they didn't register is seen
 // and revoked: the request key outlives the sign-in that registered it.
 func registrationItem(r dbq.OwnerDevice) attention.NewQueueItem {
+	keys := "key " + r.KeyThumbprint[:16]
+	if r.ApprovalKeyThumbprint != nil {
+		keys += " · Touch ID approval key " + (*r.ApprovalKeyThumbprint)[:16]
+	}
 	content := fmt.Sprintf("A device named %q was registered at %s, with a Pocket ID sign-in of %s.\n\n"+
-		"Device %s · key %s\n\n"+
-		"If you didn't register it, answer Revoke: its key stops working at once. Keep closes this. "+
+		"Device %s · %s\n\n"+
+		"If you didn't register it, answer Revoke: its keys stop working at once. Keep closes this. "+
 		"Answer from the web app: a device can't answer this.",
-		r.Name, r.CreatedAt.UTC().Format(time.RFC1123), r.RegisteredBy, r.ID, r.KeyThumbprint[:16])
+		r.Name, r.CreatedAt.UTC().Format(time.RFC1123), r.RegisteredBy, r.ID, keys)
 	return attention.NewQueueItem{
 		ID: RegistrationItemPrefix + r.ID, ItemType: api.QueueItemTypeQuestion, Priority: api.QueueItemPriorityHigh,
 		Title: "New device registered: " + r.Name, Content: content, Needed: "New device " + r.Name + ": keep or revoke?",

@@ -2259,6 +2259,8 @@ export interface components {
         [key: string]: unknown;
       } | null;
       digest: string | null;
+      /** @description The canonical JSON the digest is the SHA-256 of: the type and its version, the arguments, the frozen facts, the requester, the action id, the expiry and the catalog version. A phone hashes these bytes itself and shows what it parsed from them before it signs an approval. Null before the facts are frozen. */
+      canonical_record: string | null;
       result: {
         [key: string]: unknown;
       } | null;
@@ -2266,6 +2268,14 @@ export interface components {
       /** @enum {string} */
       delivery_state: 'none' | 'pending' | 'delivered' | 'undeliverable';
       events: components['schemas']['PrivilegedActionEvent'][];
+      /** @description The device signature the approval carried; null for an approval from the web app, or none. */
+      approval: components['schemas']['PrivilegedActionApproval'] | null;
+    };
+    /** @description An approval signed with a device's Touch ID approval key. */
+    PrivilegedActionApproval: {
+      device_id: string;
+      /** Format: date-time */
+      signed_at: string;
     };
     /** PrivilegedActionEvent */
     PrivilegedActionEvent: {
@@ -4819,6 +4829,14 @@ export interface components {
       current: boolean;
       /** @description The device's APNs token, if it set one. Null when it has none. */
       push: components['schemas']['DevicePush'] | null;
+      /** @description The device's Touch ID approval key, registered with the device; null for a device registered without one. Public: the owner pins it in the executor's configuration. */
+      approval_key: components['schemas']['DeviceApprovalKey'] | null;
+    };
+    /** @description A device's approval key, which signs approvals of privileged actions behind Touch ID. */
+    DeviceApprovalKey: {
+      /** @description RFC 7638 SHA-256 thumbprint of the key, unpadded base64url. */
+      thumbprint: string;
+      jwk: components['schemas']['DeviceKey'];
     };
     /** @description A device's APNs token, without the token itself. */
     DevicePush: {
@@ -4852,6 +4870,8 @@ export interface components {
       /** @enum {string} */
       platform: 'ios';
       request_key: components['schemas']['DeviceKey'];
+      /** @description A second key, which signs approvals of privileged actions and needs Touch ID for each signature. Optional; it must differ from the request key and can't be added later. */
+      approval_key?: components['schemas']['DeviceKey'];
     };
     DevloopLease: {
       /** @enum {string} */

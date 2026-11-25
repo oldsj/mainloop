@@ -12,6 +12,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+
+	"github.com/oldsj/mainloop/server/internal/approval"
 )
 
 // serve-executor is off by default. On, it is one replica replaced rather than rolled, in its own
@@ -331,6 +333,49 @@ func TestExecutorSecretNamespacesRefuseItsOwn(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "executor.secretNamespaces must not hold the executor's or the release's namespace ("+ns+")") {
 			t.Errorf("%s: err = %v\n%s", ns, err, out)
+		}
+	}
+}
+
+// Given approval keys pinned in the chart, serve-api (through the shared config) and
+// serve-executor get the same value, which the binary parses; without any, neither has it.
+func TestPinnedApprovalKeysReachBothProcesses(t *testing.T) {
+	r := render(t, "production-executor-approvals")
+	api := r.configMaps["mainloop-config"].Data["MAINLOOP_PRIVILEGED_APPROVAL_KEYS"]
+	ex := envByName(r.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])["MAINLOOP_PRIVILEGED_APPROVAL_KEYS"].Value
+	if api == "" || api != ex {
+		t.Fatalf("serve-api %q, serve-executor %q", api, ex)
+	}
+	pinned, err := approval.ParsePinned(ex)
+	if err != nil || len(pinned) != 1 || pinned["dev_0123456789abcdefghijklmnop"] == nil {
+		t.Fatalf("ParsePinned = %v, %v", pinned, err)
+	}
+	const required = "MAINLOOP_PRIVILEGED_APPROVAL_KEYS_REQUIRED"
+	if api, ex := r.configMaps["mainloop-config"].Data[required], envByName(r.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])[required].Value; api != "true" || ex != "true" {
+		t.Errorf("required: serve-api %q, serve-executor %q", api, ex)
+	}
+
+	r = render(t, "production-executor")
+	for _, key := range []string{"MAINLOOP_PRIVILEGED_APPROVAL_KEYS", required} {
+		if v, ok := r.configMaps["mainloop-config"].Data[key]; ok {
+			t.Errorf("serve-api has %s=%q", key, v)
+		}
+		if v, ok := envByName(r.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])[key]; ok {
+			t.Errorf("serve-executor has %s=%+v", key, v)
+		}
+	}
+
+	// Required with nothing pinned fails closed: the chart doesn't render.
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm is not installed")
+	}
+	for _, set := range []string{"executor.approvalKeys.required=true", "executor.approvalKeys.required=true,executor.approvalKeys.pinned=null"} {
+		out, err := exec.CommandContext(t.Context(), helm, "template", "mainloop", chart, "--namespace", "mainloop",
+			"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true",
+			"--set", "executor.namespace=mainloop-executor", "--set", set).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "executor.approvalKeys.required needs a key") {
+			t.Errorf("%s renders: %v\n%s", set, err, out)
 		}
 	}
 }

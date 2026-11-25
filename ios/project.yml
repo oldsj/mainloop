@@ -69,6 +69,9 @@ targets:
         MainloopOIDCClientID: $(MAINLOOP_OIDC_CLIENT_ID)
         # The APNs environment the entitlement names, sent to the server with the device token.
         MainloopAPNsEnvironment: $(MAINLOOP_APNS_ENVIRONMENT)
+        # Approvals of privileged actions are signed behind biometry. iPhone Duo uses Touch ID, which
+        # needs no string; Face ID requires one.
+        NSFaceIDUsageDescription: Mainloop asks for Face ID before it approves a privileged action.
 
   MainloopTests:
     type: bundle.unit-test

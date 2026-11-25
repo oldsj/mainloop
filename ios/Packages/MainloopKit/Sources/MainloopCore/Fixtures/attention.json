@@ -20,7 +20,7 @@
         "content": "Restart Deployment orchard/web on cluster lab.\n\nFacts: 3/3 replicas ready, image example/orchard-web:1.4.2, last restart 2026-11-20.\nRisk: Argo-managed.\n\nAgent's reason: the web pods hold a stale config after the settings change.\n\nExpires 2026-11-25 09:00 UTC.",
         "context": {
           "privileged_action_id": "pa-0001",
-          "privileged_action_digest": "3f2a9c1e7b6d4a5f8e0c2b1a9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e",
+          "privileged_action_digest": "8a6714a445634201211bad2c2b296d2d521c69bfd33488e9484ae2ced57e316e",
           "privileged_action_type": "k8s.rollout_restart"
         },
         "options": ["Approve", "Deny"],

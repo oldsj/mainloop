@@ -38,6 +38,13 @@ type Executor struct {
 	OmniKey         Secret    `env:"MAINLOOP_EXECUTOR_OMNI_KEY"`
 	OmniClusterList string    `env:"MAINLOOP_EXECUTOR_OMNI_CLUSTERS"`
 	OmniClusters    []string  `env:"-"`
+	// ApprovalKeys pins the phones' approval keys, a JSON array of P-256 JWKs with the device id
+	// as kid. With any pinned, the executor runs only actions whose approval one of them signed
+	// (docs/specs/privileged-actions.md, "Signed approvals"). Public keys, not secrets.
+	ApprovalKeys string `env:"MAINLOOP_PRIVILEGED_APPROVAL_KEYS"`
+	// ApprovalKeysRequired refuses to start without a pinned approval key, and refuses every
+	// action without a pinned key's signature.
+	ApprovalKeysRequired ExactTrue `env:"MAINLOOP_PRIVILEGED_APPROVAL_KEYS_REQUIRED"`
 	// SSH turns on command.ssh: the hosts in SSHHostList ("name=address:port,..."; addresses are
 	// IP literals), each with its credential's files (private-key, user, known-hosts) in
 	// SSHDir/<name>/.

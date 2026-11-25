@@ -6,8 +6,8 @@ server stores only the public key, so nothing in the database or its backups let
 device. Implemented in `server/internal/auth` (the verifier) and `server/internal/devices` (the
 routes and store), and in the iPhone app ([iOS app](ios-app.md)).
 
-Status: tested with software keys and fixtures, and a token signed by the app's code verifies in the
-server's tests. Not yet proven against a real phone or Pocket ID.
+Status: tested with software keys and fixtures, and a request token and an approval token signed by
+the app's code verify in the server's tests. Not yet proven against a real phone or Pocket ID.
 
 ## Registering a phone
 
@@ -20,7 +20,8 @@ server's tests. Not yet proven against a real phone or Pocket ID.
    The request's `nonce` is the new key's [RFC 7638](https://www.rfc-editor.org/rfc/rfc7638)
    thumbprint, so the ID token Pocket ID returns names the key it may register.
 3. It calls `POST /devices` with the Pocket ID ID token as `Authorization: Bearer`, a name, the
-   platform and the key's public JWK. The response's `id` (`dev_` and 26 characters) names the
+   platform, the key's public JWK and, when the phone could make one, its **approval key**'s public
+   JWK (below). The response's `id` (`dev_` and 26 characters) names the
    device from then on.
 4. The app then forgets the Pocket ID token. It keeps the device id, the origin and the key's
    Secure Enclave handle in one keychain item (this device only, never synced), and signs only for
@@ -44,7 +45,8 @@ key can be registered once, and so can a sign-in (its token's `jti` is recorded)
 `409`. A phone that signed out makes a new key and signs in again.
 
 Every registration opens a high-priority **Needs you** item, "New device registered: _name_", with
-the device id, the start of its key's thumbprint and when it was registered. The request key outlives
+the device id, the start of its key's thumbprint (and of its approval key's) and when it was
+registered. The request key outlives
 the sign-in that registered it, so a device the owner did not register must be seen. Its answers:
 
 - **Revoke** revokes the device in the same transaction as the answer, and ends its open requests.
@@ -87,12 +89,26 @@ The server:
 A verified device acts with the `owner` scope. Writes follow the [owner-write
 rule](authentication.md#owner-writes): the app sends `X-Mainloop-Client: ios` and no `Origin`.
 
-Two answers are the owner's alone until approvals are signed with a separate Touch ID key:
+A device can't answer a registration's Needs-you item (above). It approves a privileged action
+only with a signature of its approval key (below); it may answer anything else on that card, such
+as Deny, and answer other cards.
 
-- **Approve** on a privileged action's card (one whose context carries `privileged_action_digest`,
-  see [privileged actions](privileged-actions.md)) is refused from a device (`403`). A device may
-  answer anything else on that card, such as Deny, and answer other cards.
-- A registration's Needs-you item, above.
+## The approval key
+
+A phone also registers a second P-256 key in its Secure Enclave, which signs approvals of
+[privileged actions](privileged-actions.md#signed-approvals). Every signature asks for Touch ID
+(or Face ID) with the fingers enrolled when the key was made, so enrolling another one makes the
+key unusable. It needs a passcode, and a phone without one, or without enrolled biometry, registers
+without an approval key.
+
+- It comes with `POST /devices` as `approval_key` or never. It must be a P-256 point other than the
+  request key (`422`), it registers once like the request key (`409`), and it can't be added,
+  changed or removed afterwards (the same trigger refuses it). A phone registered without one signs
+  out and in again to get one.
+- The owner's **Keep** on the registration item covers both keys.
+- `GET /devices` returns its thumbprint and public JWK as `approval_key`, or `null`. The owner pins
+  that JWK in the executor's configuration; see [privileged
+  actions](privileged-actions.md#signed-approvals).
 
 Requests stay open no longer than their device: revoking a device ends its open streams (the event
 stream and a live session) in the process that revoked it at once, and in other replicas within 15
@@ -113,7 +129,9 @@ brought back, and a device's key and identity can't change (a database trigger r
 
 The web app's Settings has a **Devices** section that lists every device, revoked ones included:
 its name, platform, when it was registered and last seen (or never), its id and the start of its
-key's thumbprint, and **Active** or **Revoked** with the date. An active device has **Revoke**,
+key's thumbprint (and of its approval key's, or "no approval key"), and **Active** or **Revoked**
+with the date. An active device with an approval key has **Pin its approval key for the
+executor**, which shows the entry to add to the chart's `executor.approvalKeys.pinned`. An active device has **Revoke**,
 which asks for confirmation, then reads the list again. A device the owner did not register can be
 seen and stopped there. An active device's facts also say whether it gets notifications: **on**,
 **off** (it set no APNs token), or **stopped** when Apple refused its token. The token itself is
@@ -127,7 +145,3 @@ a request without its cookie through the browser login. When it lands, native re
 bearer. That needs either a JWT provider for `mainloop-device` with the device keys as a key set, or
 a route for the app that the login does not cover. `serve-api` verifies every device token itself
 either way. Until then the app reaches the API directly.
-
-## Not built yet
-
-- The separate Touch ID approval key for privileged actions (next slice).

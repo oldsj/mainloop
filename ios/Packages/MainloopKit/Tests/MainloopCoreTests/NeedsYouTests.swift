@@ -1,7 +1,35 @@
+import CryptoKit
 import Foundation
 import MainloopAPI
 @testable import MainloopCore
 import Testing
+
+/// A privileged card like the fixture's first, with the given context.
+func privilegedItem(_ context: [String: String]) throws -> NeedsYouItem {
+    let base = try Fixtures.attention().items.map(NeedsYouItem.init)[0]
+    return NeedsYouItem(
+        id: base.id, kind: base.kind, title: base.title, needed: base.needed, content: nil,
+        options: ["Approve", "Deny"], taskID: nil, queueItemID: base.queueItemID, createdAt: nil, expiresAt: nil,
+        privileged: PrivilegedCard(context: context)
+    )
+}
+
+/// An approver with a software key, or one whose prompt the owner cancels.
+struct TestApprover: Approver {
+    var canApprove = true
+    var fails: (any Error)?
+    let signer = SoftwareSigner()
+
+    func approval(actionID: String, digest: String, reason: String) async throws -> String {
+        if let fails { throw fails }
+        return try await ApprovalToken.make(
+            deviceID: deviceID, audience: "https://mainloop.example.test", actionID: actionID, digest: digest,
+            signer: signer, reason: reason
+        )
+    }
+}
+
+let fixtureDigest = "8a6714a445634201211bad2c2b296d2d521c69bfd33488e9484ae2ced57e316e"
 
 @Suite struct FixtureContractTests {
     @Test func attentionFixtureDecodesWithTheGeneratedTypes() throws {
@@ -33,7 +61,7 @@ import Testing
         let card = try #require(item.privileged)
         #expect(card.actionID == "pa-0001")
         #expect(card.type == "k8s.rollout_restart")
-        #expect(card.digestPrefix == "3f2a9c1e7b6d4a5f")
+        #expect(card.digestPrefix == "8a6714a445634201")
         #expect(item.isAnswerable)
     }
 
@@ -98,6 +126,38 @@ import Testing
         }
     }
 
+    @Test func aSignedApproveCarriesTheDigestAndTheApproval() throws {
+        let item = try items()[0]
+        let body = try AnswerBody.make(for: item, answer: .signedApprove(token: "header.claims.signature", digest: fixtureDigest))
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(body)) as! [String: Any]
+        #expect(json["response"] as? String == "Approve")
+        let metadata = try #require(json["metadata"] as? [String: String])
+        #expect(metadata == ["reviewed_context": fixtureDigest, "approval": "header.claims.signature"])
+    }
+
+    @Test(arguments: [
+        ["privileged_action_id": "pa-9"],
+        ["privileged_action_id": "pa-9", "privileged_action_digest": "abc"],
+        ["privileged_action_digest": String(repeating: "a", count: 64)],
+    ] as [[String: String]])
+    func aSignedApproveNeedsWellFormedFacts(_ context: [String: String]) throws {
+        #expect(throws: AnswerError.notApprovable) {
+            try AnswerBody.make(for: privilegedItem(context), answer: .signedApprove(token: "t", digest: fixtureDigest))
+        }
+    }
+
+    @Test func aSignedApproveMustSignTheCardsDigest() throws {
+        #expect(throws: AnswerError.notApprovable) {
+            try AnswerBody.make(for: items()[0], answer: .signedApprove(token: "t", digest: String(repeating: "b", count: 64)))
+        }
+    }
+
+    @Test func aSignedApproveIsOnlyForPrivilegedCards() throws {
+        #expect(throws: AnswerError.notApprovable) {
+            try AnswerBody.make(for: items()[2], answer: .signedApprove(token: "t", digest: fixtureDigest))
+        }
+    }
+
     @Test func ordinaryCardsMayBeApproved() throws {
         let merge = try items()[2]
         #expect(try AnswerBody.make(for: merge, answer: .text("Approve")).response == "Approve")
@@ -140,6 +200,57 @@ import Testing
         await model.answer(item, with: .option(Answer.approve))
         #expect(model.items.count == 4)
         #expect(model.lastError?.contains("signed approval") == true)
+    }
+
+    @Test func approveIsOfferedOnlyWithAnApprovalKeyAndWellFormedFacts() async throws {
+        let privileged = try Fixtures.attention().items.map(NeedsYouItem.init)[0]
+        #expect(NeedsYouModel(source: try FixtureSource(), approver: TestApprover()).offersSignedApprove(privileged))
+        // Registered before approval keys, or signed out.
+        #expect(!NeedsYouModel(source: try FixtureSource(), approver: TestApprover(canApprove: false)).offersSignedApprove(privileged))
+        #expect(!NeedsYouModel(source: try FixtureSource()).offersSignedApprove(privileged))
+        // Malformed facts.
+        let model = NeedsYouModel(source: try FixtureSource(), approver: TestApprover())
+        #expect(!model.offersSignedApprove(try privilegedItem(["privileged_action_id": "pa-9", "privileged_action_digest": "abc"])))
+        #expect(!model.offersSignedApprove(try privilegedItem(["privileged_action_type": "k8s.delete"])))
+        // Ordinary cards answer with their options.
+        #expect(!model.offersSignedApprove(try Fixtures.attention().items.map(NeedsYouItem.init)[2]))
+    }
+
+    @Test func approvingSignsAndRemovesTheCard() async throws {
+        let model = NeedsYouModel(source: try FixtureSource(), approver: TestApprover())
+        await model.load()
+        let item = try #require(model.items.first)
+        await model.reviewAndConfirm(item)
+        #expect(model.items.map(\.id) == ["attn-0002", "attn-0003", "attn-0004"])
+        #expect(model.lastError == nil)
+    }
+
+    @Test func aCancelledPromptSendsNothingAndSaysNothing() async throws {
+        let model = NeedsYouModel(source: try FixtureSource(), approver: TestApprover(fails: ApprovalSigningError.cancelled))
+        await model.load()
+        let item = try #require(model.items.first)
+        await model.reviewAndConfirm(item)
+        #expect(model.items.count == 4)
+        #expect(model.lastError == nil)
+        #expect(model.answering.isEmpty)
+    }
+
+    @Test func anUnrecognisedFingerSendsNothing() async throws {
+        let model = NeedsYouModel(source: try FixtureSource(), approver: TestApprover(fails: ApprovalSigningError.notRecognised))
+        await model.load()
+        await model.reviewAndConfirm(try #require(model.items.first))
+        #expect(model.items.count == 4)
+        #expect(model.lastError?.contains("Nothing was sent") == true)
+    }
+
+    @Test func typedApproveIsStillRefusedWithAnApprovalKey() async throws {
+        let model = NeedsYouModel(source: try FixtureSource(), approver: TestApprover())
+        await model.load()
+        let item = try #require(model.items.first)
+        await model.answer(item, with: .text("approve"))
+        await model.answer(item, with: .option(Answer.approve))
+        #expect(model.items.count == 4)
+        #expect(model.lastError != nil)
     }
 
     @Test func sessionsListLiveAndNeedsOwnerFirstWithoutArchived() async throws {
@@ -195,4 +306,164 @@ final class Counter: @unchecked Sendable {
     private let lock = NSLock()
     private var value = 0
     func next() -> Int { lock.withLock { value += 1; return value } }
+}
+
+extension NeedsYouModel {
+    /// Approve as the sheet does it: review the record, then confirm what it showed.
+    func reviewAndConfirm(_ item: NeedsYouItem) async {
+        await review(item)
+        if let reviewing { await confirm(reviewing) }
+    }
+}
+
+/// `GET /privileged-actions/{id}`'s answer, with `record` as its canonical record.
+func actionDetailJSON(_ record: String) throws -> String {
+    let detail: [String: Any] = [
+        "action": [
+            "id": "pa-0001", "type": "k8s.rollout_restart", "state": "pending_approval", "title": "Restart web",
+            "requester_role": "worker", "requester_session_id": "sess-0001", "requester_task_id": "task-0001",
+            "reason": "A fictional reason.", "created_at": "2026-11-24T23:00:00Z", "expires_at": "2026-11-24T23:30:00Z",
+            "decided_at": NSNull(), "finished_at": NSNull(), "decision_note": NSNull(), "last_error": NSNull(),
+        ] as [String: Any],
+        "body": "A card the server could have written to say anything.", "args": [:] as [String: Any],
+        "frozen_facts": NSNull(), "digest": NSNull(), "canonical_record": record, "result": NSNull(), "attempts": 0,
+        "delivery_state": "none", "events": [] as [Any], "approval": NSNull(),
+    ]
+    return String(decoding: try JSONSerialization.data(withJSONObject: detail), as: UTF8.self)
+}
+
+@MainActor @Suite struct ReviewTests {
+    @Test func theSheetShowsTheRecordThePhoneHashed() async throws {
+        let model = NeedsYouModel(source: try FixtureSource(), approver: TestApprover())
+        await model.load()
+        let item = try #require(model.items.first)
+        await model.review(item)
+        let review = try #require(model.reviewing)
+        #expect(review.record.digest == fixtureDigest)
+        #expect(review.record.type == "k8s.rollout_restart")
+        #expect(review.record.args.map(\.label) == ["kind", "name", "namespace"])
+        #expect(review.record.args.first { $0.label == "namespace" }?.value == "shop")
+        // A bidi override is shown, never applied.
+        let note = try #require(review.record.facts.first { $0.label == "note" }?.value)
+        #expect(note.contains("⟨U+202E⟩evil"))
+        #expect(!note.unicodeScalars.contains("\u{202E}"))
+        #expect(review.record.reason == "Approve k8s.rollout_restart (pa-0001)")
+        // Nothing is sent until the owner confirms.
+        #expect(model.items.count == 4)
+    }
+
+    @Test func aRecordThatIsNotTheCardsIsRefusedAndNothingIsSigned() async throws {
+        let (record, _) = try Fixtures.privilegedRecord()
+        let cases: [(String, ActionRecordError)] = [
+            // A server that shows a routine card but serves another action's record.
+            (record.replacingOccurrences(of: "\"web\"", with: "\"payments\""), .digestMismatch),
+        ]
+        for (served, error) in cases {
+            let transport = FakeTransport(json: #"{"status":"ok"}"#, routes: ["getPrivilegedAction": try actionDetailJSON(served)])
+            let client = MainloopAPI.client(origin: origin, middlewares: [], transport: transport)
+            let model = NeedsYouModel(source: LiveSource(client: client), approver: TestApprover())
+            await model.reviewAndConfirm(try Fixtures.attention().items.map(NeedsYouItem.init)[0])
+            #expect(model.reviewing == nil)
+            #expect(model.lastError == NeedsYouModel.describe(error))
+            #expect(await transport.sent.allSatisfy { $0.request.method == .get })
+        }
+    }
+
+    @Test func aRecordForAnotherActionWithTheCardsDigestIsRefused() throws {
+        // A card whose id the server swapped, with the digest of the real record: the record names
+        // pa-0001, the card pa-0002.
+        let card = try #require(PrivilegedCard(context: [
+            "privileged_action_id": "pa-0002", "privileged_action_digest": fixtureDigest, "privileged_action_type": "k8s.rollout_restart",
+        ]))
+        #expect(throws: ActionRecordError.otherAction) { try ActionRecord.verify(try Fixtures.privilegedRecord().record, for: card) }
+        let typed = try #require(PrivilegedCard(context: [
+            "privileged_action_id": "pa-0001", "privileged_action_digest": fixtureDigest, "privileged_action_type": "k8s.delete",
+        ]))
+        #expect(throws: ActionRecordError.otherAction) { try ActionRecord.verify(try Fixtures.privilegedRecord().record, for: typed) }
+    }
+
+    @Test func aCancelledPromptKeepsTheSheet() async throws {
+        let model = NeedsYouModel(source: try FixtureSource(), approver: TestApprover(fails: ApprovalSigningError.cancelled))
+        await model.load()
+        await model.review(try #require(model.items.first))
+        await model.confirm(try #require(model.reviewing))
+        #expect(model.reviewing != nil)
+        #expect(model.items.count == 4)
+    }
+}
+
+/// The cross-language vector: the canonical record the Go server computes
+/// (server/internal/privileged/testdata/canonical-record.json, from TestTheCanonicalRecordVector),
+/// hashed here to the same digest. The app's fixture is a copy of it.
+@Suite struct ActionRecordTests {
+    static let goVector = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().appendingPathComponent("../../../../../server/internal/privileged/testdata/canonical-record.json")
+        .standardizedFileURL
+
+    struct Vector: Decodable, Equatable { let record: String; let digest: String }
+
+    @Test func theGoDigestIsTheSwiftDigest() throws {
+        let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf: Self.goVector))
+        let card = try #require(PrivilegedCard(context: [
+            "privileged_action_id": "pa-0001", "privileged_action_digest": vector.digest, "privileged_action_type": "k8s.rollout_restart",
+        ]))
+        let record = try ActionRecord.verify(vector.record, for: card)
+        #expect(record.digest == vector.digest)
+        #expect(record.facts.first { $0.label == "ratio" }?.value == "1.5")
+        #expect(record.facts.first { $0.label == "image" }?.value == "registry.example.test/shop/web:1.50")
+    }
+
+    @Test func theAppFixtureIsTheGoVector() throws {
+        let go = try JSONDecoder().decode(Vector.self, from: Data(contentsOf: Self.goVector))
+        let (record, digest) = try Fixtures.privilegedRecord()
+        #expect(Vector(record: record, digest: digest) == go)
+    }
+
+    @Test func hiddenCharactersAreShown() {
+        #expect(ActionRecord.visible("a\u{202E}b\u{200B}c\u{2028}d\u{07}e\nf\tg") == "a⟨U+202E⟩b⟨U+200B⟩c⟨U+2028⟩d⟨U+0007⟩e\nf\tg")
+        #expect(ActionRecord.visible("café 🚀") == "café 🚀")
+    }
+}
+
+@MainActor @Suite struct LiveApprovalTests {
+    func model(_ transport: FakeTransport, approver: TestApprover) throws -> (NeedsYouModel, NeedsYouItem) {
+        let client = MainloopAPI.client(origin: origin, middlewares: [], transport: transport)
+        let item = try Fixtures.attention().items.map(NeedsYouItem.init)[0]
+        return (NeedsYouModel(source: LiveSource(client: client), approver: approver), item)
+    }
+
+    @Test func approvingSendsTheSignedApproval() async throws {
+        let transport = FakeTransport(json: #"{"status":"ok"}"#, routes: ["getPrivilegedAction": try actionDetailJSON(Fixtures.privilegedRecord().record)])
+        let approver = TestApprover()
+        let (model, item) = try model(transport, approver: approver)
+        await model.reviewAndConfirm(item)
+
+        #expect(await transport.sent.first?.request.path == "/privileged-actions/pa-0001")
+        let sent = try #require(await transport.sent.last)
+        #expect(sent.request.path == "/queue/q-0001/respond")
+        let body = try JSONSerialization.jsonObject(with: try #require(sent.body)) as! [String: Any]
+        #expect(body["response"] as? String == "Approve")
+        let metadata = try #require(body["metadata"] as? [String: String])
+        #expect(metadata["reviewed_context"] == fixtureDigest)
+        let claims = try DecodedToken(try #require(metadata["approval"]), key: approver.signer.key.publicKey).claims
+        #expect(claims["act"] as? String == "pa-0001")
+        #expect(claims["dig"] as? String == fixtureDigest)
+    }
+
+    @Test func aRefusalShowsTheServersReason() async throws {
+        let transport = FakeTransport(
+            status: .forbidden, json: #"{"detail":"This device's approval key is not pinned for this action."}"#,
+            routes: ["getPrivilegedAction": try actionDetailJSON(Fixtures.privilegedRecord().record)]
+        )
+        let (model, item) = try model(transport, approver: TestApprover())
+        await model.reviewAndConfirm(item)
+        #expect(model.lastError == "This device's approval key is not pinned for this action.")
+    }
+
+    @Test func aCancelledPromptSendsNoRequest() async throws {
+        let transport = FakeTransport(json: #"{"status":"ok"}"#, routes: ["getPrivilegedAction": try actionDetailJSON(Fixtures.privilegedRecord().record)])
+        let (model, item) = try model(transport, approver: TestApprover(fails: ApprovalSigningError.cancelled))
+        await model.reviewAndConfirm(item)
+        #expect(await transport.sent.allSatisfy { $0.request.method == .get })
+    }
 }

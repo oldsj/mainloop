@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/oldsj/mainloop/server/internal/approval"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/onepassword"
@@ -67,6 +68,13 @@ func serveExecutor(ctx context.Context, log *slog.Logger) error {
 		svc.Sidero = privileged.ExecSidero{Endpoint: cfg.OmniEndpoint, Key: key, Clusters: cfg.OmniClusters, Dir: os.TempDir()}
 		svc.OmniClusters = cfg.OmniClusters
 	}
+	if svc.ApprovalKeys, err = approval.ParsePinned(cfg.ApprovalKeys); err != nil {
+		return err
+	}
+	svc.ApprovalsRequired = bool(cfg.ApprovalKeysRequired)
+	if err := checkApprovalKeys(log, true, svc.ApprovalsRequired, svc.ApprovalKeys); err != nil {
+		return err
+	}
 	if cfg.SSH {
 		hosts := map[string]netip.AddrPort{}
 		for _, h := range cfg.SSHHosts {
@@ -78,7 +86,8 @@ func serveExecutor(ctx context.Context, log *slog.Logger) error {
 	r := &privileged.Runner{Service: svc}
 	log.Info("executor ready", "types", privileged.TypesFor(true), "secret_namespaces", cfg.SecretNamespaces,
 		"kubernetes", bool(cfg.Kubernetes), "namespace", cfg.Namespace, "omni", bool(cfg.Omni), "omni_clusters", cfg.OmniClusters,
-		"ssh_hosts", svc.SSHHosts)
+		"ssh_hosts", svc.SSHHosts,
+		"pinned_approval_keys", len(svc.ApprovalKeys), "approval_keys_required", svc.ApprovalsRequired)
 	t := time.NewTicker(executorEvery)
 	defer t.Stop()
 	for {

@@ -51,7 +51,8 @@ final class PushModel {
     /// The categories the server sets. When the owner hides previews, the lock screen shows the
     /// placeholder instead of the text.
     static let categories: Set<UNNotificationCategory> = [
-        // No actions yet: Approve and Deny on the lock screen wait for Touch ID-signed approvals.
+        // No actions: a signed Approve asks for Touch ID, which needs the app in the foreground,
+        // so cards are answered in the app.
         UNNotificationCategory(
             identifier: PushCategory.needsYou, actions: [], intentIdentifiers: [],
             hiddenPreviewsBodyPlaceholder: "Mainloop needs you", options: []

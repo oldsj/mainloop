@@ -68,6 +68,13 @@ type Config struct {
 	// PrivilegedOmniEnabled accepts command.omnictl and command.talosctl: the executor has Omni
 	// access (executor.omni in the chart).
 	PrivilegedOmniEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED"`
+	// PrivilegedApprovalKeys is the executor's pinned approval keys (the same value as
+	// serve-executor's). With any pinned, serve-api accepts an approval of an executor type only
+	// from a phone whose key is pinned, signed with it.
+	PrivilegedApprovalKeys string `env:"MAINLOOP_PRIVILEGED_APPROVAL_KEYS"`
+	// PrivilegedApprovalKeysRequired refuses to start without a pinned approval key, and takes an
+	// executor type's approval only with a pinned key's signature.
+	PrivilegedApprovalKeysRequired ExactTrue `env:"MAINLOOP_PRIVILEGED_APPROVAL_KEYS_REQUIRED"`
 	// PrivilegedSSHEnabled accepts command.ssh: the executor reaches home-network hosts over ssh
 	// (executor.ssh in the chart).
 	PrivilegedSSHEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED"`

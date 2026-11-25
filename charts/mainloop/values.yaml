@@ -339,6 +339,20 @@ executor:
     # prints it.
     # trunk-ignore(checkov/CKV_SECRET_6): the Secret's name, not a value
     keySecret: mainloop-executor-omni
+  # Touch ID-signed approvals (docs/specs/privileged-actions.md, "Signed approvals").
+  approvalKeys:
+    # Refuse to render, and both processes refuse to start, without a pinned key: set it once a
+    # phone's key is pinned, so a values change that drops the keys fails closed instead of going
+    # back to unsigned approvals.
+    required: false
+    # The phones' approval keys. Each is the public JWK Settings › Devices shows, with the device id
+    # as kid:
+    #   - {kid: dev_…, kty: EC, crv: P-256, x: …, y: …}
+    # With any pinned, the executor runs only actions whose approval one of these keys signed, and
+    # serve-api takes an approval of an executor type only from such a phone. Public keys, not
+    # secrets. With none (and not required), executor types are approved unsigned from the web
+    # app, and both processes log a warning at start.
+    pinned: []
   # command.ssh. On, the executor runs one approved command at a time on a host listed here, over
   # ssh with a client of its own that accepts only the host's pinned key. Each host's credential is
   # the Secret mainloop-executor-ssh-<name>, keys private-key (an unencrypted OpenSSH key), user

@@ -35,6 +35,14 @@ struct SettingsScreen: View {
                     case .signedIn(let deviceID):
                         LabeledContent("Device", value: deviceID)
                             .textSelection(.enabled)
+                        if let approvals = account.approvals {
+                            LabeledContent("Approvals", value: approvals)
+                        } else {
+                            LabeledContent("Approvals", value: "Not set up")
+                            Text("Sign out and in again to set up approvals. They need a passcode and Touch ID or Face ID.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                         NotificationsRow()
                         Button("Sign out", role: .destructive) {
                             Task { await account.signOut() }
@@ -46,7 +54,7 @@ struct SettingsScreen: View {
                 } header: {
                     Text("This iPhone")
                 } footer: {
-                    Text("Signing in registers a key that stays in this iPhone's Secure Enclave and signs every request. Signing out revokes it, which also stops notifications. Touch ID approvals come in a later update.")
+                    Text("Signing in registers a key that stays in this iPhone's Secure Enclave and signs every request. A second key, there too, approves privileged actions and asks for Touch ID each time. Signing out revokes the device and deletes both keys, which also stops notifications.")
                 }
                 Section("About") {
                     LabeledContent("Version", value: Bundle.main.versionString)
