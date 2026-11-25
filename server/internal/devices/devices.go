@@ -394,7 +394,8 @@ func (a *DevicesAPI) ClearDevicePush(ctx context.Context, _ api.ClearDevicePushR
 // apnsToken is an APNs device token in lower-case hex (32 bytes today; Apple may lengthen it).
 var apnsToken = regexp.MustCompile(`^[0-9a-f]{64,200}$`)
 
-// RevokeDevice implements api.StrictServerInterface. A device may revoke only itself.
+// RevokeDevice implements api.StrictServerInterface. A device may revoke only itself. Revoking
+// also clears the device's APNs token.
 func (a *DevicesAPI) RevokeDevice(ctx context.Context, r api.RevokeDeviceRequestObject) (api.RevokeDeviceResponseObject, error) {
 	if err := a.ready(); err != nil {
 		return nil, err
@@ -405,7 +406,14 @@ func (a *DevicesAPI) RevokeDevice(ctx context.Context, r api.RevokeDeviceRequest
 	if !auth.DeviceIDPattern.MatchString(r.DeviceId) {
 		return api.RevokeDevice404JSONResponse{Detail: "Device not found"}, nil
 	}
-	_, err := dbq.New(a.Pool).RevokeOwnerDevice(ctx, dbq.RevokeOwnerDeviceParams{ID: r.DeviceId, OwnerID: a.OwnerID})
+	// A revoked device gets no more push: its token goes with it (signing out is a revoke).
+	err := pgx.BeginFunc(ctx, a.Pool, func(tx pgx.Tx) error {
+		q := dbq.New(tx)
+		if _, err := q.RevokeOwnerDevice(ctx, dbq.RevokeOwnerDeviceParams{ID: r.DeviceId, OwnerID: a.OwnerID}); err != nil {
+			return err
+		}
+		return q.ClearDevicePushToken(ctx, r.DeviceId)
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return api.RevokeDevice404JSONResponse{Detail: "Device not found"}, nil
 	}

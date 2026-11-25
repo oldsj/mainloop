@@ -211,6 +211,7 @@ INSERT INTO device_push_tokens (device_id, token, environment)
 VALUES ($1, $2, $3)
 ON CONFLICT (device_id) DO UPDATE
 SET token = excluded.token, environment = excluded.environment, updated_at = now(),
+    created_at = CASE WHEN device_push_tokens.invalid_at IS NULL THEN device_push_tokens.created_at ELSE now() END,
     invalid_at = NULL, invalid_reason = NULL
 RETURNING device_id, token, environment, created_at, updated_at, invalid_at, invalid_reason
 `
@@ -221,7 +222,9 @@ type SetDevicePushTokenParams struct {
 	Environment string
 }
 
-// created_at stays: a refreshed token does not page for what is already open.
+// created_at stays while the token works: a refresh does not page for what is already open. After
+// a refusal, setting a token again counts as a new one, so it gets only what is written from now
+// on, not everything that opened while push was stopped.
 func (q *Queries) SetDevicePushToken(ctx context.Context, arg SetDevicePushTokenParams) (DevicePushToken, error) {
 	row := q.db.QueryRow(ctx, setDevicePushToken, arg.DeviceID, arg.Token, arg.Environment)
 	var i DevicePushToken

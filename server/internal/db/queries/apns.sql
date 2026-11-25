@@ -5,11 +5,14 @@
 DELETE FROM device_push_tokens WHERE token = @token AND device_id <> @device_id;
 
 -- name: SetDevicePushToken :one
--- created_at stays: a refreshed token does not page for what is already open.
+-- created_at stays while the token works: a refresh does not page for what is already open. After
+-- a refusal, setting a token again counts as a new one, so it gets only what is written from now
+-- on, not everything that opened while push was stopped.
 INSERT INTO device_push_tokens (device_id, token, environment)
 VALUES (@device_id, @token, @environment)
 ON CONFLICT (device_id) DO UPDATE
 SET token = excluded.token, environment = excluded.environment, updated_at = now(),
+    created_at = CASE WHEN device_push_tokens.invalid_at IS NULL THEN device_push_tokens.created_at ELSE now() END,
     invalid_at = NULL, invalid_reason = NULL
 RETURNING *;
 

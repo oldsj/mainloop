@@ -135,9 +135,11 @@ final class PushModel {
         Task { try? await center.setBadgeCount(count) }
     }
 
-    /// Signing out: no badge, no notifications left in Notification Center, and the next sign-in
-    /// sends the token again.
+    /// Signing out: the phone leaves APNs (a token left on the server is refused from then on, and
+    /// the revoke that signing out sends clears it there too), no badge, no notifications left in
+    /// Notification Center, and the next sign-in registers and sends a new token.
     func signedOut() async {
+        UIApplication.shared.unregisterForRemoteNotifications()
         sent = nil
         tokenInvalidAt = nil
         lastError = nil

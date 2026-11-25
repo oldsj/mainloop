@@ -12,6 +12,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/apns"
 	"github.com/oldsj/mainloop/server/internal/attention"
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/notify"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/testdb"
@@ -199,7 +200,7 @@ func TestAnApprovalReachesEachPhoneOnce(t *testing.T) {
 
 	var p struct {
 		APS struct {
-			Alert struct{ Title, Body string }
+			Alert             struct{ Title, Body string }
 			Sound             string
 			Badge             *int
 			ThreadID          string `json:"thread-id"`
@@ -272,25 +273,25 @@ func TestARefusedTokenStopsPush(t *testing.T) {
 		t.Fatalf("invalid_reason = %q", r)
 	}
 
-	// Nothing more goes to the refused token. A new one gets what is still open, including what
-	// opened while the old one was refused.
+	// Nothing more goes to the refused token. Setting a token again counts as a new one: it gets
+	// what opens from then on, not what opened while push was stopped.
 	e.approval(t, "q2")
 	e.sweep(t)
 	if d := e.deliveries(t); len(d) != 1 {
 		t.Fatalf("deliveries after refusal = %v", d)
 	}
-	e.exec(t, `UPDATE device_push_tokens SET token = $2, invalid_at = NULL, invalid_reason = NULL WHERE device_id = $1`, id, strings.Repeat("d4", 32))
+	if _, err := dbq.New(e.db.Pool).SetDevicePushToken(context.Background(), dbq.SetDevicePushTokenParams{
+		DeviceID: id, Token: strings.Repeat("d4", 32), Environment: "production",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.sweep(t)
 	e.approval(t, "q3")
 	e.sweep(t)
 	e.drain(t)
 	sent := e.sender.requests()
-	if len(sent) != 3 {
-		t.Fatalf("sent %d, want q1 then q2 and q3", len(sent))
-	}
-	for _, r := range sent[1:] {
-		if r.DeviceToken != strings.Repeat("d4", 32) {
-			t.Fatalf("sent to %s", r.DeviceToken)
-		}
+	if len(sent) != 2 || sent[1].DeviceToken != strings.Repeat("d4", 32) || !strings.Contains(string(sent[1].Payload), "queue:q3") {
+		t.Fatalf("sent = %d, want q1 then only q3", len(sent))
 	}
 }
 

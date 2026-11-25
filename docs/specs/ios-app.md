@@ -63,8 +63,8 @@ to build it.
   - **No actions** on a notification yet: Approve and Deny from the lock screen wait for Touch
     ID-signed approvals.
   - **The badge** on the app icon is the Needs-you count, set whenever the list loads or a card is
-    answered. **Sign out** clears the badge and the delivered notifications; revoking the device
-    stops its pushes on the server.
+    answered. **Sign out** unregisters from APNs and clears the badge and the delivered
+    notifications; its revoke clears the device's token on the server.
 - **Sample data.** A build whose origin is a placeholder (`*.example.test`, `*.example`) or empty
   runs on fictional fixtures. Answers and messages then change only the app's copy.
 

@@ -7,7 +7,8 @@
 
 -- A device's APNs token. One per device; a token belongs to one device (a phone that signed out and
 -- registered again moves its token to the new device). created_at is when the device first set a
--- token: notifications from before it are not sent, and a token refresh keeps it.
+-- working token: notifications from before it are not sent. A refresh keeps it; setting a token
+-- after a refusal resets it.
 CREATE TABLE device_push_tokens (
     device_id text PRIMARY KEY REFERENCES owner_devices (id) ON DELETE CASCADE,
     token text NOT NULL UNIQUE CHECK (token ~ '^[0-9a-f]{64,200}$'),

@@ -296,3 +296,19 @@ func TestLoadCredentials(t *testing.T) {
 		})
 	}
 }
+
+// A transport error names neither the URL nor the device token in it.
+func TestTransportErrorsDoNotCarryTheToken(t *testing.T) {
+	c, _, _, _ := fakeClient(t)
+	srv := httptest.NewUnstartedServer(http.NotFoundHandler())
+	srv.StartTLS()
+	srv.Close() // nothing listens there now
+	c.Hosts = map[string]string{"production": srv.URL}
+	_, err := c.Send(context.Background(), request())
+	if err == nil || errors.Is(err, apns.ErrRejected) || errors.Is(err, apns.ErrBadToken) {
+		t.Fatalf("Send = %v, want a retryable transport error", err)
+	}
+	if strings.Contains(err.Error(), token) || strings.Contains(err.Error(), srv.URL) {
+		t.Fatalf("error carries the URL: %v", err)
+	}
+}

@@ -22,8 +22,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -77,10 +77,20 @@ type Credentials struct {
 // ErrNoCredentials (the Secret does not exist yet); with some missing, or one wrong, another
 // error. Errors never quote the key.
 func LoadCredentials(dir string) (*Credentials, error) {
+	// Read through an os.Root, so the fixed names resolve inside dir only (the kubelet's
+	// ..data symlinks stay inside it).
+	root, err := os.OpenRoot(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ErrNoCredentials
+	}
+	if err != nil {
+		return nil, fmt.Errorf("apns: credentials directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
 	files := map[string][]byte{}
 	var missing []string
 	for _, name := range []string{keyFile, keyIDFile, teamIDFile} {
-		b, err := os.ReadFile(filepath.Join(dir, name))
+		b, err := root.ReadFile(name)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
 			missing = append(missing, name)
@@ -97,7 +107,6 @@ func LoadCredentials(dir string) (*Credentials, error) {
 		return nil, fmt.Errorf("apns: credentials incomplete: %s missing", strings.Join(missing, ", "))
 	}
 	pemBytes, keyID, teamID := files[keyFile], files[keyIDFile], files[teamIDFile]
-	var err error
 	c := &Credentials{KeyID: strings.TrimSpace(string(keyID)), TeamID: strings.TrimSpace(string(teamID))}
 	if !appleID.MatchString(c.KeyID) {
 		return nil, errors.New("apns: key-id must be 10 upper-case letters or digits")
@@ -227,7 +236,7 @@ func (c *Client) Send(ctx context.Context, r Request) (Result, error) {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, host+"/3/device/"+r.DeviceToken, bytes.NewReader(r.Payload))
 	if err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrRejected, err)
+		return Result{}, fmt.Errorf("%w: request: %w", ErrRejected, withoutURL(err))
 	}
 	req.Header.Set("authorization", "bearer "+tok)
 	req.Header.Set("apns-topic", c.Topic)
@@ -247,7 +256,7 @@ func (c *Client) Send(ctx context.Context, r Request) (Result, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return Result{}, fmt.Errorf("apns: %w", err)
+		return Result{}, fmt.Errorf("apns: POST /3/device/…: %w", withoutURL(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	res := Result{Status: resp.StatusCode}
@@ -261,6 +270,16 @@ func (c *Client) Send(ctx context.Context, r Request) (Result, error) {
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<10)).Decode(&body)
 	res.Reason = body.Reason
 	return res, classify(c, res)
+}
+
+// withoutURL drops the request URL from a transport error: its path is the device token, which
+// must not reach a stored detail or a log.
+func withoutURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
 }
 
 // classify turns a refusal into an error (docs: "Handling notification responses from APNs").

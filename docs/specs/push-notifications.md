@@ -87,9 +87,13 @@ the token Apple gave it, signed as its device:
 - `PUT /devices/current/push` with `{"token": "<lower-case hex>", "environment": "development" |
 "production"}`. The environment is the one the app was built for (its `aps-environment`
   entitlement), which picks Apple's host (`api.sandbox.push.apple.com` or `api.push.apple.com`).
-  The app sends it on every launch; setting a token again clears a refusal (below). A token
-  belongs to one device: setting it moves it from any other.
+  The app sends it on every launch. Setting a token after a refusal (below) clears the refusal and
+  counts as a new token: the phone gets what opens from then on, not what opened while push to it
+  was stopped. A token belongs to one device: setting it moves it from any other.
 - `DELETE /devices/current/push` stops push to the device.
+- Revoking a device clears its token. The app's sign-out is a revoke, and the app also unregisters
+  from APNs, so a token the revoke could not clear (the phone was offline) is refused by Apple
+  from then on.
 - Only a registered device sets or clears its own token: the owner's other credentials get `403`.
 
 ### What a phone gets

@@ -403,4 +403,18 @@ func TestADeviceSetsAndClearsItsPushToken(t *testing.T) {
 	if p := cur.(api.GetCurrentDevice200JSONResponse).Push; p != nil {
 		t.Fatalf("after clear = %+v", p)
 	}
+
+	// Signing out (revoking itself) takes the token with it.
+	if _, err := set(asDevice(first.Id), token, api.Production); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := a.RevokeDevice(asDevice(first.Id), api.RevokeDeviceRequestObject{DeviceId: first.Id}); err != nil || !isType[api.RevokeDevice204Response](res) {
+		t.Fatalf("revoke = %#v, %v", res, err)
+	}
+	list, _ = a.ListDevices(context.Background(), api.ListDevicesRequestObject{})
+	for _, d := range list.(api.ListDevices200JSONResponse) {
+		if d.Push != nil {
+			t.Fatalf("%s still has a push token after revocation: %+v", d.Id, d.Push)
+		}
+	}
 }
