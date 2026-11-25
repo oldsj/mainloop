@@ -416,8 +416,10 @@ with the executor's own API key.
   stay the owner's. `body` is a JSON object or array of at most 64 KiB (or its JSON text, as a
   string), for `POST`, `PUT` and `PATCH` only. Mainloop stores it as text with sorted keys and no
   spaces, and the console receives exactly those bytes.
-- A `GET` may read any other Network path. Every other method goes only to these families, and the
-  refusal lists them:
+- A `GET` may read any other Network path. Every other method goes only to the families below, and
+  the refusal lists them. The console's settings, other commands, and a device upgrade from a URL
+  stay the owner's. A body with a URL anywhere in it is refused, so no request has the console
+  fetch from one.
   - `api/s/<site>/rest/<collection>` (`POST`) and `.../rest/<collection>/<id>` (`PUT`, `DELETE`),
     for `networkconf`, `wlanconf`, `wlangroup`, `portforward`, `firewallrule`, `firewallgroup`,
     `routing`, `portconf`, `user`, `usergroup`, `device`, `tag` and `dynamicdns`;
@@ -431,8 +433,6 @@ with the executor's own API key.
   - the integration API's actions (`POST`): `.../devices/<id>/actions` (`RESTART`),
     `.../devices/<id>/interfaces/ports/<n>/actions` (`POWER_CYCLE`) and `.../clients/<id>/actions`
     (`AUTHORIZE_GUEST_ACCESS`, `UNAUTHORIZE_GUEST_ACCESS`).
-    The console's settings, other commands, and a device upgrade from a URL stay the owner's. A body
-    with a URL anywhere in it is refused, so no request has the console fetch from one.
 - A body that sets a secret field to a non-empty value is refused (`contains_secret`): a field
   named `x_...`, one whose name holds password, passphrase, secret, psk, private key, token, API
   key, auth key, credential, community (SNMP) or configuration file (a WireGuard client's), or one
