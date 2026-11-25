@@ -3,6 +3,7 @@ package tasks_test
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
@@ -107,4 +108,43 @@ func TestOwnerTasksWithoutAProjectStayRoots(t *testing.T) {
 	main := tasks.Principal{OwnerID: owner, Role: dbstate.RoleMain, BindingID: "main-1"}
 	_, err = e.create(main, ownerTask("m-1", "x"))
 	wantRefusal(t, err, 409, tasks.ReasonProjectSupervisor)
+}
+
+func TestOwnerTaskNoticeWaitsForTheSupervisorsBrief(t *testing.T) {
+	// Given a project with no standing supervisor, whose first brief is held up on its way to the
+	// supervisor's session after the attempt is already active
+	r := newRig(t)
+	gate := make(chan struct{})
+	var open sync.Once
+	release := func() { open.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	r.ses.hold, r.ses.holdIf = gate, func(text string) bool { return !strings.Contains(text, "the owner started") }
+	r.run()
+
+	// When the owner starts a task in it
+	child := r.mustCreate(r.own, ownerTask("o-1", "Read the flaky test"))
+	sup := r.str(`SELECT id FROM tasks WHERE project_id = 'p1' AND standing`)
+	r.eventually("supervisor active, brief not yet recorded", func() bool {
+		return r.count(`SELECT count(*) FROM task_attempts a JOIN tasks t ON t.current_attempt_id = a.id
+			WHERE t.id = $1 AND a.state = 'active' AND a.session_id IS NOT NULL AND a.brief_delivery_id IS NULL`, sup) == 1
+	})
+	r.eventually("notice looked at while the brief is held", func() bool {
+		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE notice_task_id = $1 AND attempts >= 3`, child) == 1
+	})
+
+	// Then the notice waits: nothing reaches the supervisor before its brief
+	if n := r.count(`SELECT count(*) FROM task_event_deliveries WHERE notice_task_id = $1 AND delivery_id IS NOT NULL`, child); n != 0 {
+		t.Fatal("the notice was sent before the supervisor's brief")
+	}
+
+	// And once the brief is recorded, the notice follows it
+	release()
+	_, session := r.attemptOf(sup)
+	r.eventually("supervisor told of the owner's task", func() bool {
+		r.finishTurns()
+		return r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '%the owner started child task%'`, session) == 1
+	})
+	if first := r.firstMessage(session); strings.Contains(first, "the owner started") {
+		t.Fatalf("the notice came before the supervisor's brief:\n%s", first)
+	}
 }

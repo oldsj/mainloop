@@ -176,6 +176,23 @@ type fakeSessions struct {
 	completed []string
 	// failed lists the session ids Fail named.
 	failed []string
+	// hold, while open, holds each SendToAs whose text holdIf accepts until it is closed.
+	hold   chan struct{}
+	holdIf func(text string) bool
+}
+
+func (f *fakeSessions) SendToAs(ctx context.Context, source sessions.Source, sessionID, messageID, text string) (sessions.Sent, error) {
+	f.mu.Lock()
+	hold, holdIf := f.hold, f.holdIf
+	f.mu.Unlock()
+	if hold != nil && holdIf(text) {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return sessions.Sent{}, ctx.Err()
+		}
+	}
+	return f.Service.SendToAs(ctx, source, sessionID, messageID, text)
 }
 
 func (f *fakeSessions) Cancel(ctx context.Context, id string) (sessions.CancelResult, error) {

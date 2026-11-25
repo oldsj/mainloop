@@ -305,6 +305,11 @@ func (s *Service) target(ctx context.Context, key string) (attemptID *string, se
 		// except a standing supervisor's, which a restart is replacing: its successor gets it.
 		return nil, "", a.State != dbstate.AttemptCreating && !p.Standing, nil
 	}
+	if p.Standing && a.BriefDeliveryID == nil {
+		// A standing supervisor's attempt is active, and has its session, a moment before its first
+		// brief is recorded: nothing reaches it before the brief, which says what it is for.
+		return nil, "", false, nil
+	}
 	return &a.ID, *a.SessionID, false, nil
 }
 
