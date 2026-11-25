@@ -26,6 +26,7 @@ import {
   type LiveState,
   type Perm
 } from './store';
+import { ComposerFooter } from './ComposerFooter';
 import { caretOnFirstLine, caretOnLastLine, sentHistory, step } from './history';
 import { liveDeps, useLiveSession, type Conn, type LiveDeps } from './useLiveSession';
 import { useQueryClient } from '@tanstack/react-query';
@@ -924,42 +925,48 @@ function Composer({
             {stop ? '■' : '↵'}
           </button>
         </div>
-        <div className="text-term-fg-muted gap-sm flex min-w-0 items-center text-xs">
-          <SessionControls
-            label={controlsLabel(provider?.label, state.model, state.effort, notes)}
-            title="Session controls"
-            open={controlsOpen}
-            onOpenChange={setControlsOpen}
-            data-testid="session-controls"
-          >
-            <ControlsPicker
-              state={state}
-              set={set}
-              provider={provider}
-              sections={sections}
-              close={() => setControlsOpen(false)}
-            />
-          </SessionControls>
-          <button
-            type="button"
-            onClick={cycleMode}
-            className={cn('min-h-8 flex-none', state.mode !== 'default' && 'text-term-magenta')}
-          >
-            ⏵⏵ {MODE_LABELS[state.mode] ?? state.mode}
-          </button>
-          <span className="min-w-0 flex-1 truncate">{state.cwd}</span>
-          {history.length ? (
-            <button
-              type="button"
-              aria-label="Sent messages"
-              aria-expanded={historyOpen}
-              onClick={() => setHistoryOpen(!historyOpen)}
-              className={cn('px-xs min-h-8 flex-none', historyOpen && 'text-term-fg')}
-            >
-              ↑ history
-            </button>
-          ) : null}
-        </div>
+        <ComposerFooter
+          controls={
+            <>
+              <SessionControls
+                label={controlsLabel(provider?.label, state.model, state.effort, notes)}
+                title="Session controls"
+                open={controlsOpen}
+                onOpenChange={setControlsOpen}
+                data-testid="session-controls"
+              >
+                <ControlsPicker
+                  state={state}
+                  set={set}
+                  provider={provider}
+                  sections={sections}
+                  close={() => setControlsOpen(false)}
+                />
+              </SessionControls>
+              <button
+                type="button"
+                onClick={cycleMode}
+                className={cn('min-h-8 flex-none', state.mode !== 'default' && 'text-term-magenta')}
+              >
+                ⏵⏵ {MODE_LABELS[state.mode] ?? state.mode}
+              </button>
+            </>
+          }
+          cwd={state.cwd}
+          history={
+            history.length ? (
+              <button
+                type="button"
+                aria-label="Sent messages"
+                aria-expanded={historyOpen}
+                onClick={() => setHistoryOpen(!historyOpen)}
+                className={cn('px-xs min-h-8 flex-none', historyOpen && 'text-term-fg')}
+              >
+                ↑ history
+              </button>
+            ) : null
+          }
+        />
       </div>
     </div>
   );

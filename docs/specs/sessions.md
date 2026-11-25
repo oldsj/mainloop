@@ -276,7 +276,9 @@ and an unchanged turn prints nothing. Up on the composer's first line (or in an 
 Down on its last line steps forward, back to the unsent draft, which is kept; elsewhere the arrows
 move the caret, so multi-line editing works. History is this session's user messages (the attach
 backlog and those sent since), a repeat kept once. On a phone, a small `↑ history` button below the
-composer lists the last ten to tap into the composer. The send button becomes interrupt while a turn runs and the composer is empty; Esc interrupts
+composer lists the last ten to tap into the composer. That row (session controls, permission mode,
+working directory, `↑ history`) keeps `↑ history` on screen: the directory truncates first, and
+where the row still does not fit, the directory and `↑ history` wrap to a second line. The send button becomes interrupt while a turn runs and the composer is empty; Esc interrupts
 too. Interrupt is Mainloop's stop turn (`POST /sessions/{id}/stop-turn`), which keeps the partial
 reply, as Esc does in Claude Code. Shift+Tab or the mode button below the composer cycles the permission mode. Every turn
 is an A2A turn, so a permission prompt the runner holds live (one outside the harness's approval

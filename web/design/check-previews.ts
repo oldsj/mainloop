@@ -17,6 +17,8 @@ const css = readdirSync(join(root, 'assets'))
   .join('');
 if (!css.includes('.min-h-control'))
   throw new Error("The previews were built without the components' Tailwind classes");
+const DESKTOP = { width: 1280, height: 720 };
+const PHONE = { width: 390, height: 844 };
 const server = await preview({
   configFile: false,
   root: import.meta.dirname,
@@ -27,7 +29,7 @@ let browser;
 let failures = 0;
 try {
   browser = await chromium.launch();
-  const context = await browser.newContext();
+  const context = await browser.newContext({ viewport: DESKTOP });
   const page = await context.newPage();
   const queue = [...pages];
   for (let i = 0; i < queue.length; i++) {
@@ -55,12 +57,41 @@ try {
       );
       if (violation.impact === 'serious' || violation.impact === 'critical') failures++;
     }
+    // On a phone (390 px wide) nothing may run past the preview's own edge: the app is monospace,
+    // which runs wider than a sans, so a row that fits on a desktop can push a control off-screen.
+    // Content inside a scroll or clipping container, and fixed overlays, are exempt.
+    await page.setViewportSize(PHONE);
+    const spills = await page.evaluate(() => {
+      const root = document.getElementById('preview');
+      if (!root) return []; // the index page lists the previews; it has none of its own
+      const edge = root.getBoundingClientRect();
+      const contained = (el: Element): boolean => {
+        for (let up = el.parentElement; up && up !== root; up = up.parentElement)
+          if (getComputedStyle(up).overflowX !== 'visible') return true;
+        return false;
+      };
+      return Array.from(root.querySelectorAll('*'))
+        .filter((el) => {
+          const box = el.getBoundingClientRect();
+          if (box.width === 0 || getComputedStyle(el).position === 'fixed' || contained(el))
+            return false;
+          return box.right > edge.right + 0.5 || box.left < edge.left - 0.5;
+        })
+        .map(
+          (el) =>
+            `${el.tagName.toLowerCase()} "${(el.textContent ?? '').trim().slice(0, 40)}" (${Math.round(el.getBoundingClientRect().right - edge.right)} px past the edge)`
+        )
+        .slice(0, 5);
+    });
+    await page.setViewportSize(DESKTOP);
+    for (const spill of spills) console.log(`${name}: serious overflow at 390 px: ${spill}`);
+    failures += spills.length;
     if (errors.length) throw new Error(`${name}: ${errors.join('; ')}`);
     console.log(`${name}: checked (${results.violations.length} violations)`);
     page.removeAllListeners('pageerror');
   }
   console.log(
-    `${pages.length} pages and ${queue.length - pages.length} additional variants checked; ${failures} serious/critical violations`
+    `${pages.length} pages and ${queue.length - pages.length} additional variants checked; ${failures} serious/critical violations or overflows at 390 px`
   );
   if (failures) process.exitCode = 1;
 } finally {

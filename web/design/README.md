@@ -133,5 +133,8 @@ because the token generator replaces `system/`.
 
 Run `pnpm --dir web check:design` after building. It serves the built pages locally
 and checks each with axe in Chromium, failing on serious or critical violations
-and printing moderate/minor findings. Chromium is cached in CI; no backend or live
+and printing moderate/minor findings. It also loads each page 390 px wide (a phone) and fails
+when anything runs past the preview's edge, outside a scroll or clipping container: the app is
+monospace, which runs wider than a sans, so a row that fits on a desktop can push a control
+off-screen. Give a component whose row can get long a preview with its longest labels. Chromium is cached in CI; no backend or live
 agent is used. Install it locally with `pnpm --dir web exec playwright install chromium`.
