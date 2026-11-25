@@ -106,7 +106,7 @@ func TestUniFiPutPreviewsAndRunsOnce(t *testing.T) {
 	a, card := e.preflighted(t, a.ID)
 	cardHas(t, card, "Send PUT to the UniFi console", "UniFi console (192.0.2.2:443)", "PUT "+networkPath,
 		"With this body", `"enabled": false`, "What is there now", `"x_passphrase": "[redacted]"`, `"vlan": 60`,
-		consoleHello.Certificate, "sends nothing if it changed", "goes back to the agent and is stored with the action",
+		consoleHello.Certificate, "sends nothing if what this request changes, or the object's id or name, changed", "goes back to the agent and is stored with the action",
 		"Risk: UniFi API, PUT, changes the network, which can cut access to it, Mainloop's included.")
 	if strings.Contains(card, "fictional-wifi-passphrase") || strings.Contains(card, "no preview") {
 		t.Fatalf("card:\n%s", card)
@@ -143,7 +143,7 @@ func TestUniFiStaleBeforeTheRequest(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			e, f := newUniFiEnv(t, answered(200, `{}`))
-			a := e.request(t, privileged.TypeUniFi, "u-1", unifiArgs("PATCH", networkPath, map[string]any{"vlan": 61}))
+			a := e.request(t, privileged.TypeUniFi, "u-1", unifiArgs("PUT", networkPath, map[string]any{"vlan": 61}))
 			a, _ = e.preflighted(t, a.ID)
 			e.approve(t, a.ID)
 			tc(f)
@@ -156,7 +156,7 @@ func TestUniFiStaleBeforeTheRequest(t *testing.T) {
 
 	// The comparison is of what the card showed: a change only to a redacted field is not seen.
 	e, f := newUniFiEnv(t, answered(200, `{}`))
-	a := e.request(t, privileged.TypeUniFi, "u-2", unifiArgs("PATCH", networkPath, map[string]any{"vlan": 61}))
+	a := e.request(t, privileged.TypeUniFi, "u-2", unifiArgs("PUT", networkPath, map[string]any{"vlan": 61}))
 	a, _ = e.preflighted(t, a.ID)
 	e.approve(t, a.ID)
 	f.objects[networkPath] = strings.Replace(guestNetwork, "fictional-wifi", "other-wifi", 1)
@@ -206,6 +206,13 @@ func TestUniFiPreviewsAndTags(t *testing.T) {
 		}
 		_, card := e.preflighted(t, a.ID)
 		cardHas(t, card, "Risk: destructive: may delete, forget or reset (forget)")
+	})
+	t.Run("upgrade", func(t *testing.T) {
+		e, _ := newUniFiEnv(t, answered(200, `{}`))
+		a := e.request(t, privileged.TypeUniFi, "u-1", unifiArgs("POST", "/proxy/network/api/s/default/cmd/devmgr",
+			map[string]any{"cmd": "upgrade", "mac": "02:00:5e:00:53:01"}))
+		_, card := e.preflighted(t, a.ID)
+		cardHas(t, card, "installs software: device firmware (upgrade)", "may restart or reprovision devices (upgrade)")
 	})
 	t.Run("delete of nothing", func(t *testing.T) {
 		e, _ := newUniFiEnv(t, answered(200, `{}`))
@@ -283,7 +290,25 @@ func TestUniFiRequestRefusals(t *testing.T) {
 		{unifiArgs("POST", "/proxy/network/integration/v1/apikeys", map[string]any{"name": "x"}), "the owner's own"},
 		{unifiArgs("GET", networkPath, map[string]any{"a": 1}), "a GET has no body"},
 		{unifiArgs("DELETE", networkPath, map[string]any{"a": 1}), "a DELETE has no body"},
-		{unifiArgs("PUT", networkPath, "guest"), "a JSON object or array"},
+		{unifiArgs("PUT", networkPath, "guest"), "body is JSON"},
+		{unifiArgs("PUT", networkPath, `"guest"`), "a JSON object or array"},
+		{unifiArgs("PATCH", networkPath, map[string]any{"vlan": 61}), "a PATCH goes only to"},
+		{unifiArgs("PUT", "/proxy/network/api/s/default/rest/setting/mgmt/65a1b2c3d4e5f60718293a4c", map[string]any{"led_enabled": false}),
+			"a PUT goes only to"},
+		{unifiArgs("POST", "/proxy/network/api/s/default/cmd/evtmgr", map[string]any{"cmd": "archive-all-alarms"}), "a POST goes only to"},
+		{unifiArgs("POST", "/proxy/network/api/s/default/rest/networkconf/65a1b2c3d4e5f60718293a4b", map[string]any{"name": "x"}), "a POST goes only to"},
+		{unifiArgs("DELETE", "/proxy/network/api/s/default/rest/networkconf", nil), "a DELETE goes only to"},
+		{unifiArgs("POST", "/proxy/network/api/s/default/cmd/devmgr", map[string]any{"cmd": "upgrade-external", "mac": "02:00:5e:00:53:01",
+			"url": "https://firmware.example.com/fw.bin"}), "its cmd, one of restart"},
+		{unifiArgs("POST", "/proxy/network/api/s/default/cmd/devmgr", map[string]any{"mac": "02:00:5e:00:53:01"}), "its cmd, one of"},
+		{unifiArgs("POST", "/proxy/network/api/s/default/cmd/devmgr", map[string]any{"cmd": "upgrade", "mac": "02:00:5e:00:53:01",
+			"source": "http://firmware.example.com/fw.bin"}), "body.source is a URL"},
+		{unifiArgs("POST", "/proxy/network/integration/v1/sites/88f7af54/devices/1a2b3c/actions", map[string]any{"action": "ADOPT"}),
+			"its action, one of RESTART"},
+		{unifiArgs("POST", "/proxy/network/api/s/default/rest/portforward", map[string]any{"name": "w", "hooks": []any{"ftp://h.example.com/x"}}),
+			"body.hooks[0] is a URL"},
+		{unifiArgs("PUT", networkPath, map[string]any{"snmp": map[string]any{"community": "public"}}), "sets community, a secret field"},
+		{unifiArgs("POST", "/proxy/network/api/s/default/rest/user", map[string]any{"code": "12345-67890"}), "sets code, a secret field"},
 		{unifiArgs("PUT", networkPath, map[string]any{"x_passphrase": "fictional-wifi-passphrase"}), "sets x_passphrase, a secret field"},
 		{unifiArgs("PUT", networkPath, map[string]any{"wifi": map[string]any{"securityConfiguration": map[string]any{"passphrase": "p"}}}),
 			"sets passphrase, a secret field"},
@@ -300,6 +325,20 @@ func TestUniFiRequestRefusals(t *testing.T) {
 	}
 	if len(f.reqs) != 0 {
 		t.Fatalf("requests %+v", f.reqs)
+	}
+	// The allowed commands and actions pass.
+	for i, args := range []map[string]any{
+		unifiArgs("POST", "/proxy/network/api/s/default/cmd/stamgr", map[string]any{"cmd": "block-sta", "mac": "02:00:5e:00:53:02"}),
+		unifiArgs("POST", "/proxy/network/integration/v1/sites/88f7af54/devices/1a2b3c/interfaces/ports/4/actions", map[string]any{"action": "POWER_CYCLE"}),
+		unifiArgs("PATCH", "/proxy/network/v2/api/site/default/trafficrules/65a1b2c3d4e5f60718293a4d", map[string]any{"enabled": false}),
+		unifiArgs("PUT", networkPath, `{"vlan":61}`),
+	} {
+		if _, err := e.svc.Request(context.Background(), mainSession, privileged.TypeUniFi, jsonArgs(args), "r", fmt.Sprintf("ok%d", i)); err != nil {
+			t.Errorf("%v: %v", args, err)
+		}
+		if i == 2 {
+			e, _ = newUniFiEnv(t, answered(200, `{}`)) // a fresh session: at most 3 wait
+		}
 	}
 	// An empty secret field is no secret: clearing one is allowed.
 	if _, err := e.svc.Request(context.Background(), mainSession, privileged.TypeUniFi,
@@ -323,5 +362,75 @@ func TestUniFiNeedsAccess(t *testing.T) {
 	e.run(t)
 	if a = e.get(t, a.ID); a.State != privileged.StatePreflightFailed || !strings.Contains(deref(a.LastError), "no UniFi access") {
 		t.Fatalf("action = %+v (%v)", a, deref(a.LastError))
+	}
+}
+
+// A device's counters and timestamps change by the second: the run compares only what the request
+// changes and the object's identity, so they do not make it stale.
+func TestUniFiStaleIgnoresWhatTheRequestDoesNotChange(t *testing.T) {
+	const devicePath = "/proxy/network/api/s/default/rest/device/65a1b2c3d4e5f60718293a4e"
+	device := `{"data":[{"_id":"65a1b2c3d4e5f60718293a4e","name":"ap-hall","led_override":"on","uptime":%d,"tx_bytes":%d}],"meta":{"rc":"ok"}}`
+	for name, tc := range map[string]struct {
+		now   string
+		state string
+	}{
+		"counters": {fmt.Sprintf(device, 900, 123456), privileged.StateSucceeded},
+		"changed":  {strings.Replace(fmt.Sprintf(device, 900, 1), `"on"`, `"off"`, 1), privileged.StateStale},
+		"renamed":  {strings.Replace(fmt.Sprintf(device, 900, 1), "ap-hall", "ap-porch", 1), privileged.StateStale},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, f := newUniFiEnv(t, answered(200, `{}`))
+			f.objects[devicePath] = fmt.Sprintf(device, 600, 1)
+			a := e.request(t, privileged.TypeUniFi, "u-1", unifiArgs("PUT", devicePath, map[string]any{"led_override": "off"}))
+			a, _ = e.preflighted(t, a.ID)
+			e.approve(t, a.ID)
+			f.objects[devicePath] = tc.now
+			e.runExecutor(t)
+			if a = e.get(t, a.ID); a.State != tc.state {
+				t.Fatalf("action = %+v (%v)", a, deref(a.LastError))
+			}
+		})
+	}
+}
+
+// The console's answers lose every secret field, by the console's x_ convention and by name: an
+// SNMP community, a voucher's code, a WireGuard client's configuration file.
+func TestUniFiAnswersAreRedacted(t *testing.T) {
+	e, f := newUniFiEnv(t, nil)
+	f.passGets = true
+	f.handle = answered(200, `{"data":[{"name":"vpn","community":"fictional-community","code":"12345-67890",`+
+		`"wireguard_client_configuration_file":"[Interface]\nPrivateKey = fictional","x_ssh_password":"fictional-ssh"}]}`)
+	a := e.request(t, privileged.TypeUniFi, "g-1", unifiArgs("GET", "/proxy/network/api/s/default/stat/vouchers", nil))
+	a, _ = e.preflighted(t, a.ID)
+	e.approve(t, a.ID)
+	e.runExecutor(t)
+	res := unifiResult(t, e.get(t, a.ID))
+	for _, secret := range []string{"fictional-community", "12345-67890", "PrivateKey", "fictional-ssh"} {
+		if strings.Contains(res.Body, secret) {
+			t.Fatalf("the answer shows %q:\n%s", secret, res.Body)
+		}
+	}
+	if strings.Count(res.Body, "[redacted]") != 4 || !strings.Contains(res.Body, `"name": "vpn"`) {
+		t.Fatalf("answer:\n%s", res.Body)
+	}
+}
+
+// Through the executor's own checks of the stored row (exactRow, then the run): a body with nested
+// objects, characters JSON escapes and a number's own text reaches the console as the card showed
+// it, byte for byte.
+func TestUniFiStoredBodyRunsExactly(t *testing.T) {
+	e, f := newUniFiEnv(t, answered(200, `{"meta":{"rc":"ok"}}`))
+	body := json.RawMessage(`{"name":"web <8443> & more","fwd_port":"8443","weight":1.50,"src":{"zone":"wan","list":[true,null,{"b":2,"a":1}]}}`)
+	a := e.request(t, privileged.TypeUniFi, "p-1", unifiArgs("POST", "/proxy/network/api/s/default/rest/portforward", body))
+	a, card := e.preflighted(t, a.ID)
+	want := `{"fwd_port":"8443","name":"web \u003c8443\u003e \u0026 more","src":{"list":[true,null,{"a":1,"b":2}],"zone":"wan"},"weight":1.50}`
+	cardHas(t, card, `"weight": 1.50`)
+	e.approve(t, a.ID)
+	e.runExecutor(t)
+	if a = e.get(t, a.ID); a.State != privileged.StateSucceeded {
+		t.Fatalf("action = %+v (%v)", a, deref(a.LastError))
+	}
+	if sent := f.sent(); len(sent) != 1 || string(sent[0].Body) != want {
+		t.Fatalf("sent %q, want %q", sent[0].Body, want)
 	}
 }

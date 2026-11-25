@@ -82,11 +82,19 @@ func (s *Server) privilegedTools() []Tool {
 			"http.unifi {method (GET, POST, PUT, PATCH or DELETE), path (the console's Network application path with an optional " +
 			"query: /proxy/network/integration/v1/..., /proxy/network/api/s/<site>/... or /proxy/network/v2/api/...), body (a JSON " +
 			"object or array, for POST, PUT and PATCH; 64 KiB)} sends that request once to the UniFi console with the executor's API " +
-			"key, for network changes no Git change covers. The console's administrators, API keys, site management and backups " +
-			"are refused, as is a body that sets a secret field (x_*, passphrases, secrets, keys): the owner sets those. The card " +
-			"shows, for PUT, PATCH and DELETE, the object a GET of the same path returns now (its secret fields redacted), read " +
-			"again just before the request; a POST has no preview. Name one object: a path a GET cannot read is refused. A DELETE, " +
-			"or a command naming a delete, forget or reset, is tagged destructive and expires in an hour. The answer (status and " +
+			"key, for network changes no Git change covers. A GET may read any Network path but the console's administrators, API " +
+			"keys, site management and backups. Anything else goes only to api/s/<site>/rest/<collection> (POST; PUT or DELETE an " +
+			"<id>) for networkconf, wlanconf, wlangroup, portforward, firewallrule, firewallgroup, routing, portconf, user, usergroup, " +
+			"device, tag, dynamicdns; v2/api/site/<site>/<trafficrules|trafficroutes|firewall-policies> (POST; PUT, PATCH or DELETE " +
+			"an <id>); api/s/<site>/cmd/devmgr {cmd: restart, force-provision, power-cycle, adopt, set-locate, unset-locate, speedtest, " +
+			"upgrade} and cmd/stamgr {cmd: block-sta, unblock-sta, kick-sta, forget-sta, authorize-guest, unauthorize-guest}; and " +
+			"the integration API's device {action: RESTART}, port {action: POWER_CYCLE} and client {action: AUTHORIZE_GUEST_ACCESS or " +
+			"UNAUTHORIZE_GUEST_ACCESS} actions. A refusal lists them. Refused: a body that holds a URL, or sets a secret field " +
+			"(x_*, passphrases, secrets, keys, SNMP communities, voucher codes): the owner sets those. The card shows, for PUT, " +
+			"PATCH and DELETE, the object a GET of the same path returns now (secret fields redacted); just before the request the " +
+			"executor reads it again and is stale if the fields the body sets, or the object's id or name, changed. A POST has no " +
+			"preview. Name one object: a path a GET cannot read is refused. A DELETE, or a command naming a delete, forget or reset, " +
+			"is tagged destructive and expires in an hour; an upgrade is tagged as installing software. The answer (status and " +
 			"body, secret fields redacted) comes back as the result. It answers unavailable where the executor has no UniFi access. " +
 			"An executor type returns state requested; its card opens once the executor has checked the target. Reuse request_id to read the same request back. At most 3 requests per session " +
 			"and 10 in all wait for the owner.",

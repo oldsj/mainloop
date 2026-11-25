@@ -128,7 +128,7 @@ var catalog = map[string]entry{
 		version: 1, expiry: UndecidedExpiry, expiryFor: unifiExpiry, executor: true, unifi: true,
 		how: "Approve sends exactly this request once to the UniFi console, with the executor's UniFi API key. " +
 			"The console applies it as it would any administrator's.",
-		normalize: normalizeUniFi, preflight: preflightUniFi,
+		normalize: normalizeUniFi, facts: UniFiFacts{}, preflight: preflightUniFi,
 	},
 	TypeSSH: {
 		version: 1, expiry: UndecidedExpiry, expiryFor: sshExpiry, executor: true, ssh: true,

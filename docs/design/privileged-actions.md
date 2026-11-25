@@ -316,7 +316,7 @@ creates every item; agents never create or read them.**
 | Talos                | Preferred: no item. `talosctl` goes through Omni with a talosconfig from the Omni service account below, so Talos grants follow the Omni role (Operator → `os:operator`; Admin → `os:admin`, to confirm against Omni's docs) and the control plane needs no change. Fallback: a `talos.dev/v1alpha1` ServiceAccount `mainloop-executor-talos` with `os:admin`, which needs a `kubernetesTalosAPIAccess` control-plane change the owner approves | `command.talosctl`         | 3b    |
 | Omni                 | Item `mainloop-executor-omni`, field `service-account-key`: an Omni service account, role Admin (the owner's choice; it gives Talos `os:admin`). Write-side only; the read tools use a separate Reader account.                                                                                                                                                                                                                                 | `command.omnictl`          | 3b    |
 | SSH, per host        | Item `mainloop-executor-ssh-<host>` per host (`nas`, `router`, `windows-host`, `utm-vm`), fields `private-key` (a new ed25519 key for this executor only, public half installed for that host's admin user), `user` and `known-hosts` (the host's key line)                                                                                                                                                                                     | `command.ssh` to that host | 3b    |
-| UniFi                | Item `mainloop-executor-unifi`, fields `api-key` (a UniFi local API key from the console) and `certificate` (the console's PEM certificate, which the executor pins)                                                                                                                                                                                                                                                                            | `http.unifi`               | 3b    |
+| UniFi                | Item `mainloop-executor-unifi`, fields `api-key` (a UniFi local API key, made under a dedicated administrator limited to the Network application, not the owner's account) and `certificate` (the console's PEM certificate, which the executor pins)                                                                                                                                                                                                                                                                            | `http.unifi`               | 3b    |
 
 A host whose item is missing is reported as `credential_missing` with the item and field names;
 the executor never falls back to another credential.
@@ -458,8 +458,10 @@ down, and nothing but the exec request is asked for) and the host allowlist; it 
 the owner has created its item in §3 and approved the executor's source address and its router
 rules (§3, Network reach). `http.unifi` came last, with its own HTTPS client pinned to the console's
 certificate, Network application paths only (the console's admins, API keys, site management and
-backups stay the owner's), secret fields refused in bodies and redacted in answers, and a `GET` of
-the same path as the preview for `PUT`, `PATCH` and `DELETE`.
+backups stay the owner's), writes held to an allowlist of path families and, for commands, of
+commands, bodies with a URL refused, secret fields refused in bodies and redacted in answers, and a
+`GET` of the same path as the preview for `PUT`, `PATCH` and `DELETE`, compared again before the run
+on the fields the request changes.
 
 **Slice 4: policy and stronger approvals.** Owner-written auto rules and "allow this target for
 24 h" (never for floor types); passkey-signed approvals, so a compromised API process cannot forge

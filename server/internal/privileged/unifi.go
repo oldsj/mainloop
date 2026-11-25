@@ -41,7 +41,9 @@ type UniFiArgs struct {
 	Body   string `json:"body,omitempty"`
 }
 
-// unifiInput is what the requester sends: the body as a JSON value.
+// unifiInput is what the requester sends: the body as a JSON value. A body that is a JSON string
+// is taken as the body's JSON text, which is also how the stored arguments hold it: the executor
+// validates those again before it runs them (exactRow).
 type unifiInput struct {
 	Method string          `json:"method"`
 	Path   string          `json:"path"`
@@ -99,12 +101,137 @@ func normalizeUniFi(raw json.RawMessage) (any, error) {
 	if redact.Credential(a.Path) {
 		return nil, invalidf("path looks like it holds a credential (contains_secret)")
 	}
-	body, err := normalizeUniFiBody(a.Method, in.Body)
+	given := in.Body
+	var text string
+	if json.Unmarshal(given, &text) == nil {
+		given = json.RawMessage(text)
+	}
+	body, err := normalizeUniFiBody(a.Method, given)
 	if err != nil {
 		return nil, err
 	}
 	a.Body = string(body)
+	if a.Method != "GET" {
+		if err := checkUniFiWrite(a, path); err != nil {
+			return nil, err
+		}
+	}
 	return a, nil
+}
+
+// unifiWrite is one family of paths a request other than a GET may go to: its segments after
+// /proxy/network/ ("*" is any one segment) and its methods. A command endpoint also names the body
+// field that holds the command and the commands allowed. Everything else the Network application
+// takes (its settings, site and console management, firmware from a URL...) stays the owner's.
+type unifiWrite struct {
+	segs    []string
+	methods []string
+	field   string
+	allowed []string
+}
+
+var (
+	// unifiCollections are the legacy API's rest/ collections a request may create in (POST) and
+	// whose objects it may change (PUT) or delete: networks, Wi-Fi, port forwards, firewall rules
+	// and groups, static routes, port profiles, clients (fixed IPs, names, groups), devices'
+	// configuration, tags and dynamic DNS.
+	unifiCollections = []string{"networkconf", "wlanconf", "wlangroup", "portforward", "firewallrule", "firewallgroup",
+		"routing", "portconf", "user", "usergroup", "device", "tag", "dynamicdns"}
+	// unifiV2Collections are the v2 API's: traffic rules and routes, and zone firewall policies.
+	unifiV2Collections  = []string{"trafficrules", "trafficroutes", "firewall-policies"}
+	unifiDevmgrCommands = []string{"restart", "force-provision", "power-cycle", "adopt", "set-locate", "unset-locate",
+		"speedtest", "upgrade"}
+	unifiStamgrCommands = []string{"block-sta", "unblock-sta", "kick-sta", "forget-sta", "authorize-guest", "unauthorize-guest"}
+	unifiWrites         = func() []unifiWrite {
+		var w []unifiWrite
+		for _, c := range unifiCollections {
+			w = append(w, unifiWrite{segs: []string{"api", "s", "*", "rest", c}, methods: []string{"POST"}},
+				unifiWrite{segs: []string{"api", "s", "*", "rest", c, "*"}, methods: []string{"PUT", "DELETE"}})
+		}
+		for _, c := range unifiV2Collections {
+			w = append(w, unifiWrite{segs: []string{"v2", "api", "site", "*", c}, methods: []string{"POST"}},
+				unifiWrite{segs: []string{"v2", "api", "site", "*", c, "*"}, methods: []string{"PUT", "PATCH", "DELETE"}})
+		}
+		post := []string{"POST"}
+		return append(w,
+			unifiWrite{segs: []string{"api", "s", "*", "cmd", "devmgr"}, methods: post, field: "cmd", allowed: unifiDevmgrCommands},
+			unifiWrite{segs: []string{"api", "s", "*", "cmd", "stamgr"}, methods: post, field: "cmd", allowed: unifiStamgrCommands},
+			unifiWrite{segs: []string{"integration", "v1", "sites", "*", "devices", "*", "actions"}, methods: post,
+				field: "action", allowed: []string{"RESTART"}},
+			unifiWrite{segs: []string{"integration", "v1", "sites", "*", "devices", "*", "interfaces", "ports", "*", "actions"},
+				methods: post, field: "action", allowed: []string{"POWER_CYCLE"}},
+			unifiWrite{segs: []string{"integration", "v1", "sites", "*", "clients", "*", "actions"}, methods: post,
+				field: "action", allowed: []string{"AUTHORIZE_GUEST_ACCESS", "UNAUTHORIZE_GUEST_ACCESS"}},
+		)
+	}()
+)
+
+func (w unifiWrite) matches(segs []string) bool {
+	if len(segs) != len(w.segs) {
+		return false
+	}
+	for i, s := range w.segs {
+		if s != "*" && segs[i] != s {
+			return false
+		}
+	}
+	return true
+}
+
+// checkUniFiWrite holds a request other than a GET to the write families, its command to the
+// family's list, and its body to no URL: a body that names one could have the console fetch and
+// install from it (a device upgrade from a URL installs that firmware).
+func checkUniFiWrite(a UniFiArgs, path string) error {
+	segs := strings.Split(strings.TrimPrefix(path, "/proxy/network/"), "/")
+	i := slices.IndexFunc(unifiWrites, func(w unifiWrite) bool { return w.matches(segs) })
+	if i < 0 || !slices.Contains(unifiWrites[i].methods, a.Method) {
+		return invalidf("a %s goes only to: /proxy/network/api/s/<site>/rest/<collection> (POST) or .../rest/<collection>/<id> "+
+			"(PUT, DELETE), collections %s; /proxy/network/v2/api/site/<site>/<collection> (POST) or .../<id> (PUT, PATCH, DELETE), "+
+			"collections %s; /proxy/network/api/s/<site>/cmd/devmgr or cmd/stamgr (POST); and the integration API's device, "+
+			"port and client actions (POST .../devices/<id>/actions, .../devices/<id>/interfaces/ports/<n>/actions, "+
+			".../clients/<id>/actions). The rest stays the owner's", a.Method,
+			strings.Join(unifiCollections, ", "), strings.Join(unifiV2Collections, ", "))
+	}
+	v, _ := decodeJSONNumbers([]byte(a.Body))
+	if w := unifiWrites[i]; w.field != "" {
+		m, _ := v.(map[string]any)
+		cmd, _ := m[w.field].(string)
+		if !slices.Contains(w.allowed, cmd) {
+			return invalidf("this endpoint's body names its %s, one of %s", w.field, strings.Join(w.allowed, ", "))
+		}
+	}
+	if where := unifiURL(v, "body"); where != "" {
+		return invalidf("%s is a URL: the executor sends nothing that has the console fetch from one (firmware or otherwise)", where)
+	}
+	return nil
+}
+
+// unifiURL is where in v a string holds a URL, or "".
+func unifiURL(v any, at string) string {
+	switch t := v.(type) {
+	case string:
+		if strings.Contains(t, "://") {
+			return at
+		}
+	case map[string]any:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		for _, k := range keys {
+			if w := unifiURL(t[k], at+"."+k); w != "" {
+				return w
+			}
+		}
+	case []any:
+		for i, e := range t {
+			if w := unifiURL(e, fmt.Sprintf("%s[%d]", at, i)); w != "" {
+				return w
+			}
+		}
+	}
+	return ""
 }
 
 // normalizeUniFiBody checks a request's body and returns its canonical form.
@@ -154,9 +281,14 @@ func decodeJSONNumbers(b []byte) (any, error) {
 }
 
 // unifiSecretWords mark a field that holds a secret, by name (lowercased, without _ and -): the
-// console's x_ fields (x_passphrase, x_password, x_authkey...) by their prefix, and these.
-var unifiSecretWords = []string{"password", "passphrase", "passwd", "secret", "psk", "preshared", "privatekey", "token",
-	"apikey", "authkey", "credential", "radiussecret"}
+// console's x_ fields (x_passphrase, x_password, x_authkey...) by their prefix, and these, among
+// them an SNMP community and a WireGuard client's configuration file. unifiSecretNames are whole
+// names: a hotspot voucher's code.
+var (
+	unifiSecretWords = []string{"password", "passphrase", "passwd", "secret", "psk", "preshared", "privatekey", "token",
+		"apikey", "authkey", "credential", "radiussecret", "community", "configurationfile", "configfile"}
+	unifiSecretNames = []string{"code", "vouchercode", "voucher"}
+)
 
 func isSecretField(key string) bool {
 	k := strings.ToLower(key)
@@ -164,7 +296,7 @@ func isSecretField(key string) bool {
 		return true
 	}
 	k = strings.NewReplacer("_", "", "-", "").Replace(k)
-	return slices.ContainsFunc(unifiSecretWords, func(w string) bool { return strings.Contains(k, w) })
+	return slices.Contains(unifiSecretNames, k) || slices.ContainsFunc(unifiSecretWords, func(w string) bool { return strings.Contains(k, w) })
 }
 
 // secretField is the name of the first field in v that holds a secret and is set, or "".
@@ -239,6 +371,9 @@ func unifiWords(a UniFiArgs) []string {
 var (
 	unifiDeleteWords  = []string{"delete", "remove", "forget", "reset", "factory", "destroy", "purge"}
 	unifiRestartWords = []string{"restart", "reboot", "cycle", "upgrade", "provision", "adopt"}
+	// unifiInstallWords mark a request that installs software: a device upgrade installs the
+	// firmware the console offers for it.
+	unifiInstallWords = []string{"upgrade", "firmware"}
 )
 
 func unifiMatches(a UniFiArgs, list []string) []string {
@@ -399,7 +534,7 @@ func renderUniFi(r dbq.PrivilegedAction, ctx map[string]any) (string, string, ma
 	switch {
 	case f.Preview == PreviewRead:
 		b.WriteString("\nWhat is there now (a GET of the same path; secret fields redacted):\n" + fenced("json", f.Current))
-		b.WriteString("Just before the request, the executor reads it again and sends nothing if it changed. ")
+		b.WriteString("Just before the request, the executor reads it again and sends nothing if what this request changes, or the object's id or name, changed. ")
 	case a.Method == "GET":
 		b.WriteString("\nIt only reads. ")
 	default:
@@ -419,14 +554,72 @@ func renderUniFi(r dbq.PrivilegedAction, ctx map[string]any) (string, string, ma
 		}
 		tags = append([]string{"destructive: may delete, forget or reset (" + what + ")"}, tags...)
 	}
+	if w := unifiMatches(a, unifiInstallWords); len(w) > 0 {
+		tags = append(tags, "installs software: device firmware ("+strings.Join(w, ", ")+")")
+	}
 	if w := unifiMatches(a, unifiRestartWords); len(w) > 0 {
 		tags = append(tags, "may restart or reprovision devices ("+strings.Join(w, ", ")+")")
 	}
 	if f.Preview == PreviewNone && a.Method != "GET" {
 		tags = append(tags, "no preview")
 	}
-	fmt.Fprintf(&b, "\nRisk: %s. (The delete and restart tags come from a word scan, not a guarantee.)", strings.Join(tags, ", "))
+	fmt.Fprintf(&b, "\nRisk: %s. (The delete, install and restart tags come from a word scan, not a guarantee.)", strings.Join(tags, ", "))
 	return fmt.Sprintf("Send %s to the UniFi console", a.Method), b.String(), ctx, nil
+}
+
+// unifiWatched is what the run compares with the card. For a PUT or PATCH of one object, the
+// fields the body sets and the object's identity (_id, id, name), as the GET showed them
+// (redacted); for a DELETE, the identity. The owner approved a change to those fields, and an
+// object's counters and timestamps (a device's uptime, its bytes) change by the second. A GET that
+// shows something else (not one object, an array body, none of those fields) compares whole.
+func unifiWatched(a UniFiArgs, current string) string {
+	obj, ok := unifiObject(current)
+	if !ok {
+		return current
+	}
+	keys := []string{"_id", "id", "name"}
+	if a.Method != "DELETE" && a.Body != "" {
+		v, _ := decodeJSONNumbers([]byte(a.Body))
+		m, ok := v.(map[string]any)
+		if !ok {
+			return current
+		}
+		for k := range m {
+			keys = append(keys, k)
+		}
+	}
+	w := map[string]any{}
+	for _, k := range keys {
+		if v, ok := obj[k]; ok {
+			w[k] = v
+		}
+	}
+	if len(w) == 0 {
+		return current
+	}
+	b, err := json.Marshal(w)
+	if err != nil {
+		return current
+	}
+	return string(b)
+}
+
+// unifiObject is the one object a GET showed: the answer itself, or the legacy API's
+// {"data": [object], ...}.
+func unifiObject(text string) (map[string]any, bool) {
+	v, err := decodeJSONNumbers([]byte(text))
+	m, ok := v.(map[string]any)
+	if err != nil || !ok {
+		return nil, false
+	}
+	if d, ok := m["data"].([]any); ok {
+		if len(d) != 1 {
+			return nil, false
+		}
+		o, ok := d[0].(map[string]any)
+		return o, ok
+	}
+	return m, true
 }
 
 // unifi runs http.unifi: the console's certificate and, for a PUT, PATCH or DELETE, the object
@@ -460,7 +653,7 @@ func (r *Runner) unifi(ctx context.Context, row dbq.PrivilegedAction) outcome {
 			return outcome{state: StateStale, err: "the object is not as the owner saw it: " + refused.msg + "; nothing was sent"}
 		case err != nil:
 			return retry(err) // a read only
-		case now != f.Current:
+		case unifiWatched(a, now) != unifiWatched(a, f.Current):
 			return outcome{state: StateStale, err: "the object changed since the owner saw it; nothing was sent"}
 		}
 	}
