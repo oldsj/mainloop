@@ -12,6 +12,8 @@ const space = (overrides: Partial<SpaceRow> = {}): SpaceRow => ({
   title: 'acme/widgets',
   detail: '1 working',
   tone: 'active',
+  needs: 1,
+  working: 1,
   target: { to: 'project', id: 'project-1' },
   ...overrides
 });
@@ -57,6 +59,7 @@ const MODEL: AgentColumnModel = {
       label: 'main',
       title: undefined,
       detail: 'working',
+      needs: 0,
       target: { to: 'chat' }
     }),
     space()
@@ -73,8 +76,20 @@ const MODEL: AgentColumnModel = {
       target: { to: 'task', id: 'b' },
       pages: [{ to: 'task', id: 'b' }],
       ask: 'About task Fix CI flake (b): '
+    }),
+    agent({
+      id: 'task:c',
+      space: MAINLOOP_SPACE,
+      spaceLabel: 'main',
+      label: 'Check the logs',
+      detail: 'Fix the logs credential',
+      tone: 'attention',
+      target: { to: 'task', id: 'c' },
+      pages: [{ to: 'task', id: 'c' }],
+      ask: 'About task Check the logs (c): '
     })
-  ]
+  ],
+  main: { needs: 2, working: 1 }
 };
 
 function renderColumn(overrides: Partial<AgentColumnProps> = {}) {
@@ -96,85 +111,111 @@ function renderColumn(overrides: Partial<AgentColumnProps> = {}) {
   return { onOpen, onAsk };
 }
 
-const spaces = () => within(screen.getByRole('list', { name: 'spaces' }));
-const agents = () => within(screen.getByRole('group', { name: 'agents' }));
+const agents = () => within(screen.getByRole('group', { name: 'Agents' }));
+const rows = () => agents().getAllByTestId('agent-row');
 
 describe('AgentColumn', () => {
-  it('shows the spaces, then the agents, each with a dot and one muted line', () => {
-    // Given two spaces and three agents
+  it('pins the main thread at the top, with what it speaks for, in no group', () => {
     renderColumn();
 
-    // Then the spaces list names each with what its agents are doing
-    const spaceRows = spaces().getAllByTestId('space-row');
-    expect(spaceRows.map((row) => row.textContent)).toEqual(['mainworking', 'widgets1 working']);
-    expect(spaceRows[1]).toHaveAttribute('title', 'acme/widgets');
+    const main = screen.getByTestId('main-entry');
+    expect(main).toHaveAccessibleName('Mainloop, 2 need you, 1 working');
+    expect(within(main).getByTestId('main-state')).toHaveTextContent('2 need you· 1 working');
+    // On the main chat it is the current page
+    expect(main).toHaveAttribute('aria-current', 'page');
+    // It is not listed again among the agents
+    expect(agents().queryByText('Mainloop')).toBeNull();
+  });
 
-    // And the agents are listed under their space's name, each its title, then its state and age
+  it('groups the agents by project, then No project, each heading with its counts', () => {
+    renderColumn();
+
     expect(
       agents()
         .getAllByTestId('agent-space')
-        .map((label) => label.textContent)
-    ).toEqual(['main', 'widgets']);
-    const widgets = within(agents().getByRole('list', { name: 'widgets' }));
-    expect(widgets.getAllByTestId('agent-row')).toHaveLength(2);
-    const agentRows = agents().getAllByTestId('agent-row');
-    expect(agentRows).toHaveLength(3);
-    expect(within(agentRows[1]!).getByText('Add retry button')).toBeInTheDocument();
-    expect(within(agentRows[1]!).getByTestId('agent-meta')).toHaveTextContent('Running · 3h');
-    expect(within(agentRows[2]!).getByTestId('agent-dot')).toHaveAttribute('data-tone', 'bad');
+        .map((heading) => heading.textContent)
+    ).toEqual(['widgets11', 'No project']);
+    const widgets = agents().getByTestId('space-row');
+    expect(widgets).toHaveAccessibleName('widgets, 1 needs you, 1 working');
+    expect(widgets).toHaveAttribute('title', 'acme/widgets: open the project');
+    expect(
+      within(agents().getByRole('list', { name: /^widgets/ })).getAllByTestId('agent-row')
+    ).toHaveLength(2);
+    expect(
+      within(agents().getByRole('list', { name: 'No project' })).getAllByTestId('agent-row')
+    ).toHaveLength(1);
   });
 
-  it('marks the agent whose page is showing, and the space it belongs to', () => {
+  it('gives every row an icon, a title with its age, and one line of state', () => {
+    renderColumn();
+
+    const [running, failed, needs] = rows();
+    expect(within(running!).getByTestId('agent-dot')).toHaveAttribute('data-tone', 'active');
+    expect(within(running!).getByText('Add retry button')).toBeInTheDocument();
+    expect(within(running!).getByTestId('agent-age')).toHaveTextContent('3h');
+    expect(within(running!).getByTestId('agent-meta')).toHaveTextContent('Running');
+    // A failure says so once, in its colour
+    expect(within(failed!).getByTestId('agent-dot')).toHaveAttribute('data-tone', 'bad');
+    expect(within(failed!).getByTestId('agent-meta')).toHaveTextContent(/^Failed$/);
+    // What the owner is asked leads with Needs you
+    expect(within(needs!).getByTestId('agent-meta')).toHaveTextContent(
+      'Needs you · Fix the logs credential'
+    );
+  });
+
+  it('marks the agent whose page is showing, and the project it belongs to', () => {
     // Given the owner is on the session of the first task
     renderColumn({ page: { to: 'session', id: 'session-a' }, space: 'project-1' });
 
-    // Then that agent is the current page, and its space is marked as where the owner is
+    // Then that agent is the current page, and its project's heading is marked as where they are
     expect(screen.getByRole('button', { name: /Add retry button/, current: 'page' })).toBe(
-      agents().getAllByTestId('agent-row')[1]
+      rows()[0]
     );
-    expect(spaces().getByRole('button', { current: true })).toHaveTextContent('widgets');
+    expect(agents().getByRole('button', { current: true })).toHaveTextContent('widgets');
     expect(screen.getAllByRole('button', { current: 'page' })).toHaveLength(1);
   });
 
-  it('marks no agent on a page that belongs to none', () => {
+  it('marks no agent on a page that belongs to none, and the main thread as its space', () => {
     renderColumn({ page: { to: 'health' } });
 
     expect(screen.queryByRole('button', { current: 'page' })).toBeNull();
-    expect(spaces().getByRole('button', { current: true })).toHaveTextContent('main');
+    expect(screen.getByTestId('main-entry')).toHaveAttribute('aria-current', 'true');
   });
 
-  it('opens a space or an agent on a click', async () => {
+  it('opens the main thread, a project or an agent on a click', async () => {
     const user = userEvent.setup();
     const { onOpen } = renderColumn();
 
-    await user.click(spaces().getAllByTestId('space-row')[1]!);
-    await user.click(agents().getAllByTestId('agent-row')[2]!);
+    await user.click(screen.getByTestId('main-entry'));
+    await user.click(agents().getByTestId('space-row'));
+    await user.click(rows()[1]!);
 
     expect(onOpen.mock.calls).toEqual([
+      [{ to: 'chat' }],
       [{ to: 'project', id: 'project-1' }],
       [{ to: 'task', id: 'b' }]
     ]);
   });
 
-  it('is one Tab stop: the arrow keys move through both lists, and Enter opens', async () => {
+  it('is one Tab stop: the arrow keys move through every row, and Enter opens', async () => {
     const user = userEvent.setup();
     const { onOpen } = renderColumn();
 
     // When the owner tabs in and presses down twice
     await user.tab();
-    expect(spaces().getAllByTestId('space-row')[0]).toHaveFocus();
+    expect(screen.getByTestId('main-entry')).toHaveFocus();
     await user.keyboard('{ArrowDown}{ArrowDown}');
 
-    // Then focus has left the spaces for the first agent
-    expect(agents().getAllByTestId('agent-row')[0]).toHaveFocus();
+    // Then focus has passed the project's heading to its first agent
+    expect(rows()[0]).toHaveFocus();
 
     // And End, then Enter, opens the last agent
     await user.keyboard('{End}{Enter}');
-    expect(onOpen).toHaveBeenCalledWith({ to: 'task', id: 'b' });
+    expect(onOpen).toHaveBeenCalledWith({ to: 'task', id: 'c' });
 
     // And the next Tab leaves the column
     await user.keyboard('{Home}');
-    expect(spaces().getAllByTestId('space-row')[0]).toHaveFocus();
+    expect(screen.getByTestId('main-entry')).toHaveFocus();
     await user.tab();
     expect(screen.getByTestId('agent-column')).not.toContainElement(
       document.activeElement as HTMLElement
@@ -186,7 +227,7 @@ describe('AgentColumn', () => {
     const { onAsk } = renderColumn();
 
     await user.click(screen.getByRole('button', { name: 'Ask Mainloop about Add retry button' }));
-    agents().getAllByTestId('agent-row')[2]!.focus();
+    rows()[1]!.focus();
     await user.keyboard('a');
 
     expect(onAsk.mock.calls).toEqual([
@@ -201,14 +242,14 @@ describe('AgentColumn', () => {
     const user = userEvent.setup();
     const { onAsk } = renderColumn();
 
-    agents().getAllByTestId('agent-row')[1]!.focus();
+    rows()[0]!.focus();
     await user.keyboard('{Shift>}{F10}{/Shift}');
     await user.click(await screen.findByRole('menuitem', { name: 'Ask Mainloop' }));
 
     expect(onAsk).toHaveBeenCalledWith('About task Add retry button (a): ');
   });
 
-  it('has one row of words between the lists: new and menu', async () => {
+  it('has its buttons on the Agents heading: new task, and search and commands', async () => {
     const user = userEvent.setup();
     const onMenu = vi.fn();
     // Given the owner is in the widgets project
@@ -218,13 +259,12 @@ describe('AgentColumn', () => {
       page: { to: 'project', id: 'project-1' }
     });
     const row = within(screen.getByTestId('column-actions'));
-    expect(row.getAllByRole('button').map((button) => button.textContent)).toEqual(['new', 'menu']);
 
-    // When the owner presses each word
+    // When the owner presses each
     await user.click(row.getByRole('button', { name: 'New task in widgets' }));
-    await user.click(row.getByRole('button', { name: 'Menu' }));
+    await user.click(row.getByRole('button', { name: 'Search and commands' }));
 
-    // Then new fills the main chat for this space, and menu opens the palette
+    // Then new fills the main chat for this project, and search opens the palette
     expect(onAsk).toHaveBeenCalledWith('Start a task in acme/widgets: ');
     expect(onOpen).not.toHaveBeenCalled();
     expect(onMenu).toHaveBeenCalledTimes(1);
@@ -236,10 +276,10 @@ describe('AgentColumn', () => {
     expect(screen.getByRole('button', { name: 'New: ask Mainloop' })).toBeInTheDocument();
   });
 
-  it('keeps that row while the lists load, so the menu works from the start', () => {
+  it('keeps the buttons while the list loads, so search works from the start', () => {
     renderColumn({ onMenu: vi.fn(), ready: false });
 
-    expect(screen.getByRole('button', { name: 'Menu' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Search and commands' })).toBeInTheDocument();
     expect(screen.queryByTestId('agent-row')).toBeNull();
   });
 

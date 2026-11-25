@@ -25,13 +25,23 @@ const agent = (overrides: Partial<AgentRow> = {}): AgentRow => ({
 
 const MODEL: AgentColumnModel = {
   spaces: [
-    { id: MAINLOOP_SPACE, label: 'main', detail: 'idle', tone: 'muted', target: { to: 'chat' } },
+    {
+      id: MAINLOOP_SPACE,
+      label: 'main',
+      detail: 'idle',
+      tone: 'muted',
+      needs: 0,
+      working: 0,
+      target: { to: 'chat' }
+    },
     {
       id: 'project-1',
       label: 'widgets',
       title: 'acme/widgets',
       detail: '1 working',
       tone: 'active',
+      needs: 0,
+      working: 1,
       target: { to: 'project', id: 'project-1' }
     }
   ],
@@ -54,7 +64,8 @@ const MODEL: AgentColumnModel = {
       target: { to: 'task', id: 'b' },
       pages: [{ to: 'task', id: 'b' }]
     })
-  ]
+  ],
+  main: { needs: 0, working: 1 }
 };
 
 function renderStrip(overrides: Partial<TabStripProps> = {}) {

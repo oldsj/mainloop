@@ -69,6 +69,9 @@ export interface SpaceRow {
   detail: string;
   /** The most urgent of its agents' dots. */
   tone: Tone;
+  /** How many of its agents need the owner (a question or a failure), and how many are working. */
+  needs: number;
+  working: number;
   target: Target;
 }
 
@@ -76,6 +79,8 @@ export interface AgentColumnModel {
   spaces: SpaceRow[];
   /** Grouped by space, in the spaces' order. */
   agents: AgentRow[];
+  /** What the main thread speaks for: the Needs-you count every badge shows, and the agents working. */
+  main: { needs: number; working: number };
 }
 
 /** Most urgent first. A space shows the first of these that any of its agents has. */
@@ -94,8 +99,11 @@ export function workingCount(agents: AgentRow[]): number {
  * `1 needs you · 2 working · 1 problem · 1 finished`, each part left out when it is zero; `idle`
  * for none.
  */
+const countTones = (agents: AgentRow[], ...tones: Tone[]) =>
+  agents.filter((agent) => tones.includes(agent.tone)).length;
+
 function spaceDetail(agents: AgentRow[]): string {
-  const count = (...tones: Tone[]) => agents.filter((agent) => tones.includes(agent.tone)).length;
+  const count = (...tones: Tone[]) => countTones(agents, ...tones);
   const needs = count('attention', 'bad');
   const working = count('active');
   const problems = agents.filter((agent) => agent.problem).length;
@@ -156,11 +164,11 @@ function taskAgent(
     space: space.id,
     spaceLabel: space.label,
     // The standing supervisor is named for what it is: its space's name is already over it.
-    label: task.standing ? 'supervisor' : node.label,
+    label: task.standing ? 'Supervisor' : node.label,
     role: supervisor ? 'supervisor' : 'worker',
     standing: task.standing === true,
     detail:
-      supervisor && !task.standing ? ['supervisor', detail].filter(Boolean).join(' · ') : detail,
+      supervisor && !task.standing ? ['Supervisor', detail].filter(Boolean).join(' · ') : detail,
     at: node.at,
     tone: action ? 'attention' : (node.tone ?? 'muted'),
     problem,
@@ -268,10 +276,8 @@ export function buildAgentColumn(
   // same count as every Needs-you badge), and is working while any task is.
   const others = [mainloop, ...projects].map((space) => ({ space, rows: agentsOf(space) }));
   const all = others.flatMap(({ rows }) => rows);
-  const state = mainloopState(
-    needsTotal(work),
-    all.filter((agent) => agent.tone === 'active').length
-  );
+  const counts = { needs: needsTotal(work), working: countTones(all, 'active') };
+  const state = mainloopState(counts.needs, counts.working);
   const main: AgentRow = {
     id: 'main',
     space: MAINLOOP_SPACE,
@@ -300,11 +306,13 @@ export function buildAgentColumn(
           ? state.label.toLowerCase()
           : spaceDetail(rows),
       tone: spaceTone(own),
+      needs: countTones(rows, 'attention', 'bad'),
+      working: countTones(rows, 'active'),
       target: space.id === MAINLOOP_SPACE ? { to: 'chat' } : { to: 'project', id: space.id }
     });
     agents.push(...own);
   }
-  return { spaces, agents };
+  return { spaces, agents, main: counts };
 }
 
 /** The agent whose page is showing, if it is in the list. */
@@ -428,7 +436,7 @@ export function loadingTabs(
 ): TabRow[] {
   if (page?.to === 'task' || page?.to === 'session' || page?.to === 'project') return [];
   const main = model.agents.filter((agent) => agent.role === 'main');
-  return spaceTabs({ spaces: model.spaces, agents: main }, MAINLOOP_SPACE, page, pathname);
+  return spaceTabs({ ...model, agents: main }, MAINLOOP_SPACE, page, pathname);
 }
 
 /**

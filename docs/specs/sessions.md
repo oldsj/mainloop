@@ -80,13 +80,14 @@ History before `e776537` describes the retired Python backend. Where other text 
 ## Session list
 
 Sessions appear as agents, not in a list of their own: a task's session is that task's agent
-in its project's space, and a live session with no task is an agent of its own (see
-[layout](layout.md)). The spaces and agents are a sidebar on the left at widths of 1024px and
+in its project's group, and a live session with no task is an agent of its own (see
+[layout](layout.md)). The main thread and the agents are a sidebar on the left at widths of 1024px and
 above, and a list opened from the bottom bar on narrower windows, where one conversation fills the
 screen. Task detail scrolls within the available pane; workspace
 controls wrap when needed.
 
-The native main thread and archived sessions are not listed as rows; finished sessions show
+The native main thread is pinned above the agents rather than listed among them, and archived
+sessions are not listed; finished sessions show
 only under their task. There is no create button: new sessions start from the main chat (the `/agents` form is reachable by URL but not
 linked).
 

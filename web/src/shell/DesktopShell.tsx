@@ -28,8 +28,11 @@ import { StatusBar } from './StatusBar';
  * next few frames, then gives up.
  */
 function focusCurrentSpace(tries = 20): void {
-  const rows = document.querySelectorAll<HTMLElement>('[data-testid="space-row"]');
-  const row = [...rows].find((el) => el.getAttribute('aria-current') === 'true') ?? rows[0];
+  // The pinned main thread and each project's heading: the rows that stand for a space.
+  const rows = document.querySelectorAll<HTMLElement>('[data-space-row]');
+  const row =
+    [...rows].find((el) => ['true', 'page'].includes(el.getAttribute('aria-current') ?? '')) ??
+    rows[0];
   if (row) row.focus();
   else if (tries > 0) setTimeout(() => focusCurrentSpace(tries - 1), 16);
 }

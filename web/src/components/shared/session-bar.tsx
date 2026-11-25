@@ -3,6 +3,8 @@ import { cn } from '@/components/ui/cn';
 import { barStatusDot, type BarStatus } from '@/lib/barStatus';
 
 export interface SessionBarProps {
+  /** Who the session is, ahead of its status: the main thread's mark and name. */
+  title?: ReactNode;
   /** The one status of the session. The word always shows, so colour is never the only signal. */
   status: BarStatus;
   /** `data-testid` of the status word. */
@@ -22,6 +24,7 @@ export interface SessionBarProps {
  * The main thread and the live view both draw it, so there is one row whichever is showing.
  */
 export function SessionBar({
+  title,
   status,
   statusTestId,
   lead,
@@ -41,6 +44,9 @@ export function SessionBar({
       <div className="gap-sm px-md min-h-control flex flex-wrap items-center py-1">
         {/* The facts wrap inside their own box, so a long status keeps the controls on its row. */}
         <span className="gap-sm flex min-w-0 flex-1 flex-wrap items-center">
+          {title ? (
+            <span className="gap-sm text-foreground flex shrink-0 items-center">{title}</span>
+          ) : null}
           <span className={cn('size-2 shrink-0', barStatusDot(status))} aria-hidden="true" />
           <span className="text-foreground" role="status" data-testid={statusTestId}>
             {status}

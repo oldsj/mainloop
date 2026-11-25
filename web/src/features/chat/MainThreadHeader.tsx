@@ -2,6 +2,7 @@ import { Info } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { SessionBar } from '@/components/shared/session-bar';
 import { cn } from '@/components/ui/cn';
+import { LogoMark } from '@/shell/LogoMark';
 import { barStatus, threadWords, type LiveStatus } from '@/lib/barStatus';
 import { threadStatus, type ThreadStatus } from '@/lib/delivery';
 import {
@@ -146,6 +147,15 @@ export function MainThreadHeader({
   return (
     <SessionBar
       data-testid="main-thread-header"
+      title={
+        <>
+          <LogoMark />
+          {/* Not the page's h1: the chat has none, and the sidebar's pinned row says the same. */}
+          <span className="text-title font-semibold" data-testid="mt-title">
+            Mainloop
+          </span>
+        </>
+      }
       status={barStatus(status, live?.status ?? null)}
       statusTestId="mt-state"
       lead={
